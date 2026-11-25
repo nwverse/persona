@@ -427,6 +427,20 @@ repository and the facade; and the client steps wait for the client domain guard
   passes with every golden unchanged; `./internal/archguard` passes; X6's measures are in the PR.
 - *Revised 2026-11-22 in #10613:* the turn hook takes `agentref.Ref`, bus methods and events are typed, and the repair
   PRs' closing is recorded; agentref comes after #12899, not with it.
+- *Built in #15418:* the slots are `Kernel.Bus` (values from `seam.NewBusMethod`), `Kernel.TurnSettled`,
+  `Kernel.Connected` and `Kernel.Snapshot` (`docs/server/architecture.md` "Validated and sealed"), and the Inbox is the
+  module "inbox" (`server/internal/assistant/inbox_module.go`), registered where `s.inboxRoutes()` was; its route
+  functions stay as they were and register through its Kernel (`routesThrough`). The bus methods' params and answers
+  that had no type became `server/internal/assistantwire/inbox_bus.go`, whose JSON a test compares with the maps the
+  switch built. Two parts of the text above did not hold on main, so they did not land: the Inbox in package
+  `assistant` builds no `map[string]any` app event (`inbox.changed` and `inbox.needs_you` already carry assistantwire
+  structs, and the extension manager builds the apps' `{"type":"inbox"}`), so the kernel's publishing service waits for
+  its first user (saved's events, #15222); and `TestDomainLayers` with a base refuses a count line the merge base lacks,
+  so no `app-bridge-call` count starts: the Inbox's hook matches an open item's Agent link with `agentref.Ref.IsSame`
+  and goes on with that link's ids. None of the 53 lines in 25 test files that build `&Service{}` without `New`
+  reaches a table that moved, so nothing stays package-level. The guard is archguard's
+  `TestCentralFilesNameNoInboxCode`: `service.go` keeps, besides the two fields, the register line and `s.inbox.lang`,
+  the Inbox names of `Service.call` and the conversation views, in its shrink-only list.
 
 ### S5. The Inbox's tools through the kernel
 - **Change:** the five tools register as one block after ask_escalate, through the tool placement the registry stage
