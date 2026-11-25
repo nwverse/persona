@@ -2365,18 +2365,21 @@ request; switching it off restores the standard experience with zero data migrat
 not expose boolean `todos_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new
 experience the default for at least one release with rollback kept) or removal is tracked in #14538.
 
-**Unified Integrations & Extensions** (#14802, #14805, #14868, #14874, `web/src/lib/labs-integrations-v2.ts`,
+**Unified Integrations & Extensions** (#14802, #14805, #14868, #14874, #15423, #15424, `web/src/lib/labs-integrations-v2.ts`,
 `web/src/views/settings/Integrations.tsx`, `web/src/views/settings/IntegrationDetail.tsx`). This single assistant-scoped
 switch applies to the selected Assistant across devices and defaults to off (`integrations_v2` on `GET`/`PUT /api/v1/assistant`,
 guarded by `expected_integrations_v2` optimistic locking and explicit manager targeting). When enabled, Settings collapses the
-three legacy tabs (`Channels`, `Connectors`, and `Extensions`) into one lazy-loaded **Integrations & Extensions** entry that
-deduplicates built-in services and multi-capability extensions, provides capability filter chips (`All`, `Chat channels`,
-`Data sources`, `Tools & appearance`), preserves Extension Market access, and mounts `IntegrationDetail` in desktop split-pane
-or mobile drill-down layouts. Legacy deep links (`/settings/connectors/...`, `/settings/channels/...`, `/settings/extensions/...`,
-including `@manager` targets) redirect cleanly into the unified view when enabled, and `/settings/integrations/...` links fall
-back cleanly to the corresponding legacy tab when disabled, with zero data migration or data loss. Older hubs that do not expose
-boolean `integrations_v2` degrade gracefully to a read-only row with an update hint. Graduation (making the new experience the
-default for at least one release with rollback kept) or removal is tracked in #14802.
+four legacy tabs (`Channels`, `Connectors`, `Inbox Sources`, and `Extensions`) into one lazy-loaded **Integrations & Extensions**
+entry that deduplicates built-in services, standalone push sources, and multi-capability extensions, surfaces subscription health
+alerts, provides capability filter chips (`All`, `Chat channels`, `Data sources`, `Tools & appearance`), preserves Extension Market
+access, offers a lazy-loaded Data Flow view (`SourcesGraph` + `InboxForwardSetting`), and mounts `IntegrationDetail` in desktop
+split-pane or mobile drill-down layouts. Legacy deep links (`/settings/connectors/...`, `/settings/channels/...`,
+`/settings/sources/...`, `/settings/extensions/...`, `/settings?tab=sources`, including `@manager` and `state` targets) and
+Settings search entries for Inbox Sources redirect cleanly into the unified view (`-sources` / `-sources@<manager>/<state>`)
+when enabled, and `/settings/integrations/...` links (including `-sources...`) fall back cleanly to the corresponding legacy tab
+(restoring the standalone `Inbox Sources` menu, routes, `manager`, and `state`) when disabled, with zero data migration or data
+loss. Older hubs that do not expose boolean `integrations_v2` degrade gracefully to a read-only row with an update hint.
+Graduation (making the new experience the default for at least one release with rollback kept) or removal is tracked in #14802.
 
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
 (`views/session/terminal/feed.ts`) draw with xterm's DOM renderer (Standard, the default) or WebGL (`@xterm/addon-webgl`,
