@@ -1069,6 +1069,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */
@@ -3969,8 +3974,8 @@ export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "
  * and calls their short tool names. An extension's connector with one this hub does not know loses only that
  * capability.
  */
-export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | (string & {});
-export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"] as const;
+export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | "inbox_visibility" | (string & {});
+export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"] as const;
 
 /**
  * ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.
@@ -5503,6 +5508,12 @@ export interface KBEntry {
    * absent on other kinds, before a match and from an older hub.
    */
   meeting_id?: string;
+  /**
+   * A recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a hub
+   * transcription not final) while nothing can settle it: module_off when the recording module is off. Derived when
+   * read, never stored; absent otherwise and from an older hub.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;
@@ -5577,6 +5588,11 @@ export interface KBDetail {
    * (docs/assistant/knowledge.md "Person profiles").
    */
   profiles?: Record<string, KBProfileRecord>;
+  /**
+   * A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is
+   * off. Derived when read, never stored.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;
@@ -7347,8 +7363,8 @@ export interface MemoryEntry {
   /** What the entry says, as the program would render it, on one or a few lines. */
   text: string;
   /**
-   * The program's own grouping (preferences, workflow, people…). Informational: the hub neither filters nor orders by
-   * it.
+   * The program's own grouping (preferences, workflow, people…). Used for explicit recall tag matching; it does not
+   * change priority or visibility.
    */
   facet?: string;
   /**

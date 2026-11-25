@@ -68,7 +68,7 @@ Continuation filenames may append `_<segment UUID>` after the thread UUID. The a
 Commentary is ordinary assistant text on the wire, so it can answer a mid-turn question in the latest-text slot. Latest-page folding keeps the newest commentary visible until a final answer follows it; earlier commentary and commentary on historical pages fold into completed work through an internal-only narration marker. It is not counted as thinking or exposed as another item kind. The iOS `ChatCache` version changes with this kind mapping so cached thinking items cannot hide the answers.
 
 Codex's own XML in UserMessage (all rollouts on the local and hub machines scanned 2026-10-26):
-`<send_user_message_question_reply>` (answers to Codex `request_user_input`, containing JSON) displays the answer itself, one "question: answer" line per question;
+`<send_user_message_question_reply>` (answers to Codex `request_user_input`, containing JSON) keeps the answer in `text`, with one "question: answer" line per question for multiple answers. A standalone envelope also carries `question_replies` so HarmonyOS can show each original question as a collapsible quotation. For a single reply the answer comes from the existing `text` field.
 strip `<in-app-browser-context>` (browser state automatically attached by the Codex App); `local_image` content becomes `<attached_images>` paths, displayed as thumbnails.
 `<environment_context>`, `<INSTRUCTIONS>`, `<skill>`, `<turn_aborted>`, `<subagent_notification>`, `<realtime_delegation>`,
 and `<codex_internal_context>` appear only in response_item (model input), not in the chat.
@@ -390,7 +390,9 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   (an existing same-named shell variable wins; these words are not shell-expanded, so `$HOME` and `~` remain literal and cannot substitute values). pi's herdr-resume command `personad tab-start` shares this code without setting `HERDR_AGENT`.
 - **Match this request**: startup is synchronous. The node waits for the Codex thread to appear before replying, and returns that thread's session, so the App opens the actual Agents entry,
   not a separate "Starting" placeholder later replaced by another. Match a rollout in this directory started after launch (`session_meta` timestamp) whose first user message exactly matches what was sent.
-  During this wait `codexStarting` reserves the pane for this explicit start. Discovery leaves the pane for the start to identify.
+  During this wait `codexStarting` reserves the pane for this explicit start. Each lookup includes newly discovered Codex homes
+  and checks the pane's observed home first. The start claims the public ID from the matched rollout's home and native thread ID,
+  then uses that same ID in its reply and pane binding (#13737).
   Answer Codex's dialogs according to the user's intent: trust the directory (the user selected it), skip update prompts.
   The screen is read as `visible` (the blank rows under it left out): 0.167 draws its trust dialog from the top of the pane, and the last 40 `recent` rows of a 51-row pane were all blank (#2351).
   The trust dialog is known by its question asking about trust, the option by what it says ("Trust and continue", "Yes, continue"), not by its number or the other option

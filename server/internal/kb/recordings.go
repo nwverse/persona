@@ -1,46 +1,17 @@
 package kb
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/kbwire"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
-
-// Recordings (docs/assistant/knowledge.md "Recordings", docs/protocol/protocol.md "Recording sync"): the phone uploads each recording's transcript,
-// keyed by its UUID, the whole state every time (revision orders them), so replays, reordering and a transcript
-// completed later all land on one entry. Only text: the audio stays on the phone, except a meeting transcribed on the
-// hub, whose audio the hub keeps until the minutes from its final transcript are written (recording_audio.go). A
-// directory per recording: meta.json, segments.json, transcript.md (what the searches read: the transcript of record,
-// hub_segments.go), summary.md (the model's, once it is complete), and for an attended meeting live.json (live.go),
-// for a meeting with photos photos.json, photos.md and attachments/ (recording_photos.go), for one transcribed on the
-// hub hub_segments.json and attachments/audio/ (transcription.go). Uploads journal the accepted files until all
-// replacements commit (recording_commit.go). Past recording_days a recording with minutes keeps only meta.json, its
-// minutes and the photos they cite until minutes_days (recording_trim.go); any other goes.
-// recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept recordingDays.
-
-// KindRecording is the recordings' kind and directory.
-const KindRecording = "recordings"
-
-// DefaultRecordingDays is how long recordings are kept unless the user says otherwise (assistant.recording_days).
-const DefaultRecordingDays = 14
-
-// DefaultMinutesDays is how long a meeting's minutes are kept unless the user says otherwise (assistant.minutes_days);
-// 0 means forever; a finite window is never shorter than the recording itself (MinutesDaysFor).
-const DefaultMinutesDays = 0
 
 // Limits of one upload.
 const (
@@ -48,21 +19,11 @@ const (
 	maxRecordingText     = 4 << 20
 )
 
-// Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
-type RecordingSegment = kbwire.RecordingSegment
-
 // RecordingBookmark is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type RecordingBookmark = recordingwire.RecordingBookmark
 
 // RecordingCalendar is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type RecordingCalendar = recordingwire.RecordingCalendar
-
-// Re-exported from recordingwire.
-const (
-	RecordingNote    = recordingwire.RecordingNote
-	RecordingMeeting = recordingwire.RecordingMeeting
-	RecordingDay     = recordingwire.RecordingDay
-)
 
 // Limits of an upload's calendar hint.
 const (
@@ -77,16 +38,6 @@ type RecordingUpload = recordingwire.RecordingUpload
 // MeetingRef is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type MeetingRef = recordingwire.MeetingRef
 
-// Re-exported from recordingwire.
-const (
-	MinutesPending = recordingwire.MinutesPending
-	MinutesReady   = recordingwire.MinutesReady
-	MinutesFailed  = recordingwire.MinutesFailed
-)
-
-// Recording is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type Recording = recordingwire.Recording
-
 // RecordingState is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type RecordingState = recordingwire.RecordingState
 
@@ -99,113 +50,6 @@ const (
 
 // RecordingPut is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type RecordingPut = recordingwire.RecordingPut
-
-var (
-	// ErrRecordingDeleted: the recording was deleted (a tombstone); the phone must not upload it again.
-	ErrRecordingDeleted = errors.New("this recording was deleted")
-	// ErrBadRecording wraps what is wrong with an upload.
-	ErrBadRecording = errors.New("invalid recording")
-	uuidRe          = lazyre.New(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-)
-
-// RecordingID is id as stored (lowercase), false when it is not a UUID.
-func RecordingID(id string) (string, bool) {
-	id = strings.ToLower(strings.TrimSpace(id))
-	return id, uuidRe.MatchString(id)
-}
-
-func badRecording(f string, a ...any) error {
-	return fmt.Errorf("%w: %s", ErrBadRecording, fmt.Sprintf(f, a...))
-}
-
-// recordingDays is days, or the default when unset.
-func recordingDays(days int) int {
-	if days <= 0 {
-		return DefaultRecordingDays
-	}
-	return days
-}
-
-func (s *Store) Recording(id string) (*Recording, bool) {
-	var r Recording
-	raw, err := s.recordingRead(id, "meta.json")
-	if err != nil || raw == nil || json.Unmarshal(raw, &r) != nil {
-		return nil, false
-	}
-	if r.Kind == RecordingDay && r.Chars > 0 && r.TextRev == 0 {
-		r.TextRev = 1 // a day recording's text stored without its count: what no recap or note read yet
-	}
-	r.Persisted = true
-	s.recFilesMu.RLock()
-	m, err := s.readMeeting(id)
-	s.recFilesMu.RUnlock()
-	if err != nil {
-		// Unreadable: as a room meeting whose role is off (it feeds nothing, takes no question), and private.
-		m = &Meeting{Room: &MeetingRoom{State: RoomNone}}
-	}
-	r.Conv = m
-	return &r, true
-}
-
-// Recordings lists them all (the tombstones file is not one).
-func (s *Store) Recordings() []*Recording {
-	var out []*Recording
-	for _, id := range s.IDs(KindRecording) {
-		if strings.HasPrefix(id, ".") {
-			continue
-		}
-		if r, ok := s.Recording(id); ok {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// RecordingSegments reads a recording's transcript of record (TranscriptOfRecord): its upload's segments, in hub mode
-// with the hub's sentences.
-func (s *Store) RecordingSegments(id string) []RecordingSegment {
-	files, m, h, err := s.recordSnapshot(id)
-	if err != nil {
-		return nil
-	}
-	return recordOf(files, m, h)
-}
-
-func (s *Store) tombstonesPath() string { return filepath.Join(s.Dir, KindRecording, ".deleted.json") }
-
-func (s *Store) tombstones() map[string]time.Time {
-	m := map[string]time.Time{}
-	_, _ = readJSON(s.tombstonesPath(), &m)
-	return m
-}
-
-// recordingName is what a recording is called in lists: the user's title, the phone calendar's, the matched calendar
-// item's, the model's, else when it started (NameSource says which).
-func (s *Store) recordingName(r *Recording) string {
-	switch r.NameSource() {
-	case NamedByRename:
-		return r.Renamed
-	case NamedByTitle:
-		return r.Title
-	case NamedByCalendar:
-		return calendarTitle(r)
-	case NamedByModel:
-		return r.AITitle
-	case "":
-		if r.Kind == RecordingDay {
-			return "全天录音 " + r.Day // Engine.recordingName has it in the owner's language
-		}
-	}
-	return "录音 " + r.StartedAt.In(s.Zone()).Format("2006-01-02 15:04")
-}
-
-// Re-exported from recordingwire.
-const (
-	NamedByRename   = recordingwire.NamedByRename
-	NamedByTitle    = recordingwire.NamedByTitle
-	NamedByCalendar = recordingwire.NamedByCalendar
-	NamedByModel    = recordingwire.NamedByModel
-)
 
 // cleanUpload checks an upload and puts its segments in order (empty ones dropped).
 func cleanUpload(u *RecordingUpload) error {
@@ -470,97 +314,6 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	return put, wasAttending || r.Attending() || r.RoomMeeting(), nil
 }
 
-func nonNilSegments(s []RecordingSegment) []RecordingSegment {
-	if s == nil {
-		return []RecordingSegment{}
-	}
-	return s
-}
-
-// renderTranscript is transcript.md: a line per segment (and bookmark) at its clock time in the user's zone; Persona's
-// echo (#5905) keeps its line, marked.
-func (s *Store) renderTranscript(r *Recording, segs []RecordingSegment) string {
-	zone := s.RecordingZone(r)
-	at := func(sec float64) string {
-		return r.StartedAt.Add(time.Duration(sec * float64(time.Second))).In(zone).Format("15:04:05")
-	}
-	type line struct {
-		sec  float64
-		text string
-	}
-	var lines []line
-	for _, sg := range segs {
-		text := strings.Join(strings.Fields(sg.Text), " ")
-		if sg.Echo {
-			text = "[Persona 回声] " + text // i18n-ignore: knowledge-base data, like the bookmarks' mark
-		}
-		lines = append(lines, line{sg.Start, "- " + at(sg.Start) + " " + text})
-	}
-	for _, b := range r.Bookmarks {
-		lines = append(lines, line{b.At, "- " + at(b.At) + " [书签] " + oneLine(b.Label)})
-	}
-	sort.SliceStable(lines, func(i, j int) bool { return lines[i].sec < lines[j].sec })
-	var b strings.Builder
-	b.WriteString("# 录音 · ")
-	if t := cmp.Or(r.Title, r.AITitle); t != "" {
-		b.WriteString(t + " · ")
-	}
-	fmt.Fprintf(&b, "%s · %s\n\n", r.StartedAt.In(zone).Format("2006-01-02 15:04"), zone)
-	for _, l := range lines {
-		b.WriteString(strings.TrimRight(l.text, " "))
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-// DeleteRecording removes recording id (files and index) and leaves a tombstone; false when there was none.
-func (e *Engine) DeleteRecording(rawID string, now time.Time) (bool, error) {
-	if e.Store.ReadOnly() {
-		return false, ErrReadOnly
-	}
-	defer e.Store.SearchIndexPurge() // its summary, minutes and recap leave the search index at its next update
-	id, ok := RecordingID(rawID)
-	if !ok {
-		return false, badRecording("id must be a UUID")
-	}
-	st := e.Store
-	st.recMu.Lock()
-	defer st.recMu.Unlock()
-	t := st.tombstones()
-	if _, ok := t[id]; !ok {
-		t[id] = now.UTC()
-		if err := writeJSON(st.tombstonesPath(), t); err != nil {
-			return false, err
-		}
-	}
-	r, existed := st.Recording(id)
-	if !existed {
-		return false, nil
-	}
-	st.recFilesMu.Lock()
-	st.audioDroppedLocked(id, ErrRecordingDeleted)
-	err := os.RemoveAll(st.path(KindRecording, id))
-	st.recFilesMu.Unlock()
-	st.audioFileClosed(id)
-	if err != nil {
-		return false, err
-	}
-	e.unlinkRecording(id, r.Projects)
-	e.unindex(KindRecording, []string{id})
-	st.notify(KindRecording, id, "metadata")
-	return true, nil
-}
-
-// unlinkRecording takes a gone recording off its projects.
-func (e *Engine) unlinkRecording(id string, projects []string) {
-	for _, slug := range projects {
-		if p, ok := e.Store.Project(slug); ok {
-			p.Items = removeStrings(p.Items, []string{KindRecording + "/" + id})
-			_ = e.Store.putEntity(KindProject, p.Slug, p, &p.Tagging, false)
-		}
-	}
-}
-
 // RecordingStates is every recording kept (trimmed ones too) and every tombstone, for the phone to reconcile.
 func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	kept, deleted = []RecordingState{}, []string{}
@@ -583,150 +336,6 @@ func (e *Engine) RecordingStates() (kept []RecordingState, deleted []string) {
 	}
 	sort.Strings(deleted)
 	return kept, deleted
-}
-
-// PruneRecordings applies retention to files and the index. Past recording_days, minutes are kept forever or within
-// a finite minutes_days window, and the recording is trimmed to them (recording_trim.go); other recordings go.
-// Interrupted trims finish whatever the window. Tombstones older than recording_days go too.
-// It returns how many recordings were deleted, not counting trimmed ones. Then it deletes the hub-mode audio that
-// should be gone and mends what a crash left of a hub transcript (sweepTranscriptions).
-func (e *Engine) PruneRecordings(now time.Time) int {
-	if e.Store.ReadOnly() {
-		return 0
-	}
-	n := e.pruneRecordings(now)
-	e.sweepTranscriptions()
-	if n > 0 {
-		e.Store.SearchIndexPurge() // their summaries, minutes and recaps leave the search index at its next update
-	}
-	return n
-}
-
-func (e *Engine) pruneRecordings(now time.Time) int {
-	cut := now.UTC().AddDate(0, 0, -recordingDays(e.RecordingDays()))
-	minutesDays := e.MinutesDays()
-	minutesCut := now.UTC().AddDate(0, 0, -minutesDays)
-	st := e.Store
-	// The trims' meeting changes (photos, transcription) are told once recMu is let go (deferred calls run last first).
-	told := map[string][]string{}
-	var order []string
-	tell := func(id string, parts []string) {
-		if len(parts) > 0 {
-			if told[id] == nil {
-				order = append(order, id)
-			}
-			told[id] = append(told[id], parts...)
-		}
-	}
-	defer func() {
-		if len(order) > 0 {
-			st.SearchIndexPurge() // a trimmed recording's files, too
-		}
-		for _, id := range order {
-			e.meetingChanged(id, told[id])
-		}
-	}()
-	st.recMu.Lock()
-	defer st.recMu.Unlock()
-	var gone []string
-	for _, r := range st.Recordings() {
-		if !r.StartedAt.Before(cut) {
-			// Within recording_days only a trimmed one has anything to do: the files an interrupted trim left (a crash
-			// after its meta.json, a failed removal) go even once recording_days made longer lets it back in the window.
-			if r.Trimmed() {
-				tell(r.ID, e.trimPruned(r, now))
-			}
-			continue
-		}
-		if (minutesDays == 0 || !r.StartedAt.Before(minutesCut)) && (r.Trimmed() || st.hasMinutes(r.ID) || st.hasRecap(r.ID)) {
-			tell(r.ID, e.trimPruned(r, now))
-			continue
-		}
-		st.recFilesMu.Lock()
-		st.audioDroppedLocked(r.ID, ErrNotFound)
-		err := os.RemoveAll(st.path(KindRecording, r.ID))
-		st.recFilesMu.Unlock()
-		st.audioFileClosed(r.ID)
-		if err == nil {
-			e.unlinkRecording(r.ID, r.Projects)
-			st.notify(KindRecording, r.ID, "metadata")
-			gone = append(gone, r.ID)
-		}
-	}
-	e.unindex(KindRecording, gone)
-	// Tombstones keep the recording_days window, not minutes_days. One only has to outlive the uploads it refuses, and
-	// an upload of a recording that started before that window is expired anyway (putRecording), whether the recording
-	// is gone, trimmed or deleted by the user. A tombstone is never older than its recording's start (it is written when
-	// the recording is deleted), so one that falls out of the window stands for a recording past it: keeping it longer,
-	// as long as a trimmed recording could have stayed, would refuse nothing more. Its other use, the phone dropping a
-	// copy deleted elsewhere, ends with the window too: the phone drops every recording older than days itself.
-	t := st.tombstones()
-	n := len(t)
-	for id, at := range t {
-		if at.Before(cut) {
-			delete(t, id)
-		}
-	}
-	if len(t) != n {
-		_ = writeJSON(st.tombstonesPath(), t)
-	}
-	return len(gone)
-}
-
-// trimPruned trims recording r for PruneRecordings (which holds recMu), or finishes its trim: idempotent, it says
-// what changed and indexes the recording again only when something did. parts are the meeting parts that changed
-// (PartPhotos, PartTranscription), which the caller tells MeetingChanged once it let recMu go.
-func (e *Engine) trimPruned(r *Recording, now time.Time) (parts []string) {
-	st := e.Store
-	trimmed, photos, err := st.trimRecording(r, now)
-	if err != nil {
-		e.logf("recording %s: trim: %v", r.ID, err)
-	} else if trimmed {
-		st.notify(KindRecording, r.ID, "metadata")
-		st.notify(KindRecording, r.ID, "messages")
-		st.notify(KindRecording, r.ID, "summary")
-		e.index(KindRecording, r.ID, r.Name, r.Tagging, r.OneLine, r.StartedAt)
-	}
-	if photos {
-		parts = append(parts, PartPhotos)
-	}
-	if err == nil {
-		parts = append(parts, e.trimTranscription(r.ID, now)...)
-	}
-	return parts
-}
-
-// RecordingDays is the retention in days (Engine.RecordingDaysFunc, the assistant's setting), the default without one.
-func (e *Engine) RecordingDays() int {
-	if e.RecordingDaysFunc != nil {
-		return recordingDays(e.RecordingDaysFunc())
-	}
-	return DefaultRecordingDays
-}
-
-// MinutesDays is how many days a meeting's minutes are kept (Engine.MinutesDaysFunc, the assistant's setting, the
-// default without one): 0 means forever; otherwise never fewer than RecordingDays.
-func (e *Engine) MinutesDays() int {
-	d := 0
-	if e.MinutesDaysFunc != nil {
-		d = e.MinutesDaysFunc()
-	}
-	return MinutesDaysFor(d, e.RecordingDays())
-}
-
-// MinutesDaysFor is the minutes' retention in effect for the setting minutes (<= 0: DefaultMinutesDays) and the
-// recordings' days: 0 means forever; minutes never go before the recording they belong to.
-func MinutesDaysFor(minutes, recording int) int {
-	if minutes <= 0 {
-		return DefaultMinutesDays
-	}
-	return max(minutes, recordingDays(recording))
-}
-
-func (e *Engine) unindex(kind string, ids []string) {
-	if e.Unindex != nil && len(ids) > 0 {
-		e.Unindex(kind, ids)
-	}
 }
 
 // recordingSummary is the model's answer for a recording (kb/recording).

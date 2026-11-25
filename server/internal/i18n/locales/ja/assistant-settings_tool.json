@@ -1,4 +1,5 @@
 {
+  "title_dashboards": "Persona にダッシュボードを作らせる",
   "title_modules": "内蔵モジュール",
   "change_modules": "内蔵モジュール：{before} → {after}。次回の manager 起動時に適用され、実行中のプロセスは変わりません。",
   "modules_unchanged": "内蔵モジュールの設定は変更されていません。",
@@ -131,5 +132,17 @@
   "change_limit_fallbacks": "利用上限で会話が止まったときに使う予備ランチャー：{before} → {after}",
   "bad_limit_fallbacks": "ランチャー名を第一候補から順に最大 8 個までリストで指定してください。空のリストでオフになります。",
   "limit_fallbacks_unchanged": "予備ランチャーは変更されていません。",
-  "limit_fallbacks_saved": "予備ランチャーを保存しました：{value}。次に利用上限に達したときから適用されます。"
+  "limit_fallbacks_saved": "予備ランチャーを保存しました：{value}。次に利用上限に達したときから適用されます。",
+  "title_machine_fallbacks": "オフライン時の予備コンピューター",
+  "change_machine_fallbacks": "主力コンピューターがオフラインになったときの予備コンピューター：{before} → {after}",
+  "bad_machine_fallbacks": "業務用以外のコンピューター ID を第一候補から順に最大 8 台までリストで指定してください。空のリストでオフになります。",
+  "machine_fallbacks_unchanged": "予備コンピューターは変更されていません。",
+  "machine_fallbacks_saved": "予備コンピューターを保存しました：{value}。オフライン時間がしきい値を超えると適用されます。",
+  "machine_fallback_work_machine": "業務用コンピューターはアシスタントの予備コンピューターに設定できません。",
+  "machine_fallback_unknown_machine": "不明なコンピューター ID です：{machine}。",
+  "title_machine_fallback_minutes": "予備コンピューターへ切り替えるまでのオフライン時間",
+  "change_machine_fallback_minutes": "予備コンピューターへ切り替えるまでのオフライン時間：{before} → {after} 分",
+  "bad_machine_fallback_minutes": "1〜1440 の整数分で指定してください。",
+  "machine_fallback_minutes_unchanged": "オフライン切り替えのしきい値は変更されていません。",
+  "machine_fallback_minutes_saved": "オフライン切り替えのしきい値を {value} 分に保存しました。"
 }
