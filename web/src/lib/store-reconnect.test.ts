@@ -376,20 +376,20 @@ describe("a slow refresh() does not put back an older snapshot", () => {
     expect(getState().todos.map((todo) => todo.id)).toEqual(["current"]);
   });
 
-  it("discards a cold sidebar read that finishes after a newer hello read", async () => {
+  it("coalesces a cold sidebar read still in flight when hello arrives instead of issuing duplicate requests", async () => {
     const turns = holdFetch(["/assistant", "/todos"]);
     connect();
     last().open();
     await vi.advanceTimersByTimeAsync(300);
     last().push({ type: "hello" });
-    turns["/assistant"][1]({ main: "current" });
-    turns["/todos"][1]({ todos: [{ id: "current" }] });
-    await settle();
-    turns["/assistant"][0]({ main: "old" });
-    turns["/todos"][0]({ todos: [{ id: "old" }] });
+    expect(turns["/assistant"]).toHaveLength(1);
+    expect(turns["/todos"]).toHaveLength(1);
+    turns["/assistant"][0]({ main: "current" });
+    turns["/todos"][0]({ todos: [{ id: "current" }] });
     await settle();
     expect(getState().assistant?.main).toBe("current");
     expect(getState().todos.map((todo) => todo.id)).toEqual(["current"]);
+    expect(getState().loaded).toBe(true);
   });
 
   it("retries failed cold sidebar reads on hello", async () => {
