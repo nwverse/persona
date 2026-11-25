@@ -369,6 +369,7 @@
   "lib-tasks.took_",
   "lib-tasks.until_",
   "lib-tasks.wake_",
+  "lib-terminal-clipboard.copied",
   "lib-terminals",
   "lib-todo-tree",
   "lib-todos.auto_done",

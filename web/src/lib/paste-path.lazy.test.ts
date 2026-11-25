@@ -15,7 +15,11 @@ describe("paste-path", () => {
   it("keeps terminal-clipboard.ts and its words off the first screen", () => {
     expect(read("./entry-drag.ts")).not.toMatch(valueImport);
     expect(read("./paste-path.ts")).not.toMatch(/^import\s/m);
-    expect(startup.filter((key) => key === "lib-terminal-clipboard" || key.startsWith("lib-terminal-clipboard."))).toEqual([]);
+    // The chat's copy button (views/chat/MessageActions.tsx) says "Copied" with the terminal's word, so the first screen
+    // keeps that one key and none of the rest.
+    expect(startup.filter((key) => key === "lib-terminal-clipboard" || key.startsWith("lib-terminal-clipboard."))).toEqual([
+      "lib-terminal-clipboard.copied",
+    ]);
   });
 
   it("is what terminal-clipboard.ts offers the terminal", () => {
