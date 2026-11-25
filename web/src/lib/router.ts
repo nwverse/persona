@@ -44,7 +44,6 @@ export type Route =
   // `manager`: whose item it is when that is another manager than the default (`?manager=`, docs/assistant/managers.md
   // "Clients"): two managers may list the same id
   | { name: "inbox"; id?: string; manager?: string }
-  | { name: "messages"; id?: string }
   | { name: "starred" }
   | { name: "routines" }
   | { name: "kb"; kind?: string; id?: string }
@@ -64,11 +63,15 @@ export type Route =
   | { name: "agent-archives" }
   // the runs of one New agent start side by side (#8916, lib/compare-runs.ts)
   | { name: "compare"; id: string }
-  // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"), with the open to-do beside it
-  | { name: "todos"; id?: string; view?: "calendar"; mode?: "day" | "week" | "month"; date?: string }
+  // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"); view=board: the read-only
+  // progress board (#12713). Either view keeps the open to-do beside it.
+  | { name: "todos"; id?: string; view?: "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
   // the source subscription pages (#2041), their first state in ?state=
   | { name: "subscriptions" }
+  // where Feishu / Lark sends the owner back after allowing a bot's app to read as them (`?code=&state=`, the daily sync's
+  // authorization, views/settings/LarkOAuthReturn.tsx); the page reads its query itself
+  | { name: "lark-oauth" }
   // an address that is no page of the app (mistyped, or left from an older version): said so, with the way to Overview,
   // instead of Overview drawn under the wrong address (web usability audit item 42); `path` is the address as it came
   | { name: "not-found"; path: string };
@@ -109,6 +112,7 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "workspace-board") return { name: "workspace-board" };
   if (p[0] === "requests" && p[1]) return { name: "request", id: p[1] };
   if (p[0] === "overview") return { name: "home" };
+  if (p[0] === "lark-oauth" && !p[1]) return { name: "lark-oauth" };
   if (p[0] === "history") return p[1] ? { name: "history", origin: p[1] } : { name: "history" };
   const module = moduleRouteAt(p);
   if (module === "absent") return notFound(path, search);
@@ -123,7 +127,6 @@ export function parse(path: string, search = ""): Route {
     const manager = p[1] ? new URLSearchParams(search).get("manager") : null;
     return manager ? { name: "inbox", id: p[1], manager } : { name: "inbox", id: p[1] };
   }
-  if (p[0] === "messages") return { name: "messages", id: p[1] };
   if (p[0] === "starred" && p.length === 1) return { name: "starred" };
   if (p[0] === "routines") return { name: "routines" };
   // an entry of a kind a feature module draws (a recording) is unknown while the module is off (core/module-host.ts)
@@ -149,6 +152,7 @@ export function parse(path: string, search = ""): Route {
     // the link's own query (#9930): reading the page's made routeAt() on a /todos?id= link open the to-do on screen
     const q = new URLSearchParams(search);
     const r: Route = { name: "todos", id: p[1] || q.get("id") || undefined };
+    if (q.get("view") === "board") return { ...r, view: "board" };
     if (q.get("view") === "calendar") {
       const mode = q.get("mode");
       const date = q.get("date");
@@ -218,8 +222,6 @@ export function routePath(r: Route): string {
       return "/assistant";
     case "inbox":
       return r.id ? `/inbox/${encodeURIComponent(r.id)}${r.manager ? `?manager=${encodeURIComponent(r.manager)}` : ""}` : "/inbox";
-    case "messages":
-      return r.id ? `/messages/${encodeURIComponent(r.id)}` : "/messages";
     case "starred":
       return "/starred";
     case "routines":
@@ -250,7 +252,9 @@ export function routePath(r: Route): string {
       return `/compare/${encodeURIComponent(r.id)}`;
     case "todos": {
       const q = new URLSearchParams();
-      if (r.view === "calendar") {
+      if (r.view === "board") {
+        q.set("view", "board");
+      } else if (r.view === "calendar") {
         q.set("view", "calendar");
         if (r.mode) q.set("mode", r.mode);
         if (r.date) q.set("date", r.date);
@@ -263,6 +267,8 @@ export function routePath(r: Route): string {
       return `/extension/${encodeURIComponent(r.extension)}/${encodeURIComponent(r.ui)}`;
     case "subscriptions":
       return "/subscriptions";
+    case "lark-oauth":
+      return "/lark-oauth";
     case "not-found":
       return r.path;
     default:
@@ -328,14 +334,16 @@ export function showsSession(r: Route, mid: string, sid: string): boolean {
   return (r.name === "session" || r.name === "tab") && r.mid === mid && r.sid === sid;
 }
 
+export function subscribeRoute(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 export function useRoute(): Route {
   // The query is part of the route (/todos?id=…): a change to it alone must re-render too. The revision also covers
   // replacing the current entry's state at an unchanged address (#12055).
   useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
+    subscribeRoute,
     () => revision,
   );
   const at = location.pathname + location.search;

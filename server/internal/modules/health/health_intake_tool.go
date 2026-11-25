@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ type healthIntakeToolArgs struct {
 	Note   *string    `json:"note"`
 	Days   *int       `json:"days"`
 	ID     string     `json:"id"`
+	Item   string     `json:"item"`
 }
 
 // The caller's space is checked in runTool before any intake storage is accessed.
@@ -37,7 +39,15 @@ func (s *Service) toolHealthIntake(ctx context.Context, args json.RawMessage) (s
 		return "", errors.New("expected one health_intake argument object")
 	}
 	logFields := a.Kind != "" || a.Amount != nil || a.At != nil || a.Note != nil
+	if a.Action != "add_item" && a.Item != "" {
+		return "", errors.New("item is only valid for add_item")
+	}
 	switch a.Action {
+	case "add_item":
+		if logFields || a.ID != "" || a.Days != nil || !validHealthItems([]string{a.Item}) {
+			return "", errors.New("add_item requires one catalog item")
+		}
+		return s.addHealthItem(ctx, a.Item)
 	case "log":
 		if a.Amount == nil || a.Days != nil || a.ID != "" {
 			return "", i18n.Err("assistant-health_intake.invalid_entry")
@@ -51,7 +61,7 @@ func (s *Service) toolHealthIntake(ctx context.Context, args json.RawMessage) (s
 			return "", i18n.Err("assistant-health_intake.invalid_entry")
 		}
 	default:
-		return "", errors.New("action must be log, list or delete")
+		return "", errors.New("action must be log, list, delete or add_item")
 	}
 	st := s.h.IntakeStore()
 	if st == nil {
@@ -82,7 +92,19 @@ func (s *Service) toolHealthIntake(ctx context.Context, args json.RawMessage) (s
 		if err != nil {
 			return "", err
 		}
-		saved, _, err := s.addHealthIntake(ctx, st, entry)
+		// Keep the gate and write in the same critical section as item saves and reminders.
+		s.intakeMu.Lock()
+		items, err := s.healthItemsLocked(ctx)
+		if err != nil {
+			s.intakeMu.Unlock()
+			return "", err
+		}
+		if !slices.Contains(items.Items, a.Kind) {
+			s.intakeMu.Unlock()
+			return fmt.Sprintf("%s is not added to Health. Ask the user whether to add it before logging.", a.Kind), nil
+		}
+		saved, _, err := s.addHealthIntakeLocked(ctx, st, entry)
+		s.intakeMu.Unlock()
 		if err != nil {
 			return "", fmt.Errorf("log may have committed; check list before logging again: %w", err)
 		}

@@ -49,6 +49,9 @@ func (s *Service) handOverMainTasks(ctx context.Context, from, to string) int {
 // (a leader keeps the card it has, and a task "Move to…" already moved has its card there). False when nothing moved
 // (a write failed: the next pass tries again).
 func (s *Service) handOverTask(ctx context.Context, t Todo, from, to string, heldBy func(*Supervision) bool) bool {
+	// Move the owner and admit its review together, as an explicit task move does.
+	s.supervise.routingMu.Lock()
+	defer s.supervise.routingMu.Unlock()
 	moved, supervised := false, false
 	if t.Origin == from {
 		if _, err := s.editTodo(ctx, t.ID, db.TodoEdit{Origin: &to}); err != nil {
@@ -79,7 +82,15 @@ func (s *Service) handOverTask(ctx context.Context, t Todo, from, to string, hel
 		case changed:
 			moved, supervised = true, true
 			if pending { // the old conversation was told; the new one has not been
-				s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "主对话换了，这个任务转给你验收"}) // i18n-ignore: the supervision message is the assistant's prompt
+				g := superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Recipient: to, Detail: "主对话换了，这个任务转给你验收"} // i18n-ignore: the supervision message is the assistant's prompt
+				// A handover can keep the same external-PR review key. Its previous supervisor's
+				// early admission and delivery fingerprint do not acknowledge the new supervisor.
+				s.supervise.mu.Lock()
+				if s.supervise.sent[g.id()] == g.Key {
+					delete(s.supervise.sent, g.id())
+				}
+				s.supervise.mu.Unlock()
+				s.signal(g)
 			}
 		}
 	}

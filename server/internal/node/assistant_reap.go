@@ -243,9 +243,12 @@ func (p *assistantProc) idleCompactable() bool {
 	return p.agent == "claude" && !p.round && !p.compacting && !p.compacted && p.context >= threshold
 }
 
-// compactIdle sends /compact to an idle process. It is not a turn: the conversation stays as it was in the app (the
-// transcript shows a notice), and the process is let go when idle again.
+// compactIdle sends /compact to an idle process before releasing it. Main chat
+// compactions report their result using the session's existing status.
 func (n *Node) compactIdle(p *assistantProc) {
+	if n.reload.Preparing() {
+		return
+	}
 	// Not while a send, a restore or the user's compaction has this conversation (assistantLife), and only on the same
 	// process, still idle: the next sweep tries again.
 	unlock, ok := n.assistantLife.tryLock(p.id)
@@ -265,13 +268,37 @@ func (n *Node) compactIdle(p *assistantProc) {
 	}
 	n.forgetCacheWarm(p.id)
 	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": n.assistantCompactCommand(p.id)}})
+	if n.reload.Preparing() {
+		return
+	}
 	p.mu.Lock()
+	if !p.alive() || p.busy || p.compacting || p.manual {
+		p.mu.Unlock()
+		return
+	}
 	tokens := p.context
+	startedAt := time.Now().UTC()
 	p.compacting, p.compacted = true, true
-	p.lastActive = time.Now()
+	p.releaseCompaction = state.IsMain
+	p.lastActive = startedAt
 	p.mu.Unlock()
+	if state.IsMain {
+		n.state.update(p.id, func(st *sessionState) bool {
+			st.Compaction = &proto.Compaction{State: proto.CompactionRunning, StartedAt: startedAt}
+			if st.IdleCompaction != nil && !st.IdleCompaction.Attempted {
+				a := *st.IdleCompaction
+				a.recordAttempt(startedAt)
+				st.IdleCompaction = &a
+			}
+			return true
+		})
+		n.notifySessions()
+	}
 	if err := p.write(line); err != nil {
 		n.logger.Printf("assistant %s: compact: %v", p.id[:8], err)
+		if state.IsMain {
+			n.compactionEnded(p.id, "没能开始压缩："+err.Error())
+		}
 		n.stopAssistant(p.id)
 		return
 	}
@@ -322,6 +349,7 @@ func (n *Node) sweepAssistants() {
 	}
 	n.mu.Unlock()
 	release := n.assistantReleases(ids)
+	reloading := n.reload.Preparing()
 	n.mu.Lock()
 	var stale *assistantProc
 	if n.spare != nil && time.Since(n.spare.born) > assistantSpareMaxAge {
@@ -338,7 +366,11 @@ func (n *Node) sweepAssistants() {
 			timedOut = append(timedOut, id)
 		}
 		if p.reapable(time.Now()) {
-			if p.idleCompactable() {
+			if p.releaseCompaction {
+				p.releaseCompaction = false
+				timedOut = append(timedOut, id)
+			}
+			if !reloading && p.idleCompactable() {
 				compact = append(compact, p)
 			} else {
 				idle = append(idle, id)

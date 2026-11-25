@@ -1,4 +1,5 @@
 import { CONTEXT_RE, FILE_RE, PERSONA_SERVERS, canonicalTool } from "./compatibility";
+import { splitInlineTrailer } from "./inline-mentions";
 // Items → what the chat shows (docs/apple/ios.md "Information architecture"): every user message opens a segment; the segment shows
 // the message, one work row folding the tools / thoughts / notices / intermediate replies, and the agent's last
 // words before the next message as the answer.
@@ -26,6 +27,8 @@ export type Step =
 export interface UserMessage {
   id: string;
   text: string;
+  /** The optional inline reference map at the end of this message's wire body. */
+  inlineTrailer?: string;
   images: Item[];
   queued?: boolean;
   ts?: string;
@@ -233,14 +236,15 @@ export function isInterjectContext(attrs: { kind?: string; title?: string }): bo
   return (attrs.kind ?? "context") === "context" && attrs.title === INTERJECT_TITLE;
 }
 
-export function parseUserText(raw: string): { text: string; contexts: Context[]; files: AttachedFile[]; photos: string[] } {
+export function parseUserText(raw: string): { text: string; inlineTrailer?: string; contexts: Context[]; files: AttachedFile[]; photos: string[] } {
   const contexts: Context[] = [];
   const files: AttachedFile[] = [];
   const photos: string[] = [];
   let text = withoutViewErrors(raw).replace(CONTEXT_RE, (_, attrs: string, body: string) => {
     const { kind, title, url, ...rest } = tagAttrs(attrs);
     if (kind === "skill-instructions" || isInterjectContext({ kind, title })) return "";
-    contexts.push({ kind: kind ?? "context", title, url, text: body.trim(), ...(Object.keys(rest).length ? { attrs: rest } : {}) });
+    const words = body.trim();
+    contexts.push({ kind: kind ?? "context", title, url, text: kind === "forward" ? splitInlineTrailer(words).text : words, ...(Object.keys(rest).length ? { attrs: rest } : {}) });
     return "";
   });
   text = text.replace(FILE_RE, (_, attrs: string) => {
@@ -264,7 +268,7 @@ export function parseUserText(raw: string): { text: string; contexts: Context[];
     })
     .replace(/\[Image #\d+\]\s?/g, "")
     .trim();
-  return { text, contexts, files, photos };
+  return { ...splitInlineTrailer(text), contexts, files, photos };
 }
 
 function isUserMessage(i: Item) {
@@ -316,7 +320,10 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       if (it.kind === "image") cur.user!.images.push(it);
       else {
         const p = parseUserText(it.text ?? "");
-        cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
+        if (p.text) {
+          cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
+          cur.user!.inlineTrailer = p.inlineTrailer;
+        }
         for (const c of p.contexts) {
           if (c.kind === "message-source") continue;
           // a real switch is the divider, not a chip; a block that only looks like one (pasted, naming no engines) stays a chip
@@ -594,12 +601,20 @@ export const TOOL_LABEL: Record<string, string> = {
 };
 
 const AGY_PERSONA_MCP_RE = new RegExp(`^mcp_(?:${[...PERSONA_SERVERS].join("|")})(?:_[0-9a-fA-F]{8,16})?_([a-z][a-z0-9_]*)$`);
+const AGY_TOOL_RESULT_HEADER_RE = /^(?:Created At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\r?\nCompleted At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})(?:\r?\n|$))+/;
 
 /** Normalize Antigravity's single-underscore Persona MCP names (`mcp_persona_<tool>`, `mcp_persona_<hex>_<tool>`) to `mcp__persona__<tool>`. */
 export function canonicalMcpToolName(name?: string): string | undefined {
   if (!name || !name.startsWith("mcp_") || name.startsWith("mcp__")) return name;
   const m = AGY_PERSONA_MCP_RE.exec(name);
   return m ? `mcp__persona__${m[1]}` : name;
+}
+
+/** Strip leading Antigravity Created At / Completed At RFC3339 wrapper lines (and an immediate Output: line) from tool results. */
+export function stripToolResultTimestampHeaders(text: string): string {
+  if (!text.startsWith("Created At: ")) return text;
+  const m = AGY_TOOL_RESULT_HEADER_RE.exec(text);
+  return m ? text.slice(m[0].length).replace(/^Output:\r?\n/, "") : text;
 }
 
 export function toolLabel(rawName?: string): string {
@@ -782,7 +797,7 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
       let internalAccepted = false;
       if (verdict === "accepted" && use.tool_input?.user_check !== true) {
         try {
-          const { background } = JSON.parse(result.text ?? "");
+          const { background } = JSON.parse(stripToolResultTimestampHeaders(result.text ?? ""));
           internalAccepted = background === true;
         } catch {
           // Legacy and malformed receipts keep the accepted review visible.
@@ -793,7 +808,7 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
     }
     if (name !== "supervision_finish") return { visible: true, completedSilent: false };
     try {
-      const { visibility } = JSON.parse(result.text ?? "");
+      const { visibility } = JSON.parse(stripToolResultTimestampHeaders(result.text ?? ""));
       if (visibility === "user") return { visible: true, completedSilent: false };
       if (visibility === "silent") silent = true;
     } catch {

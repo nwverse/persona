@@ -261,6 +261,7 @@ func RenderDispatchTask(t DispatchTask) string { return render("agents/dispatch_
 type A2AMessage struct {
 	ID, Sender, State, Text string
 	Language                string
+	Executable              string // a verified node executable, encoded as a JSON string, never shell code
 	Request                 bool
 }
 

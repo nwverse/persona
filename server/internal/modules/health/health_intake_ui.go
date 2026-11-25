@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,13 @@ func (s *Service) healthIntakeUI(w http.ResponseWriter, r *http.Request) {
 	}
 	var req wire.UIRequest
 	if !decodeIntakeJSON(w, r, &req) {
+		return
+	}
+	var route struct {
+		Page string `json:"page"`
+	}
+	if json.Unmarshal([]byte(req.State), &route) == nil && strings.HasPrefix(route.Page, "strength.") {
+		s.healthStrengthUI(w, r, req)
 		return
 	}
 	if strings.HasPrefix(req.Action, "undo:") {
@@ -187,7 +195,12 @@ func (s *Service) healthIntakeUI(w http.ResponseWriter, r *http.Request) {
 		intakeUnavailable(w)
 		return
 	}
-	view := drawIntakePage(p, c, v, reminder, now, s.healthIntakeLocation(r.Context()), l, version, s.h.QuietPush(r.Context()))
+	items, err := s.healthItemsLocked(r.Context())
+	if err != nil {
+		intakeUnavailable(w)
+		return
+	}
+	view := drawIntakePage(p, c, v, reminder, now, s.healthIntakeLocation(r.Context()), l, version, s.h.QuietPush(r.Context()), slices.Contains(items.Items, "water"))
 	if err := s.h.FitPage(&view, version, l); err != nil {
 		s.logf("health intake page: %v", err)
 		intakeUnavailable(w)

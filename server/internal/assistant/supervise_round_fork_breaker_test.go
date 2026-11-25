@@ -21,7 +21,7 @@ import (
 func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 	s, d, f, _ := privacyService(t)
 	st := &memStore{}
-	s.store = func() Store { return st }
+	s.setStore(func() Store { return st })
 	ctx := context.Background()
 	at := time.Now().Add(-time.Hour).UTC()
 	// Use "other" (neither MachineID nor InboxAgentMachine) as BackgroundSupervisorMachineID to verify that moving the

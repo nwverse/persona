@@ -1,9 +1,12 @@
-import { lineItemIds } from "./chat-search";
-import { navRailExcerpt, navRailPreview, navRailTicks, type NavRailTick } from "./nav-rail";
-import { parseUserText, type ChatLine } from "./turns";
 import type { Item } from "./types";
 
-export interface UserInputPosition { id: string; seq: number }
+export interface UserInputPosition {
+  id: string;
+  seq: number;
+  preview?: string;
+  answer?: string;
+  attachments?: number;
+}
 export interface UserInputIndex { total: number; inputs: UserInputPosition[]; history: string }
 
 /** This temporary count/position contract is deliberately smaller than #2071; migrate to that API when it ships. */
@@ -15,6 +18,10 @@ export function validUserInputIndex(value: unknown): value is UserInputIndex {
   let last = 0;
   return index.inputs.every((input) => {
     if (!input || typeof input !== "object" || typeof input.id !== "string" || !input.id || ids.has(input.id) || !Number.isSafeInteger(input.seq) || input.seq < last || input.seq <= 0) return false;
+    const { preview, answer, attachments } = input;
+    if (preview !== undefined && typeof preview !== "string") return false;
+    if (answer !== undefined && typeof answer !== "string") return false;
+    if (attachments !== undefined && (!Number.isSafeInteger(attachments) || attachments < 0)) return false;
     ids.add(input.id); last = input.seq;
     return true;
   });
@@ -35,29 +42,6 @@ export function windowUserInputs(index: UserInputIndex, earliestSeq?: number): U
   const loaded = earliestSeq === undefined ? -1 : index.inputs.findIndex((input) => input.seq >= earliestSeq);
   const start = loaded < 0 ? initial : Math.min(initial, loaded);
   return { ...index, inputs: index.inputs.slice(start) };
-}
-
-export function indexedNavTicks(index: UserInputIndex, lines: ChatLine[], items: Item[]): NavRailTick[] {
-  const owner = new Map<string, string>();
-  for (const line of lines) for (const id of lineItemIds(line)) owner.set(entry(id), line.id);
-  const loaded = new Map(navRailTicks(lines).map((tick) => [tick.id, tick]));
-  const words = new Map<string, string>();
-  for (const item of items) {
-    if (item.role === "user" && item.kind === "text") {
-      const key = entry(item.id);
-      words.set(key, [words.get(key), parseUserText(item.text ?? "").text].filter(Boolean).join("\n"));
-    }
-  }
-  return index.inputs.map((input, i) => {
-    const lineId = owner.get(entry(input.id));
-    const tick = lineId ? loaded.get(lineId) : undefined;
-    return {
-      id: `seg:${input.id}`, seq: input.seq, lineId, ordinal: index.total - index.inputs.length + i + 1,
-      preview: navRailPreview(words.get(entry(input.id)) ?? "") || tick?.preview || "",
-      ...(tick?.attachmentsOnly ? { attachmentsOnly: tick.attachmentsOnly } : {}),
-      ...(tick?.answerExcerpt ? { answerExcerpt: navRailExcerpt(tick.answerExcerpt) } : {}),
-    };
-  });
 }
 
 export function containsInput(items: Item[], input: UserInputPosition): boolean {

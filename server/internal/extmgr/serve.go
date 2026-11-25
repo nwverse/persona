@@ -66,6 +66,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)
 	go h.sentLedgerLoop(ctx)
+	go h.larkSyncLoop(ctx) // the Lark user sync's daily runs (larksync_run.go)
 	h.apiMux = http.NewServeMux()
 	h.registerRoutes(h.apiMux)
 	close(h.started)
@@ -634,9 +635,13 @@ func (h *Manager) report() extwire.Report {
 		r.Looks = h.extensionLooks()
 	}
 	if ps := h.extensions; ps != nil {
+		r.PushGradingDeclared = true
 		for _, p := range ps.reg.List() {
 			if !p.Record.Enabled || p.Problem != "" {
 				continue
+			}
+			if ps.reg.HubScopeAllowed(p.Record.ID, extension.ScopePushGrading) {
+				r.PushGradingExtensions = append(r.PushGradingExtensions, p.Record.ID)
 			}
 			hp := ps.get(p.Record.ID)
 			if hp == nil || hp.proc == nil || hp.proxy == nil {
@@ -646,6 +651,7 @@ func (h *Manager) report() extwire.Report {
 				r.APIs = append(r.APIs, extwire.APIPrefix{Prefix: a.Prefix, Receipts: a.Receipts, Events: a.Events})
 			}
 		}
+		slices.Sort(r.PushGradingExtensions)
 	}
 	for _, m := range h.machinesNow() {
 		var x extwire.MachineExtras
@@ -761,6 +767,24 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 // ConnectorTool says whether name is a registered connector's tool (not Cua's or ego's).
 func (h *Manager) ConnectorTool(name string) bool {
 	return h.connectors != nil && h.connectors.Offers(name)
+}
+
+// InboxVisibilityPreflight reports the provider's explicit visibility-enforcement declaration without running the tool.
+func (h *Manager) InboxVisibilityPreflight(name string) bool {
+	return h.connectors != nil && h.connectors.InboxVisibilityPreflight(name)
+}
+
+// InboxVisibilitySource resolves any registered connector tool to its source id. The assistant uses this positive
+// registry lookup rather than recognizing one vendor's tool names: an older arbitrary source must fail closed too.
+func (h *Manager) InboxVisibilitySource(name string) (string, bool) {
+	if h.connectors == nil || !h.connectors.Offers(name) {
+		return "", false
+	}
+	c := h.connectors.Owner(name)
+	if c == nil {
+		return "", false
+	}
+	return c.ID(), true
 }
 
 // ToolAccess classifies every tool CallTool can dispatch, without running it. Connector reads are declared by the

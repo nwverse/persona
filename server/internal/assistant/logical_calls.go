@@ -245,7 +245,7 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 				}
 			}
 		}
-		if logicalSendMethod(method) && current.Epoch > 1 {
+		if logicalSendMethod(method) && logicalSourceMayBeRetired(current) {
 			if _, err := s.logicalPhysical(ctx, active.MachineID, "assistant.segment.restore", map[string]any{"session_id": active.SessionID}); err != nil {
 				return err
 			}
@@ -401,7 +401,8 @@ func (s *Service) logicalSendModel(ctx context.Context, machine, session string,
 	}
 	c, err := st.LogicalConversation(ctx, machine, session)
 	if err != nil {
-		return true, err
+		s.logf("load logical conversation model (%s/%s): %v", machine, short(session), err)
+		return true, i18n.Err("assistant-model_pick.err_unreadable")
 	}
 	if c == nil || c.Epoch == 1 {
 		return false, nil

@@ -167,6 +167,8 @@
   "side_unread_also": "另有新回复：{titles}",
   "module_recording": "会议录音",
   "module_recording_hint": "在知识库查看录音的纪要、全天回顾、转写和照片。",
+  "module_lark": "飞书消息",
+  "module_lark_hint": "在「消息」页里用一个列表查看所有飞书会话；在「设置 › 连接器 › 飞书」里为这个浏览器打开。",
   "module_screen_share": "屏幕共享",
   "module_screen_share_hint": "在「机器」里的电脑页面打开它的实时屏幕，并在浏览器里操作。",
   "subagents_running": "{count} 个运行中",

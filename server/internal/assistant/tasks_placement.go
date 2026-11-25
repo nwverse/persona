@@ -197,6 +197,14 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 	return exists
 }
 
+// deferredTaskStart is the first input of a Companion session that answered Starting after defer_mcp. It is activated
+// through the ordinary idempotent session.send path only after the task role and supervision relationship are linked.
+type deferredTaskStart struct {
+	text        string
+	images      []proto.Image
+	clientMsgID string
+}
+
 // startTaskAgent starts the agent for t on its machine (another when its launcher does not work there: t says which)
 // and answers the machine's id and the session's: the machine it reached is the one the agent is linked to (looking it
 // up again after the start could find another, or none). A failed start counts against the launcher there.
@@ -211,11 +219,15 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	ctx = context.WithValue(ctx, placementKey{}, p)
 	defer func() { s.finishPlanPlacement(ctx, p, t, sid, err) }()
 	t.startedAgent = ""
+	t.deferredStart = nil
 	if err := s.checkClaimedGatewayStart(ctx, *t); err != nil {
 		return "", "", err
 	}
 	if err := s.checkRequestStart(ctx, *t); err != nil {
 		return "", "", err
+	}
+	if (t.HandoffID != "" || t.HandoffOperationID != "") && (t.Permission != "" || t.Readonly) {
+		t.preservePermission = true
 	}
 	t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 	settledPermission := t.Permission
@@ -225,7 +237,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// What the task itself named, kept from its first try in this process. The task as stored never carries what a
 	// tier, Model configuration › Agents or a start-defaults policy filled in (storedLaunch, #12618), so a task read
 	// back from the store (task_retry, a remedy, a queued start, a retry from the card, a manager restart) names only
-	// its own and is resolved again against the current defaults.
+	// its own and is resolved again against the current defaults, except that a tier keeps the candidate the task's
+	// previous Agent ran on (its Dispatch, below; candidate_keep.go, #14701).
 	firstTry := t.callerPick == nil
 	if t.callerPick == nil {
 		own := t.launchPick()
@@ -265,9 +278,48 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults {
 		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
 	}
-	own, err := s.resolveStart(ctx, params, t.LauncherDefaultModel)
+	tierCtx, tierSlot := withTierStart(ctx, t.Machine)
+	// Another Agent of the same task (a retry, a continuation, a queued or restarted start read back) keeps the
+	// candidate its previous Agent ran on, unless this start names a launcher, a model or another tier of its own
+	// (candidate_keep.go, #14701): the tier's pick keeps it, or re-picks it on a clear problem.
+	if keep := s.taskKeep(ctx, t); keep != nil {
+		prof, _, _ := s.activeModelProfile(ctx)
+		if keepsTier(prof, params, keep.Prev) {
+			if tier, _ := params["tier"].(string); strings.TrimSpace(tier) == "" {
+				params["tier"] = keep.Prev.Tier
+			}
+			tierSlot.keep = keep
+		}
+	}
+	own, err := s.resolveStart(tierCtx, params, t.LauncherDefaultModel)
 	if err != nil {
 		return "", "", err
+	}
+	// The candidate the tier gave this start (pickTierCandidate): on the plan card as the task's dispatch, and one
+	// model_routing row once the Agent started.
+	t.Dispatch, t.tierChoice = nil, tierSlot.pick
+	if tierSlot.pick != nil {
+		if t.startFilled.preset {
+			// A start-defaults policy chose this tier for this start only: the next Agent rolls again, it keeps nothing.
+			if tierSlot.pick.Args == nil {
+				tierSlot.pick.Args = map[string]any{}
+			}
+			tierSlot.pick.Args[dispatchPresetArg] = true
+		}
+		t.Dispatch = tierSlot.pick.dispatch()
+		if k := tierSlot.keep; k != nil && k.Prev.Launcher == t.Dispatch.Launcher && k.Prev.Model == t.Dispatch.Model {
+			t.Dispatch.Failed = k.Prev.Failed // the same candidate again: its failed starts in a row go on counting
+		}
+		defer func() {
+			if err != nil && failedStart(err) {
+				t.Dispatch.Failed++
+			}
+			if err == nil && sid != "" {
+				row := modelRoutingOf(*tierSlot.pick, mid)
+				row.TodoID, row.PlanID, row.TaskIndex, row.SessionID = t.TodoID, t.planID, t.planIndex, sid
+				s.recordModelRouting(ctx, row)
+			}
+		}()
 	}
 	if t.defaulted || t.Launcher == "" {
 		own.launcher, t.defaulted = "", true // filled in from a default, by this try or an earlier one
@@ -385,6 +437,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		s.grantScheduleKind(ctx, id, *t)
 	}
 	prompt := t.Prompt
+	if t.HandoffID != "" {
+		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
+			prompt = handoffSummary + "\n\n" + prompt
+		}
+	}
 	if t.backendWorkspace() {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
 		if err != nil {
@@ -506,7 +563,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			params["images"] = todoProtoImages(rows)
 		}
 	}
-	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, localTabName(t.Title)
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID
 	}
@@ -566,6 +623,22 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, m.ID, params)
+	deferredImages, _ := params["images"].([]proto.Image)
+	// A role-bearing Companion start must not attach MCP before linkPlanAgent can answer its identity-scoped tools/list.
+	// The real ACP id comes back first; only a Companion that actually answers Starting is activated after the link.
+	if companion && (t.Role == roleLeader || t.Parent != "") && (prompt != "" || len(deferredImages) > 0) {
+		params["defer_mcp"] = true
+		if id, _ := params["client_msg_id"].(string); id == "" {
+			params["client_msg_id"] = newStartSessionID() // the post-link send has the same once-only identity as an immediate start
+		}
+	}
+	noteDeferredStart := func(session proto.Session) {
+		if params["defer_mcp"] != true || !session.Starting {
+			return
+		}
+		clientMsgID, _ := params["client_msg_id"].(string)
+		t.deferredStart = &deferredTaskStart{text: prompt, images: append([]proto.Image(nil), deferredImages...), clientMsgID: clientMsgID}
+	}
 	callNode := func() error {
 		if err := s.checkContinuationScope(t); err != nil {
 			return err
@@ -611,6 +684,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if companionAway(err, companion) && !t.Readonly {
 			companion = false
 			delete(params, "host")
+			delete(params, "defer_mcp")
 			s.logf("task %s: start: the Antigravity companion is not connected on %s; starting in its default host", t.TodoID, m.ID)
 			if err := s.checkContinuationScope(t); err != nil {
 				return "", "", err
@@ -637,6 +711,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					cancel()
 					if found {
 						t.startedAgent = cmp.Or(session.Agent, fit.snapshot)
+						noteDeferredStart(session)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, session, params["tab_name"].(string), t.Title))
 						return m.ID, session.SessionID, nil
 					}
 				}
@@ -648,6 +724,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			if sess, ok := s.adoptTaskStartSession(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs); ok {
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
 				t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+				noteDeferredStart(sess)
+				s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 				return m.ID, sess.SessionID, nil
 			}
 			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
@@ -661,6 +739,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					if sess, ok := s.adoptTaskStartSessionUntil(ctx, m, s.startLauncher(ctx, picked), t.Cwd, expectID, knownIDs, startMayHaveArrived(err, sentAt)); ok {
 						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
 						t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
+						noteDeferredStart(sess)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 						return m.ID, sess.SessionID, nil
 					}
 				}
@@ -717,6 +797,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		t.noteWhy(i18n.T(s.lang(ctx), "assistant-tasks.ultracode_skipped", i18n.Args{"reason": skipped}))
 	}
 	t.startedAgent = cmp.Or(res.Session.Agent, fit.snapshot)
+	noteDeferredStart(res.Session)
+	s.nameAgentTabLater(agentTabNameStart(m.ID, res.Session, params["tab_name"].(string), t.Title))
 	return m.ID, res.Session.SessionID, nil
 }
 

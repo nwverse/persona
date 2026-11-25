@@ -75,6 +75,9 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// Dispatch is the hub's record of the candidate the tier gave the task's latest start (tier_pick.go, #14700):
+	// written when it starts, never taken from a tool call, and never read back as the task's own launch (storedLaunch).
+	Dispatch *TaskDispatch `json:"dispatch,omitempty"`
 	// Host: where the task's Agent starts, as task_plan named it: agy (the computer's Antigravity companion, which has
 	// no terminal) or one of the computer's engine hosts. "" lets the hub choose: the companion for an agy launcher it
 	// runs, else the computer's default host (start_host.go, #13447).
@@ -140,11 +143,13 @@ type PlanTask struct {
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
-	Goal          string   `json:"goal,omitempty"`
-	OutOfBounds   []string `json:"out_of_bounds,omitempty"`
-	Continues     string   `json:"continues,omitempty"`
-	ContinuesWhy  string   `json:"continues_why,omitempty"`
-	ScopeRevision string   `json:"scope_revision,omitempty"`
+	Goal               string   `json:"goal,omitempty"`
+	OutOfBounds        []string `json:"out_of_bounds,omitempty"`
+	Continues          string   `json:"continues,omitempty"`
+	ContinuesWhy       string   `json:"continues_why,omitempty"`
+	HandoffID          string   `json:"handoff_id,omitempty"`
+	HandoffOperationID string   `json:"handoff_operation_id,omitempty"`
+	ScopeRevision      string   `json:"scope_revision,omitempty"`
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
@@ -152,7 +157,7 @@ type PlanTask struct {
 	// work and ordinary conversations use main. The durable task ledger takes precedence after a transfer.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
-	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
+	// opened that has no agent yet, such as the todo a Lark topic opened (the lark module's thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
 	// Role: every new task declares "worker" or "leader". A leader may hand out workers beneath its task
@@ -243,9 +248,14 @@ type PlanTask struct {
 	// startNamed: what this start try put in place of the launch resolved for the task, which the task names from then
 	// on as its card shows it (storedLaunch). Never serialized; this try only.
 	startNamed startNamed
+	// tierChoice: the tier's pick on this start try; never serialized (Dispatch is its record).
+	tierChoice *tierPick
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string
+	// deferredStart is a Companion session whose real id exists but whose MCP and first prompt wait for the role link.
+	// The original first message is kept only for this start attempt; never serialized.
+	deferredStart *deferredTaskStart
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).

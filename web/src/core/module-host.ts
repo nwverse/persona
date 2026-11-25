@@ -14,11 +14,12 @@
 // `settings`, `chat_card_kinds`, `composer_actions`, `chat_accessories`, `i18n_namespaces`), in this codebase's camelCase:
 //   id → id · api → api · needs → needs · wants → wants · feature → feature
 //   shell_places → routes + extensionPages + navItems + kbKinds + standalonePages
-//   settings → settingsTabs · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
+//   settings → settingsTabs + settingsRows · chat_card_kinds → cardRenderers · composer_actions + chat_accessories → chatSlots
 //   i18n_namespaces → i18nNamespaces (+ locales)
 // Served: id, api (checked against MODULE_API), needs (the ESLint boundary), feature, routes, navItems, extensionPages
 // (reserved `/extension/<id>/…` pages, also shell_places), kbKinds (the knowledge detail's `kb.detail` slot, also
 // shell_places), standalonePages (a page drawn without the app shell, served by main.tsx; also shell_places),
+// settingsRows (rows in a core Settings page's section, SETTINGS_ROW_PLACES; also `settings`), navItems' `shown`,
 // i18nNamespaces / locales, chatSlots (#13846: ChatView,
 // Composer and Interactions draw what a module's code fills, ChatSlotOutlet), settingsTabs (Settings draws the module's
 // page under its own category) and cardRenderers (a pending card of a kind the core has no card for). Declared but not
@@ -29,28 +30,52 @@
 //
 // The hub flag rule (agreed for every client on #13844): a module's `feature` is `module.<id>` (moduleFeature). A hub
 // that publishes module flags also announces the marker MODULES_FEATURE. A module with a `feature` is off only when the
-// hello has the marker and lacks the module's flag: no hello yet, or a hello without the marker (an older hub), leaves
-// it on, so defaults never change on an older hub and nothing waits on the hello to draw.
+// hello has the marker and lacks the module's flag: an older hub (no marker) or a hub never heard from leaves it on, so
+// defaults never change and nothing waits on the hello to draw. Each hub's last module flags are remembered per hub
+// (origin and reverse-proxy subpath, #14431) and used on reload until the new hello arrives, so an off module is neither
+// drawn nor fetched while waiting for the hello.
 import type { ComponentType, ReactElement, ReactNode, RefObject } from "react";
 import { useSyncExternalStore } from "react";
 import { addCatalogs, type CatalogLoaders } from "../i18n";
 import type { IconName } from "../ui/icons";
+import { BASE } from "../lib/base";
 import type { UIColor } from "../lib/extension-ui-v6";
 import type { Route } from "../lib/router";
 import type { KBDetail, KBEntry } from "../lib/kb";
 import type { State } from "../lib/store";
 import type { Interaction, Item, Session } from "../lib/types";
-import { moduleSwitchedOff, subscribeModuleSwitches } from "./module-switch";
+import { moduleSwitchedOff, readStoredJson, subscribeModuleSwitches } from "./module-switch";
 
 import { MODULES_FEATURE } from "./module-flags";
 
 // The hub flag names (the rule above) live in module-flags.ts, so a descriptor can name its flag without the host.
 export { MODULES_FEATURE, moduleFeature } from "./module-flags";
 
+const hubKey = () => `persona.modules.hub:${typeof location < "u" ? location.origin ?? "" : ""}${BASE}`;
+
+const readHubModules = (): string[] | null => {
+  const v = readStoredJson(hubKey());
+  return Array.isArray(v) && v.every((x): x is string => typeof x === "string" && x.startsWith("module.")) ? v : null;
+};
+
+const rememberHubModules = (features: readonly string[]) => {
+  const key = hubKey();
+  const next = features.includes(MODULES_FEATURE)
+    ? JSON.stringify([...new Set(features.filter((f) => f.startsWith("module.")))].sort())
+    : null;
+  try {
+    if (next === localStorage.getItem(key)) return;
+    if (next === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, next);
+  } catch {
+    // storage blocked or full: the live hello still applies for this page
+  }
+};
+
 /** The typed chat slots a module may fill (#13430 `composer_actions`, `chat_accessories`), each drawn by the chat page
  *  where the comment on ChatSlotComponents says. */
 export type ChatSlot = "composer.trailingAction" | "chat.tail" | "chat.bar" | "interaction.asked";
-export const CHAT_SLOTS: readonly ChatSlot[] = ["composer.trailingAction", "chat.tail", "chat.bar", "interaction.asked"];
+export const CHAT_SLOTS: readonly ChatSlot[] = "composer.trailingAction chat.tail chat.bar interaction.asked".split(" ") as ChatSlot[];
 
 /** What a chat page hands every chat slot: which conversation it shows, and what of it a slot may read or do. */
 export interface ChatPageProps {
@@ -135,7 +160,15 @@ export interface ModuleNavItem {
   color?: UIColor;
   /** The core page it comes right after, in the default order. */
   after: string;
+  /** When the entry shows at all while the module is on (a browser's own choice, what the hub reads): read with each
+   *  look at the sidebar, `subscribe` calls back when it may have changed. None: always. Its address still opens. */
+  shown?: { get: () => boolean; subscribe: (listener: () => void) => () => void };
 }
+
+/** The places in core Settings pages where a module adds rows (#13404: the Lark connector's section of Settings ›
+ *  Connectors). Each is drawn by the page where its comment says, with the rows of the enabled modules naming it. */
+export type SettingsRowPlace = "connectors.lark";
+export const SETTINGS_ROW_PLACES: readonly SettingsRowPlace[] = ["connectors.lark"];
 
 /** A Settings category of the module (#13430 `settings`), in one of Settings' groups. Its words are read before the
  *  module's strings are in (the Settings sidebar, its search), so its keys live in the shell's namespaces. */
@@ -228,6 +261,8 @@ export interface ModuleCode {
   settings?: Readonly<Record<string, ComponentType<ModuleSettingsProps>>>;
   /** Its pending cards, by `cardRenderers` kind. */
   cards?: Readonly<Record<string, ComponentType<ModuleCardProps>>>;
+  /** Its rows in core Settings pages, by `settingsRows` place. */
+  settingsRows?: Partial<Readonly<Record<SettingsRowPlace, ComponentType>>>;
   /** The page its `standalonePages` open (main.tsx draws what it returns as the whole page, with no app shell), given
    *  the page's address. It takes from the address what must not stay there (a token in the fragment) before App
    *  could read it; null when the address is not one of its pages after all, and the app opens instead. */
@@ -268,6 +303,8 @@ export interface ModuleDescriptor {
   kbKinds?: readonly string[];
   /** Its Settings categories; its code's `settings` draws each. */
   settingsTabs?: readonly ModuleSettingsTab[];
+  /** Places in core Settings pages it adds rows to (SETTINGS_ROW_PLACES); its code's `settingsRows` draws each. */
+  settingsRows?: readonly SettingsRowPlace[];
   /** The chat slots it fills; its code's `chat` draws each. */
   chatSlots?: readonly ChatSlot[];
   /** The pending-card kinds it renders, none the core has a card for; its code's `cards` draws each. */
@@ -284,40 +321,46 @@ export interface ModuleDescriptor {
  *  flag). */
 export type ModuleState = "on" | "off";
 
-/** What the host reads of the hub: the hello's features and whether the hello came. The shell connects the store
- *  (connectModuleHub, App.tsx); the router imports this file, so it does not import the store itself. Until it is
- *  connected the hub has said nothing: every module is on. */
-type HubState = Pick<State, "features" | "loaded">;
+/** What the host reads of the hub: the hello's features, whether it loaded, and whether the hello arrived. The shell
+ *  connects the store (connectModuleHub, App.tsx); the router imports this file, so it does not import the store itself.
+ *  Until a hello arrives, any remembered module flags for this hub apply; an unseen hub has every module on. */
+type HubState = Pick<State, "features" | "loaded"> & Partial<Pick<State, "conn">>;
 const NO_HUB: HubState = { features: [], loaded: false };
 let hubState: () => HubState = () => NO_HUB;
-let subscribeHub: (l: () => void) => () => void = () => () => {};
+let offHubConn: (() => void) | undefined;
+
+const hasLiveHello = (s: Pick<State, "features"> & Partial<Pick<State, "loaded" | "conn">>) =>
+  Boolean(s.features.length || s.loaded || s.conn === "online");
 
 export function connectModuleHub(get: () => HubState, subscribe: (l: () => void) => () => void): void {
+  offHubConn?.();
   hubState = get;
-  subscribeHub = subscribe;
+  // Both hello and reset() replace state.features with a new array reference, so watching reference changes persists
+  // every hello's module flags and forgets them on reset() even before a hello has flushed.
+  let lastFeatures: readonly string[] = get().features;
+  offHubConn = subscribe(() => {
+    const s = get();
+    if (s.features !== lastFeatures) rememberHubModules((lastFeatures = s.features));
+    if (enabledKey() !== lastEnabled) changed();
+  });
   changed();
 }
-
-const getState = () => hubState();
 
 const MODULE_ID = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 /** The module API this shell serves (#13430 `api`). */
 export const MODULE_API = 1;
 
-/** Descriptor fields declared but not served yet: a module that fills one is refused rather than silently ignored. */
-const UNSERVED = ["wants"] as const;
-
 /** The pending-card kinds the core draws itself (views/chat/Interactions.tsx InteractionCard): no module renders them. */
-export const CORE_CARD_KINDS: ReadonlySet<string> = new Set(["question", "plan", "permission", "screen", "elicitation"]);
+export const CORE_CARD_KINDS: ReadonlySet<string> = new Set("question plan permission screen elicitation".split(" "));
 
 
 /** The first segments of the core's own addresses (lib/router.ts parse, and what the hub serves beside the app): a
  *  module's base or standalone page may not be one. lib/router.test.ts keeps it in step with parse. */
 export const CORE_PATHS: ReadonlySet<string> = new Set([
-  "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox", "messages",
+  "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox",
   "starred", "routines", "kb", "space", "machines", "terminal", "a", "agents", "compare", "settings", "subscriptions",
-  "extension", "plugin", "todos", "api", "login", "share", "admin", "assets",
+  "extension", "plugin", "todos", "lark-oauth", "api", "login", "share", "admin", "assets",
 ]);
 /** Core addresses whose deeper paths a module may take as an alias: `/tracks/<slug>` of a space it has its own page for. */
 const ALIASABLE: ReadonlySet<string> = new Set(["tracks"]);
@@ -328,7 +371,9 @@ const overlaps = (a: readonly string[], b: readonly string[]) => a.slice(0, Math
 const registry = new Map<string, ModuleDescriptor>();
 const listeners = new Set<() => void>();
 let revision = 0;
+let lastEnabled = "";
 const changed = () => {
+  lastEnabled = enabledKey();
   revision++;
   listeners.forEach((l) => l());
 };
@@ -336,52 +381,58 @@ const changed = () => {
 /** Registers a module's descriptor (src/modules/index.ts). A second registration of the same id, a malformed id, or a
  *  route base another module already claims is a programming error. */
 export function registerModule(d: ModuleDescriptor): void {
+  const fail = (msg: string): never => {
+    throw new Error(`module "${d.id}" ${msg}`);
+  };
+  const checkUnique = (items: readonly string[] | undefined, what: string, of: (m: ModuleDescriptor) => readonly string[] | undefined) => {
+    for (const x of items ?? []) {
+      const other = [...registry.values()].find((m) => of(m)?.includes(x));
+      if (other) fail(`${what} "${x}", which "${other.id}" has`);
+    }
+  };
   if (!MODULE_ID.test(d.id)) throw new Error(`module id "${d.id}" is not lower-case and hyphenated`);
-  if (registry.has(d.id)) throw new Error(`module "${d.id}" is registered twice`);
-  if ((d.api ?? MODULE_API) !== MODULE_API) throw new Error(`module "${d.id}" is written for module API ${d.api}; this shell serves ${MODULE_API}`);
-  const unserved = UNSERVED.filter((k) => (d[k]?.length ?? 0) > 0);
-  if (unserved.length) throw new Error(`module "${d.id}" contributes ${unserved.join(", ")}, which the web shell does not serve yet`);
+  if (registry.has(d.id)) fail("is registered twice");
+  if ((d.api ?? MODULE_API) !== MODULE_API) fail(`is written for module API ${d.api}; this shell serves ${MODULE_API}`);
+  if (d.wants?.length) fail("contributes wants, which the web shell does not serve yet");
   for (const slot of d.chatSlots ?? []) {
-    if (!CHAT_SLOTS.includes(slot)) throw new Error(`module "${d.id}" fills the chat slot "${slot}", which the web shell does not have`);
+    if (!CHAT_SLOTS.includes(slot)) fail(`fills the chat slot "${slot}", which the web shell does not have`);
+  }
+  for (const place of d.settingsRows ?? []) {
+    if (!SETTINGS_ROW_PLACES.includes(place)) throw new Error(`module "${d.id}" adds rows to the Settings place "${place}", which the web shell does not have`);
   }
   for (const tab of d.settingsTabs ?? []) {
-    if (tab.key !== d.id && !tab.key.startsWith(`${d.id}-`)) throw new Error(`module "${d.id}" claims the Settings category "${tab.key}", which is not its id or its id and a suffix`);
+    if (tab.key !== d.id && !tab.key.startsWith(`${d.id}-`)) fail(`claims the Settings category "${tab.key}", which is not its id or its id and a suffix`);
   }
   for (const kind of d.cardRenderers ?? []) {
-    if (CORE_CARD_KINDS.has(kind)) throw new Error(`module "${d.id}" renders the card kind "${kind}", which the core draws`);
-    const other = [...registry.values()].find((m) => m.cardRenderers?.includes(kind));
-    if (other) throw new Error(`module "${d.id}" renders the card kind "${kind}", which "${other.id}" has`);
+    if (CORE_CARD_KINDS.has(kind)) fail(`renders the card kind "${kind}", which the core draws`);
   }
+  checkUnique(d.cardRenderers, "renders the card kind", (m) => m.cardRenderers);
   const standaloneOwner = (base: string) => [...registry.values()].find((m) => m.standalonePages?.includes(base));
   for (const r of d.routes ?? []) {
     for (const path of routePaths(r)) {
-      if (path.length === 1 && CORE_PATHS.has(path[0]!)) throw new Error(`module "${d.id}" claims /${path[0]}, a core address`);
+      if (path.length === 1 && CORE_PATHS.has(path[0]!)) fail(`claims /${path[0]}, a core address`);
       const page = standaloneOwner(path[0]!);
-      if (page) throw new Error(`module "${d.id}" claims /${path.join("/")}, which "${page.id}" draws as a page of its own`);
-      if (path.length > 1 && CORE_PATHS.has(path[0]!) && !ALIASABLE.has(path[0]!)) throw new Error(`module "${d.id}" claims /${path.join("/")}, under the core address /${path[0]}`);
+      if (page) fail(`claims /${path.join("/")}, which "${page.id}" draws as a page of its own`);
+      if (path.length > 1 && CORE_PATHS.has(path[0]!) && !ALIASABLE.has(path[0]!)) fail(`claims /${path.join("/")}, under the core address /${path[0]}`);
       for (const other of registry.values()) {
         const taken = (other.routes ?? []).flatMap(routePaths).find((o) => overlaps(o, path));
-        if (taken) throw new Error(`module "${d.id}" claims /${path.join("/")}, which "${other.id}" has (/${taken.join("/")})`);
+        if (taken) fail(`claims /${path.join("/")}, which "${other.id}" has (/${taken.join("/")})`);
       }
     }
   }
   for (const id of d.extensionPages ?? []) {
-    if (!/^-[a-z][a-z0-9-]*$/.test(id)) throw new Error(`module "${d.id}" claims the extension page id "${id}", which is not a reserved one (it must start with "-")`);
-    const other = [...registry.values()].find((m) => m.extensionPages?.includes(id));
-    if (other) throw new Error(`module "${d.id}" claims the extension page id "${id}", which "${other.id}" has`);
+    if (!/^-[a-z][a-z0-9-]*$/.test(id)) fail(`claims the extension page id "${id}", which is not a reserved one (it must start with "-")`);
   }
   for (const base of d.standalonePages ?? []) {
-    if (!/^[a-z][a-z0-9-]*$/.test(base)) throw new Error(`module "${d.id}" claims the page of its own "${base}", which is not one address segment`);
-    if (CORE_PATHS.has(base)) throw new Error(`module "${d.id}" claims /${base} as a page of its own, a core address`);
+    if (!/^[a-z][a-z0-9-]*$/.test(base)) fail(`claims the page of its own "${base}", which is not one address segment`);
+    if (CORE_PATHS.has(base)) fail(`claims /${base} as a page of its own, a core address`);
     const other = standaloneOwner(base);
-    if (other) throw new Error(`module "${d.id}" claims /${base} as a page of its own, which "${other.id}" has`);
+    if (other) fail(`claims /${base} as a page of its own, which "${other.id}" has`);
     const routed = [...registry.values(), d].find((m) => (m.routes ?? []).flatMap(routePaths).some((p) => p[0] === base));
-    if (routed) throw new Error(`module "${d.id}" claims /${base} as a page of its own, which "${routed.id}" routes in the app`);
+    if (routed) fail(`claims /${base} as a page of its own, which "${routed.id}" routes in the app`);
   }
-  for (const kind of d.kbKinds ?? []) {
-    const other = [...registry.values()].find((m) => m.kbKinds?.includes(kind));
-    if (other) throw new Error(`module "${d.id}" claims the knowledge kind "${kind}", which "${other.id}" has`);
-  }
+  checkUnique(d.extensionPages, "claims the extension page id", (m) => m.extensionPages);
+  checkUnique(d.kbKinds, "claims the knowledge kind", (m) => m.kbKinds);
   registry.set(d.id, d);
   changed();
 }
@@ -395,25 +446,28 @@ export function moduleById(id: string): ModuleDescriptor | undefined {
   return registry.get(id);
 }
 
-/** Whether the hub serves a module with this `feature` (the hub flag rule): it names none, the hub publishes no module
- *  flags (no hello yet, or an older hub), or the hello has it. */
-export function hubServes(feature: string | undefined, s: Pick<State, "features"> = getState()): boolean {
-  return !feature || !s.features.includes(MODULES_FEATURE) || s.features.includes(feature);
+/** Whether the hub serves a module with this `feature` (the hub flag rule): it names none, the live hello (or before it,
+ *  this hub's remembered answer) publishes no module flags, or it includes `feature`. */
+export function hubServes(feature: string | undefined, s: Pick<State, "features"> & Partial<Pick<State, "loaded" | "conn">> = hubState()): boolean {
+  if (!feature) return true;
+  if (hasLiveHello(s)) return !s.features.includes(MODULES_FEATURE) || s.features.includes(feature);
+  const kept = readHubModules();
+  return !kept || kept.includes(feature);
 }
 
-/** Whether `d` is there given the hub's hello features and this browser's switch. */
-export function moduleState(d: ModuleDescriptor, s: Pick<State, "features" | "loaded"> = getState()): ModuleState {
+/** Whether `d` is there given the hub's hello features (or remembered flags before hello) and this browser's switch. */
+export function moduleState(d: ModuleDescriptor, s: HubState = hubState()): ModuleState {
   if (moduleSwitchedOff(d.id)) return "off";
   return hubServes(d.feature, s) ? "on" : "off";
 }
 
-export const moduleOn = (id: string, s?: Pick<State, "features" | "loaded">) => {
+export const moduleOn = (id: string, s?: HubState) => {
   const d = registry.get(id);
   return d !== undefined && moduleState(d, s) === "on";
 };
 
 /** The enabled modules, for code outside React. */
-export function enabledModules(s?: Pick<State, "features" | "loaded">): ModuleDescriptor[] {
+export function enabledModules(s?: HubState): ModuleDescriptor[] {
   return [...registry.values()].filter((d) => moduleState(d, s) === "on");
 }
 
@@ -422,8 +476,7 @@ export function enabledModules(s?: Pick<State, "features" | "loaded">): ModuleDe
 export function moduleRouteAt(segments: readonly string[]): Extract<Route, { name: "module" }> | "absent" | null {
   for (const d of registry.values()) {
     for (const r of d.routes ?? []) {
-      const prefixes = [[r.base], ...(r.aliases ?? [])];
-      const prefix = prefixes.find((p) => p.length <= segments.length && p.every((x, i) => segments[i] === x));
+      const prefix = routePaths(r).find((p) => p.length <= segments.length && p.every((x, i) => segments[i] === x));
       if (!prefix) continue;
       if (moduleState(d) === "off") return "absent";
       return { name: "module", module: d.id, base: r.base, path: segments.slice(prefix.length) };
@@ -432,24 +485,21 @@ export function moduleRouteAt(segments: readonly string[]): Extract<Route, { nam
   return null;
 }
 
+const moduleWith = (has: (d: ModuleDescriptor) => boolean | undefined): ModuleDescriptor | "absent" | null => {
+  for (const d of registry.values()) if (has(d)) return moduleState(d) === "off" ? "absent" : d;
+  return null;
+};
+
 /** The module that draws an extension-page id: its descriptor while it is on, "absent" while it is off
  *  (the router answers the address as an unknown one), null for an id no module has. */
 export function moduleExtensionAt(extension: string): ModuleDescriptor | "absent" | null {
-  for (const d of registry.values()) {
-    if (!d.extensionPages?.includes(extension)) continue;
-    return moduleState(d) === "off" ? "absent" : d;
-  }
-  return null;
+  return moduleWith((d) => d.extensionPages?.includes(extension));
 }
 
 /** The module that adds parts to a knowledge entry's page of this kind: its descriptor while it is on (or pending),
  *  "absent" while it is off, null for a kind no module names. */
 export function moduleKBKindAt(kind: string): ModuleDescriptor | "absent" | null {
-  for (const d of registry.values()) {
-    if (!d.kbKinds?.includes(kind)) continue;
-    return moduleState(d) === "off" ? "absent" : d;
-  }
-  return null;
+  return moduleWith((d) => d.kbKinds?.includes(kind));
 }
 
 /** The module that draws the page at these address segments on its own (`standalonePages`): its descriptor while it
@@ -491,31 +541,32 @@ export function moduleNavKey(r: { module: string; base: string }): string {
   return moduleNavItem(r)?.key ?? `module:${r.module}`;
 }
 
-/** The enabled modules' sidebar entries. */
+/** The enabled modules' sidebar entries, those with a `shown` condition only while it holds. */
 export function enabledNavItems(s?: Pick<State, "features" | "loaded">): ModuleNavItem[] {
-  return enabledModules(s).flatMap((d) => d.navItems ?? []);
+  return enabledModules(s).flatMap((d) => d.navItems ?? []).filter((n) => !n.shown || n.shown.get());
 }
 
 /** Calls `l` when what is enabled may have changed: a registration, the switch, the hub's features. */
 export function subscribeModules(l: () => void): () => void {
   listeners.add(l);
-  const offSwitch = subscribeModuleSwitches(l);
-  let last = enabledKey();
-  const offStore = subscribeHub(() => {
-    const now = enabledKey();
-    if (now !== last) {
-      last = now;
-      l();
-    }
+  const offSwitch = subscribeModuleSwitches(() => {
+    lastEnabled = enabledKey();
+    l();
   });
+  const onChange = () => {
+    if (enabledKey() !== lastEnabled) changed();
+  };
+  // the sidebar entries' own conditions (`shown`)
+  const offShown = [...registry.values()].flatMap((d) => d.navItems ?? []).flatMap((n) => (n.shown ? [n.shown.subscribe(onChange)] : []));
   return () => {
     listeners.delete(l);
     offSwitch();
-    offStore();
+    offShown.forEach((off) => off());
   };
 }
 
-const enabledKey = () => [...registry.values()].map((d) => `${d.id}:${moduleState(d)}`).join(",");
+const shownKey = (d: ModuleDescriptor) => (d.navItems ?? []).map((n) => (n.shown && !n.shown.get() ? "-" : "+")).join("");
+const enabledKey = () => [...registry.values()].map((d) => `${d.id}:${moduleState(d)}${shownKey(d)}`).join(",");
 const snapshot = () => `${revision}|${enabledKey()}`;
 
 /** Re-renders the caller when the enabled modules change; returns a key of their states. */
@@ -529,10 +580,13 @@ const loaded = new Map<string, ModuleCode>();
 
 /** What `code` must fill for `d`: every chat slot, Settings category and card kind the descriptor names. */
 function checkCode(d: ModuleDescriptor, code: ModuleCode): ModuleCode {
+  const miss = (keys: readonly string[] | undefined, have: Readonly<Record<string, unknown>> | undefined, what: string) =>
+    (keys ?? []).filter((x) => !have?.[x]).map((x) => `the ${what} "${x}"`);
   const missing = [
-    ...(d.chatSlots ?? []).filter((x) => !code.chat?.[x]).map((x) => `the chat slot "${x}"`),
-    ...(d.settingsTabs ?? []).filter((x) => !code.settings?.[x.key]).map((x) => `the Settings category "${x.key}"`),
-    ...(d.cardRenderers ?? []).filter((x) => !code.cards?.[x]).map((x) => `the card kind "${x}"`),
+    ...miss(d.chatSlots, code.chat as Readonly<Record<string, unknown>> | undefined, "chat slot"),
+    ...miss(d.settingsTabs?.map((x) => x.key), code.settings, "Settings category"),
+    ...miss(d.settingsRows, code.settingsRows, "Settings rows"),
+    ...miss(d.cardRenderers, code.cards, "card kind"),
     ...(d.kbKinds?.length && !code.KBDetail ? [`the knowledge kind "${d.kbKinds[0]}"`] : []),
     ...(d.standalonePages?.length && !code.Standalone ? [`the page of its own /${d.standalonePages[0]}`] : []),
   ];
@@ -576,9 +630,13 @@ export function chatSlotFillers<S extends ChatSlot>(slot: S, s?: Pick<State, "fe
     .map((d) => ({ id: d.id, Component: loaded.get(d.id)?.chat?.[slot] as NonNullable<ChatSlotComponents[S]> | undefined }));
 }
 
-/** The enabled modules' Settings categories. */
-export function enabledSettingsTabs(s?: Pick<State, "features" | "loaded">): (ModuleSettingsTab & { module: string })[] {
-  return enabledModules(s).flatMap((d) => (d.settingsTabs ?? []).map((tab) => ({ ...tab, module: d.id })));
+export { enabledSettingsTabs } from "./module-settings";
+
+/** The enabled modules that add rows to a Settings place, each with what its code draws there once it is in. */
+export function settingsRowFillers(place: SettingsRowPlace, s?: Pick<State, "features" | "loaded">): { id: string; Component: ComponentType | undefined }[] {
+  return enabledModules(s)
+    .filter((d) => d.settingsRows?.includes(place))
+    .map((d) => ({ id: d.id, Component: loaded.get(d.id)?.settingsRows?.[place] }));
 }
 
 /** The enabled module that renders a card kind. */

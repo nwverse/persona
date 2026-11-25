@@ -56,7 +56,8 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		}
 		clearStandardSpeed(params)
 	} else {
-		own, err := s.resolveStart(ctx, params, false)
+		tierCtx, _ := withTierStart(ctx, p.MachineID)
+		own, err := s.resolveStart(tierCtx, params, false)
 		if err != nil {
 			return nil, badRequest(err, s.appLang(ctx, p.Lang)) // a typed model that is no id among them
 		}
@@ -92,9 +93,8 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, p.MachineID, params)
 	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
-		if name := s.tabName(ctx, p.NameFrom); name != "" {
-			params["tab_name"] = name
-		}
+		// Start locally; agents.tab_name_started asks the model after the hub has the session identity.
+		params["tab_name"] = localTabName(p.NameFrom)
 	}
 	return params, nil
 }
@@ -179,6 +179,10 @@ func (s *Service) nameStartedAgent(ctx context.Context, machine string, c proto.
 	}
 	return title
 }
+
+// localTabName starts an Agent without a model call. The existing fixed placeholder covers prompts with no ASCII
+// words and, unlike a meaningful local slug, remains eligible for the ordinary background naming pass if a late event is lost.
+func localTabName(prompt string) string { return cmp.Or(tabSlug(prompt), "persona") }
 
 // tabSlug keeps what a tab name may be: lowercase ASCII letters and digits, single hyphens, at most 24 characters.
 func tabSlug(s string) string {

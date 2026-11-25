@@ -199,7 +199,12 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
             // The page's list arrives a moment after it opens: no "No running agents" flash before that.
             loaded = page.sessions.isNotEmpty() || page.machines.isNotEmpty(),
-            onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } })
+            onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } },
+            sessions = page.sessions,
+            onOpenSide = { row, side ->
+                model.opened(row)
+                navigator.navigate(ChatRoute(side.machineId, side.sessionId))
+            })
         if (takeoverClient != null) CodexTakeoverBusyPill(
             takeoverCoordinator,
             page.sessions,
@@ -208,7 +213,8 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
     }
     operationDialog?.let { dialog ->
         val machine = page.machines.firstOrNull { it.id == dialog.session.machineId }
-        AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine) { operationDialog = null }
+        AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine,
+            preferHerdrTabName = page.preferences.prefersHerdrTabName(dialog.session)) { operationDialog = null }
     }
     if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)
     confirmRead?.let { rows -> MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) } }
