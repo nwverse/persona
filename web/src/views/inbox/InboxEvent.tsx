@@ -8,10 +8,10 @@ import {
   type ChainEntry, type ChainTap, type InboxSuggestion,
 } from "../../lib/inbox-events";
 import { getInbox, isDone, itemKey, itemPath, itemRequest, itemRoute, reloadInbox, replaceItem, sameItem, suggestionAct, uncertainReplyKey, useInbox, type InboxItem } from "../../lib/inbox";
-import { conversationRoute, inboxConversationPage } from "../../lib/conversation-page";
+import { conversationRoute } from "../../lib/conversation-page";
 import { api, ApiError, errorText } from "../../lib/api";
 import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
-import { docChangeLine, openInboxConversation } from "../../lib/inbox-page";
+import { docChangeLine, inboxSessionRoute, openInboxConversation } from "../../lib/inbox-page";
 import { otherManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
 import { connectorBrand } from "../../lib/connectors";
@@ -207,6 +207,19 @@ function EventSummary({ text, marked = false }: { text: string; marked?: boolean
   );
 }
 
+/** Agent state can also mean the Assistant's handling chat has a child Agent. Check which session the chain links. */
+function assistantHandlingFallback(item: InboxItem, mid: string, sid: string): boolean {
+  const h = item.handling;
+  let assistant = h?.state !== "agent" || h.machine_id !== mid || h.session_id !== sid;
+  for (const e of item.chain ?? []) {
+    const link = e.link;
+    if (link?.type !== "session" || !("machine_id" in link) || link.machine_id !== mid || link.session_id !== sid) continue;
+    if (e.kind === "agent" || e.kind === "agent_stopped") return false;
+    if (e.kind === "handling" && !e.detail) assistant = true;
+  }
+  return assistant;
+}
+
 function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   const [sayOpen, setSayOpen] = useState(false);
   const [say, setSay] = useState("");
@@ -268,7 +281,7 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
     }
   };
   const open = mid && sid && (
-    <button type="button" onClick={() => openInboxConversation(mid, sid, item.manager)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-label font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
+    <button type="button" onClick={() => openInboxConversation(mid, sid, item.manager, assistantHandlingFallback(item, mid, sid))} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-label font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
       {t("inbox-inboxevent.open_conversation")}
       <Icon name="chevronRight" size={11} stroke={2.4} />
     </button>
@@ -604,12 +617,12 @@ export function Chain({ item, onSource }: { item: InboxItem; onSource: (at: Sour
     if (link) latestAgent.set(link.key, e.id);
   }
   const conversation = (e: ChainEntry, mid: string, sid: string): Route => {
-    const row = sessions[mid]?.find((s) => s.session_id === sid) ?? summaries.find((s) => s.machine_id === mid && s.session_id === sid);
     const h = item.handling;
     // A handling entry without detail records an Assistant taking over. A suggestion with detail can come from an Agent.
-    if (e.kind === "handling" && (!e.detail || (h?.machine_id === mid && h.session_id === sid)) && !row?.space) {
-      return inboxConversationPage(sid, mid, row?.manager ?? item.manager, assistant?.machine_id);
+    if (e.kind === "handling" && (!e.detail || (h?.machine_id === mid && h.session_id === sid))) {
+      return inboxSessionRoute(mid, sid, item.manager, assistantHandlingFallback(item, mid, sid));
     }
+    const row = sessions[mid]?.find((s) => s.session_id === sid) ?? summaries.find((s) => s.machine_id === mid && s.session_id === sid);
     return conversationRoute(mid, sid, sessions, assistant, row);
   };
   const tap = (x: ChainTap) => {

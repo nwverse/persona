@@ -57,9 +57,18 @@ export function parentRoute(p: InboxParent, manager?: string): Route | undefined
   return i > 0 && i < p.id.length - 1 ? { name: "session", mid: p.id.slice(0, i), sid: p.id.slice(i + 1) } : undefined;
 }
 
-export function openInboxConversation(mid: string, sid: string, manager?: string): void {
+/** Inbox links can identify an Assistant conversation even when its session is missing from the store. */
+export function inboxSessionRoute(mid: string, sid: string, manager?: string, assumeAssistant = true): Route {
   const row = getSession(mid, sid);
-  openFromInbox(row?.assistant && row.space ? spacePage(row.space, sid) : inboxConversationPage(sid, mid, manager, getState().assistant?.machine_id));
+  const { assistant } = getState();
+  const own = assistant?.conversations.some((c) => c.machine_id === mid && c.session_id === sid);
+  if (!row?.assistant && !own && (row || !assumeAssistant)) return { name: "session", mid, sid };
+  if (row?.space) return spacePage(row.space, sid);
+  return inboxConversationPage(sid, mid, row?.manager ?? manager, assistant?.machine_id);
+}
+
+export function openInboxConversation(mid: string, sid: string, manager?: string, assumeAssistant = true): void {
+  openFromInbox(inboxSessionRoute(mid, sid, manager, assumeAssistant));
 }
 
 /** Whether "AI draft reply" applies: a connector's thread only when the hub can answer it (a CI run cannot). */

@@ -135,7 +135,7 @@ afterEach(() => {
   host.remove();
 });
 
-describe("opening an archived Inbox handling conversation", () => {
+describe("opening an Inbox handling conversation", () => {
   const link = { type: "session" as const, machine_id: "m1", session_id: "inbox-chat" };
   const item: InboxItem = {
     ...plain(reply), id: "larkcli:chat:100", now: "looking", suggestion: undefined,
@@ -150,7 +150,7 @@ describe("opening an archived Inbox handling conversation", () => {
   });
 
   afterEach(() => {
-    Object.assign(getState(), { sessionSummaries: [], assistant: null });
+    Object.assign(getState(), { sessions: {}, sessionSummaries: [], assistant: null });
     resetRoster();
     settleRosterDefault();
     history.replaceState(null, "", "/");
@@ -160,6 +160,55 @@ describe("opening an archived Inbox handling conversation", () => {
     act(() => root.render(<EventBody item={item} onSource={() => {}} />));
     await press(button);
     expect(location.pathname + location.search).toBe("/persona/inbox-chat");
+    expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
+  });
+
+  it.each(["处理对话", "助手处理"])("keeps %s on the Agent page when a cached session is non-assistant", async (button) => {
+    getState().sessions[link.machine_id] = [
+      { machine_id: link.machine_id, session_id: link.session_id, assistant: false, title: "Agent", cwd: "", status: "idle" },
+    ];
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    await press(button);
+    expect(location.pathname + location.search).toBe("/s/m1/inbox-chat");
+    expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
+  });
+
+  it("opens an uncached Agent handling session on its session page", async () => {
+    const handling = { ...item.handling, state: "agent", machine_id: "m1", session_id: "agent-chat" };
+    act(() => root.render(<EventBody item={{ ...item, handling, chain: undefined }} onSource={() => {}} />));
+    await press("处理对话");
+    expect(location.pathname + location.search).toBe("/s/m1/agent-chat");
+    expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
+  });
+
+  it.each(["处理对话", "Agent suggestion"])("keeps %s on the Agent page when the chain identifies the uncached session as an Agent", async (button) => {
+    const chain = [
+      { id: "agent", kind: "agent", text: "Handed to Agent", link },
+      { id: "suggestion", kind: "handling", text: "Agent suggestion", detail: "Suggested reply", link },
+    ];
+    act(() => root.render(<EventBody item={{ ...item, chain }} onSource={() => {}} />));
+    await press(button);
+    expect(location.pathname + location.search).toBe("/s/m1/inbox-chat");
+    expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
+  });
+
+  it("opens the uncached Assistant handling conversation while its child Agent is working", async () => {
+    const handling = { ...item.handling!, state: "agent" };
+    const chain = [...item.chain!, { id: "agent", kind: "agent", text: "Child Agent", link: { ...link, session_id: "child-agent" } }];
+    act(() => root.render(<EventBody item={{ ...item, handling, chain }} onSource={() => {}} />));
+    await press("处理对话");
+    expect(location.pathname + location.search).toBe("/persona/inbox-chat");
+    expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
+  });
+
+  it("uses the cached conversation's manager when the Assistant owns the session", async () => {
+    setRoster({ default: "assistant", managers: [{ id: "assistant", name: "Persona", online: true }, { id: "work", name: "Work", online: true }] });
+    const session = { machine_id: link.machine_id, session_id: link.session_id, assistant: false, manager: "work", title: "Handling", cwd: "", status: "idle" };
+    getState().sessions[link.machine_id] = [session];
+    getState().assistant!.conversations = [session];
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    await press("处理对话");
+    expect(location.pathname + location.search).toBe("/persona/inbox-chat?machine=m1&manager=work");
     expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
   });
 
