@@ -146,13 +146,13 @@ its black-box tests and its hook; its output with every flag but `--shared` is t
 temporary module together with the flag combinations its `COMBINATIONS` table lists (the package's own types and the
 shared kernel's as parts and payloads among them), each through its own rules hook.
 
-Each sentence below states a rule, and the rule holds whether or not a check sees a breach. Most checks read syntax
+Each sentence below states a rule, and the rule holds whether or not a check sees a breach. The checks read syntax
 only (`go/ast`, no type information) and enforce each rule where the source shows it: in names, declarations,
-signatures, literals, imports and the calls they can resolve. archguard's `TestDomainTyped`
-(`server/internal/archguard/domain_typed_test.go`) reads what takes a value's type to see, with `go/types` over the
-gc export data of what the packages import (`go list -export -deps`): it checks the cores the baseline does not hold
-and the packages that import them (the `typed-*` rows below). The routes neither sees yet are listed in #15088. A
-route found later is a bug in the check, never permission to take it.
+signatures, literals, imports and the calls they can resolve; archguard's `TestDomainTyped`
+(`server/internal/archguard/domain_typed_test.go`) adds the rules that take a value's type to see, with `go/types` over
+the gc export data of what the packages import (`go list -export -deps`), for the cores the baseline does not hold and
+the packages that import them (the `typed-*` rows below). The routes neither sees yet are listed in #15088. A route
+found later is a bug in the check, never permission to take it.
 
 Why the rules exist, in this repository's own code:
 
