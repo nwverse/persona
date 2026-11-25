@@ -623,7 +623,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 
 ## Full-history positions are not a tail-window count (#2338)
 
-The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. If a richer independent navigation API is being developed elsewhere, keep the temporary adapter narrow and document its migration boundary rather than taking over that task.
+The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. The compact index and its per-history excerpt cache can now sit in the lazy rail chunk. Keep a selected historical window's cursors separate from the live subscription. Using the live view's last sequence for either direction can silently skip records or cause an unbounded continuity pull (#15813).
 
 ## Render-count tests must separate store pushes from live clocks (#1989)
 

@@ -478,9 +478,9 @@ type treeBuild struct {
 	todos    map[string]listedTodo
 	placed   map[string]todoTriage
 	views    map[string]assistantwire.TodoSummary
-	carried  map[string]bool   // open PartOf steps already rolled up onto an open top-level parent
+	carried  map[string]bool    // open PartOf steps already rolled up onto an open top-level parent
 	heldOnly map[[2]string]bool // canonical (machine, session) waiting only on Delegating cards
-	open     []string          // the ids the To-dos page counts open, by id
+	open     []string           // the ids the To-dos page counts open, by id
 	reached  map[string]bool
 	now      time.Time
 
