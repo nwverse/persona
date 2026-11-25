@@ -16,7 +16,7 @@ import { ago, clock } from "../../lib/format";
 import {
   addSyncScopes, approvalOf, authorizeSyncBot, bindingsOf, bindingTitle, botTitle, createSyncBot, healthOf, leaveFor,
   needsAuthorize, oauthRedirectURI, orderedBots, pollSyncAuthorize, reauthSoon, registerSyncBot, rememberReturn,
-  removeSyncBinding, removeSyncBot, runSyncBinding, setSyncSchedule, syncView, tierText, TIER_DOCS, TIERS,
+  removeSyncBinding, removeSyncBot, runSyncBinding, setSyncSchedule, syncView, tierText, TIER_DOCS, TIER_FULL, TIERS,
   updateSyncBinding, type LarkSyncAuthorize, type LarkSyncBinding, type LarkSyncBot, type LarkSyncView,
 } from "../../lib/lark-sync";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -358,7 +358,7 @@ function ChooseStep({ primary, onCancel, onPrompt }: {
   onCancel: () => void;
   onPrompt: (bot: string, tier: string, prompt: ConnectorPrompt, scopes: boolean) => void;
 }) {
-  const [tier, setTier] = useState(TIER_DOCS);
+  const [tier, setTier] = useState(TIER_FULL);
   const [label, setLabel] = useState("");
   const [region, setRegion] = useState(() => (primary?.domain?.includes("larksuite") ? "lark" : "feishu"));
   const [busy, setBusy] = useState<"" | "new" | "chat">("");
@@ -390,6 +390,7 @@ function ChooseStep({ primary, onCancel, onPrompt }: {
           ))}
         </select>
       </Row>
+      {tier === TIER_DOCS && <SettingsHint caution>{t("settings-larksync.tier_docs_no_chat")}</SettingsHint>}
       <Row label={t("settings-larksync.name_label")} hint={t("settings-larksync.name_hint")} wrapHint stackOnNarrow>
         <input
           value={label}

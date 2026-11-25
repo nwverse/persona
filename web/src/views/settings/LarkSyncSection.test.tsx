@@ -168,7 +168,7 @@ describe("Lark daily sync section", () => {
     await click(t("settings-larksync.add"));
     api.createSyncBot.mockResolvedValue({ bot_id: "s9", prompt: { step: "register", kind: "qr", interval: 5, qr: { size: 2, rows: ["10", "01"] } } });
     await click(t("settings-larksync.create_bot"));
-    expect(api.createSyncBot).toHaveBeenCalledWith({ label: "", tier: "docs_standard", region: "feishu" });
+    expect(api.createSyncBot).toHaveBeenCalledWith({ label: "", tier: "full_with_im", region: "feishu" });
     expect(host.querySelector(`svg[aria-label="${t("settings-larksync.qr_label")}"]`)).not.toBeNull();
     expect(text()).toContain(t("settings-larksync.step_create"));
 
@@ -186,7 +186,7 @@ describe("Lark daily sync section", () => {
     const [bot, redirect, tier] = api.authorizeSyncBot.mock.calls[0];
     expect(bot).toBe("s9");
     expect(redirect).toMatch(/^http:\/\/[^/]+\/lark-oauth$/);
-    expect(tier).toBe("docs_standard");
+    expect(tier).toBe("full_with_im");
     expect(text()).toContain(t("settings-larksync.step_authorize"));
 
     await click(t("settings-larksync.authorize_continue"));
@@ -194,14 +194,29 @@ describe("Lark daily sync section", () => {
     expect(readReturn().back).toBe(location.pathname + location.search);
   });
 
+  it("defaults to full_with_im and warns that docs_standard cannot read chats", async () => {
+    await draw();
+    await click(t("settings-larksync.add"));
+    const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-larksync.tier_label")}"]`)!;
+    expect(select.value).toBe("full_with_im");
+    expect(text()).toContain(t("settings-larksync.tier_full_hint"));
+    expect(text()).not.toContain(t("settings-larksync.tier_docs_no_chat"));
+
+    await act(async () => {
+      select.value = "docs_standard";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(text()).toContain(t("settings-larksync.tier_docs_hint"));
+    expect(text()).toContain(t("settings-larksync.tier_docs_no_chat"));
+
+    api.createSyncBot.mockResolvedValue({ bot_id: "s10", prompt: { step: "register", kind: "qr", interval: 5, qr: { size: 2, rows: ["10", "01"] } } });
+    await click(t("settings-larksync.create_bot"));
+    expect(api.createSyncBot).toHaveBeenCalledWith({ label: "", tier: "docs_standard", region: "feishu" });
+  });
+
   it("gives the chat bot the permission instead of creating a bot", async () => {
     await draw();
     await click(t("settings-larksync.add"));
-    await act(async () => {
-      const select = host.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-larksync.tier_label")}"]`)!;
-      select.value = "full_with_im";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
     api.addSyncScopes.mockResolvedValue({ done: true });
     api.authorizeSyncBot.mockResolvedValue({ mode: "browser", url: "https://accounts.example.com/a" });
     await click(t("settings-larksync.use_chat_bot"));
