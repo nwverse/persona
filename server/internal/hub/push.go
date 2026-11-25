@@ -117,14 +117,9 @@ type Pusher struct {
 	sentMirrorMu   sync.Mutex
 	gradingWriting bool // the one saver goroutine is running
 
-	// Extension push grading layers (push_grading_layer.go): keyed by (manager, extension), persisted in hub_settings
-	// under gradingLayersSettingKey, guarded in memory by gradingMu and serialized on disk by gradingLayerSaveMu.
-	gradingLayerSaveMu   sync.Mutex
-	gradingLayers        map[gradingLayerKey]PushGradingLayer
-	gradingLayersVersion uint64
-	gradingLayersDirty   bool
-	gradingLayersWriting bool
-	gradingLayersIdle    chan struct{}
+	// Cached versioned push grading configuration snapshot (hub.push_grading and
+	// hub.push_grading_layer), resolved independently per manager.
+	gradingEffective *pushGradingEffectiveCache
 
 	maintenanceWake     chan struct{}
 	maintenanceDeferred bool
@@ -139,6 +134,8 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		retryWaits: []time.Duration{time.Second, 4 * time.Second}, now: time.Now, storeTimeout: deviceStoreTimeout,
 		// Web Push in memory here; the hub gives it the store when it starts (hub.go): a test's store may have no settings.
 		web: newWebPusher(nil, logf)}
+	p.gradingEffective = newPushGradingEffectiveCache(gradingConfigTTL)
+	p.gradingEffective.now = func() time.Time { return p.now() }
 	if store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), deviceStoreTimeout)
 		if _, err := store.ReconcilePushDevices(ctx, p.now().UTC(), pushDeviceMaxIdle); err != nil {
