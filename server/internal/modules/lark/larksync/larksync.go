@@ -80,10 +80,20 @@ func (s *Syncer) Run(ctx context.Context, b larksyncwire.Binding, token func(ctx
 	return res, err
 }
 
-// read runs every reader in order. IM and search come first so the minutes their messages link to are found; the
-// documents follow, then the minutes from both.
+// read runs the binding's readers in order. In full mode, IM and search come first so the documents and minutes their
+// messages link to are found; Drive and Wiki follow, then linked cloud documents and minutes. In IM incremental mode
+// (larksyncwire.ModeIM), only IM chats, p2p chat discovery, and the cloud documents and minutes linked in those new
+// messages run.
 func (r *run) read(ctx context.Context) error {
-	steps := []func(context.Context) error{r.readIM, r.readSearch, r.readDrive, r.readWiki, r.readMinutes}
+	var steps []func(context.Context) error
+	if r.b.Mode == larksyncwire.ModeIM {
+		if r.b.Tier != larksyncwire.TierFull {
+			return nil
+		}
+		steps = []func(context.Context) error{r.readIM, r.readP2PDiscovery, r.readLinkedDocs, r.readMinutes}
+	} else {
+		steps = []func(context.Context) error{r.readIM, r.readSearch, r.readDrive, r.readWiki, r.readLinkedDocs, r.readMinutes}
+	}
 	for _, step := range steps {
 		if r.overBudget() {
 			r.partial = true
