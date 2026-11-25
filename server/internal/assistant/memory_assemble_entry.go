@@ -24,9 +24,6 @@ func (s *Service) memoryEntrySrc() memoryEntrySource {
 	if s.memoryEntries != nil {
 		return s.memoryEntries
 	}
-	if s.store == nil {
-		return nil
-	}
 	st, _ := s.store().(memoryEntrySource)
 	return st
 }
@@ -172,6 +169,19 @@ type memoryExtensionBatch struct {
 	Tagged  bool
 	// Names are the names of the extensions whose entries these are, for the Inbox's background block.
 	Names []string
+	// StandingBytes is the standing budget the extension stated (standing_bytes, the largest of its pages and of the
+	// sources); 0: none stated.
+	StandingBytes int
+}
+
+// standingBudget is the bytes of b's standing entries a standing channel carries (#15312): what the extension stated,
+// at most memoryExtensionStandingMost, else memoryExtensionStandingDefault. It is the extension's own, never spent by
+// the ledger's entries.
+func (b memoryExtensionBatch) standingBudget() int {
+	if b.StandingBytes <= 0 {
+		return memoryExtensionStandingDefault
+	}
+	return min(b.StandingBytes, memoryExtensionStandingMost)
 }
 
 // memoryExtensionSource hands the assembler the memory extension's entries: personal says the receiver may see what
@@ -229,7 +239,7 @@ func (s *Service) memoryExtensionUses(ctx context.Context, tagged bool) func(pro
 }
 
 // memorySources are the assembler's sources together, oldest first: the memory extension's entries, then the
-// ledger's, so a budget taken newest first goes to the ledger first. Each entry is seen by its own source's rules.
+// ledger's. Each entry is seen by its own source's rules and spends its own source's budget (assembleEntries).
 func (s *Service) memorySources(ctx context.Context, ledger []proto.AssistantEntry, ext memoryExtensionBatch) ([]proto.AssistantEntry, func(proto.AssistantEntry) infoUse) {
 	extEntries := ext.assistantEntries()
 	if len(extEntries) == 0 {

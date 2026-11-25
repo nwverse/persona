@@ -759,14 +759,12 @@ func (h agyHistory) page(p agyPageParams) any {
 
 func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) any {
 	if p.UserInputs {
-		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
-		for _, it := range h.items {
-			if agyUserInput(it) && (len(index.Inputs) == 0 || index.Inputs[len(index.Inputs)-1].Seq != it.Seq) {
-				index.Inputs = append(index.Inputs, proto.UserInputPosition{ID: it.ID, Seq: it.Seq})
-			}
+		items := h.items
+		if p.BeforeSeq > 0 {
+			items = items[:agyIndex(items, p.BeforeSeq)]
 		}
-		index.Total = len(index.Inputs)
-		return index
+		inputs := transcript.UserInputPositions(items)
+		return proto.UserInputIndex{History: h.token, Inputs: inputs, Total: len(inputs)}
 	}
 	uses := h.toolUses()
 	items := h.items
@@ -924,6 +922,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
+		if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+			info["swarm_workers"] = workers
+		}
 		var breakdown *proto.ContextBreakdown
 		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
 			if runtimeRow.Model != "" {

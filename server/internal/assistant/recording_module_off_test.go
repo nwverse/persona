@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/recordinghost"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // A module that is off keeps what the user has (docs/architecture/core-and-modules.md, the rule of #13430): with the
@@ -30,13 +31,12 @@ const (
 	moduleOffPending = "55555555-5555-4555-8555-555555555555" // a meeting whose minutes were not written yet
 )
 
-// moduleOffMinutes is the model's answer the fixture's minutes are written from.
-type moduleOffMinutes struct{}
-
-func (moduleOffMinutes) JSONMax(_ context.Context, _, _ string, _ int, out any) error {
-	return json.Unmarshal([]byte(`{"title": "Export review", "points": [{"text": "Entries over 4 MB are dropped by the export", "line": 2}],
-		"decisions": [{"text": "This version keeps the quota", "line": 3}]}`), out)
-}
+// moduleOffMinutes is the minutes the fixture's first recording has, as the recording module's minutes round leaves
+// them (the round is the module's own; a Core test writes the files it leaves).
+var moduleOffMinutes = kb.Minutes{Version: 1, Revision: 1, Title: "Export review", When: "today",
+	Points:    []kb.MinutesPoint{{Text: "Entries over 4 MB are dropped by the export", At: 10}},
+	Decisions: []kb.MinutesItem{{Text: "This version keeps the quota", At: 20}},
+	Markdown:  "# Export review\n\n## Points\n\n- [00:00:10] Entries over 4 MB are dropped by the export\n\n## Decisions\n\n- [00:00:20] This version keeps the quota"}
 
 // seedModuleOffRecordings writes the two recordings into dir the way a hub with the module does.
 func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
@@ -45,8 +45,7 @@ func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &kb.Engine{Store: st, Model: moduleOffMinutes{}, Owner: "Owner", Logf: func(string, ...any) {}}
-	e.SetRecordingProvider(kb.RecordingWriters(e))
+	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
 	put := func(id string, start time.Time, texts ...string) {
 		u := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: float64(10 * len(texts)), Language: "en-US", Device: "phone", Complete: true, Kind: kb.RecordingMeeting}
 		for i, text := range texts {
@@ -57,11 +56,43 @@ func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 		}
 	}
 	put(moduleOffRec, now.Add(-2*time.Hour), "Hello, today we review the export", "Ada says entries over 4 MB are dropped by the export", "Then this version keeps the quota zebrafish", "Bo adds the regression test by Friday")
-	if _, created, err := e.PhotoAdd(moduleOffRec, moduleOffPhoto, false); err != nil || !created {
-		t.Fatalf("seed photo: %v (created %v)", err, created)
+	// The photo, as the module's intake leaves it: the image, photos.json and photos.md, written through the store's
+	// own primitives (the intake is the module's; a Core test writes the files it leaves).
+	core, rid := kb.RecordingCore(e), recordingwire.ID(moduleOffRec)
+	book := recordingwire.PhotoBook{Next: 2, Rev: 1, Photos: []recordingwire.StoredPhoto{{N: 1, ID: moduleOffPhoto.ID, At: moduleOffPhoto.At,
+		Mime: moduleOffPhoto.Mime, Width: moduleOffPhoto.Width, Height: moduleOffPhoto.Height, Text: moduleOffPhoto.Text,
+		Caption: moduleOffPhoto.Caption, AddedAt: now.UTC(), Digest: moduleOffPhoto.Digest}}}
+	photos := core.Path(rid, recordingwire.DirAttachments)
+	if err := os.MkdirAll(photos, 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if n := e.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
-		t.Fatalf("seed: wrote %d minutes, want 1", n)
+	files := core.Locks().Files
+	files.Lock()
+	err = core.WriteDurable(filepath.Join(photos, book.Photos[0].FileName()), moduleOffPhoto.Data)
+	if err == nil {
+		err = core.PutPhotoBook(rid, &book, now.Add(-2*time.Hour), core.Zone())
+	}
+	files.Unlock()
+	if err != nil {
+		t.Fatalf("seed photo: %v", err)
+	}
+	// The minutes, as the module's round leaves them: minutes.json and minutes.md, and meta.json saying they are ready.
+	raw, err := json.MarshalIndent(moduleOffMinutes, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	metaPath := st.Path(kb.KindRecording, moduleOffRec, "meta.json")
+	if b, err := os.ReadFile(metaPath); err != nil || json.Unmarshal(b, &meta) != nil {
+		t.Fatalf("seed: meta.json: %v", err)
+	}
+	meta["minutes_version"], meta["minutes_rev"], meta["minutes_state"] = 1, 1, kb.MinutesReady
+	metaRaw, _ := json.MarshalIndent(meta, "", "  ")
+	for name, data := range map[string][]byte{"minutes.json": append(raw, '\n'), "minutes.md": []byte(moduleOffMinutes.Markdown + "\n"),
+		"meta.json": append(metaRaw, '\n')} {
+		if err := os.WriteFile(st.Path(kb.KindRecording, moduleOffRec, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	put(moduleOffPending, now.Add(-time.Hour), "The second meeting is about the schedule", "A proposal is due next Wednesday")
 }
@@ -313,8 +344,7 @@ func TestStoredAudioStaysUntouchedWithoutTheModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &kb.Engine{Store: st, Model: moduleOffMinutes{}, Owner: "Owner", Logf: func(string, ...any) {}}
-	e.SetRecordingProvider(kb.RecordingWriters(e))
+	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
 	e.TranscriptionReady = func() bool { return true }
 	const id = "88888888-8888-4888-8888-888888888888"
 	u := kb.RecordingUpload{Revision: 1, StartedAt: now.Add(-time.Hour), Duration: 10, Language: "en-US", Device: "phone", Kind: kb.RecordingMeeting,
@@ -327,10 +357,15 @@ func TestStoredAudioStaysUntouchedWithoutTheModule(t *testing.T) {
 	for i := range pcm {
 		pcm[i] = byte(i*7 + 1)
 	}
-	if _, err := e.AudioPut(id, 0, pcm); err != nil {
+	// The audio, as the module's writers leave it: a chunk file named by its first sample (they are the module's; a
+	// Core test writes the file).
+	chunk := filepath.Join(id, "attachments", "audio", "0.pcm")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, "recordings", chunk)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "recordings", chunk), pcm, 0o600); err != nil {
 		t.Fatalf("seed audio: %v", err)
 	}
-	chunk := filepath.Join(id, "attachments", "audio", "0.pcm")
 	before := moduleOffFiles(t, dir)
 	if before[chunk] != string(pcm) {
 		t.Fatalf("the fixture's chunk is not the stored audio (%d bytes)", len(before[chunk]))

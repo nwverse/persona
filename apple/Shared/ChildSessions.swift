@@ -529,13 +529,34 @@ struct FetchHint: Equatable {
         put(parent, ChildSessions.merge(held: heldNow[parent] ?? [], changes: [child], removals: [], baseline: false))
     }
 
-    /// One read of the parent's children. `since` follows the checkpoint. A 409 `revision_expired` reads once more
-    /// from the start. Any other failure keeps the checkpoint. No timer: the caller asks on `sessions_list`.
-    func refresh(parent: SessionKey, api: APIClient) async {
-        await refresh(parent: parent, api: api, retry: true)
+    /// Flip any held folded child/side matching `keys` to locally seen immediately (#13524): on a paged hub a side row
+    /// lives here rather than in `sessionsByMachine`, so marking it seen updates its parent's folded state at once.
+    @discardableResult
+    func markLocallySeen(_ keys: Set<SessionKey>) -> Bool {
+        guard !keys.isEmpty else { return false }
+        var changed = false
+        for (parent, rows) in heldNow {
+            var updated = rows
+            var rowChanged = false
+            for i in updated.indices where keys.contains(updated[i].key) && updated[i].needsSeen() {
+                updated[i].markLocallySeen()
+                rowChanged = true
+            }
+            if rowChanged {
+                put(parent, updated)
+                changed = true
+            }
+        }
+        return changed
     }
 
-    private func refresh(parent: SessionKey, api: APIClient, retry: Bool) async {
+    /// One read of the parent's children. `since` follows the checkpoint. A 409 `revision_expired` reads once more
+    /// from the start. Any other failure keeps the checkpoint. No timer: the caller asks on `sessions_list`.
+    func refresh(parent: SessionKey, api: APIClient, transform: ([Session]) -> [Session] = { $0 }) async {
+        await refresh(parent: parent, api: api, retry: true, transform: transform)
+    }
+
+    private func refresh(parent: SessionKey, api: APIClient, retry: Bool, transform: ([Session]) -> [Session]) async {
         let since = revision[parent]
         do {
             var cursor: String?
@@ -551,14 +572,15 @@ struct FetchHint: Equatable {
                 guard page.hasMore == true, let more = page.nextCursor, !more.isEmpty else { break }
                 cursor = more
             }
-            put(parent, ChildSessions.merge(held: heldNow[parent] ?? [], changes: changes, removals: removals,
-                                             baseline: since == nil))
+            let merged = ChildSessions.merge(held: heldNow[parent] ?? [], changes: changes, removals: removals,
+                                             baseline: since == nil)
+            put(parent, transform(merged))
             if let next { revision[parent] = next }
             loaded.insert(parent)
         } catch let error as APIError where retry && error.status == 409 && error.code == "revision_expired" {
             revision[parent] = nil
             loaded.remove(parent)
-            await refresh(parent: parent, api: api, retry: false)
+            await refresh(parent: parent, api: api, retry: false, transform: transform)
         } catch {
             // Keep the checkpoint. The next sessions_list hint tries again.
         }

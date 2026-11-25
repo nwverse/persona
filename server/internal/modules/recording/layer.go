@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modules/recording/writers"
+	"github.com/nwverse/persona/server/internal/recordingwire"
+
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -23,13 +26,26 @@ func (s *Recordings) AudioSocket(w http.ResponseWriter, r *http.Request) { s.aud
 // Hook gives knowledge base e the module's callbacks: the minutes' push, the live log's and meeting.json's changes,
 // the day recordings' names and the day's push; and the recordings' write side (recordingwire.Provider: the minutes,
 // title, recap and summary rounds, the sweep after a prune, the audio writers), which a knowledge base has only with
-// this module. The writers are still kb's own code (kb.RecordingWriters) until they move here.
-func (s *Recordings) Hook(e *kb.Engine) {
-	e.SetRecordingProvider(kb.RecordingWriters(e))
-	e.MinutesWritten, e.LiveChanged, e.MeetingChanged, e.DayRecordingName = s.minutesWritten, s.meetingKick, s.meetingLiveChanged, s.dayRecordingName
-	e.DayRecapWritten = func(ctx context.Context, r kb.Recording, d kb.DayRecap) ([]string, error) {
+// this module. The writers are this module's (internal/modules/recording/writers: the minutes and day recaps, the
+// titles, the photo intake, the audio, the hub's transcript) and reach the store through core, the storage port; the
+// summary round is still kb's own code (kb.RecordingWriters) until it moves here too.
+func (s *Recordings) Hook(e *kb.Engine, core recordingwire.Core) {
+	w := writers.New(core, kb.RecordingWriters(e))
+	w.OnWritten(s.minutesWritten, func(ctx context.Context, r kb.Recording, d kb.DayRecap) ([]string, error) {
 		return s.dayRecapWritten(ctx, e, r, d)
+	})
+	e.SetRecordingProvider(w)
+	e.LiveChanged, e.MeetingChanged, e.DayRecordingName = s.meetingKick, s.meetingLiveChanged, s.dayRecordingName
+}
+
+// writersOf is the writers of knowledge base e: the ones Hook gave it. One that was never
+// hooked (the core opens a read-only knowledge base without the module's hook) gets writers over its port for the
+// request: they read, and answer a write as a read-only knowledge base does.
+func writersOf(e *kb.Engine) *writers.Writers {
+	if w := writers.Of(e.RecordingProvider()); w != nil {
+		return w
 	}
+	return writers.New(kb.RecordingCore(e), nil)
 }
 
 func (s *Recordings) AttendResume(e *kb.Engine)                    { s.attendResume(e) }

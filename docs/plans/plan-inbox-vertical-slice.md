@@ -108,7 +108,7 @@ a communication center. "Inbox" is the user-facing Inbox, not #7563's durable in
 
 ### 3.1 Server
 
-New packages, all under the manager's tree (D1; feature modules live outside it, in server/internal/modules/<id>, as D1's 2026-11-23 amendment says): server/internal/assistant/kernel (the registration seam, D2; it already hosts the feature modules, `docs/architecture/core-and-modules.md`),
+New packages, all under the manager's tree (D1; feature modules live outside it, in server/internal/modules/<id>, as D1's 2026-11-23 amendment says): server/internal/assistant/kernel/seam (the registration seam, D2; its parent package kernel hosts the feature modules, `docs/architecture/core-and-modules.md`),
 server/internal/assistant/inbox/item (the item's lifecycle core) with its adapter inbox/item/itemadapt (the stored
 item, S8) and, only if D3's gates pass, server/internal/assistant/inbox (the stateful module behind inbox.Host).
 Archguard's `managerPart` and the hub's forbidden prefixes cover them with no new entries. Package assistant keeps the
@@ -155,13 +155,14 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
   line at start-up by the value that holds the mistake: an empty, malformed or duplicate name (ModuleName, BusMethod,
   ToolName, a route's pattern), a pattern outside the relayed tables, a nil function, a second hook from the same module
   (hooks have no name, so they are keyed by module), anything after Seal, and any method of a zero Kernel. Route
-  handlers registered through the kernel run under the one listed catch site, kernel/dispatch.go: a defect there is
+  handlers registered through the kernel run under the one listed catch site, kernel/seam/dispatch.go: a defect there is
   reported and answered with 500, and any other panic goes on to net/http. Tables run in registration order, which is
   today's line order, and dispatch goes through the registry, which never hands out its slices.
 - **Hosts stay with their modules.** `saved.Host` and `saved.Register` stay as saved's adapter: a new saved/module.go
   holds the dependencies `saved.NewModule` was given and builds `saved.Host` from them and the Kernel's methods, so
   `server/internal/assistant/saved/saved.go` is untouched. saved's own untyped Host stays inside package saved until
-  its open drafts merge or idle 14 days; its typed ports then replace it.
+  its open drafts merge or idle 14 days; its typed ports then replace it (#15222). The Inbox module takes typed ports
+  through its NewModule from the start, never saved's `func() any` store or map events.
 - **One registry.** The same registry backs #7891's registry stage: in-package domains register routes, loops and tools
   from their own files through package-level front doors taking the same typed names, which New feeds in before the
   modules, so there is one duplicate rule and one tool placement function. `Kernel.Bus` is the seam for any domain's
@@ -352,6 +353,9 @@ repository and the facade; and the client steps wait for the client domain guard
   the kernel passes its domain-rules hook; `go vet ./internal/assistant/...` is clean; X6's measures are in the PR.
 - *Revised 2026-11-22 in #10613:* typed ports and names, defects and the catch site in place of an untyped Infra and
   panics, and a layer declaration in place of a line in a domain-package list.
+- *Built in #15182:* the seam is package `seam` under server/internal/assistant/kernel, because package kernel already
+  hosts the feature modules and declares no layer yet, and NewRegistry also takes a Defects port, which the catch site
+  reports to (`docs/server/architecture.md` "Validated and sealed").
 
 ### S2. Guards and contract tests
 - **Change:** an archguard parse-only test: the book (`s.inbox.*` selectors, `b := &s.inbox`, methods on `*inboxBook`)

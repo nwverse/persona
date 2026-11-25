@@ -850,7 +850,7 @@ The contribution (extension point `memory_sources`, version 1, namespace `memory
 
 | Method | Parameters → answer | Notes |
 | --- | --- | --- |
-| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
+| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?, standing_bytes?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
 
 Each entry (`MemoryEntry`):
 
@@ -869,6 +869,12 @@ Each entry (`MemoryEntry`):
 - **`tagged`** is a promise for the whole page: the extension writes `origin_space` and `categories` on every entry and
   leaves them out only when empty. The manager reads a batch as tagged only when every page says so. Untagged, a missing
   field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
+- **`standing_bytes`** (#15312) is the bytes of standing entries' text the extension wants a standing channel to carry,
+  say its own setting for how much it keeps resident. The hub keeps this budget apart from its own memory ledger's
+  (neither spends the other's), takes the largest any page or source states, and caps it at 8192; left out or 0 means
+  4096. A negative value, or one that is not an integer, fails the page like the other page fields. Past the budget the
+  usual rule holds: the most important entries first, one that does not fit is left out and a smaller one after it may
+  still go (`docs/assistant/health.md` "Memory by scene", "Budgets").
 - **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
   is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
 - **Bounds**: 5 seconds per call and at most 1 MB per answer. The hub follows the existing cursors to the end, with
@@ -878,7 +884,7 @@ Each entry (`MemoryEntry`):
   included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
 - **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
   message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
-  `after`) do not hold to the schema, a program that does not run, and every error mean the assemblies use
+  `after`, `standing_bytes`) do not hold to the schema, a program that does not run, and every error mean the assemblies use
   none of the extension's entries until the next read and log why. It never falls back to the extension's text.
 - **Who calls**: the manager only, for the owner's personal assemblies; no other extension, device or token can.
 - **How often**: every contribution that is on is read in one go, page by page, and the merged result is kept for a
@@ -2289,7 +2295,7 @@ The [source handler contract](source-api-handlers.md) defines the separate typed
     So commands the gate cannot parse (loops, scripts, `$(…)`) are denied outright if they contain a write, with a hint to send it as a separate command. A resident node's proxy is process-wide: chats that survive a hub reconnect keep using the original address, and calls allowed on the new connection still pass.
     Once the extension is disabled, both the command and the credentials are gone. Gates with no `auth` that do not meet the default condition (several secrets, no `base_env`) still put credentials into the assistant's environment, as do gates provided by older hubs (before #1317).
   - **Card**: the confirmation card's title is `title`; the extension can answer `assistant.summary {contribution, summary}` → `{summary}` to replace ids in the card with names (left as-is if they cannot be resolved).
-  - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt. Next to it, `PERSONA_TRACK_KIND` names the kind of the conversation's track (#13472, `docs/assistant/health.md` "Tracks and kinds"): `orchestration` in the main space, `space` in the health space and a domain space, a user's kind in a track of that kind; a command may serve some kinds only. It is missing when the node was not told the kind (an older node or manager, or a process resumed before its directory was prepared since the node started), which such a command takes as unknown.
+  - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt. Next to it, `PERSONA_TRACK_KIND` names the kind of the conversation's track (#13472, `docs/assistant/health.md` "Tracks and kinds"): `orchestration` in the main space, `space` in the health space and a domain space, a user's kind in a track of that kind; a command may serve some kinds only. It is missing when the node was not told the kind (an older node or manager, or a process resumed before its directory was prepared since the node started), which such a command takes as unknown. Beside both, `PERSONA_CATEGORIES` carries the conversation's sorted comma-separated information categories (#13246, `docs/assistant/health.md` "Information categories"): empty (`PERSONA_CATEGORIES=`) for general, `health` in the health space, or comma-separated names such as `emotion,finance`. It is omitted when unknown (an older node or manager, a directory not prepared since the node started, a turn waiting to be tagged, or an unreadable store), which a command treats as sensitive. Agents never inherit `PERSONA_TRACK_KIND` or `PERSONA_CATEGORIES`.
   - The gate file is read in strict mode and checked at install time (the script must be inside a skill); credentials cannot start with `PERSONA_` / `PERSONA_` or be `PATH`.
 
 ### Assistant content from the data directory (#5770)

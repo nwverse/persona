@@ -14,10 +14,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/moduleswitch"
 
 	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/larksyncwire"
 )
 
 // Client makes the app's REST calls with a tenant access token it keeps fresh.
@@ -62,6 +64,9 @@ type Conn interface {
 type Registrar interface {
 	Begin(ctx context.Context, region, name string) (botcard.RegisterChallenge, error)
 	Poll(ctx context.Context, region, deviceCode string) (botcard.RegisterTicket, error)
+	// BeginWith is Begin that also asks for user scopes (the user sync, larksyncwire.RegisterOptions), and adds them to
+	// an existing app instead of creating one when opts.AppID is set.
+	BeginWith(ctx context.Context, region, name string, opts larksyncwire.RegisterOptions) (botcard.RegisterChallenge, error)
 }
 
 // Provider is what the lark module provides.
@@ -73,6 +78,9 @@ type Provider struct {
 	NewConn func(api Client, handler botcard.Handler, logf func(string, ...any)) Conn
 	// NewRegistrar is a registrar of the clouds' accounts sites; host, when not "", replaces every region's (tests).
 	NewRegistrar func(host string) Registrar
+	// Sync is the user OAuth and the daily reader of the user sync (docs/extensions/bots.md "Reading as you: daily
+	// sync").
+	Sync larksyncwire.Provider
 }
 
 var provided *Provider
@@ -131,4 +139,22 @@ func NewRegistrar(host string) Registrar {
 		return nil
 	}
 	return provided.NewRegistrar(host)
+}
+
+// NewUserAuth is the user OAuth client (nil when the module is not provided); accounts and open, when not "", replace
+// the accounts site and the open platform (tests).
+func NewUserAuth(accounts, open string, httpClient *http.Client) larksyncwire.UserAuth {
+	if provided == nil || provided.Sync.NewUserAuth == nil {
+		return nil
+	}
+	return provided.Sync.NewUserAuth(accounts, open, httpClient)
+}
+
+// NewSyncer is one binding's reader of the user sync (nil when the module is not provided); now is the clock (nil:
+// time.Now).
+func NewSyncer(httpClient *http.Client, now func() time.Time) larksyncwire.Syncer {
+	if provided == nil || provided.Sync.NewSyncer == nil {
+		return nil
+	}
+	return provided.Sync.NewSyncer(httpClient, now)
 }

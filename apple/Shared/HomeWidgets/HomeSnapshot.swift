@@ -252,6 +252,7 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
 
     /// Hub-owned day buckets. Optional at the top level so version 1 snapshots remain readable.
     nonisolated struct Intake: Codable, Hashable, Sendable {
+        var items: [String]?
         var supported: Bool
         /// An opaque app-side hub scope; never a credential. Older snapshots omit it.
         var scope: String?

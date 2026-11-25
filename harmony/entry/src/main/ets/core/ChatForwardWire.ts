@@ -1,3 +1,5 @@
+import { legacyContextTag, legacyFileTag, legacyProduct } from './WireCompatibility.ts';
+
 /** The shared forward block contract from spec/fixtures/forward. Local image handles never go on the wire. */
 export type ForwardFields = Record<string,Object>;
 export const forwardMaximum = 30;
@@ -12,7 +14,7 @@ export interface ForwardBlock {
 }
 export function wireContextAttribute(value:string):string {return value.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 export function wireContextBody(value:string):string {
- const closer=/<(\s*\/\s*(?:persona|jarvis)-context\s*>)/gi;
+ const closer=new RegExp('<(\\s*\\/\\s*(?:persona|' + legacyProduct + ')-context\\s*>)','gi');
  return value.replace(closer,'').replace(closer,'&lt;$1');
 }
 export function forwardUnescape(value:string):string {return value.replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');}
@@ -35,7 +37,7 @@ export interface ParsedForwardPrefix { entries:ForwardFields[]; rest:string }
 export function forwardPrefix(input:string):ParsedForwardPrefix {
  const entries:ForwardFields[]=[];let rest=input;
  while(entries.length<60){
-  const mt=rest.match(/^<(persona-context|jarvis-context)\b((?:[^">]|"[^"]*")*)>([\s\S]*?)<\/\1>\s*/);
+  const mt=new RegExp('^<(persona-context|' + legacyContextTag + ')\\b((?:[^">]|"[^"]*")*)>([\\s\\S]*?)<\\/\\1>\\s*').exec(rest);
   if(!mt)break;
   const fields:ForwardFields={};for(const a of mt[2].matchAll(/([\w-]+)="([^"]*)"/g))fields[a[1]]=forwardUnescape(a[2]);
   fields.text=mt[3].replace(/^\n|\n$/g,'');entries.push(fields);rest=rest.slice(mt[0].length);
@@ -60,7 +62,7 @@ function cutBody(body:string,cap:number,cut:string):string {
 }
 export function forwardedBody(raw:string,machine:string,cap:number,cut:string,file:(name:string,machine:string)=>string,
                              content:(text:string)=>{text:string;files:string[]}):string {
- const cleaned=raw.replace(/<(persona-context|jarvis-context)\b([^>]*)>[\s\S]*?<\/\1>\s*/g,
+ const cleaned=raw.replace(new RegExp('<(persona-context|' + legacyContextTag + ')\\b([^>]*)>[\\s\\S]*?<\\/\\1>\\s*','g'),
    (match,_tag,attrs)=>/\bkind="message-source"/.test(attrs)?'':match);
  const parsed=forwardPrefix(cleaned),parts:string[]=[];
  for(const r of parsed.entries){
@@ -69,7 +71,7 @@ export function forwardedBody(raw:string,machine:string,cap:number,cut:string,fi
   parts.push([heading,...text.split('\n')].map(line=>'> '+line).join('\n'));
  }
  const files:string[]=[];
- const rest=parsed.rest.replace(/\s*<(persona-file|jarvis-file)\b([^>]*?)\/?>(?:\s*<\/\1>)?\s*/g,(_match,_tag,attrs:string)=>{
+ const rest=parsed.rest.replace(new RegExp('\\s*<(persona-file|' + legacyFileTag + ')\\b([^>]*?)\\/?>(?:\\s*<\\/\\1>)?\\s*','g'),(_match,_tag,attrs:string)=>{
   const values:Record<string,string>={};for(const a of attrs.matchAll(/(\w+)="([^"]*)"/g))values[a[1]]=forwardUnescape(a[2]);
   if(values.path){const name=values.name||values.path.split('/').filter(Boolean).pop();if(name)files.push(file(name,machine));}
   return '\n';
@@ -86,7 +88,7 @@ export function forwardSendNote(text:string,count:number,single:string,several:s
 
 export interface ForwardOrigin { machine:string; session:string; item:string }
 export function forwardOrigin(ref:ForwardFields):ForwardOrigin|undefined {
- const url=String(ref.url||''),m=url.match(/^(?:persona|jarvis):\/\/session\/([^/?#]+)\/([^/?#]+)(?:\?([^#]*))?$/);
+ const url=String(ref.url||''),m=url.match(new RegExp('^(?:persona|' + legacyProduct + ')://session/([^/?#]+)/([^/?#]+)(?:\\?([^#]*))?$'));
  if(!m)return undefined;
  try{
   const machine=decodeURIComponent(m[1]),session=decodeURIComponent(m[2]);

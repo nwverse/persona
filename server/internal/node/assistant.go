@@ -88,6 +88,11 @@ type assistantProc struct {
 	// personaMCPOnly is fixed at a Claude or Codex process start. A warm spare must still match
 	// the hub's current capability before it becomes a new conversation.
 	personaMCPOnly bool
+	// categories is the (PERSONA_CATEGORIES value, known) state this process started with (categories_env.go).
+	// Set at start, never changed: when processCategories differs, an idle process restarts and a stale spare is rejected.
+	categories sessionCategoriesState
+	// guest: started as a guest conversation (no Bash, no gateEnv / PERSONA_CATEGORIES).
+	guest bool
 	// origin is set before the process can make its first model tool call, including while Codex still has a proc-* id.
 	origin string
 	// stderrDone closes when its stderr ends (watchAssistantStderr has read all of it): what a failed start printed
@@ -876,19 +881,24 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		n.awaitRoundTurn(ctx, p)
 	}
 	currentExecution := execution
-	// Pin only a process this send can actually retain. A restart for tools, permissions, instructions or recovery must
+	// Pin only a process this send can actually retain. A restart for tools, permissions, instructions, categories or recovery must
 	// use the manager's current revision, never the old process's binding in a new process.
-	if proto.IsExternalLauncher(launcher) && p != nil && p.alive() && !otherTools && !restartForRecovery && !p.needsRestartFor(want) && !p.instructionsStale() {
+	categoriesStale := guest == nil && n.categoriesStale(p, cwd)
+	if proto.IsExternalLauncher(launcher) && p != nil && p.alive() && !otherTools && !restartForRecovery && !p.needsRestartFor(want) && !p.instructionsStale() && !categoriesStale {
 		execution = pinExternalExecution(p, launcher, execution)
 	}
 	executionChanged := p != nil && (p.launcher != launcher || p.fingerprint != n.executionFingerprint(launcher, execution) || n.tuiEffortStale(p, execution))
-	if p != nil && (!p.alive() || executionChanged || p.needsRestartFor(want) || p.instructionsStale() || otherTools || n.toolSearchStale(p)) {
+	if p != nil && (!p.alive() || executionChanged || p.needsRestartFor(want) || p.instructionsStale() || otherTools || n.toolSearchStale(p) || categoriesStale) {
 		p.mu.Lock()
 		originChanged := assistantOriginToolPolicy(p.origin) != assistantOriginToolPolicy(origin) ||
 			assistantOriginToolPolicy(p.model.Origin) != assistantOriginToolPolicy(origin)
 		active := p.busy || len(p.tasks) > 0
 		if originChanged {
 			// The old built-in policy must also survive compactions and accepted or queued input that has not started a turn.
+			active = p.workingLocked()
+		}
+		if categoriesStale {
+			// Do not interrupt active compactions or accepted/queued input when recycling for PERSONA_CATEGORIES.
 			active = p.workingLocked()
 		}
 		if proto.IsExternalLauncher(p.launcher) || proto.IsExternalLauncher(launcher) {
@@ -921,6 +931,11 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 				// Do not kill active work, or deliver a new role's message on the old system
 				// policy. Manager-generated messages remain queued for an idle retry.
 				return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
+			}
+			if categoriesStale && n.categoriesStricterFor(p, cwd) {
+				// Do not kill active work, or deliver a turn onto a process whose PERSONA_CATEGORIES
+				// lacks newly accumulated categories or stays known while categories are unknown.
+				return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_categories_busy"), nil)
 			}
 			if execution.Strict && executionChanged {
 				return "", errors.New("task execution context differs from this conversation; start a new conversation")
@@ -1337,9 +1352,15 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			Reason          string                      `json:"reason"` // tuiFallbackSubtype: why interactive did not start
 			ModelUsage      map[string]claudeModelUsage `json:"modelUsage"`
 		}
-		if json.Unmarshal(line, &ev) != nil {
+		if err := json.Unmarshal(line, &ev); err != nil {
 			p.invalidateUpdateTasks()
-			continue
+			// A field of another type than the node reads (a gateway's token count as a string, say) fails the line
+			// but not the fields around it, which are decoded all the same. A turn's end is still its end: dropped,
+			// the conversation stayed working until its next turn ended (#14351).
+			var mismatch *json.UnmarshalTypeError
+			if ev.Type != "result" || !errors.As(err, &mismatch) {
+				continue
+			}
 		}
 		if p.round && ev.SessionID != "" && ev.SessionID != p.id && validID(ev.SessionID) {
 			n.noteRoundFork(ev.SessionID, p.id)

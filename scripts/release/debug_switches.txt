@@ -295,6 +295,7 @@ showGitReload
 showHandOffNewAgent
 showHealthActivityExample
 showHealthHomeTrendsExample
+showHealthItemsEditor
 showHealthTrends
 showHerdrStart
 showHomeState
@@ -440,6 +441,7 @@ showSwiftUIJumps
 showSystemCallService
 showTaskBoard
 showTaskDetail
+showTellHealthResult
 showTerminalUpload
 showTerminalsUnlinked
 showTestNotification
