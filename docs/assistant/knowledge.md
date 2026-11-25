@@ -94,7 +94,10 @@ What it wrote earlier stays the user's: stored recordings are still listed, open
 `kb_get`: transcript, minutes, day recap, photo texts) and found by search, and their files are not touched. Their
 tags, pinned facts and projects can still be edited, they can still be deleted (`DELETE /api/v1/kb/recordings/{id}`,
 "App API" below), and retention (`recording_days`, `minutes_days`) keeps its schedule. What stops is everything that
-makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries.
+makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries. The writers of a
+recording's minutes, recap, title, photos, audio and hub transcript are the module's code
+(`server/internal/modules/recording/writers`); the knowledge base keeps the readers, delete, retention with the trim
+and the recovery.
 
 A stored photo's image is read through the same route with or without the module, `GET /api/v1/recordings/{id}/photos/{n}`:
 the knowledge base's own read-only route (`assistant/kb_recording_media.go`, full credentials only), answering as the

@@ -170,8 +170,6 @@ func metaKeys(t *testing.T, e *testEngine, id string) map[string]json.RawMessage
 	return m
 }
 
-func mustJSON(t *testing.T, v any) string { return jsonOf(t, v) }
-
 // markTrimmed writes recording id's meta.json as a trim cut short right after it leaves it: trimmed at now, nothing
 // else of the trim done (the knowledge base's putTrimmedMeta, which these tests called while they were in
 // internal/kb).

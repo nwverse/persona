@@ -2,10 +2,12 @@ package recordingwire
 
 import (
 	"encoding/json"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A timeline is taken whole or not at all: malformed or over the limits it is ignored, never failing the upload.
@@ -125,4 +127,85 @@ func TestTimelineMergeAndRoleAt(t *testing.T) {
 	if len(u.Roles) != MaxTimelineRoles || len(u.Speaking) != MaxTimelineSpans || u.Roles[0].At != 0 || u.Speaking[0].Start != 0 {
 		t.Fatalf("limits: %d roles, %d spans", len(u.Roles), len(u.Speaking))
 	}
+}
+
+// minutesWaitFixtures are the cases the hub, the iPhone and the web share (spec/fixtures/minutes-wait, #13461).
+const minutesWaitFixtures = "../../../spec/fixtures/minutes-wait/cases.json"
+
+// The view carries final_done and end exactly when the shared cases say, with their values: while the final pass runs
+// (finishing, started) and the end is known, final_done at most the end.
+func TestMinutesWaitFixture(t *testing.T) {
+	raw, err := os.ReadFile(minutesWaitFixtures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Version int `json:"version"`
+		Cases   []struct {
+			Name string `json:"name"`
+			Hub  *struct {
+				State       string  `json:"state"`
+				PassStarted bool    `json:"pass_started"`
+				FinalDone   float64 `json:"final_done"`
+				End         float64 `json:"end"`
+			} `json:"hub"`
+			Transcription map[string]json.RawMessage `json:"transcription"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	if file.Version != 1 {
+		t.Fatalf("version %d", file.Version)
+	}
+	checked := 0
+	for _, c := range file.Cases {
+		if c.Hub == nil {
+			continue
+		}
+		checked++
+		t.Run(c.Name, func(t *testing.T) {
+			tr := &MeetingTranscription{Mode: TranscriptionHub, State: c.Hub.State, FinalDone: c.Hub.FinalDone, End: c.Hub.End}
+			if c.Hub.PassStarted {
+				tr.FinalFrom = time.Date(2026, 11, 10, 15, 0, 0, 0, time.UTC)
+			}
+			got, err := json.Marshal(Meeting{Transcription: tr}.TranscriptionView(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var view map[string]json.RawMessage
+			if err := json.Unmarshal(got, &view); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"mode", "state", "final_done", "end"} {
+				want, wok := c.Transcription[key]
+				have, hok := view[key]
+				if wok != hok || (wok && !sameNumberOrText(t, want, have)) {
+					t.Errorf("%s: view %s, want %s", key, got, mustJSON(t, c.Transcription))
+				}
+			}
+		})
+	}
+	if checked < 8 {
+		t.Fatalf("only %d hub cases", checked)
+	}
+}
+
+// sameNumberOrText: two JSON values are the same number, or the same text.
+func sameNumberOrText(t *testing.T, a, b json.RawMessage) bool {
+	t.Helper()
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return x == y
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
