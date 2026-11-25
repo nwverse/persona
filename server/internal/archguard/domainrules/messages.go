@@ -18,7 +18,7 @@ type ruleText struct{ why, fix, good string }
 var rules = map[string]ruleText{
 	"layer-declared": {
 		"every package states whether it is domain code, so new code is checked from its first line",
-		"add `//persona:layer <kit|core|core shared|adapter|application|application seam|library|contract|testkit>` to the package comment; start a domain package with python3 scripts/new_domain_slice.py",
+		"add `//persona:layer <kit|core|core shared|adapter|application|application seam|library|contract|testkit>` to the package comment; start a domain package with python3 scripts/gen/new_domain_slice.py",
 		"server/internal/agentref/doc.go",
 	},
 	"layer-one": {
@@ -43,7 +43,7 @@ var rules = map[string]ruleText{
 	},
 	"layer-application": {
 		"domain logic declared application escapes every core rule",
-		"declare core (python3 scripts/new_domain_slice.py starts one), or library if it holds no domain concept",
+		"declare core (python3 scripts/gen/new_domain_slice.py starts one), or library if it holds no domain concept",
 		planted + "internal/assistant/fleetcount",
 	},
 	"layer-library": {
@@ -193,7 +193,7 @@ var rules = map[string]ruleText{
 	},
 	"core-params": {
 		"long parameter lists hide which inputs belong together",
-		"use a staged builder (python3 scripts/new_domain_slice.py --builder writes one)",
+		"use a staged builder (python3 scripts/gen/new_domain_slice.py --builder writes one)",
 		planted + "internal/assistant/fleetcount/agent.go (NewAgentBuilder)",
 	},
 	"core-outcome-return": {
@@ -338,12 +338,12 @@ var rules = map[string]ruleText{
 	},
 	"app-exported-record": {
 		"new concepts in application and library packages keep the habit the domain model replaces",
-		"put the concept in a core (python3 scripts/new_domain_slice.py starts one) or a wire shape in a contract",
+		"put the concept in a core (python3 scripts/gen/new_domain_slice.py starts one) or a wire shape in a contract",
 		planted + "internal/assistant/fleetcount",
 	},
 	"app-named-primitive": {
 		"a named primitive is only a name",
-		"declare a value object in a core (python3 scripts/new_domain_slice.py --value)",
+		"declare a value object in a core (python3 scripts/gen/new_domain_slice.py --value)",
 		"server/internal/agentref/ref.go",
 	},
 	"app-bridge-call": {

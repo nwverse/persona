@@ -290,13 +290,18 @@ func TestOrcaWithoutProcessScan(t *testing.T) {
 // orcaSession is a node with one claude session in Orca's terminal term_1 (pane tab1:leaf1).
 func orcaSession(t *testing.T) (*Node, *orcarttest.Fake, *fakeProcs) {
 	t.Helper()
+	return orcaSessionWithPID(t, 4242)
+}
+
+func orcaSessionWithPID(t *testing.T, pid int) (*Node, *orcarttest.Fake, *fakeProcs) {
+	t.Helper()
 	n, _, o, procs, home := orcaNode(t)
 	writeTranscript(t, home, orcaCwd, sidA, time.Now().Add(-time.Minute), `{"type":"custom-title","customTitle":"x"}`)
-	writeClaudePID(t, home, 4242, sidA)
+	writeClaudePID(t, home, pid, sidA)
 	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", "claude"))
 	o.SetWorktrees(orcarttest.Worktree("repo::"+orcaCwd, orcaCwd, "refs/heads/feature-x",
 		orcarttest.Agent("tab1:leaf1", "claude", "done")))
-	procs.set("tab1:leaf1", orcaProc{pid: 4242, agent: "claude"})
+	procs.set("tab1:leaf1", orcaProc{pid: pid, agent: "claude"})
 	if m := byID(listSessions(t, n)); m[sidA].PaneID != "orca:tab1:leaf1" {
 		t.Fatalf("not listed: %v", m)
 	}
@@ -427,8 +432,10 @@ func TestOrcaSendRefusedByOrca(t *testing.T) {
 // The claude exited and the pane is back at its shell (Orca may still name claude): the shell does not get the
 // message as a command — refused before anything is typed, and the session is no longer live.
 func TestOrcaSendAfterTheAgentExited(t *testing.T) {
-	n, o, procs := orcaSession(t)
+	pid, exit := idleTerminalTestProcess(t)
+	n, o, procs := orcaSessionWithPID(t, pid)
 	o.SetScreen("term_1", "$ \n")
+	exit()
 	procs.set("tab1:leaf1")
 	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "rm -rf build"})
 	if code, _ := refusalOf(t, err); code != "not_delivered" {
@@ -932,8 +939,10 @@ func TestOrcaPromptSubmitFails(t *testing.T) {
 // A message to a stopped agent is refused (#4754); the user's Resume (session.start) brings back a Claude session
 // whose pane is gone on Orca (#5548), and on Herdr App as herdr does (#2532).
 func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
-	n, o, procs := orcaSession(t)
+	pid, exit := idleTerminalTestProcess(t)
+	n, o, procs := orcaSessionWithPID(t, pid)
 	n.claudeStart, n.claudeReady = 200*time.Millisecond, 200*time.Millisecond
+	exit()
 	procs.set("tab1:leaf1") // suspended: no claude in front
 	time.Sleep(orcaProcsMaxAge)
 	listSessions(t, n)
@@ -982,7 +991,8 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 	}
 
 	// Herdr App resumes it as herdr does (#2532): a new tab, its launcher with --resume through the start file.
-	hn, hc := hcSession(t)
+	herdrPID, exitHerdr := idleTerminalTestProcess(t)
+	hn, hc := hcSessionWithPID(t, herdrPID)
 	hn.claudeStart, hn.claudeReady = 200*time.Millisecond, 200*time.Millisecond // the fake shell never runs claude
 	hc.doc = appDoc(hcCwd)
 	var typed string
@@ -990,6 +1000,7 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 		typed, _ = startFileCommand(str(p["text"]))
 		return map[string]any{}
 	})
+	exitHerdr()
 	hc.setTerminals()
 	time.Sleep(time.Second) // past the failed-list cache
 	listSessions(t, hn)

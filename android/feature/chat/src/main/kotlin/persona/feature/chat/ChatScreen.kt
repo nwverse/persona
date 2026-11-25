@@ -1039,7 +1039,7 @@ private fun ChatPage(
                             terminalHelp = canTerminal, onDiscardLocal = interactionController::discard, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
                             first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine,
-                            resize = resize)
+                            resize = resize, commandInputErrors = interactionController.commandInputErrors)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession

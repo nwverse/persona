@@ -2,7 +2,7 @@
 
 Read before writing or changing a domain package: a server core, shared kernel, adapter or the domain kit, and the client
 domain modules as they arrive. The rules are `docs/server/architecture.md` ("Domain model"); `server/internal/CLAUDE.md`
-is the short form, and `python3 scripts/new_domain_slice.py go …` starts a package that follows them. These are the
+is the short form, and `python3 scripts/gen/new_domain_slice.py go …` starts a package that follows them. These are the
 traps the compiler does not stop, each with what to write instead.
 
 - **A typed nil is not a nil failure.** A `Fail` that holds a nil pointer (`var f *notFound; out.Err(f)`) is not `nil`:

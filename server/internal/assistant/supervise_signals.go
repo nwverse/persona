@@ -1194,7 +1194,13 @@ func reviewKey(v *Supervision) string {
 	if r := v.externalPRWake(); r != nil {
 		return externalPRReviewPrefix + r.At.UTC().Format(time.RFC3339Nano)
 	}
-	return "review@" + v.UpdatedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
+	return ordinaryReviewKey(v.UpdatedAt)
+}
+
+// updated_at is a PostgreSQL timestamptz. A review raised before restarting must have the same
+// identity as the watch obtains after reading that timestamp back at microsecond precision.
+func ordinaryReviewKey(at time.Time) string {
+	return "review@" + at.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 // stallAfter is how long without progress counts as stuck for a task that should take expect minutes.

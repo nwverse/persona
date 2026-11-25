@@ -208,7 +208,7 @@ type (
 	Evidence   = kbwire.Evidence
 )
 
-var ErrNotFound = errors.New("not found")
+var ErrNotFound = kbwire.ErrNotFound
 
 // Get reads one entity. recentChars bounds a chat's latest messages in bytes, a recording's transcript in characters
 // (0: none).
@@ -778,6 +778,9 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 		r, ok := e.Store.Recording(id)
 		if !ok {
 			return "", ErrNotFound
+		}
+		if uu.ExpectedPinned != nil && r.Pinned != *uu.ExpectedPinned {
+			return "", ErrConflict
 		}
 		tagUpdate(u, &r.Tagging)
 		protectUpdate(u, &r.Tagging, le)

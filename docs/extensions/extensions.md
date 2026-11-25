@@ -216,6 +216,7 @@ Lives at the root of the extension package. Example (a connector for a fictional
 | `tools` | No | Command-line programs it needs (#4507); the hub installs them in the extension's own directory and puts them on its `PATH`, see "Command-line programs (tools)"; requires `runtime` |
 | `auth` | No | `{title, description?, page?}`: the extension needs a sign-in (#4507); the program implements `auth.*`, see "Sign-in (auth)"; requires a `runtime` that speaks the protocol |
 | `host_integrations` | No | `[{id, version}]`: a configured host CLI integration, by its closed ID and a semantic-version range. At most one; requires an RPC runtime. The program calls `cli.call`, see "Host CLI integrations". This grants no shell, arbitrary command, write or credential access |
+| `upgrade` | No | `{backup?, prepare?, health_check?}`: what the extension asks of the hub around an automatic upgrade (#15238). `backup`: `auto` (default) / `required`; `prepare`: the hub calls the installed program's `upgrade.prepare` before backing up its data; `health_check`: the hub calls the new program's `upgrade.health` once it is up. `prepare` and `health_check` require a runtime that speaks the protocol. Every marketplace extension is backed up before an automatic upgrade whether or not it has this; see "Backup before an upgrade". Hubs from before this field read manifests strictly, so extensions using it ask for a newer hub in `engines` |
 
 Manifests are at most 256 KB and are read strictly: an unknown field at any level means it can't be installed (a misspelled `permission` is not silently ignored).
 
@@ -849,7 +850,7 @@ The contribution (extension point `memory_sources`, version 1, namespace `memory
 
 | Method | Parameters → answer | Notes |
 | --- | --- | --- |
-| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
+| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?, standing_bytes?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
 
 Each entry (`MemoryEntry`):
 
@@ -868,6 +869,12 @@ Each entry (`MemoryEntry`):
 - **`tagged`** is a promise for the whole page: the extension writes `origin_space` and `categories` on every entry and
   leaves them out only when empty. The manager reads a batch as tagged only when every page says so. Untagged, a missing
   field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
+- **`standing_bytes`** (#15312) is the bytes of standing entries' text the extension wants a standing channel to carry,
+  say its own setting for how much it keeps resident. The hub keeps this budget apart from its own memory ledger's
+  (neither spends the other's), takes the largest any page or source states, and caps it at 8192; left out or 0 means
+  4096. A negative value, or one that is not an integer, fails the page like the other page fields. Past the budget the
+  usual rule holds: the most important entries first, one that does not fit is left out and a smaller one after it may
+  still go (`docs/assistant/health.md` "Memory by scene", "Budgets").
 - **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
   is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
 - **Bounds**: 5 seconds per call and at most 1 MB per answer. The hub follows the existing cursors to the end, with
@@ -877,7 +884,7 @@ Each entry (`MemoryEntry`):
   included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
 - **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
   message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
-  `after`) do not hold to the schema, a program that does not run, and every error mean the assemblies use
+  `after`, `standing_bytes`) do not hold to the schema, a program that does not run, and every error mean the assemblies use
   none of the extension's entries until the next read and log why. It never falls back to the extension's text.
 - **Who calls**: the manager only, for the owner's personal assemblies; no other extension, device or token can.
 - **How often**: every contribution that is on is read in one go, page by page, and the merged result is kept for a
@@ -1829,7 +1836,7 @@ For extensions installed from an extension marketplace (source `market:<marketpl
 - **When to upgrade**: the source marketplace is still registered, the new version is higher than the installed one, usable on this hub (has a package for its platform, `engines` satisfied), the extension is enabled, both the master switch and this extension's own switch are on (both on by default),
   **it asks for no more than the user approved** (`MorePermissions` is false; the permission summary equals `granted_digest`), and the extension is idle: no calls in flight, no open HTTP requests or WebSockets
   (a connector always holds its extension, which does not count as in use), and the assistant is not working (its next step might call this extension's tools). If busy, check again the next minute.
-- **How to upgrade**: the same path as a manual upgrade: download per the marketplace index, verify sha256, preview, then upgrade (in the audit log the actor is `自动升级` (auto-upgrade)); stop the old, start the new, and if the new version does not come up within 30 seconds, roll back to the old one (`watchUpgrade`, actor `hub` in the audit log).
+- **How to upgrade**: the same path as a manual upgrade: download per the marketplace index, verify sha256, preview, then back up the extension's data ("Backup before an upgrade" below), then upgrade (in the audit log the actor is `自动升级` (auto-upgrade)); stop the old, start the new, and if the new version does not come up within 30 seconds, or fails its `upgrade.health`, roll back to the old one and to the backup (`watchUpgrade`, actor `hub` in the audit log).
   **A rolled-back version is recorded as skipped** and never auto-installed again (regardless of who upgraded it originally), until the marketplace has a higher version.
   That holds for a rollback the user starts too (the admin page's **Roll back**, `POST /api/v1/extensions/{id}/-/rollback`, `personad extension rollback`, #1826): the version left is skipped with `skipped_by: "user"` on the newer version's `upgrade` (and its "upgraded" note goes), so the apps say the user rolled back from it rather than that it didn't start, and nothing is pushed. A version that failed to install (download or verification failed) is retried the next time the marketplace yields a new index.
 - **Disabled extensions** (#1525): while an extension is turned off, the hub neither upgrades it nor tells the user of a version that asks for more; its newer version shows `state` `off` with a `detail` saying it is paused,
@@ -1849,6 +1856,37 @@ For extensions installed from an extension marketplace (source `market:<marketpl
 - **Telling the user**: success, rollback, waiting for confirmation and install failure are all recorded on the extension (`ExtensionView.upgrade_note`); online apps receive `{"type": "extension_upgrade", "extension", "note"}`;
   the first three also send a quiet push (`thread-id` `plugin_upgrade`, `interruption-level` `passive`, with both `plugin_upgrade: {plugin, kind, version}` and `extension_upgrade: {extension, kind, version}`).
 - **Where it is stored**: the hub setting `plugin_upgrades` (master switch, extensions switched off, skipped versions, versions already announced, each extension's last result); no new table.
+
+### Backup before an upgrade
+
+A new version may migrate or damage the data it finds; rolling back only the package would leave the old version on data it no longer
+understands. So before every automatic upgrade the hub keeps a snapshot of the extension's data directory, and a rollback puts it back
+(#15238). Code: `server/internal/extmgr/extension_upgrade_backup.go` (when) and `server/internal/extension/registry_backup.go` (the snapshots).
+
+- **What is kept**: the extension's own data directory (`PERSONA_EXTENSION_DATA`, `<extensions dir>/data/<storage key>`): directories,
+  regular files and symbolic links (as links, never followed; sockets and pipes are skipped). Its settings and secrets are not in it and an
+  upgrade does not change them. Hub-held business storage (`storage.*`, in Postgres) and the data of programs on computers (`node`) are not
+  part of the snapshot.
+- **Where and how many**: `<extensions dir>/backups/<storage key>/<UTC time>-<old version>.tar.gz`, written to a temporary file and renamed
+  when complete (the directory `0700`, the archives `0600`: they hold what the data holds, sign-in credentials included); after each
+  snapshot only the newest **3** per extension stay. An uninstall that does not keep the data removes them with
+  it (they are its data too); **Keep data** keeps them.
+- **Order**: when the installed version's manifest has `upgrade.prepare`, the hub first calls its program's
+  `upgrade.prepare {from, to, data_dir}` (2 minutes at most) so it can flush or export what it holds; an error, or `{ok: false, error}`,
+  stops the upgrade ("Upgrade failed" with the reason) and nothing else happens. The hub then **stops the old program**, so nothing writes
+  while the directory is copied, and takes the snapshot. An extension without a data directory has nothing to keep, and goes on.
+- **When the snapshot fails** (disk full, unreadable files): by default the failure is logged and the upgrade goes ahead without one. When
+  either version's manifest says `upgrade.backup: "required"`, the upgrade is not installed: the old program starts again and the extension
+  records "Upgrade failed" with the reason, tried again when the marketplace has a new index.
+- **Health check**: when the new version's manifest has `upgrade.health_check`, the hub calls its `upgrade.health {}` once it is running
+  (30 seconds at most; one started by calls is started for it). An error, or `{ok: false, error}`, counts as not coming up. Without it the
+  hub's usual checks apply: the program ends in error (exits, fails `initialize`, misses its HTTP `/health`) within the 30 seconds.
+- **Rollback**: the new program is stopped, the data directory is replaced whole by the snapshot (what the new version wrote is gone; a
+  snapshot of an extension that had no data directory removes the one the new version made), then the package goes back to the old
+  version, which starts on its own data. The note is `rolled_back` with the reason, and the version is skipped as for any rollback. A
+  snapshot that cannot be put back is logged and the package still rolls back.
+- **Not covered**: manual upgrades and a rollback the user starts by hand take no snapshot and restore none; the snapshots on disk are
+  there to restore by hand (`tar -xzf` into an empty data directory while the extension is off).
 
 `ExtensionView` has these extra fields for marketplace extensions: `auto_upgrade` (this extension's saved switch), `auto_upgrade_paused` (why that switch does not apply now: `market_removed` when its source marketplace is no longer registered, otherwise `disabled` when the extension is turned off; omitted otherwise),
 `market` (the id of the marketplace it upgrades from, also after that marketplace is removed; older hubs omit it),

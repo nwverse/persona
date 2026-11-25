@@ -547,11 +547,13 @@
       "external_refs": []
     },
     "harmony/entry/src/main/ets/core/WireCompatibility.ts": {
-      "reason": "Harmony native transport and pairing compatibility with existing deployed hubs.",
+      "reason": "Harmony native transport, persisted session, pairing, deep-link and forwarded-context compatibility with existing deployed hubs.",
       "tokens": [
         "X-Jarvis-Client",
         "X-Jarvis-Op-Id",
-        "jarvis"
+        "jarvis",
+        "jarvis-context",
+        "jarvis-file"
       ],
       "path_tokens": [],
       "external_refs": []
@@ -559,7 +561,9 @@
     "harmony/entry/src/main/ets/models/Compatibility.ets": {
       "reason": "Harmony context envelopes read and send the existing negotiated wire tag.",
       "tokens": [
-        "jarvis-context"
+        "jarvis",
+        "jarvis-context",
+        "jarvis-file"
       ],
       "path_tokens": [],
       "external_refs": []
@@ -1498,6 +1502,30 @@
       "reason": "Regression fixture for the historical state directory in a session's working directory.",
       "tokens": [
         ".jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/tests/agent-task-groups.test.mjs": {
+      "reason": "Exact persisted started-by compatibility fixture for the manual-task grouping contract.",
+      "tokens": [
+        "started_by_jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/tests/extension-ui.test.mjs": {
+      "reason": "Exact legacy deep-link compatibility assertion for the app-owned subscription setup route.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/entry/src/main/ets/models/Wire.ets": {
+      "reason": "Exact persisted started-by compatibility field used by the task-grouping reader.",
+      "tokens": [
+        "started_by_jarvis"
       ],
       "path_tokens": [],
       "external_refs": []
