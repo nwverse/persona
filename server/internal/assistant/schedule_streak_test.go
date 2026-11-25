@@ -54,7 +54,7 @@ func TestNotReadySkipsNeitherCountNorEndAStreak(t *testing.T) {
 
 // scheduleStore hands each test a database without the settings an earlier test in the process saved: a main
 // conversation left behind sent TestNotReadySkipsNeitherCountNorEndAStreak's streak to the relay instead of the push
-// it checks, whenever schedule_ready_test.go ran first (#ISSUE).
+// it checks, whenever schedule_ready_test.go ran first (#15278).
 func TestScheduleStoreForgetsEarlierSettings(t *testing.T) {
 	first := scheduleStore(t)
 	f := newFakeHub()
