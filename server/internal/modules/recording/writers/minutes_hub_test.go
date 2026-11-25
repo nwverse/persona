@@ -1,8 +1,9 @@
-package kb
+package writers
 
 import (
 	"context"
 	"errors"
+	"github.com/nwverse/persona/server/internal/kb"
 	"os"
 	"strings"
 	"testing"
@@ -12,26 +13,26 @@ import (
 const hubMinutesReply = `{"title": "设计评审", "points": [{"text": "上限保持在 4 MB", "line": 1}]}`
 
 // hubMinutesEngine is a hub engine whose model answers minutes, on a clock the test moves, telling each push.
-func hubMinutesEngine(t *testing.T, reply string) (e *Engine, m *captureModel, clock *time.Time, told *int) {
+func hubMinutesEngine(t *testing.T, reply string) (e *testEngine, m *captureModel, clock *time.Time, told *int) {
 	t.Helper()
 	m = &captureModel{reply: reply}
 	e, _ = hubEngine(t, m)
 	c := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	clock = &c
-	e.clock = func() time.Time { return *clock }
+	e.SetClock(func() time.Time { return *clock })
 	n := 0
 	told = &n
-	e.MinutesWritten = func(context.Context, Recording, Minutes) { n++ }
+	e.minutesWritten = func(context.Context, Recording, Minutes) { n++ }
 	return e, m, clock, told
 }
 
 // hubCompleteMeeting stores a complete hub-mode meeting of the phone's lines (uploaded at *clock), its live hub
 // sentences and some audio.
-func hubCompleteMeeting(t *testing.T, e *Engine, id string, at time.Time, phone []string, hub []RecordingSegment) {
+func hubCompleteMeeting(t *testing.T, e *testEngine, id string, at time.Time, phone []string, hub []RecordingSegment) {
 	t.Helper()
 	putRecording(t, e, id, hubUpload(1, at.Add(-time.Hour), true, nil, phone...), at)
 	if len(hub) > 0 {
-		if _, err := e.HubTranscriptPut(id, HubPassLive, hub); err != nil {
+		if _, err := e.HubTranscriptPut(id, kb.HubPassLive, hub); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -42,14 +43,14 @@ func hubCompleteMeeting(t *testing.T, e *Engine, id string, at time.Time, phone 
 
 // finishTranscription runs what the manager does at the end of the final pass: the final sentences, the state, and
 // FinalTranscriptStored.
-func finishTranscription(t *testing.T, e *Engine, id, state string, final []RecordingSegment) {
+func finishTranscription(t *testing.T, e *testEngine, id, state string, final []RecordingSegment) {
 	t.Helper()
 	if final != nil {
-		if _, err := e.HubTranscriptPut(id, HubPassFinal, final); err != nil {
+		if _, err := e.HubTranscriptPut(id, kb.HubPassFinal, final); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := e.TranscriptionUpdate(id, func(t *MeetingTranscription, _ Recording) error { t.State = state; return nil }); err != nil {
+	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ Recording) error { t.State = state; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.FinalTranscriptStored(id); err != nil {
@@ -57,8 +58,8 @@ func finishTranscription(t *testing.T, e *Engine, id, state string, final []Reco
 	}
 }
 
-func audioThere(e *Engine, id string) bool {
-	_, err := os.Stat(e.Store.audioPath(id))
+func audioThere(e *testEngine, id string) bool {
+	_, err := os.Stat(e.Store.Path(KindRecording, id, photosDir, "audio"))
 	return err == nil
 }
 
@@ -76,7 +77,7 @@ func TestHubMinutesWaitForTheFinalTranscript(t *testing.T) {
 	if n := e.WriteMinutes(context.Background(), 2); n != 0 || len(m.calls) != 0 {
 		t.Fatalf("written while the final pass runs: %d, %d calls", n, len(m.calls))
 	}
-	finishTranscription(t, e, recID, TranscriptionFinal, []RecordingSegment{
+	finishTranscription(t, e, recID, kb.TranscriptionFinal, []RecordingSegment{
 		hseg(0, 8, "我们先把 export cap 保持在 4 MB。"), hseg(8.5, 9, "Bo owns the vendor follow-up.")})
 	if !audioThere(e, recID) {
 		t.Fatal("the audio went before the minutes")
@@ -124,7 +125,7 @@ func TestHubMinutesMadeAgainQuietlyAfterTheFinalPass(t *testing.T) {
 		t.Fatal("minutes of the live text took the audio")
 	}
 	*clock = clock.Add(time.Minute)
-	finishTranscription(t, e, recID, TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
+	finishTranscription(t, e, recID, kb.TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
 	r := recordingNow(t, e, recID)
 	if r.MinutesState != MinutesPending || !quietMinutes(r) {
 		t.Fatalf("not made again quietly: %q quiet %d asks %d", r.MinutesState, r.MinutesQuiet, r.MinutesAsks)
@@ -144,58 +145,12 @@ func TestHubMinutesMadeAgainQuietlyAfterTheFinalPass(t *testing.T) {
 	}
 }
 
-// The short summary is made again from the final transcript, also when its call from the live text was still running
-// as the final pass ended, and when a crash kept FinalTranscriptStored from being told.
-func TestHubSummaryMadeAgainAfterTheFinalPass(t *testing.T) {
-	var e *Engine
-	race := true
-	m := &funcModel{f: func(n int, _, user string) (string, error) {
-		if race && n == 1 { // the final pass ends while the live text's summary is being made
-			finishTranscription(t, e, recID, TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
-		}
-		return `{"title": "Design review", "summary": "A summary.", "one_line": "One line."}`, nil
-	}}
-	e, _ = hubEngine(t, m)
-	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
-	hubCompleteMeeting(t, e, recID, now, []string{"手机一"}, []RecordingSegment{hseg(0, 8, "live words")})
-	ctx := context.Background()
-	if n := e.SummarizeRecordings(ctx, 3); n != 1 || !strings.Contains(m.calls[0][1], "live words") {
-		t.Fatalf("the live text's summary: %d", n)
-	}
-	if r := recordingNow(t, e, recID); !summaryDue(r) {
-		t.Fatalf("the summary of the live text settled it: rev %d final %v", r.SummarizedRev, r.SummarizedFinal)
-	}
-	if n := e.SummarizeRecordings(ctx, 3); n != 1 || !strings.Contains(m.calls[1][1], "final words") {
-		t.Fatalf("again from the final transcript: %d", n)
-	}
-	if n := e.SummarizeRecordings(ctx, 3); n != 0 || len(m.calls) != 2 {
-		t.Fatalf("a third summary: %d, %d calls", n, len(m.calls))
-	}
-
-	// A crash between the final state and FinalTranscriptStored: the summary of the live text is due all the same.
-	race = false
-	const crashed = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b"
-	hubCompleteMeeting(t, e, crashed, now, []string{"手机一"}, []RecordingSegment{hseg(0, 8, "live words")})
-	if n := e.SummarizeRecordings(ctx, 3); n != 1 {
-		t.Fatalf("the live text's summary: %d", n)
-	}
-	if _, err := e.HubTranscriptPut(crashed, HubPassFinal, []RecordingSegment{hseg(0, 8, "crashed final words")}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.TranscriptionUpdate(crashed, func(t *MeetingTranscription, _ Recording) error { t.State = TranscriptionFinal; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if n := e.SummarizeRecordings(ctx, 3); n != 1 || !strings.Contains(m.calls[len(m.calls)-1][1], "crashed final words") {
-		t.Fatalf("after the crash: %d", n)
-	}
-}
-
 // Minutes that end failed from the final transcript take the audio; so does a final pass that leaves a recording
 // with no minutes coming: no text at all, or never complete.
 func TestHubAudioGoesWithoutMinutes(t *testing.T) {
 	e, _, clock, _ := hubMinutesEngine(t, `{"title": "x", "points": [{"text": "made up", "line": 99}]}`)
 	hubCompleteMeeting(t, e, recID, *clock, []string{"手机一"}, nil)
-	finishTranscription(t, e, recID, TranscriptionFailed, nil)
+	finishTranscription(t, e, recID, kb.TranscriptionFailed, nil)
 	for range minutesTries {
 		e.WriteMinutes(context.Background(), 2)
 	}
@@ -212,7 +167,7 @@ func TestHubAudioGoesWithoutMinutes(t *testing.T) {
 	if r := recordingNow(t, e, silent); r.MinutesState != "" || r.Chars != 0 {
 		t.Fatalf("silent %+v", r)
 	}
-	finishTranscription(t, e, silent, TranscriptionFailed, nil)
+	finishTranscription(t, e, silent, kb.TranscriptionFailed, nil)
 	if audioThere(e, silent) {
 		t.Fatal("a meeting with no text kept its audio")
 	}
@@ -222,7 +177,7 @@ func TestHubAudioGoesWithoutMinutes(t *testing.T) {
 	if _, err := e.AudioPut(open, 0, pcmAt(0, 100)); err != nil {
 		t.Fatal(err)
 	}
-	finishTranscription(t, e, open, TranscriptionFinal, []RecordingSegment{hseg(0, 5, "final words")})
+	finishTranscription(t, e, open, kb.TranscriptionFinal, []RecordingSegment{hseg(0, 5, "final words")})
 	if audioThere(e, open) {
 		t.Fatal("a recording never complete kept its audio after the final pass")
 	}
@@ -245,7 +200,7 @@ func TestHubOnlyMeetingGetsMinutes(t *testing.T) {
 	if err := e.AskMinutes(recID); err != nil {
 		t.Fatalf("ask: %v", err)
 	}
-	finishTranscription(t, e, recID, TranscriptionFinal, nil)
+	finishTranscription(t, e, recID, kb.TranscriptionFinal, nil)
 	if n := e.WriteMinutes(context.Background(), 2); n != 1 || *told != 1 || !strings.Contains(m.calls[0][1], "下周三之前 Alice 要把 pricing 的 proposal 发出来。") {
 		t.Fatalf("written %d told %d", n, *told)
 	}
@@ -258,13 +213,13 @@ func TestHubAudioSweep(t *testing.T) {
 	e, _, clock, told := hubMinutesEngine(t, hubMinutesReply)
 	// The rollback: meeting.json written by an older manager, without the transcription.
 	hubCompleteMeeting(t, e, recID, *clock, []string{"手机一"}, nil)
-	if err := writeRecordingFile(e.Store.Path(KindRecording, recID, meetingFile), []byte(`{"private":true}`+"\n")); err != nil {
+	if err := os.WriteFile(e.Store.Path(KindRecording, recID, meetingFile), []byte(`{"private":true}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// The crash after the minutes: written from the final transcript, the audio still there.
 	const crashed, untold = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b", "6c7d4e5b-2e3f-4a91-8b2c-3d4e5f6a7b8c"
 	hubCompleteMeeting(t, e, crashed, *clock, []string{"手机一"}, nil)
-	if _, err := e.TranscriptionUpdate(crashed, func(t *MeetingTranscription, _ Recording) error { t.State = TranscriptionFinal; return nil }); err != nil {
+	if _, err := e.TranscriptionUpdate(crashed, func(t *kb.MeetingTranscription, _ Recording) error { t.State = kb.TranscriptionFinal; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	*clock = clock.Add(time.Minute)
@@ -275,7 +230,7 @@ func TestHubAudioSweep(t *testing.T) {
 	putMeetingMinutes(t, e, untold, Minutes{Version: 1, Title: "Design review", When: "w", GeneratedAt: *clock})
 	changeRecording(t, e, untold, func(r *Recording) { r.MinutesRev, r.MinutesState = r.Revision, MinutesReady })
 	*clock = clock.Add(time.Minute)
-	if _, err := e.TranscriptionUpdate(untold, func(t *MeetingTranscription, _ Recording) error { t.State = TranscriptionFinal; return nil }); err != nil {
+	if _, err := e.TranscriptionUpdate(untold, func(t *kb.MeetingTranscription, _ Recording) error { t.State = kb.TranscriptionFinal; return nil }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -312,7 +267,7 @@ func TestHubEchoIsKeptMarkedAndLeftOutOfTheMinutes(t *testing.T) {
 	u.Segments[2].Echo = true // the phone's mark, where the hub has no sentence
 	putRecording(t, e, recID, u, *clock)
 	echo := RecordingSegment{Start: 10, End: 18, Text: "We keep the cap for this release.", Echo: true}
-	if _, err := e.HubTranscriptPut(recID, HubPassLive, []RecordingSegment{hseg(0, 8, "我们先把 export cap 保持在 4 MB。"), echo}); err != nil {
+	if _, err := e.HubTranscriptPut(recID, kb.HubPassLive, []RecordingSegment{hseg(0, 8, "我们先把 export cap 保持在 4 MB。"), echo}); err != nil {
 		t.Fatal(err)
 	}
 	h, _ := e.HubTranscript(recID)
@@ -332,14 +287,14 @@ func TestHubEchoIsKeptMarkedAndLeftOutOfTheMinutes(t *testing.T) {
 	if strings.Join(marks, "|") != "hub: We keep the cap for this release.|device: phone three" {
 		t.Fatalf("detail.segments' echo %q (%+v)", marks, d.Segments)
 	}
-	md, _ := os.ReadFile(e.Store.path(KindRecording, recID, "transcript.md"))
+	md, _ := os.ReadFile(e.Store.Path(KindRecording, recID, "transcript.md"))
 	if !strings.Contains(string(md), "[Persona 回声] We keep the cap for this release.") || !strings.Contains(string(md), "[Persona 回声] phone three") {
 		t.Fatalf("transcript.md\n%s", md)
 	}
 	if r := recordingNow(t, e, recID); r.Chars != len([]rune("我们先把 export cap 保持在 4 MB。")) {
 		t.Fatalf("chars %d: Persona's echo counted", r.Chars)
 	}
-	finishTranscription(t, e, recID, TranscriptionFinal, nil)
+	finishTranscription(t, e, recID, kb.TranscriptionFinal, nil)
 	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
 		t.Fatalf("written %d", n)
 	}

@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func timedOut(ctx context.Context, err error) bool {
 
 // minutesTimedOut counts a try of revision rev of recording id that ran out of time, and puts the next one off.
 // Minutes that end failed so from a final transcript take the hub's audio with them.
-func (e *Engine) minutesTimedOut(id string, rev int64, now time.Time) {
+func (e *engine) minutesTimedOut(id string, rev int64, now time.Time) {
 	st := e.Store
 	st.recMu.Lock()
 	drop := false

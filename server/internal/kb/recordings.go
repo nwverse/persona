@@ -227,7 +227,7 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	if day && exists && r.Base != u.Revision {
 		// A new base: a recap made from the old one loses at once what the new transcript no longer says.
 		rebase = true
-		if recapped, err = e.repairDayRecap(r, &u); err != nil {
+		if recapped, err = e.RecordingProvider().RepairDayRecap(r, &u); err != nil {
 			return put, false, err
 		}
 	}
@@ -277,7 +277,7 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	if day {
 		putDay(r, &u)
 		if rebase {
-			rebaseRecap(r, recapped, now)
+			e.RecordingProvider().RebaseRecap(r, recapped, now)
 		}
 	}
 	if advanced {
@@ -290,7 +290,7 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	if day && exists {
 		// The notes of a chunk whose lines the upload changed (an erase above all) quote what it no longer says: they go
 		// now, not with the next note written. Those of the others stay theirs.
-		if err := st.pruneRecapNotes(r, u.Segments); err != nil {
+		if err := e.RecordingProvider().PruneRecapNotes(r, u.Segments); err != nil {
 			return put, false, err
 		}
 	}

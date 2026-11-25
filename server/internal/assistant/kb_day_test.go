@@ -262,7 +262,7 @@ func TestDayRecapAskTodosAndPush(t *testing.T) {
 
 	// The recap time comes (the evening routine's moved before now, though off): the ready recap pushes, once.
 	setEvening(t, d.s, "06:30", false)
-	d.engine().WriteDayRecaps(context.Background(), 1)
+	d.engine().RecordingProvider().WriteDayRecaps(context.Background(), 1)
 	pushes := d.f.pushed()
 	l := d.s.lang(context.Background())
 	if len(pushes) != 1 || pushes[0].ID != "ntf_dayrecap_"+r.Day || pushes[0].Kind != NotifyPush || pushes[0].SessionID != "c-main" ||
@@ -280,7 +280,7 @@ func TestDayRecapAskTodosAndPush(t *testing.T) {
 	d.putDay(dayPart2, 200, tz, map[string]any{"part": 2})
 	d.do("POST", segmentsPath(dayPart2), "", dayLines(200, 201), http.StatusOK)
 	d.recap(dayPart2)
-	d.engine().WriteDayRecaps(context.Background(), 1)
+	d.engine().RecordingProvider().WriteDayRecaps(context.Background(), 1)
 	if p := d.f.pushed(); len(p) != 1 {
 		t.Fatalf("pushed again: %+v", p)
 	}
@@ -404,7 +404,7 @@ func TestDayRecapPushCountsEveryPart(t *testing.T) {
 		t.Fatalf("pushed before the recap time: %+v", p)
 	}
 	setEvening(t, d.s, "06:30", false)
-	d.engine().WriteDayRecaps(context.Background(), 1)
+	d.engine().RecordingProvider().WriteDayRecaps(context.Background(), 1)
 	_, day := today8(d.owner)
 	want := i18n.T(d.s.lang(context.Background()), "assistant-day-recap.ready_body", i18n.Args{"day": day, "meetings": 0, "actions": 2})
 	if p := d.f.pushed(); len(p) != 1 || p[0].Body != want {

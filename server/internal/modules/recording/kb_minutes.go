@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/modules/recording/writers"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// Meeting minutes of the phone's recordings (kb/minutes.go, docs/assistant/meeting-minutes.md): asking for them, the
+// Meeting minutes of the phone's recordings (modules/recording/writers/minutes.go, docs/assistant/meeting-minutes.md): asking for them, the
 // push when they are written, and the to-dos the user confirms from their action items.
 
 // codeMinutesStale: the minutes were written again since the version the app sent; it reads them again.
@@ -60,7 +61,7 @@ func (s *Recordings) minutesRoutes(engine func(http.ResponseWriter, *http.Reques
 			return
 		}
 		_, day := dayRecording(e, r.PathValue("id"))
-		switch err := e.AskMinutes(r.PathValue("id")); {
+		switch err := writersOf(e).AskMinutes(r.PathValue("id")); {
 		case errors.Is(err, kb.ErrNotFound):
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-minutes.no_recording"))
 			return
@@ -70,10 +71,10 @@ func (s *Recordings) minutesRoutes(engine func(http.ResponseWriter, *http.Reques
 		case errors.Is(err, kb.ErrTranscriptExpired):
 			apierr.WriteCode(w, http.StatusConflict, codeTranscriptExpired, i18n.Err("assistant-minutes.transcript_expired"))
 			return
-		case errors.Is(err, kb.ErrRecordingIncomplete) && day: // nothing of the day transcribed yet
+		case errors.Is(err, writers.ErrRecordingIncomplete) && day: // nothing of the day transcribed yet
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-day-recap.no_text"))
 			return
-		case errors.Is(err, kb.ErrRecordingIncomplete):
+		case errors.Is(err, writers.ErrRecordingIncomplete):
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-minutes.incomplete"))
 			return
 		case err != nil:
@@ -111,7 +112,7 @@ func (s *Recordings) minutesRoutes(engine func(http.ResponseWriter, *http.Reques
 			todos, rc, err := s.dayRecapTodos(r.Context(), e, rec, req.Version, req.Actions)
 			var unknown unknownActionError
 			switch {
-			case errors.Is(err, kb.ErrMinutesStale):
+			case errors.Is(err, writers.ErrMinutesStale):
 				apierr.WriteCode(w, http.StatusConflict, codeMinutesStale, i18n.Err("assistant-day-recap.stale"))
 				return
 			case errors.As(err, &unknown):
@@ -130,7 +131,7 @@ func (s *Recordings) minutesRoutes(engine func(http.ResponseWriter, *http.Reques
 		todos, m, err := s.minutesTodos(r.Context(), e, r.PathValue("id"), req.Version, req.Actions)
 		var unknown unknownActionError
 		switch {
-		case errors.Is(err, kb.ErrMinutesStale):
+		case errors.Is(err, writers.ErrMinutesStale):
 			apierr.WriteCode(w, http.StatusConflict, codeMinutesStale, i18n.Err("assistant-minutes.stale"))
 			return
 		case errors.As(err, &unknown):
@@ -164,7 +165,7 @@ func (s *Recordings) minutesTodos(ctx context.Context, e *kb.Engine, id string, 
 		return nil, nil, err
 	}
 	if m.Version != version {
-		return nil, nil, kb.ErrMinutesStale
+		return nil, nil, writers.ErrMinutesStale
 	}
 	rec, ok := e.Store.Recording(rid)
 	if !ok {
@@ -175,14 +176,14 @@ func (s *Recordings) minutesTodos(ctx context.Context, e *kb.Engine, id string, 
 	if err != nil {
 		if made != nil {
 			// Those made so far are recorded all the same: a retry after the user deleted one must not make it again.
-			if _, serr := e.SetMinutesTodos(rid, version, made, byTask); serr != nil {
+			if _, serr := writersOf(e).SetMinutesTodos(rid, version, made, byTask); serr != nil {
 				s.logf("assistant: minutes to-dos of %s: %v", rid, serr)
 			}
 		}
 		return out, nil, err
 	}
 	// Minutes written again meanwhile get the to-dos by task, so confirming the same task there makes none twice.
-	m, err = e.SetMinutesTodos(rid, version, made, byTask)
+	m, err = writersOf(e).SetMinutesTodos(rid, version, made, byTask)
 	return out, m, err
 }
 

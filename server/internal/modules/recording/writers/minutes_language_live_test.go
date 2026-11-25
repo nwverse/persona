@@ -1,9 +1,11 @@
-package kb
+package writers
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/aiwire"
+	"github.com/nwverse/persona/server/internal/kb"
 	"os"
 	"regexp"
 	"slices"
@@ -12,18 +14,7 @@ import (
 	"testing"
 	"time"
 	"unicode"
-
-	"github.com/nwverse/persona/server/internal/ai"
 )
-
-// Behaviour check for the language of what is written from a recording (docs/assistant/prompts.md "Behaviour checks"):
-// TestMinutesLanguageLive runs one synthetic meeting that mixes Chinese, English and Japanese through the real minutes,
-// summary and day recap paths, once as recorded in each of zh-CN, en-US and ja-JP, and prints how much of the written
-// text is in which script. It asks a real model and runs only when PERSONA_LIVE_AI is set, never in CI:
-//
-//	PERSONA_LIVE_AI='{"base_url":"…","api_key_file":"…","model":"…"}' go test -run MinutesLanguageLive -v -count=1 ./internal/kb
-//
-// Placeholders only: the people are Ada, Bo and Cy, the work an export, a release and a cache bug.
 
 // liveMeeting is a product sync said in three languages, each line a few seconds of the recording.
 var liveMeeting = []string{
@@ -51,7 +42,7 @@ const liveWhiteboard = "Cache bug: reproduced once, weak network only. Not repro
 
 // liveAnswers is a model that keeps every minutes answer it gives and counts the merging calls.
 type liveAnswers struct {
-	Model
+	kb.Model
 	mu      sync.Mutex
 	answers []minutesAnswer
 	merges  int
@@ -254,11 +245,11 @@ func TestMinutesLanguageLive(t *testing.T) {
 	if raw == "" {
 		t.Skip("PERSONA_LIVE_AI not set")
 	}
-	var cfg ai.Config
+	var cfg aiwire.Config
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	model := ai.New(cfg)
+	model := kb.NewModel(cfg)
 	ctx := context.Background()
 	var rows, cards []string
 	row := func(tag, kind, title, counts string, s scripts, miss string) {
@@ -304,7 +295,7 @@ func TestMinutesLanguageLive(t *testing.T) {
 	// minutes writes the minutes of liveMeeting and its whiteboard photo recorded in tag on a knowledge base of its
 	// own, the transcript in parts of at most part runes when part is not 0: the engine, the minutes, the model's
 	// answers and why the summary card was left out.
-	minutes := func(tag string, part int) (*Engine, *Minutes, *liveAnswers, []string) {
+	minutes := func(tag string, part int) (*testEngine, *Minutes, *liveAnswers, []string) {
 		answers := &liveAnswers{Model: model}
 		e := goldenEngine(t, answers)
 		e.minutesCall, e.minutesPart = part, part
@@ -335,7 +326,7 @@ func TestMinutesLanguageLive(t *testing.T) {
 		{"ja-JP", "ja", "## アクション項目", "の1日のまとめ"},
 	} {
 		// Minutes: in one call, then in parts of a few lines and the merging call, as a long meeting's.
-		var e *Engine
+		var e *testEngine
 		for _, way := range []struct {
 			kind string
 			part int
@@ -385,7 +376,7 @@ func TestMinutesLanguageLive(t *testing.T) {
 
 		// A day recorded with the same words, a minute a line: an hour's notes, then the recap.
 		now := dayClock.Add(2 * time.Hour)
-		e.clock = func() time.Time { return now }
+		e.SetClock(func() time.Time { return now })
 		du := dayUpload(1, liveMeeting...)
 		du.Language = tc.tag
 		du.Coverage.To = 7200

@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"bytes"
@@ -15,32 +15,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/nwverse/persona/server/internal/ai"
+	ai "github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
-	"github.com/nwverse/persona/server/internal/recordingwire"
-)
-
-// MinutesItem is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesItem = recordingwire.MinutesItem
-
-// MinutesPoint is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesPoint = recordingwire.MinutesPoint
-
-// MinutesAction is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesAction = recordingwire.MinutesAction
-
-// PurposeMeetingMinutes is the model purpose every call of a minutes job asks for (#7980): the whole transcript, or each
-// part's notes and their merge, with the summary card in the same answers. It follows Information processing until it
-// is set apart in Model settings (docs/assistant/model-config.md "Meeting minutes and the in-meeting conversation
-// (#7980)"); the recordings' summaries and the day recap stay on kb.compress.
-const PurposeMeetingMinutes = "meeting.minutes"
-
-// PurposeMeetingAnswer is the model purpose a question asked during a meeting is answered on, and PurposeMeetingRoom the
-// one an attended meeting's room conversation starts on (#7980); the meeting recording module asks for them.
-const (
-	PurposeMeetingAnswer = "meeting.answer"
-	PurposeMeetingRoom   = "meeting.room"
 )
 
 var (
@@ -54,7 +31,7 @@ var (
 
 // putMinutes writes minutes.json and minutes.md of recording id, unless it was deleted meanwhile (false then). The
 // caller holds recMu.
-func (s *Store) putMinutes(id string, m *Minutes) (bool, error) {
+func (s *store) putMinutes(id string, m *Minutes) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
 	}
@@ -73,10 +50,10 @@ func (s *Store) putMinutes(id string, m *Minutes) (bool, error) {
 	if _, err := os.Stat(s.path(KindRecording, id, "meta.json")); err != nil {
 		return false, nil
 	}
-	if err := writeFile(s.path(KindRecording, id, "minutes.json"), append(raw, '\n')); err != nil {
+	if err := s.writeFile(s.path(KindRecording, id, "minutes.json"), append(raw, '\n')); err != nil {
 		return false, err
 	}
-	if err := writeFile(s.path(KindRecording, id, "minutes.md"), []byte(strings.TrimSpace(m.Markdown)+"\n")); err != nil {
+	if err := s.writeFile(s.path(KindRecording, id, "minutes.md"), []byte(strings.TrimSpace(m.Markdown)+"\n")); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -86,7 +63,7 @@ func (s *Store) putMinutes(id string, m *Minutes) (bool, error) {
 // no such recording, ErrTranscriptExpired once it was trimmed, ErrRecordingIncomplete before its transcript is
 // complete, and also for a complete one with no text (409 as well: there is nothing to make minutes of, and its
 // minutes_state stays absent). A day recording gets its recap instead (askDayRecap): it never becomes a meeting.
-func (e *Engine) AskMinutes(rawID string) error {
+func (e *engine) AskMinutes(rawID string) error {
 	if e.Store.ReadOnly() {
 		return ErrReadOnly
 	}
@@ -131,7 +108,7 @@ func quietMinutes(r *Recording) bool { return r.MinutesQuiet > 0 && r.MinutesQui
 // SetMinutesTodos records the to-dos made of actions (action id → to-do id) in version of recording id's minutes;
 // ErrNotFound without minutes. Minutes written again since get them by task instead (byTask: MinutesTaskKey → to-do
 // id), on their actions without one; without byTask that is ErrMinutesStale.
-func (e *Engine) SetMinutesTodos(rawID string, version int, todos, byTask map[string]string) (*Minutes, error) {
+func (e *engine) SetMinutesTodos(rawID string, version int, todos, byTask map[string]string) (*Minutes, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
@@ -175,7 +152,7 @@ func (e *Engine) SetMinutesTodos(rawID string, version int, todos, byTask map[st
 // WriteMinutes matches complete recordings to the calendar and writes the minutes of up to max meetings that need
 // them, newest first; how many it wrote. With no model, or the model paused or unreachable, they stay pending. One
 // whose last try ran out of time waits for its next (minutes_timeout.go).
-func (e *Engine) WriteMinutes(ctx context.Context, max int) int {
+func (e *engine) WriteMinutes(ctx context.Context, max int) int {
 	if e.Store.ReadOnly() {
 		return 0
 	}
@@ -230,7 +207,7 @@ func unusableAnswer(err error) bool {
 
 // minutesFailed counts an unusable answer for revision rev of recording id. Minutes that end failed from a final
 // transcript take the hub's audio with them.
-func (e *Engine) minutesFailed(id string, rev int64) {
+func (e *engine) minutesFailed(id string, rev int64) {
 	st := e.Store
 	st.recMu.Lock()
 	r, ok := st.Recording(id)
@@ -249,7 +226,7 @@ func (e *Engine) minutesFailed(id string, rev int64) {
 
 // dropAudioAfterMinutes deletes recording id's hub-mode audio when drop (the minutes from its final transcript are
 // written, or ended failed). The caller holds none of the store's locks.
-func (e *Engine) dropAudioAfterMinutes(id string, drop bool) {
+func (e *engine) dropAudioAfterMinutes(id string, drop bool) {
 	if !drop {
 		return
 	}
@@ -261,7 +238,7 @@ func (e *Engine) dropAudioAfterMinutes(id string, drop bool) {
 // matchRecordings links each complete recording not matched at its current revision to the calendar item it overlaps
 // and to the imported meeting it overlaps; one that no calendar item overlaps is looked at again until
 // minutesMatchWait after it ended, and one matched without an imported meeting until minutesImportWait (#8872).
-func (e *Engine) matchRecordings(now time.Time) {
+func (e *engine) matchRecordings(now time.Time) {
 	var due, late []string
 	for _, r := range e.Store.Recordings() {
 		if !r.Complete || r.Trimmed() || r.Kind == RecordingDay {
@@ -445,7 +422,7 @@ func modelNumber(data []byte, cut string) int {
 
 // writeMinutes makes and stores the minutes of recording id from what is committed now: its transcript of record
 // (in hub mode the hub's sentences, waiting for the final ones as long as transcriptionHolds).
-func (e *Engine) writeMinutes(ctx context.Context, id string) error {
+func (e *engine) writeMinutes(ctx context.Context, id string) error {
 	files, meeting, hub, err := e.Store.recordSnapshot(id)
 	if err != nil {
 		return err
@@ -465,7 +442,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	if err := json.Unmarshal(files["segments.json"], &device); err != nil {
 		return err
 	}
-	segs := TranscriptOfRecord(hubMode(meeting), device, hub.Segments)
+	segs := e.Store.TranscriptOfRecord(hubMode(meeting), device, hub.Segments)
 	// Minutes made from the final transcript take the hub's audio with them once written (storeMinutes).
 	final := transcriptionDone(&r)
 	zone := e.Store.Zone()
@@ -482,7 +459,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 	// deleted from now on makes them again (photosRemake), and one deleted is cited by nothing stored
 	// (storeMinutes).
 	for _, p := range e.PhotoTexts(id) {
-		if t := photoWords(p, true); t != "" {
+		if t := e.Store.photoWords(p, true); t != "" {
 			lines = append(lines, minutesLine{Photo: p.N, At: p.At, Text: t})
 		}
 	}
@@ -537,7 +514,7 @@ func (e *Engine) writeMinutes(ctx context.Context, id string) error {
 }
 
 // minutesInput is what the model is told about recording r besides its transcript.
-func (e *Engine) minutesInput(r *Recording, zone *time.Location) prompts.KBMinutesInput {
+func (e *engine) minutesInput(r *Recording, zone *time.Location) prompts.KBMinutesInput {
 	in := prompts.KBMinutesInput{Pinned: r.Pinned, Title: cmp.Or(r.Title, calendarTitle(r)), Start: r.StartedAt.In(zone),
 		End: recordingEnd(r).In(zone), Weekday: weekdayZH[r.StartedAt.In(zone).Weekday()], Minutes: int(r.Duration / 60),
 		Language: r.Language}
@@ -727,7 +704,7 @@ func clipText(s string) string { return clipRunes(s, minutesTextRunes) }
 // buildMinutes checks the model's answer against the lines it read: every item must cite one of them (a transcript
 // line, or a photo: its time then), a person must be named in them or in the calendar, a due date must be a real day
 // from the meeting on (within a year). A photo's words count as said. The minutes are in lang.
-func (e *Engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine, zone *time.Location, lang i18n.Lang) (*Minutes, error) {
+func (e *engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine, zone *time.Location, lang i18n.Lang) (*Minutes, error) {
 	at, photoSec := map[int]float64{}, map[int]float64{}
 	var saidB strings.Builder
 	for _, l := range read {
@@ -952,9 +929,6 @@ func keepTodos(m, old *Minutes) {
 	}
 }
 
-// MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
-func MinutesTaskKey(a MinutesAction) string { return a.Who + "\x00" + a.What }
-
 // renderMinutes is minutes.md: the minutes with clock times, sections without anything left out; an item citing a
 // photo ends with its number. Its headings and fixed words are in the minutes' language (kb-minutes.json). Minutes
 // with an overview follow it (renderOverview).
@@ -1105,7 +1079,7 @@ func (w *minutesMarkdown) tail(m *Minutes) {
 // transcript (quietMinutes). Items citing a photo no longer listed are left out; when the photos the minutes cite
 // changed, so does PartPhotos, before the minutes are written. final: they were made from a hub-mode recording's final
 // transcript, so its audio goes once they are stored and nothing asked for them again meanwhile (quiet or not).
-func (e *Engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, final bool) error {
+func (e *engine) storeMinutes(ctx context.Context, r *Recording, m *Minutes, final bool) error {
 	st := e.Store
 	st.recMu.Lock()
 	cur, ok := st.Recording(r.ID)
