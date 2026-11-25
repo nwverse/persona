@@ -97,6 +97,54 @@ func (s *settingsStore) DeletePushGradingLayer(_ context.Context, _, key, _, man
 	return true, nil
 }
 
+func (s *settingsStore) ClearPushGradingLayer(_ context.Context, key, manager, source string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw, ok := s.vals[key]
+	if !ok {
+		return false, nil
+	}
+	var current map[string]any
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return false, err
+	}
+	if manager != "" && current["manager"] != manager {
+		return false, nil
+	}
+	if source != "" && current["source"] != source {
+		return false, nil
+	}
+	delete(s.vals, key)
+	return true, nil
+}
+
+func (s *settingsStore) PrunePushGradingLayer(_ context.Context, key, manager string, keepSources []string) (bool, error) {
+	if manager == "" {
+		return false, errors.New("push grading layer prune requires a manager")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw, ok := s.vals[key]
+	if !ok {
+		return false, nil
+	}
+	var current map[string]any
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return false, err
+	}
+	if current["manager"] != manager {
+		return false, nil
+	}
+	src, _ := current["source"].(string)
+	for _, keep := range keepSources {
+		if src == keep {
+			return false, nil
+		}
+	}
+	delete(s.vals, key)
+	return true, nil
+}
+
 func TestPushGradingLayerStoreRoundTripAndOwnership(t *testing.T) {
 	ctx := context.Background()
 	store := &settingsStore{vals: map[string][]byte{}}
@@ -189,5 +237,51 @@ func TestPushGradingLayerStorePreservesLegacySwitch(t *testing.T) {
 				t.Fatalf("null base enabled changed legacy switch: got=%s want=%s", got, raw)
 			}
 		})
+	}
+}
+
+func TestPushGradingLayerStoreClearAndPrune(t *testing.T) {
+	ctx := context.Background()
+	rawSwitch, _ := json.Marshal(true)
+	store := &settingsStore{vals: map[string][]byte{gradingSwitchSettingKey: rawSwitch}}
+	layer := pushGradingLayer{
+		Source: "extension:one", Manager: "manager-a", UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Config: parseGradingTestConfig(t, `{"version":1,"actions":{"P1":"hold"}}`, true),
+	}
+	if _, err := writePushGradingLayer(ctx, store, layer); err != nil {
+		t.Fatal(err)
+	}
+	// Wrong manager or wrong source leaves layer untouched.
+	if deleted, err := clearPushGradingLayer(ctx, store, "manager-b", ""); err != nil || deleted {
+		t.Fatalf("clear wrong manager: deleted=%v err=%v", deleted, err)
+	}
+	if deleted, err := clearPushGradingLayer(ctx, store, "", "extension:two"); err != nil || deleted {
+		t.Fatalf("clear wrong source: deleted=%v err=%v", deleted, err)
+	}
+	if deleted, err := prunePushGradingLayer(ctx, store, "manager-b", nil); err != nil || deleted {
+		t.Fatalf("prune other manager: deleted=%v err=%v", deleted, err)
+	}
+	if deleted, err := prunePushGradingLayer(ctx, store, "manager-a", []string{"one"}); err != nil || deleted {
+		t.Fatalf("prune active owner: deleted=%v err=%v", deleted, err)
+	}
+	// Dropping "one" prunes the layer while keeping hub.ln_mode intact.
+	if deleted, err := prunePushGradingLayer(ctx, store, "manager-a", []string{"two"}); err != nil || !deleted {
+		t.Fatalf("prune dropped owner: deleted=%v err=%v", deleted, err)
+	}
+	if snap, err := readPushGradingSnapshot(ctx, store); err != nil || snap.Layer != nil {
+		t.Fatalf("layer survived prune: %+v err=%v", snap, err)
+	}
+	if got := string(store.vals[gradingSwitchSettingKey]); got != string(rawSwitch) {
+		t.Fatalf("prune mutated legacy switch: got=%s want=%s", got, rawSwitch)
+	}
+	// Re-claim and verify unfiltered clear deletes it without touching hub.ln_mode.
+	if _, err := writePushGradingLayer(ctx, store, layer); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := clearPushGradingLayer(ctx, store, "", ""); err != nil || !deleted {
+		t.Fatalf("clear all: deleted=%v err=%v", deleted, err)
+	}
+	if got := string(store.vals[gradingSwitchSettingKey]); got != string(rawSwitch) {
+		t.Fatalf("clear mutated legacy switch: got=%s want=%s", got, rawSwitch)
 	}
 }

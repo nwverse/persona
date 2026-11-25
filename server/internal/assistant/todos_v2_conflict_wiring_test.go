@@ -317,9 +317,9 @@ func TestTodosV2ConflictRollbackToOff(t *testing.T) {
 
 func TestTodosV2ConflictParseHintsAndConcurrentSafety(t *testing.T) {
 	hints := parseWriteScopeHints(
-		"- write_prefixes: `server/internal/assistant`, web/src/lib\n"+
-			"* changed_files: [server/internal/assistant/tasks_plan.go, web/src/lib/a.ts]\n"+
-			"force_parallel: true\n"+
+		"- write_prefixes: `server/internal/assistant`, web/src/lib\n" +
+			"* changed_files: [server/internal/assistant/tasks_plan.go, web/src/lib/a.ts]\n" +
+			"force_parallel: true\n" +
 			"repo_key: https://github.com/nwverse/persona.git",
 	)
 	if !slices.Equal(hints.WritePrefixes, []string{"server/internal/assistant", "web/src/lib"}) {

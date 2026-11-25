@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -295,5 +296,315 @@ func TestPushGradingEffectiveCacheConcurrentLoad(t *testing.T) {
 	}
 	if calls, _ := store.stats(); calls != 1 {
 		t.Fatalf("concurrent cache calls = %d, want single-flight load", calls)
+	}
+}
+
+type staleFirstGradingStore struct {
+	settingsStore
+	mu           sync.Mutex
+	calls        int
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+}
+
+func (s *staleFirstGradingStore) Settings(ctx context.Context, keys ...string) (map[string]json.RawMessage, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call == 1 {
+		// Read v1 before invalidate() writes v2, then stall before returning v1.
+		vals, err := s.settingsStore.Settings(ctx, keys...)
+		close(s.firstStarted)
+		<-s.releaseFirst
+		return vals, err
+	}
+	return s.settingsStore.Settings(ctx, keys...)
+}
+
+func TestPushGradingEffectiveCacheInvalidateDuringInFlightLoad(t *testing.T) {
+	ctx := context.Background()
+	store := &staleFirstGradingStore{
+		settingsStore: settingsStore{vals: map[string][]byte{}},
+		firstStarted:  make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+	}
+	v1 := parseGradingTestConfig(t, `{"version":1,"enabled":true,"actions":{"P1":"push","P2":"silence"}}`, false)
+	if err := writePushGradingBase(ctx, store, v1); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+	cache := newPushGradingEffectiveCache(time.Minute)
+	cache.now = func() time.Time { return now }
+
+	type res struct {
+		got pushGradingEffective
+		err error
+	}
+	firstRes := make(chan res, 1)
+	go func() {
+		got, err := cache.effective(ctx, store, "manager-b")
+		firstRes <- res{got: got, err: err}
+	}()
+	<-store.firstStarted
+
+	// Update settings to v2 and invalidate while the first read already fetched v1.
+	v2 := parseGradingTestConfig(t, `{"version":1,"enabled":true,"actions":{"P1":"push","P2":"hold"}}`, false)
+	if err := writePushGradingBase(ctx, store, v2); err != nil {
+		close(store.releaseFirst)
+		t.Fatal(err)
+	}
+	cache.invalidate()
+	close(store.releaseFirst)
+
+	r1 := <-firstRes
+	if r1.err != nil {
+		t.Fatalf("first caller error = %v", r1.err)
+	}
+	if r1.got.Actions.P2 != "hold" {
+		t.Fatalf("first caller after in-flight invalidate got P2=%q, want hold", r1.got.Actions.P2)
+	}
+
+	// Subsequent calls within the same TTL must observe v2, never the stale v1 snapshot.
+	r2, err := cache.effective(ctx, store, "manager-b")
+	if err != nil {
+		t.Fatalf("subsequent call error = %v", err)
+	}
+	if r2.Actions.P2 != "hold" {
+		t.Fatalf("subsequent call after in-flight invalidate got stale P2=%q, want hold", r2.Actions.P2)
+	}
+}
+
+func TestPushGradingEffectiveCacheLeaderCancellationDoesNotPoisonWaiters(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := newGradingCacheStore()
+		store.block = make(chan struct{})
+		store.started = make(chan struct{})
+		prepareGradingCacheStore(t, store)
+		cache := newPushGradingEffectiveCache(time.Minute)
+
+		leaderCtx, cancelLeader := context.WithCancel(context.Background())
+		defer cancelLeader()
+		leaderErr := make(chan error, 1)
+		go func() {
+			_, err := cache.effective(leaderCtx, store, "manager-a")
+			leaderErr <- err
+		}()
+		<-store.started
+
+		type res struct {
+			got pushGradingEffective
+			err error
+		}
+		waiterRes := make(chan res, 1)
+		go func() {
+			got, err := cache.effective(context.Background(), store, "manager-b")
+			waiterRes <- res{got: got, err: err}
+		}()
+		// Wait until the waiter is durably blocked joining the single-flight load.
+		synctest.Wait()
+
+		cancelLeader()
+		if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+			close(store.block)
+			t.Fatalf("cancelled leader err = %v, want context.Canceled", err)
+		}
+		// Ensure runLoad remains durably blocked on store.block rather than cancelling when leader left.
+		synctest.Wait()
+		close(store.block)
+
+		got := <-waiterRes
+		if got.err != nil {
+			t.Fatalf("healthy waiter poisoned by leader cancellation: err=%v", got.err)
+		}
+		if !got.got.Enabled || got.got.Actions.P1 != "push" || got.got.Actions.P2 != "silence" {
+			t.Fatalf("healthy waiter effective = %+v", got.got)
+		}
+		if calls, _ := store.stats(); calls != 1 {
+			t.Fatalf("Settings calls = %d, want 1 shared load", calls)
+		}
+	})
+}
+
+func TestPushGradingEffectiveCacheDetachedLoadDoesNotClobberReplacement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		store := &staleFirstGradingStore{
+			settingsStore: settingsStore{vals: map[string][]byte{}},
+			firstStarted:  make(chan struct{}),
+			releaseFirst:  make(chan struct{}),
+		}
+		v1 := parseGradingTestConfig(t, `{"version":1,"enabled":true,"actions":{"P1":"push","P2":"silence"}}`, false)
+		if err := writePushGradingBase(ctx, store, v1); err != nil {
+			t.Fatal(err)
+		}
+
+		now := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+		cache := newPushGradingEffectiveCache(time.Minute)
+		cache.now = func() time.Time { return now }
+
+		firstCtx, cancelFirst := context.WithCancel(ctx)
+		firstErr := make(chan error, 1)
+		go func() {
+			_, err := cache.effective(firstCtx, store, "manager-b")
+			firstErr <- err
+		}()
+		<-store.firstStarted
+
+		// Cancel the only waiter so load1 is detached without invalidate() bumping gen.
+		cancelFirst()
+		if err := <-firstErr; !errors.Is(err, context.Canceled) {
+			close(store.releaseFirst)
+			t.Fatalf("first cancelled caller err = %v, want context.Canceled", err)
+		}
+
+		// Store now holds newer v2; a replacement load reads and caches v2.
+		v2 := parseGradingTestConfig(t, `{"version":1,"enabled":true,"actions":{"P1":"push","P2":"hold"}}`, false)
+		if err := writePushGradingBase(ctx, store, v2); err != nil {
+			close(store.releaseFirst)
+			t.Fatal(err)
+		}
+		got, err := cache.effective(ctx, store, "manager-b")
+		if err != nil {
+			close(store.releaseFirst)
+			t.Fatalf("replacement load err = %v", err)
+		}
+		if got.Actions.P2 != "hold" {
+			close(store.releaseFirst)
+			t.Fatalf("replacement load got P2=%q, want hold", got.Actions.P2)
+		}
+
+		// Release the detached load1 (returning v1, nil) and ensure it does not clobber v2.
+		close(store.releaseFirst)
+		synctest.Wait()
+
+		after, err := cache.effective(ctx, store, "manager-b")
+		if err != nil {
+			t.Fatalf("post-detached load err = %v", err)
+		}
+		if after.Actions.P2 != "hold" {
+			t.Fatalf("detached load clobbered newer snapshot: got P2=%q, want hold", after.Actions.P2)
+		}
+	})
+}
+
+func TestPushGradingEffectiveCacheCancelAllWaitersDoesNotExtendExpiredTTL(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		store := newGradingCacheStore()
+		prepareGradingCacheStore(t, store)
+		now := time.Date(2026, 1, 2, 10, 0, 0, 0, time.UTC)
+		cache := newPushGradingEffectiveCache(time.Minute)
+		cache.now = func() time.Time { return now }
+
+		// Warm the cache with v1 (P2="silence" for manager-b).
+		if got, err := cache.effective(ctx, store, "manager-b"); err != nil || got.Actions.P2 != "silence" {
+			t.Fatalf("warm load = %+v, %v", got, err)
+		}
+
+		// Expire the cache and write v2 (P2="hold").
+		now = now.Add(time.Minute)
+		v2 := parseGradingTestConfig(t, `{"version":1,"enabled":true,"actions":{"P1":"push","P2":"hold"}}`, false)
+		if err := writePushGradingBase(ctx, store, v2); err != nil {
+			t.Fatal(err)
+		}
+
+		store.block = make(chan struct{})
+		store.started = make(chan struct{})
+		store.startedOnce = sync.Once{}
+
+		cancelCtx, cancel := context.WithCancel(ctx)
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := cache.effective(cancelCtx, store, "manager-b")
+			errCh <- err
+		}()
+		<-store.started
+		cancel()
+		if err := <-errCh; !errors.Is(err, context.Canceled) {
+			close(store.block)
+			t.Fatalf("cancelled reload err = %v, want context.Canceled", err)
+		}
+		// Wait while store.block is still open so runLoad must exit via <-ctx.Done().
+		synctest.Wait()
+		close(store.block)
+
+		// A healthy caller at the same timestamp must reload v2 instead of being suppressed for a full TTL.
+		got, err := cache.effective(ctx, store, "manager-b")
+		if err != nil {
+			t.Fatalf("healthy reload after cancelled reload = %v", err)
+		}
+		if got.Actions.P2 != "hold" {
+			t.Fatalf("cancelled reload extended expired TTL: got P2=%q, want hold", got.Actions.P2)
+		}
+		if calls, _ := store.stats(); calls != 3 {
+			t.Fatalf("Settings calls = %d, want 3 (warm, cancelled, healthy reload)", calls)
+		}
+	})
+}
+
+func TestPushGradingEffectiveCacheInvalidateNeverReturnsZeroConfig(t *testing.T) {
+	ctx := context.Background()
+	store := newGradingCacheStore()
+	vHold := parseGradingTestConfig(t, `{"version":1,"enabled":true,"actions":{"P1":"push","P2":"hold"}}`, false)
+	vPush := parseGradingTestConfig(t, `{"version":1,"enabled":true,"actions":{"P1":"push","P2":"push"}}`, false)
+	if err := writePushGradingBase(ctx, store, vHold); err != nil {
+		t.Fatal(err)
+	}
+	cache := newPushGradingEffectiveCache(time.Minute)
+
+	const readers = 12
+	const invalidations = 300
+	done := make(chan struct{})
+	errCh := make(chan error, readers)
+	var wg sync.WaitGroup
+	for range readers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				got, err := cache.effective(ctx, store, "manager-b")
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					return
+				}
+				if !got.Enabled || got.Actions.P1 != "push" || (got.Actions.P2 != "hold" && got.Actions.P2 != "push") {
+					select {
+					case errCh <- errors.New("returned zero or corrupt effective config with nil error"):
+					default:
+					}
+					return
+				}
+				select {
+				case <-done:
+					return
+				default:
+				}
+			}
+		}()
+	}
+
+	for i := range invalidations {
+		cfg := vHold
+		if i%2 == 1 {
+			cfg = vPush
+		}
+		if err := writePushGradingBase(ctx, store, cfg); err != nil {
+			close(done)
+			wg.Wait()
+			t.Fatal(err)
+		}
+		cache.invalidate()
+	}
+	close(done)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	default:
 	}
 }
