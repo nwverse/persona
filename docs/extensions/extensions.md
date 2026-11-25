@@ -3384,7 +3384,7 @@ are new or their fields changed. A card draws the same graph as a still fitted p
 presses; pressing it opens Full screen, the same interactive canvas as the page's. The web's native stream still sends 7.
 
 **The web's non-still canvas** (#11234) is a control room; a page, Full screen and a card's Full screen all draw it (the card itself stays a
-still 200 px preview). A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
+still 200 px preview). A view with a `graph`, `scene`, or `map` takes the wide page width (`wideView`, up to 1680 px) like split, columns, code and diff views; on wide containers the collapsible outline (208 px → 260 px at `60rem` → 300 px at `80rem`) and timeline label column (148 px → 200 px at `60rem`) widen responsively so indented node titles have room. A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
 Enter opens the selected node's first link or runs its action, and Escape clears the selection and closes the inspector. Tapping a node
 that carries `facts`, `detail` or `links` opens an in-place node inspector beside the canvas (stacked below on narrow screens) with
 those readings, summary, HTTPS links (`openLink` opens hub session links in the side panel when supported) and any node `action`
