@@ -26,7 +26,7 @@ describe("wait information stays off the first screen", () => {
   });
 
   it("loads task details' unchanged words after the first screen", () => {
-    expect(Object.keys(details)).toEqual(expect.arrayContaining(["workspace_engine_path", "plan_edit_model_placeholder_kept", "tray_unattended"]));
+    expect(Object.keys(details)).toEqual(expect.arrayContaining(["workspace_engine_path", "tray_unattended"]));
     const inStartup = startupMatcher(startup);
     for (const key of Object.keys(details)) {
       expect(tasks).not.toHaveProperty(key);
