@@ -378,6 +378,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 	}
 	f.mu.Unlock()
+	if hooks.beforeCall != nil {
+		hooks.beforeCall(p)
+	}
 	if hooks.before != nil {
 		hooks.before(read)
 	}
