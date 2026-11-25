@@ -312,6 +312,7 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Web hard-coded text | CJK strings per `web/src` file | `web/src/i18n/hardcoded-baseline.json` | `web/src/i18n/catalog.test.ts` (web lane) | `UPDATE_I18N_BASELINE=1` |
 | Prompt sizes | bytes per instruction section, tool description and supervision event | `server/internal/assistant/testdata/prompt_sizes.json` | `TestPromptSizeRatchet` (server lane) | `PROMPT_SIZE_UPDATE=1` |
 | Inbox book readers | places per file that reach the Inbox's in-memory book | `inboxBookReaders` in `server/internal/archguard/inbox_slice_test.go` | `TestInboxBookStaysInTheInbox` (server lane) | by hand |
+| Domain rules | the domain rules' findings per package in server code that predates them, and the application and library packages' exported-field records, named primitive types (adapters' too), `DoneAt` / `DoneBy` writes and uses of an adapter's `Wire` (`docs/server/architecture.md` "Domain model") | `server/internal/archguard/testdata/domain_layers/baseline.txt` | `TestDomainLayers` (server lane; check-fast, with its merge base) and each declared package's `rules_test.go` | `DOMAIN_LAYERS_UPDATE=1`, which also takes an allowance whose type landed into its count; `scripts/test/name_freezes.py pending --write --only domain_layers_baseline`, on a checkout of `main`, drops one whose PRs closed; `scripts/test/name_freezes.py moves` carries a moved package's lines |
 | Android text | hard-coded Chinese / Japanese and English UI text per Kotlin file | each module's `i18n-baseline.json` and `i18n-english-baseline.json` | `scripts/app/android_i18n_check.py` (Android lane, check-fast) | `--update` |
 | Android tokens | hard-coded values and Material 3 components per file | `android/core/designsystem/tools/token-baseline.json` | `scripts/app/android_token_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
@@ -326,13 +327,19 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
   has room, so the slack a fall leaves under a baseline cannot be spent by the next change. An entry the merge base's baseline does
   not have yet is the change's own (a file the web font's `--update` let take sizes that moved to it, or a raise the sleep ratchet
   refuses anyway), and only the baseline holds it. check-fast's diff mode runs the sleep ratchet with `--base` (it does not run
-  the other two), and hosted CI sets `CI_BASE_SHA`.
+  the other two), and hosted CI sets `CI_BASE_SHA` for its guards job. archguard's `TestDomainLayers` reads `CI_BASE_SHA`
+  itself and holds the domain counts more strictly: every count, one the merge base's baseline lacks included, may not
+  rise above its count at the merge base, and a name or allowance its lists add over the merge base's, or a count line
+  raised or added so that it gives more room than there, fails unless it followed code that moved
+  (`scripts/test/name_freezes.py moves`; `docs/server/architecture.md` "The rules and their checks").
+  check-fast's diff mode sets it to its merge base for the repo-wide guards, while the hosted server lane, a shallow
+  clone without it, holds them to the baseline only.
 - **With no base, only the baseline holds**, so a full-tree run on `main` checks only `count > baseline`. There is no fallback to
   the clone's `origin/main`: it is only as fresh as the last fetch, and main verification pins `HEAD` by SHA without moving it
   (`docs/operations/main-verification.md`), so right after a merge it usually names the parent and would hold the merged files to
   the parent's counts, a limit `merge-pr.sh` does not apply. A hosted run on `main` gets `origin/main` of its own fresh clone, so
   its merge base is `HEAD`. The never-raise checks on the baseline files themselves keep their defaults (the clone's default
-  branch for the sleep ratchet, `origin/main` for the prompt-language ratchet). The ratchets inside `go test`, vitest and the
+  branch for the sleep ratchet, `origin/main` for the prompt-language ratchet). The other ratchets inside `go test`, vitest and the
   Android scripts know no base and check only the baseline, as does `changed_ratchets.py` at merge time.
 - **Merge time does not hold a file to its merge-base count.** `scripts/hooks/merge-pr.sh` (through `changed_ratchets.py`, which
   covers the sleep and web font ratchets) refuses a merge that raises a count above its baseline, but one that raises a count back
@@ -1087,6 +1094,17 @@ does not drive the direction's running mark. It is off by default and composes w
 legacy 404 intact. `python3 -I scripts/mock/test_direction_tree_mock.py` checks the fixture and its reset behavior.
 `OutsideDirectionsUITests` uses it through `PERSONA_OUTSIDE_DIRECTIONS_HUB` for the mixed sidebar's interactions and for
 sidebar / To-dos / Agents captures in light and dark, at default and AX5 text (`PERSONA_SHOTS` saves them).
+
+`MOCK_DASHBOARDS=1|off|empty|removed|pinned` (`scripts/mock/dashboards_mock.py`, #15017) plays the default manager's
+Dashboards for the clients: the `assistant_pages` feature, the `dashboards` switch in `GET`/`PUT /api/v1/assistant`, the
+`-pages` places appended to `GET /api/v1/extensions/-/ui` (the index while a page is kept or one waits in Recently
+removed, then up to three pinned pages) and their pages over `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`. A tap on
+the running page's Done today answers the toast and a footer line "Received"; `GET /mock/dashboards?advance=1` moves it
+on to delivered, working and the page's update. Pinning, removing and the switch push `assistant_pages` and
+`extension_ui {invalidate}`. `off` keeps the pages with the switch off and `empty` has the switch on with nothing kept:
+both list nothing, for before / after captures; `removed` lists the index alone; `pinned` three pinned pages. Without
+`MOCK_EXTENSIONS=1` it also announces UI slots and lists only its own places. `python3 scripts/mock/test_dashboards_mock.py`
+checks it.
 
 **No new switch in `mock_hub.py` (#12737).** Most of what `mock_hub.py` gains comes with a new `MOCK_*` switch (89 of the 195
 commits that changed it from 2026-11-14 to 2026-11-22 added one, with 72% of its net added lines), so its switch names are

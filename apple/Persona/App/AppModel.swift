@@ -655,6 +655,13 @@ final class AppModel {
     /// reads on that alone and not on every push (#11516's page).
     private(set) var hubHellos = 0
     private(set) var healthIntakeRevision = 0
+    /// Reads the places again (`GET /api/v1/extensions/-/ui`, the default manager's): what `assistant_pages` and the
+    /// Dashboards switch run (#15017). The request and its decoding are the slots' own async work, off this call; tests
+    /// replace it.
+    @ObservationIgnored var reloadExtensionPlaces: @MainActor () async -> Void = { await ExtensionSlots.shared.reload() }
+    /// A places read is under way, and another change came while it was: one more read follows it, never one per event.
+    @ObservationIgnored private var extensionPlacesReading = false
+    @ObservationIgnored private var extensionPlacesAgain = false
     /// Numbers the tree reads in the order they were asked; `directionTreeLanded` is the newest one whose answer was
     /// taken. An answer older than that is dropped; a read that fails moves neither, so it never makes an earlier
     /// good answer count as stale.
@@ -1833,6 +1840,42 @@ final class AppModel {
             assistantConfig = st
         } catch {
             if showsPage(of: api) { assistantConfig?.recentTaskChats = was }
+            show(error)
+        }
+    }
+
+    /// The places changed on the hub (`assistant_pages`, the Dashboards switch): read them again. A change that comes while
+    /// a read is under way makes one more read after it, so a burst costs two reads and the last answer is the newest.
+    func extensionPlacesChanged() {
+        guard !extensionPlacesReading else { extensionPlacesAgain = true; return }
+        extensionPlacesReading = true
+        Task {
+            repeat {
+                extensionPlacesAgain = false
+                await reloadExtensionPlaces()
+            } while extensionPlacesAgain
+            extensionPlacesReading = false
+        }
+    }
+
+    /// Whether Settings › Assistant shows Let Persona Make Dashboards (#15017): the hub announces Dashboards and the
+    /// default assistant is shown.
+    var dashboardsOffered: Bool { DashboardsUI.offered(features: hubFeatures, manager: assistantManagerID) }
+
+    /// Let Persona make dashboards (#15017): off until the hub says on (an absent field is off). Shown at once, put back
+    /// if the hub says no; once the hub has it, the places are read again (with the switch off the Dashboards place goes).
+    func setDashboards(_ on: Bool) async {
+        guard let api, var shown = assistantConfig, (shown.dashboards ?? false) != on else { return }
+        let was = shown.dashboards
+        shown.dashboards = on
+        assistantConfig = shown
+        do {
+            let st = try await api.setAssistant(APIClient.AssistantConfigBody(dashboards: on))
+            guard showsPage(of: api) else { return }
+            assistantConfig?.dashboards = st.dashboards ?? on
+            extensionPlacesChanged()
+        } catch {
+            if showsPage(of: api) { assistantConfig?.dashboards = was }
             show(error)
         }
     }
@@ -3226,6 +3269,8 @@ final class AppModel {
             // page open on the current hub reads again (`hubHellos`).
             DirectionFilings.shared.hello(group)
             if isHub { hubHellos += 1 }
+            // `assistant_pages` sent while the socket was down is gone: a hub with Dashboards has its places read again.
+            if isHub, hubHellos > 1, hello.features.contains(DashboardsUI.feature) { extensionPlacesChanged() }
             #if os(iOS)
             if isHub { HomeWidgetData.shared.intakeChanged() }
             // `meeting_live` events sent while the socket was down are gone: the meetings on screen are read again (#3862).
@@ -3354,6 +3399,10 @@ final class AppModel {
             // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
             // manager's page keeps what GET leaders gave it (docs/assistant/managers.md "Clients").
             if isHub, let hubAPI = api, assistantShows(nil) { Task { await refreshDirectionTree(hubAPI) } }
+        case .assistantPages:
+            // The kept Dashboards pages changed (#15017): the drawer's and the sidebar's places are read again. Only the
+            // default manager of the hub shown has them (`ExtensionSlots.shared` names none).
+            if isHub { extensionPlacesChanged() }
         case .healthIntake:
             if isHub { healthIntakeRevision += 1 }
             #if os(iOS)
@@ -3520,6 +3569,7 @@ final class AppModel {
         case .managers: "managers"
         case .directions: "directions"
         case .healthIntake: "health_intake"
+        case .assistantPages: "assistant_pages"
         case .assistantFeed: "assistant_feed"
         case .assistantView: "assistant_view"
         case .assistantViewAction: "assistant_view_action"

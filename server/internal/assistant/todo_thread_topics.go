@@ -89,7 +89,7 @@ func (s *Service) threadAgentAsks(ix proto.Interaction) {
 	defer cancel()
 	ev := larkhost.ThreadEvent{Kind: larkhost.ThreadAgentNeeds, Agent: threadName(firstNonEmpty(ix.SessionTitle, ix.TaskTitle))}
 	switch {
-	case !s.feishuCardWanted(ctx, ix):
+	case !s.larkModule().AskWanted(ctx, ix):
 		// No card anywhere: the line is the notice, and says what is asked, except for a permission: what a tool is about
 		// to do (a command, a path) is not for a group chat, only that the Agent needs the user.
 		if ix.Kind != proto.IxPermission {

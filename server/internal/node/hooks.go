@@ -293,6 +293,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 				break
 			}
 		}
+		viewSession := sid
+		if viewSession == "" && !assistant && req.Pane != "" {
+			viewSession = n.paneCaller(req.Pane)
+		}
 		guest := req.Guest || n.guestOf(sid) != nil
 		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
 			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, guest)
@@ -322,6 +326,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		if err := n.peer.Call(ctx, "mcp.call", params, &res); err != nil {
 			res = proto.TextResult("Persona hub error: "+err.Error(), true)
 		}
+		n.toolViews.stripResult(viewSession, req.Name, &res)
 		resp = res
 	default:
 		resp = map[string]any{"error": "unknown kind"}

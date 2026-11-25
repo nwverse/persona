@@ -3,6 +3,7 @@
 import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { storedValue, storeValue } from "../lib/compatibility";
 import { lazyPage } from "../lib/lazy-page";
+import { takeUsageFocus } from "../lib/usage-map-link";
 import { concernOf, launcherFailing, machineAlerts, orderMachines, type AlertKind, type LauncherHealthRecord } from "../lib/machine-alerts";
 import { t as tr } from "../i18n";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
@@ -75,9 +76,22 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const chooseView = (v: MachinesView) => {
     if (v === "cards" || v === "capabilities" || v === "toolchain" || v === "services" || v === "files" || v === "storage") storeValue(VIEW_KEY, v);
     setView(v);
+    setStorageFocus(undefined);
   };
   // The alert sheet (#8037): one for the page, outside every card, on one computer's alert.
   const [sheet, setSheet] = useState<{ mid: string; kind: AlertKind } | null>(null);
+  // The disk map in reclaim mode (#14576): from a disk alert here, or a computer's disk figure on its page (history state)
+  const [storageFocus, setStorageFocus] = useState<{ mid: string; mode: "reclaim"; seq: number } | undefined>(undefined);
+  const openUsageMap = useCallback((mid: string) => {
+    setSheet(null);
+    storeValue(VIEW_KEY, "storage");
+    setView("storage");
+    setStorageFocus((f) => ({ mid, mode: "reclaim", seq: (f?.seq ?? 0) + 1 }));
+  }, []);
+  useEffect(() => {
+    const req = takeUsageFocus();
+    if (req) openUsageMap(req.mid);
+  }, [openUsageMap]);
   const openAlert = useCallback((mid: string, kind: AlertKind) => setSheet({ mid, kind }), []);
   const records = useLauncherHealth();
   const issues = useMemo(() => {
@@ -238,7 +252,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           {view === "storage" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <StoragePanel machines={machines} />
+                <StoragePanel machines={machines} focus={storageFocus} />
               </Suspense>
             </div>
           )}
@@ -266,7 +280,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           ))}
         </div>
       </div>
-      <AlertSheetHost sheet={sheet} machines={machines} metrics={metrics} sessions={full.sessions} known={known} records={records} launcherIssues={launcherIssues} roster={roster} onKind={openAlert} onClose={() => setSheet(null)} onReconnect={reconnect} />
+      <AlertSheetHost sheet={sheet} machines={machines} metrics={metrics} sessions={full.sessions} known={known} records={records} launcherIssues={launcherIssues} roster={roster} onKind={openAlert} onClose={() => setSheet(null)} onReconnect={reconnect} onUsageMap={openUsageMap} />
       <AddComputer open={!!adding} again={adding?.again} onClose={() => setAdding(null)} />
       {helping && <HelpDialog topic="add_computer" machine="" step={null} onClose={() => setHelping(false)} onAction={() => {}} />}
     </div>
@@ -523,7 +537,7 @@ function useLauncherHealth(): { list: LauncherHealthRecord[]; merge: (records: L
 }
 
 /** The alert sheet for the computer and alert asked for; closed (with its exit) when none is. */
-function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, launcherIssues, roster, onKind, onClose, onReconnect }: {
+function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, launcherIssues, roster, onKind, onClose, onReconnect, onUsageMap }: {
   sheet: { mid: string; kind: AlertKind } | null;
   machines: Machine[];
   metrics: MachineMetrics[] | null;
@@ -535,6 +549,7 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
   onKind: (mid: string, kind: AlertKind) => void;
   onClose: () => void;
   onReconnect: (id: string) => Promise<void>;
+  onUsageMap: (mid: string) => void;
 }) {
   const m = sheet ? machines.find((x) => x.id === sheet.mid) : undefined;
   const mm = m ? metrics?.find((x) => x.machine_id === m.id) : undefined;
@@ -556,6 +571,7 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
       onClose={onClose}
       onReconnect={onReconnect}
       onRecords={records.merge}
+      onUsageMap={onUsageMap}
       onReloadRecords={records.reload}
     />
   );

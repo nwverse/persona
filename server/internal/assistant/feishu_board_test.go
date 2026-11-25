@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -282,23 +281,6 @@ func TestBoardOrdersByWaitAndSaysWhoAsked(t *testing.T) {
 	for _, want := range []string{"已等 1 小时 20 分", "已等 20 分钟", "已等 2 分钟", "已等 3 天", "来自 Persona", "来自 Agent「登录修复」", "来自某个 Agent",
 		"[打开](" + testWeb + "/persona/asm)", "[打开](" + testWeb + "/s/box/ag1)", "[打开](" + testWeb + "/todos/todo_v)"} {
 		index(t, card, want)
-	}
-}
-
-func TestBoardWaitReadsLikeAPerson(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
-	for _, c := range []struct {
-		l    i18n.Lang
-		d    time.Duration
-		want string
-	}{
-		{i18n.ZhHans, 30 * time.Second, "不到 1 分钟"}, {i18n.ZhHans, 2 * time.Minute, "2 分钟"}, {i18n.ZhHans, 80 * time.Minute, "1 小时 20 分"},
-		{i18n.ZhHans, 2 * time.Hour, "2 小时"}, {i18n.ZhHans, 3*24*time.Hour + 5*time.Hour, "3 天"},
-		{i18n.En, 2 * time.Minute, "2 min"}, {i18n.En, 80 * time.Minute, "1 h 20 min"}, {i18n.En, 72 * time.Hour, "3 d"},
-	} {
-		if got := boardWait(c.l, c.d); got != c.want {
-			t.Errorf("boardWait(%s, %v) = %q, want %q", c.l, c.d, got, c.want)
-		}
 	}
 }
 

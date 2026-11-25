@@ -460,6 +460,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		return nil
 	}
 	out = out[:j]
+	n.nameAgyAliases(out, agyConversations) // the ids an agy conversation went by, on the row listing it (agyaliases.go)
+	n.markAgyStopped(out, agyRuntimeIDs)    // and one the user closed, stopped by them (agystopped.go)
 	parents, origins := n.offlineDesktop()
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them

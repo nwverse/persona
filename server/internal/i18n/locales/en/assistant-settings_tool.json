@@ -1,4 +1,5 @@
 {
+  "title_dashboards": "Let Persona make dashboards",
   "title_modules": "Built-in modules",
   "change_modules": "Built-in modules: {before} → {after}. Applies at the next manager start; the running process is unchanged.",
   "modules_unchanged": "The built-in module switch is unchanged.",
@@ -131,5 +132,17 @@
   "change_limit_fallbacks": "Backup launchers when a usage limit stops a conversation: {before} → {after}",
   "bad_limit_fallbacks": "Give a list of at most 8 launcher names, first choice first; an empty list turns it off.",
   "limit_fallbacks_unchanged": "The backup launchers are unchanged.",
-  "limit_fallbacks_saved": "Backup launchers saved: {value}. They apply from the next usage limit."
+  "limit_fallbacks_saved": "Backup launchers saved: {value}. They apply from the next usage limit.",
+  "title_machine_fallbacks": "Backup computers when offline",
+  "change_machine_fallbacks": "Backup computers when the primary computer goes offline: {before} → {after}",
+  "bad_machine_fallbacks": "Give a list of at most 8 non-work computer IDs, first choice first; an empty list turns it off.",
+  "machine_fallbacks_unchanged": "The backup computers are unchanged.",
+  "machine_fallbacks_saved": "Backup computers saved: {value}. They apply when a computer stays offline past the threshold.",
+  "machine_fallback_work_machine": "A work computer cannot be used as an assistant backup computer.",
+  "machine_fallback_unknown_machine": "Unknown computer ID: {machine}.",
+  "title_machine_fallback_minutes": "Offline minutes before computer failover",
+  "change_machine_fallback_minutes": "Offline minutes before computer failover: {before} → {after} minutes",
+  "bad_machine_fallback_minutes": "Choose a whole number from 1 to 1440 minutes.",
+  "machine_fallback_minutes_unchanged": "The offline failover threshold is unchanged.",
+  "machine_fallback_minutes_saved": "Offline failover threshold saved as {value} minutes."
 }

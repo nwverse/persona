@@ -17,7 +17,7 @@ The live `persona-context` snapshot identifies the current profile and its tiers
 
 On first access, `performance` and `economy` are created as independent copies of the **current configuration**, and `performance` is marked in use (history action `seed`, actor `system`): it is an exact copy, so nothing switches and there is nothing to roll back, and its tiers work from the start. Profiles made before this (#2225) stay without one in use until the first switch. This never switches models automatically. They are templates, not a hard-coded routing policy: configure them for your providers before relying on different behavior. Model availability, billing, and CLI compatibility depend on the configured provider.
 
-Each template gets two tiers named by the kind of work, `core` (the main chat's model then: core design and implementation, review, hard problems) and `dev` (the New Agent model then: development, debugging and research), each with a description saying so; they do not follow later edits in Model Settings. Templates made before #14700 named them `strong` and `standard`; they are renamed as they are read (see [Candidates and aliases](#candidates-and-aliases)). A suggested policy (add the other tiers you want; none exist until you do):
+Each template gets two tiers named by the kind of work, `core` (the main chat's model then: core design and implementation, review, hard problems) and `dev` (the New Agent model then: development, debugging and research), each with a description saying so; they do not follow later edits in Model Settings. Templates made before #14700 named them `strong` and `standard`; they are renamed as they are read (see [Candidates and aliases](#candidates-and-aliases)). The templates, and a profile captured from the current configuration into a new profile, give `core` and `dev` the aliases `strong` and `standard` too, so the old names resolve whichever profile is in use (#15010); profiles stored without them are not changed. A suggested policy (add the other tiers you want; none exist until you do):
 
 | Purpose or tier | Performance | Economy |
 | --- | --- | --- |
@@ -84,9 +84,43 @@ The next Agent of a task keeps the candidate its previous Agent ran on (see "Ano
 
 A tier with one candidate keeps it whatever the rule says: there is nothing else to choose. A candidate the tier (or, after a switch, the profile in use) no longer lists, or one this computer cannot run now, is chosen again as for a first start.
 
+### Trial of inactive profiles (#14702)
+
+To try a profile before switching to it, copy the active profile, add ordered candidates to its tiers, and leave it inactive. On every dispatch that records an active `model_routing` row, the manager also evaluates each inactive profile (up to 20, in stable ID order) after the active row is written, on its own goroutine and its own 5-second budget, so the dispatch never waits for it: it looks up the same tier by the active tier's name or one of its aliases, matched against each profile's tier names and aliases (`lookupTier`), runs the same candidate pick against that profile without starting anything, and writes a `model_routing` row with `active = false` carrying the same to-do, plan task, session, tier, chosen candidate, reason, and per-candidate scores/headroom detail. A profile without that tier writes nothing. Trial errors are logged only and never fail, delay or alter the real start. The trial picks as for a first start: it does not apply the continuation rule that keeps the previous Agent's candidate.
+
+`GET /api/v1/model-profiles` adds `trial: {days: 7, dispatches, would_switch}` to every profile not in use and omits `trial` on the active profile (and on every profile when the counts cannot be read, rather than showing 0):
+
+- **`dispatches`**: distinct dispatch decisions in the last 7 days that have a trial (`active = false`) row for that profile.
+- **`would_switch`**: the subset of those dispatch decisions where the trial row's `launcher` or `model` (either one) differs from the active (`active = true`) row of the same dispatch decision. A decision is matched by its session when it has one, otherwise by the same to-do, plan task and recording time.
+
+### Candidate status (#14702)
+
+`GET /api/v1/model-profiles/{id}/candidates` is a read-only endpoint returning each tier's candidates in 0-based order with their current pace-based quota headroom and 14-day measured efficiency:
+
+```json
+{
+  "days": 14,
+  "tiers": {
+    "dev": [
+      {
+        "index": 0,
+        "launcher": "coding",
+        "model": "standard-coding",
+        "headroom": { "known": true, "percent": 17.0, "stale": false },
+        "stats": { "n": 5, "minutes_p50": 18.4, "first_pass": 0.6 }
+      }
+    ]
+  }
+}
+```
+
+When a candidate's quota cannot be read or all matching accounts are stale, `headroom.known` is `false` (and `headroom.stale` is `true` when accounts were present but out of date); unknown headroom is never reported as full. `recovers_at` is included only when `known` is `true` and headroom is at or below zero. `stats.minutes_p50` and `stats.first_pass` are present exactly when `stats.n > 0`, so a measured 0 is still sent. Headroom is read for the hub's own machine. An unknown profile ID returns 404.
+
 **Aliases** are older names a tier still answers to. When a profile is read, the two tiers Persona seeded under strength names are renamed by the kind of work: `strong` becomes `core` and `standard` becomes `dev`, with the old name kept as an alias and nothing else changed; the next save stores it. A tier you made yourself keeps its name, as does a seeded one whose new name is already taken. So a stored plan task, a start-defaults preset or an older client naming `strong` or `standard` resolves to the same launcher and model as before. Within a profile an alias is a valid tier name that is neither another tier's name nor another tier's alias. Renaming a tier yourself does not add an alias; list the old name in `aliases` if anything still names it. History entries keep the names they were written with.
 
-A PUT from an older client sends a tier without `candidates`: its flat fields replace the first candidate, and the other candidates and the aliases stay as they were. A body with `candidates` (or `aliases`) states them itself, and an empty list clears them; when it sends both, the flat fields follow the first candidate. Twelve tiers of six candidates fit well within the 64 KB body limit.
+A PUT from an older client sends a tier without `candidates`: its flat fields replace the first candidate, and the other candidates and the aliases stay as they were. A body with `candidates` (or `aliases`) states them itself, and an empty list clears them; when it sends both, the flat fields follow the first candidate. A client that knows `candidates` sends a one-item `candidates` list when it cuts a tier down to one candidate, so the hub does not mistake it for an older client's flat shape and keep the removed ones. Twelve tiers of six candidates fit well within the 64 KB body limit.
+
+An older client renames a tier by sending it under its new name in the flat shape, with no earlier name. The hub pairs such a tier (a new name, no `candidates`, no `aliases`) with the stored tier the body no longer sends when it repeats that tier's first candidate and description unchanged, or, when exactly one tier went and one came, when both have the same non-empty description; a paired tier keeps its other candidates and its aliases, as an edit under the same name does. Anything else is a new tier: deleting a tier and adding an unrelated one in the same save hands it nothing. An alias the body did not send, kept for a client that cannot see it, gives way to a tier name or an alias the body sends (and to one another tier kept first, in name order), so an older client can add a tier named `strong` while `core` answers to `strong`: the save drops `strong` from `core`, and `strong` then names the new tier in that profile only; stored references to `strong` follow it. An alias a client sends itself that is another tier's name or alias is still refused. In a conversation, `tier` resolves aliases, so to add a tier under a name another tier answers to, first clear it from that tier's `aliases`. Known quirk of the read-time rename: an older client renaming `core` to `strong` (or `dev` to `standard`) is accepted, but the tier reads back as `core` (`dev`) answering to the old name.
 
 ## Edit and add profiles
 
@@ -98,7 +132,8 @@ launcher model fields expose concrete variant IDs because they each have their o
 
 | Method | Path | Operation |
 | --- | --- | --- |
-| GET | `/api/v1/model-profiles` | Catalog, revision, active profile, rollback preview (`rollback`) and bounded history (`rollbacks`), audit history |
+| GET | `/api/v1/model-profiles` | Catalog, revision, active profile, per-inactive-profile 7-day `trial` summary, rollback preview (`rollback`) and bounded history (`rollbacks`), audit history |
+| GET | `/api/v1/model-profiles/{id}/candidates` | Read-only per-tier candidate list (0-based index) with current pace headroom and 14-day `n` / `minutes_p50` / `first_pass` stats (404 for unknown profile) |
 | PUT | `/api/v1/model-profiles/{id}` | Create or replace a profile; include catalog `revision` (ignores unknown optional fields from newer clients; rejects credentials/endpoints and invalid known fields) |
 | DELETE | `/api/v1/model-profiles/{id}?revision=N` | Delete an inactive profile |
 | POST | `/api/v1/model-profiles/{id}/apply` | Apply the profile |

@@ -189,11 +189,14 @@ func (s *Service) guardRefusal(ctx context.Context, machine, session, tool strin
 	return nil
 }
 
-// guardTools narrows an actual tool list with the same decision as guardRefusal. Empty targets are unchanged.
+// guardTools narrows an actual tool list with the same decision as guardRefusal, and lists page only to a conversation
+// that may write dashboards (pages_tool.go, whose calls check again). Empty targets (the registry's whole list) are
+// unchanged.
 func (s *Service) guardTools(ctx context.Context, machine, session string, tools []proto.Tool) []proto.Tool {
 	if machine == "" && session == "" {
 		return tools
 	}
+	tools = s.pageToolListed(ctx, machine, session, tools)
 	denied := s.guardDeniedForDiscovery(ctx, machine, session)
 	if len(denied) == 0 {
 		return tools
@@ -443,6 +446,9 @@ func (s *Service) guardDiscoveryCursor(ctx context.Context, machine, session str
 	}
 	if space := s.agentCallerSpace(ctx, machine, session); space != "" {
 		base += ":space=" + space
+	}
+	if _, err := s.pageCallerOf(ctx, machine, session, true); err == nil {
+		base += ":page" // the conversation writes dashboards (pages_tool.go); one that comes to, or stops, lists again
 	}
 	denied := s.guardDeniedForDiscovery(ctx, machine, session)
 	if len(denied) == 0 {

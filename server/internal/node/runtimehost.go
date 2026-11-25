@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +39,9 @@ type RuntimeHost struct {
 	path    string
 	version string
 	logger  *log.Logger
+	// pipe is the named pipe runtimes the node starts dial on Windows (runtimepipe_windows.go); "" elsewhere, or
+	// when it could not be made. Set by Listen before any runtime starts, then fixed.
+	pipe string
 
 	mu   sync.Mutex
 	node *Node // the Node serving a hub connection now; nil between connections
@@ -126,6 +130,7 @@ func (rh *RuntimeHost) Listen(ctx context.Context) error {
 	if _, err := rh.listenOnce(ctx); err != nil {
 		return err
 	}
+	rh.listenPipe(ctx)
 	rh.ctx = ctx
 	rh.startDaemons(ctx)
 	if rh.autoCompanions {
@@ -150,6 +155,21 @@ func (rh *RuntimeHost) Listen(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+// dialPath is where a runtime the node starts connects: the named pipe on Windows, whose Node.js cannot reach a Unix
+// socket (runtimepipe_windows.go), else the socket.
+func (rh *RuntimeHost) dialPath() string {
+	if rh.pipe != "" {
+		return rh.pipe
+	}
+	return rh.path
+}
+
+// mcpConfig is the node's mcp.json, beside the runtime socket. It follows rh.path, never dialPath: on Windows that is
+// a pipe name, whose directory is \\.\pipe.
+func (rh *RuntimeHost) mcpConfig() string {
+	return filepath.Join(filepath.Dir(rh.path), "mcp.json")
 }
 
 func (rh *RuntimeHost) listenOnce(ctx context.Context) (net.Listener, error) {
@@ -457,6 +477,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			params["origin"] = origin
 		}
 		err := n.peer.Call(ctx, "mcp.call", params, &res)
+		if err == nil {
+			res = n.toolViews.stripRaw(p.SessionID, p.Name, res)
+		}
 		return res, err
 	}
 	return nil, fmt.Errorf("unknown method %s", method)
