@@ -437,6 +437,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {peerPath}
 -                    PATCH /api/v1/agent-shares/{share_id}
 inbox.write          PATCH /api/v1/inbox/policies/{id}
+-                    PATCH /api/v1/looks/uploads/{id}
 -                    PATCH /api/v1/machines/{mid}/files/entry
 -                    PATCH /api/v1/managers/{id}
 -                    PATCH /api/v1/model-config/purposes/{id}

@@ -181,6 +181,10 @@ var legacyCores = map[string]bool{
 	"internal/tokenuse":                true,
 }
 
+// LegacyCore says whether the package at rel (under the server's root) is a core that predates the rules, which the
+// baseline holds: the type-aware rules hold every other core in full.
+func LegacyCore(rel string) bool { return legacyCores[rel] }
+
 // legacyCoreList is legacyCores sorted, for messages.
 func legacyCoreList() []string {
 	var out []string
