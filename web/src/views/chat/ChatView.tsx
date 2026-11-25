@@ -2729,7 +2729,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           <CommentMarks scroller={scroller} jump={landRow} />
           </ChatActionsContext.Provider>
         </div>
-        {/* A transient edge overlay; native scrolling and the centered text column keep their existing layout. */}
+        {/* NavRail uses the natural left gutter beside the centered transcript. */}
         {questionsOn && (
           <Suspense fallback={null}>
             <QuestionMarksHost mid={mid} sid={sid} on={questions.on} lines={lines} busy={questions.busy} ticks={railTicks} scroller={scrollEl} onMarks={setQuestionMarks} onOpened={setQuestionOpened} />

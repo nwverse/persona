@@ -57,11 +57,11 @@ vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../.
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
 import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
-import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
 import { whenComposer } from "../../lib/links";
 import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
 import { useShortcuts } from "../../lib/use-shortcuts";
+import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
@@ -71,13 +71,11 @@ import { ChatView } from "./ChatView";
 const row = (x: Partial<Session> = {}): Session => ({ machine_id: "mac", session_id: "s1", title: "Checks", cwd: "/code", status: "working", state: "working", ...x }) as Session;
 const item = (seq: number, x: Partial<Item> = {}): Item => ({ id: `i${seq}`, seq, role: "assistant", kind: "text", text: `row ${seq}`, ts: "2026-11-06T00:00:00Z", ...x }) as Item;
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-const push = async (seq: number, x: Partial<Item> = {}) => {
-  await act(async () => {
-    live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq }));
-    // These checks measure individual replies after they draw. Give the transcript its trailing flush between pushes.
-    await new Promise((resolve) => setTimeout(resolve, ITEM_COALESCE_MS));
-  });
-};
+const push = (seq: number, x: Partial<Item> = {}) => act(async () => {
+  live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq }));
+  // Measure the render after the normal transcript burst window has committed.
+  await new Promise((resolve) => setTimeout(resolve, ITEM_COALESCE_MS));
+});
 const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 
 let host: HTMLDivElement;
@@ -124,6 +122,8 @@ async function open(view: React.ReactElement<{ assistant?: boolean }>, session =
   for (let i = 0; i < 6; i++) await settle();
   const title = view.props.assistant && getState().assistant?.main === session.session_id ? "Persona" : "Checks";
   await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe(title)); // session-derived props are stable
+  // Flush the header's lazy menu state before counting renders caused by the transcript.
+  await act(async () => { await vi.dynamicImportSettled(); });
   expect(live.listeners.size).toBeGreaterThan(0);
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.chips).toBeGreaterThan(0);
@@ -169,7 +169,8 @@ it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws
 it("an agent's page: pushed items leave its header and composer alone, a session change still reaches them", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);
-  expect(host.textContent).toContain("row 10");
+  // Non-critical bursts share the transcript's coalescing window; the commits it makes still leave the chrome alone.
+  await vi.waitFor(() => expect(host.textContent).toContain("row 10"));
   expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 
   act(() => applyCompleteSessions([row({ title: "Renamed" })]));
@@ -183,7 +184,7 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   for (let seq = 1; seq <= 3; seq++) await push(seq);
   words.length = 0;
   await push(4);
-  expect(words).toEqual([{ text: "row 4", fade: true }]);
+  await vi.waitFor(() => expect(words).toEqual([{ text: "row 4", fade: true }]));
 });
 
 // the first page: this many exchanges, a question and its reply each
@@ -268,7 +269,8 @@ it("finished exchanges before the last two skip drawing while off screen, from a
 it("the assistant: the header draws again only when what its face reads changes", async () => {
   await open(<ChatView mid="mac" sid="s1" assistant />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);
-  expect(host.textContent).toContain("row 10");
+  // Non-critical bursts share the transcript's coalescing window; the commits it makes still leave the chrome alone.
+  await vi.waitFor(() => expect(host.textContent).toContain("row 10"));
   expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 
   // a message of yours last: the face thinks again (lib/persona.ts personaState)

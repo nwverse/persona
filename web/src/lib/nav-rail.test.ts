@@ -121,14 +121,14 @@ describe("navRailExcerpt", () => {
 });
 
 describe("navRailMark", () => {
-  it("keeps every idle mark equally short, with only color emphasis for the current input", () => {
+  it("keeps idle marks short and gives the current input a distinct resting mark", () => {
     for (const count of [1, 2, 25, 240]) {
       for (const current of [null, 0, Math.floor(count / 2), count - 1]) {
         for (let index = 0; index < count; index++) {
           expect(navRailMark(index, count, current, null)).toEqual({
             state: index === current ? "current" : "idle",
-            width: M.tickWidth,
-            height: M.tickHeight,
+            width: index === current ? M.currentWidth : M.tickWidth,
+            height: index === current ? M.currentHeight : M.tickHeight,
             opacity: index === current ? 1 : M.tailOpacity,
           });
         }
@@ -175,19 +175,21 @@ describe("navRailMark", () => {
 
 describe("planNavRailTicks", () => {
   it("keeps the normal pitch while the ticks fit", () => {
-    expect(planNavRailTicks(10, 200)).toEqual({ start: 0, pitch: 10, hidden: 0, count: 10 });
-    expect(planNavRailTicks(0, 0)).toEqual({ start: 0, pitch: 10, hidden: 0, count: 0 });
+    expect(planNavRailTicks(10, 200)).toEqual({ start: 0, pitch: 15, hidden: 0, count: 10 });
+    expect(planNavRailTicks(0, 0)).toEqual({ start: 0, pitch: 15, hidden: 0, count: 0 });
   });
 
   it("compresses the pitch before windowing ticks", () => {
-    expect(planNavRailTicks(20, 100)).toEqual({ start: 0, pitch: 5, hidden: 0, count: 20 });
+    expect(planNavRailTicks(20, 240)).toEqual({ start: 0, pitch: 12, hidden: 0, count: 20 });
   });
 
   it("keeps every selected input accessible in a bounded moving window", () => {
-    expect(planNavRailTicks(30, 40)).toEqual({ start: 22, pitch: 5, hidden: 22, count: 8 });
+    expect(planNavRailTicks(30, 40)).toEqual({ start: 27, pitch: 40 / 3, hidden: 27, count: 3 });
+    expect(planNavRailTicks(1000, 1000)).toEqual({ start: 972, pitch: 15, hidden: 972, count: 28 });
     for (let focus = 0; focus < 1000; focus++) {
       const plan = planNavRailTicks(1000, 200, focus);
-      expect(plan.count).toBe(40);
+      expect(plan.count).toBe(16);
+      expect(plan.pitch).toBeGreaterThanOrEqual(12);
       expect(plan.start).toBeLessThanOrEqual(focus);
       expect(plan.start + plan.count).toBeGreaterThan(focus);
     }
