@@ -461,38 +461,29 @@ func (s *Service) pageRoutineCallerOf(ctx context.Context, machine, session stri
 
 // pageRoutineTool returns the narrowed page tool definition listed to a page-bound routine run (get and patch only).
 func pageRoutineTool(pageID string) proto.Tool {
-	schema, _ := json.Marshal(map[string]any{
-		"type":                 "object",
-		"required":             []string{"action", "id"},
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"action": map[string]any{
-				"type": "string",
-				"enum": []string{"get", "patch"},
-			},
-			"id": map[string]any{
-				"type":        "string",
-				"description": "the dashboard id (" + pageID + ")",
-			},
-			"reading": map[string]any{
-				"type":        "object",
-				"description": "patch: new watch reading",
-			},
-			"items": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "object"},
-				"description": "patch: replace up to 50 existing components by key and type",
-			},
-			"alert_text": map[string]any{
-				"type":        "string",
-				"maxLength":   db.AssistantPageAlertTextMost,
-				"description": "patch: optional note for alert push if rule trips",
-			},
-			"note": map[string]any{
-				"type":        "string",
-				"maxLength":   db.AssistantPageNoteMost,
-				"description": "patch: one-line history note",
-			},
+	type prop struct {
+		Type        string   `json:"type"`
+		Enum        []string `json:"enum,omitempty"`
+		MaxLength   int      `json:"maxLength,omitempty"`
+		Items       *prop    `json:"items,omitempty"`
+		Description string   `json:"description,omitempty"`
+	}
+	schema, _ := json.Marshal(struct {
+		Type                 string          `json:"type"`
+		Required             []string        `json:"required"`
+		AdditionalProperties bool            `json:"additionalProperties"`
+		Properties           map[string]prop `json:"properties"`
+	}{
+		Type:                 "object",
+		Required:             []string{"action", "id"},
+		AdditionalProperties: false,
+		Properties: map[string]prop{
+			"action":     {Type: "string", Enum: []string{"get", "patch"}},
+			"id":         {Type: "string", Description: "the dashboard id (" + pageID + ")"},
+			"reading":    {Type: "object", Description: "patch: new watch reading"},
+			"items":      {Type: "array", Items: &prop{Type: "object"}, Description: "patch: replace up to 50 existing components by key and type"},
+			"alert_text": {Type: "string", MaxLength: db.AssistantPageAlertTextMost, Description: "patch: optional note for alert push if rule trips"},
+			"note":       {Type: "string", MaxLength: db.AssistantPageNoteMost, Description: "patch: one-line history note"},
 		},
 	})
 	return proto.Tool{
