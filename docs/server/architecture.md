@@ -101,6 +101,7 @@ The parts (the hub, the managers, the node on each computer, extensions) talk on
 | `kbwire` | Knowledge-base entities, identity hints, updates and chat context as they cross the bus and the connector protocol |
 | `recordingwire` | A meeting recording's data types (the recording, its upload and timeline, meeting.json, minutes, day recap, photos, live log, meeting room, hub segments), their constants, sentinel errors, pure accessors and lenient JSON readers; `kb` aliases and re-exports them and keeps its own rules as functions over them (`docs/plans/plan-kb-recording-port.md`) |
 | `connectorwire` | The connector SPI: `Connector`, its `Manifest` and capability interfaces, statuses, sign-in prompts, threads and recall errors; inbox things and replies, conversation batches, posts and snapshots from connectors (`docs/protocol/connector-protocol.md`, `docs/extensions/connectors.md`) |
+| `wireids` | The contract's ID types (`MachineID`, `SessionID`, `TodoID`, …) and `AgentRef`, generated from `schema/wire/ids.schema.json` (`ids_gen.go`, never edited by hand); core's opaque `agentref` types are separate (`docs/plans/plan-typed-core.md` 2.3) |
 | `aiwire` | A model setting (`aiwire.Config`) |
 | `dialogwire` | A terminal dialog read off a screen, as the node and the apps see it |
 | `repositorywire` | A task's requested refs, repository layouts and the preparation snapshot a manager hands to a node, with the alias and ref rules both apply; `assistant/repository` aliases them |
