@@ -49,22 +49,10 @@ func (s core) feishuCardWanted(ctx context.Context, ix proto.Interaction) bool {
 	return true
 }
 
-type cardEnd int
-
-const (
-	cardWaiting cardEnd = iota // still up
-	cardOver                   // ended for good
-	cardUnsure                 // not up, not known to be over (not restored yet, the history could not say)
-)
-
-// botCardOver is whether interaction id is over for good, as the hub's queue and its history say (InteractionsGet).
-func (s core) botCardOver(ctx context.Context, id string) cardEnd {
-	_, end := s.botCardLook(ctx, id)
-	return end
-}
-
-// botCardLook is botCardOver with the interaction as the hub's queue has it, while it is up.
-func (s core) botCardLook(ctx context.Context, id string) (proto.Interaction, cardEnd) {
+// botCardLook is interaction id as the hub's queue and its history say (InteractionsGet): waiting, still up, with the
+// interaction as the queue has it; over, ended for good; neither, not up and not known to be over (not restored yet,
+// or the history could not say).
+func (s core) botCardLook(ctx context.Context, id string) (ix proto.Interaction, waiting, over bool) {
 	var got struct {
 		OK          bool              `json:"ok"`
 		Status      string            `json:"status"`
@@ -72,13 +60,13 @@ func (s core) botCardLook(ctx context.Context, id string) (proto.Interaction, ca
 	}
 	switch err := s.appCallTo(ctx, assistantwire.AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); {
 	case err != nil:
-		return proto.Interaction{}, cardUnsure
+		return proto.Interaction{}, false, false
 	case got.OK:
-		return got.Interaction, cardWaiting
+		return got.Interaction, true, false
 	case finalStatus(got.Status):
-		return proto.Interaction{}, cardOver
+		return proto.Interaction{}, false, true
 	}
-	return proto.Interaction{}, cardUnsure
+	return proto.Interaction{}, false, false
 }
 
 // finalStatus: how an interaction ended for good (InteractionsGet's status); "pending" (in the history, not up yet)
@@ -369,7 +357,7 @@ func (s core) botCardDone(ctx context.Context, messageID string, ix proto.Intera
 
 // closeEndedBotCards closes the bot's cards whose interaction is over. Not being in pending is not enough: right
 // after a restart the manager's table is empty or partial (interactions are restored, screen and Codex cards rebuilt,
-// after this runs), so each is closed only once the history says it ended for good (botCardOver). One that may still
+// after this runs), so each is closed only once the history says it ended for good (botCardLook). One that may still
 // be waiting is looked at again a little later, once (again).
 func (s core) closeEndedBotCards(ctx context.Context, pending map[string]bool, again bool) {
 	var maybe []botCard
@@ -382,10 +370,10 @@ func (s core) closeEndedBotCards(ctx context.Context, pending map[string]bool, a
 	})
 	var unsure []botCard
 	for _, card := range maybe {
-		switch s.botCardOver(ctx, card.Ix.ID) {
-		case cardOver:
+		switch _, waiting, over := s.botCardLook(ctx, card.Ix.ID); {
+		case over:
 			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
-		case cardUnsure:
+		case !waiting:
 			unsure = append(unsure, card)
 		}
 	}

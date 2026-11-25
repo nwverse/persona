@@ -202,8 +202,8 @@ func (s core) nudgeQuiet(ctx context.Context) (bool, error) {
 // kind of nudge has not settled. Every send re-reads the live card, so an answer,
 // withdrawal, pause, replacement or extended deadline during the sweep wins.
 func (s core) nudgeCard(ctx context.Context, id, owner string, kind nudgeKind) {
-	ix, end := s.botCardLook(ctx, id)
-	if waiting := end == cardWaiting; !waiting || ix.Private || s.h.AgentGone(ix) { // ended, private, or its agent went away
+	ix, waiting, _ := s.botCardLook(ctx, id)
+	if !waiting || ix.Private || s.h.AgentGone(ix) { // ended, private, or its agent went away
 		return
 	}
 	expires := ix.ExpiresAt

@@ -55,7 +55,7 @@ internal/assistant app-exported-record WatchSchedule #13882 #13914 #14029 #14104
 internal/assistant app-exported-record WatchTable #13882 #13914 #14029 #14104 #14362 #14995
 internal/assistant app-exported-record WatchView #13882 #13914 #14029 #14104 #14362 #14995
 internal/assistant app-lifecycle-write 30
-internal/assistant app-named-primitive 27
+internal/assistant app-named-primitive 26
 internal/assistant app-named-primitive ModelPurposeStatusCode #12300 #12307
 internal/assistant app-named-primitive launcherFit #12300 #12307
 internal/assistant app-named-primitive scopeHeadingKind #13820 #13912
