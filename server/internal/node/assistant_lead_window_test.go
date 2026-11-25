@@ -15,7 +15,7 @@ import (
 // launcher that declares a larger one, with the idle /compact at 75% of it. A conversation the manager sends no window
 // with keeps what the launcher declares.
 func TestAssistantLeadCompactWindowPolicy(t *testing.T) {
-	fakeClaudeHome(t, "exit 0\n")
+	fakeClaudeHomeBash(t, "exit 0\n") // runs without zsh too
 	t.Setenv("CODEX_HOME", t.TempDir())
 	big := []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}
 	n := codexTestNode(t)
@@ -54,7 +54,7 @@ func TestAssistantLeadCompactWindowPolicy(t *testing.T) {
 // meter's auto-compact threshold follows it. A message without it (an older manager, or the conversation no longer
 // leads) starts it again on the launcher's window.
 func TestAssistantLeadCompactWindowRPC(t *testing.T) {
-	f := cliTest(t)
+	f := cliTestBash(t) // runs without zsh too
 	f.fakeLaunch(t)
 	f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}}})
 	send := func(method string, p map[string]any) string {
