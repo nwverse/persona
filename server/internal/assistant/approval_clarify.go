@@ -282,7 +282,7 @@ func (s *Service) keepWaiting(p *pending) bool {
 			if err != nil {
 				// approvalJournalStarted succeeded, so balance its new entry before
 				// this card expires. A failed start already removed that entry.
-				s.approvalJournalAborted(context.Background(), ix.ID)
+				s.approvalJournalAborted(context.Background(), ix)
 			}
 		}
 		s.fleet.mu.Lock()
