@@ -1,6 +1,7 @@
 package writers
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
@@ -46,10 +47,10 @@ func newTestEngine(e *kb.Engine) *testEngine {
 }
 
 // eng is the engine as the writers see it now (Writers.engine), for a test that calls a writer below the rounds.
-func (e *testEngine) eng() *Engine { return e.Writers.engine() }
+func (e *testEngine) eng() *engine { return e.Writers.engine() }
 
 // ws is knowledge-base store s as the writers see it.
-func ws(s *kb.Store) *Store {
+func ws(s *kb.Store) *store {
 	testStoresMu.Lock()
 	defer testStoresMu.Unlock()
 	return newStore(testStores[s].core)
@@ -131,4 +132,13 @@ func forgetOnlyPhoto(path string, n int) error {
 		return err
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o600)
+}
+
+// The title and summary rounds are the knowledge base's own code still; a test calls them there (the provider's
+// methods of the same names carry them to the same functions).
+func (e *testEngine) TitleRecordings(ctx context.Context, max int) int {
+	return e.Engine.TitleRecordings(ctx, max)
+}
+func (e *testEngine) SummarizeRecordings(ctx context.Context, max int) int {
+	return e.Engine.SummarizeRecordings(ctx, max)
 }

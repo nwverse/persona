@@ -22,7 +22,7 @@ func hubMinutesEngine(t *testing.T, reply string) (e *testEngine, m *captureMode
 	e.SetClock(func() time.Time { return *clock })
 	n := 0
 	told = &n
-	e.MinutesWritten = func(context.Context, Recording, Minutes) { n++ }
+	e.minutesWritten = func(context.Context, Recording, Minutes) { n++ }
 	return e, m, clock, told
 }
 

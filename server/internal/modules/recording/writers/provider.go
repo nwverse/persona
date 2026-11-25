@@ -11,23 +11,33 @@ import (
 // writers of this package over the storage port, and, until they move here too, the knowledge base's own remaining
 // writers (recordingwire.WritersInCore). The module makes one in its hook and gives it to the knowledge base.
 type Writers struct {
-	recordingwire.WritersInCore
 	core recordingwire.Core
+	// rest is the knowledge base's writers that are still its own code.
+	rest recordingwire.WritersInCore
+	// minutesWritten is told when a recording's minutes for its current revision are written: the assistant pushes
+	// them. Not for minutes made again only because a photo was added or deleted. Called from the round, outside the
+	// store's locks. dayRecapWritten is told once a day (Recording.Day, across the day's parts) of the recap the day's
+	// push goes with: it pushes to the destinations not in r.RecapPushTook and returns those that took it now; an
+	// error leaves the push due (OnWritten sets both).
+	minutesWritten  func(ctx context.Context, r Recording, m Minutes)
+	dayRecapWritten func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)
 
-	// MinutesWritten is told when a recording's minutes for its current revision are written; DayRecapWritten once a
-	// day of the recap the day's push goes with (took: the push ids it took; an error leaves the push due). The module
-	// sets them before the knowledge base is used.
-	MinutesWritten  func(ctx context.Context, r Recording, m Minutes)
-	DayRecapWritten func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)
-
-	// What tests set on the engine a call makes (Engine.jobLeft, minutesCall, minutesPart).
+	// What tests set on the engine a call makes (engine.jobLeft, minutesCall, minutesPart).
 	jobLeft                  func(ctx context.Context) time.Duration
 	minutesCall, minutesPart int
 }
 
-// New is the write side of the knowledge base behind core; rest is its writers that are still its own code.
+// New is the write side of the knowledge base behind core; rest is its writers that are still its own code (nil:
+// none, for a knowledge base that only answers requests).
 func New(core recordingwire.Core, rest recordingwire.WritersInCore) *Writers {
-	return &Writers{WritersInCore: rest, core: core}
+	return &Writers{core: core, rest: rest}
+}
+
+// OnWritten sets what is told when minutes are written and when a day's recap is to be pushed, before the knowledge
+// base is used.
+func (w *Writers) OnWritten(minutes func(ctx context.Context, r Recording, m Minutes),
+	dayRecap func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)) {
+	w.minutesWritten, w.dayRecapWritten = minutes, dayRecap
 }
 
 // Of is the Writers a knowledge base was given as its provider; nil when p is another provider (no module).
@@ -38,14 +48,15 @@ func Of(p recordingwire.Provider) *Writers {
 
 // engine is the knowledge base's engine as the writers see it now: its models and evening clock as they stand, the
 // module's callbacks.
-func (w *Writers) engine() *Engine {
-	e := &Engine{Store: newStore(w.core), MinutesWritten: w.MinutesWritten, DayRecapWritten: w.DayRecapWritten,
+func (w *Writers) engine() *engine {
+	e := &engine{Store: newStore(w.core), MinutesWritten: w.minutesWritten, DayRecapWritten: w.dayRecapWritten,
 		DayRecapClock: w.core.DayRecapClock(), jobLeft: w.jobLeft, minutesCall: w.minutesCall, minutesPart: w.minutesPart}
 	e.Model, e.ModelFor = w.core.Models()
 	return e
 }
 
-// The rounds (recordingwire.Provider).
+// The rounds (recordingwire.Provider): the minutes' and the day recaps' are this package's, the others the knowledge
+// base's own until they move here.
 
 func (w *Writers) WriteMinutes(ctx context.Context, max int) int {
 	return w.engine().WriteMinutes(ctx, max)
@@ -55,10 +66,20 @@ func (w *Writers) WriteDayRecaps(ctx context.Context, max int) int {
 }
 
 // TellDayRecap tells the module of recap d of day recording r as a round does for a push that is due
-// (DayRecapWritten): the push ids it took, and an error while some destination has not taken it.
+// (OnWritten): the push ids it took, and an error while some destination has not taken it.
 func (w *Writers) TellDayRecap(ctx context.Context, r Recording, d DayRecap) ([]string, error) {
-	return w.DayRecapWritten(ctx, r, d)
+	return w.dayRecapWritten(ctx, r, d)
 }
+
+func (w *Writers) TitleRecordings(ctx context.Context, max int) int {
+	return w.rest.TitleRecordings(ctx, max)
+}
+func (w *Writers) SummarizeRecordings(ctx context.Context, max int) int {
+	return w.rest.SummarizeRecordings(ctx, max)
+}
+func (w *Writers) AfterPrune(now time.Time)          { w.rest.AfterPrune(now) }
+func (w *Writers) AudioDropped(id string, why error) { w.rest.AudioDropped(id, why) }
+func (w *Writers) AudioClosed(id string)             { w.rest.AudioClosed(id) }
 
 // The requests of the module's routes.
 

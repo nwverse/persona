@@ -169,7 +169,7 @@ internal/kb app-exported-record ProjectRef #13784 #13891 #13914 #14029 #14104 #1
 internal/kb app-exported-record ProjectTree #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record TreeError #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record TreeMove #13784 #13891 #13914 #14029 #14104 #14362 #14934
-internal/kb app-named-primitive 4
+internal/kb app-named-primitive 1
 internal/lark app-exported-record 2
 internal/larkperson app-exported-record ConversationScope #13145
 internal/larkperson app-exported-record DeliveryRequest #13145
@@ -212,6 +212,7 @@ internal/modules/phone-extra/iphone app-exported-record 12
 internal/modules/phone-extra/iphonectl app-exported-record 34
 internal/modules/phone-extra/iphonectl app-named-primitive 3
 internal/modules/recording app-named-primitive 1
+internal/modules/recording/writers app-named-primitive 3
 internal/modules/screen-share/screenlink app-exported-record 5
 internal/modules/screen-share/vncbench app-named-primitive 1
 internal/modules/voice app-exported-record 6

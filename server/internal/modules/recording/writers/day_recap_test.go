@@ -14,8 +14,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/ai"
 )
 
 // dayFake is a model for the recap: a chunk's notes (kb/day_recap) and the merge (kb/day_recap_merge) made from what
@@ -182,7 +180,7 @@ func TestDayRecapWritten(t *testing.T) {
 	m := &captureModel{reply: dayNotesReply}
 	e := dayEngine(t, m, &now)
 	var told []DayRecap
-	e.DayRecapWritten = func(_ context.Context, _ Recording, d DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, _ Recording, d DayRecap) ([]string, error) {
 		told = append(told, d)
 		return nil, nil
 	}
@@ -483,7 +481,7 @@ func TestDayRecapDue(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
 		return nil, nil
 	}
@@ -557,7 +555,7 @@ func TestDayRecapCutoff(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
 		return nil, nil
 	}
@@ -591,7 +589,7 @@ func TestDayRecapCutoffWaitsForUploads(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, r Recording, d DayRecap) ([]string, error) {
 		told = append(told, r.ID+" v"+strconv.Itoa(d.Version))
 		return nil, nil
 	}
@@ -624,7 +622,7 @@ func TestDayRecapClockAndRetell(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	e.DayRecapClock = func() (int, int) { return 19, 45 }
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
 		told = append(told, r.ID)
 		return nil, nil
 	}
@@ -670,7 +668,7 @@ func TestDayRecapPushPersisted(t *testing.T) {
 		t.Fatalf("no hook yet: %+v", r)
 	}
 	var told []int
-	e.DayRecapWritten = func(_ context.Context, got Recording, d DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, got Recording, d DayRecap) ([]string, error) {
 		if cur := recordingNow(t, e, got.ID); !cur.RecapPush || cur.RecapVersion != d.Version || !got.RecapPush {
 			t.Errorf("told before the push was stored: %+v", cur)
 		}
@@ -792,7 +790,7 @@ func TestDayRecapFailures(t *testing.T) {
 	}
 	// A paused model leaves it due, counting nothing.
 	f.merge = func(string) (string, error) {
-		return "", &ai.PausedError{Pause: ai.Pause{Reason: ai.ReasonQuota, Until: now.Add(time.Hour)}}
+		return "", errors.New("ai: paused until the quota is back") // as the client's PausedError: not an answer, not a timeout
 	}
 	_ = e.AskMinutes(dayID)
 	e.WriteDayRecaps(context.Background(), 1)
@@ -970,7 +968,7 @@ func TestDayRecapRepair(t *testing.T) {
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
 		told = append(told, r.ID)
 		return nil, nil
 	}
@@ -1510,7 +1508,7 @@ func TestDayRecapPushRetried(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	told := 0
 	var fail error = errors.New("the phone is unreachable")
-	e.DayRecapWritten = func(context.Context, Recording, DayRecap) ([]string, error) { told++; return nil, fail }
+	e.dayRecapWritten = func(context.Context, Recording, DayRecap) ([]string, error) { told++; return nil, fail }
 	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
 	e.WriteDayRecaps(context.Background(), 1)
 	if r := recordingNow(t, e, dayID); told != 1 || !r.RecapPush || r.RecapPushed || r.RecapPushTries != 1 || !r.RecapPushAt.Equal(now.Add(dayPushRetry)) {
@@ -1551,7 +1549,7 @@ func TestDayRecapPushKeepsWhoTookIt(t *testing.T) {
 		a := answers[len(got)-1]
 		return a.took, a.err
 	}
-	e.DayRecapWritten = hook
+	e.dayRecapWritten = hook
 	mustPut(t, e, dayID, dayUpload(1, "早上开会"), now)
 	e.WriteDayRecaps(context.Background(), 1)
 	if r := recordingNow(t, e, dayID); len(got) != 1 || got[0] != nil || !r.RecapPush || !slices.Equal(r.RecapPushTook, []string{"app"}) {
@@ -1568,7 +1566,7 @@ func TestDayRecapPushKeepsWhoTookIt(t *testing.T) {
 	clock := e.clock
 	e = newTestEngine(&kb.Engine{Store: st, Model: f, Owner: e.Owner, Logf: e.Logf})
 	e.SetClock(clock)
-	e.DayRecapWritten = hook
+	e.dayRecapWritten = hook
 	now = now.Add(dayPushRetry)
 	e.WriteDayRecaps(context.Background(), 1)
 	if r := recordingNow(t, e, dayID); len(got) != 2 || !slices.Equal(got[1], []string{"app"}) || !slices.Equal(r.RecapPushTook, []string{"app", "feishu"}) {
@@ -1592,7 +1590,7 @@ func TestDayRecapPushGivenUp(t *testing.T) {
 	var logs []string
 	e.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
 	told := 0
-	e.DayRecapWritten = func(context.Context, Recording, DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(context.Context, Recording, DayRecap) ([]string, error) {
 		told++
 		now = now.Add(40 * time.Second) // a channel that does not answer
 		if told == 1 {
@@ -1659,7 +1657,7 @@ func TestDayRecapPushBudget(t *testing.T) {
 		}
 	}
 	var told []string
-	e.DayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
+	e.dayRecapWritten = func(_ context.Context, r Recording, _ DayRecap) ([]string, error) {
 		told = append(told, r.ID)
 		now = now.Add(time.Minute) // each waits a minute on a destination
 		return nil, errors.New("chat: no answer")

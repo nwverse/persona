@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"os"
 	"regexp"
@@ -13,8 +14,6 @@ import (
 	"testing"
 	"time"
 	"unicode"
-
-	"github.com/nwverse/persona/server/internal/ai"
 )
 
 // liveMeeting is a product sync said in three languages, each line a few seconds of the recording.
@@ -246,11 +245,11 @@ func TestMinutesLanguageLive(t *testing.T) {
 	if raw == "" {
 		t.Skip("PERSONA_LIVE_AI not set")
 	}
-	var cfg ai.Config
+	var cfg aiwire.Config
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	model := ai.New(cfg)
+	model := kb.NewModel(cfg)
 	ctx := context.Background()
 	var rows, cards []string
 	row := func(tag, kind, title, counts string, s scripts, miss string) {

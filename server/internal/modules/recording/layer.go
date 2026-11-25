@@ -30,10 +30,9 @@ func (s *Recordings) AudioSocket(w http.ResponseWriter, r *http.Request) { s.aud
 // here too.
 func (s *Recordings) Hook(e *kb.Engine, core recordingwire.Core) {
 	w := writers.New(core, kb.RecordingWriters(e))
-	w.MinutesWritten = s.minutesWritten
-	w.DayRecapWritten = func(ctx context.Context, r kb.Recording, d kb.DayRecap) ([]string, error) {
+	w.OnWritten(s.minutesWritten, func(ctx context.Context, r kb.Recording, d kb.DayRecap) ([]string, error) {
 		return s.dayRecapWritten(ctx, e, r, d)
-	}
+	})
 	e.SetRecordingProvider(w)
 	e.LiveChanged, e.MeetingChanged, e.DayRecordingName = s.meetingKick, s.meetingLiveChanged, s.dayRecordingName
 }

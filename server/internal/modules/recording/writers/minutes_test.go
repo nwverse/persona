@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
+	ai "github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
@@ -79,7 +79,7 @@ func TestMinutesWritten(t *testing.T) {
 	m := &captureModel{reply: minutesReply}
 	e := goldenEngine(t, m)
 	var told []Minutes
-	e.MinutesWritten = func(_ context.Context, r Recording, mm Minutes) { told = append(told, mm) }
+	e.minutesWritten = func(_ context.Context, r Recording, mm Minutes) { told = append(told, mm) }
 	now := time.Date(2026, 11, 10, 16, 0, 0, 0, goldenZone)
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	u := meetingUpload(1, start, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "那这一版先保留上限", "Bo 你周五前补上回归测试", "上限按条还是按录音算还没定")

@@ -292,7 +292,7 @@ func TestMinutesOverview(t *testing.T) {
 	m := &captureModel{reply: sprintReply}
 	e := goldenEngine(t, m)
 	var told []Minutes
-	e.MinutesWritten = func(_ context.Context, _ Recording, mm Minutes) { told = append(told, mm) }
+	e.minutesWritten = func(_ context.Context, _ Recording, mm Minutes) { told = append(told, mm) }
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	sprintMeeting(t, e, start)
 	if n := e.WriteMinutes(context.Background(), 2); n != 1 {

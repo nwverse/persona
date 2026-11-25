@@ -243,7 +243,7 @@ func TestMinutesPhotosMadeAgainQuietly(t *testing.T) {
 	}}
 	e := goldenEngine(t, model)
 	var told []int
-	e.MinutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
+	e.minutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	ctx := context.Background()
 
@@ -272,7 +272,7 @@ func TestMinutesPhotosMadeAgainQuietly(t *testing.T) {
 		t.Fatalf("added: %q quiet %d asks %d", r.MinutesState, r.MinutesQuiet, r.MinutesAsks)
 	}
 	restarted := newTestEngine(&kb.Engine{Store: e.Store, Model: model, Owner: e.Owner, Logf: e.Logf})
-	restarted.MinutesWritten = e.MinutesWritten
+	restarted.minutesWritten = e.minutesWritten
 	restarted.WriteMinutes(ctx, 2)
 	if r := recordingNow(t, e, recID); r.MinutesState != MinutesReady || r.MinutesVersion != 2 || r.MinutesQuiet != 0 || !slices.Equal(told, []int{1}) {
 		t.Fatalf("made again: %q v%d quiet %d told %v", r.MinutesState, r.MinutesVersion, r.MinutesQuiet, told)
@@ -329,7 +329,7 @@ func TestMinutesPhotoDeletedDuringCall(t *testing.T) {
 	}}
 	e = goldenEngine(t, model)
 	var told []int
-	e.MinutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
+	e.minutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
 	photoMeeting(t, e, recID, time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone))
 	addPhoto(t, e, recID, photoUpload(1, 0, "白板", ""), false) // at the first line's time: its action comes first
 	e.WriteMinutes(context.Background(), 2)
@@ -369,7 +369,7 @@ func TestPhotoDeleteUncitesAtOnce(t *testing.T) {
 	}}
 	e := goldenEngine(t, model)
 	var told []int
-	e.MinutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
+	e.minutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
 	ctx := context.Background()
 	photoMeeting(t, e, recID, time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone))
 	addPhoto(t, e, recID, photoUpload(1, 0, "白板", "预算"), false)
@@ -495,7 +495,7 @@ func TestMinutesQuietAcrossARetry(t *testing.T) {
 	model := &captureModel{reply: `{"title":"t","points":[{"text":"第一句","line":1}]}`}
 	e := goldenEngine(t, model)
 	var told []int
-	e.MinutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
+	e.minutesWritten = func(_ context.Context, _ Recording, m Minutes) { told = append(told, m.Version) }
 	ctx := context.Background()
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	u := meetingUpload(1, start, "第一句", "第二句", "第三句")
