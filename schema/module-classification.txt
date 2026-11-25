@@ -75,6 +75,7 @@ go server/internal/apns core
 go server/internal/approval core
 go server/internal/archguard core
 go server/internal/archguard/domainrules core
+go server/internal/archguard/wirecount core
 go server/internal/assistant core
 go server/internal/assistant/archiverecovery core
 go server/internal/assistant/chatsearch core
@@ -181,6 +182,7 @@ go server/internal/manager core
 go server/internal/managercli core
 go server/internal/managerconf core
 go server/internal/managerupdate core
+go server/internal/lookmedia core
 go server/internal/mcpserver core
 go server/internal/mcptoolgolden core
 go server/internal/mcpwait core
@@ -270,6 +272,7 @@ go server/internal/webasset core
 go server/internal/webasset/precompress core
 go server/internal/webpush core
 go server/internal/webpush/webpushtest core
+go server/internal/wireids core
 go server/internal/workspaceboard core
 go server/internal/workspacenaming core
 go server/plugins core
