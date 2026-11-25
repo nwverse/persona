@@ -34,3 +34,11 @@ func (r *Registry) Settle(ctx context.Context, agent agentref.Ref) {
 		fn(ctx, agent)
 	}
 }
+
+type Store interface {
+	Load() (any string)
+	Save(any map[string]string)
+}
+
+type Events[T any] func(any T)
+type Payload map[string]string

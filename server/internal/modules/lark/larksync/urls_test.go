@@ -45,6 +45,30 @@ func TestTokenFromURL(t *testing.T) {
 	}
 }
 
+func TestDocLinkFromURL(t *testing.T) {
+	cases := []struct {
+		url, objType, token string
+		ok                  bool
+	}{
+		{"https://my.feishu.cn/docx/doxcnAbC123", "docx", "doxcnAbC123", true},
+		{"https://my.feishu.cn/file/boxcnF1", "file", "boxcnF1", true},
+		{"https://my.feishu.cn/drive/file/boxcnF2?from=copy", "file", "boxcnF2", true},
+		{"https://my.feishu.cn/sheets/shtcnS1?sheet=abc", "sheet", "shtcnS1", true},
+		{"https://my.feishu.cn/base/bascnB1", "bitable", "bascnB1", true},
+		{"https://my.feishu.cn/wiki/wikcnW1", "wiki", "wikcnW1", true},
+		{"https://my.feishu.cn/minutes/obcnM1", "minutes", "obcnM1", true},
+		{"https://my.feishu.cn/wiki/space/123456", "", "", false},
+		{"https://my.feishu.cn/drive/folder/fldA", "", "", false},
+		{"https://example.com/docx/doxA", "", "", false},
+	}
+	for _, c := range cases {
+		typ, tok, ok := docLinkFromURL(c.url)
+		if typ != c.objType || tok != c.token || ok != c.ok {
+			t.Errorf("docLinkFromURL(%q) = %q, %q, %v; want %q, %q, %v", c.url, typ, tok, ok, c.objType, c.token, c.ok)
+		}
+	}
+}
+
 // The fingerprint as the spec writes it, computed apart from the code under test (the knowledge base computes the
 // same, internal/kb/align_gateway.go).
 func specFingerprint(chat, sender string, at time.Time, body string) string {
@@ -70,6 +94,7 @@ func TestMessageFingerprint(t *testing.T) {
 		{"next bucket", "Team", "Alex", "hello world", at.Add(2 * time.Second), false},
 		{"another body", "Team", "Alex", "hello there", at, false},
 		{"another sender", "Team", "Sam", "hello world", at, false},
+		{"empty sender differs from named sender", "Team", "", "hello world", at, false},
 		{"another chat", "Other", "Alex", "hello world", at, false},
 	}
 	for _, c := range cases {
@@ -77,6 +102,25 @@ func TestMessageFingerprint(t *testing.T) {
 		if (got == base) != c.same {
 			t.Errorf("%s: same = %v, want %v", c.name, got == base, c.same)
 		}
+	}
+
+	// Empty sender degrades to a deterministic senderless fingerprint that matches internal/kb/align_gateway.go.
+	noSenderAt := time.Unix(1700000001, 0)
+	noSender := MessageFingerprint("  Example   Team ", "", noSenderAt, "Hello\n  World ")
+	if want := specFingerprint("example team", "", noSenderAt, "hello world"); noSender != want {
+		t.Fatalf("senderless fingerprint = %s, want %s", noSender, want)
+	}
+	if got := MessageFingerprint("Example Team", "   ", noSenderAt.Add(-time.Second), "hello world"); got != noSender {
+		t.Errorf("whitespace sender / same bucket = %s, want %s", got, noSender)
+	}
+	if got := MessageFingerprint("Example Team", "", noSenderAt.Add(time.Second), "hello world"); got == noSender {
+		t.Error("senderless fingerprint must still separate 2-second buckets")
+	}
+	if got := MessageFingerprint("Example Team", "", noSenderAt, "hello there"); got == noSender {
+		t.Error("senderless fingerprint must still separate message bodies")
+	}
+	if got := MessageFingerprint("Other Team", "", noSenderAt, "hello world"); got == noSender {
+		t.Error("senderless fingerprint must still separate chats")
 	}
 }
 

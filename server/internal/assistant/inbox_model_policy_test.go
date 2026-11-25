@@ -83,7 +83,7 @@ func TestInboxModelOutboundToolsDenied(t *testing.T) {
 
 	own := []string{
 		"notify_user", "ask_user", "agent_start", "agent_send", "conversation_send",
-		"conversation_new", "task_plan", "schedule_followup", "urgent_call",
+		"conversation_new", "task_plan", "schedule_followup", "urgent_call", "model_probe",
 	}
 	for _, name := range own {
 		t.Run(name, func(t *testing.T) {
@@ -404,13 +404,15 @@ func TestInboxDeliverNotesReattestsSessionSendOrigin(t *testing.T) {
 // real session.send decoration omit the attestation so the node retains a persisted Inbox decision or fails closed.
 func TestInboxAttestationStoreErrorStaysUnknown(t *testing.T) {
 	h := agentHub(t)
+	noDirectionsTimers(h.Service)
 	const session = "inbox-origin-store-error"
 	h.f.setSessions("server", proto.Session{SessionID: session, Assistant: true, Status: proto.StatusWorking, Cwd: "/work"})
 	h.originSet(t.Context(), "server", session, OriginInbox, "lark:real-item:1", "")
+	waitFor(t, "the backfill's read of the to-dos", h.spaceBackfillScanIdle)
 	h.origins.mu.Lock()
 	h.origins.loaded, h.origins.m = false, nil
 	h.origins.mu.Unlock()
-	h.store = func() Store { return originErrorStore{h.st} }
+	h.setStore(func() Store { return originErrorStore{h.st} })
 	params, err := h.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: session,
 		Params: map[string]any{"text": "Continue", "origin": OriginUser, "origin_known": true}})
 	if err != nil {

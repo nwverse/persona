@@ -949,8 +949,8 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 	if _, _, err := s.updateSupervision(ctx, waits.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
 		t.Fatal(err)
 	}
-	for conv, want := range map[string]string{"side1": "conv1", "bg1": "conv1", "gone": "conv1"} {
-		// What the background supervisor hands out keeps the main conversation on its ledger, as every task it follows up.
+	for conv, want := range map[string]string{"side1": "side1", "bg1": "conv1", "gone": "conv1"} {
+		// Live side conversations own what they plan (#13657); the background supervisor and gone conversations fall back to main.
 		if got, ok := s.defaultPlanSupervisor(ctx, conv, ""); !ok || got != want {
 			t.Errorf("a task %s plans is supervised by %q %v, want %q", conv, got, ok, want)
 		}

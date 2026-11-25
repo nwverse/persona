@@ -15,7 +15,7 @@ func trainingReportFixture(t *testing.T) (*Service, *fakeHub, *db.DB, Task, Work
 	needsHealthModule(t)
 	d := strengthReportTestDB(t)
 	s, f, _ := healthExecutionService(t)
-	s.store = func() Store { return d }
+	s.setStore(func() Store { return d })
 	setSettings(t, s, func(v *Settings) { v.Timezone = "Asia/Tokyo" })
 	if err := d.PutSetting(t.Context(), "health.items", map[string]any{"items": []string{"strength"}, "revision": 1}); err != nil {
 		t.Fatal(err)

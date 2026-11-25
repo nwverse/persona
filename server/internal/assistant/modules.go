@@ -135,6 +135,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		mods = kernel.Builtin()
 	}
 	coreTools := reservedCoreToolNames()
+	coreRoutes := slices.Concat(s.routes, s.routeFallbacks)
 	var acceptedRoutes []string
 	check := func(routes, tools []string) error {
 		for _, name := range tools {
@@ -142,7 +143,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 				return fmt.Errorf("tool %q is a core tool's", name)
 			}
 		}
-		if err := checkModuleRoutes(s.routes, acceptedRoutes, routes); err != nil {
+		if err := checkModuleRoutes(coreRoutes, acceptedRoutes, routes); err != nil {
 			return err
 		}
 		// The kernel commits this module immediately after a nil result, so these routes belong to the next check's
@@ -151,7 +152,12 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		return nil
 	}
 	s.modulesOff = slices.Clone(off)
-	s.modules = kernel.NewWithOptions(mods, kernel.LoadOptions{Off: func(id string) bool { return slices.Contains(off, id) }, Logf: s.logf, Check: check})
+	s.modules = kernel.NewWithOptions(mods, kernel.LoadOptions{
+		Off:   func(id string) bool { return slices.Contains(off, id) },
+		Logf:  s.logf,
+		Check: check,
+		Ports: s.modulePorts(),
+	})
 	for _, pattern := range s.modules.HubRoutes() {
 		handler, _ := s.modules.HubRoute(pattern)
 		s.handle(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -394,4 +400,13 @@ func (s *Service) briefingWaits(v Settings) (modapi.WaitRules, bool) {
 func (s *Service) briefingOn() bool {
 	_, ok := s.modules.ScheduleFacts()
 	return ok
+}
+
+// briefingRunner returns the loaded briefing module's runtime runner, or false when the module is off or built out.
+func (s *Service) briefingRunner() (modapi.ScheduleFactsRunner, bool) {
+	f, ok := s.modules.ScheduleFacts()
+	if !ok || f.Runner == nil {
+		return nil, false
+	}
+	return f.Runner, true
 }
