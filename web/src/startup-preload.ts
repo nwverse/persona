@@ -3,13 +3,15 @@
 // size. It lives here, with no imports of the client code, so the config
 // can load it and a test can check it against src/i18n/index.ts: the languages it has catalogs for (LANGS) and how it
 // picks one (preferredLanguage) must stay the same as the client's.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 import { startupMatcher } from "./i18n/startup-keys";
+import { MODULE_SWITCH_KEY } from "./core/module-switch";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -28,10 +30,25 @@ export function localeDirs(dir: string): Record<string, string[]> {
 export interface PreloadFiles {
   shared: string[];
   app: string[];
-  screen: string[];
+  /** The modules' pages of their own (core/module-host.ts `standalonePages`), by their address' first segment: the
+   *  module (left out while this browser switched it off, core/module-switch.ts) and its standalone.tsx's files. */
+  standalone: Record<string, { module: string; files: string[] }>;
   catalogs: Record<string, string>;
   /** language subtag → language code (each _meta.json's matches) */
   matches: Record<string, string>;
+}
+
+/** The modules' pages of their own (core/module-host.ts `standalonePages`), read from each src/modules/<id>/module.ts as
+ *  eslint.modules.config.mjs reads `needs`: each address segment with its module, whose code is its standalone.tsx. */
+export function standalonePages(dir = fileURLToPath(new URL("./modules/", import.meta.url))): { base: string; module: string }[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && existsSync(join(dir, e.name, "module.ts")))
+    .flatMap((e) => {
+      const list = /\bstandalonePages:\s*\[([^\]]*)\]/.exec(readFileSync(join(dir, e.name, "module.ts"), "utf8"))?.[1];
+      if (list === undefined) return [];
+      if (!existsSync(join(dir, e.name, "standalone.tsx"))) throw new Error(`startup-preload: module "${e.name}" names standalonePages but has no standalone.tsx`);
+      return [...list.matchAll(/["']([a-z][a-z0-9-]*)["']/g)].map((m) => ({ base: m[1]!, module: e.name }));
+    });
 }
 
 /** The script: it adds a modulepreload (or style preload) link for the preferred language's catalog and the page's files. */
@@ -57,8 +74,15 @@ export function preloadScript(files: PreloadFiles): string {
   }
   var base = new URL(document.baseURI).pathname;
   var path = location.pathname.indexOf(base) === 0 ? location.pathname.slice(base.length - 1) : location.pathname;
-  var screen = /^\\/screen\\/[^/]/.test(path);
-  [files.catalogs[lang]].concat(files.shared, screen ? files.screen : files.app).forEach(add);
+  var seg = /^\\/([^/]+)\\/[^/]/.exec(path);
+  var own = seg && Object.prototype.hasOwnProperty.call(files.standalone, seg[1]) ? files.standalone[seg[1]] : null;
+  if (own) {
+    try {
+      var off = JSON.parse(localStorage.getItem(${JSON.stringify(MODULE_SWITCH_KEY)}) || "[]");
+      if (Array.isArray(off) && off.indexOf(own.module) >= 0) own = null;
+    } catch (e) {}
+  }
+  [files.catalogs[lang]].concat(files.shared, own ? own.files : files.app).forEach(add);
 })();`;
 }
 

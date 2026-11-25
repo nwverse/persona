@@ -2,6 +2,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const directory = process.argv[2]
+if (process.argv.includes('--warm')) process.exit(0)
 const settings = () => JSON.parse(readFileSync(`${directory}/catalog.json`, 'utf8'))
 const nativeSettings = () => {
   try { return JSON.parse(readFileSync(`${directory}/settings/settings.json`, 'utf8')) } catch { return {} }
@@ -113,7 +114,8 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     loaded = true
     reportWindow()
     settingsAgentMode = nativeSettings().agentMode || 'default'
-    result = { sessionId: id, models: { availableModels: settings().models, currentModelId: model }, modes: { currentModeId: mode }, configOptions: configuration() }
+    const modes = settings().availableModes ? { currentModeId: mode, availableModes: settings().availableModes } : { currentModeId: mode }
+    result = { sessionId: id, models: { availableModels: settings().models, currentModelId: model }, modes, configOptions: configuration() }
   }
   if (method === 'session/prompt') {
     syncSettingsMode()
@@ -144,6 +146,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       effort = effortSuffix.exec(model)?.[1]
       reportWindow()
     }
+  }
+  // An Antigravity CLI from before session/set_mode (#14533) answers it as an unknown method.
+  if (method === 'session/set_mode' && settings().noSetMode) {
+    complete(request, undefined, { code: -32601, message: `Method not found: ${method}` })
+    return
   }
   if (method === 'session/set_mode') {
     if (params.modeId === 'accept-edits' && settings().holdFallback) {

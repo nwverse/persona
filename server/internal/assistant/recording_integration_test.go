@@ -22,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/recordinghost"
@@ -61,7 +62,7 @@ func TestBusHelloNamesRecordingDay(t *testing.T) {
 	p, _ := b.client.HelloParams().(map[string]any)
 	caps, _ := p["capabilities"].([]string)
 	// The recording module's capabilities, only when the build has it (persona_without_recording leaves them out).
-	if on := recordinghost.InBuild(); slices.Contains(caps, assistantwire.CapabilityRecordingDay) != on ||
+	if on := recordinghost.InBuild(moduleswitch.Set{}); slices.Contains(caps, assistantwire.CapabilityRecordingDay) != on ||
 		slices.Contains(caps, assistantwire.CapabilityMeetingAttendance) != on {
 		t.Fatalf("capabilities %v (module in the build: %v)", caps, on)
 	}
@@ -95,6 +96,7 @@ func TestEveningFactsDayIsBounded(t *testing.T) {
 // which the knowledge base keeps) sends it to the others, with the same id and keys; a refusal that sending again
 // cannot help counts as taken: the hub's, a channel with nowhere to send it, a channel's own coded refusal.
 func TestDayRecapPushTakenByAll(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	d := newDayFixture(t)
 	setEvening(t, d.s, "06:30", true)
 	larkFails, chanFails := 1, 1 // the answers run under d.f.mu
@@ -143,7 +145,7 @@ func TestDayRecapPushTakenByAll(t *testing.T) {
 		t.Helper()
 		r, _ := e.Store.Recording(dayRec)
 		r.RecapPushTook = took // what the knowledge base keeps of the calls before (kb's tellDayRecap)
-		now, err := e.DayRecapWritten(context.Background(), *r, *rc)
+		now, err := tellDayRecap(e, *r, *rc)
 		took = append(took, now...)
 		return err
 	}
@@ -208,6 +210,7 @@ func TestDayRecapPushTakenByAll(t *testing.T) {
 // After a restart the push goes only to the destinations that did not take it: the knowledge base keeps those that
 // did with the recording (the assistant keeps nothing), so the phone and a channel that took it get no second copy.
 func TestDayRecapPushAfterRestart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	d := newDayFixture(t)
 	setEvening(t, d.s, "06:30", true)
 	larkFails := 1
@@ -240,7 +243,7 @@ func TestDayRecapPushAfterRestart(t *testing.T) {
 		t.Fatalf("the phone and the channel took it, the Lark bot not: %+v", r)
 	}
 	// Restarted: told with the recording as stored.
-	took, err := e.DayRecapWritten(context.Background(), *r, *rc)
+	took, err := tellDayRecap(e, *r, *rc)
 	if err != nil || !slices.Equal(took, []string{channel.Feishu}) {
 		t.Fatalf("after a restart: took %v, %v", took, err)
 	}
@@ -272,7 +275,7 @@ func TestDayRecapPushPhoneKeyIsReserved(t *testing.T) {
 	e := d.engine()
 	r, _ := e.Store.Recording(dayRec)
 	r.RecapPushTook = []string{"phone"} // the plugin channel took it, the phone not yet
-	took, err := e.DayRecapWritten(context.Background(), *r, *rc)
+	took, err := tellDayRecap(e, *r, *rc)
 	if err != nil || !slices.Contains(took, dayPushPhone) || slices.Contains(took, "phone") || len(d.f.pushed()) != 1 ||
 		len(d.f.appParams(AppChannels, ChannelsSend)) != 0 {
 		t.Fatalf("took %v, %v: %d pushes, %d sends", took, err, len(d.f.pushed()), len(d.f.appParams(AppChannels, ChannelsSend)))
@@ -301,7 +304,7 @@ func TestDayRecapPushRefPerChannel(t *testing.T) {
 	d.do("POST", "/api/v1/recordings/"+dayRec+"/minutes", "", nil, http.StatusAccepted)
 	rc := d.recap(dayRec)
 	r, _ := d.engine().Store.Recording(dayRec)
-	if _, err := d.engine().DayRecapWritten(context.Background(), *r, *rc); err != nil {
+	if _, err := tellDayRecap(d.engine(), *r, *rc); err != nil {
 		t.Fatal(err)
 	}
 	refs := map[string]any{}
@@ -420,7 +423,7 @@ func TestMinutesPastMeetingTools(t *testing.T) {
 	if st, err := e.PutRecording(id, up, start.Add(time.Minute)); err != nil || st.Status != kb.RecordingStored {
 		t.Fatalf("put: %v %v", st, err)
 	}
-	if n := e.WriteMinutes(ctx, 2); n != 1 {
+	if n := e.RecordingProvider().WriteMinutes(ctx, 2); n != 1 {
 		t.Fatalf("wrote %d", n)
 	}
 
@@ -494,6 +497,7 @@ func TestMinutesPastMeetingTools(t *testing.T) {
 // kb_get on a meeting imported from a connected app lists the recording whose calendar match is an overlapping event
 // but whose imported meeting it is (#8872).
 func TestKBGetImportedMeetingListsItsRecording(t *testing.T) {
+	needsRecordingModule(t) // the calendar match runs in the module's minutes round
 	f := newFakeHub()
 	s := kbServiceOn(t, f, newKBStore(), t.TempDir(), func(string, ...any) {})
 	setSettings(t, s, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
@@ -515,7 +519,7 @@ func TestKBGetImportedMeetingListsItsRecording(t *testing.T) {
 	if st, err := e.PutRecording(id, up, start.Add(3*time.Minute)); err != nil || st.Status != kb.RecordingStored {
 		t.Fatalf("put: %v %v", st, err)
 	}
-	e.WriteMinutes(context.Background(), 2)
+	e.RecordingProvider().WriteMinutes(context.Background(), 2)
 	if r, _ := e.Store.Recording(id); r.Meeting == nil || r.Meeting.ID != "e1" || r.ImportedMeeting == nil || r.ImportedMeeting.ID != "m1" {
 		t.Fatalf("matched %+v, imported %+v", r.Meeting, r.ImportedMeeting)
 	}
@@ -1015,7 +1019,7 @@ func TestRecordingFollowsItsModule(t *testing.T) {
 		name string
 		off  []string
 		on   bool
-	}{{"build", nil, recordinghost.InBuild()}, {"switched off", []string{recordinghost.ModuleID}, false}} {
+	}{{"build", nil, recordinghost.InBuild(moduleswitch.Set{})}, {"switched off", []string{recordinghost.ModuleID}, false}} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeHub()
 			s := withSettings(t, f, New(Options{Hub: f, Logf: testLogf(t), ModulesOff: c.off}))
@@ -1044,4 +1048,12 @@ func TestRecordingFollowsItsModule(t *testing.T) {
 			}
 		})
 	}
+}
+
+// tellDayRecap tells the recording module of recap rc of day recording r as its round does for a push that is due:
+// the module's own callback (writers.Writers.TellDayRecap), reached through the knowledge base's provider.
+func tellDayRecap(e *kb.Engine, r kb.Recording, rc kb.DayRecap) ([]string, error) {
+	return e.RecordingProvider().(interface {
+		TellDayRecap(context.Context, kb.Recording, kb.DayRecap) ([]string, error)
+	}).TellDayRecap(context.Background(), r, rc)
 }

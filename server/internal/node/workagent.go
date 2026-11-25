@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,6 +83,39 @@ func workAgentCommand(launcher, program, model, effort, mode string) string {
 	return cmd
 }
 
+// A suffixed model is a concrete native variant. Select the sibling variant
+// for an explicit effort so the two CLI options agree, including on restore.
+func agyEffortModel(model, effort string) string {
+	if effort != "" {
+		for _, level := range proto.EffortLevels {
+			if base, ok := strings.CutSuffix(model, "-"+level); ok {
+				return base + "-" + effort
+			}
+		}
+	}
+	return model
+}
+
+func (n *Node) agyPaneStartModel(ctx context.Context, launcher, model, effort string) (string, error) {
+	if model == "" && effort != "" && !shellLauncherNames()[launcher] {
+		if managed, ok := n.managedLauncher(launcher); ok {
+			model = managed.Model
+		}
+	}
+	variant := agyEffortModel(model, effort)
+	if variant == model {
+		return model, nil
+	}
+	catalog, err := n.launcherModels(ctx, launcher, agyAgent, false)
+	if err != nil {
+		return "", fmt.Errorf("verify Antigravity model %q at effort %q: %w", model, effort, err)
+	}
+	if !slices.ContainsFunc(catalog.Models, func(m proto.AgentModel) bool { return m.ID == variant }) {
+		return "", fmt.Errorf("Antigravity model %q does not offer effort %q (model %q is unavailable)", model, effort, variant)
+	}
+	return variant, nil
+}
+
 // agyStartMode is the permission mode an agy start runs in: the one it names, else Allow all, as Persona starts Claude
 // Code. plan never gets here: a read-only start on a work agent is refused (control.go).
 func agyStartMode(mode string) string { return cmp.Or(mode, proto.ModeBypass) }
@@ -123,6 +157,11 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 		return nil, fmt.Errorf("unsupported agent type %q", kind)
 	}
 	if kind == agyAgent {
+		var err error
+		model, err = n.agyPaneStartModel(ctx, launcher, model, effort)
+		if err != nil {
+			return nil, err
+		}
 		mode = agyStartMode(mode)
 		n.ensureAgyHooksForLaunch() // agyhooks.go (#13950): ensure hooks exist before agy starts
 	} else {
@@ -162,26 +201,28 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 	cmd := withHerdrAgent(typedHerdrAgent(launch, herdrName, shells...), workAgentCommand(command, program, model, effort, mode))
 	// The command goes through the start file, so a line break in it cannot meet a shell that runs each line on its
 	// own (typedstart.go).
-	done, err := n.runWorkAgentCommand(ctx, launch, created, ws, "", n.agentStartCommand(cmd, shellQuote, shells...), shells...)
+	typed, err := n.typeStartMode(ctx, launch, created, ws, "", n.agentStartCommand(cmd, shellQuote, shells...), false, shells...)
 	if err != nil {
-		if done == nil {
+		if typed == nil {
 			return nil, err
 		}
-		done()
+		typed.done()
 		return nil, n.abandonStart(ctx, created, kind, err)
 	}
+	done := typed.done
 	defer done()
 	if kind == piAgent {
 		return n.finishPiStart(ctx, launch, created, cwd, launcher, model, prompt, done)
 	}
-	id, agent, err := n.waitWorkAgent(ctx, pane, herdrName)
+	exited := &paneStartExit{file: typed.path}
+	id, agent, err := n.waitWorkAgent(ctx, pane, herdrName, exited)
 	if err != nil {
 		done()
 		return nil, n.abandonStart(ctx, created, kind, err)
 	}
 	if kind == agyAgent {
 		// In a folder agy has not trusted (a new worktree), its trust dialog holds the input box (agytrust.go, #11424).
-		if err := n.agyTrustFolder(ctx, pane); err != nil {
+		if err := n.agyTrustFolder(ctx, pane, exited); err != nil {
 			done()
 			return nil, n.abandonStart(ctx, created, kind, err)
 		}
@@ -261,7 +302,7 @@ func (n *Node) sendToPi(ctx context.Context, id, text string) error {
 
 // waitWorkAgent waits until herdr reports an agent of herdrName in pane, and answers its session id (its own when it
 // names one, else the pane's terminal row).
-func (n *Node) waitWorkAgent(ctx context.Context, pane, herdrName string) (string, host.Agent, error) {
+func (n *Node) waitWorkAgent(ctx context.Context, pane, herdrName string, exited *paneStartExit) (string, host.Agent, error) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -270,6 +311,12 @@ func (n *Node) waitWorkAgent(ctx context.Context, pane, herdrName string) (strin
 			screen, _ := n.readPane(context.Background(), pane, "recent-unwrapped", 30)
 			return "", host.Agent{}, fmt.Errorf("wait for %s: %w\n%s", herdrName, ctx.Err(), lastLines(screen, 12))
 		case <-ticker.C:
+		}
+		if herdrName == agyAgent {
+			shown, _ := n.readPane(ctx, pane, "visible", 40)
+			if err := n.agyStartupFailure(ctx, pane, shown, exited); err != nil {
+				return "", host.Agent{}, err
+			}
 		}
 		if err := n.refreshHosts(ctx); err != nil {
 			continue
@@ -437,8 +484,18 @@ func (n *Node) workAgentCalls(ctx context.Context, method, id string, a host.Age
 			}
 			msg.Text = strings.TrimSpace(attachImages(msg.Text, paths))
 		}
+		typedAt := time.Now()
+		var delivery *agySendWatch
+		if a.Agent == agyAgent {
+			delivery = n.watchAgySend(id, a.PaneID, msg.Text, typedAt)
+		}
 		if err := n.hostPrompt(ctx, a.PaneID, msg.Text); err != nil {
 			return nil, fmt.Errorf("send: %w", err), true
+		}
+		if a.Agent == agyAgent {
+			if err := n.confirmAgySend(ctx, id, a.PaneID, msg.Text, typedAt, delivery); err != nil {
+				return nil, err, true
+			}
 		}
 		n.lostFirst.clear(id) // the message the start could not deliver went in now, or another one
 		// Working until herdr shows the turn, so an interrupt right after the send stops it (worksent.go, #11437).

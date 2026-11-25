@@ -106,13 +106,23 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		// Reroute is hub-owned: drop any reroute a model passes in task_plan args, so healthyPlace seeds it only from a
 		// real health detour and its first-detour guard keeps the true original machine (#2271).
 		t.Reroute, t.Placement = nil, nil
+		t.Dispatch = nil // the hub's: written by the start that resolves the tier
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
+		}
 		if t.OwnerStep = strings.TrimSpace(t.OwnerStep); !validOwnerStep(t.OwnerStep) {
 			return "", fmt.Errorf("task %d: owner_step must be empty, %q, %q or %q", i+1, ownerStepMoney, ownerStepOutward, ownerStepIrreversible)
 		}
+		aud, err := todoAudience(t.Audience)
+		if err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		t.Audience = aud
+		t.DirectionID = strings.TrimSpace(t.DirectionID)
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}

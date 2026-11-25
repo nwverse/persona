@@ -75,6 +75,13 @@ type PlanTask struct {
 	Speed              string `json:"speed,omitempty"`
 	Tier               string `json:"tier,omitempty"`
 	Permission         string `json:"permission,omitempty"`
+	// Dispatch is the hub's record of the candidate the tier gave the task's latest start (tier_pick.go, #14700):
+	// written when it starts, never taken from a tool call, and never read back as the task's own launch (storedLaunch).
+	Dispatch *TaskDispatch `json:"dispatch,omitempty"`
+	// Host: where the task's Agent starts, as task_plan named it: agy (the computer's Antigravity companion, which has
+	// no terminal) or one of the computer's engine hosts. "" lets the hub choose: the companion for an agy launcher it
+	// runs, else the computer's default host (start_host.go, #13447).
+	Host string `json:"host,omitempty"`
 	// StartPermission is the effective mode of the last started assignment, not a caller choice. It lets task_spawn
 	// recover that mode when an older node omits the live parent permission.
 	StartPermission string `json:"start_permission,omitempty"`
@@ -148,7 +155,7 @@ type PlanTask struct {
 	// work and ordinary conversations use main. The durable task ledger takes precedence after a transfer.
 	Supervisor string `json:"supervisor,omitempty"`
 	// ReuseTodo: the todo this task runs on instead of a new one (task_plan's todo_id, #5279): one this conversation
-	// opened that has no agent yet, such as the todo a Lark topic opened (feishu_thread_open.go). Checked when the
+	// opened that has no agent yet, such as the todo a Lark topic opened (the lark module's thread_open.go). Checked when the
 	// plan is made and again when it starts; it is not what the apps send back with an edit.
 	ReuseTodo string `json:"reuse_todo,omitempty"`
 	// Role: every new task declares "worker" or "leader". A leader may hand out workers beneath its task
@@ -165,6 +172,10 @@ type PlanTask struct {
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
+	// Audience: optional to-do audience ("human" or "autonomous"); "" for unset/legacy (#14619).
+	Audience string `json:"audience,omitempty"`
+	// DirectionID: optional organizational direction membership, decoupled from runtime supervision (#14660).
+	DirectionID string `json:"direction_id,omitempty"`
 	// SkipProjectMemory omits the automatic project/direction handoff for this start only. It is persisted so queued
 	// starts, retries and reloads keep the caller's choice; the assignment and to-do decisions are unaffected (#13538).
 	SkipProjectMemory bool `json:"skip_project_memory,omitempty"`
@@ -235,6 +246,8 @@ type PlanTask struct {
 	// startNamed: what this start try put in place of the launch resolved for the task, which the task names from then
 	// on as its card shows it (storedLaunch). Never serialized; this try only.
 	startNamed startNamed
+	// tierChoice: the tier's pick on this start try; never serialized (Dispatch is its record).
+	tierChoice *tierPick
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string
