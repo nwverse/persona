@@ -178,11 +178,12 @@ func TestOnlyAnExpiredAskUserBecomesATodo(t *testing.T) {
 
 // The to-do waits for the owner's call where they look: the next briefing's "Can wait" rows and the live snapshot.
 func TestAskTodoWaitsInTheBriefingAndTheSnapshot(t *testing.T) {
+	needsBriefingModule(t)
 	e := newAskTodoEnv(t, nil)
 	e.expire()
 	todo := e.onlyAskTodo()
 	f := e.s.briefFactsAt(context.Background(), time.Now(), "")
-	if f.LaterTotal != 1 || len(f.Later) != 1 || f.Later[0].summary != "Merge the release PR now?" {
+	if f.LaterTotal != 1 || len(f.Later) != 1 || f.Later[0].Summary != "Merge the release PR now?" {
 		t.Fatalf("can wait: %d %+v", f.LaterTotal, f.Later)
 	}
 	snap := e.s.contextSnapshot(context.Background(), "", false)
@@ -316,6 +317,7 @@ func TestAskTodoHandedToAnAgentIsNoTask(t *testing.T) {
 // closing its to-do does (#1854): the to-do closes, the snapshot stops holding the question, and the conversation that
 // asked is told once that it was dropped. Pressed again, it is "already handled" and tells nothing more.
 func TestAskTodoHandledInTheBriefingClosesIt(t *testing.T) {
+	needsBriefingModule(t)
 	e := newAskTodoEnv(t, nil)
 	e.expire()
 	todo := e.onlyAskTodo()
@@ -324,7 +326,7 @@ func TestAskTodoHandledInTheBriefingClosesIt(t *testing.T) {
 	if len(f.Later) != 1 {
 		t.Fatalf("can wait: %+v", f.Later)
 	}
-	row := f.Later[0].id
+	row := f.Later[0].ID
 	e.must("POST", "/api/v1/later/"+row+"/handled", "")
 	if cur := e.get(todo.ID); cur == nil || cur.DoneAt == nil {
 		t.Fatalf("the to-do is still open: %+v", cur)

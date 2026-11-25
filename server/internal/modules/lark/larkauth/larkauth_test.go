@@ -545,7 +545,7 @@ func TestConfigureRedirect(t *testing.T) {
 		t.Fatalf("under review: %+v, want awaiting", rep)
 	}
 
-	for _, code := range []int{230002, 230003} {
+	for _, code := range []int{230002, 230003, 99991672, 99991676} {
 		f, _ = configPlatform(t, code, 0)
 		rep := f.auth().ConfigureRedirect(t.Context(), testApp, testRedirect, scopes)
 		if rep.Configured || rep.Published || !rep.MissingPatch || rep.ConsoleURL != consoleFeishu {

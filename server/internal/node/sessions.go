@@ -107,7 +107,11 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			codexPaneHome = n.codexHomeOf(id)
 		}
 		emitUnavailableCodex := func() {
-			out = append(out, unavailableCodexRow(proto.Session{SessionID: id, Agent: a.Agent, Cwd: a.Cwd, Title: a.Title}))
+			base := proto.Session{SessionID: id, Agent: a.Agent, Cwd: a.Cwd, Title: a.Title}
+			if last, ok := n.lastCodexRow(id); ok {
+				base = last
+			}
+			out = append(out, unavailableCodexRow(base))
 			if pass != nil {
 				if pass.unavailable == nil {
 					pass.unavailable = map[string]bool{}
@@ -368,6 +372,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			markCodexConflict(&s)
 		}
 		n.decorateIn(&s, pass)
+		if a.Agent == "codex" && !isCodexWaitID(id) && pass != nil && !pass.unavailable[id] {
+			if pass.liveRows == nil {
+				pass.liveRows = map[string]proto.Session{}
+			}
+			pass.liveRows[id] = s
+		}
 		out = append(out, s)
 		seen[id] = true
 	}

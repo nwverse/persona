@@ -1487,7 +1487,7 @@ data class Interaction(
             return SecretHandoffRequest(variables, text("agent"), text("machine_name"), text("cwd"), text("prompt"))
         }
 
-    /** A password card's computer, purpose and commands (the commands exactly as sent); null for any other card. */
+    /** A password card's computer, purpose, delivery and commands (the commands exactly as sent); null for any other card. */
     val secretRun: SecretRunRequest?
         get() {
             if (!isSecretRun) return null
@@ -1495,7 +1495,8 @@ data class Interaction(
             fun text(key: String) = (input?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
             val commands = (input?.get("commands") as? JsonArray).orEmpty()
                 .mapNotNull { command -> (command as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank) }
-            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands)
+            val delivery = if ((input?.get("delivery") as? JsonPrimitive)?.takeIf { it.isString }?.content == "env") "env" else "stdin"
+            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands, delivery)
         }
 
     /** One line for a notification or a list row. */
@@ -1538,8 +1539,8 @@ data class SecretHandoffRequest(
     val prompt: String,
 )
 
-/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, and the commands. */
-data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>) {
+/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, delivery and the commands. */
+data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>, val delivery: String = "stdin") {
     companion object {
         /** The card's one field, declared by the hub: Run sends the typed password under this key in [Resolution.values]. */
         const val PASSWORD = "password"
