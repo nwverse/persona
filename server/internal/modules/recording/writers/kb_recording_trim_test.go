@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"slices"
 	"strings"
@@ -57,7 +57,7 @@ func TestRecordingTrimmedReadAndRefused(t *testing.T) {
 	// Refused: an upload (expired, also once recording_days covers it again), minutes made again.
 	for _, n := range []int{14, 60} {
 		days = n
-		if st, err := e.PutRecording(recID, meetingUpload(2, start, "a new transcript"), now); err != nil || st.Status != kb.RecordingExpired {
+		if st, err := e.PutRecording(recID, meetingUpload(2, start, "a new transcript"), now); err != nil || st.Status != recordingwire.RecordingExpired {
 			t.Fatalf("days %d: upload %+v %v, want expired", n, st, err)
 		}
 	}
@@ -81,7 +81,7 @@ func TestRecordingTrimmedReadAndRefused(t *testing.T) {
 	e.EarlierMeetingsInAnswers = true
 	markPrivate(t, e, recID, false)
 	later := "44444444-4444-4444-8444-444444444444"
-	putRecording(t, e, later, attendedUpload(1, now, kb.AttendanceListener), now)
+	putRecording(t, e, later, attendedUpload(1, now, recordingwire.AttendanceListener), now)
 	material, err := e.MeetingMaterial(later, "What did the design review decide?")
 	if err != nil || len(material.Earlier) != 1 || material.Earlier[0].ID != recID || material.Earlier[0].Minutes.Decisions[0].Text != "Keep the cap" {
 		t.Fatalf("material %+v %v", material, err)

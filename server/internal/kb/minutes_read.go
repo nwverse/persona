@@ -55,13 +55,6 @@ func minutesSpan(r *Recording, zone *time.Location) (time.Time, time.Time) {
 	return recordingwire.MinutesSpan(r, zone)
 }
 
-// minutesSpanOf fills Start and End of minutes written before they were (#4713) from their recording.
-func minutesSpanOf(m *Minutes, r *Recording, zone *time.Location) {
-	if m.Start.IsZero() && r != nil && !r.StartedAt.IsZero() {
-		m.Start, m.End = minutesSpan(r, zone)
-	}
-}
-
 // minutesWithSpan is minutes.json as a recording's detail sends it: minutes written before Start and End were get them
 // from the recording (spanOf), every other field as stored.
 func minutesWithSpan(raw []byte, r *Recording, zone *time.Location) []byte {

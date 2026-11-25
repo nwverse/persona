@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"image"
 	_ "image/jpeg" // image.DecodeConfig and image.Decode read the photos
 	_ "image/png"
@@ -35,7 +36,7 @@ import (
 // after it went in is withdrawn there with a line. Full credentials only, as the other meeting routes, with their
 // errors in the contract's order. The hub's models read the photos' words only, never an image.
 
-// The limits of a photo the phone adds (the knowledge base's are its text's, kb.MaxPhotoText and kb.MaxPhotoCaption).
+// The limits of a photo the phone adds (the knowledge base's are its text's, recordingwire.MaxPhotoText and recordingwire.MaxPhotoCaption).
 const (
 	maxPhotoBody  = 2 << 20 // a POST …/photos body
 	maxPhotoBytes = 1 << 20 // its image, decoded
@@ -148,7 +149,7 @@ func photoNumber(raw string) int {
 // image/jpeg or image/png, data the base64 of a whole image of that type of at most maxPhotoBytes and maxPhotoSide
 // pixels on its long side, text and caption strings within their limits as sent (null or blank ones absent). Its digest
 // covers what makes the photo, so a retry with the same body is the same photo and another body under its id is not.
-func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
+func parsePhoto(raw []byte) (recordingwire.PhotoUpload, error) {
 	var in struct {
 		ID      json.RawMessage `json:"id"`
 		At      json.RawMessage `json:"at"`
@@ -157,7 +158,7 @@ func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
 		Text    json.RawMessage `json:"text"`
 		Caption json.RawMessage `json:"caption"`
 	}
-	var u kb.PhotoUpload
+	var u recordingwire.PhotoUpload
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return u, i18n.Err("assistant-meeting.bad_json", i18n.Args{"error": err.Error()})
 	}
@@ -165,7 +166,7 @@ func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
 	if json.Unmarshal(in.ID, &id) != nil {
 		return u, i18n.Err("assistant-meeting.bad_ask_id")
 	}
-	id, ok := kb.RecordingID(id)
+	id, ok := recordingwire.RecordingID(id)
 	if !ok {
 		return u, i18n.Err("assistant-meeting.bad_ask_id")
 	}
@@ -173,7 +174,7 @@ func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
 	if !given(in.At) || json.Unmarshal(in.At, &u.At) != nil {
 		return u, i18n.Err("assistant-meeting.bad_photo_at")
 	}
-	if json.Unmarshal(in.Mime, &u.Mime) != nil || u.Mime != kb.PhotoJPEG && u.Mime != kb.PhotoPNG {
+	if json.Unmarshal(in.Mime, &u.Mime) != nil || u.Mime != recordingwire.PhotoJPEG && u.Mime != recordingwire.PhotoPNG {
 		return u, i18n.Err("assistant-meeting.bad_photo_mime")
 	}
 	var data string
@@ -204,7 +205,7 @@ func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
 		raw  json.RawMessage
 		max  int
 		to   *string
-	}{{"text", in.Text, kb.MaxPhotoText, &u.Text}, {"caption", in.Caption, kb.MaxPhotoCaption, &u.Caption}} {
+	}{{"text", in.Text, recordingwire.MaxPhotoText, &u.Text}, {"caption", in.Caption, recordingwire.MaxPhotoCaption, &u.Caption}} {
 		var v string
 		if given(f.raw) && json.Unmarshal(f.raw, &v) != nil {
 			return u, i18n.Err("assistant-meeting.bad_ask_field", i18n.Args{"field": f.name})
@@ -228,12 +229,12 @@ func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
 // photoQueued: a photo added now to recording rec is to go into its room (once the room is ready): a room meeting
 // whose role is not off, whose room has not ended or been deleted, before the meeting's end. Any other photo is stored
 // and never forwarded.
-func photoQueued(rec kb.Recording, l kb.Live, now time.Time) bool {
+func photoQueued(rec recordingwire.Recording, l recordingwire.Live, now time.Time) bool {
 	if !rec.RoomMeeting() || !rec.Attending() {
 		return false
 	}
 	switch rec.Conv.Room.State {
-	case kb.RoomEnded, kb.RoomDeleted:
+	case recordingwire.RoomEnded, recordingwire.RoomDeleted:
 		return false
 	}
 	_, ended := meetingEnd(rec, l, now)
@@ -248,12 +249,12 @@ func photoQueued(rec kb.Recording, l kb.Live, now time.Time) bool {
 // read now when nil). A message whose sends failed photoSendTries times holds neither the batch nor the messages after
 // it: it is tried again first at every look, then the next one goes. When to look again; false when nothing was sent
 // and the batch may go.
-func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r kb.Recording, now time.Time, queued []kb.Photo, withdraw []kb.PhotoRef, rd *roomRead) (time.Time, bool) {
+func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r recordingwire.Recording, now time.Time, queued []recordingwire.Photo, withdraw []recordingwire.PhotoRef, rd *roomRead) (time.Time, bool) {
 	if len(withdraw) == 0 && len(queued) == 0 {
 		return time.Time{}, false
 	}
 	room := r.Conv.Room
-	target, verdict := s.attendeeCheckRead(ctx, kb.SessionRef{MachineID: room.MachineID, SessionID: room.SessionID}, now, id, rd)
+	target, verdict := s.attendeeCheckRead(ctx, recordingwire.SessionRef{MachineID: room.MachineID, SessionID: room.SessionID}, now, id, rd)
 	switch verdict {
 	case "":
 	case attendeeBusy:
@@ -274,8 +275,8 @@ func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r 
 	// that failed least first, so it holds up neither them nor, once given up on, the batches.
 	type roomMsg struct {
 		msgID string
-		w     *kb.PhotoRef
-		p     *kb.Photo
+		w     *recordingwire.PhotoRef
+		p     *recordingwire.Photo
 	}
 	var msgs []roomMsg
 	for i := range withdraw {
@@ -305,7 +306,7 @@ func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r 
 				err = writersOf(e).PhotoSending(id, p.N)
 			}
 			switch {
-			case errors.Is(err, kb.ErrPhotoNotFound):
+			case errors.Is(err, recordingwire.ErrPhotoNotFound):
 				continue // deleted since: it never went in, nothing was sent
 			case err != nil:
 				s.logf("meeting %s: photo %d: %v", short(id), p.N, err)
@@ -338,7 +339,7 @@ func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r 
 // hub's guard): message source meeting, kept in the text as the asks' are, and no meeting-turn mark (every turn of the
 // room is a side exchange). sent once it went (the guard answers one that went before so); else how many times msgID
 // failed so far (photoFailed).
-func (s *Recordings) roomSendPhoto(ctx context.Context, ref kb.SessionRef, msgID, text string, src *proto.MessageSource, images []proto.Image) (sent bool, tries int) {
+func (s *Recordings) roomSendPhoto(ctx context.Context, ref recordingwire.SessionRef, msgID, text string, src *proto.MessageSource, images []proto.Image) (sent bool, tries int) {
 	p := map[string]any{"session_id": ref.SessionID, "text": prompts.MessageSourceText(text, src), "message_source": src,
 		"client_msg_id": msgID, "resume_only": true}
 	if len(images) > 0 {
@@ -382,7 +383,7 @@ func (r *roomState) photoSent(msgID string) {
 }
 
 // photoNoteTool is the room's meeting_photo_note {photo, text} for recording, its own meeting: the room's note on a
-// photo that went into it, 1 to kb.MaxPhotoNote characters. Refused with what is wrong: a number that is no photo of
+// photo that went into it, 1 to recordingwire.MaxPhotoNote characters. Refused with what is wrong: a number that is no photo of
 // this meeting, one that never went in or was withdrawn, a text out of bounds.
 func photoNoteTool(e *kb.Engine, recording string, args json.RawMessage) proto.ToolResult {
 	var a struct {
@@ -400,15 +401,15 @@ func photoNoteTool(e *kb.Engine, recording string, args json.RawMessage) proto.T
 	if text == "" {
 		return proto.TextResult("text is empty: say what in the photo matters for the meeting", true)
 	}
-	if c := utf8.RuneCountInString(text); c > kb.MaxPhotoNote {
-		return proto.TextResult(fmt.Sprintf("text is %d characters, over the %d a note may have: make it shorter", c, kb.MaxPhotoNote), true)
+	if c := utf8.RuneCountInString(text); c > recordingwire.MaxPhotoNote {
+		return proto.TextResult(fmt.Sprintf("text is %d characters, over the %d a note may have: make it shorter", c, recordingwire.MaxPhotoNote), true)
 	}
 	switch err := writersOf(e).PhotoNote(recording, int(n), text); {
 	case err == nil:
 		return proto.TextResult("Noted. Write nothing in reply.", false)
-	case errors.Is(err, kb.ErrPhotoNotFound):
+	case errors.Is(err, recordingwire.ErrPhotoNotFound):
 		return proto.TextResult(fmt.Sprintf("there is no photo %d in this meeting, or it was withdrawn: do not describe or use it", n), true)
-	case errors.Is(err, kb.ErrReadOnly):
+	case errors.Is(err, kbwire.ErrReadOnly):
 		return proto.TextResult("the meeting's photos can't be changed now", true)
 	}
 	return proto.TextResult("this meeting's photos are not available now", true)
@@ -416,7 +417,7 @@ func photoNoteTool(e *kb.Engine, recording string, args json.RawMessage) proto.T
 
 // meetingPhotos are photos' words as the prompts take them (each on one line, at its time in the meeting), never an
 // image.
-func meetingPhotos(texts []kb.PhotoText) []prompts.MeetingPhoto {
+func meetingPhotos(texts []recordingwire.PhotoText) []prompts.MeetingPhoto {
 	out := make([]prompts.MeetingPhoto, 0, len(texts))
 	for _, p := range texts {
 		out = append(out, prompts.MeetingPhoto{N: p.N, At: meetingClock(p.At), Caption: oneLine(p.Caption), Text: oneLine(p.Text), Note: oneLine(p.Note)})

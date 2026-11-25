@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"cmp"
@@ -68,31 +68,11 @@ type SegmentsGapError = recordingwire.SegmentsGapError
 // DayFullError is declared in recordingwire.
 type DayFullError = recordingwire.DayFullError
 
-// RecordingAppend is POST /api/v1/recordings/{id}/segments's body. A nil field is absent: unchanged.
-type RecordingAppend struct {
-	Base      int64                `json:"base"`
-	Revision  int64                `json:"revision"`
-	From      *int                 `json:"from"`
-	Segments  []RecordingSegment   `json:"segments"`
-	Duration  *float64             `json:"duration,omitempty"`
-	EndedAt   *time.Time           `json:"ended_at,omitempty"`
-	Title     *string              `json:"title,omitempty"`
-	Bookmarks *[]RecordingBookmark `json:"bookmarks,omitempty"`
-	Coverage  *RecordingCoverage   `json:"coverage,omitempty"`
-	Complete  *bool                `json:"complete,omitempty"`
-}
-
-// RecordingAppended is what AppendRecording did: Status RecordingStored or RecordingExpired, Revision and Next the
-// stored ones after it. Complete: the recording is complete after it; Wake: the recap lane has work it did not have
-// before (the recording completed, its coverage passed an hour of its clock, or a late sentence fell in a past hour).
-type RecordingAppended struct {
-	ID       string
-	Revision int64
-	Next     int
-	Status   string
-	Complete bool
-	Wake     bool
-}
+// RecordingAppend and RecordingAppended are declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type (
+	RecordingAppend   = recordingwire.RecordingAppend
+	RecordingAppended = recordingwire.RecordingAppended
+)
 
 // cleanUploadDay checks a day upload's own fields: day a real YYYY-MM-DD, tz an IANA zone (the owner's when empty), part
 // 1–99 (1 when absent), the coverage mended. The calendar hint is dropped: a day recording is never a meeting.
@@ -228,17 +208,6 @@ func joinGaps(gaps []CoverageGap, may func(a, b CoverageGap) bool) []CoverageGap
 	return out
 }
 
-// recordingName is Store.recordingName, a day recording's in the owner's language (Engine.DayRecordingName) unless
-// the user titled it.
-func (e *Engine) recordingName(r *Recording) string {
-	if r.Kind == RecordingDay && r.Title == "" && e.DayRecordingName != nil {
-		if n := oneLine(e.DayRecordingName(r.Day)); n != "" {
-			return n
-		}
-	}
-	return e.Store.recordingName(r)
-}
-
 // putDay sets a day recording's own fields from upload u (cleaned, a new base): its count, and the revisions an
 // older manager would otherwise match and summarize it at. Its text is another (TextRev): every finished chunk is
 // looked at again, and noted again when the PUT changed its lines.
@@ -259,9 +228,9 @@ func dayGuard(r *Recording) {
 	r.MatchedRev, r.SummarizedRev = r.Revision, r.Revision
 }
 
-// check refuses what is wrong with an append whatever the recording (400): no base, a revision not above it, a
+// checkAppend refuses what is wrong with an append whatever the recording (400): no base, a revision not above it, a
 // missing or negative from, too many segments, a time that is not a number. The coverage is mended.
-func (a *RecordingAppend) check() error {
+func checkAppend(a *RecordingAppend) error {
 	switch {
 	case a.Base <= 0:
 		return badRecording("base is required")
@@ -300,7 +269,7 @@ func (a *RecordingAppend) check() error {
 // recording_days or trimmed; nothing written), ErrNotDay, a BaseChangedError, a SegmentsGapError, a DayFullError
 // (nothing of the request stored). The stored segments that cannot be read are an error too, with nothing written:
 // the append never takes the place of the day.
-func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppended, error) {
+func (e *engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppended, error) {
 	id, ok := RecordingID(rawID)
 	out := RecordingAppended{ID: id}
 	if !ok {
@@ -309,7 +278,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return out, ErrRecordingDeleted
 	}
 	r, ok := st.Recording(id)
@@ -320,7 +289,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	if st.ReadOnly() {
 		return out, ErrReadOnly
 	}
-	if err := a.check(); err != nil {
+	if err := checkAppend(&a); err != nil {
 		return out, err
 	}
 	now := e.now()
@@ -422,7 +391,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 // daySegments are day recording r's stored segments (segments.json, read through a pending undo journal like every
 // read), refused when they cannot be read, do not parse, or are not as many as r says it holds: an append must never
 // commit its own batch as the whole day.
-func (s *Store) daySegments(r *Recording) ([]RecordingSegment, error) {
+func (s *store) daySegments(r *Recording) ([]RecordingSegment, error) {
 	raw, err := s.recordingRead(r.ID, "segments.json")
 	if err != nil {
 		return nil, fmt.Errorf("recording %s: segments: %w", r.ID, err)

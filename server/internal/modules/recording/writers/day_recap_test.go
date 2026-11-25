@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"regexp"
 	"slices"
@@ -299,7 +301,7 @@ func TestDayRecapNotesIncremental(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(0, "八点的事"), seg(600, "八点十分"), seg(3700, "九点的事")}
-	u.Coverage = &kb.RecordingCoverage{To: 5400} // 09:30
+	u.Coverage = &recordingwire.RecordingCoverage{To: 5400} // 09:30
 	mustPut(t, e, dayID, u, now)
 	e.WriteDayRecaps(context.Background(), 1)
 	if n, _ := f.counts(); n != 1 || !strings.Contains(f.notes[0], "八点十分") || strings.Contains(f.notes[0], "九点的事") {
@@ -310,7 +312,7 @@ func TestDayRecapNotesIncremental(t *testing.T) {
 	}
 	// The 9 o'clock hour finishes.
 	a := dayAppend(1, 2, 3, seg(4000, "九点多"))
-	a.Coverage = &kb.RecordingCoverage{To: 7300}
+	a.Coverage = &recordingwire.RecordingCoverage{To: 7300}
 	if got := mustAppend(t, e, dayID, a); !got.Wake {
 		t.Error("an hour finished without a wake")
 	}
@@ -337,7 +339,7 @@ func TestDayRecapNotesIncremental(t *testing.T) {
 		s.N = 0
 		put.Segments = append(put.Segments, s)
 	}
-	put.Coverage = &kb.RecordingCoverage{To: 7300}
+	put.Coverage = &recordingwire.RecordingCoverage{To: 7300}
 	mustPut(t, e, dayID, put, now)
 	e.WriteDayRecaps(context.Background(), 1)
 	if n, _ := f.counts(); n != 3 {
@@ -350,7 +352,7 @@ func TestDayRecapNotesIncremental(t *testing.T) {
 		}
 		erased.Segments = append(erased.Segments, s)
 	}
-	erased.Coverage = &kb.RecordingCoverage{To: 7300, Gaps: []CoverageGap{{From: 3690, To: 3720, Reason: GapErased}}}
+	erased.Coverage = &recordingwire.RecordingCoverage{To: 7300, Gaps: []CoverageGap{{From: 3690, To: 3720, Reason: GapErased}}}
 	mustPut(t, e, dayID, erased, now)
 	e.WriteDayRecaps(context.Background(), 1)
 	if n, _ := f.counts(); n != 4 || strings.Contains(f.notes[3], "九点的事") || !strings.Contains(f.notes[3], "九点多") {
@@ -375,7 +377,7 @@ func TestDayRecapNotesRetries(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(0, "八点"), seg(3700, "九点")}
-	u.Coverage = &kb.RecordingCoverage{To: 7200}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 7200}
 	mustPut(t, e, dayID, u, now)
 	chunk := func(text string) recapChunkNote {
 		for _, c := range ws(e.Store).readRecapNotes(dayID).Chunks {
@@ -387,7 +389,7 @@ func TestDayRecapNotesRetries(t *testing.T) {
 	}
 	for i := range minutesTries + 1 {
 		a := dayAppend(1, int64(2+i), 2+i, seg(float64(7200+60*i), "十点以后"))
-		a.Coverage = &kb.RecordingCoverage{To: float64(7200 + 60*(i+1))}
+		a.Coverage = &recordingwire.RecordingCoverage{To: float64(7200 + 60*(i+1))}
 		mustAppend(t, e, dayID, a)
 		e.WriteDayRecaps(context.Background(), 1)
 	}
@@ -458,7 +460,7 @@ func TestDayRecapAskRetriesNotes(t *testing.T) {
 	}
 	// A chunk waiting after it ran out of time is tried at once when asked.
 	a := dayAppend(1, 2, 1, seg(3700, "九点的事"))
-	a.Coverage = &kb.RecordingCoverage{To: 7200}
+	a.Coverage = &recordingwire.RecordingCoverage{To: 7200}
 	mustAppend(t, e, dayID, a)
 	f.note = func(string) (string, error) { return "", fmt.Errorf("call: %w", context.DeadlineExceeded) }
 	e.WriteDayRecaps(context.Background(), 1)
@@ -511,7 +513,7 @@ func TestDayRecapDue(t *testing.T) {
 	}
 	// Once a day: new text after it is not recapped again at the recap time, nor pushed again.
 	a := dayAppend(1, 2, 2, seg(13*3600, "晚上的事"))
-	a.Coverage = &kb.RecordingCoverage{To: 13*3600 + 60}
+	a.Coverage = &recordingwire.RecordingCoverage{To: 13*3600 + 60}
 	mustAppend(t, e, dayID, a)
 	now = now.Add(10 * time.Minute)
 	e.WriteDayRecaps(context.Background(), 5)
@@ -826,7 +828,7 @@ func TestDayRecapMergeChecks(t *testing.T) {
 	}
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(3700, "评审里说了导出"), seg(3800, "Ada 说先保留"), seg(14500, "午饭时说的")}
-	u.Coverage = &kb.RecordingCoverage{To: 5 * 3600, Gaps: []CoverageGap{{From: 600, To: 900, Reason: GapInterrupted},
+	u.Coverage = &recordingwire.RecordingCoverage{To: 5 * 3600, Gaps: []CoverageGap{{From: 600, To: 900, Reason: GapInterrupted},
 		{From: 20000, To: 21000, Reason: GapPaused}}}
 	mustPut(t, e, dayID, u, now)
 	f.merge = func(user string) (string, error) {
@@ -889,7 +891,7 @@ func TestDayRecapPartial(t *testing.T) {
 	for i := range 2 * (recapMaxChunks + 5) { // two lines a chunk, all in the 8 o'clock hour
 		u.Segments = append(u.Segments, RecordingSegment{Start: float64(i * 10), End: float64(i*10 + 5), Text: strconv.Itoa(i) + line})
 	}
-	u.Coverage = &kb.RecordingCoverage{To: 3600}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 3600}
 	mustPut(t, e, dayID, u, now)
 	if err := e.AskMinutes(dayID); err != nil {
 		t.Fatal(err)
@@ -992,7 +994,7 @@ func TestDayRecapRepair(t *testing.T) {
 	// The phone erased 08:03 (line 4, which zebrapassword was said on) and dropped line 2 (Bo's) and 3 (Ada's),
 	// positions kept.
 	repair := dayUpload(5, "早上开会", "", "", "")
-	repair.Coverage = &kb.RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 170, To: 200, Reason: GapErased}}}
+	repair.Coverage = &recordingwire.RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 170, To: 200, Reason: GapErased}}}
 	mustPut(t, e, dayID, repair, now)
 	rc, _ = e.ReadDayRecap(dayID)
 	if rc.Summary != "" || len(rc.Timeline) != 1 || len(rc.Timeline[0].Points) != 1 || rc.Timeline[0].Points[0].Text != "早上开会" {
@@ -1085,7 +1087,7 @@ func TestDayRecapTrimmed(t *testing.T) {
 		t.Errorf("detail %v %s %q", err, d.Recap, d.Summary)
 	}
 	hits := e.Search("quokkaword", false, 10)
-	if len(hits) == 0 || slices.ContainsFunc(hits, func(h kb.Hit) bool { return !strings.HasSuffix(h.Path, "/recap.md") }) {
+	if len(hits) == 0 || slices.ContainsFunc(hits, func(h kbwire.Hit) bool { return !strings.HasSuffix(h.Path, "/recap.md") }) {
 		t.Errorf("search %v", hits)
 	}
 	rc, _ := e.ReadDayRecap(dayID)
@@ -1140,7 +1142,7 @@ func TestDayRecapEraseDropsNotes(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(0, "八点的事"), seg(60, "八点一分"), seg(4200, "zebrasecret 密码是一二三")}
-	u.Coverage = &kb.RecordingCoverage{To: 7300}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 7300}
 	mustPut(t, e, dayID, u, now)
 	writeTestRecapWith(t, e, dayID, f)
 	path := e.Store.Path(KindRecording, dayID, recapNotesFile)
@@ -1149,7 +1151,7 @@ func TestDayRecapEraseDropsNotes(t *testing.T) {
 	}
 	erased := dayUpload(5)
 	erased.Segments = []RecordingSegment{seg(0, "八点的事"), seg(60, "八点一分"), seg(4200, "")}
-	erased.Coverage = &kb.RecordingCoverage{To: 7300, Gaps: []CoverageGap{{From: 4100, To: 4300, Reason: GapErased}}}
+	erased.Coverage = &recordingwire.RecordingCoverage{To: 7300, Gaps: []CoverageGap{{From: 4100, To: 4300, Reason: GapErased}}}
 	mustPut(t, e, dayID, erased, now)
 	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "zebrasecret") {
 		t.Errorf("erased words kept in the notes: %s", raw)
@@ -1170,7 +1172,7 @@ func TestDayRecapStopsWhenStale(t *testing.T) {
 	put := func(t *testing.T, e *testEngine, now time.Time) {
 		u := dayUpload(1)
 		u.Segments = []RecordingSegment{seg(0, "八点"), seg(3700, "九点"), seg(7300, "十点 kiwisecret")}
-		u.Coverage = &kb.RecordingCoverage{To: 4 * 3600}
+		u.Coverage = &recordingwire.RecordingCoverage{To: 4 * 3600}
 		mustPut(t, e, dayID, u, now)
 		if err := e.AskMinutes(dayID); err != nil {
 			t.Fatal(err)
@@ -1210,7 +1212,7 @@ func TestDayRecapStopsWhenStale(t *testing.T) {
 			if calls++; calls == 1 {
 				erased := dayUpload(5)
 				erased.Segments = []RecordingSegment{seg(0, "八点"), seg(3700, "九点"), seg(7300, "")}
-				erased.Coverage = &kb.RecordingCoverage{To: 4 * 3600, Gaps: []CoverageGap{{From: 7200, To: 7400, Reason: GapErased}}}
+				erased.Coverage = &recordingwire.RecordingCoverage{To: 4 * 3600, Gaps: []CoverageGap{{From: 7200, To: 7400, Reason: GapErased}}}
 				if _, err := e.PutRecording(dayID, erased, now); err != nil {
 					t.Error(err)
 				}
@@ -1251,7 +1253,7 @@ func TestDayRecapTodosRewrittenMeanwhile(t *testing.T) {
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(60, "Bo will ship the release"), seg(10*3600, "Bo will ship the release"),
 		seg(10*3600+60, "晚上开会")}
-	u.Coverage = &kb.RecordingCoverage{To: 11 * 3600}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 11 * 3600}
 	mustPut(t, e, dayID, u, now)
 	merge := func(actions string) func(string) (string, error) {
 		return func(string) (string, error) {
@@ -1301,7 +1303,7 @@ func TestDayRecapActionsSaidAgain(t *testing.T) {
 	e := dayEngine(t, f, &now)
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(0, "Bo 负责发布"), seg(300, "Ada 和 Bo 都负责发布"), seg(10*3600, "Bo 晚上又说负责发布")}
-	u.Coverage = &kb.RecordingCoverage{To: 11 * 3600}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 11 * 3600}
 	mustPut(t, e, dayID, u, now)
 	writeTestRecapWith(t, e, dayID, f)
 	rc, _ := e.ReadDayRecap(dayID)
@@ -1375,7 +1377,7 @@ func TestDayRecapWithdrawalMended(t *testing.T) {
 		t.Fatal(err)
 	}
 	erase := dayUpload(5, "早上开会", "")
-	erase.Coverage = &kb.RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 50, To: 70, Reason: GapErased}}}
+	erase.Coverage = &recordingwire.RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 50, To: 70, Reason: GapErased}}}
 	if _, err := e.PutRecording(dayID, erase, now); err == nil {
 		t.Fatal("a PUT whose withdrawal failed succeeded")
 	}
@@ -1404,7 +1406,7 @@ func TestDayRecapPendingHoursWait(t *testing.T) {
 	now := dayClock.Add(7 * time.Hour) // 15:00
 	f := &dayFake{}
 	e := dayEngine(t, f, &now)
-	pending := &kb.RecordingCoverage{To: 7 * 3600, Gaps: []CoverageGap{{From: 3600, To: 3 * 3600, Reason: GapPending}}}
+	pending := &recordingwire.RecordingCoverage{To: 7 * 3600, Gaps: []CoverageGap{{From: 3600, To: 3 * 3600, Reason: GapPending}}}
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(600, "八点十分"), seg(3600+600, "九点十分"), seg(4*3600, "十二点")}
 	u.Coverage = pending
@@ -1423,7 +1425,7 @@ func TestDayRecapPendingHoursWait(t *testing.T) {
 		t.Errorf("a pending hour noted while it drains: %d", n)
 	}
 	a := dayAppend(1, 10, 6)
-	a.Coverage = &kb.RecordingCoverage{To: 7 * 3600}
+	a.Coverage = &recordingwire.RecordingCoverage{To: 7 * 3600}
 	mustAppend(t, e, dayID, a)
 	e.WriteDayRecaps(context.Background(), 1)
 	if n, _ := f.counts(); n != 4 {
@@ -1449,7 +1451,7 @@ func TestDayRecapMeetingNamedFar(t *testing.T) {
 	_ = e.Store.PutItem(&kb.Item{Kind: KindEvent, ID: "e1", Title: "看牙", At: dayClock.Add(2 * time.Hour)}) // 10:00
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(7*3600, "打电话说牙疼"), seg(2*3600+600, "到了诊所"), seg(6*3600, "约了复诊")}
-	u.Coverage = &kb.RecordingCoverage{To: 8 * 3600}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 8 * 3600}
 	mustPut(t, e, dayID, u, now)
 	writeTestRecapWith(t, e, dayID, f)
 	rc, _ := e.ReadDayRecap(dayID)
@@ -1474,7 +1476,7 @@ func TestDayRecapMergeKeepsItsTime(t *testing.T) {
 	e.jobLeft = func(context.Context) time.Duration { return 2*minutesCallTimeout - time.Minute }
 	u := dayUpload(1)
 	u.Segments = []RecordingSegment{seg(0, "八点"), seg(3700, "九点"), seg(7300, "十点")}
-	u.Coverage = &kb.RecordingCoverage{To: 4 * 3600}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 4 * 3600}
 	mustPut(t, e, dayID, u, now)
 	if err := e.AskMinutes(dayID); err != nil {
 		t.Fatal(err)

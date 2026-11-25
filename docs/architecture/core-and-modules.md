@@ -531,29 +531,41 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   recording file is split by what its code is. `<file>_read.go` is the read path (list, get, the transcript of
   record, minutes and recap readers, the search view with the undo-journal overlay) and `<file>_keep.go` the writes
   that exist without the module (delete, retention with the trim, the undo-journal commit and the recovery in
-  `NewStore`, the `meeting.json` update primitive, the photo book the trim needs): both are Core. `<file>.go` keeps
-  the writers that are still there (the upload and the appends, the live log, the meeting writers and material, the
-  summaries), which the last PR moves into the module. Reads, delete, retention and recovery call no writer.
-- **The minutes, day-recap, title, photo, audio and hub-transcript writers are in the module** (PRs 3 and 4):
+  `NewStore`, the `meeting.json` update primitive, the photo book the trim needs): both are Core. No `<file>.go` of
+  writers is left there but one: `recordings_summary.go`, the summary round, which is the knowledge base's own
+  summarise, tag and link-to-projects of an entry applied to a recording and still runs only with the module (below).
+  Reads, delete, retention and recovery call no writer.
+- **Every recording writer but the summary round is in the module** (PRs 3, 4 and 5):
   `server/internal/modules/recording/writers` holds `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`,
-  `day_recap.go` and `day_recap_write.go` (PR 3) and `recording_title.go`, `recording_photos.go`,
-  `recording_audio.go`, `transcription.go` and `hub_segments.go` (PR 4), moved from `internal/kb` with their bodies
-  unchanged. They reach the store through the **storage port**, `recordingwire.Core`,
+  `day_recap.go` and `day_recap_write.go` (PR 3), `recording_title.go`, `recording_photos.go`,
+  `recording_audio.go`, `transcription.go` and `hub_segments.go` (PR 4), and `recordings.go` (the upload),
+  `recording_day.go` (a day's appends), `live.go` (the live log), `meeting.go` and `meeting_material.go`
+  (meeting.json and the material of an answer), `recording_upload_rest.go` and `echo.go` (PR 5), moved from
+  `internal/kb` with their bodies unchanged. They reach the store through the **storage port**, `recordingwire.Core`,
   which the knowledge base implements (`kb.RecordingCore`, `server/internal/kb/recording_core.go`) and hands to the
-  module in its hook (`recordinghost.Layer.Hook`). The port has two groups, 40 methods. `Reader` (17) is the knowledge
-  base's own read path, the functions every other reader calls, with the photo book as stored and the hub's
-  transcript. `Writer` (23) is the write primitives (`PutMeta`, `PutSummary`, `WriteFile`, `WriteDurable`,
+  module in its hook (`recordinghost.Layer.Hook`). The port has two groups, 46 methods. `Reader` (22) is the knowledge
+  base's own read path, the functions every other reader calls, with the photo book as stored, the hub's
+  transcript, the tombstones, one committed file of a recording, and the three settings the upload reads (the
+  retention days, whether the hub can transcribe, whether an answer may hold earlier meetings). `Writer` (24) is the
+  write primitives (`CommitRecording`, the upload's commit under the undo journal; `PutMeta`, `PutSummary`,
+  `WriteFile`, `WriteDurable`,
   `RecoverRecording`, `BumpPhotosRev`, `PutPhotoBook`, `PutPhotoText`, `UpdateMeetingLocked`), the change feed, the
   index and its purge, the engine's clock, log, models and output language, and `Locks`: the store's locks the
   writers take themselves (recordings, then meeting, then files, then meta, and the files lock's read side for an
-  audio append; the order is the store's and did not change). **The audio writers' state is the module's**: the
-  per-recording audio mutex and the map of them (`audioState` in `shim.go`) left `kb.Store` with the writers. It is
+  audio append; the order is the store's and did not change). **The live log's lock and the audio writers' state
+  are the module's**: `liveMu` and the per-recording audio mutex with the map of them (`storeState` in `shim.go`)
+  left `kb.Store` with their writers; nothing in Core took either. The six locks in their order, which did not
+  change: `recMu` (Core: delete, retention and a hand edit take it too), `meetMu` (Core: the trim takes it),
+  `liveMu` (the module), the audio mutex (the module), `recFilesMu` and `metaMu` (Core: readers, the commit, the
+  recovery, every entry's meta.json). The state is
   one per store: a second engine over the same store gets writers that share the first ones' state
   (`Writer.Provider`), so a delete, the trim and retention reach the audio an open socket writes through
   (`AudioDropped`, `AudioClosed`), and with no module there is no state and both are no-ops. An audio append is a
   plain call: no goroutine, and the files lock's read side through one interface call. The echo rule
-  (`server/internal/kb/echo.go`) stayed in Core: the upload's cleaner, which Core's track recordings call without an
-  engine, applies it. It is wider than the plan's first
+  (`server/internal/modules/recording/writers/echo.go`) moved with the upload's cleaner: Core's track recordings,
+  which run that cleaner on an upload the module's route hands them, take it from the route as a
+  `recordingwire.UploadCleaner` (`recordinghost.Host.PutSpaceRecordingRoute`) instead of calling it in `internal/kb`.
+  The port is wider than the plan's first
   sketch because the writers read and write the store in many places; the alternative was to leave them in Core. The
   package has its own `engine` and `store` over the port (`shim.go`), so that a writer's body reads as it did. The
   rules of a recording's stored state that both sides apply (`PlanMinutes`, `PlanRecap`, `RecordingEnd`, the hub
@@ -566,11 +578,10 @@ manifest declares `feature: module.recording`, which the kernel announces while 
 - **The write side is a provider** (`recordingwire.Provider`): the four background rounds (`WriteMinutes`,
   `TitleRecordings`, `WriteDayRecaps`, `SummarizeRecordings`), `AfterPrune` (the module's part of the retention round)
   and the audio writers' two touch points with delete and retention (`AudioDropped`, `AudioClosed`). The module's
-  provider is `writers.Writers`: all of them are its own code but the summary round, which is carried to the
-  knowledge base's remaining writer (`recordingwire.WritersInCore`, `kb.RecordingWriters`) until it moves. While
-  the upload is still in `internal/kb`, it calls the six functions of the module's writers it needs through the
-  provider too (`recordingwire.UploadFromCore`: `RepairDayRecap`, `RebaseRecap`, `PruneRecapNotes`, `AudioGaps`,
-  `AudioHeldEnd`, `TitleDue`); they go when the upload moves. The module's
+  provider is `writers.Writers`: all of them are its own code but the summary round, which it carries to the
+  knowledge base's own (`recordingwire.WritersInCore`, `kb.RecordingWriters`, `server/internal/kb/recordings_summary.go`):
+  that round names the retry book, the tag and project machinery and a project's log, none of them about recordings,
+  so it stays in Core and runs only with the module. The audio touch points take a `recordingwire.ID`. The module's
   `Hook` gives it to the knowledge base (`kb.Engine.SetRecordingProvider`); without the module the knowledge base
   holds `recordingwire.NoProvider`, a value whose methods do nothing, so no call site checks for the module. The
   assistant's lanes and its retention tick call the rounds through `kb.Engine.RecordingProvider()`

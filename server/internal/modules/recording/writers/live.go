@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"bytes"
@@ -152,7 +152,7 @@ func normalizeAttendance(u *RecordingUpload) (problem string) {
 }
 
 // readLive is recording id's live.json; an empty Live when there is none yet.
-func (s *Store) readLive(id string) (Live, error) {
+func (s *store) readLive(id string) (Live, error) {
 	var l Live
 	raw, err := os.ReadFile(s.path(KindRecording, id, liveFile))
 	if os.IsNotExist(err) {
@@ -171,7 +171,7 @@ func (s *Store) readLive(id string) (Live, error) {
 // trimmed meanwhile (false then), so a delete stays a delete and a trim keeps no live log. The trim (recording_trim.go)
 // holds recFilesMu from its meta.json to its last removal, so a read-modify-write that read the live log before it
 // cannot write it back after. The caller holds liveMu.
-func (s *Store) putLive(id string, l *Live) (bool, error) {
+func (s *store) putLive(id string, l *Live) (bool, error) {
 	if s.readOnly {
 		return false, ErrReadOnly
 	}
@@ -195,13 +195,13 @@ func (s *Store) putLive(id string, l *Live) (bool, error) {
 		return false, nil
 	}
 	// Synced before it replaces the old one: the phone was told next, and does not send those positions again.
-	return true, writeRecordingFile(s.path(KindRecording, id, liveFile), append(raw, '\n'))
+	return true, s.writeRecordingFile(s.path(KindRecording, id, liveFile), append(raw, '\n'))
 }
 
 // liveState is recording id (a stored id) with its live log: ErrRecordingDeleted after a delete, ErrNotFound with
 // no upload of it.
-func (s *Store) liveState(id string) (Live, Recording, error) {
-	if _, gone := s.tombstones()[id]; gone {
+func (s *store) liveState(id string) (Live, Recording, error) {
+	if gone := s.tombstoned(id); gone {
 		return Live{}, Recording{}, ErrRecordingDeleted
 	}
 	r, ok := s.Recording(id)
@@ -214,7 +214,7 @@ func (s *Store) liveState(id string) (Live, Recording, error) {
 
 // liveEnded notes in recording id's live log when the hub first saw it ended, for a recording that attends
 // (attending) or has a live log already. The caller holds recMu.
-func (s *Store) liveEnded(id string, attending bool, now time.Time) error {
+func (s *store) liveEnded(id string, attending bool, now time.Time) error {
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
 	if !attending {
@@ -254,7 +254,7 @@ func cutBytes(s string, n int) string {
 // live log is the hub's, LiveAppendHub), a LiveGapError (from above the positions held),
 // ErrLiveFull (the request would pass maxLivePositions or maxLiveBytes; nothing of it is stored). The Live returned is
 // the log after it, also with ErrLiveGap and ErrLiveFull. Engine.LiveChanged hears of every append.
-func (e *Engine) LiveAppend(rawID string, from int, segs []LiveSegment) (Live, Recording, error) {
+func (e *engine) LiveAppend(rawID string, from int, segs []LiveSegment) (Live, Recording, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return Live{}, Recording{}, ErrNotFound
@@ -269,7 +269,7 @@ func (e *Engine) LiveAppend(rawID string, from int, segs []LiveSegment) (Live, R
 	return l, r, err
 }
 
-func (e *Engine) liveAppend(id string, from int, segs []LiveSegment) (Live, Recording, bool, error) {
+func (e *engine) liveAppend(id string, from int, segs []LiveSegment) (Live, Recording, bool, error) {
 	st := e.Store
 	st.liveMu.Lock()
 	defer st.liveMu.Unlock()
@@ -325,7 +325,7 @@ func (e *Engine) liveAppend(id string, from int, segs []LiveSegment) (Live, Reco
 // ErrRecordingDeleted, ErrNotFound, ErrReadOnly, ErrTranscriptExpired (trimmed), ErrNotHub (not transcribed on the
 // hub), ErrLiveFull (past maxLivePositions or maxLiveBytes; nothing of it is stored). LiveChanged and MeetingChanged
 // (PartLines) hear of an append.
-func (e *Engine) LiveAppendHub(rawID string, segs []LiveSegment) (first int, err error) {
+func (e *engine) LiveAppendHub(rawID string, segs []LiveSegment) (first int, err error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return 0, ErrNotFound
@@ -340,7 +340,7 @@ func (e *Engine) LiveAppendHub(rawID string, segs []LiveSegment) (first int, err
 	return first, err
 }
 
-func (e *Engine) liveAppendHub(id string, segs []LiveSegment) (int, bool, error) {
+func (e *engine) liveAppendHub(id string, segs []LiveSegment) (int, bool, error) {
 	st := e.Store
 	st.liveMu.Lock()
 	defer st.liveMu.Unlock()
@@ -391,8 +391,8 @@ func (e *Engine) liveAppendHub(id string, segs []LiveSegment) (int, bool, error)
 }
 
 // goneError is why recording id takes no live log any more: deleted, trimmed (attending it is over) or never uploaded.
-func (s *Store) goneError(id string) error {
-	if _, gone := s.tombstones()[id]; gone {
+func (s *store) goneError(id string) error {
+	if gone := s.tombstoned(id); gone {
 		return ErrRecordingDeleted
 	}
 	if r, ok := s.Recording(id); ok && r.Trimmed() {
@@ -403,7 +403,7 @@ func (s *Store) goneError(id string) error {
 
 // LiveRead is recording id's live log (empty before any) and its stored upload, also on a read-only knowledge base:
 // ErrRecordingDeleted after a delete, ErrNotFound with no upload of it.
-func (e *Engine) LiveRead(rawID string) (Live, Recording, error) {
+func (e *engine) LiveRead(rawID string) (Live, Recording, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return Live{}, Recording{}, ErrNotFound
@@ -416,7 +416,7 @@ func (e *Engine) LiveRead(rawID string) (Live, Recording, error) {
 // changed them, and MeetingChanged hears of them. ErrNotFound when the recording's meta.json is gone (also deleted
 // meanwhile) or the recording was trimmed meanwhile, ErrReadOnly on a read-only knowledge base. fn runs with the live
 // log locked: it must be quick and call no Engine method of the live log or the recordings.
-func (e *Engine) LiveUpdate(rawID string, fn func(l *Live, r Recording) error) (Live, error) {
+func (e *engine) LiveUpdate(rawID string, fn func(l *Live, r Recording) error) (Live, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return Live{}, ErrNotFound
@@ -426,7 +426,7 @@ func (e *Engine) LiveUpdate(rawID string, fn func(l *Live, r Recording) error) (
 	return l, err
 }
 
-func (e *Engine) liveUpdate(id string, fn func(l *Live, r Recording) error) (Live, []string, error) {
+func (e *engine) liveUpdate(id string, fn func(l *Live, r Recording) error) (Live, []string, error) {
 	st := e.Store
 	st.liveMu.Lock()
 	defer st.liveMu.Unlock()
@@ -529,7 +529,7 @@ func topicLine(s string) string {
 // TopicsSet replaces recording rawID's topics with topics (CleanTopics: ErrBadTopics names the limit broken), at now;
 // false when they were those already, which changes nothing. LiveUpdate's errors otherwise; MeetingChanged hears of
 // PartTopics.
-func (e *Engine) TopicsSet(rawID string, topics []LiveTopic, now time.Time) (bool, error) {
+func (e *engine) TopicsSet(rawID string, topics []LiveTopic, now time.Time) (bool, error) {
 	clean, err := CleanTopics(topics)
 	if err != nil {
 		return false, err
@@ -603,7 +603,7 @@ func CleanHighlights(said []HighlightSaid) ([]HighlightSaid, error) {
 // is the one there already (each text, at and end), which changes nothing. A list that breaks a limit (among them a
 // said_at whose minute has no line) is refused with ErrBadHighlights naming it, and nothing changes; [] clears them.
 // LiveUpdate's errors otherwise; MeetingChanged hears of PartHighlights.
-func (e *Engine) HighlightsSet(rawID string, said []HighlightSaid, loc *time.Location, now time.Time) (bool, error) {
+func (e *engine) HighlightsSet(rawID string, said []HighlightSaid, loc *time.Location, now time.Time) (bool, error) {
 	clean, err := CleanHighlights(said)
 	if err != nil {
 		return false, err
@@ -675,7 +675,7 @@ func highlightLines(segs []LiveSegment, clocks []string, minute string) (at, end
 
 // AttendingRecordings is every recording whose stored attendance is not off and whose end batch has not gone out,
 // oldest first: what the feeder picks up again after a restart.
-func (e *Engine) AttendingRecordings() []Recording {
+func (e *engine) AttendingRecordings() []Recording {
 	var out []Recording
 	for _, r := range e.Store.Recordings() {
 		if !r.Attending() {

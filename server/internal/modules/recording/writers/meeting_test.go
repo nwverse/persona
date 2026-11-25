@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
@@ -9,30 +9,6 @@ import (
 	"testing"
 	"time"
 )
-
-// roomUploadJSON decodes an upload body as the HTTP layer does.
-func roomUploadJSON(t *testing.T, body string) RecordingUpload {
-	t.Helper()
-	var u RecordingUpload
-	if err := json.Unmarshal([]byte(body), &u); err != nil {
-		t.Fatal(err)
-	}
-	return u
-}
-
-// metaKeys are the keys of recording id's meta.json on disk.
-func metaKeys(t *testing.T, e *Engine, id string) map[string]json.RawMessage {
-	t.Helper()
-	raw, err := os.ReadFile(e.Store.path(KindRecording, id, "meta.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatal(err)
-	}
-	return m
-}
 
 // A room meeting keeps its role in meeting.json, never in meta.json: after an upload, a role change and the trim,
 // meta.json carries no attendance and no attending_session, so an older manager after a rollback feeds nothing.
@@ -97,20 +73,17 @@ func TestRoomMeetingNeverInMeta(t *testing.T) {
 	e.PutRecording(recID, roomUploadJSON(t, body(4, `,"room":{"attendance":"participant"}`)), now)
 	r = recordingNow(t, e, recID)
 	putMeetingMinutes(t, e, recID, Minutes{Version: 1, Title: "Design review", When: "w"})
-	if trimmed, _, err := e.Store.trimRecording(r, now); err != nil || !trimmed {
-		t.Fatalf("trim %v %v", trimmed, err)
-	}
+	trimRecording(t, e, r.ID, now)
 	noMeta("trim")
 	r = recordingNow(t, e, recID)
 	if !r.RoomMeeting() || r.Attending() || !r.MarkedNotPrivate() {
 		t.Fatalf("trimmed %+v %+v", r, r.Conv)
 	}
-	if _, err := os.Stat(e.Store.path(KindRecording, recID, meetingFile)); err != nil {
+	if _, err := os.Stat(ws(e.Store).path(KindRecording, recID, meetingFile)); err != nil {
 		t.Fatalf("the trim removed meeting.json: %v", err)
 	}
-	if !searchable("recordings/"+recID+"/meta.json") || searchable("recordings/"+recID+"/"+meetingFile) {
-		t.Error("meeting.json is searched")
-	}
+	// That meeting.json is not searched is the knowledge base's own rule and test (internal/kb,
+	// TestRecordingBookkeepingIsNotSearched).
 }
 
 // room takes #2981's roles and rules: an unknown role or one on a recording that is not a meeting is off with the
@@ -219,9 +192,7 @@ func TestPrivateMarkAndDetail(t *testing.T) {
 
 	// A trimmed recording takes the mark too.
 	putMeetingMinutes(t, e, recID, Minutes{Version: 1, Title: "x", When: "y"})
-	if _, _, err := e.Store.trimRecording(recordingNow(t, e, recID), now); err != nil {
-		t.Fatal(err)
-	}
+	trimRecording(t, e, recID, now)
 	if _, err := e.SetPrivate(recID, false); err != nil {
 		t.Fatalf("trimmed: %v", err)
 	}
@@ -291,7 +262,7 @@ func TestUploadKeepsAMeetingUpdateMadeMeanwhile(t *testing.T) {
 	}
 	u := roomUploadJSON(t, body(2, AttendanceParticipant))
 	u.Kind = RecordingMeeting
-	m, parts, err := e.putMeetingFields(recID, &u, now)
+	m, parts, err := e.eng().putMeetingFields(recID, &u, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +306,7 @@ func TestMeetingRoomLeanRaisesNoRevision(t *testing.T) {
 	if err != nil || got.Room.Batching != RoomBatchingLean || got.Room.Lean.SpanAt != 120 || got.Room.Lean.CompactFed != 450 || !got.Room.Lean.CompactStartedAt.Equal(now) {
 		t.Fatalf("read back %+v %v", got.Room, err)
 	}
-	raw, err := os.ReadFile(e.Store.path(KindRecording, recID, meetingFile))
+	raw, err := os.ReadFile(ws(e.Store).path(KindRecording, recID, meetingFile))
 	if err != nil || !strings.Contains(string(raw), `"batching": 2`) || !strings.Contains(string(raw), `"compact_fed": 450`) {
 		t.Fatalf("meeting.json %s %v", raw, err)
 	}
