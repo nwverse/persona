@@ -180,9 +180,11 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/health/items
 -                    GET /api/v1/assistant/history
 leaders.read         GET /api/v1/assistant/leaders
+machines.read        GET /api/v1/assistant/machine-resources
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/north-star
 -                    GET /api/v1/assistant/organization/snapshot
+tasks.schedule       GET /api/v1/assistant/placement/pending
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
 assistant.ask        GET /api/v1/assistant/reporters
@@ -520,6 +522,8 @@ leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/main/clear
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
+tasks.schedule       POST /api/v1/assistant/placement/{todo_id}/assign
+tasks.schedule       POST /api/v1/assistant/placement/{todo_id}/defer
 -                    POST /api/v1/assistant/places
 -                    POST /api/v1/assistant/readiness/dismiss
 -                    POST /api/v1/assistant/repositories
@@ -750,6 +754,7 @@ agents.control       POST /api/v1/sessions/{mid}/{sid}/seen
 -                    POST /api/v1/task-plans/{id}/start
 -                    POST /api/v1/task-plans/{id}/workspace-preview
 todos.write          POST /api/v1/todos
+-                    POST /api/v1/todos/decisions/batch
 -                    POST /api/v1/todos/import/reminders
 -                    POST /api/v1/todos/reorganize
 -                    POST /api/v1/todos/retitle

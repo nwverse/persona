@@ -92,6 +92,37 @@ describe("the sidebar's usage strip", () => {
     expect(html).toContain("Codex Pro");
     expect(html).not.toContain("Antigravity · Claude/GPT");
   });
+  it("shows a healthy sibling model pool's remaining quota instead of 0% when one model pool is depleted", () => {
+    const multiPool: UsageAccount = {
+      id: "acct-alpha",
+      provider: "antigravity",
+      name: "Antigravity",
+      sampled_at: iso(-12_000),
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 100, resets_at: iso(2 * H), model: "model-a" },
+        { label: "7d", window_minutes: 10080, used_percent: 100, resets_at: iso(48 * H), model: "model-a" },
+        { label: "5h", window_minutes: 300, used_percent: 20, resets_at: iso(3 * H), model: "model-b" },
+        { label: "7d", window_minutes: 10080, used_percent: 38, resets_at: iso(72 * H), model: "model-b" },
+      ],
+    };
+    const html = renderToStaticMarkup(<UsageBars accounts={[multiPool]} now={NOW} />);
+    expect(html).toContain("Antigravity");
+    expect(html).toContain("剩 62%");
+    expect(html).not.toContain("剩 0%");
+    expect(html).toMatch(/bg-green[^>]*style="width:62%/);
+
+    const allDepleted: UsageAccount = {
+      ...multiPool,
+      id: "acct-empty",
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 100, resets_at: iso(2 * H), model: "model-a" },
+        { label: "5h", window_minutes: 300, used_percent: 100, resets_at: iso(3 * H), model: "model-b" },
+      ],
+    };
+    const depletedHtml = renderToStaticMarkup(<UsageBars accounts={[allDepleted]} now={NOW} />);
+    expect(depletedHtml).toContain("剩 0%");
+    expect(depletedHtml).toMatch(/bg-red[^>]*style="width:0%/);
+  });
   it("opens a portaled popover on intent, keeps it open on inside clicks, and plays the close transition before unmounting", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host);

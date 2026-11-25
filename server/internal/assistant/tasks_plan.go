@@ -22,7 +22,10 @@ import (
 // plan's own todo_id, the todo a started task became, is the hub's to set, and the shallower field wins in JSON.
 type planTaskIn struct {
 	PlanTask
-	TodoID string `json:"todo_id"`
+	TodoID        string   `json:"todo_id"`
+	WritePrefixes []string `json:"write_prefixes,omitempty"`
+	ForceParallel bool     `json:"force_parallel,omitempty"`
+	ChangedFiles  []string `json:"changed_files,omitempty"`
 }
 
 // toolTaskPlanFrom is task_plan from the conversation sessionID running on machine (where its attachments are).
@@ -38,6 +41,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var a struct{ Tasks []PlanTask }
+	var plannedScopes []plannedWriteScopeInput
 	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
 		tasks, err := scope.workerTasks(args)
@@ -45,6 +49,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", err
 		}
 		a.Tasks = tasks
+		plannedScopes = make([]plannedWriteScopeInput, len(tasks))
 	} else {
 		var in struct {
 			Tasks      []planTaskIn `json:"tasks"`
@@ -62,6 +67,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			t.PlanTask.Parent = "" // the hub's, set only for a task leader's workers
 			t.PlanTask.Supervisor = lead
 			a.Tasks = append(a.Tasks, t.PlanTask)
+			plannedScopes = append(plannedScopes, plannedWriteScopeInput{
+				WritePrefixes: t.WritePrefixes,
+				ChangedFiles:  t.ChangedFiles,
+				ForceParallel: t.ForceParallel,
+			})
 		}
 	}
 	if len(a.Tasks) == 0 {
@@ -110,9 +120,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Reroute, t.Placement = nil, nil
 		t.Dispatch = nil // the hub's: written by the start that resolves the tier
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
+		t.Machine = strings.TrimSpace(t.Machine)
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if err := s.normalizePlacementConstraints(ctx, t); err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
 		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
 		}
@@ -128,12 +142,17 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
-		if m, ok := s.machineByName(ctx, t.Machine); ok && t.Role == roleLeader && s.isWorkMachine(m.ID) {
-			return "", fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only the "+
-				"reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)
+		if t.Machine != "" {
+			if m, ok := s.machineByName(ctx, t.Machine); ok && t.Role == roleLeader && s.isWorkMachine(m.ID) {
+				return "", fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only the "+
+					"reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)
+			}
 		}
 		if err := t.normalizeMachinePolicy(); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		if t.Machine == "" && (t.backendWorkspace() || t.containerWorkspace()) {
+			return "", fmt.Errorf("task %d: workspace.backend and workspace.container require an explicit machine", i+1)
 		}
 		if t.ExpectMinutes < 0 {
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
@@ -181,6 +200,26 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		if len(t.Attachments)+len(t.Mentioned) > 0 {
 			t.AttachFrom = machine
+		}
+		if t.Machine == "" {
+			if _, err := validateStartSpeed(map[string]any{"speed": t.Speed}); err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			preview := *t
+			if err := s.applyTaskTier(ctx, &preview); err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			if t.Continues != "" {
+				if prevTodo, ok := s.todoNow(t.Continues); ok {
+					if err := s.checkContinuationBlockers(ctx, prevTodo, t.Permission, t.Readonly, false); err != nil {
+						return "", fmt.Errorf("task %d: %w", i+1, err)
+					}
+				}
+			}
+			if t.ReservedTodoID == "" {
+				t.ReservedTodoID = firstNonEmpty(t.ReuseTodo, t.TodoID, "todo_"+randomHex(8))
+			}
+			continue
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
@@ -401,6 +440,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
+	for i := range a.Tasks {
+		plannedScopes[i].Task = a.Tasks[i]
+	}
+	conflictHints := s.planWriteScopeConflicts(ctx, plannedScopes)
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
 		CreatedAt: now, UpdatedAt: now}
@@ -421,6 +464,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if err != nil {
 			return "", err
 		}
+		s.rememberPlannedWriteScopes(ctx, started.Tasks, plannedScopes)
 		var b strings.Builder
 		fmt.Fprintf(&b, "Queued %d worker(s) beneath your task %s for dispatch:\n", len(started.Tasks), scope.task.ID)
 		for _, t := range started.Tasks {
@@ -428,6 +472,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
 			} else if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
+			} else if t.Queue != nil && t.Queue.Key == pendingPlacementQueueKey {
+				fmt.Fprintf(&b, "- %s → todo %s (pending placement)\n", t.Title, t.TodoID)
 			} else {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
 			}
@@ -435,6 +481,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		b.WriteString("This is not confirmation that any agent started: you are told when one fails to start. A worker that has " +
 			"report_to_supervisor reports to you in a message, and they cannot hand work on.")
 		b.WriteString(dups)
+		b.WriteString(conflictHints)
 		b.WriteString(taskPlanEstimateNotes(started.Tasks))
 		return b.String(), nil
 	}
@@ -463,6 +510,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		b.WriteString("After the user taps Start, check the task cards or context snapshot for the outcome.")
 		b.WriteString(dups)
+		b.WriteString(conflictHints)
 		b.WriteString(taskPlanEstimateNotes(p.Tasks))
 		if _, talking := s.ownersPresent(time.Now())[sessionID]; talking {
 			// The owner is talking in this very conversation: the card is in front of them, a push would only repeat it.
@@ -498,6 +546,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if err != nil {
 		return "", err
 	}
+	s.rememberPlannedWriteScopes(ctx, started.Tasks, plannedScopes)
 	var b strings.Builder
 	supervisor := ""
 	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (plan %s):\n", len(started.Tasks), started.ID)
@@ -513,6 +562,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		} else {
 			if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s: automatic start queued (%s) → todo %s on %s (queued: %s)\n", t.Title, reason, t.TodoID, t.Machine, t.Queue.Reason)
+			} else if t.Queue != nil && t.Queue.Key == pendingPlacementQueueKey {
+				fmt.Fprintf(&b, "- %s: automatic start queued (%s) → todo %s (pending placement)\n", t.Title, reason, t.TodoID)
 			} else {
 				fmt.Fprintf(&b, "- %s: automatic start initiated (%s) → todo %s on %s (dispatching)\n", t.Title, reason, t.TodoID, t.Machine)
 			}
@@ -533,6 +584,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
 	}
 	b.WriteString(dups)
+	b.WriteString(conflictHints)
 	b.WriteString(taskPlanEstimateNotes(started.Tasks))
 	if wait > 0 && len(started.Tasks) == 1 && scope == nil && started.Tasks[0].Error == "" {
 		t := started.Tasks[0]

@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func setTodosV2Flag(t *testing.T, s *Service, on bool) {
+func setTodosV2Enabled(t *testing.T, s *Service, on bool) {
 	t.Helper()
 	setSettings(t, s, func(v *Settings) {
 		v.TodosV2 = &on
@@ -62,7 +62,7 @@ func TestTodosV2StageGateEarlyUnlockOnPROpenAndClosedPRRejected(t *testing.T) {
 	st := &memStore{}
 	s, f := newTodoReadyService(t, st)
 	ctx := context.Background()
-	setTodosV2Flag(t, s, true)
+	setTodosV2Enabled(t, s, true)
 
 	f.setSessions("server",
 		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
@@ -117,7 +117,7 @@ func TestTodosV2StageGateEarlyUnlockOnContractReadyAndTags(t *testing.T) {
 	st := &memStore{}
 	s, _ := newTodoReadyService(t, st)
 	ctx := context.Background()
-	setTodosV2Flag(t, s, true)
+	setTodosV2Enabled(t, s, true)
 
 	root := createRequestAndPiece(t, s, "conv1", "Platform", "", "", nil)
 	pre := createRequestAndPiece(t, s, "conv1", "Schema spec", "Drafting schema", root.ID, nil)
@@ -166,7 +166,7 @@ func TestTodosV2StageGatePlainAfterStillRequiresCompletionAndAcceptance(t *testi
 	st := &memStore{}
 	s, _ := newTodoReadyService(t, st)
 	ctx := context.Background()
-	setTodosV2Flag(t, s, true)
+	setTodosV2Enabled(t, s, true)
 
 	// 1. Plain after without RequireAcceptedAfter: does NOT unlock on open PR or contract_ready.
 	root := createRequestAndPiece(t, s, "conv1", "Plain batch", "", "", nil)
@@ -231,7 +231,7 @@ func TestTodosV2StageGateFailsClosedOnCancelledFailedStartCyclesAndStoreError(t 
 	repoStore := &todoReadyRepoStore{memStore: &memStore{}}
 	s, _ := newTodoReadyService(t, repoStore)
 	ctx := context.Background()
-	setTodosV2Flag(t, s, true)
+	setTodosV2Enabled(t, s, true)
 
 	root := createRequestAndPiece(t, s, "conv1", "Safety", "", "", nil)
 
@@ -306,19 +306,19 @@ func TestTodosV2StageGateLosslessRollbackToggle(t *testing.T) {
 	dep := createRequestAndPiece(t, s, "conv1", "Downstream", "unlock_stage: contract_ready", root.ID, []string{pre.ID})
 
 	// Flag off -> not ready.
-	setTodosV2Flag(t, s, false)
+	setTodosV2Enabled(t, s, false)
 	if _, ready, err := s.checkTodoAfterReady(ctx, dep); err != nil || ready {
 		t.Fatalf("flag=false initial = (%v, %v), want (false, nil)", ready, err)
 	}
 
 	// Flag on -> early unlock ready.
-	setTodosV2Flag(t, s, true)
+	setTodosV2Enabled(t, s, true)
 	if _, ready, err := s.checkTodoAfterReady(ctx, dep); err != nil || !ready {
 		t.Fatalf("flag=true = (%v, %v), want (true, nil)", ready, err)
 	}
 
 	// Rollback flag off -> immediately reverts to not ready without side effects.
-	setTodosV2Flag(t, s, false)
+	setTodosV2Enabled(t, s, false)
 	if _, ready, err := s.checkTodoAfterReady(ctx, dep); err != nil || ready {
 		t.Fatalf("flag=false after rollback = (%v, %v), want (false, nil)", ready, err)
 	}
