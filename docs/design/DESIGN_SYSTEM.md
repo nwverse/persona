@@ -1800,14 +1800,28 @@ The hub's link while it is down (Waiting for network, Connecting…, Updating…
 ### Web skill mentions (#5357)
 
 Reuse the composer's existing `ComposerPanel` surface for `@` and `SlashPalette` surface for `/`, their neutral sliding
-highlight, icon set, keyboard/IME/Escape behavior and context chips. A skill row has a readable name, source and
+highlight, icon set and keyboard/IME/Escape behavior. A skill row has a readable name, source and
 description; `@` uses two lines, while `/` puts them in its own 36 px row (44 px on touch). The source
-distinguishes equal names. Selecting either row adds the same removable skill chip and opaque reference rather than hiding an invocation in display text.
-Skill rows and the skill chip's remove target meet the Web 44 px touch size. The menu's loading, partial-inventory and
+distinguishes equal names. Both pickers insert the same inline skill reference with its opaque ID. Skill rows meet
+the Web 44 px touch size. The menu's loading, partial-inventory and
 failure status stays secondary and never disables ordinary chat. No new primary screen, setting, model choice or
 native client pattern is introduced. Use the existing surface/hover/ink/accent tokens in light/dark and narrow layouts.
-Ordinary Claude Code and Codex Agent chats use this same picker and chip. The catalog belongs to the actual session;
+Ordinary Claude Code and Codex Agent chats use this same picker. The catalog belongs to the actual session;
 unsupported or unavailable environments show the existing quiet failure status while text and other references remain usable.
+
+#### Inline references in the web composer (#15409)
+
+This serves people who refer to a file, folder, skill, workspace, repository or previous Agent chat while writing.
+Picking from `@` or `+` inserts the reference at the caret so it stays with the sentence it belongs to. Use the
+existing 14 px semantic icon and accent text ink on the text baseline. Hover reveals the source or full path.
+Arrow keys step past the reference in one move, and Backspace, Delete or a range selection can remove it.
+The folder row selects the folder. Its chevron or Right Arrow opens it for browsing. The scheduled prompt picker
+browses folders to choose a file in the task's execution directory.
+
+`InlineMentionInput` loads when references are used. The native field handles ordinary drafts immediately. Their
+shared document keeps the text, references and caret through local edits and the full-screen editor. Quotes, forwards,
+uploads, pasted blocks and selections brought in from a reader continue to use their existing space above the field.
+The wire format is in `docs/protocol/protocol.md` under "Tags in messages (parsed by clients)".
 
 ### 3.11 Code blocks, inline code and quotes in replies
 
@@ -2884,6 +2898,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
+| Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## HarmonyOS native structure

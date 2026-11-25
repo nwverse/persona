@@ -11,10 +11,11 @@ import { useComposition } from "../../lib/ime";
 import { moveActive, readAllHistory, searchAction, searchSent } from "../../lib/send-history-search";
 import { cx, EASE } from "../../ui/atoms";
 import { splitSkillDraft } from "../../lib/skill-mentions";
+import { draftText } from "../../lib/inline-mentions";
 
 function historyLabel(text: string): string {
   const split = splitSkillDraft(text);
-  return [...split.skills.map((s) => `${s.title} · ${s.text.split("\n")[0]}`), split.text].filter(Boolean).join("\n");
+  return [...split.skills.map((s) => `${s.title} · ${s.text.split("\n")[0]}`), draftText(split.text)].filter(Boolean).join("\n");
 }
 
 export function HistorySearch({ onPick, onClose }: { onPick: (text: string) => void; onClose: () => void }) {
