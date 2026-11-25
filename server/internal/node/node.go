@@ -209,6 +209,7 @@ type Node struct {
 	goneDirs            map[string]time.Time              // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
 	bgScans             map[string]*bgScan                // transcript path -> incremental background-task scan
 	panePIDs            map[string]panePID                // pane -> its claude pid (machines without herdr's claude integration)
+	codexPanePIDs       map[string]codexPanePID           // pane -> its running codex pid (codex_terminal_modes.go)
 	paneSeen            map[string]time.Time              // claude pane without a host session id -> first seen (zero: there when node started)
 	modes               map[string]sessionModes           // session id -> mode / effort set from the app (modes.go)
 	terms               map[string]*termStream            // session id -> its terminal streaming to the hub (terminal.go)
