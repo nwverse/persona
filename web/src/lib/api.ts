@@ -14,6 +14,22 @@ let ownerToken: string | undefined;
 let ownerEpoch: string | undefined;
 let ownerGeneration = 0;
 const credentialListeners = new Set<(owner: string) => void>();
+interface SharedGetResult {
+  data: unknown;
+  rawText: string;
+  isJson: boolean;
+  headers: Headers;
+  status: number;
+}
+interface InFlightGet {
+  path: string;
+  fetcher: typeof fetch;
+  controller: AbortController;
+  waiters: number;
+  delivered: number;
+  promise: Promise<SharedGetResult>;
+}
+const inFlightGets = new Map<string, InFlightGet>();
 function publishCredentialOwner(): string {
   inFlightGets.clear();
   const owner = `credential-${++ownerGeneration}`;
@@ -154,24 +170,6 @@ export class HubTimeoutError extends Error {
 
 type ApiOptions = RequestInit & { json?: unknown; token?: string; tokenOwner?: string; isAuthContextCurrent?: () => boolean; onResponse?: (headers: Headers, status: number) => void; readBlob?: (response: Response, signal?: AbortSignal | null) => Promise<Blob>; allowHtmlResponse?: boolean; dedupe?: boolean };
 
-interface SharedGetResult {
-  data: unknown;
-  rawText: string;
-  isJson: boolean;
-  headers: Headers;
-  status: number;
-}
-
-interface InFlightGet {
-  path: string;
-  controller: AbortController;
-  waiters: number;
-  delivered: number;
-  promise: Promise<SharedGetResult>;
-}
-
-const inFlightGets = new Map<string, InFlightGet>();
-
 /** Detach in-flight GET entries so subsequent reads issue a fresh request (writes, store mutations, resets). */
 export function invalidateInFlightGets(prefix?: string): void {
   if (!prefix) {
@@ -231,7 +229,13 @@ async function call<T>(path: string, init: ApiOptions & { timeout?: number }, bi
   const limit = timeout ?? (read ? READ_TIMEOUT_MS : 0);
   const canDedupe = !binary && read && dedupe !== false && init.body === undefined && init.json === undefined && !init.isAuthContextCurrent;
   if (canDedupe) return callSharedGet<T>(path, rest, limit);
-  if (!limit) return request<T>(path, rest, binary);
+  if (!limit) {
+    try {
+      return await request<T>(path, rest, binary);
+    } finally {
+      if (!read) inFlightGets.clear();
+    }
+  }
   // The caller's own signal still aborts as before (an AbortError); only the time running out becomes HubTimeoutError.
   const controller = new AbortController();
   const outer = init.signal;
@@ -256,6 +260,7 @@ async function call<T>(path: string, init: ApiOptions & { timeout?: number }, bi
   } catch (e) {
     throw late && isAbort(e) ? new HubTimeoutError() : e;
   } finally {
+    if (!read) inFlightGets.clear();
     clearTimeout(timer);
     outer?.removeEventListener("abort", forward);
   }
@@ -267,10 +272,15 @@ function callSharedGet<T>(path: string, init: ApiOptions, limit: number): Promis
   const owner = init.token === undefined ? credentialOwner() : init.tokenOwner;
   const headers = buildHeaders(path, init);
   const key = dedupeKey(path, owner, init, headers);
+  const fetcher = fetch;
   let entry = inFlightGets.get(key);
+  if (entry && entry.fetcher !== fetcher) {
+    inFlightGets.delete(key);
+    entry = undefined;
+  }
   if (!entry) {
     const controller = new AbortController();
-    const created: InFlightGet = { path, controller, waiters: 0, delivered: 0, promise: null! };
+    const created: InFlightGet = { path, fetcher, controller, waiters: 0, delivered: 0, promise: null! };
     inFlightGets.set(key, created);
     const { onResponse: _onResponse, signal: _signal, ...sharedInit } = init;
     created.promise = runSharedGet(key, created, path, { ...sharedInit, signal: controller.signal }, owner, headers);
@@ -339,7 +349,7 @@ async function runSharedGet(key: string, entry: InFlightGet, path: string, init:
       try {
         let res: Response;
         try {
-          res = await fetch(`${BASE}/api/v1${path}`, { redirect: "manual", ...fetchOptions, headers });
+          res = await entry.fetcher(`${BASE}/api/v1${path}`, { redirect: "manual", ...fetchOptions, headers });
         } catch (e) {
           if (!isAbort(e)) requestCrumb(method, path, 0);
           throw e;

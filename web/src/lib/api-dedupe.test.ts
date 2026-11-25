@@ -181,25 +181,45 @@ describe("api in-flight GET deduplication", () => {
 
     const write = api("/todos", { method: "POST", json: { title: "New" } });
     expect(fn).toHaveBeenCalledTimes(2);
+    const duringWrite = api<{ v: number }>("/todos");
+    expect(fn).toHaveBeenCalledTimes(3);
     calls[1]!.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
     await write;
 
     const afterWrite = api<{ v: number }>("/todos");
-    expect(fn).toHaveBeenCalledTimes(3);
+    expect(fn).toHaveBeenCalledTimes(4);
     calls[0]!.resolve(new Response(JSON.stringify({ v: 1 }), { status: 200 }));
     calls[2]!.resolve(new Response(JSON.stringify({ v: 2 }), { status: 200 }));
+    calls[3]!.resolve(new Response(JSON.stringify({ v: 3 }), { status: 200 }));
     expect(await beforeWrite).toEqual({ v: 1 });
-    expect(await afterWrite).toEqual({ v: 2 });
+    expect(await duringWrite).toEqual({ v: 2 });
+    expect(await afterWrite).toEqual({ v: 3 });
 
     const beforeAuth = api<{ v: number }>("/assistant");
-    expect(fn).toHaveBeenCalledTimes(4);
+    expect(fn).toHaveBeenCalledTimes(5);
     setToken("token-b");
     const afterAuth = api<{ v: number }>("/assistant");
-    expect(fn).toHaveBeenCalledTimes(5);
-    calls[3]!.resolve(new Response(JSON.stringify({ v: 1 }), { status: 200 }));
-    calls[4]!.resolve(new Response(JSON.stringify({ v: 2 }), { status: 200 }));
+    expect(fn).toHaveBeenCalledTimes(6);
+    calls[4]!.resolve(new Response(JSON.stringify({ v: 1 }), { status: 200 }));
+    calls[5]!.resolve(new Response(JSON.stringify({ v: 2 }), { status: 200 }));
     expect(await beforeAuth).toEqual({ v: 1 });
     expect(await afterAuth).toEqual({ v: 2 });
+  });
+
+  it("does not coalesce onto a dangling entry after global fetch is replaced", async () => {
+    const first = abortableFetch();
+    const stale = api<{ v: number }>("/machines/m1/browser/cookies");
+    expect(first.fn).toHaveBeenCalledTimes(1);
+
+    const second = abortableFetch();
+    const fresh = api<{ v: number }>("/machines/m1/browser/cookies");
+    expect(second.fn).toHaveBeenCalledTimes(1);
+
+    second.calls[0]!.resolve(new Response(JSON.stringify({ v: 2 }), { status: 200 }));
+    await expect(fresh).resolves.toEqual({ v: 2 });
+
+    first.calls[0]!.resolve(new Response(JSON.stringify({ v: 1 }), { status: 200 }));
+    await expect(stale).resolves.toEqual({ v: 1 });
   });
 
   it("coalesces overlapping startup timer, hello refresh, and todosPushed into 1 /todos and 1 /assistant fetch", async () => {
