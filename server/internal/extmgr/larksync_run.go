@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"hash/fnv"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -263,7 +264,7 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 	}
 	app, err := h.larkSyncApp(ctx, &st, b.BotID)
 	if err != nil {
-		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, err, nil, false, 0)
+		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, err, nil, false, 0, 0, b.AuthorizedAt)
 		return err
 	}
 	reader := h.readerOf(rt)
@@ -283,15 +284,31 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 		budget = larkSyncIMBudget
 	}
 	binding := larksyncwire.Binding{Key: key, BotID: b.BotID, AccountID: b.AccountID, Label: label, Tier: tier, Mode: mode,
-		App: app, Backfill: larkSyncBackfill, Budget: budget}
+		App: app, Backfill: larkSyncBackfill, Budget: budget, AuthorizedAt: b.AuthorizedAt, GrantedScopes: slices.Clone(b.GrantedScopes)}
 	cursors, err := store.LarkSyncCursors(ctx, key)
 	if err != nil {
-		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, nil, err, false, 0)
+		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, nil, err, false, 0, 0, b.AuthorizedAt)
 		return err
+	}
+	linksBackfillVer := 0
+	remediatedQueue := ""
+	runCursors := cursors
+	if tier == larksyncwire.TierFull && b.LinksBackfillVersion < larkSyncLinksBackfillVersion {
+		if updated, done := h.larkSyncPrepareDroppedLinksBackfill(ctx, store, binding, &st, reader, cursors); done {
+			linksBackfillVer = larkSyncLinksBackfillVersion
+			if updated != "" {
+				remediatedQueue = updated
+				runCursors = maps.Clone(cursors)
+				if runCursors == nil {
+					runCursors = map[string]string{}
+				}
+				runCursors[larksyncwire.PendingLinksCursor] = updated
+			}
+		}
 	}
 	token, handed := h.larkSyncTokenFunc(key)
 	idx := &larkSyncStaging{store: store}
-	res, runErr := reader.Run(ctx, binding, token, cursors, idx)
+	res, runErr := reader.Run(ctx, binding, token, runCursors, idx)
 	if larkSyncKindOf(runErr) == larksyncwire.ErrKindAuth && ctx.Err() == nil {
 		// The access token was refused before it ran out (revoked, or the app's secret changed): refresh once and
 		// read again from the same cursors, with nothing of the first try kept. A refused refresh is an invalid grant
@@ -304,28 +321,42 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 			runErr = err
 		} else {
 			idx = &larkSyncStaging{store: store}
-			res, runErr = reader.Run(ctx, binding, token, cursors, idx)
+			res, runErr = reader.Run(ctx, binding, token, runCursors, idx)
 		}
 	}
 	var commitErr error
 	var chats, docs int
 	madeProgress := false
 	backfillVer := 0
+	committedLinksBackfillVer := 0
 	if runErr == nil {
 		moved := larkSyncMovedCursors(res)
+		if remediatedQueue != "" {
+			if _, ok := moved[larksyncwire.PendingLinksCursor]; !ok {
+				moved[larksyncwire.PendingLinksCursor] = remediatedQueue
+			}
+		}
 		madeProgress = larkSyncMadeProgress(cursors, res, moved)
 		var rows []db.LarkSyncOutbox
 		rows, chats, docs = larkSyncOutboxRows(binding, res, h.bots.sync.clock())
 		commitErr = store.CommitLarkSyncRun(ctx, key, moved, idx.records(), rows)
-		if commitErr == nil && tier == larksyncwire.TierFull && b.BackfillVersion < larkSyncBackfillVersion {
-			repaired, done := h.larkSyncBackfillSenderNames(ctx, store, binding, &st, reader, token, handed)
-			chats += repaired
-			if done {
-				backfillVer = larkSyncBackfillVersion
+		if commitErr == nil {
+			committedLinksBackfillVer = linksBackfillVer
+			if tier == larksyncwire.TierFull && b.BackfillVersion < larkSyncBackfillVersion {
+				repaired, done, repairErr := h.larkSyncBackfillSenderNames(ctx, store, binding, &st, reader, token, handed)
+				chats += repaired
+				if repairErr != nil {
+					res.Errors = append(res.Errors, larksyncwire.ResourceError{
+						Resource: "sender_names", Kind: larkSyncKindOf(repairErr), Detail: larkSyncDetail(repairErr),
+					})
+				}
+				if done {
+					backfillVer = larkSyncBackfillVersion
+				}
 			}
 		}
 	}
-	if gone := h.larkSyncFinish(ctx, key, mode, res, runErr, commitErr, madeProgress, backfillVer); gone {
+	if gone := h.larkSyncFinish(ctx, key, mode, res, runErr, commitErr, madeProgress, backfillVer, committedLinksBackfillVer, b.AuthorizedAt); gone {
 		// The binding was removed while it ran: what the run committed stays in the knowledge base, its cursors go.
 		h.larkSyncForget(ctx, key)
 		return errLarkSyncNoBinding
@@ -370,10 +401,10 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	reader larksyncwire.Syncer,
 	token func(ctx context.Context) (string, error),
 	handed func() string,
-) (repairedChats int, done bool) {
+) (repairedChats int, done bool, repairErr error) {
 	resolver, ok := reader.(larksyncwire.NameResolver)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	type candidate struct {
 		chat kbwire.SourceChat
@@ -386,7 +417,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		rows, err := store.LarkSyncOutboxAfter(ctx, db.LarkSyncChat, after, 100)
 		if err != nil {
 			h.logf("lark sync: %s: sender-name backfill scan: %v", binding.Key, err)
-			return 0, false
+			return 0, false, err
 		}
 		for _, row := range rows {
 			after = row.Seq
@@ -416,7 +447,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		}
 	}
 	if len(candidates) == 0 {
-		return 0, true
+		return 0, true, nil
 	}
 
 	// Count authorized chat-enabled bindings so a single-binding setup can still repair legacy outbox rows whose
@@ -450,7 +481,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		got, err := store.LarkSyncIndex(ctx, keys[start:end])
 		if err != nil {
 			h.logf("lark sync: %s: sender-name backfill index: %v", binding.Key, err)
-			return 0, false
+			return 0, false, err
 		}
 		for k, v := range got {
 			indexMap[k] = v
@@ -471,7 +502,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		}
 	}
 	if len(owned) == 0 {
-		return 0, true
+		return 0, true, nil
 	}
 
 	uniqueSenders := map[string]bool{}
@@ -500,7 +531,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	}
 	if len(names) == 0 {
 		// Complete when every lookup finished without a fatal/scope/deadline error (e.g. only deleted/external users).
-		return 0, err == nil
+		return 0, err == nil, err
 	}
 
 	byChat := map[string]*connector.ChatBatch{}
@@ -538,10 +569,211 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	if len(repairRows) > 0 {
 		if cerr := store.CommitLarkSyncRun(ctx, binding.Key, nil, nil, repairRows); cerr != nil {
 			h.logf("lark sync: %s: sender-name backfill commit: %v", binding.Key, cerr)
-			return 0, false
+			return 0, false, cerr
 		}
 	}
-	return len(repairRows), err == nil
+	return len(repairRows), err == nil, err
+}
+
+// larkSyncPrepareDroppedLinksBackfill performs a one-time, read-only scan of already-synced chat outbox messages for
+// binding.Key to recover cloud document and wiki links that were previously dropped when readLinkedDocs hit its run
+// budget. Links whose canonical document key already has body content in lark_sync_index (or a synced wiki alias with
+// body content in the doc outbox) are skipped; remaining links are merged into PendingLinksCursor as backfill entries
+// without duplicating queued tokens or downgrading existing live entries. Nothing is committed here: the caller feeds
+// the returned cursor into reader.Run and commits atomically with the run.
+func (h *Manager) larkSyncPrepareDroppedLinksBackfill(
+	ctx context.Context,
+	store larkSyncStore,
+	binding larksyncwire.Binding,
+	st *larkSyncState,
+	reader larksyncwire.Syncer,
+	cursors map[string]string,
+) (updatedCursor string, done bool) {
+	backfiller, ok := reader.(larksyncwire.PendingLinkBackfiller)
+	if !ok {
+		return "", false
+	}
+	type msgLinks struct {
+		links []larksyncwire.PendingLinkCandidate
+	}
+	byMsg := map[string]*msgLinks{}
+	var msgOrder []string
+	var after int64
+	for {
+		rows, err := store.LarkSyncOutboxAfter(ctx, db.LarkSyncChat, after, 100)
+		if err != nil {
+			h.logf("lark sync: %s: dropped-links backfill scan: %v", binding.Key, err)
+			return "", false
+		}
+		for _, row := range rows {
+			after = row.Seq
+			var cb connector.ChatBatch
+			if err := json.Unmarshal(row.Payload, &cb); err != nil {
+				continue
+			}
+			for _, m := range cb.Messages {
+				if m.ID == "" || !strings.Contains(m.Text, "http") {
+					continue
+				}
+				extracted := backfiller.ExtractDocLinks(m.Text)
+				if len(extracted) == 0 {
+					continue
+				}
+				for i := range extracted {
+					extracted[i].MessageAt = m.At
+				}
+				entry := byMsg[m.ID]
+				if entry == nil {
+					entry = &msgLinks{}
+					byMsg[m.ID] = entry
+					msgOrder = append(msgOrder, m.ID)
+				}
+				entry.links = append(entry.links, extracted...)
+			}
+		}
+		if len(rows) < 100 {
+			break
+		}
+	}
+	if len(byMsg) == 0 {
+		return "", true
+	}
+
+	fullBindings := 0
+	for _, b := range st.bindings {
+		if !b.authorized() {
+			continue
+		}
+		t := b.Tier
+		if !larksyncwire.ValidTier(t) {
+			t = st.tierOf(b.BotID)
+		}
+		if t == larksyncwire.TierFull {
+			fullBindings++
+		}
+	}
+
+	msgKeys := make([]string, 0, len(msgOrder))
+	for _, id := range msgOrder {
+		msgKeys = append(msgKeys, larksyncwire.KeyMessage+id)
+	}
+	msgIndex := map[string]larksyncwire.IndexRecord{}
+	for start := 0; start < len(msgKeys); start += 100 {
+		end := min(start+100, len(msgKeys))
+		got, err := store.LarkSyncIndex(ctx, msgKeys[start:end])
+		if err != nil {
+			h.logf("lark sync: %s: dropped-links backfill message index: %v", binding.Key, err)
+			return "", false
+		}
+		for k, v := range got {
+			msgIndex[k] = v
+		}
+	}
+
+	byToken := map[string]larksyncwire.PendingLinkCandidate{}
+	var tokenOrder []string
+	hasWiki := false
+	for _, id := range msgOrder {
+		rec, exists := msgIndex[larksyncwire.KeyMessage+id]
+		mine := false
+		if exists {
+			mine = slices.ContainsFunc(rec.Sources, func(s larksyncwire.SourceRef) bool { return s.Binding == binding.Key })
+		} else if fullBindings <= 1 {
+			mine = true
+		}
+		if !mine {
+			continue
+		}
+		for _, c := range byMsg[id].links {
+			if c.Token == "" || c.ObjType == "" {
+				continue
+			}
+			if c.ObjType == larksyncwire.LinkObjWiki {
+				hasWiki = true
+			}
+			if prev, seen := byToken[c.Token]; seen {
+				if c.MessageAt.After(prev.MessageAt) {
+					prev.MessageAt = c.MessageAt
+				}
+				if prev.URL == "" || (strings.Contains(prev.URL, "/wiki/") && !strings.Contains(c.URL, "/wiki/") && c.URL != "") {
+					prev.URL = c.URL
+				}
+				byToken[c.Token] = prev
+				continue
+			}
+			byToken[c.Token] = c
+			tokenOrder = append(tokenOrder, c.Token)
+		}
+	}
+	if len(tokenOrder) == 0 {
+		return "", true
+	}
+
+	docKeys := make([]string, 0, len(tokenOrder))
+	for _, tok := range tokenOrder {
+		docKeys = append(docKeys, larksyncwire.KeyDoc+tok)
+	}
+	docIndex := map[string]larksyncwire.IndexRecord{}
+	for start := 0; start < len(docKeys); start += 100 {
+		end := min(start+100, len(docKeys))
+		got, err := store.LarkSyncIndex(ctx, docKeys[start:end])
+		if err != nil {
+			h.logf("lark sync: %s: dropped-links backfill doc index: %v", binding.Key, err)
+			return "", false
+		}
+		for k, v := range got {
+			docIndex[k] = v
+		}
+	}
+
+	aliasHasBody := map[string]bool{}
+	if hasWiki {
+		var docAfter int64
+		for {
+			rows, err := store.LarkSyncOutboxAfter(ctx, db.LarkSyncDoc, docAfter, 100)
+			if err != nil {
+				h.logf("lark sync: %s: dropped-links backfill doc outbox: %v", binding.Key, err)
+				return "", false
+			}
+			for _, row := range rows {
+				docAfter = row.Seq
+				var it kbwire.Item
+				if err := json.Unmarshal(row.Payload, &it); err != nil {
+					continue
+				}
+				if it.BodyHash == "" && strings.TrimSpace(it.Content) == "" {
+					continue
+				}
+				for _, al := range it.Aliases {
+					if al != "" {
+						aliasHasBody[al] = true
+					}
+				}
+			}
+			if len(rows) < 100 {
+				break
+			}
+		}
+	}
+
+	var missing []larksyncwire.PendingLinkCandidate
+	for _, tok := range tokenOrder {
+		if rec, exists := docIndex[larksyncwire.KeyDoc+tok]; exists && rec.BodyHash != "" {
+			continue
+		}
+		if aliasHasBody[tok] {
+			continue
+		}
+		missing = append(missing, byToken[tok])
+	}
+	if len(missing) == 0 {
+		return "", true
+	}
+	updated, added := backfiller.MergePendingLinks(cursors[larksyncwire.PendingLinksCursor], missing)
+	if added == 0 {
+		return "", true
+	}
+	return updated, true
 }
 
 // larkSyncMovedCursors are the cursors of res to save: none of a resource that failed (the reader should not have
@@ -624,12 +856,17 @@ func larkSyncOutboxRows(b larksyncwire.Binding, res larksyncwire.Result, now tim
 // (ModeIM) advance NextIMRunAt without disturbing the daily full run's NextRunAt; when a ModeIM run was partial only
 // because a large chat hit its budget/cap while still making forward progress, NextIMRunAt stays at 15 minutes
 // (larkSyncIMEvery) instead of backing off for an hour. gone: the binding was removed meanwhile.
-func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res larksyncwire.Result, runErr, commitErr error, madeProgress bool, backfillVer int) (gone bool) {
+func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res larksyncwire.Result, runErr, commitErr error, madeProgress bool, backfillVer, linksBackfillVer int, authorizedAt time.Time) (gone bool) {
 	now := h.bots.sync.clock()
 	_, err := h.larkSyncChange(context.WithoutCancel(ctx), func(st *larkSyncState) error {
 		b := st.binding(key)
 		if b == nil {
 			return errLarkSyncNoBinding
+		}
+		if !b.AuthorizedAt.Equal(authorizedAt) {
+			// A grant renewed during this run is already due now. Its health and schedule must not be
+			// overwritten by the old grant's missing-scope result or daily backoff.
+			return nil
 		}
 		imOnly := mode == larksyncwire.ModeIM
 		if imOnly {
@@ -639,6 +876,17 @@ func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res lark
 		}
 		if backfillVer > b.BackfillVersion {
 			b.BackfillVersion = backfillVer
+		}
+		if linksBackfillVer > b.LinksBackfillVersion {
+			b.LinksBackfillVersion = linksBackfillVer
+		}
+		for _, e := range res.Errors {
+			if e.Resource == "sender_names" && e.Kind == larksyncwire.ErrKindScope {
+				// New unnamed messages can arrive after an earlier repair completed. Keep those eligible
+				// for repair when the owner restores contact access, not just pre-upgrade messages.
+				b.BackfillVersion = 0
+				break
+			}
 		}
 		health, detail := larksyncwire.HealthOK, ""
 		failed := false

@@ -856,6 +856,9 @@ func (s *Service) activateDeferredTaskStart(ctx context.Context, t *PlanTask, mi
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartTimeout)
 	defer cancel()
 	params := map[string]any{"session_id": sid, "text": d.text, "client_msg_id": d.clientMsgID}
+	if d.permissionMode != "" {
+		params["permission_mode"] = d.permissionMode
+	}
 	if len(d.images) > 0 {
 		params["images"] = d.images
 	}
