@@ -54,6 +54,8 @@ const (
 	larkSyncBodyMost    = int64(1 << 20)       // request bodies of the sync's routes
 	larkSyncChangesMost = 100                  // chat batches one Changes call hands over by default
 	larkSyncStaleAuth   = larkSyncAuthFor + time.Minute
+	// larkSyncBackfillVersion triggers the one-time idempotent sender-name backfill for pre-#15486 outbox messages.
+	larkSyncBackfillVersion = 1
 )
 
 // larkSyncBackoff is the wait after the third, fourth and later consecutive failed runs (a binding's circuit).
@@ -137,6 +139,8 @@ type larkSyncBinding struct {
 	RemindedDays     []int     `json:"reminded_days,omitempty"`
 	// Failures counts the consecutive failed runs (the circuit, larkSyncBackoff).
 	Failures int `json:"failures,omitempty"`
+	// BackfillVersion records the highest completed one-time data repair version for this binding (larkSyncBackfillVersion).
+	BackfillVersion int `json:"backfill_version,omitempty"`
 	// An authorization under way: browser (State, the PKCE verifier and the redirect), or device (the device code).
 	AuthState       string    `json:"auth_state,omitempty"`
 	AuthVerifierEnc string    `json:"auth_verifier_enc,omitempty"`

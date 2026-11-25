@@ -340,6 +340,19 @@ Go output. The schema has no `surfaces` map (D5) and an optional `totals` (D12);
 0 open PRs. *Gate:* step 5. *Rollback:* revert; nothing reads the types. *Done:* `--check` and test_wire_schema.py pass;
 round trips pass in Go, Kotlin, Swift (`swift test` in PersonaWire) and the web.
 
+*Landed (#15512):* `schema/wire/counts.schema.json` with its four outputs (Go in `assistantwire`), the contract in
+`docs/protocol/counts.md` and the samples in `spec/fixtures/counts/view_samples.json`, which
+`TestViewSamplesAreFleetcountsRows` (`fleetcountadapt`) holds to fleetcount's rows for the needs-you cases they name.
+What differs from section 3.2, and why: each count id is a named, optional field of `counts` and of `totals`, not a
+`{<id>: …}` map, so every client reads a typed field (the generator keeps a map whose keys are not all required a map)
+while the JSON stays the same and a new id stays an optional addition; the view names its `build`, which D18's
+diagnostics read; a row's `id` and its cards are ID types (`CountsRowKey`, `CountsCardID`, since a wire schema cannot
+`$ref` `ids.schema.json` yet) and `why` the closed enum `CountsHeldReason` (`muted`, `held`) with an explicit unknown;
+`keys` may list fewer than 200 rows, `n` being the rows it lists plus `more`, because 200 rows of UUID-length session
+and card ids come to about 22 KB, past the 16 KB the hub is to keep (section 3.2), so step 7a or 7b settles the bound
+and the limit together; `held` has the same bound; `protocol.md` gets a pointer section only, since this step adds no
+message or feature (step 7b adds their rows).
+
 **7a. The manager tells the view.** *Change:* the capability constant in a new assistantwire/counts.go (avoiding
 `assistantwire/bus.go`, 9 open PRs), named in the hello's capability list in `assistant/bus.go` (10 open PRs; one
 identifier on one line); the tell from liveLoop. *Gate:* steps 5 and 6. *Rollback:* revert. *Done:* on one round,

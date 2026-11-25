@@ -285,6 +285,12 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 // while the post's IO was pending (latest differs from before) stays the live row's; otherwise live keeps what the
 // post's apply gave it. A new unexported field of InboxItem belongs here (TestInboxPostRebaseCoversUnexportedFields).
 func rebaseInboxBookkeeping(live, before, latest *InboxItem) {
+	if !reflect.DeepEqual(latest.externalMoves, before.externalMoves) {
+		live.externalMoves = latest.externalMoves
+	}
+	if latest.externalChecking != before.externalChecking {
+		live.externalChecking = latest.externalChecking
+	}
 	if latest.replyClassifySerial != before.replyClassifySerial {
 		live.replyClassifySerial = latest.replyClassifySerial
 	}
