@@ -97,6 +97,28 @@ class ProcessScopeTests(unittest.TestCase):
             {"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"}])
         self.assertEqual(owned_debuggers, {42: START})
 
+    def test_legitimate_retained_debugger_can_reparent_to_init(self):
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            owned_debuggers = {42: START}
+            original = (f" 46 1 {START} Ss {launcher}\n"
+                        f" 42 46 {START} S /usr/libexec/debugserver")
+            reparented = f" 42 1 {START} S /usr/libexec/debugserver"
+            snapshots = iter([original, reparented, reparented, reparented, reparented])
+            def capture(command, path, **kwargs):
+                path.write_text("owned-thread-evidence\n")
+                path.with_suffix(path.suffix + ".status.txt").write_text("0\n")
+                return 0
+            with mock.patch.object(visual.watch, "bounded_file", side_effect=capture):
+                observation = visual.sample_processes(UDID, output, 0, runner=lambda command, **kwargs:
+                    subprocess.CompletedProcess(command, 0, next(snapshots), ""),
+                    owned_debuggers=owned_debuggers)
+            self.assertEqual(observation["processes"], [
+                {"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"}])
+            self.assertEqual((output / "process-000-debugserver-42-threads.txt.status.txt").read_text(), "0\n")
+            self.assertEqual(owned_debuggers, {42: START})
+
     def test_reappeared_debugger_with_an_owned_launcher_is_new_evidence(self):
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
         def line(pid, ppid, command, started=START, state="S"):
@@ -167,6 +189,85 @@ class ProcessScopeTests(unittest.TestCase):
             self.assertFalse(path.with_suffix(path.suffix + ".command").exists())
             self.assertNotIn(START, (output / "process-000.json").read_text())
 
+    def test_debugger_exit_after_successful_capture_is_explicitly_unavailable(self):
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        original = (f" 46 1 {START} Ss {launcher}\n"
+                    f" 42 46 {START} S /usr/libexec/debugserver")
+        exited = f" 46 1 {START} Ss {launcher}"
+        snapshots = iter([original, original, exited])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            def capture(command, path, **kwargs):
+                self.assertEqual(command, ["ps", "-M", "42"])
+                path.write_text("exit-race-thread-evidence\n")
+                path.with_suffix(path.suffix + ".status.txt").write_text("0\n")
+                return 0
+            with mock.patch.object(visual.watch, "bounded_file", side_effect=capture):
+                visual.sample_processes(UDID, output, 0, runner=lambda command, **kwargs:
+                    subprocess.CompletedProcess(command, 0, next(snapshots), ""))
+            path = output / "process-000-debugserver-42-threads.txt"
+            self.assertEqual(path.read_text(), "unavailable: process identity changed during thread capture\n")
+            self.assertEqual(path.with_suffix(path.suffix + ".status.txt").read_text(),
+                             "identity-mismatch-after-capture\n")
+            self.assertFalse(path.with_suffix(path.suffix + ".command").exists())
+
+    def test_host_replacement_before_capture_cannot_publish_foreign_thread_evidence(self):
+        owned = f"/Library/Developer/CoreSimulator/Devices/{UDID}/Application/X/Persona.app/Persona"
+        original = f" 41 1 {START} Ss {owned}"
+        replaced = f" 41 1 {REUSED} Ss {owned}"
+        snapshots = iter([original, replaced])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with mock.patch.object(visual.watch, "bounded_file") as bounded:
+                visual.sample_processes(UDID, output, 0, runner=lambda command, **kwargs:
+                    subprocess.CompletedProcess(command, 0, next(snapshots), ""))
+            bounded.assert_not_called()
+            path = output / "process-000-Persona-41-threads.txt"
+            self.assertEqual(path.read_text(), "unavailable: process identity changed before thread capture\n")
+            self.assertEqual(path.with_suffix(path.suffix + ".status.txt").read_text(),
+                             "identity-mismatch-before-capture\n")
+
+    def test_host_parent_change_does_not_use_the_debugger_reparenting_exception(self):
+        self.assertFalse(visual.same_process_identity((START, 1), (START, 46), "Persona"))
+
+    def test_host_exit_before_capture_is_unavailable_without_calling_ps_m(self):
+        owned = f"/Library/Developer/CoreSimulator/Devices/{UDID}/Application/X/Persona.app/Persona"
+        original = f" 41 1 {START} Ss {owned}"
+        snapshots = iter([original, ""])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            with mock.patch.object(visual.watch, "bounded_file") as bounded:
+                visual.sample_processes(UDID, output, 0, runner=lambda command, **kwargs:
+                    subprocess.CompletedProcess(command, 0, next(snapshots), ""))
+            bounded.assert_not_called()
+            path = output / "process-000-Persona-41-threads.txt"
+            self.assertEqual(path.read_text(), "unavailable: process identity changed before thread capture\n")
+            self.assertEqual(path.with_suffix(path.suffix + ".status.txt").read_text(),
+                             "identity-mismatch-before-capture\n")
+
+    def test_identity_query_failure_after_capture_is_not_a_successful_sample(self):
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        snapshot = (f" 46 1 {START} Ss {launcher}\n"
+                    f" 42 46 {START} S /usr/libexec/debugserver")
+        snapshots = iter([snapshot, snapshot])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            def capture(command, path, **kwargs):
+                path.write_text("uncertain-thread-evidence\n")
+                path.with_suffix(path.suffix + ".status.txt").write_text("0\n")
+                return 0
+            def runner(command, **kwargs):
+                try:
+                    return subprocess.CompletedProcess(command, 0, next(snapshots), "")
+                except StopIteration:
+                    return subprocess.CompletedProcess(command, 1, "", "")
+            with mock.patch.object(visual.watch, "bounded_file", side_effect=capture):
+                visual.sample_processes(UDID, output, 0, runner=runner)
+            path = output / "process-000-debugserver-42-threads.txt"
+            self.assertEqual(path.read_text(), "unavailable: process identity changed during thread capture\n")
+            self.assertEqual(path.with_suffix(path.suffix + ".status.txt").read_text(),
+                             "identity-mismatch-after-capture\n")
+
     def test_legitimate_same_process_capture_preserves_its_exit_status(self):
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
         def line(pid, ppid, command, started=START, state="S"):
@@ -228,6 +329,43 @@ class VisualObserverTests(unittest.TestCase):
         self.output = Path(self.tmp.name)
         self.destination = self.output / "diagnostics/live-regular-visual"
         self.live = mock.Mock()
+
+    def test_successful_host_capture_then_debugger_exit_keeps_observer_collecting(self):
+        owned = f"/Library/Developer/CoreSimulator/Devices/{UDID}/Application/X/Persona.app/Persona"
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        def line(pid, ppid, command, started=START, state="S"):
+            return f" {pid} {ppid} {started} {state} {command}"
+        original = "\n".join([line(41, 1, owned, state="Ss"), line(42, 41, "/usr/libexec/debugserver")])
+        host_only = line(41, 1, owned, state="Ss")
+        snapshots = iter([original, original, host_only, host_only])
+        with mock.patch.object(visual.watch, "start_live_log", return_value=self.live), \
+                mock.patch.object(visual.watch, "stop_live_log") as stop, \
+                mock.patch.object(visual.launch, "collect") as collect:
+            real_popen = subprocess.Popen
+            def capture(command, **kwargs):
+                if command[1] == "-axo":
+                    return real_popen([sys.executable, "-c",
+                        "import sys; sys.stdout.write(next(iter(sys.argv[1:])))", next(snapshots)], **kwargs)
+                self.assertEqual(command, ["ps", "-M", "41"])
+                return real_popen([sys.executable, "-c", "print('owned-host-thread-evidence')"], **kwargs)
+            with mock.patch.object(visual.watch.subprocess, "Popen", side_effect=capture):
+                visual.observe(UDID, visual.launch.BUNDLE, self.destination, seconds=36,
+                               scope_root=self.output, monotonic=lambda: 0,
+                               sleep=lambda _: (self.destination / "observer.stop").write_text(""))
+        host = self.destination / "process-000-Persona-41-threads.txt"
+        debugger = self.destination / "process-000-debugserver-42-threads.txt"
+        self.assertEqual(host.read_text(), "owned-host-thread-evidence\n")
+        self.assertEqual(host.with_suffix(host.suffix + ".status.txt").read_text(), "0\n")
+        self.assertEqual(debugger.read_text(), "unavailable: process identity changed before thread capture\n")
+        self.assertEqual(debugger.with_suffix(debugger.suffix + ".status.txt").read_text(),
+                         "identity-mismatch-before-capture\n")
+        self.assertFalse(debugger.with_suffix(debugger.suffix + ".command").exists())
+        collect.assert_called_once()
+        stop.assert_called_once_with(self.live)
+        status = (self.destination / "observer.status.txt").read_text()
+        self.assertIn("xcodebuild-finished", status)
+        self.assertIn("observation only; no launch cause established", status)
+        self.assertNotIn("collection incomplete", status)
 
     def test_stream_starts_before_first_sample_and_stop_publishes_no_cause(self):
         self.destination.mkdir(parents=True)

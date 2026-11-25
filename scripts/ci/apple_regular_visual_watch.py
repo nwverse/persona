@@ -104,11 +104,42 @@ def scoped_processes(udid, runner=None, owned_debuggers=None, process_identities
     return {"query_status": "completed", "processes": sorted(processes, key=lambda item: (item["name"], item["pid"]))}
 
 
+def same_process_identity(actual, identity, process_name):
+    """Compare current PID/name/start/ancestry without accepting missing evidence.
+
+    Reparenting a retained debugger to 1 preserves the identity when its
+    short-lived launcher exits. A host observed as that debugger's parent
+    does not become interchangeable with PID 1 through this exception.
+    """
+    return actual is not None and actual[0] == identity[0] and (
+        actual[1] == identity[1] or
+        (process_name == "debugserver" and actual[1] == 1 and identity[1] != 1))
+
+
+def current_identity(udid, runner, owned_debuggers, process_identities, key, identity):
+    """Require the exact validated process identity after refreshing state.
+
+    A missing identity is a failed check, not a reason to retain the process as
+    current owned evidence or publish a thread sample captured across its exit.
+    """
+    current = scoped_processes(udid, runner, owned_debuggers, process_identities)
+    if current["query_status"] == "completed" and same_process_identity(
+            process_identities.get(key), identity, key[1]):
+        return True
+    owned_debuggers.pop(key[0], None)
+    return False
+
+
 def sample_processes(udid, destination, index, runner=watch.subprocess.run, owned_debuggers=None,
                      process_identities=None):
+    if owned_debuggers is None:
+        owned_debuggers = {}
     if process_identities is None:
         process_identities = {}
     observation = scoped_processes(udid, runner, owned_debuggers, process_identities)
+    # Revalidation clears the shared current map. Keep this sample's identities
+    # immutable so another process's capture cannot erase the next one's baseline.
+    snapshot_identities = dict(process_identities)
     label = f"process-{index:03d}"
     launch.publish(destination / (label + ".json"), json.dumps({
         "captured_at": datetime.now(timezone.utc).isoformat(), **observation,
@@ -116,25 +147,26 @@ def sample_processes(udid, destination, index, runner=watch.subprocess.run, owne
     for process in observation["processes"]:
         if "pid" not in process or "ppid" not in process:
             continue
-        identity = process_identities[(process["pid"], process["name"])]
+        key = (process["pid"], process["name"])
+        # A successful snapshot must carry the exact private identity of every
+        # process it exposes for capture. Never infer one from a public row.
+        if key not in snapshot_identities:
+            raise RuntimeError("validated process is missing its private identity")
+        identity = snapshot_identities[key]
         path = destination / (label + f"-{process['name']}-{process['pid']}-threads.txt")
         status = path.with_suffix(path.suffix + ".status.txt")
         # Revalidate immediately before ps -M rather than relying on the earlier
         # metadata snapshot. Reject a mismatch after temporary capture, before its
         # result is published as current evidence. Portable ps offers no atomic
         # identity-and-thread snapshot; this narrows the remaining kernel race.
-        current = scoped_processes(udid, runner, owned_debuggers, process_identities)
-        if current["query_status"] != "completed" or process_identities.get(
-                (process["pid"], process["name"])) != identity:
+        if not current_identity(udid, runner, owned_debuggers, process_identities, key, identity):
             launch.publish(path, "unavailable: process identity changed before thread capture\n")
             launch.publish_status(status, "identity-mismatch-before-capture\n")
             continue
         code = watch.bounded_file(["ps", "-M", str(process["pid"])], path, timeout=5)
         if code:
             continue
-        current = scoped_processes(udid, runner, owned_debuggers, process_identities)
-        if current["query_status"] != "completed" or process_identities.get(
-                (process["pid"], process["name"])) != identity:
+        if not current_identity(udid, runner, owned_debuggers, process_identities, key, identity):
             launch.publish(path, "unavailable: process identity changed during thread capture\n")
             launch.publish_status(status, "identity-mismatch-after-capture\n")
     return observation

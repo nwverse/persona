@@ -222,10 +222,12 @@ first seen before the host remains associated with this invocation through its p
 launcher exits. If it reappears under a new non-1 parent, current owned ancestry is required even when the one-second
 `lstart` timestamp is unchanged; an equal timestamp alone cannot transfer ownership. The timestamp is internal only and
 never exported. Matching `ps -M` output is bounded and runs only after an immediate PID, start-time and ancestry check.
-A further check after temporary capture replaces a mismatching successful result with an explicit identity-mismatch
-status and unavailable evidence. Portable `ps` cannot atomically validate a PID and read its threads, so a replacement
-between those kernel operations remains an inherent race; the checks narrow it rather than claim atomic capture. Command
-arguments and private identity values are not exported.
+Each sample retains its own private identity snapshot while revalidation refreshes the shared current map. A process exit
+or a missing/changed identity at either check writes explicit unavailable evidence rather than aborting later sampling or
+final collection. A further check after temporary capture replaces a mismatching successful result with an explicit
+identity-mismatch status and unavailable evidence. Portable `ps` cannot atomically validate a PID and read its threads, so
+a replacement between those kernel operations remains an inherent race; the checks narrow it rather than claim atomic
+capture. Command arguments and private identity values are not exported.
 One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
 ID and its allowlisted `state`, `pid`, `runs` and `last exit code` fields; raw arguments, programs, paths, environment
 and arbitrary values are never exported. The visual command tees its actual stdout/stderr to `ios-about-regular.log`
