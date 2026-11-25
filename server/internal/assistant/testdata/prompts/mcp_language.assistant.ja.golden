@@ -85,6 +85,27 @@
     }
   },
   {
+    "name": "ask_user_withdraw",
+    "description": "Withdraw a pending ask_user question card created by this conversation when it is no longer needed. Only cancels this conversation's own ask_user question; another conversation's card and user-owned approvals, plans or screen dialogs are rejected. Repeated calls on an already-ended card of this conversation are idempotent.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "interaction_id"
+      ],
+      "properties": {
+        "interaction_id": {
+          "type": "string",
+          "description": "the pending ask_user interaction ID (ix_…)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional short reason why the question is no longer needed"
+        }
+      }
+    },
+    "defer_loading": true
+  },
+  {
     "name": "notify_user",
     "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; ordinary replies already notify. In the hub's push grading, a notice from a conversation other than the main one is held for the briefing instead of alerting unless it is P0; the tool answer then says it was moved to the briefing, so treat the user as not alerted.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {

@@ -172,7 +172,7 @@ type Service struct {
 	routineChecks  routineCheckApprovalBook
 
 	hub         Hub
-	store       func() Store
+	storeFn     atomic.Pointer[func() Store]
 	entriesDial func(context.Context, any) ([]byte, error)
 	// memoryEntries is where the memory assembler reads the ledger in tests; nil reads the manager database
 	// (memory_assemble_entry.go).
@@ -421,14 +421,12 @@ var _ Handler = (*Service)(nil)
 
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
-	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
+	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
+	s.setStore(o.Store)
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
-	if s.store == nil {
-		s.store = func() Store { return nil }
-	}
 	if _, ok := s.store().(logicalConversationStore); ok && s.devs != nil {
 		s.devs = &logicalDevices{Devices: s.devs, s: s}
 	}
@@ -558,6 +556,31 @@ func fullRole(r *http.Request) bool {
 // here already means the extension holds todos.write.
 func todoWriter(r *http.Request) bool {
 	return fullRole(r) || r.Header.Get(RoleHeader) == roleExtension
+}
+
+// store returns the assistant's current Store (nil when running without a database).
+func (s *Service) store() Store {
+	if fn := s.storeFn.Load(); fn != nil && *fn != nil {
+		return (*fn)()
+	}
+	return nil
+}
+
+// storeAccessor returns the installed store accessor (nil on a bare Service created without New).
+func (s *Service) storeAccessor() func() Store {
+	if fn := s.storeFn.Load(); fn != nil {
+		return *fn
+	}
+	return nil
+}
+
+// setStore installs fn as the store accessor. Production sets it once in New; tests swap it through setStore so
+// background readers calling s.store() synchronize with the swap.
+func (s *Service) setStore(fn func() Store) {
+	if fn == nil {
+		fn = func() Store { return nil }
+	}
+	s.storeFn.Store(&fn)
 }
 
 // runCtx ends when the service stops: Run's context; background before Run (tests).

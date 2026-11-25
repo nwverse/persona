@@ -289,6 +289,12 @@ var plantedWant = []string{
 	"path-no-core internal/db/usage.go:3",
 	"path-no-core internal/hub/core.go:3",
 	"seam-any internal/assistant/badseam/badseam.go:15",
+	"seam-any internal/assistant/badseam/badseam.go:18",
+	"seam-any internal/assistant/badseam/badseam.go:19",
+	"seam-any internal/assistant/badseam/badseam.go:22",
+	"seam-any internal/assistant/badseam/badseam.go:23",
+	"seam-any internal/assistant/badseam/badseam.go:24",
+	"seam-any internal/assistant/badseam/badseam.go:28",
 	"seam-exported-field internal/assistant/badseam/badseam.go:11",
 }
 

@@ -63,8 +63,9 @@ export type Route =
   | { name: "agent-archives" }
   // the runs of one New agent start side by side (#8916, lib/compare-runs.ts)
   | { name: "compare"; id: string }
-  // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"), with the open to-do beside it
-  | { name: "todos"; id?: string; view?: "calendar"; mode?: "day" | "week" | "month"; date?: string }
+  // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"); view=board: the read-only
+  // progress board (#12713). Either view keeps the open to-do beside it.
+  | { name: "todos"; id?: string; view?: "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
   // the source subscription pages (#2041), their first state in ?state=
   | { name: "subscriptions" }
@@ -151,6 +152,7 @@ export function parse(path: string, search = ""): Route {
     // the link's own query (#9930): reading the page's made routeAt() on a /todos?id= link open the to-do on screen
     const q = new URLSearchParams(search);
     const r: Route = { name: "todos", id: p[1] || q.get("id") || undefined };
+    if (q.get("view") === "board") return { ...r, view: "board" };
     if (q.get("view") === "calendar") {
       const mode = q.get("mode");
       const date = q.get("date");
@@ -250,7 +252,9 @@ export function routePath(r: Route): string {
       return `/compare/${encodeURIComponent(r.id)}`;
     case "todos": {
       const q = new URLSearchParams();
-      if (r.view === "calendar") {
+      if (r.view === "board") {
+        q.set("view", "board");
+      } else if (r.view === "calendar") {
         q.set("view", "calendar");
         if (r.mode) q.set("mode", r.mode);
         if (r.date) q.set("date", r.date);

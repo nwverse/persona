@@ -18,6 +18,8 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modules/recording/writers"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"github.com/nwverse/persona/server/internal/transcribejob"
 )
 
@@ -90,7 +92,7 @@ func (s *Recordings) audioSocket(w http.ResponseWriter, r *http.Request) {
 	p := newPhoneSocket(c)
 	defer p.wait()
 	id := r.PathValue("id")
-	aw, err := e.AudioOpen(id)
+	aw, err := writersOf(e).AudioOpen(id)
 	if code := s.audioRefusal(ctx, e, err); code != "" {
 		if aw != nil {
 			_ = aw.Close()
@@ -140,12 +142,12 @@ func (s *Recordings) audioSocket(w http.ResponseWriter, r *http.Request) {
 		return // too late: refused
 	}
 	var tl *kb.Timeline
-	if t, ok := kb.ParseTimeline(start.Timeline); ok {
+	if t, ok := recordingwire.ParseTimeline(start.Timeline); ok {
 		tl = &t
 	}
 	from := aw.HeldTo()
-	held, _ := e.AudioHeld(rid)
-	gaps := kb.GapsIn(held, 0, from)
+	held, _ := writersOf(e).AudioHeld(rid)
+	gaps := recordingwire.GapsIn(held, 0, from)
 	if gaps == nil {
 		gaps = [][2]float64{}
 	}
@@ -249,8 +251,8 @@ func finiteTime(t float64) bool { return !math.IsNaN(t) && !math.IsInf(t, 0) && 
 
 // audioEnd is the phone's end at recording second at on socket p: the recording's end is stored, the audio
 // acknowledged up to it, the job's last sentences sent as lines (within audioEndWait), then the socket closed 1000.
-func (s *Recordings) audioEnd(e *kb.Engine, run *hubRun, p *phoneSocket, aw *kb.AudioWriter, id string, at float64) {
-	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+func (s *Recordings) audioEnd(e *kb.Engine, run *hubRun, p *phoneSocket, aw *writers.AudioWriter, id string, at float64) {
+	if _, err := writersOf(e).TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.End = at
 		return nil
 	}); err != nil {
@@ -510,7 +512,7 @@ func (s *Recordings) audioPut(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteCode(w, http.StatusForbidden, assistantwire.CodeKBReadOnly, i18n.Err("assistant-kb_routes.read_only"))
 		return
 	}
-	gaps, err := e.AudioPut(id, at, raw)
+	gaps, err := writersOf(e).AudioPut(id, at, raw)
 	if gaps == nil {
 		gaps = [][2]float64{}
 	}

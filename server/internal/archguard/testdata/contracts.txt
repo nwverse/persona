@@ -23,4 +23,5 @@ internal/recordingwire
 internal/relayproto
 internal/repositorywire
 internal/rpc
+internal/wireids
 github.com/nwverse/persona/sdk/go/wire
