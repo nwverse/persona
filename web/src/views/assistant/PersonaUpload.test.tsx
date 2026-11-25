@@ -325,4 +325,36 @@ describe("uploaded looks in the picker", () => {
     await settle();
     expect(radios().some((r) => r.getAttribute("aria-label") === "Doudou")).toBe(false);
   });
+
+  it("hides Edit on uploaded cards without look_uploads_states", async () => {
+    hub.features = ["look_uploads"];
+    const { t } = await draw();
+    expect(byLabel(t("assistant-persona.delete_label", { name: "Doudou" }))).not.toBeNull();
+    expect(byLabel(t("assistant-persona.edit_label", { name: "Doudou" }))).toBeNull();
+  });
+
+  it("shows Edit beside Delete with look_uploads_states and populates Match Avatar when uploaded avatar has colors", async () => {
+    hub.features = ["look_uploads", "look_uploads_states"];
+    const coloredDoudou: LookView = {
+      ...doudou,
+      manifest: {
+        ...doudou.manifest!,
+        colors: { light: { primary: "#3A7BD5", accent: "#2255A0" }, dark: { primary: "#3A7BD5", accent: "#6BA0E8" } },
+        source: { kind: "upload", color: { auto: false, seed: "#3A7BD5" }, states: { working: { mark: true } } },
+      },
+    };
+    hub.looks = [...builtins, frog, coloredDoudou, ext];
+    hub.current = { id: "u-demo0001", effective: "u-demo0001" };
+    const { t } = await draw();
+    const { savedPersonaAccent } = await import("../../ui/look");
+    expect(savedPersonaAccent()).toEqual({ light: "#2255a0", dark: "#6ba0e8" });
+    expect(byLabel(t("assistant-persona.edit_label", { name: "Doudou" }))).not.toBeNull();
+    expect(byLabel(t("assistant-persona.edit_label", { name: "Milk Frog" }))).toBeNull();
+    // Clicking Edit opens the dialog prefilled with Doudou
+    await act(async () => byLabel(t("assistant-persona.edit_label", { name: "Doudou" }))!.click());
+    const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dlg.textContent).toContain(t("assistant-lookupload.edit_title"));
+    const nameInput = document.getElementById([...dlg.querySelectorAll("label")].find((l) => l.textContent === t("assistant-lookupload.name"))!.htmlFor) as HTMLInputElement;
+    expect(nameInput.value).toBe("Doudou");
+  });
 });

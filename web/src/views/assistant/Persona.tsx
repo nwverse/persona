@@ -12,7 +12,7 @@ import {
 } from "../../lib/persona";
 import { isResumed } from "../../lib/reconnect";
 import { hubHas, onHubEvent, useStore } from "../../lib/store";
-import { deleteUploadedLook, LOOK_UPLOADS_FEATURE, refusalText, type UploadAnswer } from "../../lib/look-upload";
+import { deleteUploadedLook, LOOK_UPLOADS_FEATURE, LOOK_UPLOADS_STATES_FEATURE, refusalText, type UploadAnswer } from "../../lib/look-upload";
 import { Button, cx, Dialog, IconButton } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { lazyDialog } from "../LazyOverlay";
@@ -251,6 +251,16 @@ function lookUploaded({ look, current }: UploadAnswer, since: number) {
   setPS(current ? { looks, list, chosen: takeChoice(normalizePersonaChoice(current.id ?? current.effective), since) } : { looks, list });
 }
 
+/** An uploaded look edited via PATCH (#15449): update it in place (and Match Avatar if chosen) and refresh the list. */
+function lookEdited(look: LookView) {
+  edits++;
+  const looks = ps.looks ? ps.looks.map((l) => (l.id === look.id ? look : l)) : null;
+  const made = usablePersonas(lookPackages([look]))[0];
+  const list = made ? ps.list.map((p) => (p.id === look.id ? made : p)) : ps.list;
+  setPS({ looks, list });
+  readPersonasAgain();
+}
+
 /**
  * An uploaded look deleted (#2404; the request left at `since`, choiceMark): gone from the list, and the hub's choice
  * after it (the default when it was the chosen one).
@@ -444,11 +454,12 @@ export function PersonaPicker({ onExtensions }: { onExtensions?: () => void } = 
   const s = usePersonaStore();
   const current = usePersona();
   const lang = currentLanguage();
-  // making avatars from images (#2404): only a hub that says it can
+  // making avatars from images (#2404, #15449): only a hub that says it can
   const uploads = useStore((st) => hubHas(st.features, LOOK_UPLOADS_FEATURE));
+  const uploadStates = useStore((st) => hubHas(st.features, LOOK_UPLOADS_STATES_FEATURE));
   const [refreshing, setRefreshing] = useState(false);
-  // the upload dialog, a new one each time it opens (`key`)
-  const [upload, setUpload] = useState({ open: false, key: 0 });
+  // the upload / edit dialog, a new one each time it opens (`key`)
+  const [upload, setUpload] = useState<{ open: boolean; key: number; edit?: PersonaInfo }>({ open: false, key: 0 });
   const [deleting, setDeleting] = useState<{ id: string; name: string; current: boolean } | null>(null);
   // where the choices stood as the upload left (takeChoice)
   const uploadSent = useRef(0);
@@ -460,16 +471,16 @@ export function PersonaPicker({ onExtensions }: { onExtensions?: () => void } = 
   useEffect(load, []);
   const sub = (text: string) => <span className="max-w-full truncate text-[11px] whitespace-nowrap text-ink-3">{text}</span>;
   const lookOf = (id: string) => s.looks?.find((l) => l.id === id);
-  const cards: { id: string; title: string; label: string; sub: React.ReactNode; face: React.ReactNode; uploaded?: boolean }[] = [
+  const cards: { id: string; title: string; label: string; sub: React.ReactNode; face: React.ReactNode; uploaded?: boolean; info?: PersonaInfo }[] = [
     { id: BUILTIN_PERSONA, title: t("assistant-persona.mochi"), label: t("assistant-persona.mochi_default"), sub: sub(t("assistant-persona.default_avatar")), face: <MochiFace size={56} /> },
     ...s.list.map((p) => {
       const title = localized(p.manifest.name, p.manifest.names, lang);
       const look = lookOf(p.id);
       const from = look?.extension_name ?? p.manifest.source?.extension_name;
-      // one made from an image says what the user wrote under it, else that it is theirs (it has no colors to show)
+      // one made from an image says what the user wrote under it, else that it is theirs
       if (look?.uploaded) {
         const about = p.manifest.subtitle ? localized(p.manifest.subtitle, p.manifest.subtitles, lang) : "";
-        return { id: p.id, title, label: title, uploaded: true, sub: sub(about || t("assistant-persona.uploaded")), face: <PersonaAvatar size={56} persona={p} fallback={<MochiFace size={56} />} /> };
+        return { id: p.id, title, label: title, uploaded: true, info: p, sub: sub(about || t("assistant-persona.uploaded")), face: <PersonaAvatar size={56} persona={p} fallback={<MochiFace size={56} />} /> };
       }
       return {
         id: p.id,
@@ -510,12 +521,15 @@ export function PersonaPicker({ onExtensions }: { onExtensions?: () => void } = 
             </button>
           );
           if (!c.uploaded || !uploads) return card;
-          // Delete sits in the card's corner: shown on hover and keyboard focus, always on touch screens.
+          // Edit (with look_uploads_states) and Delete sit in the card's corner: hover / keyboard focus, always on touch.
           return (
             <div key={c.id} className="group/look relative flex min-w-0">
               {card}
-              <span className="absolute top-1 right-1 opacity-0 transition-opacity duration-150 group-hover/look:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
-                <IconButton icon="trash" label={t("assistant-persona.delete_label", { name: c.title })} onClick={() => setDeleting({ id: c.id, name: c.title, current: selected })} />
+              <span className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/look:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+                {uploadStates && c.info && (
+                  <IconButton icon="pencil" size={26} iconSize={14} label={t("assistant-persona.edit_label", { name: c.title })} onClick={() => setUpload((u) => ({ open: true, key: u.key + 1, edit: c.info }))} />
+                )}
+                <IconButton icon="trash" size={26} iconSize={14} label={t("assistant-persona.delete_label", { name: c.title })} onClick={() => setDeleting({ id: c.id, name: c.title, current: selected })} />
               </span>
             </div>
           );
@@ -555,9 +569,12 @@ export function PersonaPicker({ onExtensions }: { onExtensions?: () => void } = 
         <LookUploadDialog
           key={upload.key}
           open={upload.open}
+          supportsStates={uploadStates}
+          edit={upload.edit}
           onClose={() => setUpload((u) => ({ ...u, open: false }))}
           onSend={() => (uploadSent.current = choiceMark())}
           onUploaded={(answer) => lookUploaded(answer, uploadSent.current)}
+          onEdited={lookEdited}
         />
       )}
       <DeleteLookDialog
