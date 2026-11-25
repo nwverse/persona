@@ -245,6 +245,7 @@ type Service struct {
 	interrupts interruptBook
 
 	titles           titleBook              // titles.go
+	extEvents        extEventBook           // extension_event.go
 	phoneKept        keptPhoneTools         // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames       agentNamingBook        // agent_naming.go
 	taskActivity     taskActivityBook       // task_close_activity.go: owner input/view activity, not read receipts
