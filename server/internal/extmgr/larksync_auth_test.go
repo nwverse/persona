@@ -2,14 +2,20 @@ package extmgr
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/botport"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/larksyncwire"
 )
@@ -237,6 +243,82 @@ func TestLarkSyncAuthorizationFallsBack(t *testing.T) {
 	if code != 200 || out["mode"] != larkSyncModeManual || out["redirect_uri"] != larkRedirect || out["console_url"] == "" ||
 		!strings.Contains(out["url"].(string), "client_id=cli_primary") {
 		t.Fatalf("manual: %d %v", code, out)
+	}
+}
+
+// End-to-end through the real larkauth -> feishubot client: when the platform answers 99991672 (missing
+// application:application:patch) or 99991676 (token no permission) on PATCH .../config, authorization tries the
+// device flow first instead of jumping straight to manual redirect pasting, and falls back to manual only when
+// the device endpoint itself is unavailable.
+func TestLarkSyncAuthorizeMissingPatchScopeFallsBackToDeviceFlow(t *testing.T) {
+	needsLarkModule(t)
+	for _, errCode := range []int{99991672, 99991676} {
+		t.Run(strconv.Itoa(errCode), func(t *testing.T) {
+			var deviceOK atomic.Bool
+			deviceOK.Store(true)
+			var deviceHits, publishHits atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/open-apis/auth/v3/tenant_access_token/internal":
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "tenant_access_token": "t-1", "expire": 7200})
+				case "/open-apis/application/v7/applications/cli_primary/config":
+					w.WriteHeader(http.StatusBadRequest)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"code": errCode,
+						"msg":  "Access denied. One of the following scopes is required: [application:application:patch]",
+					})
+				case "/open-apis/application/v7/applications/cli_primary/publish":
+					publishHits.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": 0})
+				case "/oauth/v1/device_authorization":
+					deviceHits.Add(1)
+					if !deviceOK.Load() {
+						w.WriteHeader(http.StatusNotFound)
+						_ = json.NewEncoder(w).Encode(map[string]any{"code": 404, "msg": "not found"})
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"device_code":               "dc_1",
+						"user_code":                 "UC-PATCH",
+						"verification_uri_complete": "https://accounts.example.com/device?user_code=UC-PATCH",
+						"expires_in":                600,
+						"interval":                  5,
+					})
+				default:
+					t.Errorf("unexpected platform request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			w := newLarkWorld(t)
+			w.h.bots.sync.userAuth = botport.NewUserAuth(srv.URL, srv.URL, srv.Client())
+
+			code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`)
+			p, _ := out["prompt"].(map[string]any)
+			if code != 200 || out["mode"] != larkSyncModeDevice || p["user_code"] != "UC-PATCH" {
+				t.Fatalf("code %d: got %d %v, want mode=%s with device prompt", errCode, code, out, larkSyncModeDevice)
+			}
+			if deviceHits.Load() != 1 || publishHits.Load() != 0 {
+				t.Fatalf("code %d: deviceHits=%d publishHits=%d, want 1 and 0", errCode, deviceHits.Load(), publishHits.Load())
+			}
+
+			// When device authorization is not offered, it degrades to manual redirect setup.
+			deviceOK.Store(false)
+			code, out = w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`)
+			if code != 200 || out["mode"] != larkSyncModeManual || out["redirect_uri"] != larkRedirect ||
+				out["console_url"] != botcard.DomainFeishu+"/app/cli_primary/safe" {
+				t.Fatalf("code %d manual fallback: got %d %v", errCode, code, out)
+			}
+			if deviceHits.Load() != 2 || publishHits.Load() != 0 {
+				t.Fatalf("code %d manual fallback: deviceHits=%d publishHits=%d, want 2 and 0", errCode, deviceHits.Load(), publishHits.Load())
+			}
+		})
 	}
 }
 
