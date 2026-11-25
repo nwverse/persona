@@ -52,9 +52,10 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 
 // assistantRuntimeEnv builds the generated command and environment snapshot for a local runtime's dedicated Assistant
 // worker using session-scoped gate proxy leases. For an existing session (session != ""), each proxied or relayed gate
-// idempotently reuses its (session, command) proxy address across turns, mode changes, and forks until session close or
-// runtime disconnect. For a new start (session == ""), fresh unnamed proxy addresses are opened; the caller must either
-// bind them with bind(sessionID) once session.start succeeds or call release() if starting fails.
+// idempotently reuses its (session, command) proxy address across turns, mode changes, forks, interrupt-only assistant
+// closes, and same-instance reconnects until explicit runtime close, instance replacement, or disconnect past grace.
+// For a new start (session == ""), fresh unnamed proxy addresses are opened; the caller must either bind them with
+// bind(sessionID) once session.start succeeds or call release() if starting fails.
 func (n *Node) assistantRuntimeEnv(cwd, session string) (env []string, release func(), bind func(session string)) {
 	return n.assistantLarkEnvWithLease(cwd, session, true)
 }

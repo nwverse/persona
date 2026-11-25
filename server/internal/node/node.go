@@ -2991,17 +2991,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if s, _, listed := n.runtimes.rowOf(p.SessionID); listed && s.Status == proto.StatusWorking {
 				_ = n.assistantInterruptRuntime(ctx, p.SessionID)
 			}
-			if gp := n.existingGates(); gp != nil {
-				gp.releaseSession(p.SessionID)
-			}
 			return ok(nil)
 		}
 		if n.isAssistantSession(p.SessionID) {
 			defer n.typing.lock(p.SessionID)()
 			n.stopAssistant(p.SessionID)
-			if gp := n.existingGates(); gp != nil {
-				gp.releaseSession(p.SessionID)
-			}
 			return ok(nil)
 		}
 		release := n.recovery.lock(p.SessionID)

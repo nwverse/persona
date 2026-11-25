@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,6 +114,7 @@ func TestRuntimeAssistantEnvironmentCapable(t *testing.T) {
 func TestRuntimeAssistantEnvironmentWithholdsProxyCredentials(t *testing.T) {
 	api := newFakeAPI(t)
 	n, hub := runtimeNode(t)
+	n.runtimeHost.leaseDisconnectGrace = 40 * time.Millisecond
 	t.Cleanup(func() { n.gates().close() })
 	assistantHub(hub)
 	cwd := prepareRuntimeAssistantEnvironment(t, n, true)
@@ -216,6 +218,7 @@ func TestRuntimeAssistantEnvironmentWithholdsProxyCredentials(t *testing.T) {
 
 func TestRuntimeAssistantEnvironmentRelaySocketEnvProxy(t *testing.T) {
 	n, hub := runtimeNode(t)
+	n.runtimeHost.leaseDisconnectGrace = 40 * time.Millisecond
 	t.Cleanup(func() { n.gates().close() })
 	assistantHub(hub)
 	cwd := prepareRuntimeAssistantEnvironment(t, n, false)
@@ -315,6 +318,7 @@ func TestRuntimeAssistantEnvironmentSessionAndCommandIsolationAndCleanup(t *test
 	api1 := newFakeAPI(t)
 	api2 := newFakeAPI(t)
 	n, hub := runtimeNode(t)
+	n.runtimeHost.leaseDisconnectGrace = 40 * time.Millisecond
 	t.Cleanup(func() { n.gates().close() })
 	assistantHub(hub)
 	cwd := prepareRuntimeAssistantEnvironment(t, n, true)
@@ -363,6 +367,7 @@ func TestRuntimeAssistantEnvironmentSessionAndCommandIsolationAndCleanup(t *test
 	hello["instance"] = "inst-stable"
 	hello["caps"].(map[string]any)["assistant_environment"] = true
 	hello["caps"].(map[string]any)["fork"] = true
+	hello["caps"].(map[string]any)["close"] = true
 	host := dialRuntime(t, n, hello)
 
 	var mu sync.Mutex
@@ -465,13 +470,24 @@ func TestRuntimeAssistantEnvironmentSessionAndCommandIsolationAndCleanup(t *test
 		t.Fatalf("failed start proxy URL = %d, want 404", code)
 	}
 
-	// Closing s1 revokes only s1's leases; s2 and the fork remain live and properly authenticated.
+	// Assistant session.close only interrupts/keeps the runtime conversation and must keep s1's leases alive.
 	if _, err := nodeCall(t, n, "session.close", map[string]any{"session_id": s1}); err != nil {
 		t.Fatal(err)
 	}
+	for _, keptBase := range []string{b1ex, b1ex2} {
+		if code, _ := send(t, "GET", keptBase+"/api/v1/me", ""); code != http.StatusOK {
+			t.Fatalf("assistant-closed session lease %q returned %d, want 200", keptBase, code)
+		}
+	}
+
+	// An explicit runtime-forwarded session.close that retires the worker revokes only s1's leases; s2 and the fork stay live.
+	rawClose, _ := json.Marshal(map[string]any{"session_id": s1})
+	if _, err, handled := n.runtimeHandle(context.Background(), n.runtimes.byRuntime("dsh"), "session.close", rawClose); err != nil || !handled {
+		t.Fatalf("explicit runtime session.close: handled=%v err=%v", handled, err)
+	}
 	for _, closedBase := range []string{b1ex, b1ex2} {
 		if code, _ := send(t, "GET", closedBase+"/api/v1/me", ""); code != http.StatusNotFound {
-			t.Fatalf("closed session lease %q returned %d, want 404", closedBase, code)
+			t.Fatalf("runtime-closed session lease %q returned %d, want 404", closedBase, code)
 		}
 	}
 	if code, _ := send(t, "GET", b2ex+"/api/v1/me", ""); code != http.StatusOK {
@@ -483,7 +499,7 @@ func TestRuntimeAssistantEnvironmentSessionAndCommandIsolationAndCleanup(t *test
 	if code, _ := send(t, "GET", bfex+"/api/v1/me", ""); code != http.StatusOK {
 		t.Fatalf("fork ex lease returned %d after s1 close, want 200", code)
 	}
-	if reqs := api2.requests(); len(reqs) != 1 || reqs[0].Account != "k2:t2" {
+	if reqs := api2.requests(); len(reqs) < 1 || reqs[len(reqs)-1].Account != "k2:t2" {
 		t.Fatalf("ex2 upstream auth header mismatch: %+v", reqs)
 	}
 
@@ -504,7 +520,7 @@ func TestRuntimeAssistantEnvironmentSessionAndCommandIsolationAndCleanup(t *test
 		t.Fatalf("s2 lease broken after same-instance reconnect: %d", code)
 	}
 
-	// Disconnecting the live runtime without superseding reclaims the remaining session leases.
+	// Disconnecting permanently without reconnecting reclaims the remaining session leases once grace expires.
 	_ = host2.conn.Close()
 	waitFor(t, "runtime leases released on disconnect", func() bool {
 		gp := n.gates()
@@ -519,11 +535,318 @@ func TestRuntimeAssistantEnvironmentSessionAndCommandIsolationAndCleanup(t *test
 	}
 }
 
+// Persistent ACP workers (such as the Antigravity agy companion) capture env on session.start and keep using
+// that startup environment while the worker process stays alive. Assistant session.close (idle or working) and
+// non-overlapping same-instance socket reconnects must keep the worker's proxy URLs valid so resumed turns do not 404.
+func TestRuntimeAssistantEnvironmentPersistentWorkerCloseAndResume(t *testing.T) {
+	api := newFakeAPI(t)
+	n, hub := runtimeNode(t)
+	n.runtimeHost.leaseDisconnectGrace = 120 * time.Millisecond
+	t.Cleanup(func() { n.gates().close() })
+	assistantHub(hub)
+
+	var relayCalls atomic.Int32
+	hub.mu.Lock()
+	prevAnswer := hub.answer
+	hub.answer = func(method string, params json.RawMessage) (any, error, bool) {
+		if method == proto.MethodGateRelay {
+			var req proto.GateRelayParams
+			if err := json.Unmarshal(params, &req); err != nil {
+				return nil, err, true
+			}
+			relayCalls.Add(1)
+			return proto.GateRelayAnswer{
+				Status: http.StatusOK,
+				Header: map[string][]string{"Content-Type": {"application/json"}},
+				Body:   []byte(`{"relayed":true}`),
+			}, nil, true
+		}
+		return prevAnswer(method, params)
+	}
+	hub.mu.Unlock()
+
+	cwd := prepareRuntimeAssistantEnvironment(t, n, true)
+	skills := filepath.Join(n.home, ".persona", "skills")
+	relayScript := filepath.Join(skills, "relayed", "scripts", "relay.sh")
+	if err := os.MkdirAll(filepath.Dir(relayScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "relayed", "SKILL.md"), []byte("---\nname: relayed\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(relayScript, []byte("#!/bin/sh\necho ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	g1 := proxiedGate(api.URL)
+	gRelay := proto.CommandGate{
+		Command:   "relayed",
+		Script:    "relayed/scripts/relay.sh",
+		Title:     "Relayed",
+		BaseEnv:   "RELAY_BASE",
+		SocketEnv: "RELAY_SOCKET",
+		Relay:     true,
+		Env:       map[string]string{"RELAY_SOCKET": "/manager/private/relay.sock"},
+		Auth:      &proto.GateAuth{Header: "X-Relay-Auth", Value: "relayed"},
+		Rules:     []proto.LarkRule{{Method: "GET", Path: "/**", Action: "allow"}},
+	}
+	cfg := proto.AssistantLark{Gates: []proto.CommandGate{g1, gRelay}}
+	relayGates(&cfg)
+	n.mu.Lock()
+	n.larkCfg, n.larkCfgAt = cfg, time.Now().Add(time.Hour)
+	n.mu.Unlock()
+
+	const sid = "agy-persistent-1"
+	const inst1 = "agy-inst-1"
+
+	// Model a persistent ACP worker: startup env is captured once on session.start and NOT overwritten on
+	// subsequent session.send or session.interrupt calls while the worker stays alive (matching acpFor in runtime.js).
+	var workerMu sync.Mutex
+	var workerEnv map[string]string
+	bindWorker := func(host *fakeRuntime) {
+		host.answer = func(method string, params json.RawMessage) (any, error) {
+			var p struct {
+				Env map[string]string `json:"env"`
+			}
+			_ = json.Unmarshal(params, &p)
+			switch method {
+			case "session.start":
+				workerMu.Lock()
+				if workerEnv == nil {
+					workerEnv = maps.Clone(p.Env)
+				}
+				workerMu.Unlock()
+				return map[string]any{"session": proto.Session{SessionID: sid, Cwd: cwd, Status: proto.StatusIdle}}, nil
+			case "session.send":
+				// A live ACP worker ignores p.Env when already spawned; a freshly spawned worker captures it.
+				workerMu.Lock()
+				if workerEnv == nil {
+					workerEnv = maps.Clone(p.Env)
+				}
+				workerMu.Unlock()
+				return map[string]any{"ok": true}, nil
+			case "session.interrupt":
+				return map[string]any{"ok": true, "settled": true}, nil
+			default:
+				return map[string]any{"ok": true}, nil
+			}
+		}
+	}
+
+	hello1 := assistantRuntimeHello()
+	hello1["runtime"], hello1["agent"], hello1["launcher"] = agyRuntimeID, agyRuntimeID, agyRuntimeID
+	hello1["instance"] = inst1
+	hello1["caps"].(map[string]any)["assistant_environment"] = true
+	hello1["caps"].(map[string]any)["close"] = true
+	host1 := dialRuntime(t, n, hello1)
+	bindWorker(host1)
+
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{"launcher": agyRuntimeID, "cwd": cwd, "text": "turn 1"}); err != nil {
+		t.Fatal(err)
+	}
+	workerMu.Lock()
+	heldBase, heldRelay := workerEnv["EXAMPLE_BASE"], workerEnv["RELAY_BASE"]
+	workerMu.Unlock()
+	if !gateProxyURLRe.MatchString(heldBase) || !gateProxyURLRe.MatchString(heldRelay) {
+		t.Fatalf("worker captured non-proxy URLs: ex=%q relay=%q", heldBase, heldRelay)
+	}
+	assertWorkerLive := func(phase string) {
+		t.Helper()
+		if code, body := send(t, "GET", heldBase+"/api/v1/me", ""); code != http.StatusOK {
+			t.Fatalf("%s: worker-held EXAMPLE_BASE returned %d (%s), want 200", phase, code, body)
+		}
+		if code, body := send(t, "POST", heldBase+"/api/v1/conversations/1/messages", `{"text":"hi"}`); code != http.StatusForbidden {
+			t.Fatalf("%s: unconfirmed write on worker-held EXAMPLE_BASE returned %d (%s), want 403", phase, code, body)
+		}
+		if code, body := send(t, "GET", heldRelay+"/items", ""); code != http.StatusOK {
+			t.Fatalf("%s: worker-held RELAY_BASE returned %d (%s), want 200", phase, code, body)
+		}
+	}
+	assertWorkerLive("initial start")
+
+	// Publish idle state after turn 1 finishes so step 1 exercises a genuinely idle session.close.
+	if err := host1.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: sid, Cwd: cwd, Status: proto.StatusIdle},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session idle after turn 1", func() bool {
+		row, _, ok := n.runtimes.rowOf(sid)
+		return ok && row.Status == proto.StatusIdle
+	})
+
+	// 1. Idle session.close: no runtime RPC is sent, worker stays alive, and resuming reuses the exact same URLs.
+	if _, err := nodeCall(t, n, "session.close", map[string]any{"session_id": sid}); err != nil {
+		t.Fatal(err)
+	}
+	if len(host1.got("session.close")) != 0 || len(host1.got("session.interrupt")) != 0 {
+		t.Fatalf("idle assistant close sent unexpected RPCs: close=%d interrupt=%d", len(host1.got("session.close")), len(host1.got("session.interrupt")))
+	}
+	assertWorkerLive("after idle session.close")
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": sid, "launcher": agyRuntimeID, "cwd": cwd, "text": "turn after idle close"}); err != nil {
+		t.Fatal(err)
+	}
+	if env := runtimeAssistantEnvironment(t, host1.got("session.send")[1]); env["EXAMPLE_BASE"] != heldBase || env["RELAY_BASE"] != heldRelay {
+		t.Fatalf("send after idle close rotated URLs: got %q/%q want %q/%q", env["EXAMPLE_BASE"], env["RELAY_BASE"], heldBase, heldRelay)
+	}
+	assertWorkerLive("after resume from idle session.close")
+
+	// 2. Working session.close: interrupts the active turn, keeps the ACP worker alive, and resuming reuses the exact same URLs.
+	if err := host1.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: sid, Cwd: cwd, Status: proto.StatusWorking},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session working", func() bool {
+		row, _, ok := n.runtimes.rowOf(sid)
+		return ok && row.Status == proto.StatusWorking
+	})
+	if _, err := nodeCall(t, n, "session.close", map[string]any{"session_id": sid}); err != nil {
+		t.Fatal(err)
+	}
+	if len(host1.got("session.interrupt")) != 1 || len(host1.got("session.close")) != 0 {
+		t.Fatalf("working assistant close RPCs: interrupt=%d close=%d, want 1/0", len(host1.got("session.interrupt")), len(host1.got("session.close")))
+	}
+	if err := host1.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: sid, Cwd: cwd, Status: proto.StatusIdle},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session idle after interrupt", func() bool {
+		row, _, ok := n.runtimes.rowOf(sid)
+		return ok && row.Status == proto.StatusIdle
+	})
+	assertWorkerLive("after working session.close interrupt")
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": sid, "launcher": agyRuntimeID, "cwd": cwd, "text": "turn after working close"}); err != nil {
+		t.Fatal(err)
+	}
+	if env := runtimeAssistantEnvironment(t, host1.got("session.send")[2]); env["EXAMPLE_BASE"] != heldBase || env["RELAY_BASE"] != heldRelay {
+		t.Fatalf("send after working close rotated URLs: got %q/%q want %q/%q", env["EXAMPLE_BASE"], env["RELAY_BASE"], heldBase, heldRelay)
+	}
+	assertWorkerLive("after resume from working session.close")
+	gp := n.gates()
+	gp.mu.Lock()
+	keyCount, leaseCount := len(gp.keys), len(gp.sessionLeases)
+	gp.mu.Unlock()
+	if keyCount != 2 || leaseCount != 2 {
+		t.Fatalf("after close/resume: keys=%d leases=%d, want 2/2", keyCount, leaseCount)
+	}
+
+	// 3. Non-overlapping transient disconnect followed by same-instance reconnect preserves the surviving worker's URLs.
+	_ = host1.conn.Close()
+	waitFor(t, "host1 disconnected", func() bool {
+		n.runtimes.mu.Lock()
+		defer n.runtimes.mu.Unlock()
+		return len(n.runtimes.conns) == 0
+	})
+	assertWorkerLive("during transient disconnect grace")
+	host2 := dialRuntime(t, n, hello1)
+	bindWorker(host2)
+	if err := host2.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: sid, Cwd: cwd, Status: proto.StatusIdle},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "host2 owns session", func() bool {
+		_, _, ok := n.runtimes.rowOf(sid)
+		return ok
+	})
+	// Confirm the deferred release entry was cleared on same-instance reconnect and stays live past 2x grace.
+	n.runtimeHost.mu.Lock()
+	_, stillPending := n.runtimeHost.pendingReleases[agyRuntimeID]
+	n.runtimeHost.mu.Unlock()
+	if stillPending {
+		t.Fatalf("pending disconnect release for %q was not cancelled on same-instance reconnect", agyRuntimeID)
+	}
+	graceWait := time.NewTimer(260 * time.Millisecond)
+	<-graceWait.C
+	assertWorkerLive("past grace after same-instance reconnect")
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": sid, "launcher": agyRuntimeID, "cwd": cwd, "text": "turn after reconnect"}); err != nil {
+		t.Fatal(err)
+	}
+	if env := runtimeAssistantEnvironment(t, host2.got("session.send")[0]); env["EXAMPLE_BASE"] != heldBase || env["RELAY_BASE"] != heldRelay {
+		t.Fatalf("send after same-instance reconnect rotated URLs: got %q/%q want %q/%q", env["EXAMPLE_BASE"], env["RELAY_BASE"], heldBase, heldRelay)
+	}
+
+	// 4. Restart with a different instance immediately revokes old URLs and issues fresh URLs to the new worker.
+	_ = host2.conn.Close()
+	waitFor(t, "host2 disconnected", func() bool {
+		n.runtimes.mu.Lock()
+		defer n.runtimes.mu.Unlock()
+		return len(n.runtimes.conns) == 0
+	})
+	workerMu.Lock()
+	workerEnv = nil // new companion process starts with no live ACP workers
+	workerMu.Unlock()
+	hello2 := assistantRuntimeHello()
+	hello2["runtime"], hello2["agent"], hello2["launcher"] = agyRuntimeID, agyRuntimeID, agyRuntimeID
+	hello2["instance"] = "agy-inst-2"
+	hello2["caps"].(map[string]any)["assistant_environment"] = true
+	host3 := dialRuntime(t, n, hello2)
+	bindWorker(host3)
+	if code, _ := send(t, "GET", heldBase+"/api/v1/me", ""); code != http.StatusNotFound {
+		t.Fatalf("old EXAMPLE_BASE after different-instance restart = %d, want 404", code)
+	}
+	if code, _ := send(t, "GET", heldRelay+"/items", ""); code != http.StatusNotFound {
+		t.Fatalf("old RELAY_BASE after different-instance restart = %d, want 404", code)
+	}
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": sid, "launcher": agyRuntimeID, "cwd": cwd, "text": "turn on restarted instance"}); err != nil {
+		t.Fatal(err)
+	}
+	workerMu.Lock()
+	newBase, newRelay := workerEnv["EXAMPLE_BASE"], workerEnv["RELAY_BASE"]
+	workerMu.Unlock()
+	if !gateProxyURLRe.MatchString(newBase) || newBase == heldBase || !gateProxyURLRe.MatchString(newRelay) || newRelay == heldRelay {
+		t.Fatalf("restarted instance did not receive fresh URLs: got %q/%q old %q/%q", newBase, newRelay, heldBase, heldRelay)
+	}
+	if code, _ := send(t, "GET", newBase+"/api/v1/me", ""); code != http.StatusOK {
+		t.Fatalf("new instance EXAMPLE_BASE returned %d, want 200", code)
+	}
+
+	// 5. Overlapping different-instance preemption (external agy taking over from built-in agy) revokes the preempted instance's URLs.
+	n.runtimeHost.agy.mu.Lock()
+	n.runtimeHost.agy.instance = "agy-inst-2"
+	n.runtimeHost.agy.mu.Unlock()
+	workerMu.Lock()
+	workerEnv = nil
+	workerMu.Unlock()
+	hello3 := assistantRuntimeHello()
+	hello3["runtime"], hello3["agent"], hello3["launcher"] = agyRuntimeID, agyRuntimeID, agyRuntimeID
+	hello3["instance"] = "agy-inst-external"
+	hello3["caps"].(map[string]any)["assistant_environment"] = true
+	host4 := dialRuntime(t, n, hello3)
+	bindWorker(host4)
+	waitFor(t, "preempted built-in connection removed", func() bool {
+		n.runtimes.mu.Lock()
+		defer n.runtimes.mu.Unlock()
+		return len(n.runtimes.conns) == 1
+	})
+	if code, _ := send(t, "GET", newBase+"/api/v1/me", ""); code != http.StatusNotFound {
+		t.Fatalf("preempted built-in EXAMPLE_BASE returned %d, want 404", code)
+	}
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": sid, "launcher": agyRuntimeID, "cwd": cwd, "text": "turn after preemption"}); err != nil {
+		t.Fatal(err)
+	}
+	workerMu.Lock()
+	extBase := workerEnv["EXAMPLE_BASE"]
+	workerMu.Unlock()
+	if !gateProxyURLRe.MatchString(extBase) || extBase == newBase {
+		t.Fatalf("external takeover did not receive fresh URL: got %q old %q", extBase, newBase)
+	}
+	if code, _ := send(t, "GET", extBase+"/api/v1/me", ""); code != http.StatusOK {
+		t.Fatalf("external takeover EXAMPLE_BASE returned %d, want 200", code)
+	}
+	if relayCalls.Load() < 5 {
+		t.Fatalf("expected relayed GETs to reach hub gate.relay across close/resume/reconnect, got %d", relayCalls.Load())
+	}
+}
+
 func TestRuntimeAssistantEnvironmentDisconnectBetweenHubConnectionsReleasesKeeperLeases(t *testing.T) {
 	api := newFakeAPI(t)
 	keeper := newAssistantKeeper()
 	shared := NewRuntimeHost("test", filepath.Join(t.TempDir(), "rt.sock"))
 	shared.logger = log.New(io.Discard, "", 0)
+	shared.leaseDisconnectGrace = 40 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := shared.Listen(ctx); err != nil {
@@ -572,6 +895,7 @@ func TestRuntimeAssistantEnvironmentDisconnectBetweenHubConnectionsReleasesKeepe
 func TestRuntimeAssistantEnvironmentInSpaceSemantics(t *testing.T) {
 	api := newFakeAPI(t)
 	n, hub := runtimeNode(t)
+	n.runtimeHost.leaseDisconnectGrace = 40 * time.Millisecond
 	t.Cleanup(func() { n.gates().close() })
 	assistantHub(hub)
 	hub.mu.Lock()
@@ -672,15 +996,36 @@ func TestRuntimeAssistantEnvironmentInSpaceSemantics(t *testing.T) {
 		t.Fatalf("turn 2 EXAMPLE_BASE = %q, want reused %q", got["EXAMPLE_BASE"], base)
 	}
 
-	// Closing the session revokes its proxy URL while keeping the space latch intact.
+	// Interrupt-only assistant session.close keeps the proxy lease live and preserves space confirmation enforcement.
 	if _, err := nodeCall(t, n, "session.close", map[string]any{"session_id": sid}); err != nil {
 		t.Fatal(err)
 	}
+	if code, _ := send(t, "GET", base+"/api/v1/me", ""); code != http.StatusOK {
+		t.Fatalf("space lease after assistant session.close returned %d, want 200", code)
+	}
+	if code, _ := send(t, "POST", msgURL, `{"text":"hi"}`); code != http.StatusForbidden {
+		t.Fatalf("unconfirmed space write after assistant session.close returned %d, want 403", code)
+	}
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{"session_id": sid, "launcher": "dsh", "cwd": healthCwd, "text": "turn 3"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := runtimeAssistantEnvironment(t, host.got("session.send")[2]); got["EXAMPLE_BASE"] != base {
+		t.Fatalf("turn 3 EXAMPLE_BASE = %q, want reused %q", got["EXAMPLE_BASE"], base)
+	}
+
+	// Permanent runtime disconnect revokes the proxy URL while keeping the space latch intact.
+	_ = host.conn.Close()
+	waitFor(t, "space lease released on disconnect", func() bool {
+		gp := n.gates()
+		gp.mu.Lock()
+		defer gp.mu.Unlock()
+		return len(gp.sessionLeases) == 0 && len(gp.keys) == 0
+	})
 	if code, _ := send(t, "GET", base+"/api/v1/me", ""); code != http.StatusNotFound {
-		t.Fatalf("closed space lease returned %d, want 404", code)
+		t.Fatalf("disconnected space lease returned %d, want 404", code)
 	}
 	if !n.gates().spaceSession(sid) {
-		t.Fatalf("space latch cleared on session.close; must stay latched")
+		t.Fatalf("space latch cleared on disconnect; must stay latched")
 	}
 }
 
