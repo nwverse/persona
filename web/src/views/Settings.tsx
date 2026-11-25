@@ -2,7 +2,7 @@ import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
-import { href } from "../lib/router";
+import { href, useRoute } from "../lib/router";
 import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -66,6 +66,7 @@ import { ProviderLinkCopy } from "./settings/ProviderLinkCopy";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
+import { SeenRowsRow } from "./settings/SeenRowsSetting";
 import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
 import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
 import { moduleFeaturesSource } from "../core/module-features";
@@ -196,6 +197,16 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const now = settingsAt(location.search, location.hash);
     setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
   }, [integrationsMode, at.tab, at.sub]);
+  // External in-app navigation to /settings (e.g. "Change in Settings" from the sidebar while Settings is already open).
+  const route = useRoute();
+  const initialRoute = useRef(true);
+  useEffect(() => {
+    if (initialRoute.current) { initialRoute.current = false; return; }
+    const path = stripBase(location.pathname);
+    if (path !== "/settings" && !path.startsWith("/settings/")) return;
+    const now = readSettingsLocation(integrationsModeRef.current);
+    setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
+  }, [route]);
   // Back from a category opened from the list: the URL went back, the page follows it.
   useEffect(() => {
     const back = () => {
@@ -230,7 +241,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   useEffect(() => {
     if (!at.section || listed) return;
     const section = document.getElementById(`settings-${at.section}`);
-    if (!section) return;
+    if (!section) {
+      setScrollAnchor(at.section);
+      return;
+    }
     section.scrollIntoView?.({ block: "start" });
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => section.scrollIntoView?.({ block: "start" }));
@@ -814,6 +828,7 @@ function AgentPreferences() {
   return (
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
       <AgentOpenRow />
+      <SeenRowsRow />
       <TerminalModeRow />
       {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")} wrapHint>
         <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />
