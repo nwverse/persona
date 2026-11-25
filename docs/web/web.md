@@ -316,7 +316,7 @@ The browser check opens Overview, permission/plan cards, green/orange/AI workflo
   End-to-end check of the user-input rail (#2060, #15336): start an isolated mock hub and Vite against it, then run
   `node web/e2e/user-navigation.mjs <loopback web URL> <artifact directory>` for left-gutter placement, hover and drag
   previews, keyboard access, every input in a 240-turn history, and light/dark captures at 1440 and 390 px. The
-  progressive history runner in [the browser test guide](../../web/e2e/README.md) covers server previews, full-history
+  on-demand history runner in [the browser test guide](../../web/e2e/README.md) covers server previews, full-history
   ordinals and jumping to older messages with two initial bodies.
   End-to-end check that new content shows up in a chat without reloading (#3036: new replies appear in the chat view, after switching terminal ⇄ chat several times, when pushed while on the terminal page, and after the page refetches because the `history` token changed): start the mock hub with `MOCK_TERMINAL_STREAM=1 MOCK_TERMINAL_CONTROL=1 MOCK_TERMINAL_PANES=1` (`GET /mock/say?user=…&text=…[&history=<token>]` adds a reply to every chat a page is subscribed to and can also change `history`), run `python3 scripts/test/web_chat_live_e2e.py <web URL> --hub <mock hub URL> [--shots <dir>]`.
   End-to-end check of the main chat's task dock ("All N" is the same height as the pills with top and bottom edges aligned; the pill row has no scrollbar but still scrolls sideways; Chrome runs with always-visible scrollbars, WebKit optional): start the mock hub with
@@ -1769,53 +1769,23 @@ Refetch on page entry, machine online / offline / confirmed, and window return t
 
 Screenshots use an isolated test hub (real readiness for zero computers) plus Playwright API substitutes (offline, not signed in, wrong Key, everything ready, rejected chat open).
 
-### User-input rail (#1739, #2060)
+### User-input rail (#15813)
 
-The chat pane's left gutter offers quick selection of genuine user inputs, including instructions and attachment-only messages.
+The left gutter helps people using Assistant and Agents return to their own questions, instructions and attachments in a long chat.
 
-- **Progressive input index** (#4836): `items?user_inputs=1` returns a lightweight index of genuine own inputs. Navigation
-  initially exposes the latest 50 positions, or all positions in a shorter conversation. Loading older transcript pages or
-  reaching the top of a restored cache extends the range to the earliest input reached. Ordinals count across the entire
-  conversation. Hover uses the metadata, and selecting an unloaded turn requests ordinary contiguous backward pages.
-  Changing conversations or history resets the range. For unsupported or incomplete indexes, the rail uses the newest 50
-  loaded inputs initially and counts those it can navigate. A computer's 404 `not_found` with a `reason` keeps that fallback.
-  A 404 with only `detail` may recover when the runtime reconnects and retries through the session's read gate
-  (3 seconds doubling to 5 minutes, one read at a time, #11450, #11470, #13677).
-- **Left gutter** (#15336): `src/views/chat/NavRail.tsx` measures the margin beside the centered transcript inside the chat pane. The rail sits 16 px from the pane edge, after the app sidebar, and stays visible at rest while its 44 px hit strip and 12 px gap fit. If the pane narrows or a panel takes up the gutter, the rail and its Tab stop disappear. The centered column keeps its regular symmetric padding, and the scrollbar keeps its own hit area on the right.
-  The rail loads its tick and preview projection with its own chunk (#15410). The transcript can show messages before
-  the rail builds previews from loaded items or the hub's input index.
-- **Bell-shaped marks** (#2168, #4792): at rest, the current tick is stronger and longer than the short, muted ticks around it. While previewing, every tick's width follows the same bell, growing to the right from a fixed left edge. Current-position color and thickness remain visible even when its width follows the bell's tail.
-- **Viewport ownership**: the last genuine input whose anchor starts above the scroller's top plus the shared active offset owns the high-contrast mark (`aria-current`). Hover/keyboard previews are separate from viewport ownership and never independently lengthen its mark. Missing anchors are unknown, not treated as already read.
-- **Preview and selection**: the right-opening card aligns with its mark and stays within the chat pane's height. Its bold query fits on one line, with question state beside it when available. The muted reply takes up to three lines. The query and reply each prefer the parsed local exchange, then the optional `preview` and `answer` from the Hub index (#15335). `attachments` supplies the label for an attachment-only indexed input. A bare position from an older Hub uses its localized ordinal. The card's hover area extends to the tick strip, so moving into the card keeps it open and selecting its text leaves the chat in place. Click, drag and release, or Enter/Space lands on the actual input through `ChatView.railJump` and pauses tail following. A drag keeps its targets by identity across prepends, and cancellation or Escape leaves the transcript in place.
-- **Bounded window**: the rail renders up to 28 marks at a 15 px pitch, compressing to a minimum 12 px pitch in a short pane. Arrow keys and Home/End reach earlier or later positions. The wheel moves the window in overlapping steps. The focusable landmark keeps its localized label, key instructions, preview description and keyboard-only announcements.
-- **Question states** (#13021): Persona chats derive question state from loaded exchanges, the exchange at work and the
-  Hub's read marks (`src/lib/question-states.ts`, `src/lib/question-reads.ts`). **Not started** is fainter.
-  **In progress** uses the busy animation, which slows under Reduced Motion. **Unread** adds a red dot to the left of
-  the tick. **Read** uses the plain tick. Jumping to a tick or seeing half of its exchange (or half the view for a taller
-  exchange) in the foreground marks the answer read locally and syncs to the Hub. A **follow-up** draws a shorter tick
-  when it quotes at least eight characters of an earlier answer or was sent before the previous answer arrived.
-  The state appears in the preview title row, accessible label and keyboard announcement. On a touch-only screen,
-  Persona chats with a wide enough gutter support tapping or dragging on the marked rail. `useQuestionSummary`
-  counts in-progress and unread turns from the same marks while the chat is open.
-- **Scroll cost**: observers refresh cached anchor offsets when tracked rows or layout change. They read the line wrappers
-  from the direct children of `[data-chat-content]` (#2914). Preview-only updates reuse those offsets, as do passive
-  scroll frames, which binary-search the cache. Hidden rails skip row geometry. Shared geometry lives in
-  `src/ui/nav-rail-metrics.ts`, and labels use the existing English, Simplified Chinese and Japanese catalogs.
+- **Independent index.** The rail requests `items?user_inputs=1&meta_only=1` and uses its full count and sorted positions, including those outside the transcript window. Ordinals run from the start. In a conversation that returned to an earlier engine session, the engine stretches keep their existing scope and the rail follows the live stretch. A complete older index with excerpts works as-is. An incomplete or unavailable index leaves the loaded questions navigable and retries through the session's read gate. A computer's 404 `not_found` with a `reason` keeps that fallback, while a detail-only 404 can recover after reconnecting (#11450, #11470, #13677).
+- **Left gutter.** The rail uses the measured natural margin beside the centered transcript, 16 px from the pane edge when its 44 px strip and clearance fit. A phone-width pane from 320 to 480 px reserves a compact left margin once the rail has 16 positions. The transcript and its right scrollbar keep distinct hit areas. Other constrained panes and short narrow chats omit the rail and its Tab stop.
+- **Scrolling and focus.** Fine marks sit 8 px apart, tightening to 7 px in a shorter pane. The track scrolls independently and mounts only its viewport plus overscan. Chat scrolling keeps the reading position's mark in view while the track is idle. Hover and scrubbing hold their own position. The mark of the last loaded input at or above the active offset has stronger color and thickness. Hover and keyboard preview use the existing right-expanding bell, independent of the current-position state.
+- **Previews.** The right-opening card aligns with the selected mark and stays within the pane. It uses a single-line question, up to three lines of reply and any question state. Loaded text or legacy excerpts appear immediately. Otherwise hover or keyboard focus shows a short loading label and asks for up to nine neighboring excerpts. The cache deduplicates overlapping requests for the same history; missing and unsupported excerpts leave an ordinal and a selectable mark. The preview hit area reaches the rail, so selecting its text leaves the conversation in place.
+- **Jump and return.** Click, captured drag and release, or Enter and Space select a question. Arrow keys and Home or End preview across the whole track. Escape dismisses a preview or cancels a scrub. A loaded question lands and highlights in place. An unloaded question opens a context window with 40 source lines on either side. Load earlier messages and Load later messages follow that window's cursors. Jump to bottom returns to the live view, which keeps receiving updates while the earlier window is open. The existing backward paging path handles older hubs and nodes without window support. A changed history generation refreshes the position list and transcript together. The wire details are in [Chat navigation reads](../protocol/protocol.md#chat-navigation-reads).
+- **Question states.** Persona chats use question state from loaded exchanges, the working turn and the Hub's read marks. Not started is fainter, In progress uses the busy animation, Answer not read yet adds a dot, and Read keeps the plain mark. Follow-ups have a shorter mark. Opening an answer or seeing enough of its exchange marks it read. State words are available in the preview, spoken labels and keyboard announcement. Touch-only Persona chats can tap or scrub on the active strip.
+- **Scroll cost.** The rail, index and preview cache load together off the first screen. The track caches measured transcript anchors and binary-searches them during chat scrolls. Rail scrolls update only the mounted marks and reuse the cached anchors. Geometry lives in `src/ui/nav-rail-metrics.ts`.
 
-Mock-only browser acceptance is `web/e2e/user-navigation.mjs`. It covers the resting and hovered rail at 1440 px, the
-hidden rail at 390 px, and wheel, keyboard and drag navigation in light and dark. Runtime artifacts stay outside Git.
-The historical hover fixtures for #4792 are `docs/web/screenshots/user-nav-hover/light.png` and
-`docs/web/screenshots/user-nav-hover/dark.png`.
-
-`web/e2e/user-history-navigation.mjs <loopback origin> <artifact directory> [input-count] [main|session]` covers
-progressive loading against the production build. The default 678-input fixture verifies the 28-tick render cap,
-local and indexed previews, full-history ordinals and unloaded-target landing in wide light and dark. Its raw
-runtime artifacts stay outside Git. The historical #4836
-main-conversation pair is `docs/web/screenshots/user-input-pages/light.png` and
-`docs/web/screenshots/user-input-pages/dark.png`; the same 50-mark range's first input is still globally numbered 629
-in `docs/web/screenshots/user-input-pages/hover-light.png` and `docs/web/screenshots/user-input-pages/hover-dark.png`.
-Largest-text counterparts are `docs/web/screenshots/user-input-pages/large-light.png` and
-`docs/web/screenshots/user-input-pages/large-dark.png`.
+Mock-only browser acceptance is `web/e2e/user-navigation.mjs` for legacy loaded questions, hover, drag, keyboard and the
+usual left and right gutters. The [browser test guide](../../web/e2e/README.md#on-demand-user-input-history-15813)
+covers the 120-turn Phase 2 fixture, 1440 px and 390 px light and dark, with screenshots of the dense rail, a fetched
+preview, and a landed context window. The older `docs/web/screenshots/user-input-pages/light.png` and
+`docs/web/screenshots/user-input-pages/dark.png` preserve the earlier design's historical evidence.
 
 ### Terminal ⇄ chat (#2419)
 

@@ -254,9 +254,9 @@ The URL is an origin without a route or token. The runner uses `playwright-core`
 Checks run in light and dark at 1440 × 900 and 390 × 844. Wide cases verify the visible resting rail in the left
 gutter, rightward bell-shaped expansion, a bold single-line query and up to three lines of reply, a continuous hover
 bridge, and immediate preview dismissal after mouse-out. They verify body-scroll ownership, click and drag landing,
-keyboard previews and jumps, Escape cancellation and Tab reachability after idle. At 390 px the transcript scrolls
-with symmetric padding and the rail is absent. A separate 240-input conversation reaches every input by keyboard,
-jumps to three positions, and checks wheel navigation both ways with at most 28 marks and 15 px pitch.
+keyboard previews and jumps, Escape cancellation and Tab reachability after idle. At 390 px this short fixture has symmetric padding and a separate scrollbar. The 240-input conversation
+reaches every input by keyboard, jumps to three positions and checks native wheel scrolling and viewport-bounded
+rendering with 7–8 px rows.
 
 Artifacts include `results.json` (per-check verdicts, timings, geometry, reached-mark count, intercepted request metadata and errors) and light/dark screenshots of scroll, hover, click, drag/release, keyboard, idle and edge-focus states, plus the long conversation's earliest/middle/latest inputs. The runner exits nonzero on failure or its four-minute timeout and prints a final one-line verdict. The caller must run it against the completed implementation, actually inspect the images, and upload the evidence; writing or syntax-checking this script is not browser acceptance.
 
@@ -275,17 +275,21 @@ through `--chat-scrollbar-fade` (220 ms, disabled by Reduce Motion). Forced colo
 
 **Headless Chrome pitfall**: Playwright adds `--hide-scrollbars` by default. This runner removes that argument; otherwise screenshots can show no native thumb and a zero-width gutter even though CSS reports a visible color. Always inspect the actual scrolling/idle images as well as computed styles.
 
-## Progressive user-input history (#4836)
+## On-demand user-input history (#15813)
 
 ```sh
 node web/e2e/user-history-navigation.mjs <loopback-web-origin> <artifact-directory> [input-count] [main|session] [initial-body-count] [standard|large] [legacy|slow|cancel]
 ```
 
-The default fixture has 678 genuine inputs interspersed with supervision and compaction records, with two input
-bodies on the first page. Wide light/dark runs check indexed previews before fetching bodies, parsed previews after
-landing, global ordinals and earlier positions after scrolling, with the same 28-tick cap throughout.
-`36 main 2 standard legacy` exercises a positions-only Hub. `75 main 12 standard slow` checks failure and retry,
-and `75 main 12 standard cancel` checks interrupted jumps. The runner saves screenshots and `results.json` outside Git.
+Serve the production web build on an isolated loopback origin. The runner intercepts data requests and the
+WebSocket with an invented conversation, so this scenario needs only a web server. The default starts with two
+input bodies and a 120-input compact index. Light and dark runs at 1440 × 900 and 390 × 844 check the pixel-sized
+native wheel step, lazy excerpt batches, the visible loading label, a direct context jump and return to the live
+tail after a WebSocket reply. It saves all three states per run and writes the observed requests to `results.json`.
+Pass `120 main 2 large` for the largest app text size.
+
+`36 main 2 standard legacy` exercises a positions-only Hub. `75 main 12 standard slow` checks legacy read failure
+and retry. `75 main 12 standard cancel` checks interrupted backward jumps. Runtime artifacts stay outside Git.
 
 ## The sidebar's Agents groupings on a paging hub (#6662)
 
