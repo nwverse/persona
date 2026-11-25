@@ -49,6 +49,9 @@ func (s *Service) askAcceptanceRound(t Todo, machine, session, reply string, aga
 	}
 	b.asks[t.ID] = &acceptAsk{Earlier: earlier} // claimed: a second turn ending meanwhile does not ask twice
 	b.mu.Unlock()
+	if cur, ok := s.todoNow(t.ID); ok {
+		t = cur // read any delivery update written just before askAcceptance (advanceTaskReply / deploy_check)
+	}
 	a := s.acceptLines(ctx, t, machine, session, reply)
 	if r := triageLatestReview(t.Supervision); r != nil && again && r.UserCheck && r.DeferredScope != "" {
 		a.How = clip(r.DeferredScope, 120)
@@ -247,7 +250,7 @@ func (s *Service) acceptCard(ctx context.Context, t Todo, a acceptAsk, again boo
 	if a.Link != "" {
 		link = "[" + botcard.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"
 	}
-	c.Markdown("**" + botcard.EscapeMarkdown(verdictText(l, &a)) + "**")
+	c.Markdown("**" + botcard.EscapeMarkdown(verdictText(l, &a, currentDelivery(t))) + "**")
 	how := a.How
 	if how == "" {
 		how = i18n.T(l, "assistant-reports.accept_how_default")

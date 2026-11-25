@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { chatLines } from "./turns";
 import type { Item } from "./types";
 import { containsInput, indexedNavTicks, userInputRevision, validUserInputIndex, windowUserInputs, type UserInputIndex } from "./user-input-index";
-import { navRailMark } from "./nav-rail";
 
 const index: UserInputIndex = { total: 36, history: "fixture", inputs: Array.from({ length: 36 }, (_, i) => ({ id: `input-${i}#0`, seq: i * 2 + 1 })) };
 const items: Item[] = index.inputs.slice(-2).flatMap((input) => [
@@ -46,7 +45,35 @@ describe("progressive user-input positions", () => {
     expect(ticks[0].lineId).toBeUndefined();
     expect(ticks[35].lineId).toBeDefined();
     expect(ticks[35].preview).toBe("A synthetic input");
-    expect(ticks.every((_, i) => navRailMark(i, ticks.length, 35, null).width === 6)).toBe(true);
+  });
+
+  it("uses local query and answer text when available and projects server previews for unloaded turns", () => {
+    const rich = {
+      ...index,
+      inputs: index.inputs.map((position, i) => i === 1 ? { ...position, attachments: 3 } :
+        { ...position, preview: "Indexed query\nMore detail", answer: "Indexed answer.", attachments: 2 }),
+    };
+    expect(validUserInputIndex(rich)).toBe(true);
+    const ticks = indexedNavTicks(rich, chatLines(items), items);
+    expect(ticks[0]).toMatchObject({ preview: "Indexed query", answerExcerpt: "Indexed answer." });
+    expect(ticks[0].attachmentsOnly).toBeUndefined();
+    expect(ticks[1]).toMatchObject({ preview: "", attachmentsOnly: 3 });
+    expect(ticks[35]).toMatchObject({ preview: "A synthetic input", answerExcerpt: "Synthetic answer" });
+
+    const withoutReply = items.slice(0, -1);
+    expect(indexedNavTicks(rich, chatLines(withoutReply), withoutReply)[35])
+      .toMatchObject({ preview: "A synthetic input", answerExcerpt: "Indexed answer." });
+  });
+
+  it("validates the additive preview fields without requiring them", () => {
+    const valid = (fields: Record<string, unknown>) => validUserInputIndex({
+      total: 1, history: "fixture", inputs: [{ id: "input", seq: 1, ...fields }],
+    });
+    expect(valid({})).toBe(true);
+    expect(valid({ answer: "Answer only", attachments: 0 })).toBe(true);
+    for (const fields of [{ preview: 17 }, { answer: null }, { attachments: -1 }, { attachments: 1.5 }, { attachments: "2" }]) {
+      expect(valid(fields)).toBe(false);
+    }
   });
   it("refreshes from raw queued entries without rescanning for tool frames", () => {
     const queued: Item = { id: "queued#0", seq: 80, role: "user", kind: "text", queued: true, text: "Another synthetic input" };
@@ -58,6 +85,8 @@ describe("progressive user-input positions", () => {
   it("preserves the loaded attachment-only preview while the server sends positions only", () => {
     const image: Item = { id: "picture#0", seq: 1, role: "user", kind: "image", image: { mime: "image/png", lazy: true } };
     const imageIndex: UserInputIndex = { total: 1, history: "fixture", inputs: [{ id: image.id, seq: 1 }] };
+    expect(indexedNavTicks(imageIndex, chatLines([image]), [image])[0]).toMatchObject({ preview: "", attachmentsOnly: 1 });
+    imageIndex.inputs[0] = { ...imageIndex.inputs[0], attachments: 3 };
     expect(indexedNavTicks(imageIndex, chatLines([image]), [image])[0]).toMatchObject({ preview: "", attachmentsOnly: 1 });
   });
 

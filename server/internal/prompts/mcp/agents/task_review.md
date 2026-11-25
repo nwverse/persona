@@ -4,7 +4,7 @@ For accepted (outcome=done), include each done_when criterion once in checks (me
 
 If an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.
 
-Give accepted outcome/reason/link. The hub sends conclusion cards and passes verification unless user_check. needs_user can default to recommend at 24h/deadline. Irreversible or visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
+Give accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user defaults to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.
 
 A non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.{{template "shared/mcp_language" .}}
 
@@ -34,10 +34,10 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
         "properties": {
           "criterion": {"type": "string", "description": "one done_when criterion (or what the task was for, when it had none)"},
           "met": {"type": "boolean"},
-          "evidence": {"type": "string", "description": "what shows it is met (a link, a command's output), or what is missing"}
+          "evidence": {"type": "string", "description": "proof it is met (link, command output), or what is missing"}
         }
       },
-      "description": "each criterion (met or not) with evidence/gap; updates persisted state, evidence, time, and supervisor. Omitted entries keep progress"
+      "description": "each criterion with evidence/gap; updates state, evidence, time, and supervisor. Omitted entries keep progress"
     },
     "note": {
       "type": "string",
@@ -63,7 +63,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "link": {
       "type": "string",
-      "description": "accepted/needs_user: one evidence link (PR/page/doc); defaults to task PR, note/checks link, or agent chat"
+      "description": "accepted/needs_user: direct PR/MR/doc URL when available (shown on decision card); defaults to task PR/MR, note/checks URL, or chat"
     },
     "recommend": {
       "type": "string",
@@ -82,7 +82,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
         "type": "object",
         "required": ["label", "leads_to"],
         "properties": {
-          "label": {"type": "string", "description": "the option in a few words, as a button says it"},
+          "label": {"type": "string", "description": "short button label"},
           "leads_to": {"type": "string", "description": "one sentence: what choosing it leads to"}
         }
       },
@@ -90,7 +90,7 @@ A non-main reviewer of another supervisor's task may only accept/cancel; send ga
     },
     "cost_of_waiting": {
       "type": "string",
-      "description": "needs_user (required): one sentence saying what it costs if the user does not answer soon"
+      "description": "needs_user (required): one sentence on the cost of waiting"
     },
     "question_quote": {
       "type": "string",

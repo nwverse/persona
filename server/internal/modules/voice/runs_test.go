@@ -498,6 +498,64 @@ func TestHubLinkReconnects(t *testing.T) {
 	}
 }
 
+func TestChangedTranscriptEndsAShortTurnWhileTheHubLinkIsDown(t *testing.T) {
+	setVar(t, &lookEvery, 100*time.Millisecond)
+	setVar(t, &readEvery, time.Hour) // a new revision or an end event must cause the read
+	setVar(t, &linkBackoff, []time.Duration{100 * time.Millisecond})
+	hub := agentHub(t)
+	hub.manual = true
+	hub.add("a1", proto.Item{Role: "assistant", Kind: proto.KindText, Text: "上一轮的话。"})
+	var unansweredReads, subsequentLooks atomic.Int32
+	hub.onRead = func() {
+		hub.mu.Lock()
+		waiting := len(hub.sent) == 1 && len(hub.sessions["a1"].items) == 2
+		hub.mu.Unlock()
+		if waiting {
+			unansweredReads.Add(1)
+		}
+	}
+	hub.onLook = func() {
+		if unansweredReads.Load() > 0 {
+			subsequentLooks.Add(1)
+		}
+	}
+	up := boundUpstream(t, false)
+	pl := testPlugin(t, liveProvider(up), hub.server(t))
+	a := dialApp(t, pl, boundStart("a1", nil))
+	a.until(ofType("ready"))
+	hub.subscribed("a1")
+	before, _ := hub.subscribes("a1")
+	hub.mu.Lock()
+	hub.noWS = true
+	hub.mu.Unlock()
+	hub.dropWS()
+	waitFor(t, "the Hub link to disconnect", func() bool {
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		return len(hub.ws) == 0
+	})
+	a.send(map[string]any{"type": "text", "text": "跑一下测试"})
+	hub.waitSent(1)
+	waitFor(t, "polling the unchanged, unanswered transcript", func() bool { return subsequentLooks.Load() >= 3 })
+	_, answer := on("dlg1")
+	if n := unansweredReads.Load(); n != 1 || up.count(answer) != 0 {
+		t.Fatalf("unchanged turn: %d reads, %d answers", n, up.count(answer))
+	}
+	hub.status("a1", "working")
+	hub.add("a1", proto.Item{Role: "assistant", Kind: proto.KindText, Text: "测试都过了。"})
+	hub.end("a1")
+	if got := content(up.nextMatch(on("dlg1"))); !strings.Contains(got, "测试都过了") || strings.Contains(got, "上一轮的话") {
+		t.Fatalf("answer over polling: %s", got)
+	}
+	hub.mu.Lock()
+	hub.noWS = false
+	hub.mu.Unlock()
+	waitFor(t, "the conversation to resubscribe", func() bool { n, _ := hub.subscribes("a1"); return n > before })
+	if n := len(hub.messages()); n != 1 || up.count(answer) != 1 {
+		t.Fatalf("after reconnect: %d messages, %d answers", n, up.count(answer))
+	}
+}
+
 // A card waiting on the user is said once (go look on the phone): not again while it waits, once more when it waits
 // again after working; then the turn's answer.
 func TestCardWaitingOnTheUserIsSaidOnce(t *testing.T) {
