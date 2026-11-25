@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/shellcmd"
 )
 
@@ -409,7 +410,7 @@ func readonlyCredentialSegment(seg string) bool {
 		n == "hub.json", n == "credentials.json", n == "auth.json", n == "secrets.json", n == "admin.cred",
 		n == ".netrc", n == ".npmrc", n == ".pypirc", n == ".git-credentials", n == "hosts.yml",
 		n == ".ssh", n == ".aws", n == ".gnupg", n == ".docker", n == ".kube",
-		n == ".persona", n == ".jarvis", n == ".claude", n == ".codex", n == ".claude.json",
+		n == ".persona", n == compat.StateDir, n == ".claude", n == ".codex", n == ".claude.json",
 		strings.Contains(n, "launcher-settings"):
 		return true
 	}

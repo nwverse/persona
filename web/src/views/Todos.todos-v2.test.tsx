@@ -4,7 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Todo } from "../lib/todos";
+import type { Todo, TodoBoardProjection } from "../lib/todos";
 import type { TodoSummary } from "../lib/todo-view-wire";
 
 vi.hoisted(() => {
@@ -128,6 +128,7 @@ afterEach(async () => {
 const render = async ({
   todos = sampleTodos,
   sharedBlockers = [],
+  todoBoard = null,
   sessions = {},
   todosV2,
   assistantManager,
@@ -138,18 +139,20 @@ const render = async ({
 }: {
   todos?: Todo[];
   sharedBlockers?: unknown[];
+  todoBoard?: TodoBoardProjection | null;
   sessions?: Record<string, unknown[]>;
   todosV2?: boolean;
   assistantManager?: string;
   leaders?: string[];
   conversations?: unknown[];
-  grouping?: "status" | "folder";
+  grouping?: "status" | "folder" | "direction";
   selectedId?: string;
 } = {}) => {
   localStorage.setItem("persona.todos.grouping", grouping);
   seed({
     todos,
     sharedBlockers,
+    todoBoard,
     todosLoaded: true,
     sessions,
     interactions: [],
@@ -1260,5 +1263,159 @@ describe("TodoDetail single-item Change direction control under todos_v2 (#15653
     await flush();
     expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+  });
+});
+
+describe("TodosView server-owned board projection consumption (#15800)", () => {
+  const boardTodos: Todo[] = [
+    {
+      id: "order_second",
+      title: "Second by client timestamp",
+      created_at: iso(20 * HOUR),
+      updated_at: iso(20 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 2),
+    },
+    {
+      id: "order_first",
+      title: "First by client timestamp",
+      created_at: iso(1 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 0),
+    },
+    {
+      id: "goal_parent",
+      title: "Launch Q4 Milestone",
+      direction_id: "dir-platform",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "goal_child_folded",
+      title: "Hidden folded subtask",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "goal_child_surfaced",
+      title: "Blocked child needing approval",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 1),
+    },
+  ];
+
+  // Deliberately order `order_second` before `order_first` and give `counts.needs_you = 9`
+  // so the test proves TodosView renders directly from server `board` instead of re-deriving locally.
+  const serverBoard: TodoBoardProjection = {
+    status_groups: [
+      {
+        key: "needs_you",
+        total_count: 3,
+        visible_count: 3,
+        entries: [
+          { todo_id: "order_second" },
+          { todo_id: "goal_child_surfaced" },
+          { todo_id: "order_first" },
+        ],
+      },
+      {
+        key: "in_progress",
+        total_count: 2,
+        visible_count: 1,
+        entries: [
+          {
+            todo_id: "goal_parent",
+            folded_child_ids: ["goal_child_folded"],
+            surfaced_child_ids: ["goal_child_surfaced"],
+            folded_count: 1,
+          },
+        ],
+      },
+    ],
+    direction_groups: [
+      {
+        direction_id: "dir-platform",
+        label: "Platform Server Label",
+        counts: { needs_you: 1, in_progress: 2, pending_review: 0, waiting: 0, done: 0, total: 3 },
+        todo_ids: ["goal_child_surfaced", "goal_parent", "goal_child_folded"],
+      },
+      {
+        direction_id: "",
+        counts: { needs_you: 2, in_progress: 0, pending_review: 0, waiting: 0, done: 0, total: 2 },
+        todo_ids: ["order_second", "order_first"],
+      },
+    ],
+    sidebar_tree: [],
+    counts: {
+      needs_you: 9,
+      in_progress: 2,
+      pending_review: 0,
+      waiting: 0,
+      someday: 0,
+      done: 0,
+      open_total: 11,
+    },
+  };
+
+  it("strictly renders status sections, goal folding, surfaced blockers, and header count from server board under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("board");
+
+    // Header attention count reads directly from board.counts.needs_you (9)
+    expect(host.querySelector("[data-testid=todos-header-attention]")?.getAttribute("data-count")).toBe("9");
+
+    // Waiting (needs_you) section renders in exact server order: order_second, goal_child_surfaced, order_first
+    const waitingSection = host.querySelector('[data-testid=todo-section][data-section="waiting"]')!;
+    const waitingIds = [...waitingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(waitingIds).toEqual(["order_second", "goal_child_surfaced", "order_first"]);
+
+    // Working (in_progress) section keeps goal_parent visible and folds goal_child_folded
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    const workingIds = [...workingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(workingIds).toEqual(["goal_parent"]);
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
+  });
+
+  it("renders direction grouping directly from server board.direction_groups under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "direction" });
+
+    const groups = [...host.querySelectorAll("[data-testid=todo-group]")];
+    expect(groups.map((el) => el.getAttribute("data-group"))).toEqual([
+      "direction:dir-platform",
+      "direction:secretary",
+    ]);
+    expect(groups[0]!.textContent).toContain("Platform Server Label");
+    const platformIds = [...groups[0]!.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(platformIds).toEqual(["goal_child_surfaced", "goal_parent", "goal_child_folded"]);
+  });
+
+  it("ignores server board completely when todos_v2 is false (100% legacy behavior)", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: false, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).not.toBe("board");
+    expect(host.querySelector("[data-testid=todos-header-attention]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-summary]")).not.toBeNull();
+    // Legacy path keeps folded child unfolded at top level in working
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).toContain("Hidden folded subtask");
+  });
+
+  it("falls back cleanly to client goal folding when todos_v2=true and server omits board (older Hub)", async () => {
+    await render({ todos: boardTodos, todoBoard: null, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("view");
+    // Client fallback still folds goal_child_folded under goal_parent
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
   });
 });

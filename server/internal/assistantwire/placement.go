@@ -1,6 +1,10 @@
 package assistantwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/wireids"
+)
 
 const (
 	// EventPlacementPending is a one-way wake event sent from the assistant to the extension layer when a task enters
@@ -17,12 +21,10 @@ func init() {
 	)
 }
 
-// Named ID types for placement wire contracts (contract-bare-id).
+// Placement-specific scheduling identifiers. Shared IDs use wireids directly.
 type (
-	PlanID    string
-	TodoID    string
-	BatchID   string
-	MachineID string
+	PlanID  string
+	BatchID string
 )
 
 // PlacementTaskRole is the closed role enum exposed on PlacementPendingTask.
@@ -53,9 +55,9 @@ func (s MachineResourceState) Valid() bool {
 
 // PlacementPendingEvent carries only opaque scheduling identifiers, never task prompts or private space data.
 type PlacementPendingEvent struct {
-	PlanID    PlanID `json:"plan_id"`
-	TodoID    TodoID `json:"todo_id"`
-	BatchSize int    `json:"batch_size"`
+	PlanID    PlanID         `json:"plan_id"`
+	TodoID    wireids.TodoID `json:"todo_id"`
+	BatchSize int            `json:"batch_size"`
 }
 
 // PlacementConstraints describes optional automatic machine selection constraints on a planned task.
@@ -71,7 +73,7 @@ type PlacementConstraints struct {
 // It deliberately omits prompts, titles, context, attachments, and private-space metadata.
 type PlacementPendingTask struct {
 	PlanID               PlanID                `json:"plan_id"`
-	TodoID               TodoID                `json:"todo_id"`
+	TodoID               wireids.TodoID        `json:"todo_id"`
 	Version              int                   `json:"version"`
 	Role                 PlacementTaskRole     `json:"role"`
 	Readonly             bool                  `json:"readonly"`
@@ -93,7 +95,7 @@ type PlacementPendingTask struct {
 // MachineResourceSummary is one machine's read-only resource snapshot served by GET /api/v1/assistant/machine-resources.
 // Nullable fields remain explicit null when unknown, stale, offline, pending, future, or ambiguous.
 type MachineResourceSummary struct {
-	ID                   MachineID            `json:"id"`
+	ID                   wireids.MachineID    `json:"id"`
 	Name                 string               `json:"name"`
 	State                MachineResourceState `json:"state"`
 	Online               bool                 `json:"online"`
