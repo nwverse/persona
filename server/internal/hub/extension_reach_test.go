@@ -448,6 +448,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/sessions/{mid}/{sid}/queue/send-now": "path",
 		"POST /api/v1/sessions/{mid}/{sid}/seen":           "path",
 		"POST /api/v1/sessions/{mid}/{sid}/rename":         "path",
+		"POST /api/v1/sessions/{mid}/{sid}/archive-idle":   "path",
+		"GET /api/v1/sessions/archive-idle/audit":          "manager",
 		"POST /api/v1/sessions/{mid}/{sid}/modes":          "path", // and only of a conversation its extension opened (extensionModeRefused)
 		"POST /api/v1/interactions/{id}/choose":            "path",
 		"POST /api/v1/interactions/{id}/resolve":           "path",
@@ -491,6 +493,10 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/assistant/start-defaults":                "manager",
 		"PUT /api/v1/assistant/start-defaults":                "manager",
 		"POST /api/v1/assistant/start-defaults/preview":       "manager",
+		"GET /api/v1/assistant/machine-resources":             "manager",
+		"GET /api/v1/assistant/placement/pending":             "manager",
+		"POST /api/v1/assistant/placement/{todo_id}/assign":   "manager",
+		"POST /api/v1/assistant/placement/{todo_id}/defer":    "manager",
 		"GET /api/v1/todos":                                   "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"GET /api/v1/todos/{id}": "manager", "GET /api/v1/todos/places": "manager", // TestTodoViewRoutesStayOnTheirManager
 		"GET /api/v1/todos/{id}/timeline":                     "manager", // TestTodoViewRoutesStayOnTheirManager

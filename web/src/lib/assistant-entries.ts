@@ -209,7 +209,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     // supervised task's failed start is its supervisor's to retry or remedy, and an Agent whose every card its
     // supervisor holds waits on that conversation, not on the user
     const supervised = !!todo.supervision?.supervisor;
-    const held = supervised && routed.length > 0 && ownAsks.length === 0;
+    const held = routed.length > 0 && ownAsks.length === 0;
     const waits = status === "failed" ? bucket === "open" && !supervised : !todo.done_at && WAITS_ON_YOU.has(status) && !held;
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
@@ -250,10 +250,16 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const agentsAsking: NeedsYouItem[] = [];
   const agentsRunning: RunningItem[] = [];
   for (const { session, state } of dockAgents(sessions.map((s) => lookup(s.machine_id, s.session_id) ?? s), todos, conversation, main)) {
-    if (folded.has(sessionKey(session.machine_id, session.session_id))) continue;
-    const key = `agent:${sessionKey(session.machine_id, session.session_id)}`;
-    if (state === "needs_you") agentsAsking.push({ kind: "agent", key, session, asks: asksOf.get(sessionKey(session.machine_id, session.session_id)) ?? [] });
-    else agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    const sk = sessionKey(session.machine_id, session.session_id);
+    if (folded.has(sk)) continue;
+    const key = `agent:${sk}`;
+    const agentAsks = asksOf.get(sk) ?? [];
+    const userAsks = agentAsks.filter((ix) => !ix.delegating);
+    if (state === "needs_you" && (agentAsks.length === 0 || userAsks.length > 0)) {
+      agentsAsking.push({ kind: "agent", key, session, asks: userAsks });
+    } else {
+      agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    }
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)

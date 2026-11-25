@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -103,6 +104,58 @@ func TestNoVoiceWithoutItsModule(t *testing.T) {
 		if _, err := h.extensions.specOf(context.Background(), p, &hubExtension{}); err == nil || !strings.Contains(err.Error(), "voice") {
 			t.Fatalf("hub.json's personad voice with voice switched off: %v, want it refused", err)
 		}
+	}
+}
+
+// The manager's HTTP surface treats an unavailable built-in voice extension as any other absent extension: its
+// detail, settings, secret and proxy routes all return 404 instead of colliding with hub.json's separate entry.
+func TestVoiceExtensionRoutesAre404WithoutItsModule(t *testing.T) {
+	h := newTestManager(t)
+	_, built := builtinext.VoiceExtension(moduleswitch.Set{})
+	if built {
+		h.opts.Modules = moduleswitch.Off("voice")
+	}
+	h.store = newExtensionStore()
+	startTestExtensions(t, h, voiceEntry("talk"))
+	requests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/v1/extensions/voice/-/", ""},
+		{http.MethodPut, "/api/v1/extensions/voice/-/enabled", `{"enabled":true}`},
+		{http.MethodPut, "/api/v1/extensions/voice/-/config", `{"config":{"url":"wss://live.example.com/v1/live"}}`},
+		{http.MethodPut, "/api/v1/extensions/voice/-/secrets/key", `{"value":"secret"}`},
+		{http.MethodGet, "/api/v1/extensions/voice/echo", ""},
+		{http.MethodGet, "/api/v1/plugins/voice/echo", ""},
+	}
+	for _, rq := range requests {
+		t.Run(rq.method+" "+rq.path, func(t *testing.T) {
+			if code, out := call(t, h.routes(), rq.method, rq.path, h.cfg.Token, rq.body); code != http.StatusNotFound {
+				t.Fatalf("%s %s = %d %v, want 404", rq.method, rq.path, code, out)
+			}
+		})
+	}
+	code, out := call(t, h.routes(), http.MethodGet, "/api/v1/extensions", h.cfg.Token, "")
+	if code != http.StatusOK {
+		t.Fatalf("generic extension list = %d %v, want 200", code, out)
+	}
+	var voiceListed, talkListed bool
+	items, ok := out["extensions"].([]any)
+	if !ok {
+		t.Fatalf("generic extension list payload = %v", out)
+	}
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		switch entry["id"] {
+		case voiceExtensionID:
+			voiceListed = true
+		case "talk":
+			talkListed = true
+		}
+	}
+	if voiceListed || !talkListed {
+		t.Fatalf("generic extension list = %v: voice absent and separate hub.json entry retained", out["extensions"])
 	}
 }
 

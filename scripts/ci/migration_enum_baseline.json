@@ -1,5 +1,6 @@
 {
  "hub": [
+  "bus_identities.role",
   "client_ops.kind",
   "client_ops.result",
   "client_ops.target",
@@ -21,6 +22,9 @@
   "agent_share_objects.kind",
   "assistant_captures.filed_to",
   "assistant_captures.sort",
+  "assistant_external_inbox_events.external_ref",
+  "assistant_external_inbox_events.input",
+  "assistant_external_inbox_events.plan",
   "assistant_feed.body",
   "assistant_feed.kind",
   "assistant_info_categories.kind",

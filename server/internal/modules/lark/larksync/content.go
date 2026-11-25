@@ -94,11 +94,15 @@ func (r *run) consider(ctx context.Context, resource, entry string, c docCandida
 		return err
 	}
 	known := r.known[key]
-	switch larksyncwire.Decide(known.rec, known.ok, rev, "") {
-	case larksyncwire.DecideSame, larksyncwire.DecideStale:
-		st.sightings = append(st.sightings, sighting{resource: resource, ref: r.ref(entry), revision: rev})
-		return nil
+	retryingStub := known.ok && known.rec.Revision == 0 && known.rec.BodyHash == ""
+	if !retryingStub {
+		switch larksyncwire.Decide(known.rec, known.ok, rev, "") {
+		case larksyncwire.DecideSame, larksyncwire.DecideStale:
+			st.sightings = append(st.sightings, sighting{resource: resource, ref: r.ref(entry), revision: rev})
+			return nil
+		}
 	}
+	st.lastErr = nil
 	var body, note string
 	var err error
 	switch c.objType {
@@ -110,19 +114,21 @@ func (r *run) consider(ctx context.Context, resource, entry string, c docCandida
 		if c.metaFailCode != 0 && st.doc.Title == "" {
 			rev = 0
 			note = fmt.Sprintf("unreadable: drive metadata failed (code %d)", c.metaFailCode)
+			st.lastErr = &larksyncwire.Error{Kind: larksyncwire.ErrKindOther, Op: "batch doc meta", Code: c.metaFailCode, Msg: note}
 		}
 	}
 	switch {
 	case err == nil:
-		if body != "" && rev == 0 {
+		if body == "" && metaErr != nil {
+			st.lastErr = metaErr
+			rev, note = 0, unreadableReason(metaErr)
+		} else if body != "" && rev == 0 {
 			rev = 1 // a readable body without a modification timestamp supersedes a revision-0 stub
 		}
 	case passing(err):
 		return err
 	default:
-		if metaErr != nil && err == nil {
-			err = metaErr
-		}
+		st.lastErr = err
 		body, rev, note = "", 0, unreadableReason(err)
 	}
 	if st.doc.Title == "" {
@@ -480,218 +486,6 @@ type linkedCandidate struct {
 	entry    string
 }
 
-// readLinkedDocs follows cloud document and wiki links found in synced messages (docx, sheet, bitable, wiki, file, etc.)
-// using the owner's user token, including documents shared with the owner outside their My Space root. Each document is
-// deduplicated by obj_token + revision through the existing index; unreadable documents (403, export disabled, etc.)
-// record their reason in Note without blocking the rest of the run.
-func (r *run) readLinkedDocs(ctx context.Context) error {
-	var leads []docLead
-	seenLead := map[string]bool{}
-	for _, l := range r.docLeads {
-		if l.token == "" || !r.valid(l.resource) {
-			continue
-		}
-		k := l.objType + ":" + l.token
-		if seenLead[k] {
-			continue
-		}
-		seenLead[k] = true
-		leads = append(leads, l)
-		if len(leads) >= linkedDocsMost {
-			break
-		}
-	}
-	if len(leads) == 0 {
-		return nil
-	}
-
-	var direct []linkedCandidate
-	directIdx := map[string]int{} // objToken -> index in direct
-	addDirect := func(c linkedCandidate) {
-		if c.objToken == "" {
-			return
-		}
-		if i, ok := directIdx[c.objToken]; ok {
-			if direct[i].alias == "" && c.alias != "" {
-				direct[i].alias = c.alias
-			}
-			if direct[i].title == "" && c.title != "" {
-				direct[i].title = c.title
-			}
-			if direct[i].edited == 0 && c.edited > 0 {
-				direct[i].edited = c.edited
-			}
-			if direct[i].url == "" || (strings.Contains(direct[i].url, "/wiki/") && c.alias == "" && c.url != "") {
-				direct[i].url = cmpString(c.url, direct[i].url)
-			}
-			return
-		}
-		directIdx[c.objToken] = len(direct)
-		direct = append(direct, c)
-	}
-
-	// Step 1: resolve wiki links to their underlying obj_token + obj_type (reusing nodes already walked in readWiki).
-	for _, l := range leads {
-		if r.overBudget() {
-			r.partial = true
-			return nil
-		}
-		if l.objType != "wiki" {
-			addDirect(linkedCandidate{
-				docCandidate: docCandidate{objToken: l.token, objType: l.objType, url: l.url},
-				resource:     l.resource,
-				entry:        l.entry,
-			})
-			continue
-		}
-		node, ok := r.wikiNodes[l.token]
-		if !ok {
-			var data struct {
-				Node struct {
-					NodeToken   string `json:"node_token"`
-					ObjToken    string `json:"obj_token"`
-					ObjType     string `json:"obj_type"`
-					Title       string `json:"title"`
-					ObjEditTime string `json:"obj_edit_time"`
-				} `json:"node"`
-			}
-			err := r.sess.getJSON(ctx, request{
-				family: famWiki,
-				op:     "get wiki node",
-				path:   "/open-apis/wiki/v2/spaces/get_node",
-				query:  map[string]string{"token": l.token},
-			}, &data)
-			if err != nil {
-				if fatal(err) {
-					return err
-				}
-				if e := asSyncError(err); e != nil {
-					switch e.Kind {
-					case larksyncwire.ErrKindRateLimited:
-						r.fail("links", err)
-						return nil
-					case larksyncwire.ErrKindScope:
-						r.fail("links:wiki", err)
-						r.recordUnreadableDoc(l.resource, l.entry, l.token, "wiki", l.token, l.url, unreadableReason(err))
-						continue
-					case larksyncwire.ErrKindTransient:
-						r.fail("links:wiki:"+l.token, err)
-						continue
-					}
-				}
-				r.recordUnreadableDoc(l.resource, l.entry, l.token, "wiki", l.token, l.url, unreadableReason(err))
-				continue
-			}
-			node = wikiNodeInfo{
-				objToken: data.Node.ObjToken,
-				objType:  strings.ToLower(data.Node.ObjType),
-				title:    data.Node.Title,
-				edited:   parseUnix(data.Node.ObjEditTime),
-			}
-			r.wikiNodes[l.token] = node
-		}
-		if node.objType == "minutes" && node.objToken != "" {
-			r.leads = append(r.leads, minuteLead{token: node.objToken, url: l.url, resource: l.resource, entry: l.entry})
-			continue
-		}
-		if docType(node.objType) && node.objToken != "" {
-			addDirect(linkedCandidate{
-				docCandidate: docCandidate{
-					objToken: node.objToken,
-					objType:  node.objType,
-					title:    node.title,
-					url:      l.url,
-					alias:    l.token,
-					edited:   node.edited,
-				},
-				resource: l.resource,
-				entry:    l.entry,
-			})
-		}
-	}
-
-	if len(direct) == 0 {
-		return nil
-	}
-
-	// Step 2: batch-query Drive metadata for direct candidates that still need title / latest_modify_time.
-	var needMeta []int
-	for i, c := range direct {
-		if st := r.docs[larksyncwire.KeyDoc+c.objToken]; st != nil && st.fetched {
-			continue // already read in readDrive / readWiki this run
-		}
-		if c.title == "" || c.edited == 0 {
-			needMeta = append(needMeta, i)
-		}
-	}
-	if len(needMeta) > 0 {
-		metas, failed, err := r.batchDocMeta(ctx, direct, needMeta)
-		if err != nil {
-			if fatal(err) {
-				return err
-			}
-			if e := asSyncError(err); e != nil {
-				switch e.Kind {
-				case larksyncwire.ErrKindRateLimited:
-					r.fail("links", err)
-					return nil
-				case larksyncwire.ErrKindScope:
-					r.fail("links:meta", err)
-				}
-			}
-		}
-		for _, i := range needMeta {
-			tok := direct[i].objToken
-			if m, ok := metas[tok]; ok {
-				if direct[i].title == "" {
-					direct[i].title = m.title
-				}
-				if m.edited > direct[i].edited {
-					direct[i].edited = m.edited
-				}
-				if m.url != "" && (direct[i].url == "" || strings.Contains(direct[i].url, "/wiki/")) {
-					direct[i].url = m.url
-				}
-				if m.docType != "" && docType(m.docType) {
-					direct[i].objType = m.docType
-				}
-			} else if code, ok := failed[tok]; ok {
-				direct[i].metaFailCode = code
-			}
-		}
-	}
-
-	// Step 3: read each resolved document via consider, isolating per-document failures.
-	for _, c := range direct {
-		if r.overBudget() {
-			r.partial = true
-			return nil
-		}
-		if c.objType == "file" && c.metaFailCode != 0 && c.title == "" {
-			r.recordUnreadableDoc(c.resource, c.entry, c.objToken, c.objType, c.alias, c.url,
-				fmt.Sprintf("unreadable: drive metadata failed (code %d)", c.metaFailCode))
-			continue
-		}
-		if err := r.consider(ctx, c.resource, c.entry, c.docCandidate); err != nil {
-			if fatal(err) {
-				return err
-			}
-			if e := asSyncError(err); e != nil {
-				switch e.Kind {
-				case larksyncwire.ErrKindRateLimited:
-					r.fail("links", err)
-					return nil
-				case larksyncwire.ErrKindScope:
-					r.fail("links:"+c.objType, err)
-					continue
-				}
-			}
-			r.fail("links:"+c.objToken, err)
-		}
-	}
-	return nil
-}
-
 type driveDocMeta struct {
 	docType string
 	title   string
@@ -790,9 +584,13 @@ func (r *run) recordUnreadableDoc(resource, entry, token, objType, alias, u, not
 }
 
 // findMessageLeads collects both cloud document / wiki links and minutes links found in a synced message.
-func (r *run) findMessageLeads(resource, entry, text string) {
+func (r *run) findMessageLeads(resource, entry, text string, at time.Time, backfill bool) {
 	if !strings.Contains(text, "http") {
 		return
+	}
+	msgAt := int64(0)
+	if !at.IsZero() {
+		msgAt = at.Unix()
 	}
 	for _, raw := range linkPattern.FindAllString(text, -1) {
 		u := trimLinkURL(raw)
@@ -805,7 +603,15 @@ func (r *run) findMessageLeads(resource, entry, text string) {
 			r.leads = append(r.leads, minuteLead{token: tok, url: u, resource: resource, entry: entry})
 			continue
 		}
-		r.docLeads = append(r.docLeads, docLead{token: tok, objType: objType, url: u, resource: resource, entry: entry})
+		r.docLeads = append(r.docLeads, docLead{
+			token:     tok,
+			objType:   objType,
+			url:       u,
+			resource:  resource,
+			entry:     entry,
+			messageAt: msgAt,
+			backfill:  backfill,
+		})
 	}
 }
 

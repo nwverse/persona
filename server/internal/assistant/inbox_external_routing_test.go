@@ -119,6 +119,99 @@ func externalRealtime() w.ExternalPolicy {
 	return w.ExternalPolicy{Mode: new(w.ExternalForwardMode("realtime")), ActionRole: new(w.ExternalActionRole("owner"))}
 }
 
+func TestExternalInboxLegacyForwardCutoverAndRollback(t *testing.T) {
+	f := newExternalRoutingFixture(t)
+	// The regular Inbox handling pass also calls legacy forwarding. Exercise
+	// the collection-triggered pass on its own so its lock fences delivery.
+	f.inbox.handing.Lock()
+	defer f.inbox.handing.Unlock()
+	target := f.todo(t, "todo_legacy_forward", "legacy_agent")
+	const link = "https://github.com/example/repo/pull/83"
+	if _, _, err := f.store.ImportTodoRepositoryLinkDetails(t.Context(), string(target.ID),
+		[]repository.LinkInput{{URL: link, Role: "delivery"}}, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	turnInboxTodoForwardOn(t, f.Service)
+	thing := connector.InboxThing{
+		Thread: "example/repo#83", Last: "comment:1", URL: link, Title: "Review", Sender: "Reviewer", Preview: "Review feedback",
+	}
+	path, err := externalbindingadapt.Path(githubExternalRef(thing))
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect := func(source, id string, wantSends, wantScoped int) {
+		t.Helper()
+		thing.Last, thing.At = id, time.Now()
+		now := f.collect(t, w.InboxSource{ID: source, Via: "github", Things: []connector.InboxThing{thing}})
+		// The collector starts a legacy pass after it commits the batch.
+		f.inbox.forwarding.Lock()
+		f.inbox.forwarding.Unlock()
+		f.sweep(t, now)
+		activity := f.feed(t, target)
+		scoped := slices.DeleteFunc(activity, func(row db.FeedRow) bool {
+			return strings.Contains(string(row.Body), `"todo_forward_status"`)
+		})
+		if got := f.sent(); len(got) != wantSends || len(scoped) != wantScoped {
+			t.Fatalf("%s %s sent to %v with %d scoped deliveries, want %d and %d", source, id, got, len(scoped), wantSends, wantScoped)
+		}
+	}
+	collect("github", "comment:1", 1, 0)
+	f.policy(t, path[0], externalRealtime())
+	collect("mirror", "comment:1", 1, 0) // legacy already owns this provider event
+	collect("github", "comment:2", 2, 1)
+	f.policy(t, path[0], w.ExternalPolicy{Mode: new(w.ExternalForwardMode("off"))})
+	collect("github", "comment:3", 2, 1) // explicit off also owns the routing decision
+	f.policy(t, path[0], w.ExternalPolicy{})
+	collect("another", "comment:2", 2, 1) // rollback does not send an already scoped event via legacy
+	collect("github", "comment:4", 3, 1)
+	if !f.inboxTodoForwardOn(t.Context()) {
+		t.Fatal("cutover or rollback changed the legacy setting")
+	}
+}
+
+func TestExternalInboxLarkTopicKeepsNativeOwnerMessageAndRoutesNewUpdatesOnce(t *testing.T) {
+	needsLarkLayer(t)
+	f := newExternalRoutingFixture(t)
+	target := f.todo(t, "todo_topic", "topic_agent")
+	ref := w.ExternalRef{Provider: "lark", Container: externalNode("chat", testChat), Item: externalNode("thread", testThread)}
+	thread := TodoThread{Channel: "feishu", ChatID: testChat, ThreadID: testThread}
+	if _, err := f.bindThread(t.Context(), string(target.ID), thread, nil); err != nil {
+		t.Fatal(err)
+	}
+	f.hub.mu.Lock()
+	f.hub.hello.Owner = "ou_owner"
+	f.hub.mu.Unlock()
+	f.inbox.externalTriage = func(context.Context, externalTriageInput) ([]externalVerdict, error) {
+		t.Fatal("the legacy projection and explicit binding duplicated the same candidate")
+		return nil, nil
+	}
+	f.policy(t, ref, externalRealtime())
+	f.bind(t, ref, target, w.ExternalPolicy{})
+	collect := func(id, sender string) time.Time {
+		return f.collect(t, w.InboxSource{ID: "larkcli", Things: []connector.InboxThing{{
+			Thread: "larkcli:chat:" + testChat + ":thread:" + testThread, Last: id,
+			Title: "Topic update", Preview: "Update from the topic", At: time.Now(),
+			Tags: []connector.Tag{{Key: connector.TagSender, Value: sender}},
+		}}})
+	}
+	now := collect("om_owner", "ou_owner")
+	f.sweep(t, now)
+	if len(f.sent()) != 0 || len(f.feed(t, target)) != 0 {
+		t.Fatal("the owner's message reached the scoped Inbox delivery path")
+	}
+	feishuSay(t, f.Service, f.hub, &FeishuStatus{Ready: true, Enabled: true, Owner: "ou_owner",
+		Features: FeishuFeatures{Main: true, Agents: true}}, topicEvent("om_owner", "Proceed with the work"), "")
+	decisions, err := f.store.ListTodoDecisions(t.Context(), string(target.ID), true)
+	if err != nil || len(decisions) != 1 || decisions[0].SourceMessage != "feishu-om_owner" {
+		t.Fatalf("native topic decision: %+v, %v", decisions, err)
+	}
+	now = collect("om_update", "ou_other")
+	f.sweep(t, now)
+	if got := f.feed(t, target); len(got) != 1 {
+		t.Fatalf("incoming updates should have one scoped delivery to the native to-do: %+v", got)
+	}
+}
+
 func TestExternalInboxMostSpecificAndConservativeDefaults(t *testing.T) {
 	f := newExternalRoutingFixture(t)
 	a := f.todo(t, "todo_container", "")

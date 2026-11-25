@@ -9,6 +9,7 @@ import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { loadPages } from "../../lib/lazy-page";
 import { getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
+import { interactionID } from "../../lib/ids-wire";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -78,15 +79,6 @@ afterEach(() => {
   delete getFeedState().taskCards[conversation];
   vi.unstubAllGlobals();
 });
-const settleHeldPushRead = async () => {
-  await act(async () => {
-    vi.advanceTimersByTime(0);
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-  const fetchMock = vi.mocked(fetch);
-  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/push/ln-mode"))).toBe(true);
-};
 
 const entries = () => [...host.querySelectorAll<HTMLButtonElement>("[data-assistant-actionbar] [data-tray-entry]")];
 const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assistant-actionbar] [data-tray-entry="${key}"]`)!;
@@ -899,7 +891,6 @@ describe("Assistant Needs you / In progress trays", () => {
       await refresh();
       for (const s of moreSessions) upsertSession(s);
     });
-    await settleHeldPushRead();
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}2`]);
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="agent:demo/by-hand-asks"]')?.textContent).toContain("Keep the old file?");
@@ -923,7 +914,6 @@ describe("Assistant Needs you / In progress trays", () => {
       await refresh();
       upsertSession(moreSessions[0]);
     });
-    await settleHeldPushRead();
     act(() => entry("needs").click());
     await openRows();
     const row = host.querySelector<HTMLElement>(`[data-needs-row="${kind === "task" ? "task:tray-task" : "agent:demo/by-hand-asks"}"]`)!;
@@ -1260,7 +1250,6 @@ describe("Assistant Needs you / In progress trays", () => {
       await refreshTodos();
       upsertSession(moreSessions[0]);
     });
-    await settleHeldPushRead();
     expect(entry("needs").textContent).toBe(label.needs);
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="task:tray-task"]')).toBeNull();
@@ -1268,7 +1257,7 @@ describe("Assistant Needs you / In progress trays", () => {
 
     // Plain unescalated screen card on a quiet task (even with view needs_you / agent_asks): stays out of main chat
     // Needs you per D19 until explicitly escalated via ask_escalate.
-    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: screenID }] } };
+    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: interactionID(screenID) }] } };
     moreInteractions = [{ ...baseScreen, delegating: false }];
     await act(async () => {
       await refresh();
@@ -1342,10 +1331,12 @@ describe("Assistant Needs you / In progress trays", () => {
       await refreshTodos();
       for (const s of moreSessions) upsertSession(s);
     });
-    await settleHeldPushRead();
 
     // Only the escalated task permission counts; the unescalated standalone Agent permission stays out of main chat Needs you.
     expect(entry("needs").textContent).toBe(`${label.needs}1`);
+    // Held pushes stay out of the primary main chat composer bar (surfaced in secondary views instead).
+    expect(host.querySelector("[data-held-pushes-entry]")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/push/intercepts") || String(url).includes("/push/ln-mode"))).toBe(false);
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="agent:demo/by-hand-perm"]')).toBeNull();
     await openRows("task:tray-task");
