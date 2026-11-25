@@ -2169,6 +2169,9 @@ get their rows here when the manager and the hub start sending it.
 | GET | `/api/v1/sessions/{mid}/{sid}/items?strict=1&before_seq=&limit=80&lazy_images=1` | Private CLI export's backward page. The hub forwards `strict_read: true` with `session.items` and requires the node to acknowledge it. A node reading its local transcript first opens the source and propagates refresh failures. The successful page includes `strict_read: true`, `history` when the source has recorded lines, and `from_seq` / `to_seq` as its coverage. The first page's `to_seq` is the snapshot high-water mark. For an earlier page `to_seq` is `before_seq-1`. `from_seq` is zero when there is no earlier page, otherwise one less than the first item's sequence. Same-sequence siblings remain together. A node or runtime that cannot acknowledge the request gets `409 node_outdated`; an older hub's response without the acknowledgment cannot be treated as a fresh read. |
 | GET | `/api/v1/sessions/{mid}/{sid}/items/{item id}/full?strict=1` | Export's full item uses the same fresh-source requirement. It returns the normal item with `strict_read: true` and `source_text_bytes`, the node's full text size before hub presentation transforms. A missing acknowledgment is refused the same way as for the strict page. |
 | GET | `/api/v1/sessions/{mid}/{sid}/items?user_inputs=1` | Web navigation index (#2338, #15335). `{total, inputs:[{id,seq,preview?,answer?,attachments?}], history}` lists genuine human inputs oldest first across the conversation, independently of page cursors. Text and image siblings share one position. Genuine queued inputs and user-authored contexts count. System deliveries, supervision, scheduled and wake inputs, and tool results are excluded. `preview` is the first nonblank query line outside quote blocks and context wrappers, capped at 100 Unicode code points including any ellipsis. `answer` is up to 180 code points of plain assistant prose from that exchange, with Markdown formatting, comments, code blocks and tool data removed. `attachments` counts the input's files and images when the cleaned query body is empty. Empty excerpts and zero counts are omitted. The response contains no full message bodies, attachment paths from markup or image bytes. Excerpts are computed locally without model calls. An incomplete or rewritten read returns an error. Older nodes with index support return `id` and `seq` alone. Clients can use loaded history when index mode is unavailable. |
+| GET | `/api/v1/sessions/{mid}/{sid}/items?user_inputs=1&meta_only=1` | Compact index `{total,inputs:[{id,seq}],history}` for all visible user-input positions. See "Chat navigation reads". |
+| GET | `/api/v1/sessions/{mid}/{sid}/items?preview=42:turn%230&history=` | Excerpts for up to 16 exact input positions, `{inputs:[{id,seq,preview?,answer?,attachments?}],history}`. Repeat `preview` for each position. See "Chat navigation reads". |
+| GET | `/api/v1/sessions/{mid}/{sid}/items?around_seq=42&radius=40&history=` | Direct history window `{items,history,from_seq,to_seq,has_more,more_after}` with cursors on both sides. See "Chat navigation reads". |
 | GET | `/api/v1/sessions/{mid}/{sid}/items/{item id}/image` | The raw bytes of an item's image (Content-Type is the image type, cacheable forever); the item id contains `#` and must be percent-encoded |
 | GET | `/api/v1/sessions/{mid}/{sid}/items/{item id}/visualization` | A Codex visualization item's self-contained HTML fragment (`text/html; charset=utf-8`, cacheable forever, at most 1 MiB; #10321). The node only serves files under its visualizations tree that belong to this session (symlinks resolved), and clients run the fragment in their offline HTML sandbox with no bridge |
 | GET | `/api/v1/sessions/{mid}/{sid}/items/{item id}/full` | An item's full text (`Item`, without images and without `full_size`; at most 1 MB): fetched when the App taps "show full text". The node re-reads and parses that line |
@@ -4433,6 +4436,45 @@ Every batch of items (WebSocket `items` events, HTTP `/items` responses, the nod
 - **The page's own fallback** (web `useTranscript`, `lib/stale-page.ts`; iOS / Mac `AgentSyncPacing.catchUpAt` the same, #3191): if the session's `rev` moved since the page's newest `items` read was sent (the session list's row or the `revs` event; a push does not settle it, since nothing says which lines a rev was for, #1179), or the session list's `updated_at` (for a sub-Agent, its entry in the parent's `subagents`) is newer than the `ts` of the latest item the page has, and no items have arrived and the rev has not moved for 4 seconds, fetch once with `after_seq=covered` (at most once every 10 seconds per session, only while the page is in the foreground; if `history` changed, refetch the whole page). The `rev` catches the last line of a burst whose push was lost: its `updated_at` is within a second of the line before, which the page holds, and that close the two times count as the same write. The node reports revs on its next tick, mostly after the items, so an open chat makes one empty read each time it goes quiet. Fetched items merge in silently; writes that yield no items (title, mode) aren't fetched repeatedly. Only after 2 consecutive fetches find items that "should have arrived by push" (or 2 consecutive fetches fail) does a small "Not live · Reload" notice appear at the top of the chat; it disappears when pushes resume.
 - Old hubs don't carry these fields: the App keeps merging by id. New hub fields are simply extra keys to old Apps.
 
+### Chat navigation reads
+
+People returning to earlier questions in Assistant and Agents can load the question list independently of the chat
+page, request excerpts when needed, and open a conversation at a chosen position.
+
+- **Compact index.** `user_inputs=1&meta_only=1` counts the same genuine inputs as `user_inputs=1` and returns their
+  `id` and `seq` oldest first. `total` counts the whole visible conversation independently of chat paging and the
+  viewport. A successful response includes every position. An incomplete source read fails with a non-success status.
+  Nodes use the same input classification in both modes. Transcript nodes can build the cold prefix from input
+  and branch records without filling the chat page cache. Runtime sessions can reduce one native page at a time.
+  A hub talking to an older node accepts its complete legacy index and strips its excerpts. A node without any
+  input-index support still yields the existing fallback to questions loaded in chat.
+- **Previews.** Repeat `preview=<seq>:<item id>` for 1–16 distinct positions returned by the index. Percent-encode
+  the value, including any `#` in the ID. The first colon separates the sequence from the opaque ID. Missing,
+  automated and stale positions are omitted. Excerpts use the same 100- and 180-code-point limits as the legacy
+  index. The answer can be shorter or absent if it is outside the first 128 source lines of the requested exchange.
+  Replies stop at the next exchange or the exclusive source bound, whichever comes first. Only the requested
+  positions produce excerpts. Results are in ascending sequence order.
+- **Target window.** `around_seq` reads source lines within `radius` of the target. The radius defaults to 40 and
+  accepts 0–100, so the window spans at most 201 lines. Several items may share a line. Rows are in ascending
+  sequence order and images arrive as lazy placeholders. `from_seq` is exclusive and `to_seq` is inclusive,
+  including lines with no item. Use `before_seq=from_seq+1` when `has_more` is true and `after_seq=to_seq` when
+  `more_after` is true. Both flags are present. Initialize a detached chat view from the window's cursors to avoid
+  asking the continuity gap-filler to catch up from another view. A target outside the visible interval returns
+  `404 not_found`.
+
+For previews and target windows, send the index response's `history` when available. A changed generation returns
+`409 history_changed` so the client can refresh the list before using new positions. Logical conversations resolve
+public positions against their visible segments, clip source requests to each frozen end, and verify one logical
+generation for the complete response. Sequences must be positive and at most 2,147,483,646. IDs and history tokens
+are limited to 512 and 256 UTF-8 bytes respectively. Invalid or conflicting selectors return `400 bad_request`.
+Preview and window selectors each occupy their own read and cannot be combined with ordinary paging or export.
+All three navigation responses use `Cache-Control: no-store`.
+
+An older node that does not implement `session.input_previews` or `session.items_window` returns
+`409 node_outdated` through the hub. Keep the compact positions available and use already loaded items or the
+existing paged view. A runtime that cannot prove a bounded range returns `409 unsupported`. New clients also
+validate the response shape, since an older hub can ignore these query options and return an ordinary page.
+
 ### Turn duration from actual records
 
 A turn-end record can produce a metadata item with `role: system`, `kind: turn_duration`. It carries no display text and uses the existing HTTP history / incremental pages, WebSocket `items`, and session cache path, with no new event or top-level Envelope field. The `turn_duration` field is optional; old iOS decodes an unknown kind as `unknown` and skips its display, while decoding everything else as usual.
@@ -4989,7 +5031,9 @@ hub → node requests:
 | `fs.watch` | #2439: `{dirs: [{path, cwd}], git: [cwd]}` → `{ok}`, **replaces the whole set** of folders and Git directories the node watches (at most 32 folders and 8 Git directories; an empty set stops the watch loop). Old nodes report unknown method; the hub logs a line and the page keeps refreshing manually |
 | `file.read` | `{path, cwd, offset}` → same as REST `file` (old nodes don't know `offset`, and their reply has no `offset` / `next`) |
 | `fs.stat` | `{paths, cwd}` → `{stats}`, same as REST `stat` (old nodes report unknown method, and the phone links no paths) |
-| `session.items` | `{session_id, user_inputs?, before_seq, limit, turns, after_seq, lazy_images, fold_work, from_seq, through_seq}` → `{items, has_more, more_after, history, to_seq, from_seq}` (with `through_seq` it is the folded rows: `{items, more}`) (`from_seq` is only present in `after_seq` requests; without `lazy_images: true` the node reads image data back, for compatibility with old hubs). With `user_inputs: true`, returns the HTTP input index shape `{total, inputs:[{id,seq,preview?,answer?,attachments?}], history}`. Runtimes use their existing item pages. The manager passes an exclusive `before_seq` when reading a frozen conversation segment so excerpts cover only visible source lines. Older nodes ignore this bound and return positions alone, which the manager filters. The richer #2071 contract remains independent. |
+| `session.items` | `{session_id, user_inputs?, meta_only?, before_seq, limit, turns, after_seq, lazy_images, fold_work, from_seq, through_seq}` → `{items, has_more, more_after, history, to_seq, from_seq}` (with `through_seq` it is the folded rows: `{items, more}`) (`from_seq` is only present in `after_seq` responses; without `lazy_images: true` the node reads image data back, for compatibility with old hubs). With `user_inputs: true`, returns the HTTP input index shape `{total, inputs:[{id,seq,preview?,answer?,attachments?}], history}`. Adding `meta_only: true` selects just `id` and `seq`. Runtimes use their existing item pages. The manager passes an exclusive `before_seq` for a frozen conversation segment and filters the result. The richer #2071 contract remains independent. |
+| `session.input_previews` | `{session_id, positions:[{id,seq}], before_seq?, history?}` → `{inputs:[{id,seq,preview?,answer?,attachments?}], history}`. The manager supplies the exclusive `before_seq` for retired sources. Uses bounded reads for up to 16 positions. |
+| `session.items_window` | `{session_id, from_seq, through_seq, before_seq?, history?}` → `{items,history,from_seq,to_seq,has_more,more_after}`. The request has two inclusive line endpoints. The manager clips retired requests and supplies their exclusive `before_seq` for the source's cursor checks. For runtimes using the older SDK range response, the node brackets the range read with one-item history probes and checks their generation. |
 | `session.image` | `{session_id, item_id}` → `Image{mime, data}` (the node's items don't keep image data in memory; it rereads that line at the recorded line offset) |
 | `session.visualization` | `{session_id, item_id}` → the visualization item's HTML fragment as a string (#10321): only a file under the node's visualizations tree belonging to that session (its Codex session id, or the session's main thread), symlinks resolved, at most 1 MiB; anything else is `not_found` |
 | `session.item` | `{session_id, item_id}` → `Item` (full text, no images) |
