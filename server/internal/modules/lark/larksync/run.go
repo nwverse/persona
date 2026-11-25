@@ -46,10 +46,12 @@ type run struct {
 	docOrder []string
 	chats    map[string]chatInfo
 	leads    []minuteLead
-	// names are the senders' display names read this run (open id -> name); namesOff stops asking after the first
-	// refusal (no contact scope): names are a help for matching the gateway's copy, never a reason to fail.
-	names    map[string]string
-	namesOff bool
+	// names are the senders' display names read this run (open id -> name); namesOff stops asking after a missing
+	// contact scope: names are a help for matching the gateway's copy, never a reason to fail.
+	// senderTypes records each sender id's sender_type ("user", "app", …) seen in messages this run.
+	names       map[string]string
+	senderTypes map[string]string
+	namesOff    bool
 }
 
 // resourceState is how one resource (a cursor key) ended: failed (its content is dropped), abandoned (the budget ran
@@ -101,20 +103,21 @@ type minuteLead struct {
 func newRun(s *Syncer, b larksyncwire.Binding, token func(context.Context) (string, error), cursors map[string]string, idx larksyncwire.Index, deadline time.Time) *run {
 	start := s.now()
 	return &run{
-		s:        s,
-		b:        b,
-		sess:     &session{s: s, base: botcard.ResolveDomain(b.App.Domain), token: token, deadline: deadline},
-		cursors:  cursors,
-		idx:      idx,
-		start:    start,
-		deadline: deadline,
-		owner:    openIDOf(b.AccountID),
-		res:      map[string]*resourceState{},
-		known:    map[string]knownRecord{},
-		msgs:     map[string]*msgState{},
-		docs:     map[string]*docState{},
-		names:    map[string]string{},
-		chats:    map[string]chatInfo{},
+		s:           s,
+		b:           b,
+		sess:        &session{s: s, base: botcard.ResolveDomain(b.App.Domain), token: token, deadline: deadline},
+		cursors:     cursors,
+		idx:         idx,
+		start:       start,
+		deadline:    deadline,
+		owner:       openIDOf(b.AccountID),
+		res:         map[string]*resourceState{},
+		known:       map[string]knownRecord{},
+		msgs:        map[string]*msgState{},
+		docs:        map[string]*docState{},
+		names:       map[string]string{},
+		senderTypes: map[string]string{},
+		chats:       map[string]chatInfo{},
 	}
 }
 
