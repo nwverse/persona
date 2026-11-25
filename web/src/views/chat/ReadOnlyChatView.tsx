@@ -3,6 +3,7 @@
 // fork, rewind, rename, archive or delete action is mounted. Transcript rows and ChatSearch stay the real ones.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { lineItemIds, type ChatSearchHit } from "../../lib/chat-search";
+import { ReadOnlyFileContext } from "../../lib/panel";
 import { useStore } from "../../lib/store";
 import { chatLines } from "../../lib/turns";
 import { Button, Loading } from "../../ui/atoms";
@@ -52,7 +53,9 @@ export function ReadOnlyChatView({ mid, sid, onToggleSidebar, headerActions }: {
             </div>
           )}
           {!tr.loading && !tr.error && !tr.items.length && <Empty icon="heart" title={t("spaces.empty_title")}>{t("spaces.empty_readonly_body")}</Empty>}
-          {lines.map((line) => <ChatLineView key={line.id} line={line} mid={mid} sid={sid} assistant expandFold={tr.expandFold} />)}
+          <ReadOnlyFileContext.Provider value={true}>
+            {lines.map((line) => <ChatLineView key={line.id} line={line} mid={mid} sid={sid} assistant expandFold={tr.expandFold} />)}
+          </ReadOnlyFileContext.Provider>
         </div>
       </div>
       <div role="status" data-chat-readonly className="flex shrink-0 items-center justify-center border-t border-line px-4 py-3 text-label text-ink-3">

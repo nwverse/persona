@@ -92,7 +92,7 @@ function ReadOnlyReportDialog({ mid, report, onClose }: { mid: string; report: H
     >
       {readError ? <p className="text-meta leading-relaxed text-ink-3">{t("spaces.reports_load_failed", { error: readError })}</p>
         : record === null ? <div className="flex justify-center py-6"><Loading /></div>
-        : record ? <div className="max-h-[60vh] overflow-y-auto"><Markdown text={record} small mid={mid} /></div>
+        : record ? <div className="max-h-[60vh] overflow-y-auto"><Markdown text={record} small mid={mid} readOnly /></div>
         : <p className="text-meta leading-relaxed text-ink-3">{t("spaces.report_no_record")}</p>}
     </Dialog>
   );
