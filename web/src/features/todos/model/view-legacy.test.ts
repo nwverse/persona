@@ -8,7 +8,8 @@ import { BY_DESIGN, BOUNDARY_MS, classify, KNOWN_PHASES, knownView, legacyOf, PA
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const HOUR = 3_600_000;
 const local = (section: TriageSection, rule: TriageRule, last = NOW - HOUR): Triage => ({ section, rule, last });
-const view = (section: string, reason: string, more: Partial<TodoSummary> = {}): TodoSummary => ({ phase: "todo", section, reason, rank: 0, ...more });
+// The view as the wire carries it: raw strings, which may be a newer hub's values the closed types do not know.
+const view = (section: string, reason: string, more: object = {}): TodoSummary => ({ phase: "todo", section, reason, rank: 0, ...more }) as TodoSummary;
 const facts = (more: Partial<RowFacts> = {}): RowFacts => ({
   missing: false,
   usageLimit: false,

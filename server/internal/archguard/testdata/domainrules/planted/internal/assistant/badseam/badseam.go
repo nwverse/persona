@@ -13,3 +13,18 @@ type Hooks struct {
 
 // Register keeps a module's port.
 func (h *Hooks) Register(name string, port any) {} // seam-any
+
+type Store interface {
+	Load() any           // seam-any
+	Save(map[string]any) // seam-any
+}
+
+type Events func(map[string]any) // seam-any
+type Payload map[string]any      // seam-any
+type Value = interface{}         // seam-any
+
+type Embedded interface {
+	interface {
+		Send(any) // seam-any
+	}
+}

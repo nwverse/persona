@@ -68,7 +68,7 @@ func TestMinutesHTTP(t *testing.T) {
 	if !strings.Contains(request("GET", "/api/v1/recordings", "", nil, 200), `"minutes_state":"pending"`) {
 		t.Fatal("reconciliation lacks the pending minutes")
 	}
-	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
+	if n := e.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
 		t.Fatalf("wrote %d", n)
 	}
 	pushes := f.pushed()
@@ -149,7 +149,7 @@ func TestMinutesHTTP(t *testing.T) {
 	if body := request("POST", path+"/minutes", "", nil, 202); !strings.Contains(body, `"state":"pending"`) {
 		t.Fatalf("regenerate: %s", body)
 	}
-	e.WriteMinutes(context.Background(), 2)
+	e.RecordingProvider().WriteMinutes(context.Background(), 2)
 	if pushes := f.pushed(); len(pushes) != 2 || pushes[1].ID != "ntf_minutes_"+id+"_2" {
 		t.Fatalf("pushes %+v", pushes)
 	}

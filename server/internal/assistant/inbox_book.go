@@ -34,7 +34,7 @@ type inboxBook struct {
 	passHook              func()         // tests: runs as each pass starts
 	waitHook              func()         // tests: replaces the poll sleep while suggestFrom waits for startup
 	workbenchDraftHook    func()         // tests: runs after Workbench generation and before its card item is reloaded
-	onDemandDraftSaveHook func()         // tests: runs at the on-demand draft publication boundary
+	onDemandDraftSaveHook func()         // tests: runs after an on-demand draft save attempt, before its failure tombstone
 	translating           sync.Mutex     // one translation pass at a time (inbox_translate.go)
 	replies               sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
 	handingOff            sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
@@ -101,6 +101,11 @@ type inboxBook struct {
 
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 
+	// Scoped routing receives source arrivals under mu and wakes the outbox worker after persistence.
+	externalCapture bool
+	externalTriage  externalInboxTriager
+	externalWake    chan struct{}
+
 	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
 	forwarding      sync.Mutex
 	forwardAgain    atomic.Bool
@@ -124,6 +129,7 @@ type inboxVia struct {
 func (b *inboxBook) init() {
 	b.once.Do(func() {
 		b.items = map[string]*InboxItem{}
+		b.externalWake = make(chan struct{}, 1)
 		b.extensions, b.builtin, b.kinds, b.names = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]string{}
 		b.vias = map[string]inboxVia{}
 		b.retriaged, b.settleAsked, b.settleSeen = map[string]bool{}, map[string]time.Time{}, map[string]string{}

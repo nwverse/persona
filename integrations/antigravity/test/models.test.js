@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -40,9 +41,10 @@ async function fixture(t, options = {}) {
   const fake = fileURLToPath(new URL('./fake-acp-models.mjs', import.meta.url))
   writeFileSync(bin, `#!/bin/sh\nexec '${process.execPath}' '${fake}' '${home}' "$@"\n`)
   chmodSync(bin, 0o755)
+  if (options.modelsTimeoutMs) execFileSync(bin, ['--warm'])
   const n = await startFakeNode(t)
   const runtime = createAgyRuntime({ home, agyDir, agyBin: bin, checkTimeoutMs: options.checkTimeoutMs, personadBin: '/missing', socketPath: n.path, log: () => {},
-    modelsTimeoutMs: options.modelsTimeoutMs, catalogEveryMs: options.catalogEveryMs, catalogMaxMs: options.catalogMaxMs })
+    modelsTimeoutMs: options.modelsTimeoutMs, catalogEveryMs: options.catalogEveryMs, catalogTtlMs: options.catalogTtlMs, catalogMaxMs: options.catalogMaxMs })
   t.after(async () => { await runtime.stop(); rmSync(home, { recursive: true, force: true }) })
   runtime.start()
   await n.ready
@@ -451,4 +453,126 @@ test('periodic discovery backs off while it keeps timing out', { timeout: 30_000
   await until('the usual pace again', () => modelsCalls().length >= before + 2, 20_000)
   const after = modelsCalls()
   assert.ok(after.at(-1) - after.at(-2) < 1000, `back to every 250 ms: ${after.at(-1) - after.at(-2)} ms`)
+})
+
+test('default runtime discovers models once at startup and refreshes on demand without periodic background polling', async (t) => {
+  const { n, modelsCalls } = await fixture(t, { noStart: true, catalogTtlMs: 200 })
+  await until('startup discovery finishes', () => modelsCalls().length === 1 && n.last('runtime.launchers')?.launchers[0].models.length === entries.length)
+  await n.peer.call('launchers.models', {})
+  assert.equal(modelsCalls().length, 1, 'cached catalog reused within TTL')
+  await new Promise((resolve) => setTimeout(resolve, 320))
+  assert.equal(modelsCalls().length, 1, 'no periodic background polling runs while idle')
+  await n.peer.call('launchers.models', {})
+  assert.equal(modelsCalls().length, 2, 'expired TTL refreshes on demand')
+})
+
+test('on-demand discovery backs off unforced lookups after a sign-in timeout while explicit refresh retries immediately', async (t) => {
+  const { n, catalog, modelsCalls } = await fixture(t, { noStart: true, modelsTimeoutMs: 250, catalogTtlMs: 500, catalogMaxMs: 10_000 })
+  await until('startup discovery finishes', () => modelsCalls().length === 1 && n.last('runtime.launchers')?.launchers[0].models.length === entries.length)
+  catalog({ hang: true })
+  await new Promise((resolve) => setTimeout(resolve, 550))
+  await assert.rejects(n.peer.call('launchers.models', {}), /sign-in may have expired/)
+  assert.equal(modelsCalls().length, 2)
+
+  catalog({ models: entries })
+  await assert.rejects(n.peer.call('launchers.models', {}), /sign-in may have expired/)
+  assert.equal(modelsCalls().length, 2, 'unforced lookup during backoff window does not spawn agy models')
+
+  const refreshed = await n.peer.call('launchers.models', { refresh: true })
+  assert.equal(refreshed.models.length, entries.length)
+  assert.equal(modelsCalls().length, 3, 'explicit refresh bypasses backoff and clears it')
+  const cached = await n.peer.call('launchers.models', {})
+  assert.equal(cached.models.length, entries.length)
+  assert.equal(modelsCalls().length, 3)
+})
+
+test('explicit bypassPermissions auto-approves Bash, file edits and writes without settings.json', async (t) => {
+  const f = await modePermissionFixture(t, { refuseAuto: false }, { permission_mode: 'bypassPermissions' })
+  rmSync(join(f.home, 'settings', 'settings.json'), { force: true })
+  await f.n.peer.call('session.send', { session_id: f.sessionId, text: 'ask-mixed-permissions' })
+  await until('all mixed permissions are answered', () => f.answers().length === 3)
+  await until('the mixed-permission turn ends', () => f.row()?.status === 'done')
+  assert.deepEqual({
+    mode: f.row()?.permission_mode ?? 'default',
+    cards: f.n.asked.length,
+    answers: f.answers().map((answer) => ({ id: answer.id, result: answer.result })).sort((a, b) => a.id.localeCompare(b.id)),
+  }, {
+    mode: 'bypassPermissions',
+    cards: 0,
+    answers: [
+      { id: 'read-permission-bash', result: selected('always') },
+      { id: 'read-permission-edit', result: selected('once') },
+      { id: 'read-permission-write', result: selected('always-write') },
+    ],
+  })
+})
+
+test('explicit bypassPermissions survives companion restart via brain dir persistence and reapplies accept-edits on resume', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-bypass-restart-'))
+  const agyDir = join(home, 'settings')
+  mkdirSync(join(agyDir, 'brain', '11111111-2222-3333-4444-555555555555'), { recursive: true })
+  writeFileSync(join(home, 'catalog.json'), JSON.stringify({ models: entries, resetModeOnResume: true }))
+  const bin = join(home, 'agy')
+  const fake = fileURLToPath(new URL('./fake-acp-models.mjs', import.meta.url))
+  writeFileSync(bin, `#!/bin/sh\nexec '${process.execPath}' '${fake}' '${home}' "$@"\n`)
+  chmodSync(bin, 0o755)
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+
+  const n1 = await startFakeNode(t)
+  const rt1 = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin: '/missing', socketPath: n1.path, log: () => {} })
+  rt1.start()
+  await n1.ready
+  const { session } = await n1.peer.call('session.start', { cwd: home, permission_mode: 'bypassPermissions' })
+  assert.equal(session.permission_mode, 'bypassPermissions')
+  await rt1.stop()
+
+  // New companion process starts with empty in-memory sessionModes and no settings.json.
+  const n2 = await startFakeNode(t)
+  const rt2 = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin: '/missing', socketPath: n2.path, log: () => {} })
+  t.after(async () => { await rt2.stop() })
+  rt2.start()
+  await n2.ready
+  await n2.peer.call('session.send', { session_id: session.session_id, text: 'ask-read-permissions' })
+  const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+  const answers = () => calls().filter((call) => typeof call.id === 'string' && call.id.startsWith('read-permission-') && call.result)
+  await until('resumed session auto-approves all permissions after companion restart', () => answers().length === 3)
+  const row = () => n2.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === session.session_id)
+  await until('resumed turn finishes', () => row()?.status === 'done')
+  assert.equal(n2.asked.length, 0)
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+test('deferred bypassPermissions start reapplies accept-edits after session/resume resets native mode', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-deferred-bypass-'))
+  const agyDir = join(home, 'settings')
+  mkdirSync(agyDir, { recursive: true })
+  writeFileSync(join(home, 'catalog.json'), JSON.stringify({ models: entries, resetModeOnResume: true }))
+  const bin = join(home, 'agy')
+  const personadBin = join(home, 'personad')
+  const fake = fileURLToPath(new URL('./fake-acp-models.mjs', import.meta.url))
+  writeFileSync(bin, `#!/bin/sh\nexec '${process.execPath}' '${fake}' '${home}' "$@"\n`)
+  writeFileSync(personadBin, '#!/bin/sh\nexit 0\n')
+  chmodSync(bin, 0o755)
+  chmodSync(personadBin, 0o755)
+  const n = await startFakeNode(t)
+  const runtime = createAgyRuntime({ home, agyDir, agyBin: bin, personadBin, socketPath: n.path, log: () => {} })
+  t.after(async () => { await runtime.stop(); rmSync(home, { recursive: true, force: true }) })
+  runtime.start()
+  await n.ready
+  const { session } = await n.peer.call('session.start', {
+    cwd: home, prompt: 'ask-read-permissions', defer_mcp: true, permission_mode: 'bypassPermissions',
+  })
+  assert.equal(session.starting, true)
+  assert.equal(session.permission_mode, 'bypassPermissions')
+  await n.peer.call('session.send', { session_id: session.session_id, text: 'ask-read-permissions' })
+  const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)
+  const answers = () => calls().filter((call) => typeof call.id === 'string' && call.id.startsWith('read-permission-') && call.result)
+  await until('deferred bypass turn auto-approves permissions', () => answers().length === 3)
+  const row = () => n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === session.session_id)
+  await until('deferred bypass turn finishes', () => row()?.status === 'done')
+  assert.equal(n.asked.length, 0)
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.equal(calls().filter((call) => call.method === 'session/resume').length, 1)
+  assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
 })

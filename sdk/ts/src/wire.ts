@@ -65,6 +65,7 @@ export interface Manifest {
    * executable; writes and arbitrary command lines are not part of this contract.
    */
   host_integrations?: HostIntegrationSpec[];
+  upgrade?: UpgradeSpec;
 }
 
 /**
@@ -136,6 +137,24 @@ export interface AuthSpec {
    * do leave it out of its pages.
    */
   page?: string;
+}
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+export interface UpgradeSpec {
+  /** auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade. */
+  backup?: string;
+  /**
+   * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+   */
+  prepare?: boolean;
+  /**
+   * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+   * snapshot.
+   */
+  health_check?: boolean;
 }
 
 export interface Dependency {
@@ -1069,6 +1088,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */
@@ -3969,8 +3993,8 @@ export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "
  * and calls their short tool names. An extension's connector with one this hub does not know loses only that
  * capability.
  */
-export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | (string & {});
-export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"] as const;
+export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | "inbox_visibility" | (string & {});
+export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"] as const;
 
 /**
  * ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.
@@ -4886,6 +4910,20 @@ export interface ConnectorKBItem {
    * recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
    */
   signals?: string[];
+  /**
+   * The content's identity across sources (feishu_doc:<obj_token>): items from two sources with the same key are kept
+   * once, with both in sources.
+   */
+  canonical_key?: string;
+  /** Other ids other sources store the same content under (a wiki node token). */
+  aliases?: string[];
+  /** Only grows: an item handed over with a lower revision than the stored one does not replace it. */
+  revision?: number;
+  body_hash?: string;
+  /** The item's text (a document as Markdown, a meeting's transcript), bounded by the source. */
+  content?: string;
+  /** Every place the content was read from. */
+  sources?: ConnectorKBSourceRef[];
   importance?: string;
   relevance?: number;
   tags?: string[];
@@ -4897,6 +4935,17 @@ export interface ConnectorKBItem {
   provenance?: Record<string, ConnectorKBProvenance>;
   /** The store's: the links the user removed, by list. A connector's is ignored. */
   excluded?: Record<string, string[]>;
+}
+
+/**
+ * One place a knowledge-base item was read from.
+ */
+export interface ConnectorKBSourceRef {
+  channel: string;
+  binding?: string;
+  account?: string;
+  entry?: string;
+  seen_at?: string;
 }
 
 /**
@@ -6186,13 +6235,16 @@ export interface ModelRefusal {
 
 /**
  * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
- * "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list):
- * invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
- * assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
- * not set up: try again).
+ * "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list, or
+ * "assistant.events" for assistant.event): invalid_params; not_found (assistant.messages: no such conversation in the
+ * assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+ * computer is not connected or not set up: try again); assistant.event only: no_main_conversation (the user has no
+ * main conversation: nothing was started or changed, do not retry until they have one); rate_limited (data
+ * {retry_after} in seconds: too many events from this extension); queue_full (this extension already has the most
+ * events waiting behind a running turn: try again later).
  */
-export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
-export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
+export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | "no_main_conversation" | "rate_limited" | "queue_full" | (string & {});
+export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline", "no_main_conversation", "rate_limited", "queue_full"] as const;
 
 /**
  * assistant.conversations (assistant.read): the conversations last active at or after since, newest first.
@@ -6390,6 +6442,55 @@ export interface AssistantEntriesChangedEvent {
   id: string;
   record_id: string;
   status: "wrong";
+}
+
+/**
+ * How much the user should care. info: tell them only if it matters to what they are doing; warning: they should hear
+ * about it; critical: they need to know now.
+ */
+export type AssistantEventSeverity = "info" | "warning" | "critical" | (string & {});
+export const ASSISTANT_EVENT_SEVERITIES = ["info", "warning", "critical"] as const;
+
+/**
+ * Where the thing an event's key names is now, in the extension's own words (firing, resolved, ...): a label each
+ * extension chooses. Free text, not a closed set.
+ */
+export type AssistantEventState = string;
+
+/**
+ * assistant.event (assistant.events): one event for the assistant's main conversation. The assistant gets it as
+ * something an extension observed, never as the user's words, and decides what to tell the user. An event with the
+ * same key as one of this extension's still waiting behind a running turn replaces it, unless replace is false.
+ * Lengths are in characters.
+ */
+export interface AssistantEventParams {
+  /**
+   * What the event is about (one monitored thing). The same extension and key replace an event not yet delivered.
+   */
+  key: string;
+  severity?: AssistantEventSeverity;
+  /** One line saying what happened. */
+  title: string;
+  /** The details. */
+  body?: string;
+  /** What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order. */
+  action_hint?: string;
+  /** Where the thing the key names is now, in the extension's words (firing, resolved, ...). */
+  state?: AssistantEventState;
+  /** false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true. */
+  replace?: boolean;
+}
+
+/**
+ * What happened to the event. delivered: sent into the idle main conversation now. queued: the conversation is
+ * running (or not reachable just now), so it goes in when its turn ends. replaced: it took the place of an earlier
+ * event with the same key that was still queued.
+ */
+export type AssistantEventDelivery = "delivered" | "queued" | "replaced" | (string & {});
+export const ASSISTANT_EVENT_DELIVERIES = ["delivered", "queued", "replaced"] as const;
+
+export interface AssistantEventResult {
+  delivery: AssistantEventDelivery;
 }
 
 /**
@@ -7344,6 +7445,12 @@ export interface MemoryEntriesResult {
   has_more: boolean;
   /** Opaque: what to send as after for the next page; required in practice whenever has_more is true. */
   after?: string;
+  /**
+   * The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+   * keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+   * out or 0: 4096. Entries past it are left out, the most important kept.
+   */
+  standing_bytes?: number;
 }
 
 /**
@@ -7716,6 +7823,7 @@ export const CALLS: Record<string, Call> = {
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
   "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
   "assistant.entries.list": { from: "program", params: "AssistantEntriesParams", result: "AssistantEntriesResult" },
+  "assistant.event": { from: "program", params: "AssistantEventParams", result: "AssistantEventResult" },
   "event.assistant.entries.changed": { from: "hub", params: "AssistantEntriesChangedEvent", event: true },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
   "machines.pair_link": { from: "program", params: "MachinesPairLinkParams", result: "MachinesPairLinkResult" },

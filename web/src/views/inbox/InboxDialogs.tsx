@@ -1,7 +1,9 @@
 // What can be done with one item besides reading it (docs/assistant/inbox.md "Item actions"): "AI draft reply" (a reply in the
 // user's voice, edited and sent from here) and "Hand to AI" (the item as <persona-context> to Persona or a running agent;
 // Persona's main conversation may then write back to the item).
-import { ownerHeaders } from "../../lib/manager-choice";
+import { defaultManager, ownerHeaders } from "../../lib/manager-choice";
+import { BindingDialog } from "../../features/external-sources/BindingDialog";
+import type { ExternalSourceBindingEditorProps } from "../../features/external-sources/ExternalSourceBindingEditor";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
@@ -23,7 +25,16 @@ import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
+import { useLarkItemReadOnly } from "./lark-write-gate";
 import { handOffAgents, Target, TARGET_SUB } from "./HandOffTargets";
+
+export function InboxExternalSourceDialog({ item, source, onClose }: {
+  item: InboxItem;
+  source: NonNullable<ExternalSourceBindingEditorProps["source"]>;
+  onClose: () => void;
+}) {
+  return <BindingDialog manager={item.manager ?? defaultManager()} source={source} onClose={onClose} />;
+}
 
 // A dialog's error under its controls.
 const ERROR = "mt-2 text-[12px] text-red";
@@ -45,6 +56,7 @@ export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
 }
 
 function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
+  const readOnly = useLarkItemReadOnly(item);
   const sessions = useStore((s) => s.sessions);
   const assistant = useStore((s) => s.assistant);
   const key = itemKey(item);
@@ -115,10 +127,11 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   };
 
   const send = () => {
+    if (readOnly) return;
     void sendReply(item, text.trim(), kept);
     onClose();
   };
-  const canSend = !loading && (text.trim().length > 0 || kept.length > 0);
+  const canSend = !readOnly && !loading && (text.trim().length > 0 || kept.length > 0);
 
   return (
     <Dialog
@@ -129,7 +142,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       footer={
         <>
           <Button tone="quiet" onClick={cancel}>{t("common.cancel")}</Button>
-          <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>
+          {!readOnly && <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>}
         </>
       }
     >

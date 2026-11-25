@@ -98,7 +98,7 @@ func (s *Service) modelPicksSet() (map[string]modelPick, bool) {
 	}
 	out := maps.Clone(b.m)
 	b.mu.Unlock()
-	if s.store != nil {
+	if s.storeFn.Load() != nil {
 		rows, _, err := s.logicalIndex()
 		if err != nil {
 			return out, false

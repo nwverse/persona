@@ -389,10 +389,10 @@ func TestInboxReplyPolicyWorkbenchTransientDraftStaysLegacy(t *testing.T) {
 	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	for _, tc := range []struct {
 		name   string
-		policy assistantwire.InboxReplyPolicyConfig
+		policy *assistantwire.InboxReplyPolicyConfig
 	}{
 		{name: "nil policy"},
-		{name: "disabled policy", policy: assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
+		{name: "disabled policy", policy: &assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, lark, it := handledHub(t)
@@ -438,7 +438,7 @@ func TestInboxReplyPolicyDraftDoesNotReturnUnpersistedText(t *testing.T) {
 		it.Agent.State, it.Agent.Draft = AgentSkipped, ""
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	text, err := h.draftReply(t.Context(), it.ID, "")
 	if err == nil || text != "" {
 		t.Fatalf("failed publication returned sendable obsolete text: text=%q err=%v", text, err)
@@ -562,10 +562,10 @@ func TestInboxReplyPolicyLegacyMirroredDraftGate(t *testing.T) {
 	})
 	for _, tc := range []struct {
 		name   string
-		policy assistantwire.InboxReplyPolicyConfig
+		policy *assistantwire.InboxReplyPolicyConfig
 	}{
 		{name: "nil policy"},
-		{name: "disabled policy", policy: assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
+		{name: "disabled policy", policy: &assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, lark, it := newDraft(t, false)

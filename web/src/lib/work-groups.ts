@@ -405,7 +405,7 @@ export function actionSummary(g: WorkGroupNode): { text: string; icon: string | 
     let entry = kinds.get(kind);
     if (!entry) {
       const known = ["read", "edit", "run", "search"].includes(kind);
-      entry = { count: 0, paths: new Set(), icon: known ? kind === "edit" ? "write" : kind : "tool", ...(known ? { key: `lib-work-groups.actions_${kind}` } : { label: toolLabel(name) }) };
+      entry = { count: 0, paths: new Set(), icon: known ? kind === "edit" ? "write" : kind === "run" ? "terminal" : kind : "tool", ...(known ? { key: `lib-work-groups.actions_${kind}` } : { label: toolLabel(name) }) };
       kinds.set(kind, entry);
     }
     const path = (use.tool_input as Record<string, unknown> | undefined)?.file_path;
