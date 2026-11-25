@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,16 +12,41 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 type recordingIdleAuditStore struct {
 	Store
-	mu   sync.Mutex
-	rows []struct {
+	mu             sync.Mutex
+	failAuditLoad  bool
+	failAuditWrite bool
+	rows           []struct {
 		plugin, action, actor string
 		detail                json.RawMessage
 	}
+}
+
+func (r *recordingIdleAuditStore) Setting(ctx context.Context, key string, dst any) (bool, error) {
+	r.mu.Lock()
+	fail := r.failAuditLoad
+	r.mu.Unlock()
+	if key == idleArchiveAuditKey && fail {
+		return false, errors.New("audit store read failed")
+	}
+	return r.Store.Setting(ctx, key, dst)
+}
+
+func (r *recordingIdleAuditStore) PutSetting(ctx context.Context, key string, value any) error {
+	r.mu.Lock()
+	fail := r.failAuditWrite
+	r.mu.Unlock()
+	if key == idleArchiveAuditKey && fail {
+		return errors.New("audit store write failed")
+	}
+	return r.Store.PutSetting(ctx, key, value)
 }
 
 func (r *recordingIdleAuditStore) AddExtensionAudit(_ context.Context, id, action, actor string, detail json.RawMessage) error {
@@ -343,7 +369,7 @@ func TestIdleArchiveHardRefusesProtectedAndBusySessions(t *testing.T) {
 }
 
 func TestIdleArchiveValidationRolesAndArchiveOnly(t *testing.T) {
-	now := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	ft, _, row := idleArchiveTestSetup(t, now, nil)
 
 	// Disallowed roles and missing extension header are rejected 403.
@@ -388,7 +414,21 @@ func TestIdleArchiveValidationRolesAndArchiveOnly(t *testing.T) {
 		t.Fatal("session was not archived")
 	}
 
-	// Already-archived offline session is idempotent and audited.
+	// Immediate retry 1s later (within idle_minutes) is idempotent for archive-only even while live.
+	ft.s.idleArchiveAudit.now = func() time.Time { return now.Add(time.Second) }
+	idemLive := postIdleArchive(ft.s, "mac", row.SessionID, roleFull, "", `{"idle_minutes":15,"close_terminal":false}`)
+	if idemLive.Code != http.StatusOK {
+		t.Fatalf("immediate live archive-only retry got %d: %s", idemLive.Code, idemLive.Body.String())
+	}
+	var idemLiveResp assistantwire.IdleArchiveResponse
+	if err := json.Unmarshal(idemLive.Body.Bytes(), &idemLiveResp); err != nil {
+		t.Fatal(err)
+	}
+	if !idemLiveResp.OK || !idemLiveResp.Archived || !idemLiveResp.AlreadyArchived {
+		t.Fatalf("unexpected live idempotent response: %+v", idemLiveResp)
+	}
+
+	// Already-archived offline session is idempotent within idle_minutes too.
 	offline := row
 	offline.Status, offline.State, offline.PaneID = proto.StatusOffline, proto.StateOffline, ""
 	ft.d.setSessions("mac", []proto.Session{offline})
@@ -403,6 +443,236 @@ func TestIdleArchiveValidationRolesAndArchiveOnly(t *testing.T) {
 	if !idemResp.OK || !idemResp.Archived || !idemResp.AlreadyArchived || idemResp.Close == nil || idemResp.Close.Outcome != archiveCloseNotRunning {
 		t.Fatalf("unexpected idempotent response: %+v", idemResp)
 	}
+}
+
+func TestIdleArchiveAdversarialReviewRegressions(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	t.Run("P0-1 offline or warm-grace computer refuses unverified live session", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			setup func(*fleetTest)
+		}{
+			{"disconnected computer", func(ft *fleetTest) {
+				ft.d.mu.Lock()
+				ft.d.machines["mac"].away = true
+				ft.d.mu.Unlock()
+			}},
+			{"warm-start grace active", func(ft *fleetTest) {
+				ft.d.mu.Lock()
+				ft.d.machines["mac"].shownUntil = now.Add(time.Minute)
+				ft.d.mu.Unlock()
+			}},
+			{"unlisted connection", func(ft *fleetTest) {
+				ft.d.mu.Lock()
+				ft.d.machines["mac"].unlisted = true
+				ft.d.mu.Unlock()
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ft, _, row := idleArchiveTestSetup(t, now, nil)
+				tc.setup(ft)
+				w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+				if w.Code != http.StatusConflict {
+					t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+				}
+				var body map[string]any
+				_ = json.Unmarshal(w.Body.Bytes(), &body)
+				if body["code"] != idleArchiveCodeSessionUnverified {
+					t.Fatalf("code = %v, want %s", body["code"], idleArchiveCodeSessionUnverified)
+				}
+				if len(retiredOf(ft)) != 0 || archivedIDs(t, ft.s)[row.SessionID] {
+					t.Fatal("unverified live session was archived or retired")
+				}
+			})
+		}
+	})
+
+	t.Run("P0-2 refused or failed close rolls back provisional archive", func(t *testing.T) {
+		for _, tc := range []struct {
+			name       string
+			retireErr  error
+			wantStatus int
+			wantCode   string
+		}{
+			{"node working refusal", &rpc.Error{Code: "not_retirable", Message: "the agent is working"}, http.StatusConflict, idleArchiveCodeCloseRefused},
+			{"node generic failure", &rpc.Error{Message: "herdr: no such pane"}, http.StatusBadGateway, idleArchiveCodeCloseFailed},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ft, rec, row := idleArchiveTestSetup(t, now, nil)
+				ft.f.mu.Lock()
+				ft.f.retireErr = tc.retireErr
+				ft.f.mu.Unlock()
+				w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+				if w.Code != tc.wantStatus {
+					t.Fatalf("got %d (%s), want %d", w.Code, w.Body.String(), tc.wantStatus)
+				}
+				var body map[string]any
+				_ = json.Unmarshal(w.Body.Bytes(), &body)
+				if body["code"] != tc.wantCode || body["audit_persisted"] != true {
+					t.Fatalf("unexpected body: %+v", body)
+				}
+				if archivedIDs(t, ft.s)[row.SessionID] {
+					t.Fatal("provisional archive was not rolled back after close refusal/failure")
+				}
+				if rec.count() != 1 {
+					t.Fatalf("plugin_audit rows = %d, want 1", rec.count())
+				}
+			})
+		}
+	})
+
+	t.Run("P1-1 unknown main/leader ID returns 404 without oracle and archived hidden space keeps Space", func(t *testing.T) {
+		ft, rec, _ := idleArchiveTestSetup(t, now, nil)
+		setSettings(t, ft.s, func(v *Settings) {
+			v.Main = "secret-main-on-other-host"
+			v.Leaders = []string{"secret-lead-on-other-host"}
+		})
+		for _, probe := range []string{"secret-main-on-other-host", "secret-lead-on-other-host"} {
+			w := postIdleArchive(ft.s, "mac", probe, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("probe %q: got %d (%s), want 404", probe, w.Code, w.Body.String())
+			}
+		}
+		if rec.count() != 0 {
+			t.Fatalf("oracle probes wrote %d audit entries, want 0", rec.count())
+		}
+
+		// Hidden privacy space with Cwd outside space directory preserves Space in archiveSnapshot.
+		ft2, rec2, row2 := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+			s.Space = "health"
+			s.Cwd = "/tmp/unrelated"
+		})
+		if _, err := ft2.s.setAgentArchive(context.Background(), "mac", row2.SessionID, true); err != nil {
+			t.Fatal(err)
+		}
+		// Drop from live node list so only the archived snapshot remains.
+		ft2.d.setSessions("mac", nil)
+		w := postIdleArchive(ft2.s, "mac", row2.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("archived hidden-space snapshot returned %d (%s), want 404", w.Code, w.Body.String())
+		}
+		if rec2.count() != 0 {
+			t.Fatalf("hidden-space snapshot probe wrote %d audit entries, want 0", rec2.count())
+		}
+	})
+
+	t.Run("P1-2 outside direction lead, open responsible todo, and offline desktop app refused", func(t *testing.T) {
+		// Outside direction lead
+		ft1, _, row1 := idleArchiveTestSetup(t, now, nil)
+		ft1.s.directions.mu.Lock()
+		ft1.s.directions.loaded = true
+		ft1.s.directions.m = map[string]*direction{
+			"dir-outside": {
+				Outside: &directionOutside{MachineID: "mac", SessionID: row1.SessionID},
+			},
+		}
+		ft1.s.directions.mu.Unlock()
+		w1 := postIdleArchive(ft1.s, "mac", row1.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		var b1 map[string]any
+		_ = json.Unmarshal(w1.Body.Bytes(), &b1)
+		if w1.Code != http.StatusConflict || b1["code"] != idleArchiveCodeDirectionLead {
+			t.Fatalf("outside direction lead: got %d %+v, want 409 %s", w1.Code, b1, idleArchiveCodeDirectionLead)
+		}
+
+		// Open-todo Responsible session
+		ft2, _, row2 := idleArchiveTestSetup(t, now, nil)
+		ft2.s.todos.mu.Lock()
+		ft2.s.todos.loaded = true
+		ft2.s.todos.todos = map[string]*Todo{
+			"todo_resp": {
+				ID:          "todo_resp",
+				Title:       "external responsible",
+				Responsible: &db.TodoResponsible{Kind: db.ResponsibleSession, Name: "worker", MachineID: "mac", SessionID: row2.SessionID},
+			},
+		}
+		ft2.s.todos.mu.Unlock()
+		w2 := postIdleArchive(ft2.s, "mac", row2.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		var b2 map[string]any
+		_ = json.Unmarshal(w2.Body.Bytes(), &b2)
+		if w2.Code != http.StatusConflict || b2["code"] != idleArchiveCodeOpenTodo {
+			t.Fatalf("open responsible todo: got %d %+v, want 409 %s", w2.Code, b2, idleArchiveCodeOpenTodo)
+		}
+
+		// Offline desktop-app session (AgentSurface == desktop, SourceKind empty)
+		ft3, _, row3 := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+			s.Status, s.State, s.PaneID = proto.StatusOffline, proto.StateOffline, ""
+			s.SourceKind = ""
+			s.AgentSurface = transcript.SurfaceDesktop
+		})
+		w3 := postIdleArchive(ft3.s, "mac", row3.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		var b3 map[string]any
+		_ = json.Unmarshal(w3.Body.Bytes(), &b3)
+		if w3.Code != http.StatusConflict || b3["code"] != idleArchiveCodeExternalSession {
+			t.Fatalf("offline desktop session: got %d %+v, want 409 %s", w3.Code, b3, idleArchiveCodeExternalSession)
+		}
+	})
+
+	t.Run("P1-3 empty or unrecognized live status fails closed", func(t *testing.T) {
+		for _, badStatus := range []string{"", "future_busy_status"} {
+			ft, _, row := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+				s.Status = badStatus
+				s.State = proto.StateUnknown
+			})
+			w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+			var body map[string]any
+			_ = json.Unmarshal(w.Body.Bytes(), &body)
+			if w.Code != http.StatusConflict || body["code"] != idleArchiveCodeSessionUnverified {
+				t.Fatalf("status=%q: got %d %+v, want 409 %s", badStatus, w.Code, body, idleArchiveCodeSessionUnverified)
+			}
+			if len(retiredOf(ft)) != 0 || archivedIDs(t, ft.s)[row.SessionID] {
+				t.Fatalf("status=%q mutated session", badStatus)
+			}
+		}
+	})
+
+	t.Run("P1-5 audit store failure fails closed and emits no dangling audit_id", func(t *testing.T) {
+		// Unloadable audit store blocks before any mutation.
+		ft1, rec1, row1 := idleArchiveTestSetup(t, now, nil)
+		rec1.mu.Lock()
+		rec1.failAuditLoad = true
+		rec1.mu.Unlock()
+		w1 := postIdleArchive(ft1.s, "mac", row1.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		if w1.Code != http.StatusServiceUnavailable {
+			t.Fatalf("audit load failure got %d (%s), want 503", w1.Code, w1.Body.String())
+		}
+		if len(retiredOf(ft1)) != 0 || archivedIDs(t, ft1.s)[row1.SessionID] {
+			t.Fatal("mutation occurred despite unreadable audit store")
+		}
+
+		// Audit write failure on archive-only rolls back archive and returns 503.
+		ft2, rec2, row2 := idleArchiveTestSetup(t, now, nil)
+		rec2.mu.Lock()
+		rec2.failAuditWrite = true
+		rec2.mu.Unlock()
+		w2 := postIdleArchive(ft2.s, "mac", row2.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"close_terminal":false}`)
+		if w2.Code != http.StatusServiceUnavailable {
+			t.Fatalf("audit write failure on archive-only got %d (%s), want 503", w2.Code, w2.Body.String())
+		}
+		if archivedIDs(t, ft2.s)[row2.SessionID] {
+			t.Fatal("archive-only was not rolled back after audit write failure")
+		}
+
+		// Audit write failure on refusal emits audit_persisted=false and omits audit_id.
+		ft3, rec3, row3 := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+			s.Status, s.State = proto.StatusWorking, proto.StateWorking
+		})
+		rec3.mu.Lock()
+		rec3.failAuditWrite = true
+		rec3.mu.Unlock()
+		w3 := postIdleArchive(ft3.s, "mac", row3.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		if w3.Code != http.StatusConflict {
+			t.Fatalf("refusal with failing audit got %d, want 409", w3.Code)
+		}
+		var b3 map[string]any
+		_ = json.Unmarshal(w3.Body.Bytes(), &b3)
+		if b3["audit_persisted"] != false {
+			t.Fatalf("expected audit_persisted=false, got %+v", b3)
+		}
+		if _, hasID := b3["audit_id"]; hasID {
+			t.Fatalf("refusal emitted dangling audit_id on persistence failure: %+v", b3)
+		}
+	})
 }
 
 func TestIdleArchiveConcurrentRaceAndHiddenSpace(t *testing.T) {

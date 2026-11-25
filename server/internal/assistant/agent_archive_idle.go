@@ -17,8 +17,10 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 const (
@@ -36,7 +38,7 @@ const (
 	idleArchiveAuditCorePlugin    = "core.idle_archive"
 )
 
-// Refusal codes returned with HTTP 409 when a guarded idle archive-and-close request is blocked.
+// Refusal codes returned with HTTP 409 (or 503/502 for close transport failures) when a guarded idle archive-and-close request is blocked.
 const (
 	idleArchiveCodeMainConversation      = "protected_main_conversation"
 	idleArchiveCodeDirectionLead         = "protected_direction_lead"
@@ -49,6 +51,9 @@ const (
 	idleArchiveCodeSubagentSession       = "subagent_session"
 	idleArchiveCodeIdleUnverified        = "idle_unverified"
 	idleArchiveCodeNotIdleLongEnough     = "not_idle_long_enough"
+	idleArchiveCodeCloseRefused          = "close_refused"
+	idleArchiveCodeCloseOffline          = "close_offline"
+	idleArchiveCodeCloseFailed           = "close_failed"
 )
 
 // Audit outcome values persisted in sessions.idle_archive_audit and plugin_audit.
@@ -68,10 +73,11 @@ type extensionAuditWriter interface {
 }
 
 type idleArchiveAuditBook struct {
-	mu      sync.Mutex
-	loaded  bool
-	entries []assistantwire.IdleArchiveAuditEntry
-	now     func() time.Time
+	mu       sync.Mutex
+	loaded   bool
+	entries  []assistantwire.IdleArchiveAuditEntry
+	inFlight map[[2]string]chan struct{}
+	now      func() time.Time
 }
 
 func (svc *Service) idleArchiveNow() time.Time {
@@ -84,6 +90,36 @@ func (svc *Service) idleArchiveNow() time.Time {
 func (svc *Service) idleArchiveRoutes() {
 	svc.handle(assistantwire.RouteAgentIdleArchive, svc.handleAgentIdleArchive)
 	svc.handle(assistantwire.RouteAgentIdleArchiveAudit, svc.handleAgentIdleArchiveAudit)
+}
+
+// lockIdleArchiveSession serializes guarded idle-archive operations for one (machine, session) pair
+// so concurrent callers cannot race between verification and terminal retirement / archive writes.
+func (svc *Service) lockIdleArchiveSession(ctx context.Context, mid, sid string) (func(), error) {
+	key := [2]string{mid, sid}
+	for {
+		svc.idleArchiveAudit.mu.Lock()
+		if svc.idleArchiveAudit.inFlight == nil {
+			svc.idleArchiveAudit.inFlight = map[[2]string]chan struct{}{}
+		}
+		if ch, busy := svc.idleArchiveAudit.inFlight[key]; busy {
+			svc.idleArchiveAudit.mu.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		done := make(chan struct{})
+		svc.idleArchiveAudit.inFlight[key] = done
+		svc.idleArchiveAudit.mu.Unlock()
+		return func() {
+			svc.idleArchiveAudit.mu.Lock()
+			delete(svc.idleArchiveAudit.inFlight, key)
+			close(done)
+			svc.idleArchiveAudit.mu.Unlock()
+		}, nil
+	}
 }
 
 func idleArchiveCaller(r *http.Request) (actor, extID string, isExt, allowed bool) {
@@ -170,6 +206,66 @@ func (svc *Service) sessionHasPendingInteraction(machineID string, candidateIDs 
 	return false
 }
 
+func (svc *Service) isOutsideDirectionLead(ctx context.Context, mid string, candidates []string) (bool, error) {
+	b := &svc.directions
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !svc.directionsLocked(ctx) {
+		return false, errors.New("could not load directions to verify session safety")
+	}
+	targetMachine := svc.canonical(mid)
+	for _, d := range b.m {
+		if d == nil || d.EndedAt != nil || d.Outside == nil || d.Outside.SessionID == "" {
+			continue
+		}
+		if d.Outside.MachineID != "" && svc.canonical(d.Outside.MachineID) != targetMachine {
+			continue
+		}
+		if slices.Contains(candidates, d.Outside.SessionID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (svc *Service) sessionHasOpenResponsibleTodo(mid string, candidates []string) bool {
+	targetMachine := svc.canonical(mid)
+	svc.todos.mu.RLock()
+	defer svc.todos.mu.RUnlock()
+	for _, t := range svc.todos.todos {
+		if t == nil || t.DoneAt != nil || t.Responsible == nil {
+			continue
+		}
+		if t.Responsible.Kind != db.ResponsibleSession || t.Responsible.SessionID == "" {
+			continue
+		}
+		if t.Responsible.MachineID != "" && svc.canonical(t.Responsible.MachineID) != targetMachine {
+			continue
+		}
+		if slices.Contains(candidates, t.Responsible.SessionID) {
+			return true
+		}
+	}
+	return false
+}
+
+// machineLiveVerified returns true only when mid is currently reachable with a fresh
+// live session list from its active node connection (never stale cached m.sessions
+// from before a disconnect or during warm-start reconnect grace).
+func (svc *Service) machineLiveVerified(mid string) bool {
+	if svc.devs == nil {
+		return false
+	}
+	d, ok := svc.devs.Summary(mid)
+	if !ok || !d.Reachable {
+		return false
+	}
+	if shown, ok := svc.devs.Shown(mid); ok && (!shown.Listed || !shown.Until.IsZero()) {
+		return false
+	}
+	return true
+}
+
 func sessionHasUnresolvedCard(s proto.Session) bool {
 	return s.PendingInteractions > 0 || s.Status == proto.StatusBlocked || s.State == proto.StateNeedsYou
 }
@@ -178,21 +274,53 @@ func sessionBusyForIdleArchive(s proto.Session) bool {
 	return agentCloseBusy(s) || s.Status == proto.StatusUnknown || wakePending(s)
 }
 
-func idleArchiveCloseOutcome(outcome string) string {
-	switch outcome {
-	case archiveCloseClosed:
-		return idleArchiveOutcomeArchivedAndClosed
-	case archiveCloseNotRunning:
-		return idleArchiveOutcomeArchivedNotRunning
-	case archiveCloseRefused:
-		return idleArchiveOutcomeArchivedCloseRefused
-	case archiveCloseOffline:
-		return idleArchiveOutcomeArchivedCloseOffline
-	default:
-		return idleArchiveOutcomeArchivedCloseFailed
+// liveSessionStatusSafe requires an explicit idle or done status and forbids StateUnknown
+// (including empty or unrecognized future statuses) on any live/non-offline session.
+func liveSessionStatusSafe(s proto.Session) bool {
+	if s.State == proto.StateUnknown {
+		return false
 	}
+	return s.Status == proto.StatusIdle || s.Status == proto.StatusDone
 }
 
+func sessionIsConfirmedOffline(row proto.Session, raw proto.Session, listed bool) bool {
+	if row.Status != proto.StatusOffline || row.PaneID != "" || row.Host != "" {
+		return false
+	}
+	if listed && (raw.Status != proto.StatusOffline || raw.PaneID != "" || raw.Host != "") {
+		return false
+	}
+	return true
+}
+
+func sessionIsExternalOrDesktop(s proto.Session) bool {
+	return s.SourceKind != "" || s.AgentSurface == transcript.SurfaceDesktop
+}
+
+func (svc *Service) ensureIdleArchiveAuditLoaded(ctx context.Context) error {
+	store := svc.store()
+	if store == nil {
+		return errors.New("no database")
+	}
+	readCtx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
+	defer cancel()
+	svc.idleArchiveAudit.mu.Lock()
+	defer svc.idleArchiveAudit.mu.Unlock()
+	if svc.idleArchiveAudit.loaded {
+		return nil
+	}
+	var saved []assistantwire.IdleArchiveAuditEntry
+	if _, err := store.Setting(readCtx, idleArchiveAuditKey, &saved); err != nil {
+		return err
+	}
+	svc.idleArchiveAudit.entries = saved
+	svc.idleArchiveAudit.loaded = true
+	return nil
+}
+
+// recordIdleArchiveAudit durably appends entry to sessions.idle_archive_audit (bounded to 500
+// newest entries) and mirrors metadata to plugin_audit when supported. On persistence failure
+// it returns ("", false) so callers never expose a dangling audit_id absent from storage.
 func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) (assistantwire.IdleArchiveAuditID, bool) {
 	if entry.ID == "" {
 		entry.ID = assistantwire.IdleArchiveAuditID("ia_" + randomHex(8))
@@ -202,7 +330,7 @@ func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantw
 	}
 	store := svc.store()
 	if store == nil {
-		return entry.ID, false
+		return "", false
 	}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
 	defer cancel()
@@ -272,29 +400,162 @@ func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantw
 		}
 	}
 
-	return entry.ID, persisted
+	if !persisted {
+		return "", false
+	}
+	return entry.ID, true
 }
 
 func (svc *Service) loadIdleArchiveAudit(ctx context.Context) ([]assistantwire.IdleArchiveAuditEntry, error) {
-	store := svc.store()
-	if store == nil {
-		return nil, errors.New("no database")
+	if err := svc.ensureIdleArchiveAuditLoaded(ctx); err != nil {
+		return nil, err
 	}
-	readCtx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
-	defer cancel()
 	svc.idleArchiveAudit.mu.Lock()
 	defer svc.idleArchiveAudit.mu.Unlock()
-	if !svc.idleArchiveAudit.loaded {
-		var saved []assistantwire.IdleArchiveAuditEntry
-		if _, err := store.Setting(readCtx, idleArchiveAuditKey, &saved); err != nil {
-			return nil, err
-		}
-		svc.idleArchiveAudit.entries = saved
-		svc.idleArchiveAudit.loaded = true
-	}
 	out := make([]assistantwire.IdleArchiveAuditEntry, len(svc.idleArchiveAudit.entries))
 	copy(out, svc.idleArchiveAudit.entries)
 	return out, nil
+}
+
+type idleArchiveEvaluation struct {
+	row       proto.Session
+	raw       proto.Session
+	listed    bool
+	offline   bool
+	obsSec    int64
+	notFound  bool
+	storage   error
+	refuse    string
+	refuseMsg string
+	refuseObs *int64
+}
+
+func (svc *Service) evaluateIdleArchiveTarget(ctx context.Context, mid, sid string, isExt bool, idleMinutes int) idleArchiveEvaluation {
+	list, _, err := svc.archivedInventory(ctx, mid)
+	if err != nil {
+		return idleArchiveEvaluation{storage: err}
+	}
+	var row proto.Session
+	found := false
+	for _, s := range list {
+		if s.SessionID == sid {
+			row = s
+			row.MachineID = mid
+			found = true
+			break
+		}
+	}
+	raw, listed := svc.nodeSession(mid, sid)
+	if !listed && found && row.SessionID != sid {
+		raw, listed = svc.nodeSession(mid, row.SessionID)
+	}
+
+	// Never reveal or act on a session in a privacy space hidden from this extension.
+	if isExt && ((found && svc.extensionHides(ctx, runSpace(row))) || (listed && svc.extensionHides(ctx, runSpace(raw)))) {
+		return idleArchiveEvaluation{notFound: true}
+	}
+	// Unknown sessions return 404 before any protection check so arbitrary IDs cannot probe
+	// cfg.Main, cfg.Leaders, or outside directions on another machine or hidden space.
+	if !found {
+		return idleArchiveEvaluation{notFound: true}
+	}
+
+	cfg := svc.settings(ctx)
+	candidates := sessionCandidateIDs(sid, row, found, raw, listed)
+
+	// 1. Hard-refuse main conversation, direction leads (including outside directions), and assistant conversations.
+	if cfg.Main != "" && slices.Contains(candidates, cfg.Main) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeMainConversation, refuseMsg: "the main Persona conversation cannot be archived by idle archive"}
+	}
+	for _, id := range candidates {
+		if slices.Contains(cfg.Leaders, id) || svc.isLeader(ctx, id) {
+			return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeDirectionLead, refuseMsg: "a direction lead conversation cannot be archived by idle archive"}
+		}
+	}
+	outsideLead, err := svc.isOutsideDirectionLead(ctx, mid, candidates)
+	if err != nil {
+		return idleArchiveEvaluation{storage: err}
+	}
+	if outsideLead {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeDirectionLead, refuseMsg: "a direction lead conversation cannot be archived by idle archive"}
+	}
+	if row.Assistant || (listed && raw.Assistant) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeAssistantConversation, refuseMsg: "Persona assistant conversations cannot be archived by idle archive"}
+	}
+
+	// 2. Hard-refuse sessions with unresolved cards / pending interactions.
+	if sessionHasUnresolvedCard(row) || (listed && sessionHasUnresolvedCard(raw)) || svc.sessionHasPendingInteraction(mid, candidates) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeUnresolvedInteraction, refuseMsg: "session has an unresolved card or pending interaction"}
+	}
+
+	// 3. Hard-refuse external-tool-owned sessions (including offline desktop app sessions) and subagent rows.
+	if sessionIsExternalOrDesktop(row) || (listed && sessionIsExternalOrDesktop(raw)) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeExternalSession, refuseMsg: "sessions owned by an external tool cannot be archived by idle archive"}
+	}
+	if row.IsSubagent || (listed && raw.IsSubagent) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeSubagentSession, refuseMsg: "subagent rows cannot be archived independently by idle archive"}
+	}
+
+	// 4. Hard-refuse unverified live sessions (offline/disconnected computer or stale warm-start cache)
+	// and any working, busy, wake-pending, or unrecognized/unknown-status live session.
+	offline := sessionIsConfirmedOffline(row, raw, listed)
+	if !offline {
+		if !listed || !svc.machineLiveVerified(mid) {
+			return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeSessionUnverified, refuseMsg: "live session state could not be verified on its computer"}
+		}
+	}
+	if sessionBusyForIdleArchive(row) || (listed && sessionBusyForIdleArchive(raw)) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeSessionBusy, refuseMsg: "session is working, starting, has background work, queued input, a loop, or running servers"}
+	}
+	if !offline && (!liveSessionStatusSafe(row) || !liveSessionStatusSafe(raw)) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeSessionUnverified, refuseMsg: "live session status is unknown or unverified"}
+	}
+
+	// 5. Hard-refuse sessions linked to an open to-do (agents, activeBySession, or external Responsible session).
+	links := svc.sessionLinks()
+	var lastDone time.Time
+	for _, id := range candidates {
+		open, _, _, doneAt := links.link(mid, id)
+		if open {
+			return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeOpenTodo, refuseMsg: "session is linked to an open to-do"}
+		}
+		if doneAt.After(lastDone) {
+			lastDone = doneAt
+		}
+	}
+	if svc.sessionHasOpenResponsibleTodo(mid, candidates) {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeOpenTodo, refuseMsg: "session is responsible for an open to-do"}
+	}
+
+	// 6. Strictly verify idle duration > idle_minutes (fail closed when UpdatedAt is zero or in the future).
+	lastActivity := row.UpdatedAt
+	if listed && raw.UpdatedAt.After(lastActivity) {
+		lastActivity = raw.UpdatedAt
+	}
+	if lastActivity.IsZero() {
+		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeIdleUnverified, refuseMsg: "session idle duration cannot be verified because last activity time is missing"}
+	}
+	if lastDone.After(lastActivity) {
+		lastActivity = lastDone
+	}
+	// Only clamp forward by ArchiveChangedAt for restored (!row.Archived) sessions so a freshly
+	// restored session gets a full grace period, while already-archived retries remain idempotent.
+	if !row.Archived && row.ArchiveChangedAt != nil && row.ArchiveChangedAt.After(lastActivity) {
+		lastActivity = *row.ArchiveChangedAt
+	}
+	observed := svc.idleArchiveNow().UTC().Sub(lastActivity)
+	obsSec := int64(observed.Seconds())
+	threshold := time.Duration(idleMinutes) * time.Minute
+	if observed <= threshold {
+		return idleArchiveEvaluation{
+			row:       row,
+			refuse:    idleArchiveCodeNotIdleLongEnough,
+			refuseMsg: fmt.Sprintf("session has only been idle for %ds; requires strictly more than %d minute(s)", max(obsSec, 0), idleMinutes),
+			refuseObs: &obsSec,
+		}
+	}
+
+	return idleArchiveEvaluation{row: row, raw: raw, listed: listed, offline: offline, obsSec: obsSec}
 }
 
 func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +586,10 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		apierr.WriteCode(w, http.StatusServiceUnavailable, "todos_unavailable", errors.New("could not load open tasks to verify session safety"))
 		return
 	}
+	if err := svc.ensureIdleArchiveAuditLoaded(ctx); err != nil {
+		apierr.WriteCode(w, http.StatusServiceUnavailable, "audit_unavailable", errors.New("could not load idle archive audit storage"))
+		return
+	}
 
 	mid := r.PathValue("mid")
 	sid := strings.TrimSpace(r.PathValue("sid"))
@@ -335,34 +600,15 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 	}
 	mid = m.ID
 
-	list, _, err := svc.archivedInventory(ctx, mid)
+	unlock, err := svc.lockIdleArchiveSession(ctx, mid, sid)
 	if err != nil {
-		apierr.Write(w, http.StatusInternalServerError, i18n.Err("hub-agent_archives.storage"))
+		apierr.WriteCode(w, http.StatusServiceUnavailable, "request_cancelled", err)
 		return
 	}
-	var row proto.Session
-	found := false
-	for _, s := range list {
-		if s.SessionID == sid {
-			row = s
-			row.MachineID = mid
-			found = true
-			break
-		}
-	}
-	raw, listed := svc.nodeSession(mid, sid)
-	if !listed && found && row.SessionID != sid {
-		raw, listed = svc.nodeSession(mid, row.SessionID)
-	}
+	defer unlock()
 
-	// Never reveal or act on a session in a privacy space hidden from this extension.
-	if isExt && ((found && svc.extensionHides(ctx, runSpace(row))) || (listed && svc.extensionHides(ctx, runSpace(raw)))) {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("hub-deleted_sessions.unknown"))
-		return
-	}
-
-	refuse := func(code, msg string, obsSec *int64) {
-		auditID, _ := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
+	refuse := func(status int, code, msg string, obsSec *int64, closeOutcome string) {
+		auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 			Actor:               actor,
 			Extension:           extID,
 			MachineID:           assistantwire.MachineID(mid),
@@ -372,103 +618,44 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			CloseTerminal:       closeTerminal,
 			Outcome:             idleArchiveOutcomeRefused,
 			RefusalCode:         code,
+			CloseOutcome:        closeOutcome,
 			Reason:              req.Reason,
 		})
-		apierr.WriteBody(w, http.StatusConflict, map[string]any{
-			"error":    msg,
-			"code":     code,
-			"audit_id": auditID,
-		})
-	}
-
-	cfg := svc.settings(ctx)
-	candidates := sessionCandidateIDs(sid, row, found, raw, listed)
-
-	// 1. Hard-refuse main conversation, direction leads, and all Persona assistant conversations.
-	if cfg.Main != "" && slices.Contains(candidates, cfg.Main) {
-		refuse(idleArchiveCodeMainConversation, "the main Persona conversation cannot be archived by idle archive", nil)
-		return
-	}
-	for _, id := range candidates {
-		if slices.Contains(cfg.Leaders, id) || svc.isLeader(ctx, id) {
-			refuse(idleArchiveCodeDirectionLead, "a direction lead conversation cannot be archived by idle archive", nil)
-			return
+		body := map[string]any{
+			"error":           msg,
+			"code":            code,
+			"audit_persisted": persisted,
 		}
+		if persisted && auditID != "" {
+			body["audit_id"] = auditID
+		}
+		if closeOutcome != "" {
+			body["close_outcome"] = closeOutcome
+		}
+		apierr.WriteBody(w, status, body)
 	}
-	if (found && row.Assistant) || (listed && raw.Assistant) {
-		refuse(idleArchiveCodeAssistantConversation, "Persona assistant conversations cannot be archived by idle archive", nil)
+
+	ev := svc.evaluateIdleArchiveTarget(ctx, mid, sid, isExt, req.IdleMinutes)
+	if ev.storage != nil {
+		apierr.WriteCode(w, http.StatusServiceUnavailable, "storage_unavailable", ev.storage)
 		return
 	}
-	if !found {
+	if ev.notFound {
 		apierr.Write(w, http.StatusNotFound, i18n.Err("hub-deleted_sessions.unknown"))
 		return
 	}
-
-	// 2. Hard-refuse sessions with unresolved cards / pending interactions.
-	if sessionHasUnresolvedCard(row) || (listed && sessionHasUnresolvedCard(raw)) || svc.sessionHasPendingInteraction(mid, candidates) {
-		refuse(idleArchiveCodeUnresolvedInteraction, "session has an unresolved card or pending interaction", nil)
+	if ev.refuse != "" {
+		refuse(http.StatusConflict, ev.refuse, ev.refuseMsg, ev.refuseObs, "")
 		return
 	}
 
-	// 3. Hard-refuse external-tool-owned sessions and subagent rows.
-	if row.SourceKind != "" || (listed && raw.SourceKind != "") {
-		refuse(idleArchiveCodeExternalSession, "sessions owned by an external tool cannot be archived by idle archive", nil)
-		return
-	}
-	if row.IsSubagent || (listed && raw.IsSubagent) {
-		refuse(idleArchiveCodeSubagentSession, "subagent rows cannot be archived independently by idle archive", nil)
-		return
-	}
+	row := ev.row
+	obsSec := ev.obsSec
 
-	// 4. Hard-refuse unverified live sessions and any working / busy / wake-pending session.
-	if (row.Status != proto.StatusOffline || row.PaneID != "" || row.Host != "") && !listed {
-		refuse(idleArchiveCodeSessionUnverified, "live session state could not be verified on its computer", nil)
-		return
-	}
-	if sessionBusyForIdleArchive(row) || (listed && sessionBusyForIdleArchive(raw)) {
-		refuse(idleArchiveCodeSessionBusy, "session is working, starting, has background work, queued input, a loop, or running servers", nil)
-		return
-	}
-
-	// 5. Hard-refuse sessions linked to an open to-do (including active task leaders and workers).
-	links := svc.sessionLinks()
-	var lastDone time.Time
-	for _, id := range candidates {
-		open, _, _, doneAt := links.link(mid, id)
-		if open {
-			refuse(idleArchiveCodeOpenTodo, "session is linked to an open to-do", nil)
-			return
-		}
-		if doneAt.After(lastDone) {
-			lastDone = doneAt
-		}
-	}
-
-	// 6. Strictly verify idle duration > idle_minutes (fail closed when UpdatedAt is zero or in the future).
-	lastActivity := row.UpdatedAt
-	if listed && raw.UpdatedAt.After(lastActivity) {
-		lastActivity = raw.UpdatedAt
-	}
-	if lastActivity.IsZero() {
-		refuse(idleArchiveCodeIdleUnverified, "session idle duration cannot be verified because last activity time is missing", nil)
-		return
-	}
-	if lastDone.After(lastActivity) {
-		lastActivity = lastDone
-	}
-	if row.ArchiveChangedAt != nil && row.ArchiveChangedAt.After(lastActivity) {
-		lastActivity = *row.ArchiveChangedAt
-	}
-	observed := svc.idleArchiveNow().UTC().Sub(lastActivity)
-	obsSec := int64(observed.Seconds())
-	threshold := time.Duration(req.IdleMinutes) * time.Minute
-	if observed <= threshold {
-		refuse(idleArchiveCodeNotIdleLongEnough, fmt.Sprintf("session has only been idle for %ds; requires strictly more than %d minute(s)", max(obsSec, 0), req.IdleMinutes), &obsSec)
-		return
-	}
-
-	// 7. Already archived and offline: idempotent success with audit entry.
-	if row.Archived && row.Status == proto.StatusOffline && row.PaneID == "" && row.Host == "" {
+	// 7. Idempotent already-archived path:
+	// - Already archived and offline (whether close_terminal is true or false), OR
+	// - Already archived and caller asked for archive-only (close_terminal == false).
+	if row.Archived && (ev.offline || !closeTerminal) {
 		closeOutcome := ""
 		var closeRes *assistantwire.IdleArchiveCloseResult
 		if closeTerminal {
@@ -499,16 +686,18 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 8. Perform archive (+ terminal close when requested) using core archive primitives.
+	// 8. Perform guarded archive (+ fail-closed terminal close when requested).
 	if closeTerminal {
-		res, err := svc.archiveAndCloseAgentSession(ctx, mid, row.SessionID)
-		if err != nil {
-			code := "archive_failed"
-			var refusal *agentArchiveError
-			if errors.As(err, &refusal) && refusal.code != "" {
-				code = refusal.code
+		if ev.offline {
+			changedAt, err := svc.noteAgentArchiveAt(ctx, row, true)
+			if err != nil {
+				refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
+				return
 			}
-			svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
+			row.ArchiveChangedAt = archiveChangedAt(changedAt)
+			svc.publishList(row.MachineID)
+			closeRes := &assistantwire.IdleArchiveCloseResult{Closed: false, Outcome: archiveCloseNotRunning}
+			auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 				Actor:               actor,
 				Extension:           extID,
 				MachineID:           assistantwire.MachineID(mid),
@@ -516,13 +705,71 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 				IdleMinutes:         req.IdleMinutes,
 				ObservedIdleSeconds: &obsSec,
 				CloseTerminal:       true,
-				Outcome:             idleArchiveOutcomeRefused,
-				RefusalCode:         code,
+				Outcome:             idleArchiveOutcomeArchivedNotRunning,
+				CloseOutcome:        archiveCloseNotRunning,
 				Reason:              req.Reason,
 			})
-			svc.writeAgentArchiveError(w, err)
+			apierr.WriteJSON(w, assistantwire.IdleArchiveResponse{
+				OK:                  true,
+				Archived:            true,
+				ObservedIdleSeconds: obsSec,
+				Close:               closeRes,
+				AuditID:             auditID,
+				AuditPersisted:      persisted,
+			})
 			return
 		}
+
+		// Live session close: fence the archive provisionally before calling the node, and
+		// roll back the provisional archive if the node refuses, is offline, or fails to close.
+		wasArchived := row.Archived
+		if !wasArchived {
+			provisional, err := svc.confirmationArchiveFenceAt(ctx, row, true)
+			if err != nil {
+				refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
+				return
+			}
+			row.ArchiveChangedAt = archiveChangedAt(provisional)
+		}
+
+		res := svc.retireArchived(ctx, row)
+		if res.Outcome != archiveCloseClosed && res.Outcome != archiveCloseNotRunning {
+			if !wasArchived {
+				if rbErr := svc.confirmationArchiveFence(context.WithoutCancel(ctx), row, false); rbErr != nil {
+					svc.logf("idle archive %s/%s: rollback provisional archive: %v", mid, short(row.SessionID), rbErr)
+				}
+			}
+			status := http.StatusBadGateway
+			code := idleArchiveCodeCloseFailed
+			msg := "could not close idle session terminal"
+			switch res.Outcome {
+			case archiveCloseRefused:
+				status = http.StatusConflict
+				code = idleArchiveCodeCloseRefused
+				msg = "node refused to close session terminal"
+			case archiveCloseOffline:
+				status = http.StatusServiceUnavailable
+				code = idleArchiveCodeCloseOffline
+				msg = "computer went offline before closing session terminal"
+			}
+			if res.Detail != "" {
+				msg = msg + ": " + res.Detail
+			}
+			refuse(status, code, msg, &obsSec, res.Outcome)
+			return
+		}
+
+		publishMark, err := svc.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), true)
+		if err != nil {
+			svc.logf("idle archive %s/%s: note close: %v", row.MachineID, short(row.SessionID), err)
+			svc.retryNativeArchiveClosed(ctx, row)
+		}
+		if publishMark != 0 {
+			svc.publishListAtArchiveMark(row.MachineID, publishMark)
+		} else {
+			svc.publishList(row.MachineID)
+		}
+
 		closeRes := &assistantwire.IdleArchiveCloseResult{
 			Closed:  res.Closed,
 			Outcome: res.Outcome,
@@ -530,6 +777,10 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		}
 		if res.ReasonKey != "" {
 			closeRes.Reason = i18n.T(i18n.OfWriter(w), res.ReasonKey)
+		}
+		outcome := idleArchiveOutcomeArchivedNotRunning
+		if res.Closed {
+			outcome = idleArchiveOutcomeArchivedAndClosed
 		}
 		auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 			Actor:               actor,
@@ -539,13 +790,14 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			IdleMinutes:         req.IdleMinutes,
 			ObservedIdleSeconds: &obsSec,
 			CloseTerminal:       true,
-			Outcome:             idleArchiveCloseOutcome(res.Outcome),
+			Outcome:             outcome,
 			CloseOutcome:        res.Outcome,
 			Reason:              req.Reason,
 		})
 		apierr.WriteJSON(w, assistantwire.IdleArchiveResponse{
 			OK:                  true,
 			Archived:            true,
+			AlreadyArchived:     wasArchived,
 			ObservedIdleSeconds: obsSec,
 			Close:               closeRes,
 			AuditID:             auditID,
@@ -554,27 +806,14 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if _, err := svc.setAgentArchive(ctx, mid, row.SessionID, true); err != nil {
-		code := "archive_failed"
-		var refusal *agentArchiveError
-		if errors.As(err, &refusal) && refusal.code != "" {
-			code = refusal.code
-		}
-		svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
-			Actor:               actor,
-			Extension:           extID,
-			MachineID:           assistantwire.MachineID(mid),
-			SessionID:           assistantwire.SessionID(row.SessionID),
-			IdleMinutes:         req.IdleMinutes,
-			ObservedIdleSeconds: &obsSec,
-			CloseTerminal:       false,
-			Outcome:             idleArchiveOutcomeRefused,
-			RefusalCode:         code,
-			Reason:              req.Reason,
-		})
-		svc.writeAgentArchiveError(w, err)
+	// Archive-only path (close_terminal: false): persist archive under the per-session lock
+	// and fail closed (rolling back) if the audit record cannot be persisted.
+	changedAt, err := svc.noteAgentArchiveAt(ctx, row, true)
+	if err != nil {
+		refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
 		return
 	}
+	row.ArchiveChangedAt = archiveChangedAt(changedAt)
 	auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 		Actor:               actor,
 		Extension:           extID,
@@ -586,6 +825,14 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		Outcome:             idleArchiveOutcomeArchivedOnly,
 		Reason:              req.Reason,
 	})
+	if !persisted {
+		if rbErr := svc.confirmationArchiveFence(context.WithoutCancel(ctx), row, false); rbErr != nil {
+			svc.logf("idle archive %s/%s: rollback archive after audit failure: %v", mid, short(row.SessionID), rbErr)
+		}
+		apierr.WriteCode(w, http.StatusServiceUnavailable, "audit_unavailable", errors.New("could not persist idle archive audit entry"))
+		return
+	}
+	svc.publishList(row.MachineID)
 	apierr.WriteJSON(w, assistantwire.IdleArchiveResponse{
 		OK:                  true,
 		Archived:            true,

@@ -1,8 +1,10 @@
 package hub
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -83,7 +85,18 @@ func TestIdleArchiveCapabilityAndManagerBoundary(t *testing.T) {
 		t.Fatal("archive-idle reached manager without capability")
 	}
 
-	// Advertising the capability allows forwarding.
+	// Before every manager announces agent_session_idle_archive, Hub must NOT advertise it,
+	// and an extension report cannot spoof it into Hub features.
+	if slices.Contains(h.features(), featureAgentSessionIdleArchive) {
+		t.Fatal("hub advertised agent_session_idle_archive before managers announced it")
+	}
+	spoof, _ := json.Marshal(extwire.Report{Features: []string{featureAgentSessionIdleArchive}})
+	busEvents[extwire.EventReport](h, nil, spoof)
+	if slices.Contains(h.features(), featureAgentSessionIdleArchive) {
+		t.Fatal("extension report spoofed manager-owned agent_session_idle_archive feature")
+	}
+
+	// Advertising the capability on every manager allows forwarding and advertises the feature.
 	caps := []string{
 		assistantwire.CapabilityConfigOwn,
 		assistantwire.CapabilityAgentSessionArchives,
@@ -95,6 +108,9 @@ func TestIdleArchiveCapabilityAndManagerBoundary(t *testing.T) {
 	}
 	if err := a.call(t, busHello, map[string]any{"id": a.id, "capabilities": caps}, nil); err != nil {
 		t.Fatal(err)
+	}
+	if !slices.Contains(h.features(), featureAgentSessionIdleArchive) {
+		t.Fatal("hub did not advertise agent_session_idle_archive when every manager announced it")
 	}
 	if code, body := ownershipGet(t, h, srv, http.MethodPost, "/api/v1/sessions/mb/same/archive-idle", nil); code != http.StatusOK {
 		t.Fatalf("capable manager post: got %d %+v", code, body)
