@@ -2441,7 +2441,11 @@ The open-source repo ships no quota extension for any particular gateway.
 
 A usage extension (`usage`, #12402) turns a gateway's own usage answer into the rows of the subscription usage bars (`docs/server/usage-windows.md`), where the fixed `relay`, `relay_key` and `generic` source types do not fit. Like a quota extension it **never sees the launcher's key**.
 
-It is read as a usage source of `type: "extension"` in the manager's `manager.json` (`usage.sources[]`, with `extension`: the extension's id, and `launcher`: the launcher whose gateway it reads; no `url`, no `key`). Every poll cycle (`usage.poll_minutes`, default 5) the manager:
+**Direct sources (usage version 2).** A contribution with `direct: true` is discovered from installed, enabled extensions. The manager polls it with `usage.query {contribution, tz, lang}`; no launcher, `usage.http` session, or manager configuration entry is needed. The program uses its extension settings and normal sandbox network grants, and returns the same accounts as a launcher-backed source. Disabling the contribution or extension removes its rows. The manager's global usage switch and polling interval apply to both modes.
+
+A direct contribution can declare `remote_address` and `remote_key` naming its URI setting and fixed secret. Persona requires a saved HTTPS address before accepting the secret and clears that secret when the origin changes. Declare the relevant `permissions.network` hosts or settings separately. A direct contribution does not declare launcher `hosts` or require `launcher_keys`.
+
+**Launcher-backed sources.** A contribution without `direct` is read as a usage source of `type: "extension"` in the manager's `manager.json` (`usage.sources[]`, with `extension`: the extension's id, and `launcher`: the launcher whose gateway it reads; no `url`, no `key`). Every poll cycle (`usage.poll_minutes`, default 5) the manager:
 
 1. checks that the extension is enabled, running, granted `launcher_keys`, and that one of its `usage` items names the launcher's gateway host (no `hosts`: any);
 2. sends `usage.query {contribution, query_id, base_url, tz, lang}`: `base_url` is the gateway's root (with `/v1` removed), `tz` the user's time zone, `lang` the user's language (`en`, `zh-Hans`, `ja`), which the extension's text is written in;

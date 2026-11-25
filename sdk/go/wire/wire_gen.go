@@ -778,9 +778,12 @@ type QuotaItem struct {
 }
 
 type UsageItem struct {
-	ID    string   `json:"id"`
-	Name  string   `json:"name"`
-	Hosts []string `json:"hosts,omitempty"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Hosts         []string `json:"hosts,omitempty"`
+	Direct        bool     `json:"direct,omitempty"`
+	RemoteAddress string   `json:"remote_address,omitempty"`
+	RemoteKey     string   `json:"remote_key,omitempty"`
 }
 
 type ProviderItem struct {

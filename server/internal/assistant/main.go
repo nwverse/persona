@@ -408,6 +408,10 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			}
 			return ext.UsageQuery(ctx, id, launcher)
 		},
+		DirectUsageSources: func() []devices.DirectUsageSource { return ext.DirectUsageSources() },
+		DirectUsageQuery: func(ctx context.Context, source devices.DirectUsageSource) (json.RawMessage, error) {
+			return ext.DirectUsageQuery(ctx, source)
+		},
 		Hub: lazyHost{c: func() *bus.Client { return bh.Client() }}})
 	// The run-time module switch (the modules settings row), read once here, before the extensions: the kernel and every
 	// provider seam (moduleswitch) get the same list, so a module switched off is absent as one built out.

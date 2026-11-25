@@ -595,3 +595,39 @@ func TestUsageWindowsRouteCarriesAnExtensionsProtectionLines(t *testing.T) {
 }
 
 func f64(v float64) *float64 { return &v }
+
+func TestDirectUsageDiscoveryNeedsNoSavedSource(t *testing.T) {
+	now := time.Now()
+	source := DirectUsageSource{Extension: "example-usage", Contribution: "pool", Name: "Direct pool", UpdatedAt: now}
+	installed := true
+	var g usageGateways
+	g.discoverDirect = func() []DirectUsageSource {
+		if installed {
+			return []DirectUsageSource{source}
+		}
+		return nil
+	}
+	calls := 0
+	g.fetchDirect = func(_ context.Context, got DirectUsageSource) (json.RawMessage, error) {
+		calls++
+		if got != source {
+			t.Errorf("source %+v, want %+v", got, source)
+		}
+		return json.RawMessage(`{"accounts":[{"id":"opaque","provider":"claude","name":"Direct","windows":[{"label":"5h","used_percent":20}]}]}`), nil
+	}
+	g.init(UsageConfig{}, func() {}, nil)
+	g.pollDue(context.Background(), now)
+	if rows := g.accounts(now); len(rows) != 1 || rows[0].Sources[0] != "Direct pool" || calls != 1 || len(g.config().Sources) != 0 {
+		t.Fatalf("rows=%+v calls=%d config=%+v", rows, calls, g.config())
+	}
+	source.UpdatedAt = now.Add(time.Second)
+	g.pollDue(context.Background(), source.UpdatedAt)
+	if calls != 2 {
+		t.Fatal("changed settings must invalidate and repoll the source")
+	}
+	installed = false
+	g.pollDue(context.Background(), now.Add(2*time.Second))
+	if len(g.accounts(now.Add(2*time.Second))) != 0 || calls != 2 {
+		t.Fatal("removed contribution retained usage or was polled")
+	}
+}

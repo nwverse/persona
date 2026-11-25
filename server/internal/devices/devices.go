@@ -112,7 +112,9 @@ type Options struct {
 	// UsageExtension asks an extension (contributes.usage) about a launcher's gateway: usage.query, whose answer is the
 	// accounts to draw (usagesource.ExtensionAnswer). The extensions are the manager's, so it owns this; it holds the
 	// launcher's key and sends the extension's requests with it. nil: extension sources cannot be read.
-	UsageExtension func(ctx context.Context, extension, launcher string) (json.RawMessage, error)
+	UsageExtension     func(ctx context.Context, extension, launcher string) (json.RawMessage, error)
+	DirectUsageSources func() []DirectUsageSource
+	DirectUsageQuery   func(context.Context, DirectUsageSource) (json.RawMessage, error)
 	// TailcatKey is the identity file the computers reached over tailcat trust (tunnel.LoadOrCreateHubKey); "": this
 	// machine's data directory's (tunnel.HubKeyPath).
 	TailcatKey string
@@ -227,6 +229,8 @@ func New(o Options) *Devices {
 	d.usageGW.init(usage, d.usageWin.invalidate, d.logf)
 	d.usageWin.balances = d.usageBal.accounts
 	d.usageGW.fetchExtension = o.UsageExtension
+	d.usageGW.discoverDirect = o.DirectUsageSources
+	d.usageGW.fetchDirect = o.DirectUsageQuery
 	d.usageBal.init(o.LauncherBalances, d.usageWin.invalidate, d.logf)
 	return d
 }
