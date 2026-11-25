@@ -175,6 +175,7 @@ const fill = async (label: string, value: string) => act(async () => {
   control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
 });
 const options = (label: string) => [...field<HTMLSelectElement>(label).options].map((option) => option.value);
+const description = (label: string) => document.getElementById(field(label).getAttribute("aria-describedby")!)?.textContent;
 const policyOptions = () => ["Forwarding", "Responsibility", "New work", "Filter updates"].map(options);
 const request = (end: string, method: string) => calls.find((c) => c.path.endsWith(end) && c.method === method);
 
@@ -233,11 +234,11 @@ describe("external sources in work and Inbox", () => {
     expect(options("Scope")).toEqual(workScope);
     expect(options("Destination type")).toEqual(workTargets);
     expect(field("Scope").value).toBe("item");
-    expect(field<HTMLSelectElement>("Forwarding").options[0]?.textContent).toBe("Inherit · Send a digest");
+    expect(description("Forwarding")).toBe("Send a digest · Channel default");
     expect(field<HTMLInputElement>("Digest interval (minutes)").placeholder).toBe("60");
     expect(dialog().textContent).toContain("Source setting");
     expect(dialog().textContent).toContain("release");
-    expect(field<HTMLSelectElement>("New work").options[0]?.textContent).toBe("Inherit · Ask me first");
+    expect(description("New work")).toBe("Ask me first · Persona default");
 
     await fill("Scope", "container");
     await fill("Destination type", "todo");

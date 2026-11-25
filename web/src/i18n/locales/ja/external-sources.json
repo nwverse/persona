@@ -55,7 +55,6 @@
   "untitled": "タイトルなし",
   "policy": "更新の扱い",
   "inherit": "継承",
-  "inherit_value": "継承 · {value}",
   "mode": "転送方法",
   "interval": "要約の間隔（分）",
   "interval_hint": "更新を要約して転送するときに使います。",

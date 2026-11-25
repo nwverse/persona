@@ -55,7 +55,6 @@
   "untitled": "未命名",
   "policy": "更新处理策略",
   "inherit": "继承",
-  "inherit_value": "继承 · {value}",
   "mode": "转发方式",
   "interval": "摘要间隔（分钟）",
   "interval_hint": "以摘要方式转发更新时使用。",

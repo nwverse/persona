@@ -55,7 +55,6 @@
   "untitled": "Untitled",
   "policy": "Update policy",
   "inherit": "Inherit",
-  "inherit_value": "Inherit · {value}",
   "mode": "Forwarding",
   "interval": "Digest interval (minutes)",
   "interval_hint": "Applies when updates are sent as a digest.",

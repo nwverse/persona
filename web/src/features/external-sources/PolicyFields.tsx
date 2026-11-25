@@ -45,10 +45,11 @@ function PolicyChoice<T extends string>({ label, value, options, inherited, orig
   origin: ReactNode;
   onChange: (value: T | "") => void;
 }) {
+  const hint = !value && inherited ? <>{policyOptionLabel(inherited)}{" · "}{origin}</> : origin;
   return (
-    <ExternalField label={label} hint={origin}>
+    <ExternalField label={label} hint={hint}>
       <select className={externalFieldClass} value={value} onChange={(e) => onChange(e.target.value as T | "")}>
-        <option value="">{inherited ? t("external-sources.inherit_value", { value: policyOptionLabel(inherited) }) : t("external-sources.inherit")}</option>
+        <option value="">{t("external-sources.inherit")}</option>
         {options.map((choice) => <option key={choice} value={choice}>{policyOptionLabel(choice)}</option>)}
       </select>
     </ExternalField>
