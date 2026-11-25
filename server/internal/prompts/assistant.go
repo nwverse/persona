@@ -862,6 +862,8 @@ type SuperviseEntry struct {
 	ExternalInfo *NeedsUserExternalInfo
 	// ParentCloseout: localized closeout guidance when all part_of children of an open parent to-do are done (#13100).
 	ParentCloseout string
+	// OutageRecovery: localized coalesced recovery summary after a provider-wide outage held interrupted/unjudged signals (#13158).
+	OutageRecovery string
 }
 
 // SuperviseTodoReady describes an open, unstarted to-do ready to advance once all of its after prerequisites are met.
