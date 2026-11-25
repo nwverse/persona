@@ -6,16 +6,10 @@ package kb
 import (
 	"cmp"
 	"github.com/nwverse/persona/server/internal/recordingwire"
-	"math"
 	"slices"
 	"strings"
 	"time"
 )
-
-func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
-
-// dayLocation is the IANA zone name ("Local" is not one).
-func dayLocation(name string) (*time.Location, error) { return recordingwire.DayLocation(name) }
 
 // RecordingZone is the zone r's clock times are in: a day recording's own (tz), else (and when it cannot be loaded)
 // the user's.
@@ -34,12 +28,6 @@ func (e *Engine) now() time.Time {
 	}
 	return time.Now()
 }
-
-// coverageTo is how far r's text reaches, in seconds since started_at: its coverage's to, its duration without one
-// (the recap reads up to its last segment then, recapLines).
-func coverageTo(r *Recording) float64 { return recordingwire.CoverageTo(r) }
-
-func seconds(sec float64) time.Duration { return time.Duration(sec * float64(time.Second)) }
 
 // DayRecordings are the day recordings of day (YYYY-MM-DD, in each one's zone), by part, then start.
 func (e *Engine) DayRecordings(day string) []Recording {

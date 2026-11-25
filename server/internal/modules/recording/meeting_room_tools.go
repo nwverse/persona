@@ -247,7 +247,7 @@ func topicsSetTool(e *kb.Engine, recording string, args json.RawMessage, now tim
 
 // highlightsSetTool is the room's meeting_highlights_set {highlights} for recording, its own meeting: the whole list of
 // {text, said_at} replaces the highlights at now, each said_at resolved in loc, the zone the batches are written in
-// (kb.HighlightsSet). A list that is not one, or breaks a limit, is refused saying which, and nothing changes.
+// (writers.HighlightsSet). A list that is not one, or breaks a limit, is refused saying which, and nothing changes.
 func highlightsSetTool(e *kb.Engine, recording string, args json.RawMessage, loc *time.Location, now time.Time) proto.ToolResult {
 	var a struct {
 		Highlights *[]json.RawMessage `json:"highlights"` // nil when absent or null

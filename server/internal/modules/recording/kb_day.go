@@ -38,7 +38,7 @@ const (
 const maxSegmentsBody = 1 << 20
 
 func (s *Recordings) dayRoutes() {
-	// Appends to a day recording by position (kb.AppendRecording). Full credentials only, like …/live, and the
+	// Appends to a day recording by position (writers.AppendRecording). Full credentials only, like …/live, and the
 	// refusals in the contract's order: 503, 413 too_large, 410, 404, 403 kb_read_only, 400, then the append's own.
 	s.handle("POST /api/v1/recordings/{id}/segments", func(w http.ResponseWriter, r *http.Request) {
 		if !meetingCaller(w, r) {

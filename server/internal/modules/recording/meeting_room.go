@@ -143,7 +143,7 @@ func (s *Recordings) roomLook(ctx context.Context, e *kb.Engine, id string, l re
 	return time.Time{} // ended, deleted: nothing more until the sweep deletes it
 }
 
-// roomSet changes recording id's room with fn (kb.MeetingUpdate); what it is after, false when it could not be written.
+// roomSet changes recording id's room with fn (writers.MeetingUpdate); what it is after, false when it could not be written.
 func (s *Recordings) roomSet(e *kb.Engine, id string, fn func(rm *recordingwire.MeetingRoom)) (recordingwire.MeetingRoom, bool) {
 	m, err := writersOf(e).MeetingUpdate(id, func(m *recordingwire.Meeting, _ recordingwire.Recording) error {
 		if m.Room == nil {
@@ -220,7 +220,7 @@ func (s *Recordings) roomStart(ctx context.Context, e *kb.Engine, id string, now
 
 // roomCreate makes recording r's room on machine under sid, or finds the one a start left there: its directory with
 // the meeting CLAUDE.md, the book's guest and origin noted before the node is asked (its first tool calls come before
-// the start answers), then the start with the meeting header. The session id it has; a problem (kb.Room*) when the
+// the start answers), then the start with the meeting header. The session id it has; a problem (recordingwire.Room*) when the
 // node cannot run a room, an error otherwise.
 func (s *Recordings) roomCreate(ctx context.Context, machine, sid string, r recordingwire.Recording) (string, string, error) {
 	lang := cmp.Or(strings.TrimSpace(r.Language), string(s.lang(ctx)))

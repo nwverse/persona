@@ -21,8 +21,8 @@ import (
 // it to a transcription contribution's live job (meeting_transcribe_job.go). Each recording being transcribed has a
 // hubRun: it holds a sentence back while Persona speaks and then marks it Persona's echo or not by the echo rule
 // (writers.EchoHeld, writers.EchoOf: kb/echo.go, against the speaking spans and the answers said in them), puts every sentence in
-// the hub's transcript (hub_segments.json, kb.HubTranscriptPut; Persona's echo with its mark) and the meeting's own,
-// while the role at their end is not off, in the live log (kb.LiveAppendHub), sending the phone its line frames.
+// the hub's transcript (hub_segments.json, writers.HubTranscriptPut; Persona's echo with its mark) and the meeting's own,
+// while the role at their end is not off, in the live log (writers.LiveAppendHub), sending the phone its line frames.
 // Persona's echo never reaches the live log, a line frame or the room. When the hub has no
 // sentences the phone's text fills the live log (meeting_transcribe_fallback.go). After the meeting the final pass
 // transcribes the stored audio again (meeting_transcribe_final.go). Nothing here logs what was said.
@@ -304,7 +304,7 @@ func (r *hubRun) phoneSendLocked(v any) {
 
 // roleNowLocked is the role at the live edge, for what only goes out while the meeting is attended.
 func (r *hubRun) roleNowLocked() string {
-	return r.timeline.RoleAt(float64(r.edge)/kb.AudioRate, r.role)
+	return r.timeline.RoleAt(float64(r.edge)/recordingwire.AudioRate, r.role)
 }
 
 // ---- the phone's socket ----
@@ -395,7 +395,7 @@ func (r *hubRun) audio(at float64, pcm []byte) {
 	r.edge, r.audioAt = to, time.Now()
 	if j := r.ensureJobLocked(from); j != nil {
 		j.feedLocked(from, pcm)
-		if r.flushWant > 0 && float64(j.sentS)/kb.AudioRate >= r.flushWant {
+		if r.flushWant > 0 && float64(j.sentS)/recordingwire.AudioRate >= r.flushWant {
 			r.flushWant = 0
 			r.notifyLocked() // a heard ask's audio reached the job: it flushes now (hubFlush)
 		}
@@ -696,7 +696,7 @@ func (r *hubRun) stop(code string) {
 	gone := code == codeRecordingDeleted || code == codeTranscriptExpired
 	if r.openFrom != nil && !gone {
 		from := *r.openFrom
-		r.expireSpanLocked(from, float64(r.edge)/kb.AudioRate)
+		r.expireSpanLocked(from, float64(r.edge)/recordingwire.AudioRate)
 	}
 	if !gone {
 		r.putHubLocked()
@@ -824,7 +824,7 @@ func (s *Recordings) hubFlush(ctx context.Context, id string, at float64) bool {
 		}
 		switch {
 		case !j.ready:
-		case float64(j.sentS)/kb.AudioRate < at: // the ask came before its audio: woken once the audio reaches it
+		case float64(j.sentS)/recordingwire.AudioRate < at: // the ask came before its audio: woken once the audio reaches it
 			if r.flushWant == 0 || at < r.flushWant {
 				r.flushWant = at
 			}

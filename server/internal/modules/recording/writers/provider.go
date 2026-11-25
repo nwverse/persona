@@ -8,12 +8,12 @@ import (
 )
 
 // Writers is the recordings' write side of one knowledge base (recordingwire.Provider): the writers of this package
-// over the storage port (the minutes and day recaps, the titles, the photo intake, the audio, the hub's transcript),
-// and, until it moves here too, the knowledge base's own remaining one (recordingwire.WritersInCore: the summary
-// round). The module makes one in its hook and gives it to the knowledge base.
+// over the storage port (the upload and a day's appends, the live log, meeting.json, the minutes and day recaps, the
+// titles, the photo intake, the audio, the hub's transcript), and the one round that is the knowledge base's own code
+// (recordingwire.WritersInCore: the summary round). The module makes one in its hook and gives it to the knowledge base.
 type Writers struct {
 	core recordingwire.Core
-	// rest is the knowledge base's writers that are still its own code.
+	// rest is the round that is the knowledge base's own code: the summaries'.
 	rest recordingwire.WritersInCore
 	// audio is the audio writers' state of the store behind core: the one the store's writers before these had (a
 	// second engine over the same store), else new.
@@ -33,8 +33,8 @@ type Writers struct {
 	minutesCall, minutesPart int
 }
 
-// New is the write side of the knowledge base behind core; rest is its writers that are still its own code (nil:
-// none, for a knowledge base that only answers requests).
+// New is the write side of the knowledge base behind core; rest is the round that is its own code, the summaries'
+// (nil: none, for a knowledge base that only answers requests).
 func New(core recordingwire.Core, rest recordingwire.WritersInCore) *Writers {
 	w := &Writers{core: core, rest: rest, state: &storeState{}}
 	if before := Of(core.Provider()); before != nil {
@@ -80,8 +80,8 @@ func (w *Writers) engine() *engine {
 // store is the knowledge base's store as the writers see it now.
 func (w *Writers) store() *store { return newStore(w.core, w.state) }
 
-// The rounds (recordingwire.Provider): the summaries' is the knowledge base's own until it moves here; without it
-// (a knowledge base that only answers requests) it writes nothing.
+// The rounds (recordingwire.Provider): the summaries' is the knowledge base's own code; without it (a knowledge base
+// that only answers requests) it writes nothing.
 
 func (w *Writers) WriteMinutes(ctx context.Context, max int) int {
 	return w.engine().WriteMinutes(ctx, max)
@@ -195,9 +195,6 @@ func (w *Writers) AppendRecording(rawID string, a RecordingAppend) (RecordingApp
 func (w *Writers) RecordingStates() (kept []RecordingState, deleted []string) {
 	return w.engine().RecordingStates()
 }
-
-// RecordingDays is the retention in days as it is in effect.
-func (w *Writers) RecordingDays() int { return w.core.RecordingDays() }
 
 func (w *Writers) LiveAppend(rawID string, from int, segs []LiveSegment) (Live, Recording, error) {
 	return w.engine().LiveAppend(rawID, from, segs)

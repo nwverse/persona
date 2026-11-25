@@ -29,7 +29,7 @@ import (
 // nothing billed) after each of finalUnreachableRetries, counted apart (finalRetryAfter); then the state is final
 // with the live sentences, or failed when the hub has none. A recording that never completes is complete for the pass
 // feedStale after its last upload. Once the pass stored its text the knowledge base makes the minutes (again,
-// quietly) and deletes the audio when no minutes will come (kb.FinalTranscriptStored).
+// quietly) and deletes the audio when no minutes will come (writers.FinalTranscriptStored).
 
 // finalPassState is one recording's final pass in this process: running (cancel ends the try, its recording deleted
 // or trimmed), when it may be tried again, the windows it finished (kept across tries) and where they end, and
@@ -552,7 +552,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 			}
 			t.Stop()
 		}
-		n, err := writersOf(e).AudioRead(id, float64(pos)/kb.AudioRate, buf)
+		n, err := writersOf(e).AudioRead(id, float64(pos)/recordingwire.AudioRate, buf)
 		if errors.Is(err, io.EOF) {
 			break
 		}
