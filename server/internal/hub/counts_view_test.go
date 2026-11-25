@@ -108,14 +108,39 @@ const workView = `{"epoch":"b7e1c2a9","rev":5,"as_of":1795593605000,"build":"1.0
 	`"counts":{"agents_needs_you":{"n":2,"keys":[{"id":"agent:studio/s1","cards":["ix-plan"]},{"id":"card:ix-a","cards":["ix-a"]}]}},` +
 	`"totals":{"agents_needs_you":2}}`
 
+// hangUp closes manager r's connection and returns the counts messages app c got until the hub had handled the end:
+// the hub tells the apps that asked for "managers" the roster changed after it sent the counts message, if any.
+func hangUp(t *testing.T, r *rawBus, c *client) []string {
+	t.Helper()
+	_ = r.ws.Close(websocket.StatusNormalClosure, "restarting")
+	<-r.ended
+	var got []string
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case b := <-c.out:
+			if bytes.HasPrefix(b, []byte(`{"type":"counts",`)) {
+				got = append(got, string(b))
+			}
+			if string(b) == `{"type":"managers"}` {
+				return got
+			}
+		case <-deadline:
+			t.Fatal("no managers push after the manager hung up")
+			return nil
+		}
+	}
+}
+
 // The hub keeps a capable manager's view as it was told and relays it, unchanged and under the manager's id, to the
 // full-role apps that named the feature, and to no one else: an app that did not ask, a scoped device and an
 // answer-only device that asked get nothing queued. The roster's counts_view says which managers tell one. The same
 // view again, and a view from a manager whose hello did not name the capability, relay nothing; when the connection
-// ends, the apps hear view null and the roster entry loses the flag.
+// ends, the apps hear view null and the roster entry loses the flag, and the end of a manager that told no view tells
+// them nothing.
 func TestTheHubRelaysCountsViewsToFullAppsThatAsk(t *testing.T) {
 	h, srv := countsHub(t)
-	full := countsApp(h, roleFull, proto.FeatureCountsView)
+	full := countsApp(h, roleFull, proto.FeatureCountsView, "managers")
 	unasked := countsApp(h, roleFull)
 	scoped := countsApp(h, roleScoped, proto.FeatureCountsView)
 	answer := countsApp(h, roleAnswer, proto.FeatureCountsView)
@@ -152,10 +177,7 @@ func TestTheHubRelaysCountsViewsToFullAppsThatAsk(t *testing.T) {
 		t.Fatalf("a newer view relayed %q", got)
 	}
 
-	_ = work.ws.Close(websocket.StatusNormalClosure, "restarting")
-	<-work.ended
-	eventually(t, 5*time.Second, "the apps hear the view stopped", func() bool { return len(full.out) > 0 })
-	if got := countsQueued(full); !slices.Equal(got, []string{`{"type":"counts","manager":"m-work","view":null}`}) {
+	if got := hangUp(t, work, full); !slices.Equal(got, []string{`{"type":"counts","manager":"m-work","view":null}`}) {
 		t.Fatalf("on disconnect the full app got %q", got)
 	}
 	for name, c := range map[string]*client{"an app that did not ask": unasked, "a scoped device": scoped, "an answer-only device": answer} {
@@ -167,9 +189,7 @@ func TestTheHubRelaysCountsViewsToFullAppsThatAsk(t *testing.T) {
 	if _, has := gone["counts_view"]; has || gone["online"] != false {
 		t.Fatalf("an offline manager's entry: %v", gone)
 	}
-	_ = old.ws.Close(websocket.StatusNormalClosure, "restarting")
-	<-old.ended
-	if got := countsQueued(full); len(got) != 0 {
+	if got := hangUp(t, old, full); len(got) != 0 {
 		t.Fatalf("a manager that never told a view went, and the apps got %q", got)
 	}
 }
