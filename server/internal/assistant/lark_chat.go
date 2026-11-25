@@ -242,10 +242,13 @@ func (h larkHost) ApproveOwnerAction(ctx context.Context, ev botcard.MessageEven
 
 // ---- the commands ----
 
-func (h larkHost) StopConversation(ctx context.Context, f FeishuFeatures, t botTarget) (string, string) {
-	out := h.s.stopConversation(ctx, f, t)
+func (h larkHost) InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (string, string) {
+	out := h.s.interruptBotConversation(ctx, resolvedTarget{machine: rt.Machine, machineName: rt.MachineName, session: rt.Session,
+		label: rt.Label, secondary: rt.Secondary, main: rt.Main, isNew: rt.IsNew})
 	return out.kind, out.message
 }
+
+func (h larkHost) TurnPending(machine, session string) bool { return h.s.turnPending(machine, session) }
 
 func (h larkHost) StopProgressCard(ctx context.Context, f FeishuFeatures, t botTarget, messageID string) (string, string) {
 	out := h.s.stopProgressCard(ctx, f, t, messageID)

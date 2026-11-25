@@ -239,16 +239,15 @@ func (s *Service) ApproveOwnerAction(context.Context, botcard.MessageEvent, stri
 	return false
 }
 
-func (s *Service) StopConversation(_ context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) (string, string) {
-	if err := s.Allowed("", f, t); err != nil {
-		return "error", err.Error()
-	}
+func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.ChatResolved) (string, string) {
 	d := s.ch()
 	s.tmu.Lock()
-	d.stopped = append(d.stopped, t)
+	d.stopped = append(d.stopped, assistantwire.ChatTarget{MachineID: rt.Machine, SessionID: rt.Session.SessionID})
 	s.tmu.Unlock()
-	return "success", "stopped " + t.Kind + " " + t.SessionID
+	return "success", "stopped " + rt.Session.SessionID
 }
+
+func (s *Service) TurnPending(string, string) bool { return false }
 
 func (s *Service) StopProgressCard(_ context.Context, _ assistantwire.FeishuFeatures, t assistantwire.ChatTarget, _ string) (string, string) {
 	return "info", "expired"

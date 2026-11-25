@@ -5095,6 +5095,10 @@ type KBEntry struct {
 	// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
 	// absent on other kinds, before a match and from an older hub.
 	MeetingID string `json:"meeting_id,omitempty"`
+	// A recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a hub
+	// transcription not final) while nothing can settle it: module_off when the recording module is off. Derived when
+	// read, never stored; absent otherwise and from an older hub.
+	Paused string `json:"paused,omitempty"`
 	// Reference-only for a project that stores pointers. Omitted means full.
 	ProjectMode string              `json:"project_mode,omitempty"`
 	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
@@ -5159,6 +5163,9 @@ type KBDetail struct {
 	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
 	// (docs/assistant/knowledge.md "Person profiles").
 	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+	// A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is
+	// off. Derived when read, never stored.
+	Paused string `json:"paused,omitempty"`
 	// Reference-only for a project that stores pointers. Omitted means full.
 	ProjectMode string              `json:"project_mode,omitempty"`
 	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`

@@ -726,6 +726,16 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   page while off) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
   module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
   makes it a failure.
+- **What the user already has stays** (#13430, `docs/architecture/core-and-modules.md` "A module that is off keeps
+  what the user has"): for `recording`, two recordings written by the knowledge base's own writers
+  (`TestWriteRecordingFixture` in `server/internal/kb`, run with `PERSONA_RECORDING_FIXTURE_DIR`) are in the temporary
+  home's knowledge base before the hub first starts: a meeting with its transcript and minutes, and one whose minutes
+  were still to be written. In every phase they are listed, opened and found by search through the knowledge base's
+  own routes; while off, the opened recording's detail equals the `on` phase's, the one in flight says
+  `paused: "module_off"`, and every file under `recordings/` is byte for byte what it was when the phase began.
+  `scripts/ci/core-only-smoke.py` checks the same on a core-only hub and with `--switched-off recording`. The web row
+  still expects the web app to hide a recording's entry while the module is off: that is the web app's behaviour
+  today, and its change is a client follow-up.
 - **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default
   `<shots>/evidence.json`: commit, the settings row, the manager line, the hello's module flags, what the browser got and
   requested), and screenshots `<phase>-<scheme>-<name>.png` in `--shots` (this machine's name is masked; never commit

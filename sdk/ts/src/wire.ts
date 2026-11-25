@@ -5508,6 +5508,12 @@ export interface KBEntry {
    * absent on other kinds, before a match and from an older hub.
    */
   meeting_id?: string;
+  /**
+   * A recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a hub
+   * transcription not final) while nothing can settle it: module_off when the recording module is off. Derived when
+   * read, never stored; absent otherwise and from an older hub.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;
@@ -5582,6 +5588,11 @@ export interface KBDetail {
    * (docs/assistant/knowledge.md "Person profiles").
    */
   profiles?: Record<string, KBProfileRecord>;
+  /**
+   * A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is
+   * off. Derived when read, never stored.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;

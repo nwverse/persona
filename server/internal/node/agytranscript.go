@@ -89,7 +89,8 @@ type agyTranscriptUsage struct {
 	compacted     bool
 	hasUsage      bool
 	contextStats  transcript.ContextStats
-	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	first         string    // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	modTime       time.Time // transcript file mtime in UTC, used as fallback UpdatedAt for herdr agy panes
 }
 
 type agyHistory struct {
