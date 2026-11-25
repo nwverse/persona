@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"io"
 	"os"
 	"path/filepath"
@@ -83,7 +84,7 @@ func TestAudioWriteSyncAndHeld(t *testing.T) {
 	if tr := transcriptionNow(t, e, recID); !sameSpans(tr.Gaps, [][2]float64{{2, 5}}) {
 		t.Fatalf("gaps %v", tr.Gaps)
 	}
-	if len(*changed) != 1 || !slices.Equal((*changed)[0], []string{kb.PartTranscription}) {
+	if len(*changed) != 1 || !slices.Equal((*changed)[0], []string{recordingwire.PartTranscription}) {
 		t.Fatalf("told %v", *changed)
 	}
 	// Bad frames.
@@ -127,7 +128,7 @@ func TestAudioWriteSyncAndHeld(t *testing.T) {
 		t.Fatalf("end %+v %v, told %v", tr.Gaps, err, *changed)
 	}
 	if tr, err := e.TranscriptionUpdate(recID, func(t *MeetingTranscription, _ Recording) error {
-		t.State, t.FinalFrom = kb.TranscriptionFinishing, time.Now()
+		t.State, t.FinalFrom = recordingwire.TranscriptionFinishing, time.Now()
 		return nil
 	}); err != nil || !sameSpans(tr.Gaps, [][2]float64{{6, 8}}) {
 		t.Fatalf("final pass %+v %v", tr.Gaps, err)
@@ -269,7 +270,7 @@ func TestAudioPutAndRefusals(t *testing.T) {
 	const dev, trimmed, final, deleted = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b", "6c7d4e5b-2e3f-4a91-8b2c-3d4e5f6a7b8c",
 		"7d8e5f6c-3f40-4b02-9c3d-4e5f6a7b8c9d", "8e9f6a7d-4051-4c13-8d4e-5f6a7b8c9dae"
 	du := meetingUpload(1, now.Add(-time.Hour), "一句")
-	du.SetTranscription(kb.TranscriptionDevice, nil)
+	du.SetTranscription(recordingwire.TranscriptionDevice, nil)
 	putRecording(t, e, dev, du, now)
 	putRecording(t, e, trimmed, hubUpload(1, now.Add(-time.Hour), true, nil, "一句"), now)
 	putMeetingMinutes(t, e, trimmed, Minutes{Version: 1, Title: "Design review", When: "w"})
@@ -337,7 +338,7 @@ func TestAudioFinalClosesWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := e.TranscriptionUpdate(recID, func(t *MeetingTranscription, _ Recording) error {
-		t.State, t.FinalFrom = kb.TranscriptionFinishing, now
+		t.State, t.FinalFrom = recordingwire.TranscriptionFinishing, now
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -417,7 +418,7 @@ func TestAudioGoesWithTheRecording(t *testing.T) {
 	// Through the retention: the trimmed recording keeps its mode and state, no gaps, its audio noted gone.
 	const kept = "7d8e5f6c-3f40-4b02-9c3d-4e5f6a7b8c9d"
 	old := now.AddDate(0, 0, -20)
-	u := hubUpload(1, old, true, &kb.Timeline{Speaking: spk(1, 2)}, "一句")
+	u := hubUpload(1, old, true, &recordingwire.Timeline{Speaking: spk(1, 2)}, "一句")
 	u.Duration = 10
 	putRecording(t, e, kept, u, old)
 	if _, err := e.AudioPut(kept, 0, pcmAt(0, secs(1))); err != nil {
@@ -426,11 +427,11 @@ func TestAudioGoesWithTheRecording(t *testing.T) {
 	putMeetingMinutes(t, e, kept, Minutes{Version: 1, Title: "Design review", When: "w"})
 	e.PruneRecordings(now)
 	tr := transcriptionNow(t, e, kept)
-	if tr.Mode != TranscriptionHub || tr.State != kb.TranscriptionLive || tr.Gaps != nil || tr.Timeline != nil || tr.AudioGoneAt.IsZero() {
+	if tr.Mode != TranscriptionHub || tr.State != recordingwire.TranscriptionLive || tr.Gaps != nil || tr.Timeline != nil || tr.AudioGoneAt.IsZero() {
 		t.Fatalf("trimmed %+v", tr)
 	}
 	m, _, _ := e.MeetingRead(kept)
-	if v := m.TranscriptionView(nil); v == nil || v.State != kb.TranscriptionLive || v.Gaps == nil || len(*v.Gaps) != 0 {
+	if v := m.TranscriptionView(nil); v == nil || v.State != recordingwire.TranscriptionLive || v.Gaps == nil || len(*v.Gaps) != 0 {
 		t.Fatalf("trimmed view %+v", v)
 	}
 	if _, err := os.Stat(audioDirOf(e, kept)); !os.IsNotExist(err) {
