@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botport"
 	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extmgr/githubport"
@@ -721,6 +722,13 @@ func (h *Manager) registerConnectors() {
 		lc := h.newLarkCLIConnector(h.effectiveLarkCLIProfile(context.Background()))
 		if err := h.addConnector(lc); err != nil {
 			h.logf("larkcli connector: %v", err)
+		}
+	}
+	// The Lark user sync's reads reach the knowledge base through its own connector (larksync_connector.go): on every
+	// hub with the lark module; it hands over nothing until a binding has run.
+	if botport.Available(h.modules()) {
+		if err := h.addConnector(larkSyncConnector{h}); err != nil {
+			h.logf("larksync connector: %v", err)
 		}
 	}
 	// Messages (imessage) is registered once the extensions are there: its Mac is the extension's, else manager.json's
