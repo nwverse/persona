@@ -287,6 +287,38 @@ func ContractDirs(serverRoot string) ([]string, error) {
 	return dirs, nil
 }
 
+// FieldMetrics are the metrics CountFields adds, in output order; Wide counts only these.
+var FieldMetrics = Metrics[:11]
+
+// Wide counts the field metrics over every non-test package under serverRoot/internal (modules included, testdata
+// skipped) and the contract packages outside it (the SDK's wire package). The ratchet uses it to tell a weak field
+// that is new from one that already existed outside the contract packages and was moved into one: lifting a type
+// from a Core package into a contract package (the first step of moving a module out) keeps its wide count.
+func Wide(serverRoot string) (Counts, error) {
+	c := Counts{}
+	for _, m := range FieldMetrics {
+		c[m] = map[string]int{}
+	}
+	internal := filepath.Clean(filepath.Join(serverRoot, "internal"))
+	if err := parseDir(internal, true, func(f *ast.File) { CountFields(c, f) }); err != nil {
+		return nil, err
+	}
+	dirs, err := ContractDirs(serverRoot)
+	if err != nil {
+		return nil, err
+	}
+	for _, dir := range dirs {
+		dir = filepath.Clean(dir)
+		if dir == internal || strings.HasPrefix(dir, internal+string(filepath.Separator)) {
+			continue
+		}
+		if err := parseDir(dir, false, func(f *ast.File) { CountFields(c, f) }); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
 // Count runs every metric over the tree under serverRoot.
 func Count(serverRoot string) (Counts, error) {
 	c := newCounts()

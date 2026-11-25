@@ -27,6 +27,10 @@
 //	write-json-map    writeJSON(..., map[string]any{...}) call, named by the literal's sorted string keys
 //	literal-call      x.Call(ctx, "method", ...) with a string literal method, named by the method
 //
+// Wide (field metrics only) counts the same names over every non-test package under internal/, modules included, and
+// the SDK's wire package. A contract name above its baseline is let through when its wide count has not risen: the
+// field already existed outside the contract packages and was lifted or moved into one, which is neutral.
+//
 // TestEmit (count_test.go) writes the counts as JSON to the file named by WIRE_COUNTS_OUT; the ratchet runs it.
 //
 //persona:layer library

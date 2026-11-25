@@ -89,6 +89,12 @@ func h() {
 	}
 }
 
+func TestFieldMetricsArePrefix(t *testing.T) {
+	if FieldMetrics[len(FieldMetrics)-1] != "ptr-error-string" || Metrics[len(FieldMetrics)] != "inline-event" {
+		t.Fatalf("FieldMetrics = %v, want every field metric and no handler metric", FieldMetrics)
+	}
+}
+
 // TestEmit is the ratchet's entry point: with WIRE_COUNTS_OUT set it counts the server tree and writes the JSON there.
 func TestEmit(t *testing.T) {
 	out := os.Getenv("WIRE_COUNTS_OUT")
@@ -103,7 +109,11 @@ func TestEmit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.MarshalIndent(map[string]any{"metrics": c}, "", " ")
+	wide, err := Wide(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.MarshalIndent(map[string]any{"metrics": c, "wide": wide}, "", " ")
 	if err := os.WriteFile(out, append(data, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}

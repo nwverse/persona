@@ -283,11 +283,11 @@ def global_failures(change):
     if merged is None:
         return ["{0}: the merge removes the wire types baseline".format(rel)], []
     try:
-        previous = wire_types_ratchet.parse_baseline(base_text.decode("utf-8"), change.base[:12] + ":" + rel)[0]
-        candidate = wire_types_ratchet.parse_baseline(merged.decode("utf-8"), "the merge's " + rel)[0]
+        previous = wire_types_ratchet.parse_baseline(base_text.decode("utf-8"), change.base[:12] + ":" + rel)
+        candidate = wire_types_ratchet.parse_baseline(merged.decode("utf-8"), "the merge's " + rel)
     except wire_types_ratchet.WireTypesError as error:
         raise CheckError(str(error))
-    return wire_types_ratchet.raised_against(candidate, previous, change.base[:12]), []
+    return wire_types_ratchet.raised_against(candidate[0], previous[0], change.base[:12], candidate[2], previous[2]), []
 
 
 def check(root, base, head):

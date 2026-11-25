@@ -10,12 +10,22 @@ a field is "<Type>.<Field>", an event is its type string, a writeJSON map is its
 A type that moves from one contract package to another (the module slimming does this) keeps its names and so is
 neutral; only a name that is new, or occurs more often than the baseline allows, is a rise.
 
-The baseline is scripts/ci/wire_types_baseline.json: {"metrics": {metric: {name: count}}, "exceptions": ...}. A rise
+Moves into the contract packages are neutral too. The counter also counts the field metrics "wide", over every
+non-test package under server/internal (modules included) and the SDK's wire package, and the baseline keeps those
+counts in "wide". A contract field name above its allowance is let through ("lifted") when its wide count is at or
+under the baseline's: the field already existed in a Core package or a module and was lifted into a contract package
+(slimming's first step for each module, #15022) or moved back from a module (#15297). A field written anew raises its
+wide count too and fails. Lifted names are not added to "metrics"; their wide entry keeps letting them through. A
+rename is a new name: lower the old one and add an exception for the new one in the same PR.
+
+The baseline is scripts/ci/wire_types_baseline.json: {"metrics": {metric: {name: count}}, "wide": {field metric:
+{name: count}}, "exceptions": ...}. A rise
 fails with the new names and how to fix them. There is no ignore marker. A weak type that has to stay goes in the
 baseline's "exceptions": {metric: {name: {"count": n, "pr": "#N", "why": "..."}}}, which raises that name's allowance
 for review to see. --update only lowers: it drops names that are gone and lowers counts, and it refuses to raise or
-add a name or to create a baseline. With a base (--base, else CI_BASE_SHA; scripts/ci/ratchet_base.py) the baseline's
-own metrics may not rise or gain a name against the merge base. Needs Go. See docs/operations/testing.md ("Count
+add a name (in "metrics" or "wide") or to create a baseline. With a base (--base, else CI_BASE_SHA;
+scripts/ci/ratchet_base.py) the baseline's own metrics and wide counts may not rise or gain a name against the merge
+base. Needs Go. See docs/operations/testing.md ("Count
 ratchets") and docs/lessons/testing.md.
 """
 import argparse
@@ -35,6 +45,7 @@ GO_TIMEOUT = 300
 METRICS = ("bare-enum-state", "bare-enum-kind", "bare-enum-type", "bare-enum-role", "bare-id", "bare-error",
            "map-any", "raw-json", "ptr-time", "ptr-bool", "ptr-error-string", "inline-event", "write-json-map",
            "literal-call")
+FIELD_METRICS = METRICS[:11]  # the metrics the "wide" counts cover (wirecount.FieldMetrics)
 FIX = {
     "bare-enum-state": "use a named type with a closed set of values (a Go enum with Valid(), a schema enum) instead of string",
     "bare-enum-kind": "use a named type with a closed set of values instead of string",
@@ -58,7 +69,8 @@ class WireTypesError(Exception):
 
 
 def parse_baseline(text, label="baseline"):
-    """(metrics, exceptions): metrics {metric: {name: count}}, exceptions {metric: {name: count}}."""
+    """(metrics, exceptions, wide): metrics {metric: {name: count}}, exceptions {metric: {name: count}}, wide
+    {field metric: {name: count}} (empty when the baseline has none)."""
     try:
         data = json.loads(text)
     except ValueError as error:
@@ -80,11 +92,21 @@ def parse_baseline(text, label="baseline"):
         for name, count in names.items():
             if not isinstance(count, int) or count < 1:
                 raise WireTypesError("wire types ratchet: {0}: {1} {2} has count {3!r}".format(label, metric, name, count))
-    return metrics, exceptions
+    wide = data.get("wide") or {}
+    if not isinstance(wide, dict):
+        raise WireTypesError("wire types ratchet: {0}: \"wide\" is not an object".format(label))
+    for metric, names in wide.items():
+        if metric not in FIELD_METRICS:
+            raise WireTypesError("wire types ratchet: {0}: wide has non-field metric {1}".format(label, metric))
+        for name, count in names.items():
+            if not isinstance(count, int) or count < 1:
+                raise WireTypesError("wire types ratchet: {0}: wide {1} {2} has count {3!r}".format(label, metric, name, count))
+    return metrics, exceptions, wide
 
 
 def run_counter(root):
-    """The counts as {metric: {name: count}} from the Go counter, run over the repository's server/."""
+    """The counts as {"metrics": {metric: {name: count}}, "wide": {field metric: {name: count}}} from the Go counter,
+    run over the repository's server/."""
     return run_counter_in(Path(root) / "server")
 
 
@@ -105,20 +127,37 @@ def run_counter_in(server):
         if result.returncode != 0 or not out.is_file():
             raise WireTypesError("wire types ratchet: the counter failed: "
                                  + (result.stdout + result.stderr).decode("utf-8", "replace").strip())
-        counts = json.loads(out.read_text(encoding="utf-8"))["metrics"]
-    return {metric: names for metric, names in counts.items() if names}
+        data = json.loads(out.read_text(encoding="utf-8"))
+    return {key: {metric: names for metric, names in (data.get(key) or {}).items() if names}
+            for key in ("metrics", "wide")}
 
 
-def violations(actual, metrics, exceptions):
-    """Lines for each name that is new or occurs more often than the baseline (plus its exception) allows."""
+def lifted_names(actual, metrics, exceptions, wide):
+    """{metric: [name]} of contract names above their allowance whose wide count is at or under the baseline's wide
+    count: fields that existed outside the contract packages and moved into one."""
+    lifted = {}
+    for metric in FIELD_METRICS:
+        allowed, extra = metrics.get(metric, {}), exceptions.get(metric, {})
+        now_wide, base_wide = actual["wide"].get(metric, {}), wide.get(metric, {})
+        for name, count in sorted(actual["metrics"].get(metric, {}).items()):
+            if count > allowed.get(name, 0) + extra.get(name, 0) and \
+                    count <= now_wide.get(name, 0) <= base_wide.get(name, 0) + extra.get(name, 0):
+                lifted.setdefault(metric, []).append(name)
+    return lifted
+
+
+def violations(actual, metrics, exceptions, wide=None):
+    """Lines for each name that is new or occurs more often than the baseline (plus its exception) allows, and was
+    not lifted from outside the contract packages."""
     lines = []
+    lifted = lifted_names(actual, metrics, exceptions, wide or {})
     for metric in METRICS:
         allowed = metrics.get(metric, {})
         extra = exceptions.get(metric, {})
         risen = []
-        for name, count in sorted(actual.get(metric, {}).items()):
+        for name, count in sorted(actual["metrics"].get(metric, {}).items()):
             limit = allowed.get(name, 0) + extra.get(name, 0)
-            if count > limit:
+            if count > limit and name not in lifted.get(metric, ()):
                 risen.append("{0} ({1} -> {2})".format(name, limit, count) if limit else name + " (new)")
         if risen:
             lines.append("wire types ratchet: {0}: {1} new weak name(s): {2}\n  fix: {3}. There is no ignore marker; "
@@ -127,26 +166,37 @@ def violations(actual, metrics, exceptions):
     return lines
 
 
-def lowerable(actual, metrics):
-    return ["{0} {1}: {2} -> {3}".format(metric, name, count, actual.get(metric, {}).get(name, 0))
-            for metric in METRICS for name, count in sorted(metrics.get(metric, {}).items())
-            if actual.get(metric, {}).get(name, 0) < count]
-
-
-def raised_against(candidate, previous, label):
-    """Lines for baseline entries above the same entry of a previous baseline, or absent from it."""
-    lines = []
-    for metric in METRICS:
-        for name, count in sorted(candidate.get(metric, {}).items()):
-            if count > previous.get(metric, {}).get(name, 0):
-                lines.append("wire types ratchet: {0} {1} is {2} in the baseline but {3} at {4}; a baseline never "
-                             "rises (an exception needs a PR reference)".format(metric, name, count,
-                                                                                  previous.get(metric, {}).get(name, 0), label))
+def lowerable(actual, metrics, wide=None):
+    lines = ["{0} {1}: {2} -> {3}".format(metric, name, count, actual["metrics"].get(metric, {}).get(name, 0))
+             for metric in METRICS for name, count in sorted(metrics.get(metric, {}).items())
+             if actual["metrics"].get(metric, {}).get(name, 0) < count]
+    lines += ["wide {0} {1}: {2} -> {3}".format(metric, name, count, actual["wide"].get(metric, {}).get(name, 0))
+              for metric in FIELD_METRICS for name, count in sorted((wide or {}).get(metric, {}).items())
+              if actual["wide"].get(metric, {}).get(name, 0) < count]
     return lines
 
 
-def render(metrics, exceptions_text):
+def raised_against(candidate, previous, label, candidate_wide=None, previous_wide=None):
+    """Lines for baseline entries ("metrics", and "wide" when the previous baseline has it) above the same entry of a
+    previous baseline, or absent from it."""
+    lines = []
+    sections = [("", candidate, previous)]
+    if previous_wide:
+        sections.append(("wide ", candidate_wide or {}, previous_wide))
+    for prefix, now, before in sections:
+        for metric in METRICS:
+            for name, count in sorted(now.get(metric, {}).items()):
+                if count > before.get(metric, {}).get(name, 0):
+                    lines.append("wire types ratchet: {0}{1} {2} is {3} in the baseline but {4} at {5}; a baseline "
+                                 "never rises (an exception needs a PR reference)".format(
+                                     prefix, metric, name, count, before.get(metric, {}).get(name, 0), label))
+    return lines
+
+
+def render(metrics, exceptions_text, wide=None):
     data = {"metrics": {metric: dict(sorted(metrics[metric].items())) for metric in METRICS if metrics.get(metric)}}
+    if wide:
+        data["wide"] = {metric: dict(sorted(wide[metric].items())) for metric in FIELD_METRICS if wide.get(metric)}
     if exceptions_text:
         data["exceptions"] = exceptions_text
     return json.dumps(data, indent=1, sort_keys=False) + "\n"
@@ -160,7 +210,7 @@ def _base_metrics(root, base, env):
         text = merge_base.texts([BASELINE_REL]).get(BASELINE_REL)
     except ratchet_base.BaseError as error:
         raise WireTypesError("wire types ratchet: " + str(error))
-    return (parse_baseline(text, merge_base.label + ":" + BASELINE_REL)[0], merge_base.label) if text else None
+    return (parse_baseline(text, merge_base.label + ":" + BASELINE_REL), merge_base.label) if text else None
 
 
 def check(root, base=None, env=None, counter=run_counter, notes=None):
@@ -169,14 +219,18 @@ def check(root, base=None, env=None, counter=run_counter, notes=None):
     path = Path(root) / BASELINE_REL
     if not path.is_file():
         return ["wire types ratchet: baseline missing ({0}); refusing to invent counts".format(BASELINE_REL)]
-    metrics, exceptions = parse_baseline(path.read_text(encoding="utf-8"), BASELINE_REL)
+    metrics, exceptions, wide = parse_baseline(path.read_text(encoding="utf-8"), BASELINE_REL)
     actual = counter(root)
-    found = violations(actual, metrics, exceptions)
+    found = violations(actual, metrics, exceptions, wide)
     if notes is not None:
-        notes.extend(lowerable(actual, metrics))
+        notes.extend(lowerable(actual, metrics, wide))
+        for metric, names in sorted(lifted_names(actual, metrics, exceptions, wide).items()):
+            print("wire types ratchet: {0}: {1} name(s) moved into the contract packages from Core or a module, "
+                  "neutral: {2}".format(metric, len(names), ", ".join(names)))
     previous = _base_metrics(root, base, env)
     if previous:
-        found.extend(raised_against(metrics, previous[0], previous[1]))
+        (base_metrics, _, base_wide), label = previous
+        found.extend(raised_against(metrics, base_metrics, label, wide, base_wide))
     return found
 
 
@@ -186,22 +240,29 @@ def update(root, base=None, env=None, counter=run_counter):
     path = Path(root) / BASELINE_REL
     if not path.is_file():
         raise WireTypesError("wire types ratchet: no baseline at {0}; refusing to create one".format(BASELINE_REL))
-    metrics, exceptions = parse_baseline(path.read_text(encoding="utf-8"), BASELINE_REL)
+    metrics, exceptions, wide = parse_baseline(path.read_text(encoding="utf-8"), BASELINE_REL)
     actual = counter(root)
-    refusals = violations(actual, metrics, exceptions)
+    refusals = violations(actual, metrics, exceptions, wide)
     if refusals:
         return refusals
-    planned = {}
-    for metric in METRICS:
-        for name, count in metrics.get(metric, {}).items():
-            now = min(count, actual.get(metric, {}).get(name, 0))
-            if now:
-                planned.setdefault(metric, {})[name] = now
+
+    def lowered(limits, counts, metrics_list):
+        planned = {}
+        for metric in metrics_list:
+            for name, count in limits.get(metric, {}).items():
+                now = min(count, counts.get(metric, {}).get(name, 0))
+                if now:
+                    planned.setdefault(metric, {})[name] = now
+        return planned
+
+    planned = lowered(metrics, actual["metrics"], METRICS)
+    planned_wide = lowered(wide, actual["wide"], FIELD_METRICS)
     raw = json.loads(path.read_text(encoding="utf-8")).get("exceptions")
-    rendered = render(planned, raw)
+    rendered = render(planned, raw, planned_wide)
     if path.read_text(encoding="utf-8") != rendered:
         path.write_text(rendered, encoding="utf-8")
-        print("wire types ratchet: lowered the baseline to {0} name(s)".format(sum(len(v) for v in planned.values())))
+        print("wire types ratchet: lowered the baseline to {0} name(s), {1} wide".format(
+            sum(len(v) for v in planned.values()), sum(len(v) for v in planned_wide.values())))
     else:
         print("wire types ratchet: baseline already matches")
     return []
@@ -221,7 +282,7 @@ def main(argv=None):
     notes = []
     try:
         if args.print:
-            print(summary(run_counter(args.root)))
+            print(summary(run_counter(args.root)["metrics"]))
             return 0
         problems = update(args.root, args.base) if args.update else check(args.root, base=args.base, notes=notes)
     except WireTypesError as error:

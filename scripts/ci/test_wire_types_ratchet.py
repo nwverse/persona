@@ -17,8 +17,10 @@ import wire_types_ratchet as w
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def baseline(metrics, exceptions=None):
+def baseline(metrics, exceptions=None, wide=None):
     data = {"metrics": metrics}
+    if wide:
+        data["wide"] = wide
     if exceptions:
         data["exceptions"] = exceptions
     return json.dumps(data)
@@ -31,11 +33,52 @@ class RatchetTests(unittest.TestCase):
         (self.root / "scripts/ci").mkdir(parents=True)
         self.addCleanup(self.dir.cleanup)
 
-    def write(self, metrics, exceptions=None):
-        (self.root / w.BASELINE_REL).write_text(baseline(metrics, exceptions))
+    def write(self, metrics, exceptions=None, wide=None):
+        (self.root / w.BASELINE_REL).write_text(baseline(metrics, exceptions, wide))
 
-    def counter(self, counts):
-        return lambda root: counts
+    def counter(self, counts, wide=None):
+        # The wide counts cover the contract packages too, so by default they are at least the contract counts.
+        if wide is None:
+            wide = {m: dict(names) for m, names in counts.items() if m in w.FIELD_METRICS}
+        return lambda root: {"metrics": counts, "wide": wide}
+
+    def test_a_field_lifted_from_a_core_package_is_neutral(self):
+        # #15022: recording types moved from internal/kb (not a contract) into recordingwire, kb kept aliases.
+        self.write({"bare-id": {"A.ID": 1}}, wide={"bare-id": {"A.ID": 1, "Recording.MachineID": 1}})
+        counter = self.counter({"bare-id": {"A.ID": 1, "Recording.MachineID": 1}},
+                               wide={"bare-id": {"A.ID": 1, "Recording.MachineID": 1}})
+        self.assertEqual([], w.check(self.root, counter=counter))
+        self.assertEqual([], w.update(self.root, counter=counter))
+        metrics, _, wide = w.parse_baseline((self.root / w.BASELINE_REL).read_text())
+        self.assertEqual({"bare-id": {"A.ID": 1}}, metrics)  # not added; its wide entry keeps letting it through
+        self.assertEqual({"bare-id": {"A.ID": 1, "Recording.MachineID": 1}}, wide)
+
+    def test_a_field_moved_back_from_a_module_is_neutral(self):
+        self.write({}, wide={"raw-json": {"Photo.Meta": 1}})
+        counter = self.counter({"raw-json": {"Photo.Meta": 1}}, wide={"raw-json": {"Photo.Meta": 1}})
+        self.assertEqual([], w.check(self.root, counter=counter))
+
+    def test_a_lift_that_also_keeps_a_copy_fails(self):
+        # Copying the field instead of moving it raises its wide count: that is a new weak field.
+        self.write({}, wide={"bare-id": {"Recording.MachineID": 1}})
+        counter = self.counter({"bare-id": {"Recording.MachineID": 1}}, wide={"bare-id": {"Recording.MachineID": 2}})
+        self.assertIn("Recording.MachineID (new)", w.check(self.root, counter=counter)[0])
+
+    def test_a_new_field_in_a_core_package_alone_is_not_checked(self):
+        # Outside the contract packages the wide count only serves lifts; it is not a limit.
+        self.write({"bare-id": {"A.ID": 1}}, wide={"bare-id": {"A.ID": 1}})
+        counter = self.counter({"bare-id": {"A.ID": 1}}, wide={"bare-id": {"A.ID": 1, "Helper.OwnerID": 1}})
+        self.assertEqual([], w.check(self.root, counter=counter))
+
+    def test_update_lowers_wide_and_never_adds_to_it(self):
+        self.write({}, wide={"bare-id": {"A.ID": 2, "B.ID": 1}})
+        counter = self.counter({}, wide={"bare-id": {"A.ID": 1, "C.ID": 1}})
+        self.assertEqual([], w.update(self.root, counter=counter))
+        self.assertEqual({"bare-id": {"A.ID": 1}}, w.parse_baseline((self.root / w.BASELINE_REL).read_text())[2])
+
+    def test_the_wide_counts_may_not_rise_against_the_previous_baseline(self):
+        found = w.raised_against({}, {}, "base", {"bare-id": {"A.ID": 2}}, {"bare-id": {"A.ID": 1}})
+        self.assertIn("wide bare-id A.ID is 2 in the baseline but 1", found[0])
 
     def test_the_same_counts_pass(self):
         self.write({"bare-enum-state": {"Session.State": 1}})
@@ -83,7 +126,7 @@ class RatchetTests(unittest.TestCase):
     def test_update_lowers_and_drops_gone_names(self):
         self.write({"bare-id": {"A.ID": 2, "B.ID": 1}, "map-any": {"C.X": 1}})
         self.assertEqual([], w.update(self.root, counter=self.counter({"bare-id": {"A.ID": 1}})))
-        metrics, _ = w.parse_baseline((self.root / w.BASELINE_REL).read_text())
+        metrics = w.parse_baseline((self.root / w.BASELINE_REL).read_text())[0]
         self.assertEqual({"bare-id": {"A.ID": 1}}, metrics)
 
     def test_update_refuses_to_raise_or_add(self):
@@ -127,14 +170,37 @@ class CounterTests(unittest.TestCase):
             (server / "internal/kbwire/a.go").unlink()
             (server / "internal/recordingwire/a.go").write_text(src.format("recordingwire"))
             after = w.run_counter_in(server)
-        self.assertEqual({"bare-enum-state": {"Clip.State": 1}}, before)
+        self.assertEqual({"bare-enum-state": {"Clip.State": 1}}, before["metrics"])
         self.assertEqual(before, after)
+
+    def test_the_go_counter_counts_core_packages_and_modules_wide(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            server = Path(tmp) / "server"
+            for name in ("hub", "assistant", "devices", "extmgr", "kb", "recordingwire", "modules/recording"):
+                (server / "internal" / name).mkdir(parents=True)
+            (server / "internal/archguard/testdata").mkdir(parents=True)
+            (server / "internal/archguard/testdata/contracts.txt").write_text("internal/recordingwire\n")
+            (server / "internal/kb/a.go").write_text("package kb\ntype Clip struct { MachineID string }\n")
+            (server / "internal/modules/recording/a.go").write_text("package recording\ntype Pic struct { ID string }\n")
+            (server / "internal/kb/a_test.go").write_text("package kb\ntype T struct { OwnerID string }\n")
+            before = w.run_counter_in(server)
+            (server / "internal/kb/a.go").write_text("package kb\nimport \"x/recordingwire\"\ntype Clip = recordingwire.Clip\n")
+            (server / "internal/recordingwire/a.go").write_text("package recordingwire\ntype Clip struct { MachineID string }\n")
+            after = w.run_counter_in(server)
+        self.assertEqual({}, before["metrics"])
+        self.assertEqual({"bare-id": {"Clip.MachineID": 1, "Pic.ID": 1}}, before["wide"])
+        self.assertEqual({"bare-id": {"Clip.MachineID": 1}}, after["metrics"])
+        self.assertEqual(before["wide"], after["wide"])  # the alias is not a struct: the lift keeps the wide count
 
 
 class CommittedBaselineTests(unittest.TestCase):
     def test_the_committed_baseline_parses(self):
-        metrics, _ = w.parse_baseline((ROOT / w.BASELINE_REL).read_text(encoding="utf-8"))
+        metrics, _, wide = w.parse_baseline((ROOT / w.BASELINE_REL).read_text(encoding="utf-8"))
         self.assertTrue(metrics["bare-id"])
+        for metric, names in metrics.items():
+            if metric in w.FIELD_METRICS:
+                for name, count in names.items():
+                    self.assertLessEqual(count, wide.get(metric, {}).get(name, 0), metric + " " + name)
 
 
 if __name__ == "__main__":
