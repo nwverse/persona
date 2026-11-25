@@ -1,0 +1,18 @@
+{
+  "manifest_version": 1,
+  "id": "focus-web-shell",
+  "name": "Focus 4-Layer Workspace",
+  "version": "0.1.0",
+  "description": "Reference pluggable Web/Desktop UI shell with a 4-layer sidebar, attention-first Agent stream, background job isolation, and one-click built-in fallback.",
+  "tags": ["web-shell", "workspace", "ui"],
+  "contributes": {
+    "web_shells": [
+      {
+        "id": "focus-4layer",
+        "name": "Focus 4-Layer",
+        "description": "Action center, attention-first session stream (status / project / machine), collapsed extensions, and footer infra.",
+        "dir": "web"
+      }
+    ]
+  }
+}
