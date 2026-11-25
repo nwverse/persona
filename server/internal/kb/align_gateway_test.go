@@ -457,6 +457,13 @@ func TestGatewayAlignerEquivalentBodyAndAttachmentFormats(t *testing.T) {
 			at := alignAt()
 			gw := SourceChat{ID: "f_formats", Name: "Example formats", Kind: "group"}
 			sc := SourceChat{ID: "oc_formats", Name: gw.Name, Kind: "group"}
+			// Keep an existing sync chat so duplicate delivery exercises its durable per-message receipts.
+			// A chat containing only duplicates intentionally stores no empty directory (covered above).
+			if _, err := e.Ingest(ctx, named("larksync"), sc, []SourceMessage{
+				{ID: "om_sync_only", SenderName: "Example Sender", Text: "Only in sync", At: at.Add(-time.Minute)},
+			}); err != nil {
+				t.Fatal(err)
+			}
 			var synced []SourceMessage
 			for i, c := range cases {
 				g := SourceMessage{ID: "gateway_" + c.name, SenderName: "Example Sender", Text: c.gateway, At: at.Add(time.Duration(i) * time.Minute)}
