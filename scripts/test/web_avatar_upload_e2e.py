@@ -165,7 +165,7 @@ def check_no_uploads(browser, base, lang):
     try:
         page = context.new_page()
         page.set_default_timeout(15000)
-        page.goto(base + "/settings?tab=persona&token=mock")
+        page.goto(base + "/settings?tab=avatar&token=mock")
         picker = page.locator('section[data-settings-group="avatar"]').get_by_role("radiogroup", name=w["avatar"])
         expect(picker.get_by_role("radio", name=w["mochi"], exact=True)).to_be_visible()
         expect(picker.get_by_role("radio", name=DEMO, exact=True)).to_be_visible()
@@ -191,7 +191,7 @@ def check_basic_old_hub(browser, base, basic_base, width, theme, lang, image, sh
         page.set_default_timeout(15000)
         errors = []
         page.on("pageerror", lambda err: errors.append(str(err)))
-        page.goto(target + "/settings?tab=persona&token=mock")
+        page.goto(target + "/settings?tab=avatar&token=mock")
         picker = page.locator('section[data-settings-group="avatar"]').get_by_role("radiogroup", name=w["avatar"])
         upload = picker.get_by_role("button", name=w["upload"], exact=True)
         expect(upload).to_be_visible()
@@ -243,7 +243,7 @@ def check_reduced_motion(browser, base, lang, apng):
     try:
         page = context.new_page()
         page.set_default_timeout(15000)
-        page.goto(base + "/settings?tab=persona&token=mock")
+        page.goto(base + "/settings?tab=avatar&token=mock")
         picker = page.locator('section[data-settings-group="avatar"]').get_by_role("radiogroup", name=w["avatar"])
         picker.get_by_role("button", name=w["upload"], exact=True).click()
         dialog = page.get_by_role("dialog", name=w["dialog"])
@@ -268,7 +268,7 @@ def check(browser, base, width, theme, lang, image, apng, shots):
     name = f"Sunset {width} {theme}"
     apng_bytes = open(apng, "rb").read()
     try:
-        page.goto(base + "/settings?tab=persona&token=mock")
+        page.goto(base + "/settings?tab=avatar&token=mock")
         group = page.locator('section[data-settings-group="avatar"]')
         picker = group.get_by_role("radiogroup", name=w["avatar"])
         upload = picker.get_by_role("button", name=w["upload"], exact=True)
@@ -358,13 +358,15 @@ def check(browser, base, width, theme, lang, image, apng, shots):
         expect(states_toggle).to_have_attribute("aria-expanded", "true")
         expect(dialog.locator("[data-state-row]")).to_have_count(5)
         dialog.locator('[data-testid="look-upload-state-file-working"]').set_input_files(apng)
-        # State crop sub-view shows playing animated preview and Status mark switch
-        expect(dialog.locator('[data-testid="look-upload-animated"]')).to_be_visible()
-        mark_switch = dialog.get_by_role("switch")
+        # State crop sub-view replaces the dialog title ("Crop — Working") and shows a playing animated preview
+        crop_dlg = page.get_by_role("dialog")
+        expect(crop_dlg.locator('[data-testid="look-upload-animated"]')).to_be_visible()
+        mark_switch = crop_dlg.get_by_role("switch")
         expect(mark_switch).to_have_attribute("aria-checked", "true")
         mark_switch.click()
         expect(mark_switch).to_have_attribute("aria-checked", "false")
-        dialog.get_by_role("button", name=w["apply_crop"], exact=True).click()
+        crop_dlg.get_by_role("button", name=w["apply_crop"], exact=True).click()
+        expect(dialog).to_be_visible()
         expect(dialog.locator('[data-state-preview="working"]')).to_have_attribute("data-playing", "true")
         if shots:
             page.wait_for_timeout(350)
@@ -430,7 +432,7 @@ def check(browser, base, width, theme, lang, image, apng, shots):
             tc.screenshot(path=os.path.join(shots, f"match-avatar-{width}-{theme}.png"))
 
         # 5. Edit sheet of the demo look (Mikan, u-demo0002) and PATCH with only changed fields
-        page.goto(base + "/settings?tab=persona&token=mock")
+        page.goto(base + "/settings?tab=avatar&token=mock")
         picker = page.locator('section[data-settings-group="avatar"]').get_by_role("radiogroup", name=w["avatar"])
         mikan = picker.get_by_role("radio", name=DEMO_STATES, exact=True)
         expect(mikan).to_be_visible()
@@ -515,6 +517,7 @@ def main():
     parser.add_argument("--channel", default="chrome", help="Playwright browser channel (default: the installed Chrome)")
     parser.add_argument("--executable", help="Explicit browser executable path (overrides --channel)")
     args = parser.parse_args()
+    expect.set_options(timeout=15000)
     if args.shots:
         os.makedirs(args.shots, exist_ok=True)
     base = args.base.rstrip("/")

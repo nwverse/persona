@@ -201,36 +201,59 @@ export function ThemeColorSection({
           ) : (
             <div className="flex flex-col gap-2 rounded-control bg-surface px-2.5 py-2 shadow-hairline">
               <div className="flex flex-wrap items-center gap-2">
-                {ACCENT_PRESETS.map((preset) => {
-                  const hex = PRESET_COLORS[preset].accent.light.toUpperCase();
-                  const selected = customColor.toUpperCase() === hex;
+                {(() => {
+                  const upper = customColor.toUpperCase();
+                  const isPreset = ACCENT_PRESETS.some((p) => PRESET_COLORS[p].accent.light.toUpperCase() === upper);
                   return (
-                    <button
-                      key={preset}
-                      type="button"
-                      disabled={disabled}
-                      aria-label={t("assistant-lookupload.color_preset", { name: t(`ui-look.${preset}`) })}
-                      aria-pressed={selected}
-                      onClick={() => onCustomColorChange(hex)}
-                      className="touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-white shadow-hairline transition-transform active:scale-95 disabled:opacity-50"
-                      style={{ background: hex }}
-                    >
-                      {selected && <Icon name="check" size={13} stroke={2.6} />}
-                    </button>
+                    <>
+                      {ACCENT_PRESETS.map((preset) => {
+                        const hex = PRESET_COLORS[preset].accent.light.toUpperCase();
+                        const selected = upper === hex;
+                        return (
+                          <button
+                            key={preset}
+                            type="button"
+                            disabled={disabled}
+                            aria-label={t("assistant-lookupload.color_preset", { name: t(`ui-look.${preset}`) })}
+                            aria-pressed={selected}
+                            onClick={() => onCustomColorChange(hex)}
+                            className={cx(
+                              "touch-hit flex size-7 shrink-0 items-center justify-center rounded-full text-white shadow-hairline transition-transform active:scale-95 disabled:opacity-50",
+                              selected && "ring-2 ring-ink ring-offset-1 ring-offset-surface",
+                            )}
+                            style={{ background: hex }}
+                          >
+                            {selected && <Icon name="check" size={13} stroke={2.6} />}
+                          </button>
+                        );
+                      })}
+                      <label
+                        className={cx(
+                          "touch-hit relative flex size-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full shadow-hairline transition-transform active:scale-95",
+                          !isPreset ? "text-white ring-2 ring-ink ring-offset-1 ring-offset-surface" : "border border-dashed border-line-strong bg-field text-ink-2 hover:bg-hover",
+                        )}
+                        style={!isPreset ? { background: customColor } : undefined}
+                        title={t("assistant-lookupload.color_pick")}
+                      >
+                        <Icon
+                          name={isPreset ? "plus" : "pencil"}
+                          size={isPreset ? 13 : 12}
+                          stroke={2.3}
+                          className={!isPreset ? "drop-shadow-[0_1px_1px_rgba(0,0,0,0.45)]" : undefined}
+                        />
+                        <input
+                          type="color"
+                          data-testid="look-color-input"
+                          aria-label={t("assistant-lookupload.color_pick")}
+                          disabled={disabled}
+                          value={customColor.toLowerCase()}
+                          onChange={(e) => onCustomColorChange(e.target.value.toUpperCase())}
+                          className="absolute inset-0 size-full cursor-pointer opacity-0"
+                        />
+                      </label>
+                    </>
                   );
-                })}
-                <label className="touch-hit relative flex size-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full shadow-hairline" title={t("assistant-lookupload.color_pick")}>
-                  <span aria-hidden className="size-full rounded-full" style={{ background: customColor }} />
-                  <input
-                    type="color"
-                    data-testid="look-color-input"
-                    aria-label={t("assistant-lookupload.color_pick")}
-                    disabled={disabled}
-                    value={customColor.toLowerCase()}
-                    onChange={(e) => onCustomColorChange(e.target.value.toUpperCase())}
-                    className="absolute inset-0 size-full cursor-pointer opacity-0"
-                  />
-                </label>
+                })()}
                 <span className="ml-auto font-mono text-label text-ink-2 tabular-nums">{customColor}</span>
               </div>
             </div>
