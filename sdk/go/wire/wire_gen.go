@@ -4554,18 +4554,39 @@ type ConnectorKBItem struct {
 	// Why it concerns the owner, as far as the program can tell: mentions (the document mentions the owner),
 	// comment_mentions (a comment or reply on it does), authored (the owner owns it), viewed (the owner opened it
 	// recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
-	Signals      []string  `json:"signals,omitempty"`
-	Importance   string    `json:"importance,omitempty"`
-	Relevance    int       `json:"relevance,omitempty"`
-	Tags         []string  `json:"tags,omitempty"`
-	Locked       bool      `json:"locked,omitempty"`
-	TaggedAt     time.Time `json:"tagged_at,omitzero"`
-	Pinned       string    `json:"pinned,omitempty"`
-	LockedFields []string  `json:"locked_fields,omitempty"`
+	Signals []string `json:"signals,omitempty"`
+	// The content's identity across sources (feishu_doc:<obj_token>): items from two sources with the same key are kept
+	// once, with both in sources.
+	CanonicalKey string `json:"canonical_key,omitempty"`
+	// Other ids other sources store the same content under (a wiki node token).
+	Aliases []string `json:"aliases,omitempty"`
+	// Only grows: an item handed over with a lower revision than the stored one does not replace it.
+	Revision int    `json:"revision,omitempty"`
+	BodyHash string `json:"body_hash,omitempty"`
+	// The item's text (a document as Markdown, a meeting's transcript), bounded by the source.
+	Content string `json:"content,omitempty"`
+	// Every place the content was read from.
+	Sources      []ConnectorKBSourceRef `json:"sources,omitempty"`
+	Importance   string                 `json:"importance,omitempty"`
+	Relevance    int                    `json:"relevance,omitempty"`
+	Tags         []string               `json:"tags,omitempty"`
+	Locked       bool                   `json:"locked,omitempty"`
+	TaggedAt     time.Time              `json:"tagged_at,omitzero"`
+	Pinned       string                 `json:"pinned,omitempty"`
+	LockedFields []string               `json:"locked_fields,omitempty"`
 	// The store's: which extension holds a locked field. A connector's is ignored.
 	Provenance map[string]ConnectorKBProvenance `json:"provenance,omitempty"`
 	// The store's: the links the user removed, by list. A connector's is ignored.
 	Excluded map[string][]string `json:"excluded,omitempty"`
+}
+
+// ConnectorKBSourceRef: one place a knowledge-base item was read from.
+type ConnectorKBSourceRef struct {
+	Channel string    `json:"channel"`
+	Binding string    `json:"binding,omitempty"`
+	Account string    `json:"account,omitempty"`
+	Entry   string    `json:"entry,omitempty"`
+	SeenAt  time.Time `json:"seen_at,omitzero"`
 }
 
 // ConnectorKBProvenance: who holds a locked field of a knowledge-base entity, and from what (kb.schema.json
@@ -8096,6 +8117,7 @@ var newDef = map[string]func() any{
 	"ConnectorHistoryAnchor":        func() any { return new(ConnectorHistoryAnchor) },
 	"ConnectorItems":                func() any { return new(ConnectorItems) },
 	"ConnectorKBItem":               func() any { return new(ConnectorKBItem) },
+	"ConnectorKBSourceRef":          func() any { return new(ConnectorKBSourceRef) },
 	"ConnectorKBProvenance":         func() any { return new(ConnectorKBProvenance) },
 	"ConnectorKBEvidence":           func() any { return new(ConnectorKBEvidence) },
 	"ConnectorDocTitleParams":       func() any { return new(ConnectorDocTitleParams) },

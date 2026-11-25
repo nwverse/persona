@@ -27,7 +27,7 @@ it("draws nothing and keeps the composer when the chunk cannot load", async () =
   expect(reported).toEqual(["composer_files"]);
   expect(failed.loads).toBeGreaterThan(0);
   expect(host.querySelector('[data-testid="input"]')).not.toBeNull();
-  expect(host.querySelector('[data-testid="composer-files"]')).toBeNull();
+  expect(host.firstElementChild?.childElementCount).toBe(1);
   act(() => root.unmount());
   host.remove();
 });
