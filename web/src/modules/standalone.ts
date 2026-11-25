@@ -11,7 +11,7 @@
 import type { ReactElement } from "react";
 import type { ModuleDescriptor } from "../core/module-host";
 import { moduleSwitchedOff } from "../core/module-switch";
-import { rememberedHubServes } from "../core/module-hub-storage";
+import { rememberedHubServes, rememberHubModules } from "../core/module-hub-storage";
 import { MODULES_FEATURE } from "../core/module-flags";
 import { addCatalogs } from "../i18n";
 import { getToken } from "../lib/api";
@@ -64,6 +64,8 @@ export async function hubServesHere(d: ModuleDescriptor, token: string, hello = 
   if (!d.feature) return true;
   const features = await hello(token);
   if (!features) return rememberedHubServes(d.feature);
+  // The standalone page runs before App's host, so its live hello updates the same remembered answer too.
+  rememberHubModules(features);
   return !features.includes(MODULES_FEATURE) || features.includes(d.feature);
 }
 

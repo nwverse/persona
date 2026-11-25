@@ -79,6 +79,7 @@ describe("the modules' pages of their own", () => {
   });
 
   it("keeps a remembered hub-off module absent when no new hello arrives, and allows a live hello to turn it on", async () => {
+    const key = `persona.modules.hub:${location.origin}`;
     rememberHubModules(["modules"], location.origin, "");
     window.history.replaceState(null, "", "/screen/mac#token=t1&embed=1");
     expect(await standalonePage(window.location.href, [counted()], noHello)).toBeNull();
@@ -87,9 +88,14 @@ describe("the modules' pages of their own", () => {
     expect(catalog).not.toHaveBeenCalled();
 
     window.history.replaceState(null, "", "/screen/mac#token=t1");
+    expect(isValidElement(await standalonePage(window.location.href, [counted()], helloWith(["terminal_stream"])))).toBe(true);
+    expect(localStorage.getItem(key)).toBeNull();
+
+    window.history.replaceState(null, "", "/screen/mac#token=t1");
     expect(isValidElement(await standalonePage(window.location.href, [counted()], helloWith(["modules", "module.screen-share"])))).toBe(true);
-    expect(chunk).toHaveBeenCalledTimes(1);
-    expect(catalog).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(key)).toBe(JSON.stringify(["module.screen-share"]));
+    expect(chunk).toHaveBeenCalledTimes(2);
+    expect(catalog).toHaveBeenCalledTimes(2);
   });
 
   it("asks the hub with the page's own token, and takes no hello or an older hub as on", async () => {
