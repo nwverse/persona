@@ -1,7 +1,7 @@
 // What the switch divider's chip opens (#5054, EngineSwitchDivider.tsx): the handoff the new engine was given, under a
 // title saying what it is, selectable; the rest of a handoff the hub cut for the page loads on "View full text". Off the
 // first screen: the divider loads it as it is drawn, so it is in before the chip is first pressed.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ENGINE_SWITCH_KIND, engineSwitchOf, type EngineSwitch } from "../../lib/engine-switch";
 import { bytes } from "../../lib/format";
 import { withoutCutMark } from "../../lib/tool-detail";
@@ -26,10 +26,12 @@ export interface EngineHandoffPanelProps {
   sw: EngineSwitch;
   /** The message's transcript item, for the rest of a handoff the hub cut for the page (`full_size`). */
   item?: Item;
-  /** Session machine id for the default full-text fetcher; optional when controlled. */
+  /** Session machine id for the default full-text fetcher; also scopes controlled full-text state when provided. */
   mid?: string;
-  /** Session id for the default full-text fetcher; optional when controlled. */
+  /** Session id for the default full-text fetcher; also scopes controlled full-text state when provided. */
   sid?: string;
+  /** Optional stable source scope for controlled full-text state when `mid`/`sid` are absent or do not identify the loader source. */
+  scopeKey?: string;
   /** Explicit complete handoff text owned by a controlled panel; skips the default full-text loader. */
   fullText?: string;
   /** Controlled loader for a truncated item (`item.full_size`); replaces the default `fullItem` API call. */
@@ -68,28 +70,71 @@ function DefaultEngineHandoffPanel({ id, sw, item, mid, sid }: Pick<EngineHandof
   return <EngineHandoffPanelView id={id} handoff={handoff} more={full.more} />;
 }
 
-function ControlledEngineHandoffPanel({ id, sw, item, fullText, loadFullItem, more, onLoadError }: EngineHandoffPanelProps) {
+function controlledFullTextKey(
+  cut: Item | undefined,
+  canLoad: boolean,
+  mid: string | undefined,
+  sid: string | undefined,
+  scopeKey: string | undefined,
+): string {
+  if (!cut || !canLoad) return "";
+  return JSON.stringify([
+    scopeKey ?? null,
+    mid ?? null,
+    sid ?? null,
+    cut.id,
+    cut.text ?? null,
+    cut.full_size,
+    cut.source_fingerprint ?? null,
+  ]);
+}
+
+function ControlledEngineHandoffPanel({
+  id,
+  sw,
+  item,
+  mid,
+  sid,
+  scopeKey,
+  fullText,
+  loadFullItem,
+  more,
+  onLoadError,
+}: EngineHandoffPanelProps) {
   const cut = item?.full_size ? item : undefined;
-  const key = cut ? JSON.stringify([cut.id, cut.text, cut.full_size, cut.source_fingerprint]) : "";
-  const current = useRef(key);
-  const pending = useRef<{ key: string; promise: Promise<void> } | null>(null);
-  const [loaded, setLoaded] = useState<{ key: string; text: string } | null>(null);
-  const [status, setStatus] = useState<{ key: string; state: "idle" | "loading" | "failed" }>();
+  const canLoad = Boolean(cut && loadFullItem && fullText === undefined && more === undefined);
+  const key = controlledFullTextKey(cut, canLoad, mid, sid, scopeKey);
+  const [scope, setScope] = useState<{ key: string; epoch: number }>(() => ({ key, epoch: 1 }));
+  const [loaded, setLoaded] = useState<{ epoch: number; text: string } | null>(null);
+  const [status, setStatus] = useState<{ epoch: number; state: "idle" | "loading" | "failed" } | null>(null);
+  if (scope.key !== key) {
+    setScope({ key, epoch: scope.epoch + 1 });
+    setLoaded(null);
+    setStatus(null);
+  }
+  const activeEpoch = useRef(0);
+  const pending = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
+  const onLoadErrorRef = useRef(onLoadError);
 
-  useEffect(() => {
-    current.current = key;
+  useLayoutEffect(() => {
+    onLoadErrorRef.current = onLoadError;
+  }, [onLoadError]);
+
+  useLayoutEffect(() => {
+    activeEpoch.current = scope.epoch;
     return () => {
-      current.current = "";
+      activeEpoch.current = 0;
+      if (pending.current?.epoch === scope.epoch) pending.current = null;
     };
-  }, [key]);
+  }, [scope.epoch]);
 
-  const state = status?.key === key ? status.state : "idle";
-  const resolved = loaded?.key === key ? loaded.text : undefined;
+  const state = status?.epoch === scope.epoch ? status.state : "idle";
+  const resolved = loaded?.epoch === scope.epoch ? loaded.text : undefined;
 
   const load = () => {
-    if (!cut || !loadFullItem || resolved !== undefined || pending.current?.key === key) return;
-    const loadKey = key;
-    setStatus({ key: loadKey, state: "loading" });
+    const loadEpoch = scope.epoch;
+    if (!cut || !loadFullItem || !canLoad || resolved !== undefined || pending.current?.epoch === loadEpoch) return;
+    setStatus({ epoch: loadEpoch, state: "loading" });
     let request: Promise<EngineHandoffFullItem>;
     try {
       request = Promise.resolve(loadFullItem(cut));
@@ -98,22 +143,21 @@ function ControlledEngineHandoffPanel({ id, sw, item, fullText, loadFullItem, mo
     }
     const promise = request
       .then((result) => {
+        if (activeEpoch.current !== loadEpoch) return;
         const extracted = resolveLoadedHandoff(cut, result);
-        if (current.current === loadKey) {
-          setLoaded({ key: loadKey, text: extracted || withoutCutMark(sw.text) });
-          setStatus({ key: loadKey, state: "idle" });
-        }
+        setLoaded({ epoch: loadEpoch, text: extracted || withoutCutMark(sw.text) });
+        setStatus({ epoch: loadEpoch, state: "idle" });
       })
       .catch((error: unknown) => {
-        if (current.current === loadKey) {
-          setStatus({ key: loadKey, state: "failed" });
-          onLoadError?.(error);
+        if (activeEpoch.current === loadEpoch) {
+          setStatus({ epoch: loadEpoch, state: "failed" });
+          onLoadErrorRef.current?.(error);
         }
       })
       .finally(() => {
         if (pending.current?.promise === promise) pending.current = null;
       });
-    pending.current = { key: loadKey, promise };
+    pending.current = { epoch: loadEpoch, promise };
   };
 
   const handoff = fullText !== undefined ? fullText : cut ? (resolved ?? withoutCutMark(sw.text)) : sw.text;

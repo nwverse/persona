@@ -226,6 +226,402 @@ describe("EngineHandoffPanel with controlled props", () => {
     expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
   });
 
+  it("isolates cached and pending full text for the same item across mid/sid session switches", async () => {
+    const sharedItem = makeCutItem({ id: "item-same", source_fingerprint: "fp-same" });
+    const loadS1 = vi.fn(async () => `${HANDOFF}\nSession 1 full handoff.`);
+    const loadS2 = vi.fn(async () => `${HANDOFF}\nSession 2 full handoff.`);
+    const loadM2 = vi.fn(async () => `${HANDOFF}\nMachine 2 full handoff.`);
+
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      mid: "machine-1",
+      sid: "session-1",
+      loadFullItem: loadS1,
+    });
+    act(() => fullButton()!.click());
+    await flush();
+    expect(loadS1).toHaveBeenCalledTimes(1);
+    expect(preText()).toBe(`${HANDOFF}\nSession 1 full handoff.`);
+    expect(fullButton()).toBeNull();
+
+    // Switching sid with an identical item resets cached full text and calls the new loader.
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      mid: "machine-1",
+      sid: "session-2",
+      loadFullItem: loadS2,
+    });
+    expect(preText()).toBe(HANDOFF);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    expect(fullButton()?.disabled).toBe(false);
+
+    act(() => fullButton()!.click());
+    await flush();
+    expect(loadS2).toHaveBeenCalledTimes(1);
+    expect(preText()).toBe(`${HANDOFF}\nSession 2 full handoff.`);
+    expect(fullButton()).toBeNull();
+
+    // Switching mid with an identical item and sid also isolates the cache.
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      mid: "machine-2",
+      sid: "session-2",
+      loadFullItem: loadM2,
+    });
+    expect(preText()).toBe(HANDOFF);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    act(() => fullButton()!.click());
+    await flush();
+    expect(loadM2).toHaveBeenCalledTimes(1);
+    expect(preText()).toBe(`${HANDOFF}\nMachine 2 full handoff.`);
+
+    // In-flight load from one session never short-circuits or leaks into another session with the same item.
+    let finishPendingA!: (value: EngineHandoffFullItem) => void;
+    let finishPendingB!: (value: EngineHandoffFullItem) => void;
+    const pendingLoaderA = vi.fn(() => new Promise<EngineHandoffFullItem>((resolve) => { finishPendingA = resolve; }));
+    const pendingLoaderB = vi.fn(() => new Promise<EngineHandoffFullItem>((resolve) => { finishPendingB = resolve; }));
+
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      mid: "machine-3",
+      sid: "session-a",
+      loadFullItem: pendingLoaderA,
+    });
+    act(() => fullButton()!.click());
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      mid: "machine-3",
+      sid: "session-b",
+      loadFullItem: pendingLoaderB,
+    });
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    act(() => fullButton()!.click());
+    expect(pendingLoaderB).toHaveBeenCalledTimes(1);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    await act(async () => {
+      finishPendingA("Stale session A text");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe(HANDOFF);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    await act(async () => {
+      finishPendingB("Fresh session B text");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Fresh session B text");
+    expect(fullButton()).toBeNull();
+  });
+
+  it("isolates same-item cache via scopeKey without mid/sid while keeping inline loader re-renders stable", async () => {
+    const sharedItem = makeCutItem({ id: "item-scoped", source_fingerprint: "fp-scoped" });
+    const loaderA = vi.fn(async (_item: Item) => `${HANDOFF}\nSource A full handoff.`);
+    const loaderAInline = vi.fn(async (_item: Item) => `${HANDOFF}\nShould not be invoked on re-render.`);
+    const loaderB = vi.fn(async (_item: Item) => `${HANDOFF}\nSource B full handoff.`);
+
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      scopeKey: "source-a",
+      loadFullItem: (it) => loaderA(it),
+    });
+    act(() => fullButton()!.click());
+    await flush();
+    expect(loaderA).toHaveBeenCalledTimes(1);
+    expect(preText()).toBe(`${HANDOFF}\nSource A full handoff.`);
+    expect(fullButton()).toBeNull();
+
+    // A fresh inline closure with the same scopeKey and item does not reset loaded text.
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      scopeKey: "source-a",
+      loadFullItem: (it) => loaderAInline(it),
+    });
+    expect(preText()).toBe(`${HANDOFF}\nSource A full handoff.`);
+    expect(fullButton()).toBeNull();
+    expect(loaderAInline).not.toHaveBeenCalled();
+
+    // Switching scopeKey invalidates the cached full text and invokes the new loader.
+    await mount({
+      sw: makeSwitch(`${HANDOFF}${CUT_MARK}`),
+      item: sharedItem,
+      scopeKey: "source-b",
+      loadFullItem: (it) => loaderB(it),
+    });
+    expect(preText()).toBe(HANDOFF);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    expect(fullButton()?.disabled).toBe(false);
+
+    act(() => fullButton()!.click());
+    await flush();
+    expect(loaderB).toHaveBeenCalledTimes(1);
+    expect(preText()).toBe(`${HANDOFF}\nSource B full handoff.`);
+    expect(fullButton()).toBeNull();
+  });
+
+  it("resets loading when a request resolves while switched away so returning to the original key can retry", async () => {
+    const resolvers: Array<(value: EngineHandoffFullItem) => void> = [];
+    const loadFullItem = vi.fn(
+      () => new Promise<EngineHandoffFullItem>((resolve) => { resolvers.push(resolve); }),
+    );
+    const itemA = makeCutItem({ id: "item-a" });
+    const itemB = makeCutItem({ id: "item-b" });
+
+    await mount({
+      sw: makeSwitch(`Preview A${CUT_MARK}`),
+      item: itemA,
+      loadFullItem,
+    });
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(1);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+    expect(fullButton()?.disabled).toBe(true);
+
+    await mount({
+      sw: makeSwitch(`Preview B${CUT_MARK}`),
+      item: itemB,
+      loadFullItem,
+    });
+    expect(preText()).toBe("Preview B");
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+
+    await act(async () => {
+      resolvers[0]("Stale full A while viewing B");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Preview B");
+
+    // Returning to A must not be stuck in loading and must allow a fresh load.
+    await mount({
+      sw: makeSwitch(`Preview A${CUT_MARK}`),
+      item: itemA,
+      loadFullItem,
+    });
+    expect(preText()).toBe("Preview A");
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    expect(fullButton()?.disabled).toBe(false);
+    expect(fullButton()?.getAttribute("aria-busy")).toBeNull();
+
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(2);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    await act(async () => {
+      resolvers[1]("Retried full A");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Retried full A");
+    expect(fullButton()).toBeNull();
+  });
+
+  it("resets loading when a request rejects while switched away without leaking errors and stays retryable", async () => {
+    const deferred: Array<{ resolve: (v: EngineHandoffFullItem) => void; reject: (e: unknown) => void }> = [];
+    const loadFullItem = vi.fn(
+      () =>
+        new Promise<EngineHandoffFullItem>((resolve, reject) => {
+          deferred.push({ resolve, reject });
+        }),
+    );
+    const onLoadError = vi.fn();
+    const itemA = makeCutItem({ id: "item-a-rej" });
+    const itemB = makeCutItem({ id: "item-b-rej" });
+
+    await mount({
+      sw: makeSwitch(`Preview A${CUT_MARK}`),
+      item: itemA,
+      loadFullItem,
+      onLoadError,
+    });
+    act(() => fullButton()!.click());
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    await mount({
+      sw: makeSwitch(`Preview B${CUT_MARK}`),
+      item: itemB,
+      loadFullItem,
+      onLoadError,
+    });
+
+    await act(async () => {
+      deferred[0].reject(new Error("abandoned request"));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(onLoadError).not.toHaveBeenCalled();
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+
+    await mount({
+      sw: makeSwitch(`Preview A${CUT_MARK}`),
+      item: itemA,
+      loadFullItem,
+      onLoadError,
+    });
+    expect(preText()).toBe("Preview A");
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    expect(fullButton()?.disabled).toBe(false);
+    expect(onLoadError).not.toHaveBeenCalled();
+
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      deferred[1].resolve("Recovered full A");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Recovered full A");
+    expect(fullButton()).toBeNull();
+  });
+
+  it("fences ABA switches so late old resolve/reject cannot overwrite state or clear the new pending request", async () => {
+    type Deferred = { resolve: (v: EngineHandoffFullItem) => void; reject: (e: unknown) => void };
+    const calls: Deferred[] = [];
+    const loadFullItem = vi.fn(
+      () =>
+        new Promise<EngineHandoffFullItem>((resolve, reject) => {
+          calls.push({ resolve, reject });
+        }),
+    );
+    const onLoadError = vi.fn();
+    const sharedItem = makeCutItem({ id: "item-aba" });
+
+    // 1) A -> B -> A while old request is still pending; retry on A, then old request resolves late.
+    await mount({ sw: makeSwitch(`Preview A${CUT_MARK}`), item: sharedItem, mid: "m1", sid: "s1", loadFullItem, onLoadError });
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(1);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    await mount({ sw: makeSwitch(`Preview B${CUT_MARK}`), item: sharedItem, mid: "m1", sid: "s2", loadFullItem, onLoadError });
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+
+    await mount({ sw: makeSwitch(`Preview A${CUT_MARK}`), item: sharedItem, mid: "m1", sid: "s1", loadFullItem, onLoadError });
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    expect(fullButton()?.disabled).toBe(false);
+
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(2);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    // Late resolution of old request #1 must not write stale text or clear request #2's pending guard.
+    await act(async () => {
+      calls[0].resolve("Stale ABA resolve");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Preview A");
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+    expect(fullButton()?.disabled).toBe(true);
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      calls[1].resolve("Fresh ABA resolve");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Fresh ABA resolve");
+    expect(fullButton()).toBeNull();
+
+    // 2) A -> B -> A where old request rejects late while a fresh retry is in flight.
+    await mount({ sw: makeSwitch(`Preview A2${CUT_MARK}`), item: sharedItem, scopeKey: "aba-a2", loadFullItem, onLoadError });
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(3);
+
+    await mount({ sw: makeSwitch(`Preview B2${CUT_MARK}`), item: sharedItem, scopeKey: "aba-b2", loadFullItem, onLoadError });
+    await mount({ sw: makeSwitch(`Preview A2${CUT_MARK}`), item: sharedItem, scopeKey: "aba-a2", loadFullItem, onLoadError });
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(4);
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+
+    await act(async () => {
+      calls[2].reject(new Error("stale aba reject"));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(onLoadError).not.toHaveBeenCalled();
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("loading");
+    expect(fullButton()?.disabled).toBe(true);
+
+    await act(async () => {
+      calls[3].resolve("Fresh ABA after stale reject");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Fresh ABA after stale reject");
+    expect(fullButton()).toBeNull();
+
+    // 3) A -> B -> A where old request resolves before user clicks retry: stays idle and does not write stale text.
+    await mount({ sw: makeSwitch(`Preview A3${CUT_MARK}`), item: sharedItem, scopeKey: "aba-a3", loadFullItem, onLoadError });
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(5);
+
+    await mount({ sw: makeSwitch(`Preview B3${CUT_MARK}`), item: sharedItem, scopeKey: "aba-b3", loadFullItem, onLoadError });
+    await mount({ sw: makeSwitch(`Preview A3${CUT_MARK}`), item: sharedItem, scopeKey: "aba-a3", loadFullItem, onLoadError });
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+
+    await act(async () => {
+      calls[4].resolve("Stale before retry");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Preview A3");
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    expect(fullButton()?.disabled).toBe(false);
+
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(6);
+    await act(async () => {
+      calls[5].resolve("Explicit retry A3");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Explicit retry A3");
+    expect(fullButton()).toBeNull();
+
+    // 4) A -> B -> A where old request rejects before user clicks retry: stays idle without reporting an error.
+    await mount({ sw: makeSwitch(`Preview A4${CUT_MARK}`), item: sharedItem, scopeKey: "aba-a4", loadFullItem, onLoadError });
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(7);
+
+    await mount({ sw: makeSwitch(`Preview B4${CUT_MARK}`), item: sharedItem, scopeKey: "aba-b4", loadFullItem, onLoadError });
+    await mount({ sw: makeSwitch(`Preview A4${CUT_MARK}`), item: sharedItem, scopeKey: "aba-a4", loadFullItem, onLoadError });
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+
+    await act(async () => {
+      calls[6].reject(new Error("stale reject before retry"));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(onLoadError).not.toHaveBeenCalled();
+    expect(preText()).toBe("Preview A4");
+    expect(fullButton()?.getAttribute("data-full-text")).toBe("idle");
+    expect(fullButton()?.disabled).toBe(false);
+
+    act(() => fullButton()!.click());
+    expect(loadFullItem).toHaveBeenCalledTimes(8);
+    await act(async () => {
+      calls[7].resolve("Explicit retry A4");
+      await Promise.resolve();
+    });
+    await flush();
+    expect(preText()).toBe("Explicit retry A4");
+    expect(fullButton()).toBeNull();
+  });
+
   it("renders non-truncated handoff verbatim without calling loadFullItem or useFullText", async () => {
     const loadFullItem = vi.fn();
     await mount({ sw: makeSwitch(HANDOFF), loadFullItem });
