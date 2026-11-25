@@ -25,6 +25,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/memtrim"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -149,8 +150,13 @@ func NewBusHub(o BusOptions) *BusHub {
 		// The manager's extensions stop waiting for a card when their caller does (extmgr's interactions.wait). A switch
 		// to Persona Link that gave up on the hub's begin (its time ran out) has the hub give it up too, so it changes
 		// nothing the manager no longer waits for (internal/devices link_switch.go).
-		Cancels: map[string]bool{assistantwire.MethodApp: true, devicewire.MethodLinkSwitchBegin: true},
-		Hub:     o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
+		// Retirement requests also end with their caller, so renewed activity can cancel the guarded stop.
+		Cancels: map[string]bool{
+			assistantwire.MethodApp:          true,
+			assistantwire.MethodDeviceRetire: true,
+			devicewire.MethodLinkSwitchBegin: true,
+		},
+		Hub: o.Hub, Token: o.Token, HTTPClient: o.HTTPClient, Logf: o.Logf, Backoff: o.Backoff,
 		StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.StopWhenRejected,
 		// The hub's own manager (its child, or the built-in one's service dialing the hub's local address) is on the
 		// hub's machine: compressing its messages saves no network, and costs both ends the compressor's state.
@@ -465,7 +471,11 @@ func (b *BusHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage,
 		return out, err
 	}
 	var out json.RawMessage
-	err := b.client.Call(ctx, assistantwire.MethodDevice, p, &out)
+	method := assistantwire.MethodDevice
+	if p.Method == nodeproto.StopIfIdle {
+		method = assistantwire.MethodDeviceRetire
+	}
+	err := b.client.Call(ctx, method, p, &out)
 	return out, busError(err)
 }
 

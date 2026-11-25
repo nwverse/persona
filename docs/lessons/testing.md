@@ -532,6 +532,16 @@ The `scripts/ci/` lanes are written for the hosted runners; on a Mac developer m
 - Accepting a task review starts `goRecordTaskOutcome`, which asynchronously writes a `DecisionOutcome` receipt. Call `s.tasks.outcomeRuns.Wait()` before inspecting the task's decisions, then keep rejecting every non-outcome row; neither deleting the assertion nor treating that receipt as an owner click tests supersession. Cancelling a review does not start this writer.
 - `DB.Feed` returns a bounded, oldest-first conversation page. In a shared Postgres shard, older rows can fill all 500 entries and push the review written by the current test out of that page. For a to-do's review audit, query `FeedByRef` with `feedReview` and retain the conversation and `superseded_reason` assertions; increasing the page size only moves the intermittent failure.
 
+## Retirement tests must pass the first-sight floor (2026-11-18, #6819, #10311)
+
+When merging the finished-task pass's resume history with owner-activity protection, keep one `doneSeen` across passes.
+Tests that age a task to exercise the stop RPC must also seed that completion's earlier running observation; otherwise
+the first-sight floor skips the RPC and can hide a broken activity or post-stop guard. Keep the first-sight and resume
+regressions too, rather than shortening the production inactivity window to make the older tests reach their barrier.
+
+When an upstream result accessor is renamed, keep refused-review assertions on the same stored result
+(`resultOfTodo(id)`). Dropping the no-result assertion would hide review effects published before a refused commit.
+
 ## "Not listed" holds for a transcript the list never shows (2026-11-12, #5054)
 
 The node's list leaves out offline Claude transcripts under 2 KB (a hook probe's, `scanOffline`), and the fixtures of
@@ -719,6 +729,11 @@ first, and the old copy's state goes its own way.
   Test scripts also verify listening ports with `lsof` after starting mock and fail immediately if absent.
 
 ## New UI tests
+
+- An intentional UI removal also changes dependent integration assertions. After the meeting header became hidden,
+  the photo test still expected a `joined` row and stopped before checking image credentials and deletion. Compare an
+  untouched upstream snapshot, keep the intended rendering and all photo checks, and correct the stale expected rows;
+  do not restore removed UI or loosen timeouts to make the integration test pass.
 
 - File-preview mock has two entry points (2026-11-03, #796): `MOCK_TREE` for the tree, `FILES` for full text/pagination. Update both for new Markdown fixtures, or names/sizes show new content but opening still loads the old long text and tests cannot find new links.
 - `socket.create_connection(timeout=3)` leaves the timeout on the returned socket too. Forwarding mocks must call `settimeout(None)` after connection, letting WebSocket disconnection end the stream. If the simulator pauses over 3 seconds before WebView creation / HTTP requests, the old mock closes TCP while waiting for responses, leaving a correctly opened drawer white. Do not loosen page-load assertions because of it.

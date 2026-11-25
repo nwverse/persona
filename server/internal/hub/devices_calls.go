@@ -9,6 +9,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -16,6 +17,9 @@ import (
 
 // deviceBusMethod keeps cancellation scoped to the long file operations whose node side supports it.
 func deviceBusMethod(method string) string {
+	if method == nodeproto.StopIfIdle {
+		return devicewire.MethodRetireCall
+	}
 	if method == "file.copy" || method == "file.zip" {
 		return devicewire.MethodFileCall
 	}
