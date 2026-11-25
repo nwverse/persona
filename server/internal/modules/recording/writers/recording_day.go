@@ -68,31 +68,11 @@ type SegmentsGapError = recordingwire.SegmentsGapError
 // DayFullError is declared in recordingwire.
 type DayFullError = recordingwire.DayFullError
 
-// RecordingAppend is POST /api/v1/recordings/{id}/segments's body. A nil field is absent: unchanged.
-type RecordingAppend struct {
-	Base      int64                `json:"base"`
-	Revision  int64                `json:"revision"`
-	From      *int                 `json:"from"`
-	Segments  []RecordingSegment   `json:"segments"`
-	Duration  *float64             `json:"duration,omitempty"`
-	EndedAt   *time.Time           `json:"ended_at,omitempty"`
-	Title     *string              `json:"title,omitempty"`
-	Bookmarks *[]RecordingBookmark `json:"bookmarks,omitempty"`
-	Coverage  *RecordingCoverage   `json:"coverage,omitempty"`
-	Complete  *bool                `json:"complete,omitempty"`
-}
-
-// RecordingAppended is what AppendRecording did: Status RecordingStored or RecordingExpired, Revision and Next the
-// stored ones after it. Complete: the recording is complete after it; Wake: the recap lane has work it did not have
-// before (the recording completed, its coverage passed an hour of its clock, or a late sentence fell in a past hour).
-type RecordingAppended struct {
-	ID       string
-	Revision int64
-	Next     int
-	Status   string
-	Complete bool
-	Wake     bool
-}
+// RecordingAppend and RecordingAppended are declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type (
+	RecordingAppend   = recordingwire.RecordingAppend
+	RecordingAppended = recordingwire.RecordingAppended
+)
 
 // cleanUploadDay checks a day upload's own fields: day a real YYYY-MM-DD, tz an IANA zone (the owner's when empty), part
 // 1–99 (1 when absent), the coverage mended. The calendar hint is dropped: a day recording is never a meeting.
@@ -248,9 +228,9 @@ func dayGuard(r *Recording) {
 	r.MatchedRev, r.SummarizedRev = r.Revision, r.Revision
 }
 
-// check refuses what is wrong with an append whatever the recording (400): no base, a revision not above it, a
+// checkAppend refuses what is wrong with an append whatever the recording (400): no base, a revision not above it, a
 // missing or negative from, too many segments, a time that is not a number. The coverage is mended.
-func (a *RecordingAppend) check() error {
+func checkAppend(a *RecordingAppend) error {
 	switch {
 	case a.Base <= 0:
 		return badRecording("base is required")
@@ -309,7 +289,7 @@ func (e *engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	if st.ReadOnly() {
 		return out, ErrReadOnly
 	}
-	if err := a.check(); err != nil {
+	if err := checkAppend(&a); err != nil {
 		return out, err
 	}
 	now := e.now()

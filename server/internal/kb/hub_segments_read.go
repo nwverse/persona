@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
 
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
