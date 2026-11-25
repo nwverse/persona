@@ -516,6 +516,9 @@ func isSelfAuthoredInboxItem(it *InboxItem, owner string, ownEmails []string) bo
 	if matchesOwn(it.Sender) {
 		return true
 	}
+	if it.Lark != nil && matchesOwn(it.Lark.SenderID) {
+		return true
+	}
 	if it.Mail != nil {
 		if matchesOwn(it.Mail.From.Email) || matchesOwn(it.Mail.From.Name) {
 			return true
@@ -883,6 +886,14 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	// Re-check that the to-do is still open right before delivery.
 	curTodo, ok := s.todoNow(m.todo.ID)
 	if !ok || !taskOpen(curTodo) {
+		_ = s.finishTodoForward(ctx, inboxTodoForwardRecord{InboxItemID: snap.ID, TodoID: m.todo.ID}, false)
+		return
+	}
+	won, err := s.claimLegacyExternalInbox(ctx, snap, curTodo.ID)
+	if !won || err != nil {
+		if err != nil {
+			s.logf("inbox: check external receipt before legacy forwarding: %v", err)
+		}
 		_ = s.finishTodoForward(ctx, inboxTodoForwardRecord{InboxItemID: snap.ID, TodoID: m.todo.ID}, false)
 		return
 	}
