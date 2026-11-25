@@ -759,6 +759,10 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		thing.Tier = connector.Tier(eventRuleTier(thing)) // the rule tier, not a decision: set below
 		fillConnectorItem(it, thing)
 	}
+	// The event id belongs to the grouping. The original thread names its source.
+	sourceThing := thing
+	sourceThing.Thread = thread
+	b.setConnectorExternalPath(it, sourceThing)
 	// The hub assigns the messages, so it keeps the count (the connector's meta may hold only the newest ones): the
 	// event had count, it takes these. Its start is set once, when it is made.
 	it.Count, it.StartedAt = count+len(e.messages), started
