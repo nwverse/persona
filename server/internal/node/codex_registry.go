@@ -634,7 +634,7 @@ type codexListPass struct {
 	unavailableHomes map[string]bool      // Codex homes whose index or rollout cache mutex was unavailable on this pass
 	real             map[string]string    // directory → realPath
 	stats            map[string]codexStat // rollout path → os.Stat
-	desktop          map[string]bool      // Codex home → codexDesktopAvailable
+	desktop          map[string]bool      // Codex home → codexDesktopBusAvailable
 	own              string               // assistantProject, once ownSet
 	ownSet           bool
 	// runtimes is the runtime session each Codex thread is listed as (thread → session, runtimecodex.go): the list
@@ -706,16 +706,23 @@ func (p *codexListPass) stat(path string) (os.FileInfo, error) {
 	return st.info, st.err
 }
 
-func (p *codexListPass) desktopAvailable(home string) bool {
+func (p *codexListPass) desktopBusAvailable(home string) bool {
 	if p == nil {
-		return codexDesktopAvailable(home)
+		return codexDesktopBusAvailable(home)
 	}
 	up, ok := p.desktop[home]
 	if !ok {
-		up = codexDesktopAvailable(home)
+		up = codexDesktopBusAvailable(home)
 		p.desktop[home] = up
 	}
 	return up
+}
+
+func (p *codexListPass) desktopAvailable(home string) bool {
+	if p.desktopBusAvailable(home) {
+		return true
+	}
+	return codexDesktopQueueCLI(home) != ""
 }
 
 // appState is loadCodexAppState with each home's state looked up once per pass.
@@ -975,13 +982,27 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		} else if codexDesktopChatIn(src, pass) {
 			// Retain App identity and grouping when an update removes its bus, including database-only chats.
 			s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
-			s.Capabilities.Send = pass.desktopAvailable(src.home)
+			busUp := pass.desktopBusAvailable(src.home)
+			s.Capabilities.Send = busUp || codexDesktopQueueCLI(src.home) != ""
 			elsewhere, desktopViewOnly = s.Capabilities.Send, !s.Capabilities.Send
 			s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopUnavailableKey)
 			n.placeCodexDesktopIn(&s, src, src.thread, false, pass)
+			if !busUp {
+				// Interrupting a running turn requires the legacy follower bus; native queue delivery only enqueues messages.
+				s.Capabilities.Interrupt = false
+			}
 			if s.Capabilities.Send {
 				s.ReadOnlyReason = ""
-				n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+				if busUp {
+					n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+				} else if s.Model == "" {
+					if app := codexAppThreads(src.home)[src.thread]; app.Model != "" {
+						s.Model = app.Model
+						if s.Effort == "" {
+							s.Effort = app.Effort
+						}
+					}
+				}
 			}
 		} else if o := codexThreadOrigin(src); o.desktop { // a subagent whose rollout is gone too: its database row (#8191)
 			if o.parent != "" {
