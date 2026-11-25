@@ -70,6 +70,10 @@ class PhoneListRead {
 export class ClientModel {
   readonly ssh: SshTunnel = new SshTunnel();
   private static pairingEpochs: Map<string, number> = new Map();
+  private static forgetHooks: Set<(hubId: string, context: common.Context) => Promise<void>> = new Set();
+  static registerForgetHook(hook: (hubId: string, context: common.Context) => Promise<void>): void {
+    ClientModel.forgetHooks.add(hook);
+  }
   pairingRevision(): number { return ClientModel.pairingEpochs.get(this.profile.id) || 0; }
   private retirePairing(id: string): void { ClientModel.pairingEpochs.set(id, (ClientModel.pairingEpochs.get(id) || 0) + 1); }
   retireHubConnections(id: string): void {
@@ -822,6 +826,11 @@ export class ClientModel {
     if (this.context) { try { await ChatAttachments.forgetHub(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     if (this.context) { try { clearImagePreviews(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     try { await nativeNotifications.clear(id); } catch (_) { cleanupFailed = true; }
+    if (this.context) {
+      for (const hook of ClientModel.forgetHooks) {
+        try { await hook(id, this.context); } catch (_) {}
+      }
+    }
     try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id); }); } catch (_) { cleanupFailed = true; }
     this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.publishDirectory();
     try { await this.saveProfiles(); } catch (_) { cleanupFailed = true; }

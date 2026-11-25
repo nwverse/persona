@@ -4,11 +4,13 @@ import { phonePasswordLogin } from '../platform/PhonePasswordLogin';
 import { isPairingLink } from '../core/WireCompatibility';
 import { parseXiaoYiWant } from '../core/XiaoYiRoutes';
 import { deviceFeatures } from '../models/DeviceFeatures';
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { XiaoYiRuntimeContext } from '../xiaoyi/XiaoYiRuntimeContext';
+import { IntentSuggestionsService } from '../xiaoyi/IntentSuggestionsService';
+import { AbilityConstant, ConfigurationConstant, UIAbility, Want, common } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { Strings } from '../design/Strings';
-import { client } from '../models/ClientModel';
+import { ClientModel, client } from '../models/ClientModel';
 import { nativeNotifications, NOTIFICATION_ACTION } from '../platform/NativeNotifications';
 import { Wire } from '../models/Wire';
 import { KnowledgeRecording } from '../models/KnowledgeRecording';
@@ -16,12 +18,18 @@ import { deviceLook } from '../models/DeviceLook';
 import { NativeDictation } from '../platform/NativeDictation';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 
+function clearXiaoYiSuggestionsOnForget(_hubId: string, context: common.Context): Promise<void> {
+  return IntentSuggestionsService.clearAll(context);
+}
+
 export default class EntryAbility extends UIAbility {
   private lifecycle: number = 0;
   private visible: boolean = true;
   private pendingNotification: Record<string, Object> | undefined;
   private pendingXiaoYiRoute: string = '';
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    XiaoYiRuntimeContext.bind(this.context);
+    ClientModel.registerForgetHook(clearXiaoYiSuggestionsOnForget);
     phoneTextSize.attach(this.context);
     nativeEnvironment.update(this.context.config);
     Strings.bind(this.context.resourceManager);

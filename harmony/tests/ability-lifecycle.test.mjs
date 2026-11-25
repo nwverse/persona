@@ -18,9 +18,11 @@ registerHooks({
   if(url.startsWith('ability-test:'))return {format:'module',shortCircuit:true,source:`const s=globalThis.__personaAbilityTest;
    export const phoneTextSize={attach(){},refresh(scale){s.fontScale=scale;},detach(){}};
    export const phonePasswordLogin={receive(uri){if(!s.expectPasswordReturn || uri!==s.expectPasswordReturn)return false;s.receivedPasswordReturn=uri;return true;}};
-   export const AbilityConstant={},ConfigurationConstant={ColorMode:{COLOR_MODE_LIGHT:1,COLOR_MODE_DARK:2,COLOR_MODE_NOT_SET:0}},Want={};
+   export const AbilityConstant={},ConfigurationConstant={ColorMode:{COLOR_MODE_LIGHT:1,COLOR_MODE_DARK:2,COLOR_MODE_NOT_SET:0}},Want={},common={};
    export class UIAbility {context={config:{fontSizeScale:1},resourceManager:{},getApplicationContext:()=>({setColorMode(){}})}}
    export const window={};export const Strings={bind(){},refresh(){}};
+   export const XiaoYiRuntimeContext={bind(){s.contextBound=(s.contextBound||0)+1;}};
+   export const IntentSuggestionsService={async clearAll(){s.suggestionsCleared=(s.suggestionsCleared||0)+1;}};
    export const nativeMeetingServices={async initialize(){s.meetingRefreshes=(s.meetingRefreshes||0)+1},setRecordingEvent(){},
      receive(parameters){if(parameters.personaMeetingType==='persona.meeting.reminder' && parameters.occurrence)s.meetingOpens=(s.meetingOpens||0)+1}};
    export const NOTIFICATION_ACTION='persona.notification.OPEN';export const nativeNotifications={refresh:()=>s.query};
@@ -29,6 +31,7 @@ registerHooks({
    export const KnowledgeRecording={async backgroundAll(){s.recordingStops++;}};
    export const deviceLook={async initialize(){},async bind(owner){if(owner===undefined)s.lookUnbinds++;}};
    export const nativeEnvironment={update(){},bindWindow(){},unbindWindow(){}};
+   export const ClientModel={registerForgetHook(fn){s.forgetHook=fn;}};
    export const client={get ready(){return s.ready;},set ready(value){s.ready=value;},appearance:0,get language(){return s.language;},announceLanguage(){s.localeAnnouncements++;},error:'',initialize:()=>s.init,activateForeground(){s.activated++;},async foregrounded(){s.foregrounded++;},async background(){s.background++;},async shutdown(){s.background++;},async openNotification(target){s.notifications.push(target);},openXiaoYiRoute(route){s.xiaoYiRoutes.push(route);}};
   `};
   if(url.endsWith('.ets')||url.endsWith('.ts'))return {format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};
