@@ -258,7 +258,8 @@ func keyOf(sess *proto.Session) agentKey { return agentKey{sess.MachineID, sess.
 // liveCounted says whether an agent is on the Live Activity at all, by fleetcount's rule (Agent.Counts): muted agents
 // and subtasks are not (Codex sub-agents, and a runtime's session another one started, which its parent's row stands
 // for until it needs the user). A session fleetcount refuses counts nowhere. A side session folded under its parent is
-// not either: buildFleetIn counts it under that row first (foldSidesIn, #7944).
+// not either: buildFleetIn counts it under that row first (foldSidesIn, #7944). foldSidesIn asks it of the rows it
+// folds; a round's own rows read it from what the round built (fleetRound.onLive).
 func liveCounted(a fleetInput) bool {
 	agent, failed := kitoutcome.Unpack(fleetcountadapt.Agent(a.Session, a.Muted, 0))
 	return failed == nil && agent.Counts(fleetcount.SurfaceLiveActivity())
@@ -273,19 +274,25 @@ type fleetRound struct {
 	live, link fleetcountadapt.Fleet
 	waiting    []*proto.Session
 	cards      []proto.Interaction
+	onLive     []bool // by place in the last agents filled: fleetcount counts the agent on the Live Activity at all
 	logf       func(string, ...any)
 	refused    int
 }
 
-// fill puts a round's agents and cards into f; told says which cards the owner was told of (nil: none).
+// fill puts a round's agents and cards into f; told says which cards the owner was told of (nil: none). onLive
+// records, for each agent, whether fleetcount counts it on the Live Activity at all (Agent.Counts), which the working
+// and finished rows follow too.
 func (r *fleetRound) fill(f *fleetcountadapt.Fleet, agents []fleetInput, ixs []proto.Interaction, told map[string]bool) {
 	f.Reset()
+	r.onLive = r.onLive[:0]
 	refused := 0
 	var first fail.Fail
 	var which string
 	for i := range agents {
 		a := &agents[i]
-		if _, failed := kitoutcome.Unpack(f.Agent(a.Machine, a.Session, a.Muted)); failed != nil {
+		agent, failed := kitoutcome.Unpack(f.Agent(a.Machine, a.Session, a.Muted))
+		r.onLive = append(r.onLive, failed == nil && agent.Counts(fleetcount.SurfaceLiveActivity()))
+		if failed != nil {
 			if refused++; first == nil {
 				first, which = failed, "session "+a.Session.MachineID+"/"+a.Session.SessionID
 			}
@@ -442,7 +449,7 @@ func (r *fleetRound) buildFleet(l i18n.Lang, agents []fleetInput, ixs []proto.In
 	for i := range agents {
 		a := &agents[i]
 		sess := a.Session
-		if !liveCounted(*a) || len(asked) > 0 && asked[keyOf(sess)] {
+		if !r.onLive[i] || len(asked) > 0 && asked[keyOf(sess)] {
 			continue
 		}
 		switch sess.State {
