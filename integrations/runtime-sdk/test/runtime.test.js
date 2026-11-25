@@ -1414,17 +1414,18 @@ test('send_and_interrupt_say_queued_and_settled_as_the_driver_does', async (t) =
   assert.deepEqual(await n.peer.call('session.interrupt', { session_id: 's1' }), { ok: true, settled: true })
 })
 
-test('supervision_policy is advertised only when both assistant and supervisionPolicy are enabled (#11173)', async (t) => {
+test('supervision_policy and assistant_environment are explicit assistant-only capabilities', async (t) => {
   const full = await startFakeNode(t)
   const capable = createRuntime(
     minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
-    { runtime: 'agy-like', socketPath: full.path, retryMs: 20, assistant: true, supervisionPolicy: true },
+    { runtime: 'agy-like', socketPath: full.path, retryMs: 20, assistant: true, supervisionPolicy: true, assistantEnvironment: true },
   )
   t.after(() => capable.stop())
   capable.start()
   await full.ready
   assert.equal(full.hello.caps.assistant, true)
   assert.equal(full.hello.caps.supervision_policy, true)
+  assert.equal(full.hello.caps.assistant_environment, true)
 
   const legacy = await startFakeNode(t)
   const plainAsst = createRuntime(
@@ -1436,26 +1437,76 @@ test('supervision_policy is advertised only when both assistant and supervisionP
   await legacy.ready
   assert.equal(legacy.hello.caps.assistant, true)
   assert.equal(legacy.hello.caps.supervision_policy, undefined, 'absent unless explicitly opted in')
+  assert.equal(legacy.hello.caps.assistant_environment, undefined, 'environment is absent unless explicitly opted in')
 
   const noAsst = await startFakeNode(t)
   const nonAsst = createRuntime(
     minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }), send: async () => {} }),
-    { runtime: 'plain', socketPath: noAsst.path, retryMs: 20, assistant: false, supervisionPolicy: true },
+    { runtime: 'plain', socketPath: noAsst.path, retryMs: 20, assistant: false, supervisionPolicy: true, assistantEnvironment: true },
   )
   t.after(() => nonAsst.stop())
   nonAsst.start()
   await noAsst.ready
   assert.equal(noAsst.hello.caps.assistant, false)
   assert.equal(noAsst.hello.caps.supervision_policy, undefined, 'never advertised without assistant')
+  assert.equal(noAsst.hello.caps.assistant_environment, undefined)
 
   const noSend = await startFakeNode(t)
   const incomplete = createRuntime(
     minimal({ start: async () => ({ session: { session_id: 's1', status: 'idle' } }) }),
-    { runtime: 'half-asst', socketPath: noSend.path, retryMs: 20, assistant: true, supervisionPolicy: true },
+    { runtime: 'half-asst', socketPath: noSend.path, retryMs: 20, assistant: true, supervisionPolicy: true, assistantEnvironment: true },
   )
   t.after(() => incomplete.stop())
   incomplete.start()
   await noSend.ready
   assert.equal(noSend.hello.caps.assistant, false)
   assert.equal(noSend.hello.caps.supervision_policy, undefined, 'never advertised when start/send are incomplete')
+  assert.equal(noSend.hello.caps.assistant_environment, undefined)
+})
+
+test('hello carries codex_claims only when codexClaims names an app-server instance (#12571)', async (t) => {
+  const plain = await startFakeNode(t)
+  const unclaimed = createRuntime(minimal(), { runtime: 'plain', socketPath: plain.path, retryMs: 20 })
+  t.after(() => unclaimed.stop())
+  unclaimed.start()
+  await plain.ready
+  assert.equal(plain.hello.codex_claims, undefined, 'absent without the option')
+
+  const n = await startFakeNode(t, { features: ['prefer_running', 'codex_claims'] })
+  let asked = 0
+  const rt = createRuntime(minimal(), {
+    runtime: 'codexd',
+    socketPath: n.path,
+    retryMs: 20,
+    codexClaims: () => {
+      asked++
+      return [{ home: '/srv/codex', endpoint: 'unix:///srv/codex/app.sock' }, { endpoint: 'ws://127.0.0.1:4500', note: 'x' }, { home: 7 }, null, {}]
+    },
+  })
+  t.after(() => rt.stop())
+  rt.start()
+  await n.ready
+  assert.deepEqual(n.hello.codex_claims, [{ home: '/srv/codex', endpoint: 'unix:///srv/codex/app.sock' }, { endpoint: 'ws://127.0.0.1:4500' }],
+    'only the entries that name a home or an endpoint, with nothing else')
+  assert.equal(asked, 1, 'a function is asked once per hello')
+  await until('the node took the claims', () => rt.nodeHas('codex_claims'))
+
+  const old = await startFakeNode(t)
+  const listed = createRuntime(minimal(), { runtime: 'listed', socketPath: old.path, retryMs: 20, codexClaims: [{ home: '/srv/codex' }] })
+  t.after(() => listed.stop())
+  listed.start()
+  await old.ready
+  assert.deepEqual(old.hello.codex_claims, [{ home: '/srv/codex' }], 'a list is sent as it is')
+  assert.equal(listed.nodeHas('codex_claims'), false, 'a node without the feature ignores the claims')
+
+  for (const codexClaims of [[], [{}], () => { throw new Error('not yet') }]) {
+    const none = await startFakeNode(t)
+    const logged = []
+    const quiet = createRuntime(minimal(), { runtime: 'none', socketPath: none.path, retryMs: 20, codexClaims, log: (line) => logged.push(line) })
+    t.after(() => quiet.stop())
+    quiet.start()
+    await none.ready
+    assert.equal(none.hello.codex_claims, undefined, 'nothing to claim sends no codex_claims')
+    if (typeof codexClaims === 'function') assert.ok(logged.some((line) => line.includes('codexClaims: not yet')), 'a failing function is logged')
+  }
 })

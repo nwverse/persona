@@ -58,7 +58,7 @@ export type MentionRow =
 
 /** The panel's own rows: the box's file picker and the session's Plan mode. */
 export type PanelAction = "attach" | "plan";
-export type PanelPick = { kind: "action"; action: PanelAction } | { kind: "row"; row: MentionRow };
+export type PanelPick = { kind: "action"; action: PanelAction } | { kind: "row"; row: MentionRow } | { kind: "browse"; insert: string };
 
 export interface ComposerPanelHandle {
   /** A key pressed in the message box while the panel is open from a typed @ (↑ ↓ move, Enter / Tab pick): true when the
@@ -244,10 +244,14 @@ export function ComposerPanel({
   const selected = entries[current];
   const skill = selected?.kind === "row" && selected.row.kind === "skill" ? selected.row.skill : undefined;
 
+  const browse = (insert: string) => {
+    if (from === "plus") setSearch(insert.slice(1));
+    else onPick({ kind: "browse", insert });
+  };
   const choose = (e: Entry) => {
     if (e.kind === "action") return onPick({ kind: "action", action: e.action });
-    // from the +, a folder opens in the search box; from a typed @ the box's token keeps browsing
-    if (from === "plus" && e.row.kind === "file" && e.row.dir) return setSearch(e.row.insert.slice(1));
+    // Scheduled file inputs accept regular files within the execution folder.
+    if (source?.referenceFiles && e.row.kind === "file" && e.row.dir) return browse(e.row.insert);
     onPick({ kind: "row", row: e.row });
   };
   const key = (k: string): boolean => {
@@ -258,6 +262,11 @@ export function ComposerPanel({
     }
     if (k === "Enter" || k === "Tab") {
       choose(entries[current]);
+      return true;
+    }
+    const folder = selected?.kind === "row" && selected.row.kind === "file" && selected.row.dir ? selected.row : null;
+    if (k === "ArrowRight" && folder) {
+      browse(folder.insert);
       return true;
     }
     return false;
@@ -305,11 +314,18 @@ export function ComposerPanel({
     }
     const r = e.row;
     if (r.kind === "skill") return <SkillRow skill={r.skill} common={common} />;
+    const folder = r.kind === "file" && r.dir;
     return (
-      <button key={r.id} {...common} title={r.detail ? `${r.name} · ${r.detail}` : r.name} className="relative flex h-9 w-full items-center gap-2 rounded-control px-2.5 text-left text-sm text-ink [@media(pointer:coarse)]:h-11">
+      <button key={r.id} {...common} title={r.detail ? `${r.name} · ${r.detail}` : r.name} className="relative flex h-9 w-full items-center gap-2 rounded-control px-2.5 text-left text-sm text-ink [@media(pointer:coarse)]:h-11"
+        aria-keyshortcuts={folder ? "ArrowRight" : undefined}
+        onClick={(event) => {
+          if (folder && (event.target as Element).closest("[data-browse-folder]")) browse(r.insert);
+          else common.onClick?.(event);
+        }}>
         <Icon name={r.kind === "session" ? "chat" : r.kind === "repository" ? "git" : r.kind === "workspace" || r.dir ? "folder" : "file"} size={16} className="shrink-0 text-ink-3" />
-        <span className="min-w-0 truncate">{r.name}</span>
+        <span className="min-w-0 flex-1 truncate">{r.name}</span>
         {r.detail && <span className="ml-auto max-w-[min(240px,50%)] shrink-0 truncate pl-2 text-[12px] text-ink-3">{r.detail}</span>}
+        {folder && <span data-browse-folder title={t("chat-composerpanel.browse_folder")} aria-hidden className="-mr-2 flex h-full w-11 shrink-0 items-center justify-center rounded-control text-ink-3 hover:bg-hover-2"><Icon name="chevronRight" size={14} /></span>}
       </button>
     );
   };

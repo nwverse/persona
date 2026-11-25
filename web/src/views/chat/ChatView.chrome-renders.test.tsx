@@ -61,6 +61,10 @@ import { whenComposer } from "../../lib/links";
 import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
 import { useShortcuts } from "../../lib/use-shortcuts";
+import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
+import { withContexts } from "../../lib/context-xml";
+import { inlineBody } from "../../lib/inline-message";
+import { skillContext } from "../../lib/skill-mentions";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
@@ -70,21 +74,23 @@ import { ChatView } from "./ChatView";
 const row = (x: Partial<Session> = {}): Session => ({ machine_id: "mac", session_id: "s1", title: "Checks", cwd: "/code", status: "working", state: "working", ...x }) as Session;
 const item = (seq: number, x: Partial<Item> = {}): Item => ({ id: `i${seq}`, seq, role: "assistant", kind: "text", text: `row ${seq}`, ts: "2026-11-06T00:00:00Z", ...x }) as Item;
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-const push = async (seq: number, x: Partial<Item> = {}) => {
-  act(() => live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq })));
-  await settle();
-};
+const push = (seq: number, x: Partial<Item> = {}) => act(async () => {
+  live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq }));
+  // Measure the render after the normal transcript burst window has committed.
+  await new Promise((resolve) => setTimeout(resolve, ITEM_COALESCE_MS));
+});
 const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 
 let host: HTMLDivElement;
 let root: Root;
 let opened = "";
 let fetcher: ReturnType<typeof vi.fn>;
-// An agent's header loads its compare menu lazily (ChatView: import("../../lib/compare-runs")) and draws again when it
-// is in. Loaded here first, it is in before a test counts renders: cold, under a full parallel run, it came in during the
-// pushes and counted as one of their renders.
+// An agent's header loads its compare menu lazily (ChatView: import("../../lib/compare-runs")) and finished replies
+// load their bar lazily (MessageActions: import("./ReplyBar")), each drawing again when it arrives. Loaded here first,
+// neither arrives mid-test under a full parallel run and counts as a render caused by pushes or turn transitions.
 beforeAll(async () => {
   await import("../../lib/compare-runs");
+  await import("./ReplyBar");
 });
 
 beforeEach(() => {
@@ -119,6 +125,8 @@ async function open(view: React.ReactElement<{ assistant?: boolean }>, session =
   for (let i = 0; i < 6; i++) await settle();
   const title = view.props.assistant && getState().assistant?.main === session.session_id ? "Persona" : "Checks";
   await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe(title)); // session-derived props are stable
+  // Flush the header's lazy menu state before counting renders caused by the transcript.
+  await act(async () => { await vi.dynamicImportSettled(); });
   expect(live.listeners.size).toBeGreaterThan(0);
   expect(renders.info).toBeGreaterThan(0);
   expect(renders.chips).toBeGreaterThan(0);
@@ -164,7 +172,8 @@ it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws
 it("an agent's page: pushed items leave its header and composer alone, a session change still reaches them", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);
-  expect(host.textContent).toContain("row 10");
+  // Non-critical bursts share the transcript's coalescing window; the commits it makes still leave the chrome alone.
+  await vi.waitFor(() => expect(host.textContent).toContain("row 10"));
   expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 
   act(() => applyCompleteSessions([row({ title: "Renamed" })]));
@@ -178,7 +187,21 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   for (let seq = 1; seq <= 3; seq++) await push(seq);
   words.length = 0;
   await push(4);
-  expect(words).toEqual([{ text: "row 4", fade: true }]);
+  await vi.waitFor(() => expect(words).toEqual([{ text: "row 4", fade: true }]));
+});
+
+it("a pushed inline reference and its disclosure leave the header and composer alone", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const ref = skillContext({ id: "review", name: "Review", source: "Project", description: "Look for edge cases." });
+  await push(1, { role: "user", text: withContexts([ref], inlineBody(["Use ", ref, "."])) });
+  const token = () => host.querySelector<HTMLButtonElement>("[data-bubble-text] button[aria-expanded]");
+  await vi.waitFor(async () => {
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(token()?.textContent).toBe("Review");
+  });
+  act(() => token()!.click());
+  expect(host.textContent).toContain("Look for edge cases.");
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 });
 
 // the first page: this many exchanges, a question and its reply each
@@ -186,6 +209,17 @@ const serve = (exchanges: number) => {
   const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
   fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
 };
+
+it("shows the latest finished reply's actions at rest when replies share a timestamp", async () => {
+  serve(2);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const bars = () => [...host.querySelectorAll<HTMLElement>('[data-reply-bar]:not([data-reply-bar="loading"])')];
+  await vi.waitFor(() => expect(bars()).toHaveLength(2));
+  const [earlier, latest] = bars();
+  expect(earlier.querySelector("time")?.closest(".opacity-0")).toBe(earlier);
+  expect(latest.querySelector("time")?.closest(".opacity-0")).toBeNull();
+  expect(latest.querySelector("button")?.closest(".opacity-0")).toBeNull();
+});
 
 it("a turn starting or ending renders the message actions of its own exchange only", async () => {
   const flip = async (sid: string, exchanges: number) => {
@@ -206,6 +240,52 @@ it("a turn starting or ending renders the message actions of its own exchange on
   expect(await flip("s2", 6)).toEqual(one);
 });
 
+it("a turn starting or ending leaves earlier engine stretches untouched while keeping offscreen virtualization", async () => {
+  const measure = async (sid: string, session: Session, earlierItems?: Item[]) => {
+    const liveItems = [item(0, { role: "user", text: "live ask" }), item(1, { text: "live reply" })];
+    fetcher.mockImplementation((url: string) => {
+      const target = String(url);
+      if (target.includes("/sessions/mac/prev/items")) {
+        return Promise.resolve(new Response(JSON.stringify({ items: earlierItems ?? [], has_more: false }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      if (target.includes("/items")) {
+        return Promise.resolve(new Response(JSON.stringify({ items: liveItems, to_seq: 1, has_more: false }), { status: 200, headers: { "Content-Type": "application/json" } }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
+    });
+    await open(<ChatView mid="mac" sid={sid} inPage />, session);
+    if (earlierItems) {
+      await vi.waitFor(() => expect(host.querySelector('[data-engine-stretch="prev"]')).not.toBeNull());
+      for (let i = 0; i < 4; i++) await settle();
+    }
+    const counts: number[] = [];
+    for (const state of ["idle", "working"] as const) {
+      asks.n = 0;
+      act(() => applyCompleteSessions([{ ...session, status: state, state }]));
+      await settle();
+      counts.push(asks.n);
+    }
+    return counts;
+  };
+  const baseline = await measure("s1", row({ session_id: "s1" }));
+  for (const count of baseline) expect(count).toBeGreaterThan(0);
+  const earlierItems = [
+    item(0, { id: "p0", role: "user", text: "earlier ask 0", ts: "2026-11-05T00:00:00Z" }),
+    item(1, { id: "p1", text: "earlier reply 0", ts: "2026-11-05T00:01:00Z" }),
+    item(2, { id: "p2", role: "user", text: "earlier ask 1", ts: "2026-11-05T00:02:00Z" }),
+    item(3, { id: "p3", text: "earlier reply 1", ts: "2026-11-05T00:03:00Z" }),
+  ];
+  const switched = row({
+    session_id: "s2",
+    agent: "codex",
+    engine_history: [{ session_id: "prev", agent: "claude", until: "2026-11-05T01:00:00Z" }],
+  });
+  expect(await measure("s2", switched, earlierItems)).toEqual(baseline);
+  const earlierSections = [...host.querySelectorAll<HTMLElement>('[data-engine-stretch="prev"] section[data-segment]')];
+  expect(earlierSections).toHaveLength(2);
+  expect(earlierSections.every((s) => s.classList.contains("seg-cv"))).toBe(true);
+});
+
 it("finished exchanges before the last two skip drawing while off screen, from a guessed height", async () => {
   serve(5);
   await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
@@ -217,7 +297,8 @@ it("finished exchanges before the last two skip drawing while off screen, from a
 it("the assistant: the header draws again only when what its face reads changes", async () => {
   await open(<ChatView mid="mac" sid="s1" assistant />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);
-  expect(host.textContent).toContain("row 10");
+  // Non-critical bursts share the transcript's coalescing window; the commits it makes still leave the chrome alone.
+  await vi.waitFor(() => expect(host.textContent).toContain("row 10"));
   expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 
   // a message of yours last: the face thinks again (lib/persona.ts personaState)
@@ -379,6 +460,36 @@ it("toggles the session overview and leaves it open while using the chat", async
   expect(trigger.getAttribute("aria-pressed")).toBe("false");
   expect(overview?.isConnected).toBe(false);
   expect(host.querySelector("textarea")).toBe(composer);
+});
+
+it("shows the native Antigravity Swarm status in the session overview", async () => {
+  const { SessionOverview } = await import("./SessionOverview");
+  const { emptyTaskIndex } = await import("../../lib/tasks");
+  let info = {};
+  fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(info), { status: 200, headers: { "Content-Type": "application/json" } })));
+  vi.useFakeTimers();
+  await act(async () => root.render(<SessionOverview id="test-overview" session={row({ agent: "agy" })}
+    machineName="Example computer" items={[]} tasks={emptyTaskIndex()} children={[]} />));
+  const overview = host.querySelector("[data-session-overview]")!;
+  expect(overview.querySelector("[data-swarm-roster]")).toBeNull();
+  info = { swarm_workers: [
+    { name: "Build", state: "working" },
+    { name: "Review", state: "waiting" },
+  ] };
+  await act(() => vi.advanceTimersByTimeAsync(3000));
+  const roster = overview.querySelector<HTMLDetailsElement>("[data-swarm-roster]")!;
+  expect(roster.open).toBe(false);
+  expect(roster.querySelector("summary")?.textContent).toContain(t("chat-sessionoverview.swarm_workers", { count: 2 }));
+  act(() => roster.querySelector("summary")!.click());
+  expect(roster.open).toBe(true);
+  expect([...roster.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "Build" + t("lib-state-labels.working"),
+    "Review" + t("chat-sessionoverview.swarm_waiting"),
+  ]);
+  info = { swarm_workers: [{ name: "Review", state: "stopped" }] };
+  await act(() => vi.advanceTimersByTimeAsync(3000));
+  expect(roster.open).toBe(true);
+  expect(roster.querySelector("li")?.textContent).toContain(t("chat-sessionoverview.swarm_stopped"));
 });
 
 function ShortcutChat({ chat = true }: { chat?: boolean }) {

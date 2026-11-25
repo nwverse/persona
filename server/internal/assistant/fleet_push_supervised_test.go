@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -137,7 +137,7 @@ func (e *supervisedEnv) finishNow() {
 		gen = tr.gen
 		return true
 	})
-	e.s.notifyFinishedNow("mac", supAgent, gen, e.s.notifyTimings())
+	e.s.notifyFinishedNow("mac", supAgent, gen, e.s.notifyTimings(), supervisionEnd{})
 	// A push and a Feishu card the decision made go out on goroutines of their own (deliver, feishuAgentDone), and
 	// nothing marks one that was never started: give them a moment to land before a check that none did.
 	time.Sleep(100 * time.Millisecond) // sleep-ok: a negative check, no event marks a push or card that was not sent
@@ -236,6 +236,7 @@ func TestSupervisedAgentFinishIsNotPushed(t *testing.T) {
 // An Agent nobody supervises (on no to-do, or on a to-do the user made, which has no ledger) is pushed and gets its
 // Lark card as before, and the card that lands is logged with its kind, computer and session.
 func TestUnsupervisedAgentFinishStillPushed(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name  string
 		setup func(e *supervisedEnv)
@@ -261,6 +262,7 @@ func TestUnsupervisedAgentFinishStillPushed(t *testing.T) {
 // A cancelled task stays closed when its Agent works again, so the Agent's next turn, started after the close, is its
 // own again and is pushed.
 func TestSupervisedTaskClosedWhileThePushWaits(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, accepted := range []bool{true, false} {
 		t.Run(fmt.Sprintf("accepted=%v", accepted), func(t *testing.T) {
 			e := newSupervisedEnv(t, true)
@@ -296,6 +298,7 @@ func TestSupervisedTaskClosedWhileThePushWaits(t *testing.T) {
 // notify_user's Lark copy is not a finished turn's: the supervisor's notice reaches the phone and Lark as before while
 // its task's Agent finishes unpushed, and the copy that lands is logged as a push of that conversation.
 func TestSupervisorNotifyUserStillCopiedToLark(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newSupervisedEnv(t, true)
 	e.task("conv1", "conv1")
 	e.holdDone()
@@ -335,14 +338,14 @@ func TestCardSentLogLine(t *testing.T) {
 	e := newSupervisedEnv(t, true)
 	ctx := context.Background()
 	e.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return nil, errors.New("feishu down") })
-	if _, err := e.s.botPost(ctx, "", feishubot.NewCard("", "", "测试"), ""); err == nil {
+	if _, err := e.s.botPost(ctx, "", botcard.NewCard("", "", "测试"), ""); err == nil {
 		t.Fatal("the post did not fail")
 	}
 	if got := e.logged("bots: card sent"); len(got) != 0 {
 		t.Fatalf("logged a card that did not land: %q", got)
 	}
 	e.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_x"}, nil })
-	if _, err := e.s.botPost(ctx, "", feishubot.NewCard("", "", "测试"), ""); err != nil {
+	if _, err := e.s.botPost(ctx, "", botcard.NewCard("", "", "测试"), ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.logged("bots: card sent: kind=other machine=- session=- message=om_x"); len(got) != 1 {

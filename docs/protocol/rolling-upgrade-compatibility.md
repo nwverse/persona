@@ -51,6 +51,14 @@
 
 基线的 `/api/v1/…` 入口、普通 WebSocket `type` 与 node／manager RPC 方法不因产品名切换而整体改名；新增业务能力仍按各自协商规则处理。协议版本没有因本兼容层提高。注册 Bundle ID、系统 controls／Intent 等原生身份由 #6152／#6192 记录，本清单不以服务端测试代替其系统升级证据。
 
+### Agent tab naming (#15387)
+
+| Pair | What happens |
+| --- | --- |
+| New hub and manager | An unnamed start gets a local placeholder immediately. `agents.tab_name_started` carries the returned session and expected tab identity, and the late model name uses the node's guarded rename. |
+| New hub, older manager | `agents.start_params` keeps the older synchronous model naming behavior. The older manager does not understand the completion event, so the new guarded late rename requires a manager upgrade too. |
+| Older hub, new manager | Start parameters carry the local placeholder without a model wait. An older hub does not emit the completion event for a synchronous start and retains its legacy asynchronous post-start behavior; upgrade the hub for the guarded completion path. |
+
 ### MCP namespace / tools
 
 The hub sends its feature list in `devices.connected`, matching the capabilities advertised in `hello.features`.
@@ -155,6 +163,21 @@ The AI twin's own saved mode is authorization metadata, not a caller's model cho
 
 Origin attestation, the Inbox MCP/tool gate and Lark outbound policy are unchanged in every combination.
 
+### Ordinary assistant permission defaults on resume (#13653)
+
+The manager sends its current default as `default_permission_mode` and marks a deliberate generic choice with
+`permission_mode_explicit` on `assistant.send`, `session.send` and `assistant.model`. The node persists that explicit
+provenance as `app_mode_explicit` in the existing `node_model` JSON. Neither field changes the model fingerprint, the
+public client API or the Inbox/guest policy.
+
+| Pair or state | What happens |
+| --- | --- |
+| New manager, new node | A new or stopped Claude Code process uses the explicit conversation mode first, then the current manager default, then legacy state/transcript evidence. A live process keeps its current mode. |
+| New manager, older node | The older node ignores both fields and retains its legacy resume behavior until updated. Initial starts still receive the ordinary `permission_mode`. |
+| Older manager, new node | Both fields are absent, so the node retains the legacy `AppMode` / in-memory / transcript precedence and built-in `bypassPermissions` fallback. |
+| Non-Claude launcher | The manager omits the resume default and the node keeps legacy `AppMode` / in-memory / transcript precedence, even when the declared mode list contains that default. An explicit generic `permission_mode` follows its existing path. |
+| Legacy Claude state without `app_mode_explicit` | Its `AppMode` is treated as inherited when a current manager supplies a default. An explicit choice made after the upgrade persists with the marker and wins thereafter. |
+
 ### Node connection lanes (#10660)
 
 A manager and a node built since #10660 frame their connection on four lanes (protocol.md "Lanes"); any older end
@@ -240,6 +263,22 @@ The records are the node's own (the hub keeps its copy, as for any start), of th
 writes for a start with a creation identity, plus `engine_runtime` in the model settings the hub keeps with each one
 (no table changes), so rolling the node back leaves them to be read as those, the mark ignored. Nothing else is
 stored: rolling either side back or forward changes only what the next resume does.
+
+### Outside reporting directions (#8236)
+
+The manager migration `20261120081453_outside_directions.sql` adds only `assistant_outside_directions`; existing
+settings, directions, conversations and to-do ownership are not rewritten. A new manager on an older database therefore
+starts with no outside bindings until one is created. The table is separate because an older settings writer does not
+know the outside marker and would otherwise discard it.
+
+An older manager or hub has neither new write route nor `leaders.write`; those calls keep its previous 404 / 403
+behavior. A new CLI talking to an older node receives its legacy `unknown kind` answer and exits unavailable without
+retrying. `leaders.read` keeps its existing routes and events. On rollback, an older manager does not read the outside
+binding table or emit `external` / Agent-target metadata, and its legacy direction code may treat the stored opaque id
+as a conversation id; outside directions are therefore not a supported rollback interface. Existing
+conversation-backed directions keep their old behavior. Rolling forward again rejoins bindings that remain in the
+table to the surviving direction records; an owner or older manager removing a direction from `assistant.leaders`
+still ends its current membership as before.
 
 ### Launcher default models (#4663)
 

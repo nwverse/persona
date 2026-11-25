@@ -266,7 +266,7 @@ describe("Composer image object URLs", () => {
 // conversation, hold the message until they are there, and go with it as <persona-file> tags after the words.
 describe("Composer files", () => {
   const box = () => host.querySelector("textarea")!;
-  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-testid=composer-files] > span"));
+  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-composer-attachments] > [data-state]"));
   const renderOn = (draftKey: string, onSend: (m: Outgoing) => Promise<boolean> = async () => true) =>
     act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={onSend} />));
   const pickNotes = async () => {
@@ -281,6 +281,26 @@ describe("Composer files", () => {
     forget();
     renderOn("b");
     forget();
+  });
+
+  it("shares one attachment strip between pictures and remote files and removes it when empty", async () => {
+    const strip = () => host.querySelector("[data-composer-attachments]");
+    renderOn("a");
+    expect(strip()).toBeNull();
+
+    putImage("a");
+    const photo = () => host.querySelector('img[alt="a.png"]')?.closest('[title="a.png"]');
+    expect(photo()?.parentElement).toBe(strip());
+
+    await pickNotes();
+    await until(() => expect(tiles()).toHaveLength(1));
+    expect(tiles()[0].parentElement).toBe(strip());
+    expect(strip()?.children).toHaveLength(2);
+
+    act(() => strip()?.querySelector<HTMLButtonElement>('button[aria-label="移除 a.png"]')!.click());
+    expect(strip()?.firstElementChild).toBe(tiles()[0]);
+    forget();
+    expect(strip()).toBeNull();
   });
 
   it("puts nothing in the words and sends the file as a tag after them", async () => {
@@ -340,7 +360,7 @@ describe("Composer image limits", () => {
   const MiB = 1024 * 1024;
   const hub = (l: Partial<{ request_bytes: number; per_message: number }>) =>
     setPublishedImageLimits({ request_bytes: 32 * MiB, image_bytes: 3_750_000, max_side: 1600, per_message: 4, ...l });
-  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-testid=composer-files] > span"));
+  const tiles = () => Array.from(host.querySelectorAll<HTMLElement>("[data-composer-attachments] > [data-state]"));
   const renderOn = (draftKey: string) => act(() => root.render(<Composer draftKey={draftKey} machineId="m1" placeholder="" onSend={async () => true} />));
   beforeEach(() => {
     hub({});
@@ -787,7 +807,7 @@ describe("sending while another send is in flight", () => {
 describe("the trailing slot", () => {
   it("draws what it is given right before voice and send, inside the composer container", () => {
     localStorage.setItem("draft:trailing", "hello"); // a draft: voice is the small icon, send stays
-    act(() => root.render(<Composer draftKey="trailing" placeholder="" onSend={async () => true} footer={<span data-footer />} trailing={<span data-pill />} voice={{ mode: "explain", label: "voice", onClick: () => {} }} />));
+    act(() => root.render(<Composer draftKey="trailing" placeholder="" onSend={async () => true} footer={<span data-footer />} trailing={<span data-pill />} action={{ icon: "voice", name: "Voice", label: "voice", primary: false, onClick: () => {}, attributes: { "data-testid": "composer-voice" } }} />));
     const pill = host.querySelector("[data-pill]")!;
     const row = pill.parentElement!;
     const order = [...row.children].map((c) => (c.matches("[data-pill]") ? "pill" : c.querySelector("[data-footer]") ? "footer" : c.getAttribute("data-testid") ?? c.getAttribute("aria-label") ?? c.tagName));

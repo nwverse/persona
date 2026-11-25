@@ -90,7 +90,7 @@ func (s *Service) trackFloor(ctx context.Context, space string) ([]string, bool)
 func (s *Service) conversationUse(ctx context.Context, sid string) infoUse {
 	space, _ := s.conversationSpace(ctx, sid)
 	cats, _, ok := s.conversationCategoryState(ctx, sid)
-	return infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(sid), SourceTrack: space}
+	return infoUse{Categories: cats, Known: ok && !s.infoTagWaiting.has(sid), SourceTrack: space, Rules: s.trackRules(ctx, space)}
 }
 
 // exitUse is text's information on its way out of conversation sid of track space (scenes 3, 4, 5 and 7): the
@@ -100,12 +100,12 @@ func (s *Service) conversationUse(ctx context.Context, sid string) infoUse {
 // else it is taken for sensitive.
 func (s *Service) exitUse(ctx context.Context, text, sid, space string) infoUse {
 	floor, known := s.trackFloor(ctx, space)
-	info := infoUse{Categories: floor, Known: known, SourceTrack: space}
+	info := infoUse{Categories: floor, Known: known, SourceTrack: space, Rules: s.trackRules(ctx, space)}
 	text = strings.TrimSpace(text)
 	if !known || len(floor) > 0 || text == "" || !s.infoTagConfigured(ctx) {
 		return info
 	}
-	cats, err := s.infoTag(ctx, infoTagClip(text), floor, infoTagExitTimeout)
+	cats, err := s.infoTag(ctx, infoTagClip(text), s.infoTagFocus(ctx, space), infoTagExitTimeout)
 	if err == nil || modelUnconfigured(err) {
 		info.Categories, _ = normalCategories(append(cats, floor...))
 		return info
@@ -142,6 +142,33 @@ func (s *Service) exitPolicy(ctx context.Context, text, sid, space string) Track
 // main chat's reads still hide by track; they switch to this in the next step (#13246).
 func (s *Service) conversationPolicy(ctx context.Context, sid string) TrackPolicy {
 	return policyOf(s.conversationUse(ctx, sid))
+}
+
+// putConversationCategories attaches conversation sid's accumulated information categories to an assistant.send,
+// session.send (via SendParams) or assistant.answer_again call so its process gets PERSONA_CATEGORIES when started or
+// resumed (#13246). When the conversation's categories are not known (a turn waiting to be tagged, an unreadable store,
+// an unknown track or unplaced conversation), categories_unknown tells the node to leave PERSONA_CATEGORIES unset
+// rather than fall back to the directory's default categories.
+func (s *Service) putConversationCategories(ctx context.Context, sid string, p map[string]any) {
+	delete(p, "categories")
+	delete(p, "categories_unknown")
+	if sid == "" {
+		return
+	}
+	space, known := s.conversationSpace(ctx, sid)
+	if !known {
+		p["categories_unknown"] = true
+		return
+	}
+	cats, _, ok := s.categoryStateIn(ctx, sid, space, known)
+	if !ok || s.infoTagWaiting.has(sid) {
+		p["categories_unknown"] = true
+		return
+	}
+	if cats == nil {
+		cats = []string{}
+	}
+	p["categories"] = cats
 }
 
 // infoNoneTagged is the category kept for a conversation tagged with none: it says the conversation was tagged, and

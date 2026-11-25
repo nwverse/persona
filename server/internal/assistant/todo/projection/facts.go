@@ -55,6 +55,7 @@ type Facts struct {
 	Kind            string       `json:"kind,omitempty"`
 	SeenAt          *time.Time   `json:"seen_at,omitempty"`
 	PartOf          string       `json:"part_of,omitempty"`
+	After           []string     `json:"after,omitempty"`
 	// Ask is the to-do's own open ask, DecisionReview its decision round and whether the owner chose Don't handle on it.
 	Ask            *Ask            `json:"ask,omitempty"`
 	DecisionReview *DecisionReview `json:"decision_review,omitempty"`
@@ -81,6 +82,8 @@ type Facts struct {
 	Superseded bool `json:"-"`
 	// Loc is the owner's time zone, for a due day; nil is UTC.
 	Loc *time.Location `json:"-"`
+	// TodosV2 gates experimental New To-dos & Tasks projection rules (#14620); false preserves legacy behavior identically.
+	TodosV2 bool `json:"-"`
 }
 
 // Agent is one of the to-do's runs (an Agent session) as the list links it (agents[]).
@@ -119,6 +122,9 @@ type DecisionReview struct {
 // Supervision is a supervised task's ledger: the review state, the park that holds it, the reviews (latest last) and
 // the moments that count as activity.
 type Supervision struct {
+	// Supervisor: the conversation that handed it out and supervises it. Its failed starts and the cards it routes are
+	// that conversation's to handle, not the owner's.
+	Supervisor   string     `json:"supervisor,omitempty"`
 	State        string     `json:"state"`
 	Parked       *Parked    `json:"parked,omitempty"`
 	Reviews      []Review   `json:"reviews"`
@@ -135,9 +141,11 @@ type Parked struct {
 	Evidence  *ParkEvidence `json:"evidence,omitempty"`
 }
 
-// ParkEvidence carries only the owner-request link the projection reads; the other evidence stays on the listed to-do.
+// ParkEvidence carries the fields of parked evidence the projection reads (owner-request link and shared-blocker root cause).
 type ParkEvidence struct {
 	Kind          string `json:"kind,omitempty"`
+	Target        string `json:"target,omitempty"`
+	URL           string `json:"url,omitempty"`
 	InteractionID string `json:"interaction_id,omitempty"`
 }
 

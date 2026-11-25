@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -13,8 +12,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -51,9 +52,9 @@ const reportDelay = time.Minute
 const (
 	reportRetryDelay = 30 * time.Second
 	reportMaxRetries = 3
-	// reportCardMaxBytes/Elements bound one card; each item's real marshaled JSON is measured against them.
-	reportCardMaxBytes    = 24000
-	reportCardMaxElements = 50
+	// Keep the existing card-budget names for the assistant's other card builders.
+	reportCardMaxBytes    = botcard.MaxBytes
+	reportCardMaxElements = botcard.MaxElements
 	reportFallbackMax     = 1500 // runes of a card's rich-text fallback (PostMarkdown clips neither)
 )
 
@@ -601,7 +602,7 @@ func (s *Service) sendReports() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	f, ready := s.feishuFeatures(ctx)
+	f, ready := s.chat().Features(ctx)
 	if !ready || !f.Reports {
 		return
 	}
@@ -657,13 +658,13 @@ func (s *Service) sendReports() {
 		}
 		return keep[i].todo < keep[j].todo // identical timestamps stay in a stable, repost-safe order
 	})
-	var cards []*feishubot.Card
+	var cards []*botcard.Card
 	var fallbacks []string
 	if f.ReportSteps {
 		cards, fallbacks = s.reportCards(ctx, keep)
 	} else {
 		c, fb := s.goalCard(ctx, keep)
-		cards, fallbacks = []*feishubot.Card{c}, []string{fb}
+		cards, fallbacks = []*botcard.Card{c}, []string{fb}
 	}
 	// A notifications companion takes the report (feishu_companions.go); the decisions' own cards, which answer for
 	// the owner, still go to the chat below.
@@ -673,7 +674,7 @@ func (s *Service) sendReports() {
 	}
 	// Every card must land: a failure after some went out requeues the whole batch (reposts early ones, retry-capped).
 	for i, c := range cards {
-		if _, err := s.botPost(ctx, "", c, fallbacks[i]); err != nil {
+		if _, err := s.chat().Post(ctx, larkhost.Target{}, "", c, fallbacks[i], ""); err != nil {
 			s.logf("bots: report: %v", err)
 			s.requeueReports(append(keep, asks...)) // the decisions held back from the card are not lost with it
 			return
@@ -686,7 +687,11 @@ func (s *Service) sendReports() {
 func (s *Service) postReportAsks(items []*reportItem) {
 	for _, it := range items {
 		if it.state == reportNeeds && it.ix != nil && !s.botCardOut(it.ix.ID) {
-			s.feishuInteractionAlways(*it.ix)
+			// Its card goes out whatever the cards switches say; answering it goes as any card's (the hub checks the
+			// owner pressed it).
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			s.larkModule().AskPost(ctx, *it.ix)
+			cancel()
 		}
 	}
 }
@@ -699,7 +704,7 @@ func (it *reportItem) stuck() bool {
 
 // goalCard is the goal-level card for stuck tasks: for each, the goal, where it is now and one line of evidence with its
 // link (#3218). items are sorted; past goalCardMaxItems a line counts the rest.
-func (s *Service) goalCard(ctx context.Context, items []*reportItem) (*feishubot.Card, string) {
+func (s *Service) goalCard(ctx context.Context, items []*reportItem) (*botcard.Card, string) {
 	l, web := s.botLang(ctx), s.webBase(ctx)
 	names := s.feishuDirections(ctx)
 	var titles, lines []string
@@ -714,7 +719,7 @@ func (s *Service) goalCard(ctx context.Context, items []*reportItem) (*feishubot
 	}
 	status := i18n.T(l, "assistant-reports.goal_stuck_title", i18n.Args{"n": len(items)})
 	title := reportTitle(l, titles, status)
-	c := feishubot.NewCard(title, feishubot.Red, title).Tag(i18n.T(l, "assistant-reports.tag_stuck"), feishubot.Red)
+	c := botcard.NewCard(title, botcard.Red, title).Tag(i18n.T(l, "assistant-reports.tag_stuck"), botcard.Red)
 	for i, line := range lines {
 		if i > 0 {
 			c.HR()
@@ -740,7 +745,7 @@ func goalLines(l i18n.Lang, web string, t Todo, it *reportItem, direction string
 	if it.session[1] != "" && web != "" {
 		link = sessionLink(web, it.session[0], it.session[1], false)
 	}
-	evidence := feishubot.EscapeMarkdown(clip(oneLine(it.text), 80))
+	evidence := botcard.EscapeMarkdown(clip(oneLine(it.text), 80))
 	if link != "" {
 		a := "[" + i18n.T(l, "assistant-reports.goal_open") + "](" + link + ")"
 		evidence = strings.TrimSpace(evidence + " " + a)
@@ -748,7 +753,7 @@ func goalLines(l i18n.Lang, web string, t Todo, it *reportItem, direction string
 	if evidence == "" {
 		evidence = i18n.T(l, "assistant-reports.goal_no_evidence")
 	}
-	return i18n.T(l, "assistant-reports.goal_lines", i18n.Args{"goal": feishubot.EscapeMarkdown(direction + clip(oneLine(t.Title), 80)),
+	return i18n.T(l, "assistant-reports.goal_lines", i18n.Args{"goal": botcard.EscapeMarkdown(direction + clip(oneLine(t.Title), 80)),
 		"now": now, "evidence": evidence})
 }
 
@@ -808,21 +813,19 @@ func (s *Service) requeueReports(items []*reportItem) {
 
 // botCardOut: the bot has posted (or is posting) a card for interaction id.
 func (s *Service) botCardOut(id string) bool {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.cards[id]
+	ok := false
+	s.larkModule().Book(context.Background(), func(b assistantwire.ChatBook) { _, ok = b.Card(id) })
 	return ok
 }
 
 type reportEntry struct {
 	title   string
 	md      string
-	buttons []feishubot.Button
+	buttons []botcard.Button
 	bytes   int // marshaled JSON length of its Markdown block plus button row
 }
 
-func (s *Service) reportCards(ctx context.Context, items []*reportItem) ([]*feishubot.Card, []string) {
+func (s *Service) reportCards(ctx context.Context, items []*reportItem) ([]*botcard.Card, []string) {
 	l, web, stages := s.botLang(ctx), s.webBase(ctx), s.todoStages(ctx)
 	names := s.feishuDirections(ctx)
 	es, needs := make([]reportEntry, len(items)), 0
@@ -838,7 +841,7 @@ func (s *Service) reportCards(ctx context.Context, items []*reportItem) ([]*feis
 		}
 		md, buttons := s.reportItemView(l, web, stages, t, it, direction)
 		es[i] = reportEntry{title: title, md: md, buttons: buttons}
-		es[i].bytes = feishuElBytes(func(c *feishubot.Card) {
+		es[i].bytes = feishuElBytes(func(c *botcard.Card) {
 			c.Markdown(md)
 			if len(buttons) > 0 {
 				c.Buttons(buttons...)
@@ -846,9 +849,9 @@ func (s *Service) reportCards(ctx context.Context, items []*reportItem) ([]*feis
 		})
 	}
 	head1, headN := reportCardHeads(l, needs, len(items))
-	hr := feishuElBytes(func(c *feishubot.Card) { c.HR() })
+	hr := feishuElBytes(func(c *botcard.Card) { c.HR() })
 	segs := reportCardSegments(es, head1, headN, hr)
-	cards, fallbacks := make([]*feishubot.Card, 0, len(segs)), make([]string, 0, len(segs))
+	cards, fallbacks := make([]*botcard.Card, 0, len(segs)), make([]string, 0, len(segs))
 	offset := 0
 	for k, seg := range segs {
 		c, fb := reportCardOne(l, seg, k, len(segs), offset, needs, len(items))
@@ -857,16 +860,8 @@ func (s *Service) reportCards(ctx context.Context, items []*reportItem) ([]*feis
 	return cards, fallbacks
 }
 
-// feishuElBytes is the JSON length of add()'s elements; json.Marshal escapes &<>, Card.JSON does not, so it errs high.
-func feishuElBytes(add func(*feishubot.Card)) int {
-	c := feishubot.NewCard("", "", "")
-	add(c)
-	n := 0
-	for _, el := range c.Body.Elements {
-		b, _ := json.Marshal(el)
-		n += len(b) + 1 // its joining comma inside the body's element array
-	}
-	return n
+func feishuElBytes(add func(*botcard.Card)) int {
+	return botcard.ElementBytes(add)
 }
 
 // Several tasks may share a report. Name the tasks on this card in delivery
@@ -887,11 +882,11 @@ func reportCardHeads(l i18n.Lang, needs, total int) (head1, headN int) {
 	if needs > 0 {
 		first = i18n.T(l, "assistant-reports.title_needs", i18n.Args{"n": needs}) + part
 	}
-	c1 := reportCardStart(l, first, feishubot.Orange)
+	c1 := reportCardStart(l, first, botcard.Orange)
 	c1.Markdown("**" + i18n.T(l, "assistant-reports.decide") + "**")
 	c1.Markdown("**" + i18n.T(l, "assistant-reports.progress") + "**")
 	plain := i18n.T(l, "assistant-reports.title", i18n.Args{"n": total}) + part
-	cN := reportCardStart(l, plain, feishubot.Blue)                    // suffix measured with the longest part too
+	cN := reportCardStart(l, plain, botcard.Blue)                      // suffix measured with the longest part too
 	cN.Markdown("**" + i18n.T(l, "assistant-reports.progress") + "**") // a progress label may land past card 1
 	// Each escaped rune in the new header and its 60-rune chat preview costs
 	// at most six JSON bytes (e.g. a control character).
@@ -899,33 +894,22 @@ func reportCardHeads(l i18n.Lang, needs, total int) (head1, headN int) {
 	return len(c1.JSON()) + titleBudget, len(cN.JSON()) + titleBudget
 }
 
-// reportCardSegments packs entries within the budgets; an item is never cut, one always fits on an empty card.
+// reportCardSegments keeps the report entry API on botcard's generic packer.
 func reportCardSegments(es []reportEntry, head1, headN, hr int) [][]reportEntry {
-	segs := [][]reportEntry{{}}
-	ne, nb := 2, head1 // the first card reserves two element slots for the section labels
-	for _, e := range es {
-		ie, ib := 1, e.bytes
+	return botcard.Segments(es, head1, headN, hr, func(e reportEntry) (bytes, elements int) {
+		elements = 1
 		if len(e.buttons) > 0 {
-			ie++ // its button row
+			elements++ // its button row
 		}
-		cur := &segs[len(segs)-1]
-		if len(*cur) > 0 {
-			ie, ib = ie+1, ib+hr // HR before a later item
-			if ne+ie > reportCardMaxElements || nb+ib > reportCardMaxBytes {
-				segs = append(segs, nil)
-				cur, ne, nb, ie, ib = &segs[len(segs)-1], 1, headN, ie-1, ib-hr
-			}
-		}
-		*cur, ne, nb = append(*cur, e), ne+ie, nb+ib
-	}
-	return segs
+		return e.bytes, elements
+	})
 }
 
 // reportCardOne builds one segment; k is its 0-based index of n, off its first item's global position.
-func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) (*feishubot.Card, string) {
-	title, template := i18n.T(l, "assistant-reports.title", i18n.Args{"n": total}), feishubot.Blue
+func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) (*botcard.Card, string) {
+	title, template := i18n.T(l, "assistant-reports.title", i18n.Args{"n": total}), botcard.Blue
 	if needs > 0 && k == 0 { // only the first card carries the decisions
-		title, template = i18n.T(l, "assistant-reports.title_needs", i18n.Args{"n": needs}), feishubot.Orange
+		title, template = i18n.T(l, "assistant-reports.title_needs", i18n.Args{"n": needs}), botcard.Orange
 	}
 	if n > 1 {
 		title += i18n.T(l, "assistant-reports.part", i18n.Args{"k": k + 1, "n": n})
@@ -954,25 +938,25 @@ func reportCardOne(l i18n.Lang, seg []reportEntry, k, n, off, needs, total int) 
 }
 
 // reportCardStart is a report card's header: its title, its colour (orange while it carries decisions) and its kind.
-func reportCardStart(l i18n.Lang, title, template string) *feishubot.Card {
-	return feishubot.NewCard(title, template, title).Tag(i18n.T(l, "assistant-reports.tag_report"), feishubot.Neutral)
+func reportCardStart(l i18n.Lang, title, template string) *botcard.Card {
+	return botcard.NewCard(title, template, title).Tag(i18n.T(l, "assistant-reports.tag_report"), botcard.Neutral)
 }
 
 // reportStateColors are the colours of an item's state tag: waiting for the owner orange, failed or cut off red, a
 // turn finished blue (the task goes on), done green.
-var reportStateColors = map[string]string{reportNeeds: feishubot.Orange, reportFailed: feishubot.Red,
-	reportInterrupted: feishubot.Red, reportDone: feishubot.Blue, reportClosed: feishubot.Green}
+var reportStateColors = map[string]string{reportNeeds: botcard.Orange, reportFailed: botcard.Red,
+	reportInterrupted: botcard.Red, reportDone: botcard.Blue, reportClosed: botcard.Green}
 
 // reportItemView renders one item's Markdown body and its link buttons (task page, PR, agent chat).
-func (s *Service) reportItemView(l i18n.Lang, web string, stages map[string]todoStage, t Todo, it *reportItem, direction string) (string, []feishubot.Button) {
+func (s *Service) reportItemView(l i18n.Lang, web string, stages map[string]todoStage, t Todo, it *reportItem, direction string) (string, []botcard.Button) {
 	var md strings.Builder
 	color := reportStateColors[it.state]
 	if color == "" {
-		color = feishubot.Neutral
+		color = botcard.Neutral
 	}
-	md.WriteString(feishubot.InlineTag(i18n.T(l, "assistant-reports.state_"+it.state), color) + " **" + feishubot.EscapeMarkdown(direction+clip(oneLine(t.Title), 40)) + "**")
+	md.WriteString(botcard.InlineTag(i18n.T(l, "assistant-reports.state_"+it.state), color) + " **" + botcard.EscapeMarkdown(direction+clip(oneLine(t.Title), 40)) + "**")
 	if it.machine != "" {
-		md.WriteString(" · " + feishubot.EscapeMarkdown(it.machine))
+		md.WriteString(" · " + botcard.EscapeMarkdown(it.machine))
 	}
 	if t.StageKind != "general" {
 		if t.Stage == "" {
@@ -983,20 +967,20 @@ func (s *Service) reportItemView(l i18n.Lang, web string, stages map[string]todo
 	if text := strings.TrimSpace(it.text); text != "" {
 		// Charts become numbers first, as the bot's answers and the briefing card do: clipMarkdown drops a persona-card
 		// block it cannot draw down to its title, so a chart in the answer would reach the owner without its numbers.
-		md.WriteString("\n" + feishubot.CardMarkdown(clipMarkdown(feishubot.PersonaCards(text), 300)))
+		md.WriteString("\n" + botcard.CardMarkdown(clipMarkdown(botcard.PersonaCards(text), 300)))
 	}
 	if it.state == reportNeeds {
 		md.WriteString("\n" + i18n.T(l, "assistant-reports.answer_below"))
 	}
-	var bs []feishubot.Button
+	var bs []botcard.Button
 	if link := todoLink(web, t.ID); link != "" {
-		bs = append(bs, feishubot.PageBtn(i18n.T(l, "assistant-reports.open_task"), link))
+		bs = append(bs, botcard.PageBtn(i18n.T(l, "assistant-reports.open_task"), link))
 	}
 	if pr := stages[t.ID].PR; pr != "" {
-		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.open_pr"), pr))
+		bs = append(bs, botcard.LinkBtn(i18n.T(l, "assistant-reports.open_pr"), pr))
 	}
 	if it.session[1] != "" && web != "" {
-		bs = append(bs, feishubot.PageBtn(i18n.T(l, "assistant-reports.open_agent"), sessionLink(web, it.session[0], it.session[1], false)))
+		bs = append(bs, botcard.PageBtn(i18n.T(l, "assistant-reports.open_agent"), sessionLink(web, it.session[0], it.session[1], false)))
 	}
 	return md.String(), bs
 }

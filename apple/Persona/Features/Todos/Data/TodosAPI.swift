@@ -30,6 +30,27 @@ nonisolated enum TodoNotThere {
     }
 }
 
+/// What the asks route's refusals say (`POST /api/v1/todos/{id}/asks/{ask}/answer`, docs/protocol/protocol.md, its
+/// row in the REST table): a hub whose manager reconnected at an older version answers 404 or 405 with neither of the
+/// route's own codes, which means the route is not there, so the answer goes through today's routes instead.
+nonisolated enum TodoAskRefusal {
+    static let stale = "ask_stale"
+    static let notFound = "ask_not_found"
+
+    /// The route is not there: 405, or a 404 that names neither the to-do nor the ask.
+    static func routeMissing(_ error: Error) -> Bool {
+        guard let e = error as? APIError else { return false }
+        return e.status == 405 || (e.status == 404 && e.code != TodoNotThere.goneCode && e.code != notFound)
+    }
+
+    /// The ask no longer waits: answered anywhere, a newer round, started again (409 `ask_stale`), or it is gone with its
+    /// to-do (404 `todo_not_found`, `ask_not_found`). The first answer anywhere wins; this one is let go quietly.
+    static func answeredElsewhere(_ error: Error) -> Bool {
+        guard let e = error as? APIError else { return false }
+        return (e.status == 409 && e.code == stale) || (e.status == 404 && (e.code == TodoNotThere.goneCode || e.code == notFound))
+    }
+}
+
 /// One to-do as `GET /api/v1/todos/{id}` answers it: the row and its view, worked out over the whole list.
 nonisolated struct ViewedTodo: Equatable, Sendable {
     var todo: TodoItem
@@ -106,13 +127,32 @@ nonisolated extension APIClient {
         _ = try await request("DELETE", "/api/v1/todos/\(Self.todoPath(id))", opID: opID)
     }
 
-    /// `POST /api/v1/todos`: a new to-do with its title and notes, named by the hub.
-    func createTodo(title: String, notes: String?, opID: UUID) async throws -> TodoItem {
-        struct Body: Encodable { var title: String; var notes: String? }
+    /// `POST /api/v1/todos`: a new to-do with its title and notes, named by the hub. Made in a To-dos place, its due day
+    /// or moment and its project go in the same write (#10465), so a retry never leaves it outside the place.
+    func createTodo(title: String, notes: String?, dueAt: Date? = nil, dueDate: String? = nil, project: String? = nil,
+                    opID: UUID) async throws -> TodoItem {
+        struct Body: Encodable {
+            var title: String
+            var notes: String?
+            var dueAt: Date?
+            var dueDate: String?
+            var project: String?
+            enum CodingKeys: String, CodingKey { case title, notes, project, dueAt = "due_at", dueDate = "due_date" }
+        }
         let body = Body(title: title.trimmingCharacters(in: .whitespacesAndNewlines),
-                        notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines))
+                        notes: notes?.trimmingCharacters(in: .whitespacesAndNewlines), dueAt: dueAt, dueDate: dueDate, project: project)
         let data = try await request("POST", "/api/v1/todos", body: body, opID: opID)
         return try JSON.decoder.decode(TodoAnswer.self, from: data).todo
+    }
+
+    /// An answer to one of a to-do's own asks (`POST …/todos/{id}/asks/{ask}/answer`, while the hub lists `todo_asks`),
+    /// by the id its view lists, escaped as one path segment (a step's ask carries a `/`). `opID` rides as
+    /// `X-Persona-Op-Id`: a repeat after an unknown outcome gets the first one's answer. The answer carries the row as it
+    /// reads after it, which says whether the ask still waits.
+    func answerAsk(todo id: String, ask: String, _ answer: TodoAskAnswer, opID: UUID) async throws -> TodoAskAnswered {
+        let data = try await request("POST", "/api/v1/todos/\(Self.todoPath(id))/asks/\(Self.todoPath(ask))/answer", body: answer,
+                                     timeout: Self.todoRelayWait, opID: opID)
+        return try JSON.decoder.decode(TodoAskAnswered.self, from: data)
     }
 
     /// Restore on an inactive to-do (`PUT …/restored`): activity for its status, never an edit.
