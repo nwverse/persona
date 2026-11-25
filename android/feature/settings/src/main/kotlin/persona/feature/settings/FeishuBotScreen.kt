@@ -58,8 +58,13 @@ internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit) {
     val feedback = LocalAppFeedback.current
     LaunchedEffect(model) { model.load() }
     val status = state.status
+    // The daily sync into the knowledge base (#15392): read again with the bot, so a new chat bot shows there too.
+    val sync = remember(api) { api.sync?.let { LarkSyncModel(it, scope) } }
+    val syncState = sync?.state?.collectAsState()?.value
+    LaunchedEffect(sync, status?.appId) { sync?.load() }
+    if (sync != null && syncState != null) LarkSyncEffects(sync, syncState)
     JListPage(title = stringResource(R.string.settings_feishu_bot_title), onBack = onBack, largeTitle = false,
-        refreshing = state.loading && status != null, onRefresh = { scope.launch { model.load() } }) {
+        refreshing = state.loading && status != null, onRefresh = { scope.launch { model.load(); sync?.load() } }) {
         item("status") {
             Column {
                 JGroupItem(GroupPosition(first = true, last = false), Modifier.padding(top = Tokens.Space.s)) {
@@ -117,6 +122,7 @@ internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit) {
                 }
             }
         }
+        if (sync != null && syncState != null) larkSyncItems(sync, syncState, scope)
         item("howto") {
             Column(Modifier.padding(top = Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JSectionHeader(stringResource(R.string.settings_feishu_bot_howto))
