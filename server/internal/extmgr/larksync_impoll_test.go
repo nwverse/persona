@@ -488,3 +488,53 @@ func TestLarkSyncSenderRepairRetriesAfterReauthorization(t *testing.T) {
 		})
 	}
 }
+
+func TestLarkSyncOldRunCannotPostponeRenewedGrant(t *testing.T) {
+	w := newLarkWorld(t)
+	ctx := context.Background()
+	w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierFull)
+	key, acc := w.adopt(t, "bsync", "ou_owner", "example-old", "example-refresh", 24*time.Hour)
+	started, resume := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	w.script("bsync", acc, func(_ context.Context, _ larksyncwire.Binding, _ func(context.Context) (string, error), _ map[string]string, _ larksyncwire.Index) (larksyncwire.Result, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-resume
+			return larksyncwire.Result{Errors: []larksyncwire.ResourceError{{Resource: "sender_names", Kind: larksyncwire.ErrKindScope}}}, nil
+		}
+		return larksyncwire.Result{}, nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- w.h.larkSyncRun(ctx, key) }()
+	t.Cleanup(func() {
+		select {
+		case <-resume:
+		default:
+			close(resume)
+		}
+	})
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("old run did not start")
+	}
+	w.advance(time.Minute)
+	w.adopt(t, "bsync", "ou_owner", "example-new", "example-new-refresh", 24*time.Hour)
+	close(resume)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("old run did not finish")
+	}
+	b := w.binding(t, key)
+	if b.Health != larksyncwire.HealthOK || !b.NextRunAt.Equal(w.now()) || b.BackfillVersion != 0 {
+		t.Fatalf("old run overwrote renewed grant: health=%s due=%v repair=%d", b.Health, b.NextRunAt, b.BackfillVersion)
+	}
+	w.h.larkSyncTick(ctx)
+	if calls.Load() != 2 {
+		t.Fatal("renewed grant did not automatically run on the next tick")
+	}
+}

@@ -263,7 +263,7 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 	}
 	app, err := h.larkSyncApp(ctx, &st, b.BotID)
 	if err != nil {
-		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, err, nil, false, 0)
+		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, err, nil, false, 0, b.AuthorizedAt)
 		return err
 	}
 	reader := h.readerOf(rt)
@@ -286,7 +286,7 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 		App: app, Backfill: larkSyncBackfill, Budget: budget}
 	cursors, err := store.LarkSyncCursors(ctx, key)
 	if err != nil {
-		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, nil, err, false, 0)
+		h.larkSyncFinish(ctx, key, mode, larksyncwire.Result{}, nil, err, false, 0, b.AuthorizedAt)
 		return err
 	}
 	token, handed := h.larkSyncTokenFunc(key)
@@ -330,7 +330,7 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 			}
 		}
 	}
-	if gone := h.larkSyncFinish(ctx, key, mode, res, runErr, commitErr, madeProgress, backfillVer); gone {
+	if gone := h.larkSyncFinish(ctx, key, mode, res, runErr, commitErr, madeProgress, backfillVer, b.AuthorizedAt); gone {
 		// The binding was removed while it ran: what the run committed stays in the knowledge base, its cursors go.
 		h.larkSyncForget(ctx, key)
 		return errLarkSyncNoBinding
@@ -629,12 +629,17 @@ func larkSyncOutboxRows(b larksyncwire.Binding, res larksyncwire.Result, now tim
 // (ModeIM) advance NextIMRunAt without disturbing the daily full run's NextRunAt; when a ModeIM run was partial only
 // because a large chat hit its budget/cap while still making forward progress, NextIMRunAt stays at 15 minutes
 // (larkSyncIMEvery) instead of backing off for an hour. gone: the binding was removed meanwhile.
-func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res larksyncwire.Result, runErr, commitErr error, madeProgress bool, backfillVer int) (gone bool) {
+func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res larksyncwire.Result, runErr, commitErr error, madeProgress bool, backfillVer int, authorizedAt time.Time) (gone bool) {
 	now := h.bots.sync.clock()
 	_, err := h.larkSyncChange(context.WithoutCancel(ctx), func(st *larkSyncState) error {
 		b := st.binding(key)
 		if b == nil {
 			return errLarkSyncNoBinding
+		}
+		if !b.AuthorizedAt.Equal(authorizedAt) {
+			// A grant renewed during this run is already due now. Its health and schedule must not be
+			// overwritten by the old grant's missing-scope result or daily backoff.
+			return nil
 		}
 		imOnly := mode == larksyncwire.ModeIM
 		if imOnly {
