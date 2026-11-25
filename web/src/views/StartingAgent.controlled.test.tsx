@@ -390,6 +390,201 @@ describe("StartingAgent controlled deps, view separation, and race guards", () =
     expectNoDefaultSingletons();
   });
 
+  it("resets controlled draft and retrying state when switching from direct scopeKey to getter+subscribe (P1-1)", async () => {
+    const scopeListeners = new Set<() => void>();
+    let liveScope = "acct-b";
+    const launchA = makeLaunch({ id: "l-1", launcher: "orig-a", text: "orig-text-a" });
+    const launchB = makeLaunch({ id: "l-1", launcher: "orig-b", text: "orig-text-b" });
+    let switchAccount!: () => void;
+    let stateSnap = { text: "", launcher: "", retrying: false };
+
+    function BridgeSwitchHost() {
+      const [subscribedMode, setSubscribedMode] = useState(false);
+      const [text, setText] = useState("edited-secret-a");
+      const [launcher, setLauncher] = useState("custom-a");
+      const [retrying, setRetrying] = useState(true);
+      stateSnap = { text, launcher, retrying };
+      switchAccount = () => setSubscribedMode(true);
+      return (
+        <StartingAgent
+          launch={subscribedMode ? launchB : launchA}
+          deps={{
+            scopeKey: subscribedMode ? () => liveScope : "acct-a",
+            subscribeScopeKey: subscribedMode ? (l) => { scopeListeners.add(l); return () => scopeListeners.delete(l); } : undefined,
+            machineName: "Mac",
+            providerNames: [],
+            putLaunch: vi.fn(),
+            deliverLaunch: vi.fn(),
+            navigate: vi.fn(),
+            text,
+            onTextChange: setText,
+            launcher,
+            onLauncherChange: setLauncher,
+            retrying,
+            onRetryingChange: setRetrying,
+          }}
+        />
+      );
+    }
+
+    await act(async () => root.render(<BridgeSwitchHost />));
+    expect(stateSnap).toEqual({ text: "edited-secret-a", launcher: "custom-a", retrying: true });
+
+    await act(async () => switchAccount());
+    await flush();
+    expect(stateSnap).toEqual({ text: "orig-text-b", launcher: "orig-b", retrying: false });
+    expect(host.querySelector("input")!.value).toBe("orig-b");
+    expect(host.querySelector("textarea")!.value).toBe("orig-text-b");
+    expect(buttonByText(t("startingagent.retry"))!.disabled).toBe(false);
+    expectNoDefaultSingletons();
+  });
+
+  it("re-checks scope immediately before deliverLaunch if putLaunch synchronously switches account (P1-3)", async () => {
+    let liveScope = "acct-a";
+    const scopeListeners = new Set<() => void>();
+    const deliverLaunch = vi.fn();
+    const onRetryingChange = vi.fn();
+    const putLaunch = vi.fn(() => {
+      liveScope = "acct-b";
+      scopeListeners.forEach((l) => l());
+    });
+
+    await act(async () => root.render(
+      <StartingAgent
+        launch={makeLaunch({ id: "l-sync-switch", launcher: "claude", text: "task-a" })}
+        deps={{
+          scopeKey: () => liveScope,
+          subscribeScopeKey: (l) => { scopeListeners.add(l); return () => scopeListeners.delete(l); },
+          machineName: "Mac",
+          providerNames: [],
+          putLaunch,
+          deliverLaunch,
+          navigate: vi.fn(),
+          onRetryingChange,
+        }}
+      />,
+    ));
+
+    await act(async () => buttonByText(t("startingagent.retry"))!.click());
+    await flush();
+    expect(putLaunch).toHaveBeenCalledTimes(1);
+    expect(deliverLaunch).not.toHaveBeenCalled();
+    expect(onRetryingChange).toHaveBeenLastCalledWith(false);
+    expect(buttonByText(t("startingagent.retry"))!.disabled).toBe(false);
+    expectNoDefaultSingletons();
+  });
+
+  it("cancels stale async confirm when launch gains a session and clearable draft while awaiting confirmation (P1-4)", async () => {
+    let liveLaunch: AgentLaunch = makeLaunch({ id: "l-op", machineId: "mac-1", uncertain: true, session: undefined, clearable: undefined });
+    const confirmReq = deferred<boolean>();
+    const confirmFn = vi.fn(() => confirmReq.promise);
+    const deliverLaunch = vi.fn();
+    const onRetryingChange = vi.fn();
+
+    await act(async () => root.render(
+      <StartingAgent
+        launch={liveLaunch}
+        deps={{
+          scopeKey: "acct-1",
+          machineName: "Mac",
+          providerNames: [],
+          getLaunch: () => liveLaunch,
+          confirm: confirmFn,
+          putLaunch: vi.fn(),
+          deliverLaunch,
+          navigate: vi.fn(),
+          onRetryingChange,
+        }}
+      />,
+    ));
+
+    await act(async () => buttonByText(t("startingagent.retry"))!.click());
+    expect(confirmFn).toHaveBeenCalledWith(t("startingagent.restart_confirm"));
+    expect(buttonByText(t("startingagent.retry"))!.disabled).toBe(true);
+
+    // While waiting on restart_confirm, the same launch gains session S and clearable draft D.
+    liveLaunch = {
+      ...liveLaunch,
+      session: { machine_id: "mac-1", session_id: "S", title: "Session S", status: "idle", cwd: "/code/app" },
+      clearable: "D",
+    };
+    await act(async () => confirmReq.resolve(true));
+    await flush();
+
+    // Approving the old restart_confirm must NOT resend to session S with clear_draft D.
+    expect(deliverLaunch).not.toHaveBeenCalled();
+    expect(onRetryingChange).toHaveBeenLastCalledWith(false);
+    expect(buttonByText(t("startingagent.retry"))!.disabled).toBe(false);
+    expectNoDefaultSingletons();
+  });
+
+  it("caches fresh-array providerNames getter snapshots with subscribeProviderNames without infinite re-renders (P1-5)", async () => {
+    let label = "Team Relay v1";
+    const listeners = new Set<() => void>();
+    const readProviderNames = vi.fn(() => [{ name: "relay-1", display_name: label }]);
+
+    await act(async () => root.render(
+      <StartingAgent
+        launch={makeLaunch({ launcher: "relay-1" })}
+        deps={{
+          scopeKey: "s1",
+          machineName: "Mac",
+          providerNames: readProviderNames,
+          subscribeProviderNames: (l) => { listeners.add(l); return () => listeners.delete(l); },
+          putLaunch: vi.fn(),
+          deliverLaunch: vi.fn(),
+          navigate: vi.fn(),
+        }}
+      />,
+    ));
+    expect(host.querySelector("header p")?.textContent).toContain("Team Relay v1");
+
+    label = "Team Relay v2";
+    await act(async () => { listeners.forEach((l) => l()); });
+    expect(host.querySelector("header p")?.textContent).toContain("Team Relay v2");
+    expectNoDefaultSingletons();
+  });
+
+  it("catches putLaunch throw, releases retrying state, shows recoverable error, and permits retry (P1-6)", async () => {
+    const putLaunch = vi.fn()
+      .mockImplementationOnce(() => { throw new Error("storage quota exceeded"); })
+      .mockImplementationOnce(() => {});
+    const deliverLaunch = vi.fn();
+    const onRetryingChange = vi.fn();
+
+    await act(async () => root.render(
+      <StartingAgent
+        launch={makeLaunch({ id: "l-throw", launcher: "claude", text: "prompt" })}
+        deps={{
+          scopeKey: "acct-1",
+          machineName: "Mac",
+          providerNames: [],
+          putLaunch,
+          deliverLaunch,
+          navigate: vi.fn(),
+          formatError: (e) => `persist:${(e as Error).message}`,
+          onRetryingChange,
+        }}
+      />,
+    ));
+
+    // First attempt throws inside putLaunch: busy must clear, deliverLaunch skipped, recoverable error shown.
+    await act(async () => buttonByText(t("startingagent.retry"))!.click());
+    await flush();
+    expect(deliverLaunch).not.toHaveBeenCalled();
+    expect(onRetryingChange).toHaveBeenLastCalledWith(false);
+    expect(buttonByText(t("startingagent.retry"))!.disabled).toBe(false);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("persist:storage quota exceeded");
+
+    // Second attempt succeeds and clears the error.
+    await act(async () => buttonByText(t("startingagent.retry"))!.click());
+    await flush();
+    expect(putLaunch).toHaveBeenCalledTimes(2);
+    expect(deliverLaunch).toHaveBeenCalledExactlyOnceWith("l-throw", undefined);
+    expect(host.querySelector('[role="alert"]')?.textContent).not.toContain("persist:storage quota exceeded");
+    expectNoDefaultSingletons();
+  });
+
   it("renders StartingAgentView purely and preserves default fallbacks when deps are omitted", async () => {
     const onRetry = vi.fn();
     const onToggleSidebar = vi.fn();

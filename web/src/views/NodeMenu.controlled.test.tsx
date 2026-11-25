@@ -194,6 +194,90 @@ describe("NodeMenu controlled deps, view separation, and scope fencing", () => {
     expect(nodeDeps.changed).not.toHaveBeenCalled();
   });
 
+  it("fences pre-built actions, before items, submenu children, and rename commits after getter-only scopeKey mutation (P1-2)", async () => {
+    let liveScope = "acct-a";
+    const beforeSelect = vi.fn();
+    const closeAction = vi.fn(() => Promise.resolve());
+    const childAction = vi.fn();
+    const renameCommit = vi.fn(() => Promise.resolve());
+    const onClose = vi.fn();
+
+    await act(async () => root.render(
+      <NodeMenu
+        node={paneNode()}
+        at={{ point: { x: 10, y: 10 } }}
+        onClose={onClose}
+        before={[{ key: "before-pin", label: "Pin", onSelect: beforeSelect }]}
+        deps={{
+          scopeKey: () => liveScope,
+          actions: [
+            { key: "pre-close", label: "Close pane", confirm: "Confirm close", inline: true, onSelect: closeAction },
+            { key: "pre-sub", label: "More", onSelect: () => {}, children: [{ key: "sub-item", label: "Sub action", onSelect: childAction }] },
+            { key: "pre-rename", label: "Rename", onSelect: () => {}, rename: { value: "old", commit: renameCommit } },
+          ],
+        }}
+      />,
+    ));
+
+    // Step 1: click Close pane once to enter confirming state while still in acct-a.
+    await act(async () => menuButton("Close pane")!.click());
+    expect(menuButton("Confirm close")).not.toBeUndefined();
+
+    // Mutate getter-only scope WITHOUT re-rendering, then confirm Close pane -> raw closeAction MUST NOT fire.
+    liveScope = "acct-b";
+    await act(async () => menuButton("Confirm close")!.click());
+    await flush();
+    expect(closeAction).not.toHaveBeenCalled();
+
+    // Re-open in acct-b, mutate to acct-c without re-render, and verify before item, rename commit, and submenu child are all fenced.
+    await act(async () => root.render(
+      <NodeMenu
+        node={paneNode()}
+        at={{ point: { x: 10, y: 10 } }}
+        onClose={onClose}
+        before={[{ key: "before-pin", label: "Pin", onSelect: beforeSelect }]}
+        deps={{
+          scopeKey: () => liveScope,
+          actions: [
+            { key: "pre-sub", label: "More", onSelect: () => {}, children: [{ key: "sub-item", label: "Sub action", onSelect: childAction }] },
+            { key: "pre-rename", label: "Rename", onSelect: () => {}, rename: { value: "old", commit: renameCommit } },
+          ],
+        }}
+      />,
+    ));
+
+    // Open submenu and rename input while in acct-b, then mutate scope to acct-c before activating them.
+    await act(async () => menuButton("More")!.click());
+    expect(menuButton("Sub action")).not.toBeUndefined();
+    liveScope = "acct-c";
+    await act(async () => menuButton("Sub action")!.click());
+    await act(async () => menuButton("Pin")!.click());
+    expect(childAction).not.toHaveBeenCalled();
+    expect(beforeSelect).not.toHaveBeenCalled();
+
+    // Also verify rename commit is fenced when scope mutates while rename input is open.
+    await act(async () => root.render(
+      <NodeMenu
+        node={paneNode()}
+        at={{ point: { x: 10, y: 10 } }}
+        onClose={onClose}
+        deps={{
+          scopeKey: () => liveScope,
+          actions: [{ key: "pre-rename", label: "Rename", onSelect: () => {}, rename: { value: "old", commit: renameCommit } }],
+        }}
+      />,
+    ));
+    await act(async () => menuButton("Rename")!.click());
+    const input = host.querySelector<HTMLInputElement>("input")!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "new-name");
+    await act(async () => input.dispatchEvent(new Event("input", { bubbles: true })));
+    liveScope = "acct-d";
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flush();
+    expect(renameCommit).not.toHaveBeenCalled();
+    expect(mocks.defaultNodeDeps).not.toHaveBeenCalled();
+  });
+
   it("supports deps.actions, deps.renderMenu, and pure NodeMenuView without default singletons", async () => {
     let captured: NodeMenuViewProps | undefined;
     const onAction = vi.fn();

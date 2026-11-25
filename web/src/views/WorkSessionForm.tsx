@@ -157,6 +157,59 @@ const label = "flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ink-2"
 
 type Load<T> = { key: string; data?: T; error?: string };
 
+const noopSubscribe = () => () => {};
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  const ak = Object.keys(ar);
+  const bk = Object.keys(br);
+  return ak.length === bk.length && ak.every((k) => Object.prototype.hasOwnProperty.call(br, k) && sameValue(ar[k], br[k]));
+}
+
+function useCachedSnapshot<T>(subscribe: (listener: () => void) => () => void, read: () => T): T {
+  const cacheRef = useRef<{ has: boolean; value: T }>({ has: false, value: undefined as T });
+  const getSnapshot = useCallback(() => {
+    const next = read();
+    if (cacheRef.current.has && sameValue(cacheRef.current.value, next)) return cacheRef.current.value;
+    cacheRef.current = { has: true, value: next };
+    return next;
+  }, [read]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function useTrackedString(subscribe: (listener: () => void) => () => void, read: () => string) {
+  const stateRef = useRef<{ value: string; version: number } | null>(null);
+  const sub = useCallback((listener: () => void) => subscribe(() => {
+    const next = read();
+    if (!stateRef.current || next !== stateRef.current.value) {
+      stateRef.current = { value: next, version: (stateRef.current?.version ?? 0) + 1 };
+    }
+    listener();
+  }), [subscribe, read]);
+  const getSnapshot = useCallback(() => {
+    const next = read();
+    if (!stateRef.current) {
+      stateRef.current = { value: next, version: 0 };
+    } else if (next !== stateRef.current.value) {
+      stateRef.current = { value: next, version: stateRef.current.version + 1 };
+    }
+    return stateRef.current;
+  }, [read]);
+  const snap = useSyncExternalStore(sub, getSnapshot, getSnapshot);
+  const readToken = useCallback(() => {
+    const cur = read();
+    const s = stateRef.current;
+    return s && s.value === cur ? `${s.version}:${cur}` : `drift:${cur}`;
+  }, [read]);
+  return { value: snap.value, token: `${snap.version}:${snap.value}`, readToken };
+}
+
 function useTarget<T>(
   key: string,
   read: (signal: AbortSignal) => Promise<T>,
@@ -357,156 +410,61 @@ export function WorkSessionFormView({
   </>;
 }
 
-function useTrackedString(subscribe: (listener: () => void) => () => void, read: () => string) {
-  const stateRef = useRef<{ value: string; version: number } | null>(null);
-  const sub = useCallback((listener: () => void) => subscribe(() => {
-    const next = read();
-    if (!stateRef.current || next !== stateRef.current.value) {
-      stateRef.current = { value: next, version: (stateRef.current?.version ?? 0) + 1 };
-    }
-    listener();
-  }), [subscribe, read]);
-  const getSnapshot = useCallback(() => {
-    const next = read();
-    if (!stateRef.current) {
-      stateRef.current = { value: next, version: 0 };
-    } else if (next !== stateRef.current.value) {
-      stateRef.current = { value: next, version: stateRef.current.version + 1 };
-    }
-    return stateRef.current;
-  }, [read]);
-  const snap = useSyncExternalStore(sub, getSnapshot, getSnapshot);
-  const readToken = useCallback(() => {
-    const cur = read();
-    const s = stateRef.current;
-    return s && s.value === cur ? `${s.version}:${cur}` : `drift:${cur}`;
-  }, [read]);
-  return { value: snap.value, token: `${snap.version}:${snap.value}`, readToken };
-}
-
-export function WorkSessionForm({ open, onClose, deps }: WorkSessionFormProps) {
-  if (deps?.subscribeScopeKey && typeof deps.scopeKey === "function") {
-    return <SubscribedScopeBridge open={open} onClose={onClose} deps={deps} readScope={deps.scopeKey} subscribe={deps.subscribeScopeKey} />;
-  }
-  const scopeDep = deps?.scopeKey;
-  const readScopeToken = () => (typeof scopeDep === "function" ? scopeDep() : (scopeDep ?? ""));
-  const scopeToken = readScopeToken();
-  return <MachinesBridge open={open} onClose={onClose} deps={deps} scopeToken={scopeToken} readScopeToken={readScopeToken} />;
-}
-
-function SubscribedScopeBridge({
-  open, onClose, deps, readScope, subscribe,
-}: WorkSessionFormProps & { readScope: () => string; subscribe: (listener: () => void) => () => void }) {
-  const tracked = useTrackedString(subscribe, readScope);
-  return <MachinesBridge open={open} onClose={onClose} deps={deps} scopeToken={tracked.token} readScopeToken={tracked.readToken} />;
-}
-
-interface ScopeResolvedProps extends WorkSessionFormProps {
+interface FormStateBag {
   scopeToken: string;
-  readScopeToken: () => string;
+  ownerToken: string;
+  epoch: number;
+  resetting: boolean;
+  mid: string;
+  cwd: string;
+  browse: string;
+  harness: string;
+  launcher: string;
+  model: string;
+  prompt: string;
+  attachments: LocalAttachment[];
+  revision: number;
+  isScopeCurrent: () => boolean;
+  formatError: (error: unknown) => string;
+  setMidState: (next: string) => void;
+  setCwdState: (next: string) => void;
+  setBrowseState: (next: string) => void;
+  setHarnessState: (next: string) => void;
+  setLauncherState: (next: string) => void;
+  setModelState: (next: string) => void;
+  setPromptState: (next: string) => void;
+  setAttachmentsState: (next: LocalAttachment[] | ((current: LocalAttachment[]) => LocalAttachment[])) => void;
+  bumpRevision: () => void;
+  close: () => void;
+  add: (list: FileList) => void;
+  removeAttachment: (id: string) => void;
+  submit: (
+    opts: WorkSessionStartOptions | undefined,
+    projectPath: string | undefined,
+    kind: string,
+    canStart: boolean,
+    machine: Machine | undefined,
+    readLiveMachine: (machineId: string) => Machine | undefined,
+  ) => void;
 }
 
-function MachinesBridge(props: ScopeResolvedProps) {
-  const { deps } = props;
-  if (deps?.machines !== undefined) {
-    if (deps.subscribeMachines && typeof deps.machines === "function") {
-      return <SubscribedMachinesBridge {...props} deps={deps} readMachines={deps.machines} subscribe={deps.subscribeMachines} />;
-    }
-    const machinesDep = deps.machines;
-    const machines = typeof machinesDep === "function" ? machinesDep() : machinesDep;
-    const readLiveMachine = (id: string) =>
-      deps.getLiveMachine ? deps.getLiveMachine(id) : (typeof machinesDep === "function" ? machinesDep() : machinesDep).find((m) => m.id === id);
-    return <OwnerBridge {...props} machines={machines} readLiveMachine={readLiveMachine} />;
-  }
-  return <DefaultMachinesBridge {...props} />;
-}
+/** Stable outer owner of scope/credential identity tracking and controlled/uncontrolled form resets across bridge mode switches. */
+export function WorkSessionForm({ open, onClose, deps }: WorkSessionFormProps) {
+  const scopeDep = deps?.scopeKey;
+  const readScope = useCallback(() => (typeof scopeDep === "function" ? scopeDep() : (scopeDep ?? "")), [scopeDep]);
+  const scopeSubscribe = deps?.subscribeScopeKey && typeof scopeDep === "function" ? deps.subscribeScopeKey : noopSubscribe;
+  const trackedScope = useTrackedString(scopeSubscribe, readScope);
 
-function SubscribedMachinesBridge(
-  props: ScopeResolvedProps & { deps: WorkSessionFormDeps; readMachines: () => readonly Machine[]; subscribe: (listener: () => void) => () => void },
-) {
-  const { deps, readMachines, subscribe } = props;
-  const machines = useSyncExternalStore(subscribe, readMachines, readMachines);
-  const readLiveMachine = useCallback(
-    (id: string) => (deps.getLiveMachine ? deps.getLiveMachine(id) : readMachines().find((m) => m.id === id)),
-    [deps.getLiveMachine, readMachines],
-  );
-  return <OwnerBridge {...props} machines={machines} readLiveMachine={readLiveMachine} />;
-}
-
-function DefaultMachinesBridge(props: ScopeResolvedProps) {
-  const machines = useScopedMachines();
-  const getLive = props.deps?.getLiveMachine;
-  const readLiveMachine = useCallback(
-    (id: string) => (getLive ? getLive(id) : getState().machines.find((m) => m.id === id)),
-    [getLive],
-  );
-  return <OwnerBridge {...props} machines={machines} readLiveMachine={readLiveMachine} />;
-}
-
-interface MachinesResolvedProps extends ScopeResolvedProps {
-  machines: readonly Machine[];
-  readLiveMachine: (machineId: string) => Machine | undefined;
-}
-
-function OwnerBridge(props: MachinesResolvedProps) {
-  const { deps } = props;
-  if (deps?.subscribeCredentialOwner) {
-    return <SubscribedOwnerBridge {...props} deps={deps} subscribe={deps.subscribeCredentialOwner} />;
-  }
-  if (deps?.credentialOwner !== undefined) {
-    const ownerDep = deps.credentialOwner;
-    const readOwnerToken = () => (typeof ownerDep === "function" ? ownerDep() : ownerDep);
-    const ownerToken = readOwnerToken();
-    return <AddComputerBridge {...props} ownerToken={ownerToken} readOwnerToken={readOwnerToken} />;
-  }
-  return <DefaultOwnerBridge {...props} />;
-}
-
-function SubscribedOwnerBridge(
-  props: MachinesResolvedProps & { deps: WorkSessionFormDeps; subscribe: (listener: () => void) => () => void },
-) {
-  const { deps, subscribe } = props;
-  const ownerDep = deps.credentialOwner;
+  const ownerDep = deps?.credentialOwner;
+  const hasControlledOwner = ownerDep !== undefined || deps?.subscribeCredentialOwner !== undefined;
   const readOwner = useCallback(
     () => (typeof ownerDep === "function" ? ownerDep() : typeof ownerDep === "string" ? ownerDep : credentialOwner()),
     [ownerDep],
   );
-  const tracked = useTrackedString(subscribe, readOwner);
-  return <AddComputerBridge {...props} ownerToken={tracked.token} readOwnerToken={tracked.readToken} />;
-}
+  const ownerSubscribe = hasControlledOwner ? (deps?.subscribeCredentialOwner ?? noopSubscribe) : subscribeCredentialOwner;
+  const trackedOwner = useTrackedString(ownerSubscribe, readOwner);
 
-function DefaultOwnerBridge(props: MachinesResolvedProps) {
-  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
-  return <AddComputerBridge {...props} ownerToken={owner} readOwnerToken={credentialOwner} />;
-}
-
-interface OwnerResolvedProps extends MachinesResolvedProps {
-  ownerToken: string;
-  readOwnerToken: () => string;
-}
-
-function AddComputerBridge(props: OwnerResolvedProps) {
-  const addDep = props.deps?.addComputer;
-  if (addDep !== undefined) {
-    const adding: WorkSessionAddComputer = typeof addDep === "function" ? { open: addDep, dialog: null } : addDep;
-    return <WorkSessionFormBody {...props} adding={adding} />;
-  }
-  return <DefaultAddComputerBridge {...props} />;
-}
-
-function DefaultAddComputerBridge(props: OwnerResolvedProps) {
-  const adding = useAddComputer();
-  return <WorkSessionFormBody {...props} adding={adding} />;
-}
-
-interface BodyProps extends OwnerResolvedProps {
-  adding: WorkSessionAddComputer;
-}
-
-function WorkSessionFormBody({
-  open, onClose, deps, scopeToken, readScopeToken, machines, readLiveMachine, ownerToken, readOwnerToken, adding,
-}: BodyProps) {
-  const scopeIdentity = JSON.stringify([scopeToken, ownerToken]);
+  const scopeIdentity = JSON.stringify([trackedScope.token, trackedOwner.token]);
   const [scope, setScope] = useState<{ key: string; epoch: number }>(() => ({ key: scopeIdentity, epoch: 1 }));
   const [resetEpoch, setResetEpoch] = useState(1);
 
@@ -546,9 +504,8 @@ function WorkSessionFormBody({
   const depsRef = useRef(deps);
   const openRef = useRef(open);
   const onCloseRef = useRef(onClose);
-  const readScopeTokenRef = useRef(readScopeToken);
-  const readOwnerTokenRef = useRef(readOwnerToken);
-  const readLiveMachineRef = useRef(readLiveMachine);
+  const readScopeTokenRef = useRef(trackedScope.readToken);
+  const readOwnerTokenRef = useRef(trackedOwner.readToken);
   const attachmentsRef = useRef(attachments);
   const promptRef = useRef(prompt);
   const keptLocalFiles = useRef<LocalAttachment[]>(deps?.attachments === undefined ? localAttachments : []);
@@ -560,9 +517,8 @@ function WorkSessionFormBody({
     depsRef.current = deps;
     openRef.current = open;
     onCloseRef.current = onClose;
-    readScopeTokenRef.current = readScopeToken;
-    readOwnerTokenRef.current = readOwnerToken;
-    readLiveMachineRef.current = readLiveMachine;
+    readScopeTokenRef.current = trackedScope.readToken;
+    readOwnerTokenRef.current = trackedOwner.readToken;
     attachmentsRef.current = attachments;
     promptRef.current = prompt;
     if (!resetting) keptLocalFiles.current = deps?.attachments === undefined ? localAttachments : [];
@@ -641,13 +597,173 @@ function WorkSessionFormBody({
   }, [open, scope.epoch]);
 
   const isScopeCurrent = () =>
-    activeEpochRef.current === scope.epoch && readScopeTokenRef.current() === scopeToken && readOwnerTokenRef.current() === ownerToken;
+    activeEpochRef.current === scope.epoch
+    && readScopeTokenRef.current() === trackedScope.token
+    && readOwnerTokenRef.current() === trackedOwner.token;
   const formatError = (error: unknown) => (depsRef.current?.formatError ?? workSessionError)(error);
+
+  const close = () => {
+    submitted.current = true;
+    onCloseRef.current();
+  };
+  const add = (list: FileList) => {
+    if (!isScopeCurrent()) return;
+    const pick = depsRef.current?.pickAttachment ?? pickAttachment;
+    const notify = depsRef.current?.notify ?? toast;
+    const picked: LocalAttachment[] = [];
+    for (const file of Array.from(list)) {
+      try { picked.push(pick(file)); }
+      catch (e) { notify(formatError(e), "error"); }
+    }
+    if (picked.length) setAttachmentsState((current) => [...current, ...picked]);
+  };
+  const removeAttachment = (id: string) => {
+    if (!isScopeCurrent()) return;
+    const removed = attachmentsRef.current.filter((a) => a.id === id);
+    releaseFiles(removed);
+    setAttachmentsState((current) => current.filter((a) => a.id !== id));
+  };
+  const submit: FormStateBag["submit"] = (opts, projectPath, kind, canStart, machine, readLiveMachine) => {
+    if (submitted.current || !openRef.current || !isScopeCurrent()) return;
+    const live = readLiveMachine(mid);
+    const currentPrompt = promptRef.current;
+    const currentAttachments = attachmentsRef.current;
+    if (
+      !canStart || !opts || !projectPath || !live?.online || live.trust === "pending"
+      || live.manager !== machine?.manager || live.engine !== machine?.engine || live.engine_default !== machine?.engine_default
+      || (opts.prompt_required && !currentPrompt.trim()) || (!opts.attachments && currentAttachments.length > 0)
+    ) return;
+    submitted.current = true;
+    const runLaunch = depsRef.current?.launchAgent ?? launchAgent;
+    runLaunch({
+      machineId: mid,
+      cwd: projectPath,
+      launcher,
+      agentType: kind,
+      workSession: true,
+      model: model || undefined,
+      inlinePrompt: opts.inline_prompt,
+      text: currentPrompt.trim(),
+      attachments: currentAttachments,
+    });
+    keptLocalFiles.current = []; // The launch owns the attachment previews after this point.
+    setAttachmentsState([]);
+    setPromptState("");
+    onCloseRef.current();
+  };
+
+  const form: FormStateBag = {
+    scopeToken: trackedScope.token,
+    ownerToken: trackedOwner.token,
+    epoch: scope.epoch,
+    resetting,
+    mid,
+    cwd,
+    browse,
+    harness,
+    launcher,
+    model,
+    prompt,
+    attachments,
+    revision,
+    isScopeCurrent,
+    formatError,
+    setMidState,
+    setCwdState,
+    setBrowseState,
+    setHarnessState,
+    setLauncherState,
+    setModelState,
+    setPromptState,
+    setAttachmentsState,
+    bumpRevision: () => setRevision((n) => n + 1),
+    close,
+    add,
+    removeAttachment,
+    submit,
+  };
+
+  return <MachinesBridge open={open} onClose={onClose} deps={deps} form={form} />;
+}
+
+interface MachinesBridgeProps extends WorkSessionFormProps {
+  form: FormStateBag;
+}
+
+function MachinesBridge(props: MachinesBridgeProps) {
+  if (props.deps?.machines !== undefined) {
+    return <ControlledMachinesBridge {...props} deps={props.deps} />;
+  }
+  return <DefaultMachinesBridge {...props} />;
+}
+
+function ControlledMachinesBridge(props: MachinesBridgeProps & { deps: WorkSessionFormDeps }) {
+  const { deps } = props;
+  const machinesDep = deps.machines!;
+  const readMachines = useCallback(
+    () => (typeof machinesDep === "function" ? machinesDep() : machinesDep),
+    [machinesDep],
+  );
+  const subscribe = deps.subscribeMachines && typeof machinesDep === "function" ? deps.subscribeMachines : noopSubscribe;
+  const machines = useCachedSnapshot(subscribe, readMachines);
+  const readLiveMachine = useCallback(
+    (id: string) => (deps.getLiveMachine ? deps.getLiveMachine(id) : readMachines().find((m) => m.id === id)),
+    [deps.getLiveMachine, readMachines],
+  );
+  return <AddComputerBridge {...props} machines={machines} readLiveMachine={readLiveMachine} />;
+}
+
+function DefaultMachinesBridge(props: MachinesBridgeProps) {
+  const machines = useScopedMachines();
+  const getLive = props.deps?.getLiveMachine;
+  const readLiveMachine = useCallback(
+    (id: string) => (getLive ? getLive(id) : getState().machines.find((m) => m.id === id)),
+    [getLive],
+  );
+  return <AddComputerBridge {...props} machines={machines} readLiveMachine={readLiveMachine} />;
+}
+
+interface MachinesResolvedProps extends MachinesBridgeProps {
+  machines: readonly Machine[];
+  readLiveMachine: (machineId: string) => Machine | undefined;
+}
+
+function AddComputerBridge(props: MachinesResolvedProps) {
+  const addDep = props.deps?.addComputer;
+  if (addDep !== undefined) {
+    const adding: WorkSessionAddComputer = typeof addDep === "function" ? { open: addDep, dialog: null } : addDep;
+    return <WorkSessionFormBody {...props} adding={adding} />;
+  }
+  return <DefaultAddComputerBridge {...props} />;
+}
+
+function DefaultAddComputerBridge(props: MachinesResolvedProps) {
+  const adding = useAddComputer();
+  return <WorkSessionFormBody {...props} adding={adding} />;
+}
+
+interface BodyProps extends MachinesResolvedProps {
+  adding: WorkSessionAddComputer;
+}
+
+function WorkSessionFormBody({ open, deps, form, machines, readLiveMachine, adding }: BodyProps) {
+  const {
+    scopeToken, ownerToken, epoch, resetting, mid, cwd, browse, harness, launcher, model, prompt, attachments, revision,
+    isScopeCurrent, formatError, setMidState, setCwdState, setBrowseState, setHarnessState, setLauncherState, setModelState,
+    setPromptState, bumpRevision, close, add, removeAttachment, submit,
+  } = form;
+
+  const depsRef = useRef(deps);
+  const readLiveMachineRef = useRef(readLiveMachine);
+  useLayoutEffect(() => {
+    depsRef.current = deps;
+    readLiveMachineRef.current = readLiveMachine;
+  });
 
   const machine = machines.find((m) => m.id === mid);
   const offline = !!mid && (!machine?.online || machine.trust === "pending");
   const target = !resetting && open && machine?.online && machine.trust !== "pending"
-    ? JSON.stringify([scopeToken, ownerToken, scope.epoch, mid, machine.manager, machine.engine, machine.engine_default, revision])
+    ? JSON.stringify([scopeToken, ownerToken, epoch, mid, machine.manager, machine.engine, machine.engine_default, revision])
     : "";
   const dirs = useTarget(
     target && JSON.stringify([target, browse]),
@@ -712,55 +828,7 @@ function WorkSessionFormBody({
     setHarnessState("");
     chooseLauncher("");
   };
-  const close = () => {
-    submitted.current = true;
-    onCloseRef.current();
-  };
-  const add = (list: FileList) => {
-    if (!isScopeCurrent()) return;
-    const pick = depsRef.current?.pickAttachment ?? pickAttachment;
-    const notify = depsRef.current?.notify ?? toast;
-    const picked: LocalAttachment[] = [];
-    for (const file of Array.from(list)) {
-      try { picked.push(pick(file)); }
-      catch (e) { notify(formatError(e), "error"); }
-    }
-    if (picked.length) setAttachmentsState((current) => [...current, ...picked]);
-  };
-  const removeAttachment = (id: string) => {
-    if (!isScopeCurrent()) return;
-    const removed = attachmentsRef.current.filter((a) => a.id === id);
-    releaseFiles(removed);
-    setAttachmentsState((current) => current.filter((a) => a.id !== id));
-  };
-  const start = () => {
-    if (submitted.current || !openRef.current || !isScopeCurrent()) return;
-    const live = readLiveMachineRef.current(mid);
-    const currentPrompt = promptRef.current;
-    const currentAttachments = attachmentsRef.current;
-    if (
-      !canStart || !opts || !project?.data || !live?.online || live.trust === "pending"
-      || live.manager !== machine?.manager || live.engine !== machine?.engine || live.engine_default !== machine?.engine_default
-      || (opts.prompt_required && !currentPrompt.trim()) || (!opts.attachments && currentAttachments.length > 0)
-    ) return;
-    submitted.current = true;
-    const runLaunch = depsRef.current?.launchAgent ?? launchAgent;
-    runLaunch({
-      machineId: mid,
-      cwd: project.data.path,
-      launcher,
-      agentType: kind,
-      workSession: true,
-      model: model || undefined,
-      inlinePrompt: opts.inline_prompt,
-      text: currentPrompt.trim(),
-      attachments: currentAttachments,
-    });
-    keptLocalFiles.current = []; // The launch owns the attachment previews after this point.
-    setAttachmentsState([]);
-    setPromptState("");
-    onCloseRef.current();
-  };
+  const start = () => submit(opts, project?.data?.path, kind, canStart, machine, readLiveMachineRef.current);
 
   const err = dirs?.error || project?.error || launcherList?.error || options?.error;
 
@@ -803,7 +871,7 @@ function WorkSessionFormBody({
       onChooseHarness={chooseHarness}
       onChooseLauncher={chooseLauncher}
       onModelChange={setModelState}
-      onRetry={() => setRevision((n) => n + 1)}
+      onRetry={bumpRevision}
       onPromptChange={setPromptState}
       onAddFiles={add}
       onRemoveAttachment={removeAttachment}

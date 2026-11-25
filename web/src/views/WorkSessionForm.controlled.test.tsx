@@ -466,6 +466,112 @@ describe("WorkSessionForm controlled deps, view separation, and race guards", ()
     expectNoDefaultSingletons();
   });
 
+  it("resets controlled state via unified setters when switching from direct scope/owner to getter+subscribe bridges (P1-1)", async () => {
+    const launchFn = vi.fn();
+    const scopeListeners = new Set<() => void>();
+    const ownerListeners = new Set<() => void>();
+    let liveScope = "acct-b";
+    let liveOwner = "owner-b";
+    const attA: LocalAttachment = { id: "att-a", name: "secret.txt", mime: "text/plain", file: new File(["secret"], "secret.txt") };
+
+    let switchToSubscribedAccountB!: () => void;
+    let latestState = { mid: "", cwd: "", prompt: "", attachments: 0 };
+
+    function BridgeSwitchHost() {
+      const [subscribedMode, setSubscribedMode] = useState(false);
+      const [mid, setMid] = useState("m1");
+      const [cwd, setCwd] = useState("/work/app");
+      const [harness, setHarness] = useState("claude");
+      const [launcher, setLauncher] = useState("claude-main");
+      const [model, setModel] = useState("sonnet");
+      const [prompt, setPrompt] = useState("account-a secret draft");
+      const [attachments, setAttachments] = useState<LocalAttachment[]>([attA]);
+      latestState = { mid, cwd, prompt, attachments: attachments.length };
+      switchToSubscribedAccountB = () => setSubscribedMode(true);
+      return (
+        <WorkSessionForm
+          open
+          onClose={vi.fn()}
+          deps={{
+            scopeKey: subscribedMode ? () => liveScope : "acct-a",
+            subscribeScopeKey: subscribedMode ? (l) => { scopeListeners.add(l); return () => scopeListeners.delete(l); } : undefined,
+            credentialOwner: subscribedMode ? () => liveOwner : "owner-a",
+            subscribeCredentialOwner: subscribedMode ? (l) => { ownerListeners.add(l); return () => ownerListeners.delete(l); } : undefined,
+            machines: MACHINES,
+            addComputer: vi.fn<() => void>(),
+            loadDirs: async (_mid, path) => ({ ...DIRS_A, path: path || "/work" }),
+            loadLaunchers: async () => ({ launchers: [{ name: "claude-main", agent_type: "claude" }] }),
+            loadStartOptions: async () => START_OPTS,
+            launchAgent: launchFn,
+            mid,
+            onMidChange: setMid,
+            cwd,
+            onCwdChange: setCwd,
+            harness,
+            onHarnessChange: setHarness,
+            launcher,
+            onLauncherChange: setLauncher,
+            model,
+            onModelChange: setModel,
+            prompt,
+            onPromptChange: setPrompt,
+            attachments,
+            onAttachmentsChange: setAttachments,
+          }}
+        />
+      );
+    }
+
+    await act(async () => root.render(<BridgeSwitchHost />));
+    await flush();
+    expect(buttonByText(t("newagent.start"))!.disabled).toBe(false);
+
+    // Switching account AND switching scope/owner from direct string -> getter+subscribe must still invoke unified resets.
+    await act(async () => switchToSubscribedAccountB());
+    await flush();
+    expect(latestState).toEqual({ mid: "", cwd: "", prompt: "", attachments: 0 });
+    expect(selects()[0].value).toBe("");
+    expect(host.querySelector("textarea")!.value).toBe("");
+    expect(buttonByText(t("newagent.start"))!.disabled).toBe(true);
+    await act(async () => buttonByText(t("newagent.start"))!.click());
+    expect(launchFn).not.toHaveBeenCalled();
+    expectNoDefaultSingletons();
+  });
+
+  it("caches fresh-array machines getter snapshots with subscribeMachines without infinite re-renders (P1-5)", async () => {
+    let online = true;
+    const listeners = new Set<() => void>();
+    const readMachines = vi.fn(() => [{ ...MACHINES[0], online, engine_hosts: ["herdr"] }]);
+
+    await act(async () => root.render(
+      <WorkSessionForm
+        open
+        onClose={vi.fn()}
+        deps={{
+          scopeKey: "s1",
+          credentialOwner: "acct-1",
+          machines: readMachines,
+          subscribeMachines: (l) => { listeners.add(l); return () => listeners.delete(l); },
+          addComputer: vi.fn<() => void>(),
+          loadDirs: async (_mid, path) => ({ ...DIRS_A, path: path || "/work" }),
+          loadLaunchers: async () => ({ launchers: [{ name: "claude-main", agent_type: "claude" }] }),
+          loadStartOptions: async () => START_OPTS,
+          launchAgent: vi.fn(),
+        }}
+      />,
+    ));
+    await flush();
+    expect(selects()[0].textContent).toContain("Alpha");
+    expect(selects()[0].options[1].disabled).toBe(false);
+
+    // Mutate content and notify subscriber -> updates cleanly once.
+    online = false;
+    await act(async () => { listeners.forEach((l) => l()); });
+    await flush();
+    expect(selects()[0].options[1].disabled).toBe(true);
+    expectNoDefaultSingletons();
+  });
+
   it("renders WorkSessionFormView purely without touching singletons", async () => {
     const onAddComputer = vi.fn();
     const onClose = vi.fn();

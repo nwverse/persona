@@ -44,6 +44,8 @@ export interface NodeMenuViewProps {
   menuKey?: string | number;
 }
 
+const noopSubscribe = () => () => {};
+
 /** Pure presentational view for a node context menu. */
 export function NodeMenuView({ at, onClose, header, items, menuKey }: NodeMenuViewProps) {
   // the header is the node's name (a space's, a tab's, a pane's): as written, not in a label's capitals
@@ -75,24 +77,6 @@ function useTrackedScope(subscribe: (listener: () => void) => () => void, read: 
     return s && s.value === cur ? `${s.version}:${cur}` : `drift:${cur}`;
   }, [read]);
   return { token: `${snap.version}:${snap.value}`, readToken };
-}
-
-export function NodeMenu(props: NodeMenuProps) {
-  const { deps } = props;
-  if (deps?.subscribeScopeKey && typeof deps.scopeKey === "function") {
-    return <SubscribedNodeMenu {...props} readScope={deps.scopeKey} subscribe={deps.subscribeScopeKey} />;
-  }
-  const scopeDep = deps?.scopeKey;
-  const readScopeToken = () => (typeof scopeDep === "function" ? scopeDep() : (scopeDep ?? ""));
-  const scopeToken = readScopeToken();
-  return <NodeMenuBody {...props} scopeToken={scopeToken} readScopeToken={readScopeToken} />;
-}
-
-function SubscribedNodeMenu(
-  props: NodeMenuProps & { readScope: () => string; subscribe: (listener: () => void) => () => void },
-) {
-  const tracked = useTrackedScope(props.subscribe, props.readScope);
-  return <NodeMenuBody {...props} scopeToken={tracked.token} readScopeToken={tracked.readToken} />;
 }
 
 function fenceAsync<T>(isCurrent: () => boolean, run: () => Promise<T>, fallback: T): Promise<T> {
@@ -130,19 +114,42 @@ function fenceNodeDeps(raw: NodeActionDeps, isCurrent: () => boolean): NodeActio
   };
 }
 
-function NodeMenuBody({
-  node,
-  at,
-  onClose,
-  header,
-  before,
-  omit,
-  changed,
-  deps,
-  scopeToken,
-  readScopeToken,
-}: NodeMenuProps & { scopeToken: string; readScopeToken: () => string }) {
-  const nodeScope = JSON.stringify([scopeToken, node.kind, node.mid, node.workspaceId ?? "", node.tabId ?? "", node.paneId ?? "", node.sessionId ?? "", node.host ?? ""]);
+function fenceMenuItem(item: MenuItem, isCurrent: () => boolean): MenuItem {
+  const onSelect = () => {
+    if (!isCurrent()) return;
+    if (!item.inline) return item.onSelect();
+    return fenceAsync(isCurrent, () => Promise.resolve(item.onSelect()), undefined);
+  };
+  const children = !item.children
+    ? undefined
+    : typeof item.children === "function"
+      ? () => fenceAsync(isCurrent, () => (item.children as () => Promise<MenuItem[]>)(), []).then((sub) => (isCurrent() ? fenceMenuItems(sub, isCurrent) : []))
+      : fenceMenuItems(item.children, isCurrent);
+  const rename = item.rename
+    ? {
+        ...item.rename,
+        commit: (name: string) => fenceAsync(isCurrent, () => Promise.resolve(item.rename!.commit(name)), undefined),
+      }
+    : undefined;
+  return {
+    ...item,
+    onSelect,
+    ...(children !== undefined ? { children } : {}),
+    ...(rename !== undefined ? { rename } : {}),
+  };
+}
+
+function fenceMenuItems(items: readonly MenuItem[], isCurrent: () => boolean): MenuItem[] {
+  return items.map((item) => fenceMenuItem(item, isCurrent));
+}
+
+export function NodeMenu({ node, at, onClose, header, before, omit, changed, deps }: NodeMenuProps) {
+  const scopeDep = deps?.scopeKey;
+  const readScope = useCallback(() => (typeof scopeDep === "function" ? scopeDep() : (scopeDep ?? "")), [scopeDep]);
+  const scopeSubscribe = deps?.subscribeScopeKey && typeof scopeDep === "function" ? deps.subscribeScopeKey : noopSubscribe;
+  const trackedScope = useTrackedScope(scopeSubscribe, readScope);
+
+  const nodeScope = JSON.stringify([trackedScope.token, node.kind, node.mid, node.workspaceId ?? "", node.tabId ?? "", node.paneId ?? "", node.sessionId ?? "", node.host ?? ""]);
   const [scope, setScope] = useState<{ key: string; epoch: number }>(() => ({ key: nodeScope, epoch: 1 }));
   if (scope.key !== nodeScope) {
     setScope({ key: nodeScope, epoch: scope.epoch + 1 });
@@ -150,11 +157,11 @@ function NodeMenuBody({
 
   const activeEpochRef = useRef(scope.epoch);
   const onCloseRef = useRef(onClose);
-  const readScopeTokenRef = useRef(readScopeToken);
+  const readScopeTokenRef = useRef(trackedScope.readToken);
   const refreshDep = deps?.refresh;
   useLayoutEffect(() => {
     onCloseRef.current = onClose;
-    readScopeTokenRef.current = readScopeToken;
+    readScopeTokenRef.current = trackedScope.readToken;
   });
   useLayoutEffect(() => {
     activeEpochRef.current = scope.epoch;
@@ -164,7 +171,8 @@ function NodeMenuBody({
   }, [scope.epoch]);
 
   const capturedEpoch = scope.epoch;
-  const isCurrent = () => activeEpochRef.current === capturedEpoch && readScopeTokenRef.current() === scopeToken;
+  const capturedScope = trackedScope.token;
+  const isCurrent = () => activeEpochRef.current === capturedEpoch && readScopeTokenRef.current() === capturedScope;
   const fencedOnClose = () => {
     if (activeEpochRef.current === capturedEpoch) onCloseRef.current();
   };
@@ -189,7 +197,8 @@ function NodeMenuBody({
     own = (deps?.buildActions ?? nodeActions)(guardedNode, fenceNodeDeps(baseDeps!, isCurrent), { omit });
   }
 
-  const items = before?.length && own.length ? [...before, { ...own[0], divider: true }, ...own.slice(1)] : [...(before ?? []), ...own];
+  const merged = before?.length && own.length ? [...before, { ...own[0], divider: true }, ...own.slice(1)] : [...(before ?? []), ...own];
+  const items = fenceMenuItems(merged, isCurrent);
   const viewProps: NodeMenuViewProps = { at, onClose: fencedOnClose, header, items, menuKey: scope.epoch };
   if (deps?.renderMenu) return <>{deps.renderMenu(viewProps)}</>;
   return <NodeMenuView {...viewProps} />;
