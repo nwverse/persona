@@ -257,7 +257,7 @@ const FoldControl = memo(function FoldControl({ id, w, h, gap, down, folded, hid
       onClick={() => onToggle(id)}
       className={cx(
         "touch-hit absolute z-[3] flex items-center justify-center rounded-full border border-line bg-surface text-ink-3 shadow-hairline",
-        "transition-transform duration-150 hover:text-ink",
+        "transition-colors duration-150 hover:text-ink",
       )}
       style={{
         width: size,
@@ -380,12 +380,19 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
   // The layout follows from the nodes, edges and folds alone, so a redraw that changes only states keeps every node
   // in place (spec/fixtures/graph-layout/README.md).
   const laid = useMemo(
-    () => layOutGraph({ nodes: item.nodes ?? [], edges: item.edges, layout: item.layout, direction: item.direction }, [...folds], still ? undefined : { maxLeafRows: 6 }),
+    () => layOutGraph(
+      { nodes: item.nodes ?? [], edges: item.edges, layout: item.layout, direction: item.direction },
+      [...folds],
+      still ? { mergeLayerGroups: true } : { maxLeafRows: 6, mergeLayerGroups: true },
+    ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- still is the only reading of `full`/`compact` this takes
     [item.nodes, item.edges, item.layout, item.direction, folds, still],
   );
   const byId = useMemo(() => Object.fromEntries((item.nodes ?? []).map((n) => [n.id, n])), [item.nodes]);
   const down = item.direction === "down";
+  const foldGap = down ? pitchY - nodeH : pitchX - nodeW;
+  const maxFoldScale = Math.max(1, foldGap / 24);
+  const foldScaleFor = useCallback((zoom: number) => Math.min(maxFoldScale, 1 / zoom), [maxFoldScale]);
   const lw = (laid.size[0] - 1) * pitchX + nodeW + 2 * MARGIN;
   const lh = (laid.size[1] - 1) * pitchY + nodeH + 2 * MARGIN;
 
@@ -478,7 +485,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
     }
     view.current = next;
     pane.style.transform = `translate(${next.x}px, ${next.y}px) scale(${next.zoom})`;
-    pane.style.setProperty("--graph-fold-scale", String(Math.max(1, 1 / next.zoom)));
+    pane.style.setProperty("--graph-fold-scale", String(foldScaleFor(next.zoom)));
     moved.current = true;
     if (!still) {
       const s = readStore();
@@ -486,7 +493,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
       s.moved = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- readStore closes over keyed/scoped only through the store's own id
-  }, [at, nodeW, nodeH, lw, lh, still, keyed, scoped]);
+  }, [at, nodeW, nodeH, lw, lh, still, keyed, scoped, foldScaleFor]);
 
   const inspect = useCallback((id: string) => {
     setSelectedNodeId(id);
@@ -529,8 +536,8 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
     const apply = (v: CanvasView) => {
       view.current = v;
       pane.style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.zoom})`;
-      // the fold control counters the zoom, so it never shrinks below its own 24 px on screen (a 44 px hit)
-      pane.style.setProperty("--graph-fold-scale", String(Math.max(1, 1 / v.zoom)));
+      // Keep the fold control at 24 px on screen while zooming in and bounded inside its gap when zoomed out.
+      pane.style.setProperty("--graph-fold-scale", String(foldScaleFor(v.zoom)));
       if (still) return; // a still preview never writes the store: the page's kept view stays whatever a card did
       const s = readStore();
       s.view = v;
@@ -738,7 +745,7 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
     };
     // laid changes when the view is drawn again or a fold is toggled; the person's view survives it in `view`.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- readStore closes over keyed/scoped only through the store's own id
-  }, [laid, still, full, storeKey, keyed, at, sel, byId, nodeW, nodeH, lw, lh]);
+  }, [laid, still, full, storeKey, keyed, at, sel, byId, nodeW, nodeH, lw, lh, foldScaleFor]);
 
   // A node the keyboard focuses is panned into view. It does not count as the person moving the canvas (an untouched
   // key still re-fits), but the shift itself is kept: without it, the next redraw of an untouched key would take the
@@ -757,25 +764,24 @@ export function GraphCanvas({ item, compact, busy, onPress, canPress }: {
     const nw = nodeW * v.zoom;
     const nh = nodeH * v.zoom;
     // the node's fold control sits beside it, fully past the node on the side its children leave it (right for a
-    // right tree, below for a down one), and counters the zoom (24 px drawn, a 44 px hit): a reveal that stops at the
-    // node's box leaves the control clipped at the stage edge, so the box it pans in grows by the control's far
-    // extent on that side — half the gap plus its own radius.
-    const gap = down ? (pitchY - nodeH) * v.zoom : (pitchX - nodeW) * v.zoom;
-    const reach = Math.max(24, gap / 2 + 24) * Math.max(1, 1 / v.zoom);
+    // right tree, below for a down one), bounded to its gap: pan far enough to keep the control inside the stage.
+    const gap = foldGap * v.zoom;
+    const foldRadius = 12 * foldScaleFor(v.zoom) * v.zoom;
+    const reach = Math.max(24, gap / 2 + Math.max(22, foldRadius));
     const dx = sx < 12 ? 12 - sx : sx + nw > w - 12 - (down ? 0 : reach) ? w - 12 - (down ? 0 : reach) - nw - sx : 0;
     const dy = sy < 12 ? 12 - sy : sy + nh > h - 12 - (down ? reach : 0) ? h - 12 - (down ? reach : 0) - nh - sy : 0;
     if (dx || dy) {
       const next = { x: v.x + dx, y: v.y + dy, zoom: v.zoom };
       view.current = next;
       pane.style.transform = `translate(${next.x}px, ${next.y}px) scale(${next.zoom})`;
-      pane.style.setProperty("--graph-fold-scale", String(Math.max(1, 1 / next.zoom)));
+      pane.style.setProperty("--graph-fold-scale", String(foldScaleFor(next.zoom)));
       if (!still) {
         const s = readStore();
         s.view = next; // kept without marking the person's move: an untouched key still re-fits on a resize
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- readStore closes over keyed/scoped only through the store's own id
-  }, [at, nodeW, nodeH, pitchX, pitchY, down, still, keyed, scoped]);
+  }, [at, nodeW, nodeH, foldGap, foldScaleFor, down, still, keyed, scoped]);
 
   const toggle = useCallback((id: string) => {
     const next = new Set(folds);

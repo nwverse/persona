@@ -1311,4 +1311,70 @@ describe("UI 10: the control room", () => {
     expect(labelSpan.className).toContain("w-[148px]");
     expect(labelSpan.className).toContain("@min-[60rem]:w-[200px]");
   });
+
+  it("keeps FoldControl free of transform transitions and bounds --graph-fold-scale across zoom in and Fit", async () => {
+    const spy = sizeStage(400, 300);
+    const large = {
+      sections: [{
+        items: [{
+          type: "graph",
+          key: "fold-bounds",
+          nodes: [
+            { id: "root", title: "Root" },
+            ...Array.from({ length: 24 }, (_, i) => ({ id: `n${i}`, title: `Node ${i}` })),
+          ],
+          edges: Array.from({ length: 24 }, (_, i) => ({ from: "root", to: `n${i}` })),
+        }],
+      }],
+    };
+    await mount(draw(large), { compact: false, onPress: () => {} });
+    const fold = host.querySelector<HTMLButtonElement>('[data-graph-fold="root"]')!;
+    expect(fold.className).not.toContain("transition-transform");
+    expect(fold.className).toContain("transition-colors");
+
+    const layer = host.querySelector<HTMLElement>("[data-graph-layer]")!;
+    // Fit drops zoom to 0.25; --graph-fold-scale must stay capped at gap / 24 (= 2) instead of 4.
+    act(() => host.querySelector<HTMLButtonElement>(`[aria-label="${t("extensions-viewbody.graph_fit")}"]`)!.click());
+    const fitZoom = Number(layer.style.transform.match(/scale\(([-\d.]+)\)/)![1]);
+    const fitFoldScale = Number(layer.style.getPropertyValue("--graph-fold-scale"));
+    expect(fitZoom).toBeLessThan(0.5);
+    expect(fitFoldScale).toBeCloseTo(2, 6);
+
+    // Zoom in past 100%; --graph-fold-scale drops to 1 / zoom so the button stays 24 px on screen.
+    const zoomIn = host.querySelector<HTMLButtonElement>(`[aria-label="${t("extensions-viewbody.graph_zoom_in")}"]`)!;
+    for (let i = 0; i < 12; i++) act(() => zoomIn.click());
+    const maxZoom = Number(layer.style.transform.match(/scale\(([-\d.]+)\)/)![1]);
+    const inFoldScale = Number(layer.style.getPropertyValue("--graph-fold-scale"));
+    expect(maxZoom).toBeCloseTo(2, 6);
+    expect(inFoldScale).toBeCloseTo(0.5, 6);
+    spy.mockRestore();
+  });
+
+  it("renders a single unified frame per group for multi-parent layered graphs", () => {
+    const layered = {
+      sections: [{
+        items: [{
+          type: "graph",
+          key: "multi-gw",
+          layout: "layered",
+          nodes: [
+            { id: "gw1", title: "Gateway 1" },
+            { id: "gw2", title: "Gateway 2" },
+            { id: "gw3", title: "Gateway 3" },
+            { id: "w1", title: "Worker 1", group: "Workers" },
+            { id: "c1", title: "Cache 1", group: "Cache" },
+            { id: "w2", title: "Worker 2", group: "Workers" },
+          ],
+          edges: [
+            { from: "gw1", to: "w1" },
+            { from: "gw2", to: "c1" },
+            { from: "gw3", to: "w2" },
+          ],
+        }],
+      }],
+    };
+    const d = doc(renderToStaticMarkup(<GraphCanvas item={draw(layered)} busy="" onPress={() => {}} />));
+    const frames = [...d.querySelectorAll("[data-graph-frame]")].map((el) => el.getAttribute("data-graph-frame"));
+    expect(frames).toEqual(["Workers", "Cache"]);
+  });
 });

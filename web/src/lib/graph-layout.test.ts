@@ -189,9 +189,66 @@ describe("tree layout: wide leaf runs fold into columns", () => {
     }
   });
 
-  it("does not touch a layered layout", () => {
+  it("does not touch a layered layout when only maxLeafRows is given", () => {
     const g = fan(20);
     (g as { layout?: string }).layout = "layered";
     expect(layOutGraph(g, [], { maxLeafRows: 6 })).toEqual(layOutGraph(g));
+  });
+
+  it("keeps a mixed named group (non-leaf + many leaves) in one column so its frame never encloses non-member children", () => {
+    const g: LayoutGraph = {
+      nodes: [
+        { id: "root" },
+        { id: "hub", group: "Cluster" },
+        { id: "child" },
+        ...Array.from({ length: 8 }, (_, i) => ({ id: `leaf${i}`, group: "Cluster" })),
+      ],
+      edges: [
+        { from: "root", to: "hub" },
+        { from: "hub", to: "child" },
+        ...Array.from({ length: 8 }, (_, i) => ({ from: "root", to: `leaf${i}` })),
+      ],
+    };
+    const got = layOutGraph(g, [], { maxLeafRows: 6 });
+    apart(got.at);
+    // Every member of the mixed group stays at depth 1; the non-member child stays at depth 2 outside the group's column.
+    expect(got.at.hub[0]).toBe(1);
+    for (let i = 0; i < 8; i++) expect(got.at[`leaf${i}`][0]).toBe(1);
+    expect(got.at.child[0]).toBe(2);
+    expect(got.frames).toEqual([{ group: "Cluster", members: ["hub", ...Array.from({ length: 8 }, (_, i) => `leaf${i}`)] }]);
+  });
+
+  it("merges same-group nodes across different parents in a layered layout when mergeLayerGroups is set", () => {
+    const g: LayoutGraph = {
+      nodes: [
+        { id: "gw1" },
+        { id: "gw2" },
+        { id: "gw3" },
+        { id: "w1", group: "Workers" },
+        { id: "c1", group: "Cache" },
+        { id: "w2", group: "Workers" },
+      ],
+      edges: [
+        { from: "gw1", to: "w1" },
+        { from: "gw2", to: "c1" },
+        { from: "gw3", to: "w2" },
+      ],
+      layout: "layered",
+    };
+    // Default shared spec still splits by parent set.
+    expect(layOutGraph(g).frames).toEqual([
+      { group: "Workers", members: ["w1"] },
+      { group: "Cache", members: ["c1"] },
+      { group: "Workers", members: ["w2"] },
+    ]);
+    // Web canvas merges same-group nodes in the layer into one contiguous frame.
+    const merged = layOutGraph(g, [], { mergeLayerGroups: true });
+    apart(merged.at);
+    expect(merged.frames).toEqual([
+      { group: "Workers", members: ["w1", "w2"] },
+      { group: "Cache", members: ["c1"] },
+    ]);
+    expect(merged.at.w2[1] - merged.at.w1[1]).toBeCloseTo(1, 9);
+    expect(merged.at.c1[1] - merged.at.w2[1]).toBeCloseTo(1.25, 9);
   });
 });
