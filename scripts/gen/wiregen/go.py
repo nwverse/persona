@@ -303,4 +303,3 @@ def gofmt(src: str) -> str:
     if r.returncode != 0:
         raise SchemaError("gofmt: " + r.stderr.strip())
     return r.stdout
-
