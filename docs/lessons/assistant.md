@@ -1038,3 +1038,10 @@ Save the hold timestamp and promotion together. Clear the active record at the e
 turn's decision to the delayed push and channel mirror. Reading the conversation's current hold at notification
 time can pick up the next round. A restart test for promotion must show the hold still exists before it checks
 that a silent finish is refused.
+
+## An inbox row can carry more than one provider event (#15517)
+
+Keep the deduplication key independent of the Inbox row and the binding that matched. Two readers can report
+the same comment, and the row can collect a later comment while the first is waiting for its digest. Commit the
+source receipt with the Inbox write. Reserve only one action owner and pin the delivery before contacting the
+Agent. Record uncertain delivery against that recipient so a restarted worker does not try another one.

@@ -2,53 +2,77 @@
 // Keep the stable default and a lossless rollback. Link a tracking issue with a plan to graduate or remove the trial.
 // Put permanent module switches in General and other lasting preferences in their owning category. Keep irreversible
 // changes, internal debug controls and placeholder demos out of Labs. ConfigurationForm draws each trial's source.
+import { useLayoutEffect, useState } from "react";
 import { t } from "../../i18n";
 import type { ConfigurationSource } from "../../lib/configuration/contract";
 import type { ConfigurationGuidance } from "../../lib/configuration/guidance";
+import { ASSISTANT_LABS, TERMINAL_LABS_ID, type LabId } from "../../lib/labs-catalog";
+import { useLabsState } from "../../lib/labs-seen";
+import { markLabsSeen } from "../../lib/labs-seen-write";
 import { integrationsV2LabsSource } from "../../lib/labs-integrations-v2";
 import { todosV2LabsSource } from "../../lib/labs-todos-v2";
 import { workGuideLabsSource } from "../../lib/labs-work-guide";
 import { useChosenManager, useKnownDefault } from "../../lib/manager-choice";
-import { terminalLabsSource } from "../../lib/labs-terminal";
+import { TERMINAL_LABS_FIELD, terminalLabsSource } from "../../lib/labs-terminal";
 import { Dialog, Loading } from "../../ui/atoms";
 import { ConfigurationForm } from "./configuration/ConfigurationForm";
-import { Group, SettingsHint } from "./SettingsParts";
+import { Group, Pill, SettingsHint } from "./SettingsParts";
 
 export interface LabsModule {
   source: ConfigurationSource;
   guidance?: ConfigurationGuidance;
 }
 
-const defaultModules: readonly LabsModule[] = [{ source: terminalLabsSource() }];
+const terminal = terminalLabsSource();
+const assistantSources = {
+  work_guide: workGuideLabsSource,
+  todos_v2: todosV2LabsSource,
+  integrations_v2: integrationsV2LabsSource,
+};
 
-// These fields follow the selected manager. The browser-local experiments below render
-// immediately, even while the roster is resolving the default manager.
-function AssistantLabsSettings() {
-  const chosen = useChosenManager();
-  const knownDefault = useKnownDefault();
-  const manager = chosen ?? knownDefault;
-  if (!manager) return <Loading />;
+function LabCards({ manager, newIds = [] }: { manager: string; newIds?: readonly LabId[] }) {
+  const card = (id: LabId, source: ConfigurationSource) => (
+    <div key={source.key} className="mb-6">
+      <ConfigurationForm source={source} fieldBadge={newIds.includes(id) ? {
+        id: id === TERMINAL_LABS_ID ? TERMINAL_LABS_FIELD : id,
+        content: <Pill tone="accent">{t("settings-labs.new_badge")}</Pill>,
+      } : undefined} />
+    </div>
+  );
   return (
     <>
-      <div className="mb-6"><ConfigurationForm key={`work-guide:${manager}`} source={workGuideLabsSource(manager)} /></div>
-      <div className="mb-6"><ConfigurationForm key={`todos-v2:${manager}`} source={todosV2LabsSource(manager)} /></div>
-      <div className="mb-6"><ConfigurationForm key={`integrations-v2:${manager}`} source={integrationsV2LabsSource(manager)} /></div>
+      {manager ? ASSISTANT_LABS.map((id) => card(id, assistantSources[id](manager))) : <Loading />}
+      {card(TERMINAL_LABS_ID, terminal)}
     </>
   );
 }
 
-export function LabsSettings({ modules }: { modules?: readonly LabsModule[] } = {}) {
+function LabsVisit({ manager }: { manager: string }) {
+  const { ready, unseen, visible, seen, waiting, synced } = useLabsState();
+  const [entry, setEntry] = useState<{ unseen: readonly LabId[]; remaining: LabId[]; synced: boolean } | null>(null);
+  if (entry === null && manager && ready) {
+    setEntry({ unseen, remaining: visible.filter((id) => !seen.includes(id) && !waiting.includes(id)), synced });
+  }
+  useLayoutEffect(() => {
+    if (entry) void markLabsSeen(manager, entry.remaining, entry.synced);
+  }, [entry, manager]);
+  return <LabCards manager={manager} newIds={entry?.unseen} />;
+}
+
+export function LabsSettings({ modules, trackVisit = true }: { modules?: readonly LabsModule[]; trackVisit?: boolean } = {}) {
+  const chosen = useChosenManager();
+  const knownDefault = useKnownDefault();
+  const manager = chosen ?? knownDefault;
   return (
     <>
       <Group anchor="labs" footer={t("settings-labs.scope_note")}>
         <SettingsHint>{t("settings-labs.intro")}</SettingsHint>
       </Group>
-      {!modules && <AssistantLabsSettings />}
-      {(modules ?? defaultModules).map(({ source, guidance }) => (
+      {modules ? modules.map(({ source, guidance }) => (
         <div key={source.key} className="mb-6">
           <ConfigurationForm source={source} guidance={guidance} />
         </div>
-      ))}
+      )) : trackVisit ? <LabsVisit key={manager} manager={manager} /> : <LabCards manager={manager} />}
     </>
   );
 }
@@ -59,7 +83,7 @@ export function LabsDialog({ open, onClose, modules }: { open: boolean; onClose:
   return (
     <Dialog open={open} onClose={onClose} title={t("settings-nav.tab_labs")} width={600}>
       <div data-labs-dialog className="-mb-6">
-        <LabsSettings modules={modules} />
+        <LabsSettings modules={modules} trackVisit={false} />
       </div>
     </Dialog>
   );

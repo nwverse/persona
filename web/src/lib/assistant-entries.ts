@@ -6,6 +6,7 @@ import { finishedAt, hubNeedsYou, JUST_DONE_MS, openByView, supersededFailedStar
 import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
+import { sameManager } from "./manager-choice";
 import type { Interaction, Session } from "./types";
 
 /**
@@ -133,7 +134,14 @@ export function decisionLaterKey(todo: Todo): string {
 }
 
 export function assistantEntries(input: AssistantEntriesInput): AssistantEntries {
-  const { conversation, main, todos, sessions, interactions, plans, feed } = input;
+  const { conversation, main, feed } = input;
+  const owns = (owner: string | undefined) => !input.manager || sameManager(owner, input.manager);
+  const todos = input.manager ? input.todos.filter((t) => owns(t.manager)) : input.todos;
+  const sessions = input.manager ? input.sessions.filter((s) => owns(s.manager)) : input.sessions;
+  const interactions = input.manager ? input.interactions.filter((ix) => owns(ix.manager)) : input.interactions;
+  const plans = input.manager
+    ? Object.fromEntries(Object.entries(input.plans).filter(([, plan]) => owns(plan.manager)))
+    : input.plans;
   const now = input.now ?? Date.now();
   const lookup = withInteractionLookup(input.lookup ?? makeSessionLookup(sessions), interactions);
   const isMain = !!main && main === conversation;
@@ -201,7 +209,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     // supervised task's failed start is its supervisor's to retry or remedy, and an Agent whose every card its
     // supervisor holds waits on that conversation, not on the user
     const supervised = !!todo.supervision?.supervisor;
-    const held = supervised && routed.length > 0 && ownAsks.length === 0;
+    const held = routed.length > 0 && ownAsks.length === 0;
     const waits = status === "failed" ? bucket === "open" && !supervised : !todo.done_at && WAITS_ON_YOU.has(status) && !held;
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
@@ -242,14 +250,20 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const agentsAsking: NeedsYouItem[] = [];
   const agentsRunning: RunningItem[] = [];
   for (const { session, state } of dockAgents(sessions.map((s) => lookup(s.machine_id, s.session_id) ?? s), todos, conversation, main)) {
-    if (folded.has(sessionKey(session.machine_id, session.session_id))) continue;
-    const key = `agent:${sessionKey(session.machine_id, session.session_id)}`;
-    if (state === "needs_you") agentsAsking.push({ kind: "agent", key, session, asks: asksOf.get(sessionKey(session.machine_id, session.session_id)) ?? [] });
-    else agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    const sk = sessionKey(session.machine_id, session.session_id);
+    if (folded.has(sk)) continue;
+    const key = `agent:${sk}`;
+    const agentAsks = asksOf.get(sk) ?? [];
+    const userAsks = agentAsks.filter((ix) => !ix.delegating);
+    if (state === "needs_you" && (agentAsks.length === 0 || userAsks.length > 0)) {
+      agentsAsking.push({ kind: "agent", key, session, asks: userAsks });
+    } else {
+      agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    }
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)
-    .filter((plan) => ((isMain && plan.space !== "health") || plan.conversation === conversation) && plan.state === "open" && (!input.manager || !plan.manager || plan.manager === input.manager))
+    .filter((plan) => ((isMain && plan.space !== "health") || plan.conversation === conversation) && plan.state === "open")
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id))
     .map((plan) => ({ kind: "plan", key: `plan:${plan.id}`, plan }));
   const messages: NeedsYouItem[] = feed.filter((it) => messageWaits(it, input.deferred)).map((item) => ({ kind: "message", key: `message:${item.id}`, item }));
