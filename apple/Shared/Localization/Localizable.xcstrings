@@ -237609,6 +237609,52 @@
           }
         }
       }
+    },
+    "Drop an image here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop an image here"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将图片拖放到这里"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ここに画像をドロップ"
+          }
+        }
+      }
+    },
+    "Makes an avatar from an image of your own, or drop an image here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Makes an avatar from an image of your own, or drop an image here"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用你自己的图片做一个形象，或将图片拖放到这里"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分の画像からアバターを作るか、ここに画像をドロップします"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

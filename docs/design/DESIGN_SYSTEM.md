@@ -4516,3 +4516,14 @@ measure for a moment first, and one neutral offload provider; `-tab settings -op
   in its top leading corner: the same round `chromeSurface` button, the whole 44 pt corner answering
   (`tapTargetFrame`), and the same action named for VoiceOver (**Edit Avatar**, **Delete Avatar**). Never a context
   menu: the grid is one Form row (`docs/apple/persona.md` "Uploading an image").
+- **Image drop targets (#15612)**: on iPad and Mac (modifier attached on all platforms), every avatar picture slot
+  accepts a dragged image through `AvatarPictureDrop` (`apple/Persona/Views/Settings/AvatarStatesPages.swift`) with
+  `DroppedAvatarImage` importing `.image` in its original bytes so animated pictures keep their frames: the main picture
+  (new crop square and edit face), each of the five state rows (opening that state's crop page), each state's crop page,
+  the picker's New from Photo card, and editable uploaded avatar cards (opening Edit with the dropped image as the new
+  main picture, nothing saved until Save; built-in and old-hub cards do not attach a `dropDestination`). While targeted,
+  the slot draws a non-hit-testing rounded overlay (`Theme.Radius.card` on squares and cards, `Theme.Radius.control` on
+  Form rows) filled with `Theme.AvatarSheet.dropTint` (`Theme.accentTint`) and stroked with `Theme.AvatarSheet.dropStroke`
+  (`Theme.accent`) at `Theme.AvatarSheet.dropStrokeWidth` (`Theme.Size.rule`), matching the web dialog's accent border
+  and tint in light and dark without shifting layout. Every picture slot also keeps both Photos and Files
+  (`AvatarPictureSourceButtons`) and announces a localized drop hint for VoiceOver.
