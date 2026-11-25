@@ -203,6 +203,7 @@ go server/internal/nodeproto core
 go server/internal/nodesign core
 go server/internal/nodeupdate core
 go server/internal/operations/backup core
+go server/internal/operations/recovery core
 go server/internal/osproc core
 go server/internal/osproc/osproctest core
 go server/internal/outboxcli core
