@@ -185,6 +185,9 @@ export function ChannelList({ onOpen, onMarketItem, openBeside }: { onOpen: (id:
 export function ChannelBindingBlock({ ctl, showAccountMark = true }: { ctl: ChannelController; showAccountMark?: boolean }) {
   const [unbinding, setUnbinding] = useState(false);
   const d = ctl.detail;
+  useEffect(() => {
+    setUnbinding(false);
+  }, [d?.id]);
   if (!d) return null;
   const editable = !d.read_only && d.source !== "market";
   if (!editable) return null;
@@ -255,6 +258,9 @@ export function ChannelDeliveryControls({
 }) {
   const [picking, setPicking] = useState(false);
   const d = ctl.detail;
+  useEffect(() => {
+    setPicking(false);
+  }, [d?.id]);
   if (!d) return null;
 
   const editable = !d.read_only && d.source !== "market";

@@ -236,10 +236,11 @@ describe("useChannelController", () => {
     expect(hub.forgotten).toBe(1);
     expect(latest.detail?.capabilities.reply_only).toBe(true);
 
-    // Late initial read must not overwrite the adopted detail.
+    // Late initial read must not overwrite the adopted detail, and must still clear loading when it settles.
     await act(async () => slowGet.answer(makeDetail("alpha", { capabilities: { push: true }, name: "Stale" })));
     await settle();
     expect(latest.detail?.name).toBe("Alpha");
+    expect(latest.loading).toBe(false);
 
     let run!: Promise<void>;
     await act(async () => {
@@ -257,5 +258,126 @@ describe("useChannelController", () => {
       text: t("settings-channels.connection_ok", { name: "Alpha" }),
     });
     expect(toast).toHaveBeenCalledWith(t("settings-channels.connection_ok", { name: "Alpha" }), "ok");
+  });
+
+  it("re-fences, clears state, and reloads when manager changes for the same channelId", async () => {
+    await act(async () => root.render(<Harness channelId="wechat" manager="m-1" />));
+    expect(hub.pins.at(-1)).toEqual({ prefix: "/channels/wechat", manager: "m-1" });
+    const m1Get = hub.asked.shift()!;
+    await act(async () => m1Get.answer(makeDetail("wechat", { name: "M1 WeChat", enabled: true })));
+    await settle();
+    expect(latest.detail?.name).toBe("M1 WeChat");
+
+    // Start an in-flight write on m-1, then switch manager to m-2 with the same channelId.
+    let m1PutPromise!: Promise<void>;
+    await act(async () => {
+      m1PutPromise = latest.change("enabled", { enabled: false });
+    });
+    const m1Put = hub.asked.shift()!;
+    expect(m1Put.kind).toBe("put");
+
+    await act(async () => root.render(<Harness channelId="wechat" manager="m-2" />));
+    expect(hub.pins.at(-1)).toEqual({ prefix: "/channels/wechat", manager: "m-2" });
+    expect(latest.detail).toBeNull();
+    expect(latest.busy).toBe("");
+
+    const m2Get = hub.asked.shift()!;
+    expect(m2Get.kind).toBe("get");
+    expect(m2Get.id).toBe("wechat");
+    await act(async () => m2Get.answer(makeDetail("wechat", { name: "M2 WeChat", enabled: false })));
+    await settle();
+    expect(latest.detail?.name).toBe("M2 WeChat");
+
+    // Resolving the stale m-1 write must neither overwrite m-2 nor trigger a reload.
+    const countBefore = hub.asked.length;
+    await act(async () => {
+      m1Put.answer(makeDetail("wechat", { name: "M1 Stale", enabled: true }));
+      await m1PutPromise;
+    });
+    await settle();
+    expect(latest.detail?.name).toBe("M2 WeChat");
+    expect(hub.asked.length).toBe(countBefore);
+  });
+
+  it("clears loading when an in-flight load finishes after an interleaved write", async () => {
+    await act(async () => root.render(<Harness channelId="alpha" />));
+    await act(async () => hub.asked.shift()!.answer(makeDetail("alpha", { enabled: true })));
+    await settle();
+    expect(latest.loading).toBe(false);
+
+    // Start a manual refresh, then interleave a write before the refresh returns.
+    let refreshPromise!: Promise<void>;
+    await act(async () => {
+      refreshPromise = latest.load();
+    });
+    const slowRefresh = hub.asked.shift()!;
+    expect(slowRefresh.kind).toBe("get");
+    expect(latest.loading).toBe(true);
+
+    let writePromise!: Promise<void>;
+    await act(async () => {
+      writePromise = latest.change("enabled", { enabled: false });
+    });
+    const put = hub.asked.shift()!;
+    expect(put.kind).toBe("put");
+    await act(async () => {
+      put.answer(makeDetail("alpha", { enabled: false }));
+      await writePromise;
+    });
+    await settle();
+    expect(latest.detail?.enabled).toBe(false);
+
+    // When the older GET settles, it must not overwrite the write's result, yet must clear loading.
+    await act(async () => {
+      slowRefresh.answer(makeDetail("alpha", { enabled: true }));
+      await refreshPromise;
+    });
+    await settle();
+    expect(latest.detail?.enabled).toBe(false);
+    expect(latest.loading).toBe(false);
+  });
+
+  it("fences adopt against channel switches, manager switches, null clearing, mismatched ids, and unmount", async () => {
+    await act(async () => root.render(<Harness channelId="alpha" manager="m-1" />));
+    await act(async () => hub.asked.shift()!.answer(makeDetail("alpha", { name: "Alpha M1" })));
+    await settle();
+    const staleAlphaAdopt = latest.adopt;
+
+    // Wrong id on the active scope is ignored.
+    act(() => staleAlphaAdopt(makeDetail("beta", { name: "Wrong" })));
+    expect(latest.detail?.id).toBe("alpha");
+
+    // Switching to beta with an in-flight GET: stale alpha adopt must neither drop beta's GET nor overwrite detail.
+    await act(async () => root.render(<Harness channelId="beta" manager="m-1" />));
+    const betaGet = hub.asked.shift()!;
+    act(() => staleAlphaAdopt(makeDetail("alpha", { name: "Stale Alpha" })));
+    expect(latest.detail).toBeNull();
+    await act(async () => betaGet.answer(makeDetail("beta", { name: "Beta M1" })));
+    await settle();
+    expect(latest.detail?.name).toBe("Beta M1");
+
+    // Switching back to alpha (ABA) or changing manager still fences the first scope's adopt.
+    await act(async () => root.render(<Harness channelId="alpha" manager="m-1" />));
+    const alphaGet2 = hub.asked.shift()!;
+    act(() => staleAlphaAdopt(makeDetail("alpha", { name: "ABA Stale" })));
+    await act(async () => alphaGet2.answer(makeDetail("alpha", { name: "Alpha Fresh" })));
+    await settle();
+    expect(latest.detail?.name).toBe("Alpha Fresh");
+
+    // Switching to null fences adopt.
+    const currentAdopt = latest.adopt;
+    await act(async () => root.render(<Harness channelId={null} />));
+    act(() => currentAdopt(makeDetail("alpha", { name: "After Null" })));
+    expect(latest.detail).toBeNull();
+
+    // Unmount fences adopt without throwing or updating state.
+    await act(async () => root.render(<Harness channelId="alpha" />));
+    await act(async () => hub.asked.shift()!.answer(makeDetail("alpha", { name: "Before Unmount" })));
+    await settle();
+    const beforeUnmountAdopt = latest.adopt;
+    act(() => root.unmount());
+    expect(() => beforeUnmountAdopt(makeDetail("alpha", { name: "After Unmount" }))).not.toThrow();
+    // Recreate root for afterEach cleanup.
+    root = createRoot(host);
   });
 });

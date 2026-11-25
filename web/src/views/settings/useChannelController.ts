@@ -1,5 +1,5 @@
 // Shared channel detail controller: pins manager scope, sequences reads, serializes writes, and fences channel switches.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import {
@@ -25,10 +25,15 @@ export interface ChannelController {
 
 /** Loads and mutates one channel with request sequencing, exclusive writes, and channel-switch fencing. */
 export function useChannelController(channelId: string | null, manager?: string): ChannelController {
+  const owner = otherManager(manager);
+  const scope = useMemo(() => ({}), [channelId, owner]);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
   useLayoutEffect(() => {
     if (!channelId) return undefined;
-    return pinManager(`/channels/${encodeURIComponent(channelId)}`, otherManager(manager));
-  }, [channelId, manager]);
+    return pinManager(`/channels/${encodeURIComponent(channelId)}`, owner);
+  }, [channelId, owner]);
 
   const [detail, setDetail] = useState<ChannelDetail | null>(null);
   const [error, setError] = useState("");
@@ -40,6 +45,7 @@ export function useChannelController(channelId: string | null, manager?: string)
   const mounted = useRef(true);
   const epochRef = useRef(0);
   const seq = useRef(0);
+  const loadSeq = useRef(0);
   const activeWrite = useRef(0);
   const detailRef = useRef<ChannelDetail | null>(null);
   detailRef.current = detail;
@@ -47,6 +53,7 @@ export function useChannelController(channelId: string | null, manager?: string)
   const load = useCallback(async () => {
     const epoch = epochRef.current;
     const n = ++seq.current;
+    const r = ++loadSeq.current;
     if (!channelId) {
       setDetail(null);
       setError("");
@@ -56,16 +63,20 @@ export function useChannelController(channelId: string | null, manager?: string)
     setLoading(true);
     try {
       const next = await channelDetail(channelId);
-      if (!mounted.current || epoch !== epochRef.current || n !== seq.current) return;
+      if (!mounted.current || epoch !== epochRef.current || scope !== scopeRef.current || n !== seq.current) return;
       setDetail(next);
       setError("");
       setReloadKey((k) => k + 1);
     } catch (e) {
-      if (mounted.current && epoch === epochRef.current && n === seq.current) setError(errorText(e));
+      if (mounted.current && epoch === epochRef.current && scope === scopeRef.current && n === seq.current) {
+        setError(errorText(e));
+      }
     } finally {
-      if (mounted.current && epoch === epochRef.current && n === seq.current) setLoading(false);
+      if (mounted.current && epoch === epochRef.current && scope === scopeRef.current && r === loadSeq.current) {
+        setLoading(false);
+      }
     }
-  }, [channelId]);
+  }, [channelId, scope]);
 
   useEffect(() => {
     mounted.current = true;
@@ -80,19 +91,21 @@ export function useChannelController(channelId: string | null, manager?: string)
       mounted.current = false;
       epochRef.current++;
       seq.current++;
+      loadSeq.current++;
       activeWrite.current = 0;
     };
   }, [load]);
 
   const adopt = useCallback((next: ChannelDetail) => {
-    seq.current++;
     forgetChannels();
+    if (!mounted.current || !channelId || scope !== scopeRef.current || next.id !== channelId) return;
+    seq.current++;
     setDetail(next);
     setError("");
-  }, []);
+  }, [channelId, scope]);
 
   const exclusive = useCallback(async (what: string, save: () => Promise<ChannelDetail | void>): Promise<boolean> => {
-    if (!channelId || activeWrite.current !== 0) return false;
+    if (!channelId || scope !== scopeRef.current || activeWrite.current !== 0) return false;
     const epoch = epochRef.current;
     const n = ++seq.current;
     activeWrite.current = n;
@@ -117,7 +130,7 @@ export function useChannelController(channelId: string | null, manager?: string)
     }
     if (stale && mounted.current && epoch === epochRef.current) void load();
     return ok;
-  }, [channelId, load]);
+  }, [channelId, load, scope]);
 
   const change = useCallback(async (what: string, body: ChannelUpdateBody) => {
     if (!channelId) return;
