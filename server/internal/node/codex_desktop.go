@@ -156,21 +156,14 @@ func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text strin
 	if err != nil {
 		return refusal("bad_image", err.Error(), nil)
 	}
-	msg := codexDesktopMessage{text: text, paths: paths}
-	if cli := codexDesktopQueueCLI(src.home); cli != "" {
-		// An App with a live follower bus keeps its existing behavior. With no listener, persist
-		// busy sends immediately as well; the owner drains its queue after the current turn.
-		probeCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
-		conn, dialErr := dialCodexDesktopBus(probeCtx, src.home)
-		cancel()
-		if dialErr == nil {
-			conn.Close()
-		} else if missingCodexDesktopBus(dialErr) {
-			return n.enqueueCodexDesktop(ctx, cli, src, codexDesktopInput([]codexDesktopMessage{msg}))
-		}
+	clientID, _ := ctx.Value(sendTraceKey{}).(string)
+	if clientID == "" {
+		clientID = newUUID()
+		ctx = context.WithValue(ctx, sendTraceKey{}, clientID)
 	}
-	// While the App runs a turn in the thread the message waits here and goes in once, as a turn of its own, when the
-	// turn ends (codex_desktop_queue.go): a start-turn into a running turn is steered into it and then run again.
+	msg := codexDesktopMessage{text: text, paths: paths, clientID: clientID}
+	// Serialize both native-queue and legacy-bus delivery per thread (codex_desktop_queue.go), and while the App runs a
+	// turn on the legacy bus hold the message until the turn ends so it is never steered into the running turn.
 	return n.sendOrHoldCodexDesktop(ctx, src, msg)
 }
 
@@ -193,10 +186,14 @@ func (n *Node) startCodexDesktopTurn(ctx context.Context, src codexSource, input
 	if err != nil {
 		return err
 	}
+	clientID, _ := ctx.Value(sendTraceKey{}).(string)
+	if clientID == "" {
+		clientID = newUUID()
+	}
 	turn := map[string]any{
 		"conversationId": src.thread,
 		"turnStart": map[string]any{
-			"request": map[string]any{"threadId": src.thread, "clientUserMessageId": newUUID(), "input": input},
+			"request": map[string]any{"threadId": src.thread, "clientUserMessageId": clientID, "input": input},
 			"context": map[string]any{},
 		},
 	}

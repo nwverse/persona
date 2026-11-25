@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -265,4 +267,161 @@ func TestStartCodexDesktopTurnFallsBackToNativeQueueWhenBusDisappears(t *testing
 	if !strings.Contains(string(wire), `"method":"thread/queue/add"`) || !strings.Contains(string(wire), `"held follow-up"`) {
 		t.Fatalf("held turn did not fall back to thread/queue/add:\n%s", wire)
 	}
+}
+
+func TestCodexDesktopNativeQueueSerializesConcurrentSends(t *testing.T) {
+	const thread = "018f0000-0000-4000-8000-000000000003"
+	home := unavailableCodexBus(t, true)
+	cli := filepath.Join(home, "codex")
+	script := `#!/bin/sh
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$CODEX_HOME/requests"
+  case "$line" in
+    *'"method":"initialize"'*) printf '%s\n' '{"id":1,"result":{}}';;
+    *'"method":"thread/queue/list"'*) printf '%s\n' '{"id":2,"result":{"data":[]}}';;
+    *'"method":"thread/queue/add"'*)
+      cid=$(printf '%s' "$line" | sed -n 's/.*"clientUserMessageId":"\([^"]*\)".*/\1/p')
+      printf '{"id":3,"result":{"queuedSubmission":{"id":"ack","clientUserMessageId":"%s"}}}\n' "$cid"
+      ;;
+  esac
+done
+`
+	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	prevCLI, prevOpen := codexDesktopQueueCLI, openCodexQueueThread
+	t.Cleanup(func() { codexDesktopQueueCLI, openCodexQueueThread = prevCLI, prevOpen })
+	codexDesktopQueueCLI = func(h string) string {
+		if h == home {
+			return cli
+		}
+		return ""
+	}
+	var inFlight, maxInFlight atomic.Int32
+	openCodexQueueThread = func(_ context.Context, _ string, _ codexSource) error {
+		cur := inFlight.Add(1)
+		for {
+			prev := maxInFlight.Load()
+			if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		inFlight.Add(-1)
+		return nil
+	}
+
+	n := &Node{dir: t.TempDir()}
+	src := codexSource{home: home, thread: thread}
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, id := range []string{"concurrent-1", "concurrent-2"} {
+		wg.Add(1)
+		go func(idx int, cid string) {
+			defer wg.Done()
+			ctx, queued := withSendQueued(context.WithValue(context.Background(), sendTraceKey{}, cid))
+			err := n.sendCodexDesktop(ctx, src, cid, nil)
+			if err == nil && !*queued {
+				err = errors.New("expected queued receipt")
+			}
+			errs[idx] = err
+		}(i, id)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+	}
+	if got := maxInFlight.Load(); got != 1 {
+		t.Fatalf("max concurrent native-queue sends for same thread = %d, want 1", got)
+	}
+}
+
+func TestCodexDesktopHeldMessageFallbackPreservesClientIDAndOrder(t *testing.T) {
+	fastCodexDesktopHold(t)
+	const thread = "018f0000-0000-4000-8000-000000000004"
+	const firstID = "held-trace-id-1"
+	home, listener := listenFakeCodexBus(t)
+	acceptDone := make(chan struct{})
+	go func() {
+		defer close(acceptDone)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	cli := fakeNativeQueueCLI(t, home, "", `{"id":3,"result":{"queuedSubmission":{"id":"ack","clientUserMessageId":"`+firstID+`"}}}`, false)
+	prevCLI, prevOpen := codexDesktopQueueCLI, openCodexQueueThread
+	t.Cleanup(func() { codexDesktopQueueCLI, openCodexQueueThread = prevCLI, prevOpen })
+	codexDesktopQueueCLI = func(h string) string {
+		if h == home {
+			return cli
+		}
+		return ""
+	}
+	openCodexQueueThread = func(_ context.Context, _ string, _ codexSource) error { return nil }
+
+	path, write := appRollout(t, turnStarted)
+	n := &Node{dir: t.TempDir()}
+	src := codexSource{home: home, thread: thread, path: path}
+
+	// First send while bus is listening and turn is running: held in order with firstID.
+	ctx1, q1 := withSendQueued(context.WithValue(context.Background(), sendTraceKey{}, firstID))
+	if err := n.sendCodexDesktop(ctx1, src, "first held", nil); err != nil || !*q1 {
+		t.Fatalf("first send: err=%v queued=%v", err, *q1)
+	}
+	// Legacy bus disappears before the turn completes.
+	listener.Close()
+	<-acceptDone
+
+	// Second send while first is still held must stay behind it instead of overtaking into native queue.
+	ctx2, q2 := withSendQueued(context.WithValue(context.Background(), sendTraceKey{}, "held-trace-id-2"))
+	if err := n.sendCodexDesktop(ctx2, src, "second held", nil); err != nil || !*q2 {
+		t.Fatalf("second send: err=%v queued=%v", err, *q2)
+	}
+	if _, err := os.Stat(filepath.Join(home, "requests")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("second send overtook held message before running turn ended: stat err=%v", err)
+	}
+
+	// Turn completes: held delivery falls back to native queue preserving order and firstID.
+	write(turnComplete)
+	deadline := time.Now().Add(5 * time.Second)
+	var wire []byte
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(filepath.Join(home, "requests"))
+		if err == nil && strings.Contains(string(b), `"method":"thread/queue/add"`) {
+			wire = b
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(wire) == 0 {
+		t.Fatal("held messages were not delivered via native queue fallback after turn completed")
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(wire)), "\n") {
+		var msg struct {
+			Method string
+			Params struct {
+				ThreadID, ClientUserMessageID string
+				Input                         []struct{ Text string }
+			}
+		}
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Method == "thread/queue/add" {
+			if msg.Params.ThreadID != thread || msg.Params.ClientUserMessageID != firstID {
+				t.Fatalf("fallback thread/clientID mismatch: %s", line)
+			}
+			if len(msg.Params.Input) != 1 || msg.Params.Input[0].Text != "first held\n\nsecond held" {
+				t.Fatalf("fallback input order mismatch: %s", line)
+			}
+			return
+		}
+	}
+	t.Fatalf("no thread/queue/add found in requests:\n%s", wire)
 }
