@@ -27,7 +27,7 @@ export type Tab = CoreTab | ModuleTab;
 export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "advanced", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
-export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
+export type SettingsSection = "providers" | "model-config" | "translation" | "seen-rows" | AgentTab;
 /** A host-owned secondary page, not a connector ID. */
 export const SENT_SUB = "-sent";
 
@@ -143,7 +143,7 @@ export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: s
   const old = settingsTab(q.get("tab"));
   const legacy = old ? LEGACY_TABS[old] : undefined;
   const t = (legacy?.tab ?? old) as Tab;
-  if (!isCoreTab(t)) return isModuleTab(t) ? { tab: t, sub: null, section: null } : { tab: null, sub: null, section: null };
+  if (!isCoreTab(t)) return isModuleTab(t) ? { tab: t, sub: null, section: null } : { tab: null, sub: null, section: sectionOfHash(hash, "general") };
   const param = SUB[t];
   // ?tab=plugins&plugin=<id>: a link from before #1845
   const sub = old === "sent" ? SENT_SUB : param ? (q.get(param) ?? (t === "extensions" ? q.get("plugin") : null)) : null;
@@ -255,7 +255,7 @@ function sectionOfHash(hash: string, tab: Tab): SettingsSection | null {
   const section = hash.startsWith("#settings-") ? hash.slice("#settings-".length) : "";
   if (tab === "models" && (section === "providers" || section === "model-config")) return section;
   if (tab === "agents" && (AGENT_KINDS as readonly string[]).includes(section)) return section as AgentTab;
-  if (tab === "general" && section === "translation") return "translation";
+  if (tab === "general" && (section === "translation" || section === "seen-rows")) return section;
   return null;
 }
 

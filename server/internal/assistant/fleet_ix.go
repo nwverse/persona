@@ -881,6 +881,11 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		s.fleet.mu.Unlock()
 		return errHandoffElsewhere // a channel, the assistant, a remembered answer, an older hub: a no only
 	}
+	if p != nil && proto.SecretRunEnvInteraction(p.ix) && !proto.SecretHandoffDeclines(r) &&
+		(approver == nil || approver.DeviceID == "" || authorization != nil) {
+		s.fleet.mu.Unlock()
+		return errSecretRunEnv // an older specialized client would show no env warning before its Run
+	}
 	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
 		s.fleet.mu.Unlock()
 		return errInvalidQuestionCancel
