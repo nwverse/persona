@@ -136,8 +136,10 @@ only through the storage port (`recordingwire.Core`), and the knowledge base sta
 and works without the module (`docs/architecture/core-and-modules.md` "Recording"). The same package holds the
 module's other writers of a recording: the live title and the owner's rename (`recording_title.go`), the photo intake
 (`recording_photos.go`), a hub-mode meeting's audio (`recording_audio.go`), the manager's changes of the transcription
-(`transcription.go`) and the hub's own transcript (`hub_segments.go`), all behind the same port. The echo rule
-(`server/internal/kb/echo.go`) is still the knowledge base's: the upload's cleaner applies it too.
+(`transcription.go`), the hub's own transcript (`hub_segments.go`), the upload and its cleaner with the echo rule
+(`recordings.go`, `echo.go`), the live log (`live.go`), meeting.json (`meeting.go`) and the material of an answer
+(`meeting_material.go`), all behind the same port. Only the short summary's round is the knowledge base's own code
+(`server/internal/kb/recordings_summary.go`); it too runs only with the module.
 
 - For a meeting: `kind: meeting`, a calendar item in the knowledge base overlapping a recording of at least 5 minutes, or `minutes_asked`. Only once `complete: true` and the current revision has no minutes yet. The knowledge base loop's minutes lane does it (its own lane since #4247, so a long meeting's minutes no longer hold back archiving, [knowledge.md](knowledge.md) "Pipeline"), at most two recordings a run, on the **Meeting minutes** model (`meeting.minutes`, which follows Information processing until it is set apart, [model-config.md](model-config.md) "Meeting minutes and the in-meeting conversation (#7980)"; `kb.compress` before #7980). No new service. An upload that completes a recording wakes that round, so minutes start within seconds.
 - A long transcript is handled in segments: consecutive chunks in time order, each chunk reduced to candidate points, decisions, actions and questions with their timestamps, then one merge pass that deduplicates and orders them. The middle of a meeting is no longer dropped on the floor. Chunks are sized to fit the model's context with room for the instructions.

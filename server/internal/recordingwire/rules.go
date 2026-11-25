@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -476,4 +477,40 @@ func transcriptionShown(t *MeetingTranscription) any {
 		Fallback             bool
 		FinalDone, End       float64
 	}{t.Mode, t.State, t.Problem, gaps, t.Fallback, done, end}
+}
+
+// TranscriptOfRecord is a recording's text of record: in device mode the upload's segments; in hub mode the hub's
+// sentences, and each upload segment the hub's sentences, taken together (their union), cover no more than half of,
+// in time order (the hub's first at the same start), with Source set (SourceHub, SourceDevice). The phone's text is
+// made on the device in the recording's language only, so in hub mode it fills only where the hub has none. Persona's
+// echo stays in it, marked (Echo: the hub's by the echo rule, the phone's as uploaded); what is built from the meeting
+// reads it through MeetingLines.
+func TranscriptOfRecord(hubMode bool, device, hub []kbwire.RecordingSegment) []kbwire.RecordingSegment {
+	if !hubMode {
+		return slices.Clone(device)
+	}
+	out := make([]kbwire.RecordingSegment, 0, len(hub)+len(device))
+	spans := make([][2]float64, 0, len(hub))
+	for _, sg := range hub {
+		sg.Source = SourceHub
+		out = append(out, sg)
+		spans = append(spans, [2]float64{sg.Start, sg.End})
+	}
+	union := UnionSpans(spans)
+	for _, sg := range device {
+		if CoveredByUnion(sg.Start, sg.End, union) <= 0.5 {
+			sg.Source = SourceDevice
+			out = append(out, sg)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b kbwire.RecordingSegment) int {
+		switch {
+		case a.Start < b.Start:
+			return -1
+		case a.Start > b.Start:
+			return 1
+		}
+		return 0
+	})
+	return out
 }

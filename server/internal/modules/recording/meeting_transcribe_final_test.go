@@ -288,7 +288,7 @@ func TestFinalPassWaitsForTheLastLines(t *testing.T) {
 	h.finalState(meetingRec, "final")
 }
 
-// The final pass marks Persona's echo among its sentences by the timeline's spans and their answers (kb/echo.go),
+// The final pass marks Persona's echo among its sentences by the timeline's spans and their answers (writers/echo.go),
 // never drops it: the final transcript and detail.segments keep it marked, transcript.md marks it, and chars leaves it
 // out.
 func TestFinalPassMarksEcho(t *testing.T) {

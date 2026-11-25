@@ -21,7 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// Attending a recorded meeting (docs/assistant/meeting-minutes.md "Attending a meeting", kb/live.go): the phone's
+// Attending a recorded meeting (docs/assistant/meeting-minutes.md "Attending a meeting", writers/live.go): the phone's
 // live sentences (POST / GET …/live) and its questions (POST …/ask, meeting_ask.go). The live log is the knowledge
 // base's; feeding it to the attending session is the feeder's (meetingKick). Full credentials only: the watch's
 // answer-only token and extension tokens never reach these routes at the hub (they are not in extwire.RouteScopes),

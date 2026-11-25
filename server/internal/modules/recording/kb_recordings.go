@@ -16,7 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/modules/recording/writers"
 )
 
-// The phone's recording sync (docs/protocol/protocol.md "Recording sync", kb/recordings.go): transcripts into the knowledge base,
+// The phone's recording sync (docs/protocol/protocol.md "Recording sync", writers/recordings.go): transcripts into the knowledge base,
 // keyed by the recording's UUID. The hub relays these like the other knowledge-base routes.
 
 // codeRecordingDeleted: the recording was deleted here; the phone drops it instead of uploading it again.

@@ -19,7 +19,7 @@ import (
 )
 
 // Feeding the meetings Persona attends (docs/assistant/meeting-minutes.md "Feeding the attending session"): the
-// phone appends the sentences it hears to the recording's live log (kb/live.go), and the attending session gets them
+// phone appends the sentences it hears to the recording's live log (writers/live.go), and the attending session gets them
 // as one message a batch, at most one a minute, with the questions answered on the phone since the last one, and an
 // end batch once the meeting is over. A batch goes only to a session that is free (meeting_attendee.go); one that
 // cannot take it keeps it for later, and the live log says why (its problem). What was given to which session is the

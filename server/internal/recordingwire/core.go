@@ -34,10 +34,9 @@ type Reader interface {
 	// RecordingName is r's name in lists as it stands now (a day recording's from the day).
 	RecordingName(r *Recording) string
 	// RecordingSnapshot is recording id's committed files; RecordSnapshot the same with its meeting.json and the
-	// hub's transcript; TranscriptOfRecord the transcript the minutes are made from.
+	// hub's transcript (the transcript the minutes are made from is the rule TranscriptOfRecord of the two).
 	RecordingSnapshot(id ID) (Files, error)
 	RecordSnapshot(id ID) (Files, *Meeting, HubTranscript, error)
-	TranscriptOfRecord(hubMode bool, device, hub []kbwire.RecordingSegment) []kbwire.RecordingSegment
 	// ReadMinutes is recording id's minutes.json; ReadRecap its recap.json.
 	ReadMinutes(id ID) (*Minutes, error)
 	ReadRecap(id ID) (*DayRecap, error)

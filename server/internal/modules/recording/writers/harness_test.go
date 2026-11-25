@@ -72,7 +72,7 @@ func entryOf(rel string) (kind, id string, ok bool) {
 	return parts[0], parts[1], true
 }
 
-// summaryDue is the knowledge base's own rule (internal/kb/recordings.go): r's summary is to be made (again).
+// summaryDue is the knowledge base's own rule (internal/kb/recordings_summary.go): r's summary is to be made (again).
 func summaryDue(r *Recording) bool {
 	if !r.Complete || r.Chars == 0 || r.Trimmed() || r.Kind == RecordingDay {
 		return false

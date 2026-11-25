@@ -490,7 +490,7 @@ func (s *store) photoWords(p recordingwire.PhotoText, clipped bool) string {
 	return s.core.PhotoWords(p, clipped)
 }
 func (s *store) TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
-	return s.core.TranscriptOfRecord(hubMode, device, hub)
+	return recordingwire.TranscriptOfRecord(hubMode, device, hub)
 }
 func (s *store) recordingSnapshot(id string) (map[string][]byte, error) {
 	files, err := s.core.RecordingSnapshot(recordingwire.ID(id))

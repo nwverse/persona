@@ -20,7 +20,7 @@ import (
 // with transcription hub streams its audio to the hub (meeting_audio.go), which stores it (writers.AudioWriter) and hands
 // it to a transcription contribution's live job (meeting_transcribe_job.go). Each recording being transcribed has a
 // hubRun: it holds a sentence back while Persona speaks and then marks it Persona's echo or not by the echo rule
-// (writers.EchoHeld, writers.EchoOf: kb/echo.go, against the speaking spans and the answers said in them), puts every sentence in
+// (writers.EchoHeld, writers.EchoOf: writers/echo.go, against the speaking spans and the answers said in them), puts every sentence in
 // the hub's transcript (hub_segments.json, writers.HubTranscriptPut; Persona's echo with its mark) and the meeting's own,
 // while the role at their end is not off, in the live log (writers.LiveAppendHub), sending the phone its line frames.
 // Persona's echo never reaches the live log, a line frame or the room. When the hub has no

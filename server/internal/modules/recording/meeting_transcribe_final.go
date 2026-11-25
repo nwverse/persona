@@ -461,7 +461,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 			case extwire.TFSentence:
 				if f.Start != nil && f.End != nil && f.Text != nil {
 					sg := kbwire.RecordingSegment{Start: *f.Start, End: max(*f.End, *f.Start), Text: *f.Text, Source: recordingwire.SourceHub}
-					if sg.Text != "" { // Persona's echo kept, marked (kb/echo.go)
+					if sg.Text != "" { // Persona's echo kept, marked (writers/echo.go)
 						sg.Echo = writers.EchoOf(tl, sg.Start, sg.End, sg.Text)
 						cur = append(cur, sg)
 					}

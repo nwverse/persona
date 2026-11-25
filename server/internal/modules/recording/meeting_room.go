@@ -22,7 +22,7 @@ import (
 )
 
 // The meeting's room conversation (docs/assistant/meeting-minutes.md "Meeting conversation (#3862)", "The room
-// conversation"): a room meeting (one whose upload carries room, kb/meeting.go) is attended by a conversation of its
+// conversation"): a room meeting (one whose upload carries room, writers/meeting.go) is attended by a conversation of its
 // own, a guest of kind meeting on the assistant's computer, limited to meeting material: Claude Code only, no runtime
 // tools, its own directory with a meeting CLAUDE.md, none of the owner's Claude Code setup (node/assistant_guest.go),
 // and only the meeting tools, bound to its recording (meeting_room_tools.go). It is a side exchange everywhere

@@ -35,9 +35,6 @@ func (c recordingCore) RecordSnapshot(id recordingwire.ID) (recordingwire.Files,
 	files, m, hub, err := c.e.Store.recordSnapshot(string(id))
 	return portFiles(files), m, hub, err
 }
-func (c recordingCore) TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
-	return TranscriptOfRecord(hubMode, device, hub)
-}
 func (c recordingCore) ReadMinutes(id recordingwire.ID) (*Minutes, error) {
 	return c.e.Store.ReadMinutes(string(id))
 }
