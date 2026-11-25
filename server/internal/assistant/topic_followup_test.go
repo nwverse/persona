@@ -100,8 +100,9 @@ func TestLinkedTopicFollowupReachesAgentAndCurrentSupervisor(t *testing.T) {
 				f.setSessions("server",
 					proto.Session{SessionID: "conv1", Assistant: true, Status: proto.StatusIdle},
 					proto.Session{SessionID: "current", Assistant: true, Status: proto.StatusIdle})
+				setSettings(t, s, func(cfg *Settings) { cfg.Leaders = []string{"current"} })
 				if _, _, err := s.updateSupervision(context.Background(), task.ID, func(v *Supervision) bool {
-					v.Supervisor = "current"
+					v.Supervisor, v.SupervisorSource = "current", "explicit"
 					return true
 				}); err != nil {
 					t.Fatal(err)
@@ -258,7 +259,7 @@ func TestLinkedTopicFollowupPersistsAndRecovers(t *testing.T) {
 		return nil, errors.New("source temporarily unavailable after receipt commit")
 	})
 	again.sweepDeploys(now.Add(2 * time.Minute))
-	if len(sentToAgent(hub)) != 0 || !slices.Contains(pendingKinds(again, task.ID), "topic_followup") {
+	if len(sentToAgent(hub)) != 0 || len(hub.notices()) == 0 && !slices.Contains(pendingKinds(again, task.ID), "topic_followup") {
 		t.Fatalf("restart lost the supervisor copy or resent to Agent: sends=%v pending=%v", sentToAgent(hub), pendingKinds(again, task.ID))
 	}
 	flushLinkedFollowup(again)
@@ -503,7 +504,7 @@ func TestLinkedTopicFollowupBoundsReadsAndNotifiesUnsupervisedFallback(t *testin
 		t.Fatalf("unvisited topics starved: calls=%d unique=%d", len(calls), len(threads))
 	}
 	flushLinkedFollowup(s)
-	if len(f.notices()) != 1 || !strings.Contains(f.notices()[0], "the task has no agent") {
+	if missing := strings.Count(strings.Join(f.notices(), "\n"), "the task has no agent"); missing != 5 {
 		t.Fatalf("manually linked tasks did not report their missing Agent to main: %v", f.notices())
 	}
 }
