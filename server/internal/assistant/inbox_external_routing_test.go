@@ -121,6 +121,10 @@ func externalRealtime() w.ExternalPolicy {
 
 func TestExternalInboxLegacyForwardCutoverAndRollback(t *testing.T) {
 	f := newExternalRoutingFixture(t)
+	// The regular Inbox handling pass also calls legacy forwarding. Exercise
+	// the collection-triggered pass on its own so its lock fences delivery.
+	f.inbox.handing.Lock()
+	defer f.inbox.handing.Unlock()
 	target := f.todo(t, "todo_legacy_forward", "legacy_agent")
 	const link = "https://github.com/example/repo/pull/83"
 	if _, _, err := f.store.ImportTodoRepositoryLinkDetails(t.Context(), string(target.ID),
@@ -143,7 +147,8 @@ func TestExternalInboxLegacyForwardCutoverAndRollback(t *testing.T) {
 		f.inbox.forwarding.Lock()
 		f.inbox.forwarding.Unlock()
 		f.sweep(t, now)
-		scoped := slices.DeleteFunc(f.feed(t, target), func(row db.FeedRow) bool {
+		activity := f.feed(t, target)
+		scoped := slices.DeleteFunc(activity, func(row db.FeedRow) bool {
 			return strings.Contains(string(row.Body), `"todo_forward_status"`)
 		})
 		if got := f.sent(); len(got) != wantSends || len(scoped) != wantScoped {
@@ -173,7 +178,9 @@ func TestExternalInboxLarkTopicKeepsNativeOwnerMessageAndRoutesNewUpdatesOnce(t 
 	if _, err := f.bindThread(t.Context(), string(target.ID), thread, nil); err != nil {
 		t.Fatal(err)
 	}
+	f.hub.mu.Lock()
 	f.hub.hello.Owner = "ou_owner"
+	f.hub.mu.Unlock()
 	f.inbox.externalTriage = func(context.Context, externalTriageInput) ([]externalVerdict, error) {
 		t.Fatal("the legacy projection and explicit binding duplicated the same candidate")
 		return nil, nil
