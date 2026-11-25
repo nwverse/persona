@@ -3,11 +3,12 @@ package writers
 import (
 	"context"
 	"errors"
-	"github.com/nwverse/persona/server/internal/kb"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/kb"
 )
 
 const hubMinutesReply = `{"title": "设计评审", "points": [{"text": "上限保持在 4 MB", "line": 1}]}`
@@ -24,38 +25,6 @@ func hubMinutesEngine(t *testing.T, reply string) (e *testEngine, m *captureMode
 	told = &n
 	e.minutesWritten = func(context.Context, Recording, Minutes) { n++ }
 	return e, m, clock, told
-}
-
-// hubCompleteMeeting stores a complete hub-mode meeting of the phone's lines (uploaded at *clock), its live hub
-// sentences and some audio.
-func hubCompleteMeeting(t *testing.T, e *testEngine, id string, at time.Time, phone []string, hub []RecordingSegment) {
-	t.Helper()
-	putRecording(t, e, id, hubUpload(1, at.Add(-time.Hour), true, nil, phone...), at)
-	if len(hub) > 0 {
-		if _, err := e.HubTranscriptPut(id, kb.HubPassLive, hub); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := e.AudioPut(id, 0, pcmAt(0, secs(1))); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// finishTranscription runs what the manager does at the end of the final pass: the final sentences, the state, and
-// FinalTranscriptStored.
-func finishTranscription(t *testing.T, e *testEngine, id, state string, final []RecordingSegment) {
-	t.Helper()
-	if final != nil {
-		if _, err := e.HubTranscriptPut(id, kb.HubPassFinal, final); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ Recording) error { t.State = state; return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.FinalTranscriptStored(id); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func audioThere(e *testEngine, id string) bool {
