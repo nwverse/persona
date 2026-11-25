@@ -208,11 +208,12 @@ mid-turn too; `config.toml` stays as it is (`node/codex_terminal_modes.go`).
 
 - **Row**: `capabilities.model: true`, and `efforts` the levels of the model the rollout last ran: `supported_reasoning_levels` in the
   `models_cache.json` of the Codex home the rollout is in, Codex's whole list for a model the cache does not name, none for a model that takes none.
-  Only when the session has a rollout whose `session_meta` names `cli_version` 0.169 or later: the version that started the session, not the one
-  running in the pane now. So a session an older Codex started stays refused after a newer one resumes it, and a session an older binary resumes
-  (a downgrade under a running session) gets `/model` with arguments it does not take: its picker or an error on the screen, then
-  `modes_codex_unconfirmed`, nothing typed again. Reading the running Codex's version is #13290. Never on sub-Agents, botmux panes, TRAE CLI, or a
-  session whose owner is in doubt.
+  Only when the session has a rollout and the running Codex is 0.169 or later (#13290): the node reads the pane process's executable version first
+  (`<exe> --version`, cached by executable path and modification time) and falls back to the rollout's first `session_meta.cli_version` when the
+  pane process cannot be read (another user, a remote pane, or a failing version check). If neither reports 0.169 or later, the row omits the
+  controls and `session.modes` refuses with `modes_codex_version`, with nothing typed. So a pre-0.169 session resumed by 0.169 or later offers
+  model and effort and switches them, and a newer session resumed by a pre-0.169 binary is refused safely without opening its picker. Never on
+  sub-Agents, botmux panes, TRAE CLI, or a session whose owner is in doubt.
 - The phone reads the named launcher's catalog when the session reports one. A manually opened Codex pane with no known launcher
   gets the machine's Codex catalog. A pick changes the running session's model within its current provider. The gateway determines which
   model IDs it will serve.
@@ -223,7 +224,7 @@ mid-turn too; `config.toml` stays as it is (`node/codex_terminal_modes.go`).
   applies them, between turns and mid-turn, and again at each turn's start. The transcript reader takes that event as it takes a `turn_context`,
   so the row shows the new values at once.
 - **Refusals** (`session.modes` codes, worded in en / zh-Hans / ja): a permission mode, as on the app-server route; a level the model does not take;
-  `modes_codex_version` (an older Codex started the session); `modes_codex_no_rollout` (no rollout yet: a new Codex has none until its first
+  `modes_codex_version` (the running Codex — or the rollout's `cli_version` when the process cannot be read — is older than 0.169 or unknown); `modes_codex_no_rollout` (no rollout yet: a new Codex has none until its first
   message); `modes_codex_refused` with Codex's own words (a model or level it does not have, Reserve, an unknown argument, `/model` disabled
   while a task runs; "still starting" is typed once more after 2 seconds, and a second "still starting" is passed on);
   `modes_codex_unconfirmed` (`delivered: "unknown"`) when the rollout does not show the change within 15 seconds. Nothing is typed again after
@@ -232,7 +233,7 @@ mid-turn too; `config.toml` stays as it is (`node/codex_terminal_modes.go`).
 - **Observed** in a private pty, temporary `CODEX_HOME`, no model reachable: with Codex 0.169.1 mid-turn and 0.171.0-alpha.13 between turns,
   `Model changed to <model> <level> for this session only` on the screen and `thread_settings_applied` in the rollout at once; the model's
   default level for a model alone; `model` / `model_reasoning_effort` in `config.toml` unchanged. 0.171.0-alpha.13 was not tried mid-turn.
-- **Tests**: `node/codex_terminal_modes_test.go` (the row by version and cache; the line typed for an effort, a model, both, mid-turn and an
+- **Tests**: `node/codex_terminal_modes_test.go` (the row by running binary and rollout version and cache; binary `--version` caching, mtime invalidation, and error fallback; the line typed for an effort, a model, both, mid-turn and an
   unchanged pick; every refusal, including a dialog on the screen, a botmux pane, a subagent and "still starting" twice; Codex's answers on the
   screen; the rollout's record), `transcript/codex_effort_observe_test.go`
   (`thread_settings_applied` in the parser and the incremental scan). `TestCodexTerminalLive` (`node/codex_terminal_modes_live_test.go`, opt-in
