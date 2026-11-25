@@ -2907,10 +2907,25 @@ input's acceptance or refusal settles them. A late preparation failure cannot re
 `in_doubt`; reconciliation continues from the activated state. The existing history loop and session-list changes wake
 queued items after a restart.
 
+A switch that has not activated its target (`preparing`, `prepared`, or a preparation whose receipt stays unknown,
+`in_doubt` at the expected epoch) is bounded (#15317). Its retries keep the latest failure on the operation; 30 minutes
+after the operation started (`logicalSwitchPrepareLimit`, counted from its creation, so retries and restarts do not
+extend it) the sweep rejects it through the ordinary `rejected` outcome. The source stays active at the same epoch, a
+prepared target is abandoned and closed, the source's node is told it is not retired, and a batch item waiting on it
+becomes `refused` with a reason naming the phase and the last error. The cancel shares the conversation's row lock and
+epoch fence with activation, so an activation that wins is left alone. Activated switches, first-turn delivery and
+ambiguous input delivery are never timed out.
+
 The batch response distinguishes queued, switching, switched and refused items; one refusal does not cancel independent
 items. `restore_batch_id` creates a new, itself-restorable batch toward the original per-conversation settings rather
 than a global default. It only includes completed items whose current epoch and execution still match that batch's
-target. A conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
+target. An item still `switching` whose operation has not activated is restored by cancelling that operation instead:
+only while the conversation is at the item's expected epoch, on its saved before-image, with the operation's source
+still active. The restore item (`cancel`) is saved with its batch before the cancel runs, so a restart finishes it
+once; the restore batch reports it `switched` with a reason, the original item becomes `refused`, and nothing
+is prepared. If the switch activates first (or while the MCP confirmation is open), the item is refused and the switch
+finishes; restore it again afterwards. The usage-limit fallback's automatic restore does not cancel. A
+conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-
 default behavior, while a saved empty permission mode restores explicit `default` instead of inheriting the fallback.
 Preview creates neither state nor a phone confirmation; MCP execution uses one existing whole-batch outbound
 confirmation and the caller's space-scoped conversation lookup. Full-role HTTP routes and batch status are documented in
