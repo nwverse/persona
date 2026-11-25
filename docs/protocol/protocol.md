@@ -3623,7 +3623,7 @@ Each map counts the complete filtered membership by that dimension; missing attr
 GET /api/v1/sessions?summary=1&limit=50&since=<checkpoint>&with_counts=1
 ```
 
-- A refresh that needs both rows and counts takes one request instead of two. The web runtime list and a filtered Agents list ask for them on the first page of each refresh (only that page of a multi-page delta) and fall back to the separate `counts=1` read when the answer has no valid `counts`.
+- A refresh that needs both rows and counts takes one request instead of two. The web runtime list, Apple's unfiltered root list and filtered section lists ask for them on the first page of each refresh (only that page of a multi-page delta) and fall back to the separate `counts=1` read when the answer has no valid `counts`. An Apple root with a state filter keeps the separate read with `state` cleared, so its quick filters retain every state's count rather than only the selected state's membership.
 - `with_counts` takes the same boolean values as `counts`; anything else is 400 `invalid_query`. Without it the page is unchanged. An extension token's manager-limited view gets that manager's counts, as with `counts=1`.
 - Older hubs ignore the key and answer with the page alone: clients send it only when the feature is advertised, and still handle a page without `counts`.
 - **`agents_page_counts`** (#6496) says the same of the personal-agent endpoint: a paged `GET /api/v1/agents/sessions` (a first page or a `since` page) takes `with_counts=1` and answers with the page plus what `?counts=1` with the same filters returns, from one refresh of the sources. The web personal list and a filtered personal list use it the same way.

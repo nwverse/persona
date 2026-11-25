@@ -87,7 +87,11 @@ import Observation
         let list = SessionListModel<Session>(id: { $0.id }, removalID: { SessionListIdentity.runtime($0, group: group)?.path },
             fetch: { [weak link] query, cursor, since in
                 guard let link else { throw CancellationError() }
-                return try await link.api.sessionListPage(query, cursor: cursor, since: since)
+                var api = link.api
+                // A filtered root still needs every quick-filter count, not only the selected state's membership.
+                // Its separate counts read clears state below; an unfiltered root can use counts with the page.
+                api.sessionsPageCounts = api.sessionsPageCounts && query.state.isEmpty
+                return try await api.sessionListPage(query, cursor: cursor, since: since)
             }, counts: { [weak link] query in
                 guard let link else { throw CancellationError() }
                 var query = query
@@ -112,6 +116,10 @@ import Observation
             }
             // Whether the list is a window or the whole collection decides where the switcher's counts come from.
             if group == model.hub?.group { model.followNeedsYou() }
+        }
+        list.published = { [weak model, weak list] in
+            guard let model, let list else { return }
+            model.keepSeen(in: list)
         }
         list.outside = { [weak model] rows in model?.landSessionSummaries(rows, group: group) }
         lists[group] = list
@@ -239,6 +247,10 @@ import Observation
         page.changed = { [weak model, weak page] rows in
             guard let model, let page else { return }
             model.landSessionSummaries(rows, group: scope.hub)
+            model.keepSeen(in: page)
+        }
+        page.published = { [weak model, weak page] in
+            guard let model, let page else { return }
             model.keepSeen(in: page)
         }
         page.outside = { [weak model] rows in model?.landSessionSummaries(rows, group: scope.hub) }

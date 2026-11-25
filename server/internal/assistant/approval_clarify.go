@@ -612,6 +612,7 @@ type approvalBook struct {
 	mu         sync.Mutex
 	loaded     bool
 	list       []approvalJournalEntry
+	handled    map[string]bool
 	delivering bool
 	again      bool
 	retry      bool
