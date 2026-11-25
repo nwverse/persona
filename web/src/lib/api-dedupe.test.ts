@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError, HubTimeoutError, isAbort, READ_TIMEOUT_MS, setToken } from "./api";
-import { connect, getState, reset, todosPushed } from "./store";
+import { connect, getState, refreshAssistant, refreshTodos, reset, todosPushed } from "./store";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -222,7 +222,7 @@ describe("api in-flight GET deduplication", () => {
     await expect(stale).resolves.toEqual({ v: 1 });
   });
 
-  it("coalesces overlapping startup timer, hello refresh, and todosPushed into 1 /todos and 1 /assistant fetch", async () => {
+  it("coalesces same-boundary passive cold-start reads while non-resumed hello and todosPushed issue fresh boundary reads", async () => {
     vi.useFakeTimers();
     FakeSocket.all = [];
     vi.stubGlobal("WebSocket", FakeSocket);
@@ -241,28 +241,37 @@ describe("api in-flight GET deduplication", () => {
     }));
 
     connect();
-    // 250ms fallback fires before hello arrives.
+    // 250ms fallback fires before hello arrives; overlapping passive view-mount reads coalesce with it.
     await vi.advanceTimersByTimeAsync(250);
+    void refreshTodos({ coalesce: true });
+    void refreshAssistant({ coalesce: true }).catch(() => {});
     expect(counts["/api/v1/todos"]).toBe(1);
     expect(counts["/api/v1/assistant"]).toBe(1);
 
-    // WebSocket hello arrives while fallback reads are still in flight.
+    // Non-resumed WebSocket hello crosses the freshness boundary and issues fresh post-hello GETs.
     const sock = FakeSocket.all.at(-1)!;
     sock.open();
     sock.push({ type: "hello", features: ["todo_revision"] });
-    // Feed-triggered todos push settles while initial /todos is still in flight (no revision yet).
+    expect(counts["/api/v1/todos"]).toBe(2);
+    expect(counts["/api/v1/assistant"]).toBe(2);
+
+    // Feed-triggered todos push settles while /todos still has no revision: issues a fresh post-push GET.
     todosPushed();
     await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(250);
+    expect(counts["/api/v1/todos"]).toBe(3);
+    expect(counts["/api/v1/assistant"]).toBe(2);
 
-    expect(counts["/api/v1/todos"]).toBe(1);
-    expect(counts["/api/v1/assistant"]).toBe(1);
-
-    held["/api/v1/todos"]![0]!.resolve(new Response(JSON.stringify({ todos: [{ id: "t1", title: "Ship", created_at: "", updated_at: "" }] }), { status: 200 }));
-    held["/api/v1/assistant"]![0]!.resolve(new Response(JSON.stringify({ machine_id: "hub", main: "main", conversations: [] }), { status: 200 }));
+    // Newest answers resolve first; stale pre-hello/pre-push snapshots resolving later cannot overwrite them.
+    held["/api/v1/todos"]![2]!.resolve(new Response(JSON.stringify({ todos: [{ id: "t2", title: "After Push", created_at: "", updated_at: "" }] }), { status: 200 }));
+    held["/api/v1/assistant"]![1]!.resolve(new Response(JSON.stringify({ machine_id: "hub", main: "main-after-hello", conversations: [] }), { status: 200 }));
+    await vi.advanceTimersByTimeAsync(0);
+    held["/api/v1/todos"]![1]!.resolve(new Response(JSON.stringify({ todos: [{ id: "t1", title: "At Hello", created_at: "", updated_at: "" }] }), { status: 200 }));
+    held["/api/v1/todos"]![0]!.resolve(new Response(JSON.stringify({ todos: [{ id: "t0", title: "Pre Hello", created_at: "", updated_at: "" }] }), { status: 200 }));
+    held["/api/v1/assistant"]![0]!.resolve(new Response(JSON.stringify({ machine_id: "hub", main: "main-pre-hello", conversations: [] }), { status: 200 }));
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(getState().todos.map((t) => t.id)).toEqual(["t1"]);
-    expect(getState().assistant?.main).toBe("main");
+    expect(getState().todos.map((t) => t.id)).toEqual(["t2"]);
+    expect(getState().assistant?.main).toBe("main-after-hello");
   });
 });

@@ -7,7 +7,7 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { loadPages } from "../lib/lazy-page";
-import { connect, reset, todosPushed } from "../lib/store";
+import { connect, refreshAssistant, refreshTodos, reset } from "../lib/store";
 import { loadTodoProjects, useTodoProjects } from "../lib/todo-projects";
 import type { Todo } from "../lib/todos";
 import type { Session } from "../lib/types";
@@ -310,21 +310,36 @@ describe("Sidebar lazy loading, section concurrency cap, and route-switch safety
       return null;
     }
 
-    // 1. Cold start on `/`: fallback timer + hello + todosPushed overlap while /todos and /assistant are slow.
+    // 1. Cold start on `/`: 250ms fallback timer coalesces with overlapping passive reads in the same pre-hello boundary.
     await act(async () => {
       connect();
       root.render(<Sidebar route={{ name: "persona" }} onSearch={() => {}} onNewAgent={() => {}} />);
       await vi.advanceTimersByTimeAsync(250);
+      void refreshTodos({ coalesce: true });
+      void refreshAssistant({ coalesce: true }).catch(() => {});
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(peakByPath.get("/api/v1/todos")).toBe(1);
+    expect(peakByPath.get("/api/v1/assistant")).toBe(1);
+
+    // Drain pre-hello reads, then establish WS hello and verify post-hello passive bursts coalesce while route switches abort stale reads.
+    await act(async () => {
+      while (held.length) held.shift()!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
       const sock = FakeSocket.all.at(-1)!;
       sock.open();
       sock.push({ type: "hello", features: FEATURES });
-      todosPushed();
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(0);
+      while (held.length) held.shift()!.resolve();
+      await vi.advanceTimersByTimeAsync(0);
     });
 
     // 2. Switch `/` -> `/overview` -> `/inbox` (mounting route-scoped MailBody) -> `/todos` (mounting useTodoProjects) -> `/overview`.
     await act(async () => {
+      void refreshTodos({ coalesce: true });
+      void refreshTodos({ coalesce: true });
+      void refreshAssistant({ coalesce: true }).catch(() => {});
+      void refreshAssistant({ coalesce: true }).catch(() => {});
       root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
       root.render(<>
         <Sidebar route={{ name: "inbox" }} onSearch={() => {}} onNewAgent={() => {}} />
