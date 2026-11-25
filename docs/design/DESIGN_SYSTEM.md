@@ -53,6 +53,19 @@ nothing, and nothing is left greyed out (principle 2). No new component or token
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
+### Strength training pages (#14713)
+
+Audience: everyday people keeping their gym sets. Health's reserved declarative page reuses grouped sections, rows,
+choice fields, row steppers and switches, charts, native confirmation and push/pop navigation. Pending drafts appear
+first in the overview. Adjust keeps a working copy until Save updates the draft and its conversation card together;
+Cancel leaves both unchanged, and a conflicting revision reloads the saved draft with an explanation. If the card
+settles while Adjust is open, further edits redraw a read-only page with its saved or discarded status. A duplicate
+exercise name keeps the entered name in the form and shows a toast so the owner can correct it. Clients below
+UI version 6 show the sets read-only with an update hint. Deleting an exercise names it and the number of active sets
+in the confirmation; each saved set has Undo on its exercise page. The home card reuses the intake pages' bar chart
+for working sets over the last seven owner-local days including today, excluding warm-ups and undone sets; empty
+days remain zero bars, with no future days. No new visual token or client component is added.
+
 ## 1. Purpose, scope and sources of truth
 
 This is the project-level design specification. It describes what the code uses today. Apple (iOS first, then watchOS, macOS, visionOS) is the reference implementation. Web and Android are checked against it. Where the code and an older doc disagree, the code wins and the disagreement is listed in section 8.
@@ -3057,6 +3070,25 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 - **Add entry** appends one empty entry and is disabled at the manifest's maximum. All field edits and additions remain drafts until the page's existing **Save**. The host owns saved entry identity; an unsaved browser key must survive immutable field edits without becoming a visible value or part of the JSON payload.
 - Removal uses the shared confirmation `Dialog`, names the entry, and says that the entry and its saved secret are deleted **when Save succeeds**. Cancel leaves the draft untouched. A required list keeps only its declared minimum; an optional list can always return to its valid absent state even when a present array would have a positive minimum. If an address participates in configured-network permission, a nearby hint says that saving a changed address clears that entry's secret. These are consequences of the pending configuration write, not claims that merely opening or dismissing the dialog changed hub state.
 - Text and explanations wrap at phone width and the largest accessibility text size; buttons stay on one line using the existing button behavior. Destructive actions remain reachable without horizontal scrolling. Dark and light themes use the same semantic roles as every other settings card.
+
+## Dashboards (#15017)
+
+Dashboards are pages a conversation drafts and the owner keeps with one tap on Keep; where they live is 4.1, the line under
+a page's title is "Ownership line (#15017)" below. What the iPhone and iPad do of their own:
+
+- **No new host.** The hub lists Dashboards as ordinary extension places under the reserved id `-pages` (the index, then up
+  to three pinned pages); the drawer and the iPad sidebar draw them with the extension rows they have, and a page opens in
+  `ExtensionNavPage` / `ExtensionPageView` like any extension page. Settings › Extensions leaves them out: they are the
+  assistant's, not an extension's.
+- **The switch.** "Let Persona make dashboards" in Settings › Assistant, with its footnote, only when the hub's hello lists
+  `assistant_pages` and the default assistant is shown. Its label wraps rather than truncating (it is a label, not a
+  button).
+- **The ownership line.** The bar's subtitle on iOS 26 and later (`navigationSubtitle`, as other pages say where a thing is).
+  iOS 18 has no bar subtitle: there the title and the line together are the bar's title (`Theme.Font.heading` over
+  `Theme.Font.label`, secondary), as Knowledge's day page draws its chat.
+- **Over HTTP only.** Every extension id that starts with "-" is a manager's and is drawn over HTTP, never the native page
+  stream. `assistant_pages` (no payload) reads the places again, coalesced, and a reconnect reads them once more.
+
 ## Sidebar icon colors (#10822)
 
 Who it serves: anyone whose sidebar lists many pages and who finds it quicker to scan when each page has a color. It is

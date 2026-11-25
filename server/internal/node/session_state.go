@@ -84,7 +84,7 @@ type sessionState struct {
 	DesktopPendingEffort string `json:"desktop_pending_effort,omitempty"`
 	// Tasks: the assistant conversation's background tasks and monitors running right now (node/assistant.go).
 	Tasks []string `json:"tasks,omitempty"`
-	// Compaction: the last compaction the user asked for (assistant_compact.go).
+	// Compaction: the latest reported manual or idle compaction (assistant_compact.go).
 	Compaction *proto.Compaction `json:"compaction,omitempty"`
 	// RecoveryPending survives restarts until an input carrying this checkpoint is delivered.
 	RecoveryPending     string `json:"recovery_pending,omitempty"`
@@ -465,8 +465,9 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		if old.SegmentOperation != "" {
 			v.SegmentOperation = old.SegmentOperation
 		}
-		// Owned by state.update: a send's earlier copy must not erase a user's newer arrival.
-		v.IdleCompaction = old.IdleCompaction
+		// Owned by state.update: older process snapshots cannot replace the
+		// idle clock or the latest compaction result.
+		v.IdleCompaction, v.Compaction = old.IdleCompaction, old.Compaction
 		if old.CreationID != "" {
 			v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
 		}

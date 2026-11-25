@@ -47,7 +47,14 @@ type TaskExecution struct {
 }
 
 func (s *Service) taskMachine(ctx context.Context, t Task) string {
-	return cmp.Or(t.ExecutionMachineID, s.settings(ctx).MachineID)
+	if t.ExecutionMachineID != "" {
+		return t.ExecutionMachineID
+	}
+	def := s.settings(ctx).MachineID
+	if t.Cwd == "" && !t.continuesSource() {
+		return s.machineFallbackScheduleMachine(ctx, def, time.Now())
+	}
+	return def
 }
 
 func (t Task) startsFresh() bool {

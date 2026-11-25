@@ -57,6 +57,7 @@ var startOptOuts = map[string]string{
 	"startChatAgent":             "the Lark bot's start card: the user started the Agent by hand in the chat",
 	"sendHandoff":                "the inbox's hand-off into the main conversation: the main conversation is the supervisor",
 	"startInboxAgent":            "an inbox event's agent: its result is the draft in the inbox, which the user reviews",
+	"startInboxAgentAuthorized":  "an inbox event's policy-authorized agent: its result is the draft in the inbox, which the user reviews",
 	"runTask":                    "a scheduled task's own conversation: its runs report through notify_user, and the schedule follows them",
 	"runAutoReview":              "an independent reviewer of a supervised task: the review is part of that task's supervision",
 	"startSessionReview":         "an explicit independent reviewer: its source session's owner asked for it and answers its result card",

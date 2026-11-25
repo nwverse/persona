@@ -100,6 +100,9 @@ type escalatedCard struct {
 	at   time.Time
 }
 
+// maxDialogChoices is how many of a terminal dialog's choices its text names (the bot's card shows as many buttons).
+const maxDialogChoices = 8
+
 // escalatedKeep bounds how long an escalated card is remembered unanswered (it expired, was cancelled or its node went).
 const escalatedKeep = 48 * time.Hour
 
@@ -166,7 +169,7 @@ func terminalQuestionText(ix proto.Interaction) string {
 	for _, o := range d.Options {
 		if o.Kind == "" && o.Label != "" {
 			choices = append(choices, clip(oneLine(o.Label), 60))
-			if len(choices) == maxDialogOptions {
+			if len(choices) == maxDialogChoices {
 				break
 			}
 		}
@@ -688,7 +691,7 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 // task's decision: the agent's call, not the user's, made by conversation self.
 func (s *Service) askAnswered(ctx context.Context, todo, self string, ix proto.Interaction, answers map[string]string, reason string) {
 	st := s.todoDB()
-	if st == nil {
+	if st == nil || todo == "" {
 		return
 	}
 	at := decisionNow()
@@ -779,7 +782,7 @@ func (s *Service) answeredApproval(ctx context.Context, todo, self string, ix pr
 	}
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "todo": todo, "card": ix.ID, "kind": ix.Kind, "allow": allow})
 	st := s.todoDB()
-	if st == nil {
+	if st == nil || todo == "" {
 		return nil
 	}
 	l := s.lang(ctx)
@@ -811,7 +814,7 @@ func (s *Service) answeredScreen(ctx context.Context, todo, self string, ix prot
 	}
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "todo": todo, "card": ix.ID, "kind": ix.Kind, "option": o.Key})
 	st := s.todoDB()
-	if st == nil {
+	if st == nil || todo == "" {
 		return nil
 	}
 	l := s.lang(ctx)

@@ -266,6 +266,18 @@ func TestAgentPageTitleRules(t *testing.T) {
 			t.Errorf("agent %q: %q, %v", title, got, err)
 		}
 	}
+	// A name in Latin letters is refused as a whole word only; a name in Chinese or Japanese anywhere.
+	words := AgentPageTitleRules{Reserved: []string{"Persona", "ToDo", "Inbox", "Needs you", "收件箱", "ダッシュボード"}, Fold: fullWidth}
+	for title, refused := range map[string]bool{
+		"Inbox (2)": true, "Inbox · work": true, "Work inbox": true, "inbox": true, "My Persona notes": true, "Persona's week": true,
+		"ToDo list": true, "Needs you today": true, "看收件箱": true, "我的ダッシュボード": true, "Personas Persona": true, "週のToDo": true,
+		"Personal budget": false, "Todoist export": false, "Inboxes": false, "Unpersonable": false, "Personaé": false,
+		"Needs your input": false, "To do list": false,
+	} {
+		if _, err := words.Check(title); (err != nil) != refused {
+			t.Errorf("agent %q: refused %v, want %v", title, err != nil, refused)
+		}
+	}
 	if _, err := agent.Check("In\u200bbox"); err == nil || !strings.Contains(err.Error(), "U+200B") {
 		t.Fatalf("characters are checked first: %v", err)
 	}

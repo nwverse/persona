@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -152,7 +153,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 	// most botAnswerCards); the push's title heads the first card, the open button goes under the last.
 	l := s.botLang(ctx)
 	ctx = feishuSendAs(ctx, "push", machine, session)
-	cards := answerCards(l, s.linkNamer(ctx), body, false, nil, "")
+	cards := s.answerCards(l, s.linkNamer(ctx), body, false, nil, "")
 	head := botcard.NewCard("", "", title)
 	for i, ac := range cards {
 		if i == 0 {
@@ -220,7 +221,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 		}
 	}
 	if reminder == nil && len(missing) > 0 && (key == "" || again == nil) {
-		s.botSay(ctx, missingPiecesNote(l, missing))
+		s.botSay(ctx, s.larkModule().MissingPiecesNote(l, missing))
 	}
 	return again
 }
@@ -285,7 +286,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	if asked != "" && main {
 		foot = i18n.T(l, "assistant-feishu_cards.asked_elsewhere", i18n.Args{"asked": clip(oneLine(stripContext(asked)), 80)}) + "\n" + label
 	}
-	cards := answerCards(l, s.linkNamer(ctx), answer, false, nil, foot)
+	cards := s.answerCards(l, s.linkNamer(ctx), answer, false, nil, foot)
 	if len(cards) > 0 {
 		cards[len(cards)-1].card.AppendToLinks(s.openButton(ctx, machine, session))
 	}
@@ -377,7 +378,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 		}
 	}
 	if len(missing) > 0 {
-		s.botSay(ctx, missingPiecesNote(m.l, missing))
+		s.botSay(ctx, s.larkModule().MissingPiecesNote(m.l, missing))
 	}
 }
 
@@ -541,7 +542,7 @@ func agentDoneCard(l i18n.Lang, head, text, place, secondary string, sess proto.
 			meta = append([]string{botcard.EscapeMarkdown(i18n.T(l, "assistant-feishu_cards.only_beginning"))}, meta...)
 		}
 		card.Meta(meta...).Buttons(open)
-		if len(card.JSON()) <= answerCardMaxBytes || limit <= agentDoneClip/8 {
+		if len(card.JSON()) <= assistantwire.AnswerCardMaxBytes || limit <= agentDoneClip/8 {
 			break
 		}
 		limit /= 2

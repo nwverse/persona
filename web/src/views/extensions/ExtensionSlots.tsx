@@ -33,7 +33,7 @@ const OwnerScope = ({ extension, children }: { extension: string; children: Reac
 
 /** A nav_page's icon from the fixed vocabulary, as one of the web's icons (unknown: the extension's). */
 const NAV_ICON: Record<UIIcon, IconName> = { extension: "extension", plugin: "extension", chart: "chart", gauge: "gauge", list: "list", bell: "bell", doc: "read", calendar: "calendar", money: "money",
-  branch: "branch", code: "code", pull_request: "pullRequest", merge: "merge", ...NEW_ICON_GLYPH };
+  branch: "branch", code: "code", pull_request: "pullRequest", merge: "merge", map: "map", ...NEW_ICON_GLYPH };
 export const navIcon = (icon?: string): IconName => NAV_ICON[uiIcon(icon)];
 
 /** A badge's tone as the sidebar's badge colors. */

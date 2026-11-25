@@ -96,7 +96,9 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 			t.Fatalf("seeded tiers say nothing of when to use them: %+v", p.Tiers)
 		}
 		core.Description, dev.Description = "", ""
-		if !core.equal(ModelTier{Launcher: "current", Model: "test-chat"}) || !dev.equal(ModelTier{Launcher: "current", Model: "test-agents"}) {
+		// Each answers to its older name too, as a migrated one does (#15010).
+		if !core.equal(ModelTier{Launcher: "current", Model: "test-chat", Aliases: []string{"strong"}}) ||
+			!dev.equal(ModelTier{Launcher: "current", Model: "test-agents", Aliases: []string{"standard"}}) {
 			t.Fatalf("tiers are not the current configuration: %+v", p.Tiers)
 		}
 	}

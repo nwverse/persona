@@ -250,6 +250,16 @@ The node's `node.sock`, `runtime.sock` and `node-attach.sock` are still AF_UNIX 
 They weren't switched to named pipes: Go's `net` supports them directly, so the hooks, persona-link and `--stdio` forwarding code didn't change a line. Listening, connecting, half-close (`CloseWrite`) and replacing a leftover socket file were verified on a real Windows 11 machine.
 Limits: the path can't exceed 108 bytes (a very deep `%USERPROFILE%` gives `bind: invalid argument`); permission bits like `0600` mean nothing on Windows, so it relies on the user directory's own ACL.
 
+**Runtimes on Node.js use a named pipe.** Node.js on Windows treats every `net.connect` path as a named pipe and cannot
+reach an AF_UNIX socket (`connect EACCES`), so the built-in Antigravity, opencode and Paseo companions never connected to
+`runtime.sock`: agy stayed the plain CLI launcher, which can start Agents but not the main chat. The node therefore also
+listens on `\\.\pipe\persona-runtime-<random>` and passes that path to the companions it starts (`--socket` and
+`PERSONA_RUNTIME_SOCKET`; `server/internal/node/runtimepipe_windows.go`). The name is new on every start and handed only
+to processes the node starts, after the node owns the pipe, so nobody can create it first. Its DACL allows only the
+node's account, remote clients are refused, and its handles are not inheritable. As on the socket, the node does not know
+the connecting process. If the pipe cannot be created, the node logs `runtime pipe:` and passes `runtime.sock` as before.
+A runtime started by hand on Windows still defaults to `runtime.sock` and cannot connect.
+
 ## Orca
 
 - **Transport**: the Windows build of Orca writes `named-pipe` (`\\.\pipe\orca-<pid>-…`) and `websocket` in `orca-runtime.json` (`%APPDATA%\orca\`), with no `unix`.
