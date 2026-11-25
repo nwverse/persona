@@ -44,7 +44,8 @@ type RuntimeHost struct {
 	pipe string
 
 	mu   sync.Mutex
-	node *Node // the Node serving a hub connection now; nil between connections
+	node *Node      // the Node serving a hub connection now; nil between connections
+	gp   *gateProxy // last attached Node's gate proxy (resident keeper's) so disconnects between hub links release leases
 
 	// The daemons it dials (daemons.go), by id: their ids are reserved against runtimes on the socket.
 	dmu        sync.Mutex
@@ -98,6 +99,9 @@ func (rh *RuntimeHost) attach(n *Node) {
 		rh.reg.clearAssistantPIDs()
 	}
 	rh.node = n
+	if gp := n.existingGates(); gp != nil {
+		rh.gp = gp
+	}
 	rh.mu.Unlock()
 	rh.reg.resetWatches()
 	rh.notifyHub(true)
@@ -110,11 +114,28 @@ func (rh *RuntimeHost) detach(n *Node) {
 		rh.mu.Unlock()
 		return
 	}
+	if gp := n.existingGates(); gp != nil {
+		rh.gp = gp
+	}
 	rh.node = nil
 	rh.reg.clearAssistantPIDs()
 	rh.mu.Unlock()
 	rh.reg.resetWatches()
 	rh.notifyHub(false)
+}
+
+func (rh *RuntimeHost) releaseSessionGates(sessions []string) {
+	if len(sessions) == 0 {
+		return
+	}
+	rh.mu.Lock()
+	n, gp := rh.node, rh.gp
+	rh.mu.Unlock()
+	if cur := n.existingGates(); cur != nil {
+		cur.releaseSessions(sessions)
+	} else if gp != nil {
+		gp.releaseSessions(sessions)
+	}
 }
 
 // notifyHub tells every connected runtime whether a hub is connected.
@@ -224,7 +245,8 @@ func (rh *RuntimeHost) serveConn(ctx context.Context, c io.ReadWriteCloser, daem
 	err := peer.Serve(ctx, c)
 	peer.Close(err)
 	cancel()
-	rh.reg.remove(h)
+	released := rh.reg.remove(h)
+	rh.releaseSessionGates(released)
 	if id := h.id(); id != "" {
 		if id == agyRuntimeID {
 			rh.wakeAgyBridge()

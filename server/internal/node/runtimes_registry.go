@@ -582,7 +582,7 @@ func (b *runtimeRegistry) add(peer *rpc.Peer) *runtimeConn {
 	return h
 }
 
-func (b *runtimeRegistry) remove(h *runtimeConn) {
+func (b *runtimeRegistry) remove(h *runtimeConn) []string {
 	id := h.id()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -590,11 +590,43 @@ func (b *runtimeRegistry) remove(h *runtimeConn) {
 	h.mu.Lock()
 	h.assistantPIDs = nil
 	h.mu.Unlock()
+	var owned []string
+	if !h.superseded {
+		for sid, o := range b.owner {
+			if o == h {
+				owned = append(owned, sid)
+			}
+		}
+	}
 	b.leftUnlisted(id)
 	b.leftRows(h, id)
 	b.leftCodexClaims(id)
 	b.agyWorkRemoveConnLocked(h, agyPresenceNow())
 	b.recomputeOwners()
+	if h.superseded {
+		return nil
+	}
+	drop := map[string]struct{}{}
+	for _, sid := range owned {
+		if b.owner[sid] == nil {
+			drop[sid] = struct{}{}
+		}
+	}
+	if id != "" && b.byRuntime(id) == nil {
+		for sid, k := range b.known {
+			if k.runtime == id && b.owner[sid] == nil {
+				drop[sid] = struct{}{}
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return nil
+	}
+	released := make([]string, 0, len(drop))
+	for sid := range drop {
+		released = append(released, sid)
+	}
+	return released
 }
 
 // recomputeOwners picks, for every listed session, the connection that answers for it. Two runtimes can list the
