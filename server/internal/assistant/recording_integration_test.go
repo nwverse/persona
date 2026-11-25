@@ -497,6 +497,7 @@ func TestMinutesPastMeetingTools(t *testing.T) {
 // kb_get on a meeting imported from a connected app lists the recording whose calendar match is an overlapping event
 // but whose imported meeting it is (#8872).
 func TestKBGetImportedMeetingListsItsRecording(t *testing.T) {
+	needsRecordingModule(t) // the calendar match runs in the module's minutes round
 	f := newFakeHub()
 	s := kbServiceOn(t, f, newKBStore(), t.TempDir(), func(string, ...any) {})
 	setSettings(t, s, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
