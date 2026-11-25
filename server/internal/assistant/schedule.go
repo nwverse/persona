@@ -1298,10 +1298,12 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		renames := a.Title != "" && title != t.Title // the title is part of the rendered prompt
 		return t.PromptSelections && a.Prompt == "" && (changesRun || enables || renames)
 	}
+	unchangedRunIf := false
 	if a.ID != "" && (changesRun || a.Enabled != nil || a.Title != "") {
 		// Refuse before model validation or pre-run command approval. Recheck
 		// under the schedule lock in case the owner edits the task meanwhile.
 		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
+			unchangedRunIf = runIf != nil && sameRoutineCheck(prev.RunIf, runIf)
 			if requiresOwner(prev) {
 				return "", errTaskSelectionsOwner
 			}
@@ -1315,7 +1317,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			}
 		}
 	}
-	if runIf != nil {
+	if runIf != nil && !unchangedRunIf {
 		approved, err := s.approveRoutineCheck(ctx, machine, self, runIf)
 		if err != nil {
 			return "", err
@@ -1340,6 +1342,10 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		if requiresOwner(t) {
 			sc.mu.Unlock()
 			return "", errTaskSelectionsOwner
+		}
+		if unchangedRunIf && !sameRoutineCheck(t.RunIf, runIf) {
+			sc.mu.Unlock()
+			return "", errors.New("run_if changed while the routine was being updated; retry the update")
 		}
 		old = t
 	} else {
