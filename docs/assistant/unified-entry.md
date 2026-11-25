@@ -1150,10 +1150,13 @@ to its supervising conversation in either configuration (#11195). Code: `server/
   one push (the first card pushes; the others go to the apps and channels without one), each carrying
   `delegate.reason` / `delegate.recommend`. `userApproval` also recognizes outward, deletion and spending tool actions
   structurally with neutral payloads; known local file-edit tools (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`,
-  `apply_patch`) never classify their file contents as the requested action. Only the task's supervisor and the main
-  chat may escalate. A leader's or the background supervisor's escalation adds an `escalated` entry to the main chat with
-  the cards, the reason and the recommendation, so it does not ask again. The main chat may answer a card either of
-  them still holds, and its answer is kept as the task's decision too.
+  `apply_patch`) never classify their file contents as the requested action. Antigravity's `File <path>` permission
+  display title gets the same treatment only with a recognized string write/edit field in its JSON input, not from a
+  path-like title alone. `Skill` only loads instructions, so its arguments are not action evidence; subsequent tool
+  calls are classified independently. Only the task's supervisor and the main chat may escalate. A leader's or the
+  background supervisor's escalation adds an `escalated` entry to the main chat with the cards, the reason and the
+  recommendation, so it does not ask again. The main chat may answer a card either of them still holds, and its answer
+  is kept as the task's decision too.
 - **Answers**: the user's answers go to the agents as any card's; a question's is kept as every card's is
   (`source: card`), and an escalated permission or plan becomes a `card` decision too ("Allow …" → "Allowed"), so a
   later card cannot quietly go the other way.
