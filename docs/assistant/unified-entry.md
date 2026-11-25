@@ -1126,7 +1126,11 @@ to its supervising conversation in either configuration (#11195). Code: `server/
   question, or `allow` for Yes/No), kept as the assistant's answer and the task's decision; a dialog that trusts a
   folder, accepts Bypass Permissions, may delete files (`Risk: delete`) or acts in the owner's name is the owner's
   (`userScreen`), and only an explicit `ask_escalate` rings the owner about it. Unparsed screens and password or private
-  input keep their existing owner route. The conversations' own cards stay the user's. The card is shown on the apps
+  input keep their existing owner route. The conversations' own cards stay the user's: a card of the main
+  conversation, the background supervisor or a leader (`supervisorConversation`) goes up no ladder, and the route that
+  hands other cards of none of the owner's six kinds to a supervisor or the main conversation (`handNonOwnerCard`,
+  `card_nonowner_route.go`) leaves it alone too. Handed on, such a card waited where no turn was started for it, no
+  timeout moved it and `ask_escalate`, which takes a task, could not hand it up (#15360). The card is shown on the apps
   marked `delegating` and rings nothing: no push, no bot card, no Persona Link notification. A card the supervisor
   holds (any kind but a question) is not the owner's: the apps count no session that waits only on such cards in Needs
   you (the hub's `supervisor_held` count) and offer no buttons to answer it (2026-11-23, D11 of

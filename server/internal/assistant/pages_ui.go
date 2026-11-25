@@ -125,12 +125,12 @@ func (s *Service) dashboardsOn(ctx context.Context) bool {
 // assistant is made, main.go).
 type pagesHook struct{ svc func() *Service }
 
-func (h pagesHook) Places(ctx context.Context, l i18n.Lang, _ string) []extmgr.UIPlace {
+func (h pagesHook) Places(ctx context.Context, l i18n.Lang, placement string, overview bool) []extmgr.UIPlace {
 	s := h.svc()
 	if s == nil {
 		return nil
 	}
-	return s.pagePlaces(ctx, l)
+	return s.pagePlacesFor(ctx, l, placement, overview)
 }
 
 func (h pagesHook) UI(ctx context.Context, l i18n.Lang, ui string, in wire.UIRequest, device string) (extension.ActionResult, error) {
@@ -148,8 +148,19 @@ func pagesRefusal(status int, code, key string) error {
 // pagePlaces are the sidebar's entries: the index while a page is kept or one waits in Recently removed, then each
 // pinned page; nothing while Dashboards are off. Never a badge (a page is no count of the app's).
 func (s *Service) pagePlaces(ctx context.Context, l i18n.Lang) []extmgr.UIPlace {
+	return s.pagePlacesFor(ctx, l, "", false)
+}
+
+// pagePlacesFor returns the -pages places for placement, including overview_card entries (`g_<hex>`) for kept watch
+// pages with on_overview only when overview is true (`?pages_overview=1`) and placement is empty or `overview_card`.
+func (s *Service) pagePlacesFor(ctx context.Context, l i18n.Lang, placement string, overview bool) []extmgr.UIPlace {
 	st, ok := s.pageStore()
 	if !ok || !s.dashboardsOn(ctx) {
+		return nil
+	}
+	wantNav := placement == "" || extension.FullPage(placement)
+	wantOverview := overview && (placement == "" || placement == "overview_card")
+	if !wantNav && !wantOverview {
 		return nil
 	}
 	kept, err := st.AssistantPages(ctx, db.AssistantPageQuery{Status: []string{db.AssistantPageActive}})
@@ -157,16 +168,29 @@ func (s *Service) pagePlaces(ctx context.Context, l i18n.Lang) []extmgr.UIPlace 
 		s.logf("assistant pages: places: %v", err)
 		return nil
 	}
-	if len(kept) == 0 {
-		removed, err := st.RecentlyRemovedAssistantPages(ctx, time.Now())
-		if err != nil || len(removed) == 0 {
-			return nil
+	var out []extmgr.UIPlace
+	if wantNav {
+		showIndex := len(kept) > 0
+		if !showIndex {
+			removed, err := st.RecentlyRemovedAssistantPages(ctx, time.Now())
+			showIndex = err == nil && len(removed) > 0
+		}
+		if showIndex {
+			out = append(out, pagePlace(pagesIndex, i18n.T(l, "assistant-pages.dashboards"), wire.AgentPageIconDefault, ""))
+			pinned := 0
+			for _, p := range kept {
+				if p.Pinned && pinned < db.AssistantPagesPinnedMost {
+					out = append(out, pagePlace(p.ID, p.Title, p.Icon, p.IconColor))
+					pinned++
+				}
+			}
 		}
 	}
-	out := []extmgr.UIPlace{pagePlace(pagesIndex, i18n.T(l, "assistant-pages.dashboards"), wire.AgentPageIconDefault, "")}
-	for _, p := range kept {
-		if p.Pinned && len(out) <= db.AssistantPagesPinnedMost {
-			out = append(out, pagePlace(p.ID, p.Title, p.Icon, p.IconColor))
+	if wantOverview {
+		for _, p := range kept {
+			if len(p.Watch) > 0 && p.OnOverview {
+				out = append(out, pageOverviewPlace(p))
+			}
 		}
 	}
 	return out
@@ -201,15 +225,16 @@ func (st pageState) encode() string {
 
 // pageRequest is one request to the pages.
 type pageRequest struct {
-	s       *Service
-	st      pageStore
-	l       i18n.Lang
-	version int
-	device  string
-	in      wire.UIRequest
-	state   pageState
-	now     time.Time
-	loc     *time.Location
+	s        *Service
+	st       pageStore
+	l        i18n.Lang
+	version  int
+	platform string
+	device   string
+	in       wire.UIRequest
+	state    pageState
+	now      time.Time
+	loc      *time.Location
 }
 
 // pageUI answers a request to draw ui, or an action on it.
@@ -222,16 +247,22 @@ func (s *Service) pageUI(ctx context.Context, l i18n.Lang, ui string, in wire.UI
 		return extension.ActionResult{}, pagesRefusal(http.StatusServiceUnavailable, "unavailable", "unavailable")
 	}
 	version := 1
+	platform := ""
 	if in.Context != nil {
 		version = in.Context.UIVersion
+		platform = in.Context.Platform
 	}
-	r := &pageRequest{s: s, st: st, l: l.Or(s.lang(ctx)), version: min(max(version, 1), extension.UIVersion), device: device, in: in,
-		state: readPageState(in.State), now: time.Now(), loc: s.location(ctx)}
+	now := time.Now()
+	s.logPageRefreshes(ctx, now)
+	r := &pageRequest{s: s, st: st, l: l.Or(s.lang(ctx)), version: min(max(version, 1), extension.UIVersion), platform: platform, device: device, in: in,
+		state: readPageState(in.State), now: now, loc: s.location(ctx)}
 	switch {
 	case ui == pagesIndex:
 		return r.index(ctx)
 	case pageIDPattern.MatchString(ui):
 		return r.page(ctx, ui)
+	case overviewIDPattern.MatchString(ui):
+		return r.overviewCard(ctx, ui)
 	}
 	return extension.ActionResult{}, pagesRefusal(http.StatusNotFound, "not_found", "not_found")
 }
@@ -274,7 +305,20 @@ func (r *pageRequest) indexResult(ctx context.Context, undo *db.AssistantPageRow
 	if err != nil {
 		return extension.ActionResult{}, err
 	}
-	v := drawPagesIndex(kept, removed, undo, r.l, r.loc, r.now)
+	var readingIDs []string
+	for _, p := range kept {
+		if len(p.Watch) > 0 || p.RoutineID != "" {
+			readingIDs = append(readingIDs, p.ID)
+		}
+	}
+	var readingsByPage map[string][]db.AssistantPageReadingRow
+	if len(readingIDs) > 0 {
+		readingsByPage, err = r.st.AssistantPagesReadings(ctx, readingIDs, db.AssistantPageReadingsKept)
+		if err != nil {
+			return extension.ActionResult{}, err
+		}
+	}
+	v := drawPagesIndexWith(kept, removed, undo, readingsByPage, r.l, r.loc, r.now)
 	if err := r.fit(&v); err != nil {
 		return extension.ActionResult{}, err
 	}
@@ -282,7 +326,11 @@ func (r *pageRequest) indexResult(ctx context.Context, undo *db.AssistantPageRow
 }
 
 func (r *pageRequest) fit(v *wire.View) error {
-	slot, _ := extension.Slot("nav_page")
+	return r.fitSlot(v, "nav_page")
+}
+
+func (r *pageRequest) fitSlot(v *wire.View, slotName string) error {
+	slot, _ := extension.Slot(slotName)
 	_, err := extension.Fit(v, slot, r.version, r.l)
 	return err
 }
@@ -316,6 +364,8 @@ func (r *pageRequest) page(ctx context.Context, id string) (extension.ActionResu
 		return r.ownerAction(ctx, id, action, arg)
 	case "persona.retry":
 		return r.retry(ctx, p, arg)
+	case "persona.refresh", "persona.pause", "persona.resume", "persona.alert", "persona.overview":
+		return r.pageWatchAction(ctx, p, action)
 	}
 	if ownAction(action) {
 		return extension.ActionResult{}, pagesRefusal(http.StatusBadRequest, "bad_request", "bad_action")
@@ -337,7 +387,20 @@ func (r *pageRequest) pageResult(ctx context.Context, p *db.AssistantPageRow, su
 		if len(taps) > 0 {
 			last = &taps[0]
 		}
-		v = drawPage(p, sub, last, r.l, r.loc, r.now, r.s.webBase(ctx))
+		extra := pageDrawExtra{platform: r.platform}
+		if len(p.Watch) > 0 || p.RoutineID != "" {
+			extra.readings, err = r.st.AssistantPageReadings(ctx, p.ID, db.AssistantPageReadingsKept)
+			if err != nil {
+				return extension.ActionResult{}, err
+			}
+		}
+		if p.RoutineID != "" {
+			if t, ok := r.s.taskView(ctx, p.RoutineID); ok {
+				extra.routine = &t
+			}
+			extra.refresh = r.s.pageRefreshStatusFor(p, extra.readings, extra.routine, r.now)
+		}
+		v = drawPageWith(p, sub, last, extra, r.l, r.loc, r.now, r.s.webBase(ctx))
 	}
 	if err := r.fit(&v); err != nil {
 		r.s.logf("assistant pages: %s does not fit UI version %d: %v", p.ID, r.version, err)
@@ -409,6 +472,9 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 		}
 		if err == nil {
 			r.s.pagesTold(ctx, id, changed)
+			if changed && len(p.Watch) > 0 && p.OnOverview {
+				r.s.pageChanged(overviewCardID(id), pageContent)
+			}
 			if r.version >= 3 {
 				return extension.ActionResult{Pop: true, Toast: toast("renamed")}, nil
 			}
@@ -419,7 +485,12 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 		p, changed, err = r.st.RemoveAssistantPage(ctx, id, db.AssistantPageRemovedByOwner, r.now)
 		if err == nil {
 			if changed {
+				r.s.cancelPageRefresh(id)
+				_, _, _ = r.st.ClearAssistantPageRefresh(ctx, id, r.now)
 				r.s.pageRoutineRemoved(ctx, id, p.RoutineID)
+				if len(p.Watch) > 0 && p.OnOverview {
+					r.s.pageChanged(overviewCardID(id), pageContent)
+				}
 			}
 			r.s.pagesTold(ctx, id, changed)
 			return r.indexResult(ctx, p, toast("removed_toast"))
@@ -434,6 +505,9 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 		case err == nil:
 			if changed {
 				r.s.pageRoutineRestored(ctx, id, p.RoutineID)
+				if len(p.Watch) > 0 && p.OnOverview {
+					r.s.pageChanged(overviewCardID(id), pageContent)
+				}
 			}
 			r.s.pagesTold(ctx, id, changed)
 			return again(toast("restored"))
@@ -443,7 +517,9 @@ func (r *pageRequest) ownerAction(ctx context.Context, from, action, id string) 
 		changed, routine, err = r.st.DeleteAssistantPageWithRoutine(ctx, id)
 		if err == nil {
 			if changed {
+				r.s.cancelPageRefresh(id)
 				r.s.pageRoutineDeleted(ctx, id, routine)
+				r.s.pageChanged(overviewCardID(id), pageContent)
 			}
 			r.s.pagesTold(ctx, id, changed)
 			return r.indexResult(ctx, nil, toast("deleted"))
@@ -531,6 +607,10 @@ func pageWord(l i18n.Lang, key string) string { return i18n.T(l, "assistant-page
 // drawPagesIndex is the index: the pinned pages, the others, and Recently removed, with the line to undo removing undo
 // on top; with no page kept, an example of what to ask for.
 func drawPagesIndex(kept, removed []db.AssistantPageRow, undo *db.AssistantPageRow, l i18n.Lang, loc *time.Location, now time.Time) wire.View {
+	return drawPagesIndexWith(kept, removed, undo, nil, l, loc, now)
+}
+
+func drawPagesIndexWith(kept, removed []db.AssistantPageRow, undo *db.AssistantPageRow, readings map[string][]db.AssistantPageReadingRow, l i18n.Lang, loc *time.Location, now time.Time) wire.View {
 	v := wire.View{Title: pageWord(l, "dashboards"), Sections: []wire.Section{}}
 	if undo != nil {
 		v.Sections = append(v.Sections, wire.Section{Key: "persona.undo", Items: []wire.Component{
@@ -540,7 +620,7 @@ func drawPagesIndex(kept, removed []db.AssistantPageRow, undo *db.AssistantPageR
 	}
 	var pinned, rest []wire.Component
 	for _, p := range kept {
-		row := keptPageRow(p, l, loc, now)
+		row := keptPageRowWith(p, readings[p.ID], l, loc, now)
 		if p.Pinned {
 			pinned = append(pinned, row)
 		} else {
@@ -578,28 +658,61 @@ func drawPagesIndex(kept, removed []db.AssistantPageRow, undo *db.AssistantPageR
 }
 
 func keptPageRow(p db.AssistantPageRow, l i18n.Lang, loc *time.Location, now time.Time) wire.Component {
+	return keptPageRowWith(p, nil, l, loc, now)
+}
+
+func keptPageRowWith(p db.AssistantPageRow, readings []db.AssistantPageReadingRow, l i18n.Lang, loc *time.Location, now time.Time) wire.Component {
 	pin := wire.RowAction{Title: pageWord(l, "pin"), Icon: "star", Swipe: true, Action: wire.Action{ID: "persona.pin", Values: map[string]string{"page": p.ID}}}
 	if p.Pinned {
 		pin = wire.RowAction{Title: pageWord(l, "unpin"), Icon: "star", Swipe: true, Action: wire.Action{ID: "persona.unpin", Values: map[string]string{"page": p.ID}}}
 	}
-	return wire.Component{Type: wire.ComponentRow, Key: "page:" + p.ID, Title: p.Title, Subtitle: pageTime(l, loc, now, p.ContentAt, "updated"),
+	row := wire.Component{Type: wire.ComponentRow, Key: "page:" + p.ID, Title: p.Title, Subtitle: keptPageSubtitle(p, readings, l, loc, now),
 		Icon: p.Icon, IconColor: p.IconColor, Action: &wire.Action{ID: "persona.open:" + p.ID, Push: &wire.Push{UI: p.ID, Title: p.Title}},
 		Actions: []wire.RowAction{pin, {Title: pageWord(l, "remove"), Icon: "trash", Role: wire.ButtonRoleDestructive, Swipe: true,
 			Action: wire.Action{ID: "persona.remove", Values: map[string]string{"page": p.ID}, Confirm: pageWord(l, "remove_confirm")}}}}
+	if len(p.Watch) > 0 {
+		if watch, err := wire.ParsePageWatch(p.Watch); err == nil {
+			g := drawWatchGlance(watch, parseWatchReadings(watch, readings), l)
+			row.Value = g.value
+			row.Spark = g.spark
+			if g.icon != "" {
+				row.Icon = g.icon
+				row.IconColor = g.iconColor
+			}
+		}
+	}
+	return row
 }
 
 // drawPage is kept page p as the apps draw it: its detail page sub ("" or one it does not have: the page itself), its
 // actions made the extension pages' own, its title as the View's, and the hub's footer (last: the owner's latest tap).
 func drawPage(p *db.AssistantPageRow, sub string, last *db.AssistantPageActionRow, l i18n.Lang, loc *time.Location, now time.Time, web string) wire.View {
-	root, err := wire.ParseAgentPage(p.View)
-	if err != nil {
-		return drawBrokenPage(p, l)
+	return drawPageWith(p, sub, last, pageDrawExtra{}, l, loc, now, web)
+}
+
+func drawPageWith(p *db.AssistantPageRow, sub string, last *db.AssistantPageActionRow, extra pageDrawExtra, l i18n.Lang, loc *time.Location, now time.Time, web string) wire.View {
+	var watch *wire.PageWatch
+	if len(p.Watch) > 0 {
+		w, err := wire.ParsePageWatch(p.Watch)
+		if err != nil {
+			return drawBrokenPage(p, l)
+		}
+		watch = w
 	}
-	v := *root
-	if page, ok := root.Pages[sub]; ok && sub != "" {
-		v = page
-	} else {
+	var v wire.View
+	if watch != nil && emptyPageView(p.View) {
 		sub = ""
+	} else {
+		root, err := wire.ParseAgentPage(p.View)
+		if err != nil {
+			return drawBrokenPage(p, l)
+		}
+		v = *root
+		if page, ok := root.Pages[sub]; ok && sub != "" {
+			v = page
+		} else {
+			sub = ""
+		}
 	}
 	v.Pages, v.Fallback, v.RefreshAfter = nil, "", 0
 	for _, a := range wire.Actions(&v) {
@@ -607,7 +720,11 @@ func drawPage(p *db.AssistantPageRow, sub string, last *db.AssistantPageActionRo
 	}
 	v.Title = p.Title
 	v.State = pageState{P: sub, V: p.Version}.encode()
-	v.Sections = append(v.Sections, pageFooter(p, last, l, loc, now, web))
+	if watch != nil && sub == "" {
+		sec := drawWatchSection(watch, parseWatchReadings(watch, extra.readings), l, loc, now, 0)
+		v.Sections = append([]wire.Section{sec}, v.Sections...)
+	}
+	v.Sections = append(v.Sections, pageFooterWith(p, watch, last, extra, l, loc, now, web))
 	return v
 }
 
@@ -630,8 +747,20 @@ func pageActionForExtension(a *wire.Action, id string, version int64) {
 // pageFooter is the hub's own part of a page: when it was updated, where the owner's latest tap is, and the owner's
 // actions.
 func pageFooter(p *db.AssistantPageRow, last *db.AssistantPageActionRow, l i18n.Lang, loc *time.Location, now time.Time, web string) wire.Section {
-	items := []wire.Component{{Type: wire.ComponentText, Key: "persona.updated", Text: pageTime(l, loc, now, p.ContentAt, "updated"), Style: "caption"}}
-	items = append(items, pageTapStatus(p, last, l, now, web)...)
+	return pageFooterWith(p, nil, last, pageDrawExtra{}, l, loc, now, web)
+}
+
+func pageFooterWith(p *db.AssistantPageRow, watch *wire.PageWatch, last *db.AssistantPageActionRow, extra pageDrawExtra, l i18n.Lang, loc *time.Location, now time.Time, web string) wire.Section {
+	items := []wire.Component{{Type: wire.ComponentText, Key: "persona.updated", Text: pageFooterTimeLine(p, extra, l, loc, now), Style: "caption"}}
+	if p.Paused {
+		items = append(items, wire.Component{Type: wire.ComponentText, Key: "persona.paused", Text: watchWord(l, "updates_paused"), Style: "caption"})
+	}
+	if refreshItems := pageRefreshStatusItems(p, extra.refresh, l); len(refreshItems) > 0 {
+		items = append(items, refreshItems...)
+	} else {
+		items = append(items, pageTapStatus(p, last, l, now, web)...)
+	}
+	items = append(items, pageWatchFooterControls(p, watch, extra.platform, l)...)
 	pin := wire.Component{Type: wire.ComponentButton, Key: "persona.pin", Title: pageWord(l, "pin"), Action: &wire.Action{ID: "persona.pin"}}
 	if p.Pinned {
 		pin = wire.Component{Type: wire.ComponentButton, Key: "persona.pin", Title: pageWord(l, "unpin"), Action: &wire.Action{ID: "persona.unpin"}}

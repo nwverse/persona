@@ -51,6 +51,14 @@
 
 基线的 `/api/v1/…` 入口、普通 WebSocket `type` 与 node／manager RPC 方法不因产品名切换而整体改名；新增业务能力仍按各自协商规则处理。协议版本没有因本兼容层提高。注册 Bundle ID、系统 controls／Intent 等原生身份由 #6152／#6192 记录，本清单不以服务端测试代替其系统升级证据。
 
+### Agent tab naming (#15387)
+
+| Pair | What happens |
+| --- | --- |
+| New hub and manager | An unnamed start gets a local placeholder immediately. `agents.tab_name_started` carries the returned session and expected tab identity, and the late model name uses the node's guarded rename. |
+| New hub, older manager | `agents.start_params` keeps the older synchronous model naming behavior. The older manager does not understand the completion event, so the new guarded late rename requires a manager upgrade too. |
+| Older hub, new manager | Start parameters carry the local placeholder without a model wait. An older hub does not emit the completion event for a synchronous start and retains its legacy asynchronous post-start behavior; upgrade the hub for the guarded completion path. |
+
 ### MCP namespace / tools
 
 The hub sends its feature list in `devices.connected`, matching the capabilities advertised in `hello.features`.
