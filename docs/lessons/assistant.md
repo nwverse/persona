@@ -1054,3 +1054,10 @@ line and no delivery) is a question, not finished work.
 Settling such a turn right after triage must not read the work state from the session lists: they pick up the
 triage's state only on the next publish, so the settle saw the previous turn's state and put the turn off again, with
 nothing left to wake it. The settle takes the triage's own entry for that turn (`withPersonWait`).
+
+## An inbox row can carry more than one provider event (#15517)
+
+Keep the deduplication key independent of the Inbox row and the binding that matched. Two readers can report
+the same comment, and the row can collect a later comment while the first is waiting for its digest. Commit the
+source receipt with the Inbox write. Reserve only one action owner and pin the delivery before contacting the
+Agent. Record uncertain delivery against that recipient so a restarted worker does not try another one.

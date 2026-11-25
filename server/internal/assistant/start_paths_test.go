@@ -47,6 +47,8 @@ var supervisedStarts = map[string]string{
 	"resumeAndSend": "resumeAndSend",
 	// a timed-out task's original session: the user's Resume keeps its existing supervision ledger
 	"continueTimedOut": "continueTimedOut",
+	// the owner's cross-provider handoff keeps the to-do's ledger, or adopts its ordinary owner first
+	"executeOwnerTodoHandoff": "executeOwnerTodoHandoff",
 }
 
 // startOptOuts are the start paths that stay unsupervised on purpose, with why. Each is the user's own conversation or
