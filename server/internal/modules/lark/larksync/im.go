@@ -13,13 +13,21 @@ import (
 
 // IM reading bounds.
 const (
-	chatsPagesMost   = 20              // 2000 chats
-	chatPagesMost    = 40              // 2000 messages of one chat per run; the rest next run (ascending order)
-	threadPagesMost  = 10              // 500 replies of one thread per run
-	searchPagesMost  = 10              // 500 search hits per run
-	messageOverlap   = 5 * time.Minute // re-read before a chat's cursor: messages that landed late
-	searchResource   = larksyncwire.ResSearch
-	chatResourceStem = larksyncwire.ResIM + ":"
+	chatsPagesMost     = 20              // 2000 chats
+	chatPagesMost      = 40              // 2000 messages of one chat per run; the rest next run (ascending order)
+	threadPagesMost    = 10              // 500 replies of one thread per run
+	searchPagesMost    = 10              // 500 general search hits per run
+	p2pSearchPagesMost = 40              // 2000 p2p search hits per run for single-chat discovery
+	p2pChatsMost       = 2000            // remembered single chats per binding
+	messageOverlap     = 5 * time.Minute // re-read before a chat's cursor: messages that landed late
+	searchResource     = larksyncwire.ResSearch
+	p2pSearchResource  = larksyncwire.ResSearch + ":p2p"
+	chatResourceStem   = larksyncwire.ResIM + ":"
+	p2pChatsResource   = chatResourceStem + "p2p_chats"
+	// searchChatTypeP2P is the chat_type filter for POST /open-apis/search/v2/message to match single (p2p) chats only.
+	// Feishu Open Platform docs: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/search-v2/message/create
+	// (oapi-sdk-go/v3/service/search/v2 CreateMessageReqBody.ChatType: "group_chat" | "p2p_chat").
+	searchChatTypeP2P = "p2p_chat"
 )
 
 // apiChat is one chat of GET /open-apis/im/v1/chats (as the user: the chats they are in).
@@ -56,12 +64,16 @@ type page struct {
 	PageToken string `json:"page_token"`
 }
 
-// readIM reads every chat the owner is in, one resource per chat ("im:<chat_id>"). The documents tier does not read
-// chats at all.
+// readIM reads every chat the owner is in, one resource per chat ("im:<chat_id>"), plus every previously discovered
+// single (p2p) chat remembered in p2pChatsResource: GET /open-apis/im/v1/chats lists only group chats for a user, so
+// single chats are discovered separately through p2p message search and then read incrementally by chat_id just like
+// group chats. The documents tier does not read chats at all.
 func (r *run) readIM(ctx context.Context) error {
 	if r.b.Tier != larksyncwire.TierFull {
 		return nil
 	}
+	r.loadP2PChats()
+	defer r.saveP2PChats()
 	chats, err := r.listChats(ctx)
 	if err != nil {
 		return r.settle(ctx, larksyncwire.ResIM, err)
@@ -71,7 +83,28 @@ func (r *run) readIM(ctx context.Context) error {
 			r.partial = true
 			return nil
 		}
+		if c.kind == "p2p" {
+			if c.name == "" && r.p2pChats[c.id] != "" {
+				c.name = r.p2pChats[c.id]
+				r.chats[c.id] = c
+			}
+			r.recordP2PChat(c.id, c.name)
+		}
 		if err := r.readChat(ctx, c); err != nil {
+			return err
+		}
+	}
+	for _, id := range sortedKeys(r.p2pChats) {
+		if r.readChats[id] {
+			continue
+		}
+		if r.overBudget() {
+			r.partial = true
+			return nil
+		}
+		ci := chatInfo{id: id, name: r.p2pChats[id], kind: "p2p"}
+		r.chats[id] = ci
+		if err := r.readChat(ctx, ci); err != nil {
 			return err
 		}
 	}
@@ -115,6 +148,7 @@ func (r *run) listChats(ctx context.Context) ([]chatInfo, error) {
 // readChat reads one chat's messages since its cursor (less the overlap) and the replies of the threads they belong
 // to, in the same window. Nothing of the chat counts unless all of it was read.
 func (r *run) readChat(ctx context.Context, c chatInfo) error {
+	r.readChats[c.id] = true
 	resource := chatResourceStem + c.id
 	from := r.backfillFrom().Unix()
 	old := parseUnix(r.cursors[resource])
@@ -124,6 +158,7 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 	end := r.start.Unix()
 	seen := map[string]bool{}
 	var msgs []larksyncwire.Message
+	extraURLs := map[string][]string{}
 	var threads []string
 	var last int64 // the newest create_time read from the chat itself, in ms
 	capped := false
@@ -135,6 +170,9 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 			seen[am.MessageID] = true
 			m := r.message(am, c)
 			msgs = append(msgs, m)
+			if urls := extraMessageURLs(am); len(urls) > 0 {
+				extraURLs[am.MessageID] = urls
+			}
 			if am.ThreadID != "" && !containsString(threads, am.ThreadID) {
 				threads = append(threads, am.ThreadID)
 			}
@@ -187,9 +225,37 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 		}
 	}
 	r.nameSenders(ctx, msgs)
+	if c.kind == "p2p" {
+		peer := c.name
+		if peer == "" {
+			for _, m := range msgs {
+				if m.ChatName != "" {
+					peer = m.ChatName
+					break
+				}
+			}
+		}
+		if peer == "" && len(msgs) > 0 {
+			if peer = r.fetchP2PChatName(ctx, c.id); peer != "" {
+				for i := range msgs {
+					if msgs[i].ChatName == "" {
+						msgs[i].ChatName = peer
+					}
+				}
+			}
+		}
+		if peer != "" && peer != c.name {
+			c.name = peer
+			r.chats[c.id] = c
+		}
+		r.recordP2PChat(c.id, c.name)
+	}
 	for _, m := range msgs {
 		r.addMessage(resource, m, larksyncwire.EntryChat)
-		r.findLeads(resource, larksyncwire.EntryMessage, m.Text)
+		r.findMessageLeads(resource, larksyncwire.EntryMessage, m.Text)
+		for _, u := range extraURLs[m.ID] {
+			r.findMessageLeads(resource, larksyncwire.EntryMessage, u)
+		}
 	}
 	cursor := max(last, old)
 	if !capped && cursor == 0 {
@@ -223,6 +289,9 @@ func (r *run) listMessages(ctx context.Context, containerType, id string, from, 
 
 // message turns an API message of chat c into the sync's Message.
 func (r *run) message(am apiMessage, c chatInfo) larksyncwire.Message {
+	if am.Sender.ID != "" && am.Sender.SenderType != "" {
+		r.senderTypes[am.Sender.ID] = am.Sender.SenderType
+	}
 	text, files := messageText(am)
 	for i := range files {
 		files[i].Ref = attachmentRef(r.b.Key, am.MessageID, files[i].Ref, files[i].Kind)
@@ -246,12 +315,24 @@ func (r *run) message(am apiMessage, c chatInfo) larksyncwire.Message {
 	}
 }
 
-// readSearch reads the owner's messages found by message search since its cursor: what the chat list does not
-// reach (a chat the owner left, a single chat). Best effort: any failure fails only "search". The search API with an
-// empty query is not documented to list everything; when it answers nothing, nothing is lost.
+// readP2PDiscovery runs only the p2p chat discovery step (used by ModeIM incremental syncs to pick up newly started
+// single chats without running the broader unfiltered message search).
+func (r *run) readP2PDiscovery(ctx context.Context) error {
+	_, err := r.discoverP2PChats(ctx)
+	return err
+}
+
+// readSearch first discovers single (p2p) chats via chat_type=p2p_chat search and backfills each discovered chat's
+// full history through GET /open-apis/im/v1/messages (so active group chats cannot crowd p2p chats out of the search
+// results), then runs the general message search for anything else the chat list does not reach (such as a chat the
+// owner left). Best effort: any failure fails only "search".
 func (r *run) readSearch(ctx context.Context) error {
 	if r.b.Tier != larksyncwire.TierFull || r.overBudget() {
 		return nil
+	}
+	ok, err := r.discoverP2PChats(ctx)
+	if err != nil || !ok || r.overBudget() {
+		return err
 	}
 	from := r.backfillFrom().Unix()
 	if old := parseUnix(r.cursors[searchResource]); old > 0 {
@@ -259,6 +340,7 @@ func (r *run) readSearch(ctx context.Context) error {
 	}
 	end := r.start.Unix()
 	var found []larksyncwire.Message
+	extraURLs := map[string][]string{}
 	var again []string // hits already read through a chat: only the search source is added
 	tok := ""
 	for range searchPagesMost {
@@ -292,12 +374,15 @@ func (r *run) readSearch(ctx context.Context) error {
 			if containsMessage(found, id) {
 				continue
 			}
-			m, ok, err := r.fetchMessage(ctx, id)
+			m, urls, ok, err := r.fetchMessageWithURLs(ctx, id)
 			if err != nil {
 				return r.settle(ctx, searchResource, err)
 			}
 			if ok {
 				found = append(found, m)
+				if len(urls) > 0 {
+					extraURLs[m.ID] = urls
+				}
 			}
 		}
 		if !data.HasMore || data.PageToken == "" {
@@ -311,38 +396,250 @@ func (r *run) readSearch(ctx context.Context) error {
 			r.addMessage(searchResource, st.msg, larksyncwire.EntrySearch)
 		}
 	}
+	r.nameSenders(ctx, found)
 	for _, m := range found {
 		r.addMessage(searchResource, m, larksyncwire.EntrySearch)
-		r.findLeads(searchResource, larksyncwire.EntryMessage, m.Text)
+		r.findMessageLeads(searchResource, larksyncwire.EntryMessage, m.Text)
+		for _, u := range extraURLs[m.ID] {
+			r.findMessageLeads(searchResource, larksyncwire.EntryMessage, u)
+		}
 	}
 	r.moveCursor(searchResource, unixCursor(end))
 	return nil
 }
 
-// fetchMessage reads one message by id. ok is false for one that cannot be read (deleted, or no longer visible to
-// the owner): it is skipped, not a failure.
-func (r *run) fetchMessage(ctx context.Context, id string) (larksyncwire.Message, bool, error) {
+// discoverP2PChats searches POST /open-apis/search/v2/message filtered to chat_type="p2p_chat" across all pages in
+// [from, end] to find single chats that GET /open-apis/im/v1/chats omits for user tokens. Each newly discovered chat
+// is immediately backfilled via readChat (im/v1/messages) and remembered in p2pChatsResource so subsequent hits from
+// the same chat skip fetchRawMessage and future runs sync it incrementally without relying on search.
+// ok is true when discovery finished normally and general readSearch may proceed.
+func (r *run) discoverP2PChats(ctx context.Context) (bool, error) {
+	if r.b.Tier != larksyncwire.TierFull || r.overBudget() {
+		return false, nil
+	}
+	defer r.saveP2PChats()
+	from := r.backfillFrom().Unix()
+	if old := parseUnix(r.cursors[p2pSearchResource]); old > 0 {
+		from = old - int64(messageOverlap/time.Second)
+	}
+	end := r.start.Unix()
+	seen := map[string]bool{}
+	tok := ""
+	for range p2pSearchPagesMost {
+		if r.overBudget() {
+			r.abandon(p2pSearchResource)
+			return false, nil
+		}
+		var data struct {
+			page
+			Items []string `json:"items"`
+		}
+		q := map[string]string{"page_size": "50", "user_id_type": "open_id"}
+		if tok != "" {
+			q["page_token"] = tok
+		}
+		body := map[string]string{
+			"query":      "",
+			"chat_type":  searchChatTypeP2P,
+			"start_time": strconv.FormatInt(from, 10),
+			"end_time":   strconv.FormatInt(end, 10),
+		}
+		err := r.sess.getJSON(ctx, request{family: famSearch, op: "search p2p messages", method: "POST", path: "/open-apis/search/v2/message", query: q, body: body}, &data)
+		if err != nil {
+			return false, r.settle(ctx, searchResource, err)
+		}
+		for _, id := range data.Items {
+			if id == "" || seen[id] {
+				continue
+			}
+			seen[id] = true
+			if _, ok := r.msgs[larksyncwire.KeyMessage+id]; ok {
+				continue // already read through readChat in this run
+			}
+			if r.overBudget() {
+				r.abandon(p2pSearchResource)
+				return false, nil
+			}
+			am, ok, err := r.fetchRawMessage(ctx, id)
+			if err != nil {
+				return false, r.settle(ctx, searchResource, err)
+			}
+			if !ok || am.ChatID == "" {
+				continue
+			}
+			if existing, known := r.chats[am.ChatID]; known && existing.kind != "" && existing.kind != "p2p" {
+				continue // never reclassify a group/topic chat returned by listChats
+			}
+			r.recordP2PChat(am.ChatID, r.p2pChats[am.ChatID])
+			if !r.readChats[am.ChatID] {
+				if r.overBudget() {
+					r.abandon(p2pSearchResource)
+					return false, nil
+				}
+				ci := chatInfo{id: am.ChatID, name: r.p2pChats[am.ChatID], kind: "p2p"}
+				r.chats[am.ChatID] = ci
+				if err := r.readChat(ctx, ci); err != nil {
+					return false, err
+				}
+			}
+		}
+		if !data.HasMore || data.PageToken == "" {
+			break
+		}
+		tok = data.PageToken
+	}
+	r.moveCursor(p2pSearchResource, unixCursor(end))
+	return true, nil
+}
+
+// fetchRawMessage reads one API message by id. ok is false for one that cannot be read (deleted, or no longer visible
+// to the owner): it is skipped, not a failure.
+func (r *run) fetchRawMessage(ctx context.Context, id string) (apiMessage, bool, error) {
 	var data struct {
 		Items []apiMessage `json:"items"`
 	}
 	err := r.sess.getJSON(ctx, request{family: famIM, op: "get message", path: "/open-apis/im/v1/messages/" + pathEsc(id), query: map[string]string{"user_id_type": "open_id"}}, &data)
 	if err != nil {
 		if e := asSyncError(err); e != nil && e.Kind == larksyncwire.ErrKindOther {
-			return larksyncwire.Message{}, false, nil
+			return apiMessage{}, false, nil
 		}
-		return larksyncwire.Message{}, false, err
+		return apiMessage{}, false, err
 	}
 	for _, am := range data.Items {
-		if am.MessageID != id || am.Deleted {
-			continue
+		if am.MessageID == id {
+			return am, true, nil
 		}
-		c := r.chats[am.ChatID]
-		if c.id == "" {
-			c = chatInfo{id: am.ChatID}
-		}
-		return r.message(am, c), true, nil
 	}
-	return larksyncwire.Message{}, false, nil
+	return apiMessage{}, false, nil
+}
+
+// fetchMessageWithURLs reads one message by id and any URLs embedded in interactive card action fields. ok is false
+// for one that cannot be read (deleted, or no longer visible to the owner): it is skipped, not a failure.
+func (r *run) fetchMessageWithURLs(ctx context.Context, id string) (larksyncwire.Message, []string, bool, error) {
+	am, ok, err := r.fetchRawMessage(ctx, id)
+	if err != nil || !ok || am.Deleted {
+		return larksyncwire.Message{}, nil, false, err
+	}
+	c := r.chats[am.ChatID]
+	if c.id == "" {
+		c = chatInfo{id: am.ChatID}
+	}
+	return r.message(am, c), extraMessageURLs(am), true, nil
+}
+
+// extraMessageURLs extracts URLs stored in interactive card action/link fields ("url", "href", "pc_url", "android_url",
+// "ios_url") that cardText omits when flattening plain text.
+func extraMessageURLs(am apiMessage) []string {
+	if am.MsgType != "interactive" || strings.TrimSpace(am.Body.Content) == "" {
+		return nil
+	}
+	var raw any
+	if err := json.Unmarshal([]byte(am.Body.Content), &raw); err != nil {
+		return nil
+	}
+	var out []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for _, k := range sortedKeys(x) {
+				switch k {
+				case "url", "href", "pc_url", "android_url", "ios_url":
+					if s, ok := x[k].(string); ok && strings.HasPrefix(strings.TrimSpace(s), "http") {
+						out = append(out, strings.TrimSpace(s))
+					}
+				default:
+					walk(x[k])
+				}
+			}
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		}
+	}
+	walk(raw)
+	return out
+}
+
+// loadP2PChats loads the remembered single chats (chat_id -> peer name) from cursors. Invalid or empty cursor data is
+// ignored so a run never fails on metadata.
+func (r *run) loadP2PChats() {
+	raw := strings.TrimSpace(r.cursors[p2pChatsResource])
+	if raw == "" {
+		return
+	}
+	var saved map[string]string
+	if err := json.Unmarshal([]byte(raw), &saved); err != nil {
+		return
+	}
+	for id, name := range saved {
+		if id != "" {
+			r.recordP2PChat(id, name)
+		}
+	}
+}
+
+func (r *run) recordP2PChat(id, name string) {
+	if id == "" {
+		return
+	}
+	if old, ok := r.p2pChats[id]; ok {
+		if name != "" && old != name {
+			r.p2pChats[id] = name
+		}
+		return
+	}
+	if len(r.p2pChats) >= p2pChatsMost {
+		return
+	}
+	r.p2pChats[id] = name
+}
+
+func (r *run) saveP2PChats() {
+	if len(r.p2pChats) == 0 {
+		return
+	}
+	raw, err := json.Marshal(r.p2pChats)
+	if err != nil {
+		return
+	}
+	if s := string(raw); s != r.cursors[p2pChatsResource] {
+		r.moveCursor(p2pChatsResource, s)
+	}
+}
+
+// fetchP2PChatName tries GET /open-apis/im/v1/chats/:chat_id as a best-effort fallback when a single chat's messages
+// in this window did not include a named human peer (for example, only the owner sent messages, or the peer is a bot).
+// Feishu Open Platform docs: https://open.feishu.cn/document/server-docs/group/chat/get
+func (r *run) fetchP2PChatName(ctx context.Context, chatID string) string {
+	if chatID == "" || r.chatMetaTried[chatID] || ctx.Err() != nil {
+		return ""
+	}
+	r.chatMetaTried[chatID] = true
+	var data struct {
+		Name          string `json:"name"`
+		OwnerID       string `json:"owner_id"`
+		P2PTargetID   string `json:"p2p_target_id"`
+		P2PTargetType string `json:"p2p_target_type"`
+	}
+	err := r.sess.getJSON(ctx, request{family: famIM, op: "chat info", path: "/open-apis/im/v1/chats/" + pathEsc(chatID),
+		query: map[string]string{"user_id_type": "open_id"}}, &data)
+	if err != nil {
+		return ""
+	}
+	if name := strings.TrimSpace(data.Name); name != "" {
+		return name
+	}
+	if data.P2PTargetID != "" && isContactUser(data.P2PTargetID, data.P2PTargetType) {
+		if name := r.senderName(ctx, data.P2PTargetID); name != "" {
+			return name
+		}
+	}
+	if data.OwnerID != "" && data.OwnerID != r.owner && isContactUser(data.OwnerID, "") {
+		return r.senderName(ctx, data.OwnerID)
+	}
+	return ""
 }
 
 // messageText is a message's plain text by its type, and its attachments (Ref holds the bare file or image key; the
@@ -512,36 +809,57 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // nameSenders fills in the senders' display names, and a single chat's name when the platform gives none (the other
 // person's name, as the Lark gateway names it): the knowledge base matches a message it already has from the gateway
-// by chat name, sender and text (kb.NewGatewayAligner), and the gateway writes names, not open ids. Best effort: a
-// refused lookup (no contact scope) stops the lookups for the run and leaves the names empty.
+// by chat name, sender and text (kb.NewGatewayAligner), and the gateway writes names, not open ids. Best effort:
+// non-user senders (bots/apps such as cli_* or sender_type != "user") are skipped without querying the contact API;
+// a missing contact scope stops lookups for the rest of the run, while a single sender's failure leaves only that
+// sender unnamed.
 func (r *run) nameSenders(ctx context.Context, msgs []larksyncwire.Message) {
 	for i := range msgs {
 		m := &msgs[i]
-		if m.SenderID != "" && m.SenderName == "" {
+		if m.SenderName == "" && isContactUser(m.SenderID, r.senderTypes[m.SenderID]) {
 			m.SenderName = r.senderName(ctx, m.SenderID)
 		}
 	}
-	peer := ""
+	peers := map[string]string{}
 	for _, m := range msgs {
 		if m.ChatType == "p2p" && m.ChatName == "" && !m.Mine && m.SenderName != "" {
-			peer = m.SenderName
-			break
+			if _, ok := peers[m.ChatID]; !ok {
+				peers[m.ChatID] = m.SenderName
+			}
 		}
 	}
-	if peer == "" {
+	if len(peers) == 0 {
 		return
 	}
 	for i := range msgs {
 		if msgs[i].ChatName == "" {
-			msgs[i].ChatName = peer
+			if peer := peers[msgs[i].ChatID]; peer != "" {
+				msgs[i].ChatName = peer
+			}
 		}
 	}
 }
 
+// isContactUser reports whether a sender can be looked up through contact/v3/users by open_id.
+// Bot/app senders (sender_type "app" or cli_* app ids) and other non-user senders ("anonymous", "unknown") are not
+// contact users; querying contact/v3/users for them always fails.
+func isContactUser(senderID, senderType string) bool {
+	if senderID == "" {
+		return false
+	}
+	if st := strings.ToLower(strings.TrimSpace(senderType)); st != "" && st != "user" {
+		return false
+	}
+	return !strings.HasPrefix(senderID, "cli_")
+}
+
 // senderName is one open id's display name, read once per run.
 func (r *run) senderName(ctx context.Context, openID string) string {
-	if name, ok := r.names[openID]; ok || r.namesOff {
+	if name, ok := r.names[openID]; ok {
 		return name
+	}
+	if r.namesOff || ctx.Err() != nil {
+		return ""
 	}
 	var data struct {
 		User struct {
@@ -551,7 +869,16 @@ func (r *run) senderName(ctx context.Context, openID string) string {
 	err := r.sess.getJSON(ctx, request{family: famIM, op: "user name", path: "/open-apis/contact/v3/users/" + pathEsc(openID),
 		query: map[string]string{"user_id_type": "open_id"}}, &data)
 	if err != nil {
-		r.namesOff = true
+		if e := asSyncError(err); e != nil && e.Kind == larksyncwire.ErrKindScope {
+			r.namesOff = true
+			return ""
+		}
+		// Only a missing contact scope disables lookups for the rest of the run; a per-sender failure
+		// (deleted/external user, invalid id, transient or rate-limit error) leaves only this sender unnamed
+		// and is cached for the run so repeated messages from them do not repeat the failed lookup.
+		if ctx.Err() == nil {
+			r.names[openID] = ""
+		}
 		return ""
 	}
 	r.names[openID] = data.User.Name

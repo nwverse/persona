@@ -123,6 +123,8 @@ var goTypes = map[string]any{
 	"KBChangedEvent":   assistantwire.KBChanged{},
 	"KBForgottenEvent": assistantwire.KBForgottenEvent{},
 
+	"AssistantEventParams":         assistantwire.AssistantEventParams{},
+	"AssistantEventResult":         assistantwire.AssistantEventResult{},
 	"AssistantConversationsParams": assistantwire.AssistantConversationsParams{},
 	"AssistantConversationsResult": assistantwire.AssistantConversationsResult{},
 	"AssistantMessagesParams":      assistantwire.AssistantMessagesParams{},
@@ -249,10 +251,11 @@ var transcriptionCalls = []string{assistantwire.MethodTranscriptionStart, assist
 	assistantwire.MethodTranscriptionFinish, assistantwire.MethodTranscriptionCancel}
 
 // The assistant's conversations the hub forwards for extensions granted assistant.read, its memory for those granted
-// assistant.memory.read (assistant.schema.json), and what it reads back of an extension's data contributions
-// (assistant_data.schema.json).
+// assistant.memory.read (assistant.schema.json), what it reads back of an extension's data contributions
+// (assistant_data.schema.json), and the events for those granted assistant.events (assistant.schema.json).
 var assistantCalls = []string{assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages,
-	assistantwire.MethodAssistantMemory, assistantwire.MethodAssistantDataStatus, assistantwire.MethodAssistantEntriesList, "event." + assistantwire.EventAssistantEntriesChanged}
+	assistantwire.MethodAssistantMemory, assistantwire.MethodAssistantDataStatus, assistantwire.MethodAssistantEntriesList, "event." + assistantwire.EventAssistantEntriesChanged,
+	assistantwire.MethodAssistantEvent}
 
 // The to-do events the hub tells the extensions granted todos.read (todos.schema.json).
 var todoCalls = []string{"event." + assistantwire.EventTodoChanged, "event." + assistantwire.EventTodoDecision}

@@ -99,6 +99,23 @@ describe("deferred long-chat exchanges", () => {
     expect(host.querySelector("[data-markdown]")).not.toBeNull();
   });
 
+  it("keeps a promoted relay's original out of its deferred placeholder", async () => {
+    const original = "Synthetic relay transport details\n".repeat(8).trim();
+    const seg = segment();
+    seg.user = { ...seg.user!, text: original, source: { kind: "conversation", title: "Synthetic source" }, promotedRelay: true };
+    await act(async () => draw(seg, offscreen));
+    expect(host.querySelector("[data-segment-placeholder]")?.textContent).not.toContain(original);
+
+    await act(async () => FakeIntersectionObserver.all[0]!.fire(true));
+    const source = host.querySelector('[data-message-source="conversation"]');
+    expect(source?.textContent).not.toContain(original);
+    const disclosure = source?.querySelector<HTMLButtonElement>("button[aria-expanded]");
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+    expect(source?.querySelector("[data-markdown]")).toBeNull();
+    await act(async () => disclosure!.click());
+    expect(source?.querySelector("[data-markdown]")?.textContent).toContain("Synthetic relay transport details");
+  });
+
   it("mounts the exact search target immediately and keeps it after reveal clears", async () => {
     await act(async () => draw(segment(), offscreen));
     expect(host.querySelector('[data-items="a2#0"]')).toBeNull();

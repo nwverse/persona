@@ -229,8 +229,12 @@ showAssistantSwitcher
 showAttachCamera
 showAutoScroll
 showAvatarCrop
+showAvatarCropColor
 showAvatarCropName
+showAvatarCropPage
 showAvatarDelete
+showAvatarEdit
+showAvatarStatePicture
 showBlankLanding
 showBrowserLoginSample
 showButtonContrast

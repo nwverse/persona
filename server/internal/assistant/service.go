@@ -244,30 +244,32 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles           titleBook             // titles.go
-	phoneKept        keptPhoneTools        // fleet_tools.go: the phone's tools as the hub last listed them
-	agentNames       agentNamingBook       // agent_naming.go
-	prefs            settingsBook          // profile.go
-	guard            dispatchGuardBook     // dispatch_guard.go
-	main             mainBook              // start.go
-	archived         archiveBook           // conversations.go
-	tags             conversationTagsBook  // conversation_tags.go
-	directionFilings directionSessionsBook // direction_sessions.go
-	origins          originBook            // origins.go
-	guests           guestBook             // guest.go
-	relays           relayBook             // conversations.go
-	chatReplies      chatReplyBook         // chat_reply.go: what conversations that wrote as the user were told of the chats
-	undelivered      undeliveredBook       // undelivered.go: the owner's messages that could not go in
-	quotes           quoteBook             // relay_quote.go: the owner's messages relays carried, verified
-	handovers        handoverBook          // relay_handover.go: the owner's words handed to and from a direction's lead
-	avail            availBook             // availability.go
-	quiet            quietBook             // quiet.go
-	taskFileBook     taskFileBook          // task_files.go: the files tasks handed over, by todo id
-	supervise        superviseBook         // supervise_signals.go
-	progress         progressBook          // supervise_progress.go
-	preempt          preemptBook           // owner_preempt.go
-	tbriefs          taskBriefBook         // task_brief.go
-	search           searchIndex           // search_index.go
+	titles           titleBook              // titles.go
+	extEvents        extEventBook           // extension_event.go
+	phoneKept        keptPhoneTools         // fleet_tools.go: the phone's tools as the hub last listed them
+	agentNames       agentNamingBook        // agent_naming.go
+	prefs            settingsBook           // profile.go
+	guard            dispatchGuardBook      // dispatch_guard.go
+	main             mainBook               // start.go
+	archived         archiveBook            // conversations.go
+	tags             conversationTagsBook   // conversation_tags.go
+	directionFilings directionSessionsBook  // direction_sessions.go
+	origins          originBook             // origins.go
+	guests           guestBook              // guest.go
+	relays           relayBook              // conversations.go
+	chatReplies      chatReplyBook          // chat_reply.go: what conversations that wrote as the user were told of the chats
+	undelivered      undeliveredBook        // undelivered.go: the owner's messages that could not go in
+	quotes           quoteBook              // relay_quote.go: the owner's messages relays carried, verified
+	handovers        handoverBook           // relay_handover.go: the owner's words handed to and from a direction's lead
+	avail            availBook              // availability.go
+	quiet            quietBook              // quiet.go
+	taskFileBook     taskFileBook           // task_files.go: the files tasks handed over, by todo id
+	supervise        superviseBook          // supervise_signals.go
+	progress         progressBook           // supervise_progress.go
+	preempt          preemptBook            // owner_preempt.go
+	tbriefs          taskBriefBook          // task_brief.go
+	handoffs         todoContextHandoffBook // todo_context_handoff.go
+	search           searchIndex            // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go

@@ -21,6 +21,8 @@
   "fixed_launcher_unhealthy": "固定电脑 {machine} 上的启动器 {launcher} 不可用：{reason}。任务仍留在该电脑，请在健康恢复后重试。",
   "launcher_not_on_machine": "{machine} 上没有启动器 {launcher}，没有启动任何 Agent。这台电脑能用的启动器：{launchers}",
   "launcher_swapped": "{launcher} 不在 {machine} 上，改用 {to}（它的默认模型）",
+  "launcher_desktop_default": "{launcher} 只用于你在新建 Agent 里发起的会话，这次改用 {to}（它的默认模型）",
+  "launcher_desktop_default_model": "{launcher} 只用于你在新建 Agent 里发起的会话，这次改用 {to}，并保留你选择的模型 {model}",
   "launcher_swapped_model": "{launcher} 不在 {machine} 上，改用 {to}，并保留你选择的模型 {model}",
   "speed_type": "speed 必须是字符串：standard、fast 或 ultrafast。",
   "speed_invalid": "Agent speed {speed} 无效：请使用 standard、fast 或 ultrafast。",
