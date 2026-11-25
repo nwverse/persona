@@ -953,7 +953,7 @@ func keepTodos(m, old *Minutes) {
 }
 
 // MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
-func MinutesTaskKey(a MinutesAction) string { return a.Who + "\x00" + a.What }
+func MinutesTaskKey(a MinutesAction) string { return recordingwire.MinutesTaskKey(a) }
 
 // renderMinutes is minutes.md: the minutes with clock times, sections without anything left out; an item citing a
 // photo ends with its number. Its headings and fixed words are in the minutes' language (kb-minutes.json). Minutes

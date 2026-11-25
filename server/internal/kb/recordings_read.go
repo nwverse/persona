@@ -30,7 +30,7 @@ import (
 // recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept recordingDays.
 
 // KindRecording is the recordings' kind and directory.
-const KindRecording = "recordings"
+const KindRecording = recordingwire.KindRecording
 
 // DefaultRecordingDays is how long recordings are kept unless the user says otherwise (assistant.recording_days).
 const DefaultRecordingDays = 14

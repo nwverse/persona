@@ -6,6 +6,7 @@ package kb
 import (
 	"cmp"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"math"
 	"slices"
 	"strings"
@@ -54,12 +55,7 @@ func (e *Engine) now() time.Time {
 
 // coverageTo is how far r's text reaches, in seconds since started_at: its coverage's to, its duration without one
 // (the recap reads up to its last segment then, recapLines).
-func coverageTo(r *Recording) float64 {
-	if r.Coverage != nil {
-		return r.Coverage.To
-	}
-	return r.Duration
-}
+func coverageTo(r *Recording) float64 { return recordingwire.CoverageTo(r) }
 
 func seconds(sec float64) time.Duration { return time.Duration(sec * float64(time.Second)) }
 

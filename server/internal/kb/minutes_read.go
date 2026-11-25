@@ -41,31 +41,18 @@ func (s *Store) ReadMinutes(id string) (*Minutes, error) {
 }
 
 // recordingEnd is when r ended: ended_at, else its start plus what was recorded (at least a minute).
-func recordingEnd(r *Recording) time.Time {
-	end := r.StartedAt.Add(time.Duration(r.Duration * float64(time.Second)))
-	if r.EndedAt != nil && r.EndedAt.After(end) {
-		end = *r.EndedAt
-	}
-	if !end.After(r.StartedAt.Add(time.Minute)) {
-		end = r.StartedAt.Add(time.Minute)
-	}
-	return end
-}
+func recordingEnd(r *Recording) time.Time { return recordingwire.RecordingEnd(r) }
 
 // calendarTitle is the phone calendar's title of r, else the matched calendar item's ("" without either).
 func calendarTitle(r *Recording) string { return r.CalendarTitle() }
 
-func clockAt(start time.Time, sec float64, zone *time.Location) string {
-	return start.Add(time.Duration(sec * float64(time.Second))).In(zone).Format("15:04:05")
-}
+func clockAt(start time.Time, sec float64, zone *time.Location) string { return recordingwire.ClockAt(start, sec, zone) }
 
 // clipRunes is s on one line, at most n runes ("…" marking a cut).
 func clipRunes(s string, n int) string { return clip(strings.Join(strings.Fields(s), " "), n) }
 
 // minutesSpan is the recording's start and end in the user's zone, to the second: the span minutes are about.
-func minutesSpan(r *Recording, zone *time.Location) (time.Time, time.Time) {
-	return r.StartedAt.In(zone).Truncate(time.Second), recordingEnd(r).In(zone).Truncate(time.Second)
-}
+func minutesSpan(r *Recording, zone *time.Location) (time.Time, time.Time) { return recordingwire.MinutesSpan(r, zone) }
 
 // minutesSpanOf fills Start and End of minutes written before they were (#4713) from their recording.
 func minutesSpanOf(m *Minutes, r *Recording, zone *time.Location) {

@@ -10,7 +10,7 @@ import (
 )
 
 // minutesHubWait is how long a hub-mode meeting's minutes wait for its final transcript after the complete upload.
-const minutesHubWait = 45 * time.Minute
+const minutesHubWait = recordingwire.MinutesHubWait
 
 // Re-exported from recordingwire.
 var (
@@ -73,25 +73,14 @@ func settleTranscription(t *MeetingTranscription, now time.Time) {
 type TranscriptionView = recordingwire.TranscriptionView
 
 // hubTranscription is r's hub-mode transcription, nil when r is not transcribed on the hub.
-func hubTranscription(r *Recording) *MeetingTranscription {
-	if !r.HubTranscribed() {
-		return nil
-	}
-	return r.Conv.Transcription
-}
+func hubTranscription(r *Recording) *MeetingTranscription { return recordingwire.HubTranscription(r) }
 
 // transcriptionHolds: r's minutes wait for its final transcript: hub mode, the state not final nor failed, at most
 // minutesHubWait after the complete upload.
-func transcriptionHolds(r *Recording, now time.Time) bool {
-	t := hubTranscription(r)
-	return t != nil && !t.Done() && !t.CompleteAt.IsZero() && now.Before(t.CompleteAt.Add(minutesHubWait))
-}
+func transcriptionHolds(r *Recording, now time.Time) bool { return recordingwire.TranscriptionHolds(r, now) }
 
 // transcriptionDone: r is transcribed on the hub and its final pass has run or failed.
-func transcriptionDone(r *Recording) bool {
-	t := hubTranscription(r)
-	return t != nil && t.Done()
-}
+func transcriptionDone(r *Recording) bool { return recordingwire.TranscriptionDone(r) }
 
 // ---- the upload ----
 

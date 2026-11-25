@@ -18,9 +18,9 @@ import (
 // persisted with the recording until a recap is written or the model failed at it; recap_state says which.
 
 const (
-	recapFile      = "recap.json"
-	recapMarkdown  = "recap.md"
-	recapNotesFile = "recap_notes.json"
+	recapFile      = recordingwire.RecapFile
+	recapMarkdown  = recordingwire.RecapMarkdown
+	recapNotesFile = recordingwire.RecapNotesFile
 )
 
 // DayRecap is declared in recordingwire (docs/plans/plan-kb-recording-port.md).

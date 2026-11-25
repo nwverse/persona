@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"slices"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ const PurposeMeetingTitle = "meeting.title"
 const (
 	AITitleLive    = "live"
 	AITitleSummary = "summary"
-	AITitleMinutes = "minutes"
+	AITitleMinutes = recordingwire.AITitleMinutes
 )
 
 const (

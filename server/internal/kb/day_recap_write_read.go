@@ -4,16 +4,13 @@ package kb
 // section 1; docs/architecture/core-and-modules.md "Recording").
 
 import (
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"time"
 )
 
 // dayStart is the start of day (YYYY-MM-DD) in zone, and of the day after.
 func dayStart(day string, zone *time.Location) (time.Time, time.Time, bool) {
-	d, err := time.ParseInLocation(time.DateOnly, day, zone)
-	if err != nil {
-		return time.Time{}, time.Time{}, false
-	}
-	return d, time.Date(d.Year(), d.Month(), d.Day()+1, 0, 0, 0, 0, zone), true
+	return recordingwire.DayStart(day, zone)
 }
 
 // daySpan is when day recording r was recorded, as far as the hub knows: from its start to where its coverage

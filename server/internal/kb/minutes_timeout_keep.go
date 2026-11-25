@@ -4,6 +4,7 @@ package kb
 // section 1; docs/architecture/core-and-modules.md "Recording").
 
 import (
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"time"
 )
 
@@ -14,6 +15,6 @@ import (
 // revision make the minutes failed, so a recording no model ever finishes still can't hold the queue for ever.
 
 const (
-	minutesTimeoutTries = 4               // tries of one revision that ran out of time before the minutes are failed
-	minutesRetry        = 2 * time.Minute // the wait after the first of them, doubled after each further one
+	minutesTimeoutTries = recordingwire.MinutesTimeoutTries // tries of one revision that ran out of time before the minutes are failed
+	minutesRetry        = 2 * time.Minute                   // the wait after the first of them, doubled after each further one
 )
