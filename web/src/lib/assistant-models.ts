@@ -11,7 +11,7 @@ import { explicitLauncherModel } from "./compatibility";
 import { conversationKey, launcherOffered, NEW_CONVERSATION, pickedEffort, pickedFast, pickedLauncher, pickedModel, type AssistantLauncher } from "./assistant-chat";
 import { modelSupportsFast, type LauncherDefault } from "./launcher-models";
 import { providerTitle } from "./provider-names";
-import { currentModelRow, pillModel, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
+import { currentModelRow, pillModel, sessionModelHost, type AssistantLaunchers, type ModelList, type PillView } from "./session-models";
 import type { ModelPick, Session } from "./types";
 
 /** The hub keeps a Persona chat's pick (`model_pick`, PUT / DELETE …/conversations/{id}/model). */
@@ -92,6 +92,15 @@ export function sessionActualLauncher(s: Session): string | undefined {
   if (s.source_kind === "codex_app_server" || s.source_kind === "codex_history") return "codex";
   const agent = agentId(sessionAgent(s).agent);
   return agent !== "claude" ? agent : undefined;
+}
+
+/** Shared catalog host key for an assistant launcher on this conversation: the AGY companion host only for that session's own AGY launcher. */
+export function assistantModelHost(session: Session | undefined, provider: string): "agy" | undefined {
+  if (!session) return undefined;
+  const host = sessionModelHost(session);
+  if (!host) return undefined;
+  const actual = sessionActualLauncher(session);
+  return actual && canonicalLauncher(actual) === canonicalLauncher(provider) ? host : undefined;
 }
 
 function configuredAgentOf(

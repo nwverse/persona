@@ -20,7 +20,7 @@ import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { launcherTitle } from "../../lib/provider-names";
-import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, canonicalLauncher, findAssistantLauncher, sessionActualLauncher, type AssistantChat } from "../../lib/assistant-models";
+import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantModelHost, assistantPickKey, assistantPillView, assistantSetup, canonicalLauncher, findAssistantLauncher, type AssistantChat } from "../../lib/assistant-models";
 import {
   agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readMainDefault, mainDefault, readSuperviseDefault, sessionModelHost, useRevisionReread, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
@@ -331,9 +331,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
   }, [key, picked, info, session, kept]);
   const setup = assistantSetup(chat, info);
   const catalogLauncher = findAssistantLauncher(info, setup.provider)?.name ?? canonicalLauncher(setup.provider);
-  const modelHost = session && canonicalLauncher(sessionActualLauncher(session) ?? "") === canonicalLauncher(catalogLauncher)
-    ? sessionModelHost(session)
-    : undefined;
+  const modelHost = assistantModelHost(session, catalogLauncher);
   // A hub or native catalog that can't honor Fast disarms the draft even while the lazy panel is closed. A manager
   // change disarms it in the store, before this pill or its destination catalog answers.
   useEffect(() => {
@@ -365,7 +363,7 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
     if (supervisor) void readSuperviseDefault(mid, { again: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
       if (scope !== assistantCatalogScope()) return;
-      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== catalogLauncher) void readModels(mid, l.name, { purpose: "assistant", again: true });
+      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== catalogLauncher) void readModels(mid, l.name, { purpose: "assistant", again: true, host: assistantModelHost(session, l.name) });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
   }, [shown, mid, scope]);
