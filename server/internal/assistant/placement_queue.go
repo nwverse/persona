@@ -465,6 +465,25 @@ func (s *Service) sweepPendingPlacement(ctx context.Context) time.Duration {
 	return nextWake
 }
 
+// fallbackTaskLauncher is the launcher a deferred task would start on machine: the task's own launcher when it names
+// one, else the candidate its tier picks on that machine (the same per-machine pick applyStartTier runs at dispatch),
+// else the configured default (model settings' agent.new, then claude). The fallback's candidate filter must judge
+// this launcher so a task without an explicit launcher never gets recommended a computer whose resolved launcher is
+// missing or unhealthy, which would reject the assignment every 30s until the 30m queue deadline.
+func (s *Service) fallbackTaskLauncher(ctx context.Context, pt PlanTask, machine string) (string, error) {
+	if pt.Launcher != "" {
+		return s.startLauncher(ctx, pt.Launcher), nil
+	}
+	if pt.Tier != "" {
+		pick, err := s.pickTierCandidate(ctx, pt.Tier, tierFacts{Machine: machine})
+		if err != nil {
+			return "", err
+		}
+		return s.startLauncher(ctx, pick.Tier.Launcher), nil
+	}
+	return s.startLauncher(ctx, ""), nil
+}
+
 func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int, pt PlanTask, version int, now time.Time) {
 	s.placementSched.mu.Lock()
 	if s.placementSched.inFlight == nil {
@@ -504,16 +523,26 @@ func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int
 			pl.hit(d.ID, "assistant_workspace", nil)
 			return false
 		}
-		if pt.Launcher != "" {
-			resolved := s.startLauncher(pctx, pt.Launcher)
-			if !s.launcherOn(pctx, d.ID, resolved) {
-				pl.hit(d.ID, "launcher_missing", nil)
-				return false
+		// Resolve the effective launcher on this computer even when the task names no launcher: a default- or
+		// tier-launcher task otherwise skips both checks here and gets rejected by assignPendingPlacement on every
+		// retry, livelocking until the 30m deadline (#15953).
+		resolved, err := s.fallbackTaskLauncher(pctx, pt, d.ID)
+		if err != nil {
+			var line *i18n.Message
+			if errors.As(err, &line) {
+				pl.violation(d.ID, line)
+			} else {
+				pl.hit(d.ID, "tier_unavailable", i18n.Args{"tier": pt.Tier})
 			}
-			if h, bad := s.launcherUnusable(pctx, d.ID, resolved); bad {
-				pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": h.Kind})
-				return false
-			}
+			return false
+		}
+		if !s.launcherOn(pctx, d.ID, resolved) {
+			pl.hit(d.ID, "launcher_missing", nil)
+			return false
+		}
+		if h, bad := s.launcherUnusable(pctx, d.ID, resolved); bad {
+			pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": h.Kind})
+			return false
 		}
 		if dir != "" && !pt.backendWorkspace() && !s.taskDirectoryExists(pctx, d.ID, dir) {
 			return false
@@ -680,10 +709,13 @@ func (s *Service) assignPendingPlacement(
 	if candidate.Permission == "" && takesModes {
 		candidate.Permission = s.taskPermission(ctx, m.ID, nil)
 	}
-	if r, bad := s.launcherUnusableNow(ctx, m.ID, s.startLauncher(ctx, cmp.Or(candidate.Launcher, resolvedLauncher))); bad {
+	// Name the resolved launcher, not the task's possibly empty field: a default-launcher task must never format a
+	// blank launcher in fixed_launcher_unhealthy.
+	checkedLauncher := s.startLauncher(ctx, cmp.Or(candidate.Launcher, resolvedLauncher))
+	if r, bad := s.launcherUnusableNow(ctx, m.ID, checkedLauncher); bad {
 		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "launcher_unavailable",
 			err: i18n.Err("assistant-tasks.fixed_launcher_unhealthy", i18n.Args{
-				"machine": m.ID, "launcher": cmp.Or(candidate.Launcher, resolvedLauncher), "reason": r.Error,
+				"machine": m.ID, "launcher": checkedLauncher, "reason": r.Error,
 			})}
 	}
 	if err := s.resolveTaskWorkspace(ctx, &candidate); err != nil {
