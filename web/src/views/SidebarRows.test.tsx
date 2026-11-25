@@ -52,7 +52,7 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
     expect(mark(html)).toContain("text-ink-3");
     expect(mark(html)).toContain("<svg");
     expect(mark(html)).not.toMatch(/>终端</); // no visible word any more
-    expect(link(html)).toMatch(/title="整理文档\n终端/); // the row's tooltip names it too: the mark hides while hovered
+    expect(link(html)).not.toContain(" title=");
   });
   it("draws a desktop app's own chat as a window, in its own color", () => {
     for (const patch of [{ space_kind: "codex_app", source_kind: "codex_history" }, { host: "paseo", source_kind: "runtime", source_instance_id: "paseo" }]) {
@@ -105,6 +105,7 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
     expect(html).toMatch(/<span class="[^"]*flex-1 truncate[^"]*min-w-0[^"]*">整理文档<\/span>/);
     expect(html).not.toMatch(/>[^<]*Codex App[^<]*</);
     expect(html).not.toContain("basis-auto");
+    expect(link(html)).not.toContain(" title=");
   });
   it("keeps a Persona title's date, kind and topic, with unread styling", () => {
     const title = "1125 | Design | Sidebar review";

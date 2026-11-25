@@ -9,15 +9,15 @@ vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
-// every render of a SessionRow reads its preview once: counted per session
-const previews = vi.hoisted(() => new Map<string, number>());
-vi.mock("../lib/format", async (load) => {
-  const real = await load<typeof import("../lib/format")>();
+// every render of a SessionRow reads its left draft once: counted per session
+const draftReads = vi.hoisted(() => new Map<string, number>());
+vi.mock("../lib/drafts", async (load) => {
+  const real = await load<typeof import("../lib/drafts")>();
   return {
     ...real,
-    sessionPreview: (s: Parameters<typeof real.sessionPreview>[0]) => {
-      previews.set(s.session_id, (previews.get(s.session_id) ?? 0) + 1);
-      return real.sessionPreview(s);
+    useLeftDraft: (key: string | null) => {
+      if (key) draftReads.set(key, (draftReads.get(key) ?? 0) + 1);
+      return real.useLeftDraft(key);
     },
   };
 });
@@ -39,7 +39,7 @@ const flush = async () => {
 
 beforeEach(() => {
   localStorage.clear();
-  previews.clear();
+  draftReads.clear();
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(answers[new URL(url, "http://x").pathname] ?? {}), { headers: { "Content-Type": "application/json" } }))));
   history.replaceState(null, "", "/");
   host = document.createElement("div");
@@ -60,23 +60,23 @@ describe("a sessions push", () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
     expect(host.textContent).toContain("任务 4");
-    expect([...previews.keys()].sort()).toEqual(["s1", "s2", "s3", "s4"]);
-    previews.clear();
+    expect([...draftReads.keys()].sort()).toEqual(["mac/s1", "mac/s2", "mac/s3", "mac/s4"]);
+    draftReads.clear();
 
     act(() => upsertSession({ ...getState().sessions.mac[1], title: "任务 2（改）" }));
     await flush();
     expect(host.textContent).toContain("任务 2（改）");
-    expect([...previews.keys()]).toEqual(["s2"]);
+    expect([...draftReads.keys()]).toEqual(["mac/s2"]);
   });
 
   it("moving to another conversation re-renders only the two rows whose highlight moves", async () => {
     await act(() => refresh());
     act(() => root.render(<Sidebar route={{ name: "session", mid: "mac", sid: "s1" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    previews.clear();
+    draftReads.clear();
     act(() => root.render(<Sidebar route={{ name: "session", mid: "mac", sid: "s3" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    expect([...previews.keys()].sort()).toEqual(["s1", "s3"]);
+    expect([...draftReads.keys()].sort()).toEqual(["mac/s1", "mac/s3"]);
     expect(host.querySelector('a[aria-current="page"]')?.textContent).toContain("任务 3");
   });
 
@@ -93,9 +93,9 @@ describe("a sessions push", () => {
       const row = () => [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("任务 4"))?.textContent ?? "";
       expect(row()).toContain("任务 4");
       expect(row()).not.toContain("刚刚");
-      previews.clear();
+      draftReads.clear();
       act(() => vi.advanceTimersByTime(60_000));
-      expect(previews.get("s4")).toBeUndefined();
+      expect(draftReads.get("mac/s4")).toBeUndefined();
 
       act(() => setAgentDetails(true));
       expect(row()).toContain("刚刚");
