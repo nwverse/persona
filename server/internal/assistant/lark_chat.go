@@ -412,7 +412,7 @@ func (h larkHost) LaterHandled(ctx context.Context, id string) (bool, error) {
 	return h.s.laterHandled(ctx, id, time.Now())
 }
 
-func (h larkHost) TabName(ctx context.Context, prompt string) string { return h.s.tabName(ctx, prompt) }
+func (h larkHost) TabName(ctx context.Context, prompt string) string { return localTabName(prompt) }
 
 func (h larkHost) ApplyModel(ctx context.Context, kind string, params map[string]any) error {
 	return h.s.applyModel(ctx, kind, params)
@@ -428,6 +428,11 @@ func (s *Service) startChatAgent(ctx context.Context, machine string, params map
 		Session proto.Session `json:"session"`
 	}
 	err := s.call(ctx, machine, DeviceSessionStart, params, &res)
+	if err == nil {
+		nameFrom, _ := params["prompt"].(string)
+		requested, _ := params["tab_name"].(string)
+		s.nameAgentTabLater(agentTabNameStart(machine, res.Session, requested, nameFrom))
+	}
 	return res.Session, err
 }
 

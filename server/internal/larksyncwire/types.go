@@ -229,6 +229,13 @@ func (e *Error) Error() string {
 	return "lark " + e.Op + ": " + e.Kind + " " + e.Msg
 }
 
+// Sync modes (Binding.Mode): ModeFull ("", the default) runs the full daily sync; ModeIM runs only the lightweight
+// IM incremental sync (new messages since cursors, plus cloud document and minutes links in those messages).
+const (
+	ModeFull = ""
+	ModeIM   = "im"
+)
+
 // Binding is one (account, bot) pair a run reads for.
 type Binding struct {
 	Key       string // stable: "<bot_id>~<account_id>"
@@ -237,7 +244,10 @@ type Binding struct {
 	// Label is the account's name the owner gave it ("Work"), for logs and the sources.
 	Label string
 	Tier  string
-	App   App
+	// Mode selects which readers run: ModeFull ("") runs every reader; ModeIM reads only IM messages since cursors
+	// and follows linked cloud documents and minutes found in those messages.
+	Mode string
+	App  App
 	// Backfill is how far back the first run reads (no cursor yet).
 	Backfill time.Duration
 	// Budget bounds one run; what is left is read next time, from where the cursors stopped.
@@ -281,6 +291,7 @@ type Doc struct {
 	Revision int64       `json:"revision"`
 	Title    string      `json:"title"`
 	URL      string      `json:"url,omitempty"`
+	Note     string      `json:"note,omitempty"` // why a body was not read (e.g. forbidden, export disabled, non-text file)
 	Body     string      `json:"body,omitempty"` // Markdown, bounded
 	BodyHash string      `json:"body_hash,omitempty"`
 	At       time.Time   `json:"at"` // last edited
@@ -372,6 +383,13 @@ type Syncer interface {
 	Run(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), cursors map[string]string, idx Index) (Result, error)
 	// Media fetches an attachment by its Ref.
 	Media(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), ref string, limit int64) ([]byte, string, error)
+}
+
+// NameResolver is optionally implemented by a Syncer to resolve user display names by open_id using a binding's user
+// access token (used by the one-time sender-name backfill for pre-#15486 messages). Non-user ids and per-user lookup
+// errors are omitted; a missing contact scope or auth/context error is returned alongside any names resolved so far.
+type NameResolver interface {
+	ResolveUserNames(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), openIDs []string) (map[string]string, error)
 }
 
 // Provider is what the Lark module provides for the sync (botport.Provider.Sync).

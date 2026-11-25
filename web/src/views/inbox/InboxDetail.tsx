@@ -27,7 +27,7 @@ import { Button, cx, IconButton, Loading, Menu, useMenu, type MenuItem } from ".
 import { Icon } from "../../ui/icons";
 import { ConnectorBody, openSystem } from "./ConnectorThread";
 import { DocBody, MailBody, MomentBody } from "./InboxBodies";
-import { DraftDialog, HandOffDialog } from "./InboxDialogs";
+import { DraftDialog, HandOffDialog, InboxExternalSourceDialog } from "./InboxDialogs";
 import { markFromRow } from "./InboxList";
 import { AgentWorking, ItemAvatar, Spark, Tag } from "./InboxParts";
 import { InboxExtensionBody } from "./InboxExtensionBody";
@@ -36,6 +36,7 @@ import { InboxTaskLinks } from "./InboxTaskLinks";
 import { EventBody, type SourceAt } from "./InboxEvent";
 import { chatOfItem, LarkThread } from "./LarkThread";
 import { lazyDialog } from "../LazyOverlay";
+import type { ExternalSourceBindingEditorProps } from "../../features/external-sources/ExternalSourceBindingEditor";
 
 const SameMatterDialog = lazyDialog(() => import("./InboxSameMatter").then((m) => m.InboxSameMatter));
 
@@ -55,6 +56,7 @@ export function InboxDetail({ item, loaded }: { item?: InboxItem; loaded: boolea
 
 function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
   const [dialog, setDialog] = useState<"" | "draft" | "handoff" | "same">("");
+  const [bindingSource, setBindingSource] = useState<ExternalSourceBindingEditorProps["source"]>();
   const [pins, setPins] = useState(false);
   // an event's own page (the chat, the mail) when "Original" or a source entry opened it; null: the event body
   const [source, setSource] = useState<SourceAt | null>(null);
@@ -99,6 +101,8 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
     );
   }
   const done = isDone(item);
+  const ref = item.external_path?.[0];
+  const connectSource = () => { if (ref) setBindingSource({ ref, label: item.where || item.title }); };
   const label = kindLabel(item);
   const showEvent = event && (embed || !source);
   // a suggestion takes the AI twin's draft's place (the hub mirrors a reply suggestion into the draft for older apps)
@@ -171,6 +175,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                   {muteRows.length > 0 && <IconButton icon="bellOff" label={t("inbox-inboxdetail.mute")} onClick={muteMenu.open} active={Boolean(muteMenu.anchor)} size={32} />}
                   {foldersShown && <IconButton icon="folder" label={item.folder ? t("inbox-folders.move_from", { folder: item.folder }) : t("inbox-folders.move_menu")} onClick={() => openFolderDialog(item)} size={32} />}
                   <IconButton icon="link" label={t("inbox-inboxline.same")} onClick={() => setDialog("same")} size={32} />
+                  {ref && <IconButton icon="target" label={t("external-sources.inbox_action")} onClick={connectSource} />}
                 </>
               )}
               {muteMenu.anchor && <Menu anchor={muteMenu.anchor} onClose={muteMenu.close} align="right" width={224} items={muteRows} />}
@@ -178,6 +183,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
                 <Menu anchor={moreMenu.anchor} onClose={moreMenu.close} align="right" width={224}
                   items={[
                     ...(!done ? [{ key: "todo", label: t("inbox-inboxlist.todo_add_short"), icon: "todo" as const, onSelect: () => openTodoDialog([item]) }] : []),
+                    ...(ref ? [{ key: "connect-source", label: t("external-sources.add_binding"), icon: "target" as const, onSelect: connectSource }] : []),
                     ...(canPin ? [{ key: "pins", label: t("inbox-inboxdetail.pin_messages"), icon: "pin" as const, onSelect: () => setPins(true) }] : []),
                     ...muteRows.map((r, i) => (i === 0 && canPin ? { ...r, divider: true } : r)),
                     ...(foldersShown ? [{ key: "folder", label: t("inbox-folders.move_menu"), hint: item.folder, icon: "folder" as const, divider: true, onSelect: () => openFolderDialog(item) }] : []),
@@ -242,6 +248,7 @@ function ItemDetail({ item, loaded }: { item?: InboxItem; loaded: boolean }) {
         ) : showEvent ? <EventBody item={item} onSource={setSource} /> : !event && place ? <InboxExtensionBody key={`${itemKey(item)}/${place.extension}/${place.id}`} item={item} place={place} own={own} onOwn={setOwnShown} /> : own()}
         {dialog === "draft" && <DraftDialog item={item} onClose={() => setDialog("")} />}
         {dialog === "handoff" && <HandOffDialog item={item} onClose={() => setDialog("")} />}
+        {bindingSource && <InboxExternalSourceDialog item={item} source={bindingSource} onClose={() => setBindingSource(undefined)} />}
         <SameMatterDialog open={dialog === "same"} item={item} onClose={() => setDialog("")} />
       </div>
     </ItemManager.Provider>

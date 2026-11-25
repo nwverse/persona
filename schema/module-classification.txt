@@ -68,6 +68,7 @@ go server/internal/agentref core
 go server/internal/agentref/agentrefadapt core
 go server/internal/agents core
 go server/internal/agentsend core
+go server/internal/agentviewwire core
 go server/internal/ai core
 go server/internal/aiwire core
 go server/internal/apierr core
@@ -75,9 +76,18 @@ go server/internal/apns core
 go server/internal/approval core
 go server/internal/archguard core
 go server/internal/archguard/domainrules core
+go server/internal/archguard/wirecount core
 go server/internal/assistant core
+go server/internal/assistant/agentview core
 go server/internal/assistant/archiverecovery core
 go server/internal/assistant/chatsearch core
+go server/internal/assistant/externalbinding core
+go server/internal/assistant/externalbinding/externalbindingadapt core
+go server/internal/assistant/externalsourcestore core
+go server/internal/assistant/fleetcount core
+go server/internal/assistant/fleetcount/fleetcountadapt core
+go server/internal/assistant/fleetcount/fleetcounttest core
+go server/internal/assistant/fleetview core
 go server/internal/assistant/kernel core
 go server/internal/assistant/kernel/seam core
 go server/internal/assistant/repository core
@@ -170,12 +180,14 @@ go server/internal/lazyre core
 go server/internal/lcuconfirm core
 go server/internal/link core
 go server/internal/linktray core
+go server/internal/linkwire core
 go server/internal/machineops core
 go server/internal/mailwire core
 go server/internal/manager core
 go server/internal/managercli core
 go server/internal/managerconf core
 go server/internal/managerupdate core
+go server/internal/lookmedia core
 go server/internal/mcpserver core
 go server/internal/mcptoolgolden core
 go server/internal/mcpwait core
@@ -205,6 +217,7 @@ go server/internal/nodeproto core
 go server/internal/nodesign core
 go server/internal/nodeupdate core
 go server/internal/operations/backup core
+go server/internal/operations/recovery core
 go server/internal/osproc core
 go server/internal/osproc/osproctest core
 go server/internal/outboxcli core
@@ -265,6 +278,7 @@ go server/internal/webasset core
 go server/internal/webasset/precompress core
 go server/internal/webpush core
 go server/internal/webpush/webpushtest core
+go server/internal/wireids core
 go server/internal/workspaceboard core
 go server/internal/workspacenaming core
 go server/plugins core

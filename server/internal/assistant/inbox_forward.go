@@ -806,7 +806,7 @@ func (s *Service) forwardInboxToTodos(ctx context.Context) {
 		}
 	}
 	for _, it := range b.items {
-		if it.VisibilityExcluded || !it.open() || !inboxTaskLinkEligible(it) {
+		if it.VisibilityExcluded || !it.open() || it.externallyRouted() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if isSelfAuthoredInboxItem(it, owner, ownEmails) {
@@ -860,6 +860,13 @@ type todoForwardDelivery struct {
 }
 
 func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, snap InboxItem, m todoForwardMatch) {
+	b := &s.inbox
+	b.mu.Lock()
+	stillLegacy := b.items[snap.ID] == it && it.Last == snap.Last && !it.externallyRouted()
+	b.mu.Unlock()
+	if !stillLegacy {
+		return
+	}
 	allowed, visErr := s.inboxVisibilityModelAllowed(ctx, &snap)
 	if visErr != nil || !allowed {
 		return
@@ -915,7 +922,6 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	}
 
 	// Persist forwarding metadata on the Inbox item without dropping it.
-	b := &s.inbox
 	var w *inboxWrite
 	recordAudit := res.commitLedger
 	b.mu.Lock()

@@ -412,3 +412,20 @@ func RenderInboxReplyPolicyInput(in InboxReplyPolicyInput) string {
 	}
 	return render("inbox/reply_policy_input", in)
 }
+
+// RenderExternalInboxTriage gives the small-task model its routing response schema.
+func RenderExternalInboxTriage(language string) string {
+	return render("inbox/external_routing", struct{ Language string }{language})
+}
+
+// ExternalInboxUpdate is one source update routed to its existing owner.
+type ExternalInboxUpdate struct {
+	Language string
+	Event    string
+	Summary  string
+	URL      string
+}
+
+func RenderExternalInboxUpdate(in ExternalInboxUpdate) string {
+	return render("inbox/external_update", in)
+}
