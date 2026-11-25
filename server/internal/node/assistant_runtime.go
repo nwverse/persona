@@ -322,6 +322,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		}
 		return "", fmt.Errorf("%s: %w", h.label(), err)
 	}
+	if h.agent() == agyAgent {
+		n.clearAgyStopped(id, sentAt)
+	}
 	if runtimeAnswerFlag(said, "queued") {
 		if !command {
 			n.ttft.disarm(id, sentAt)
