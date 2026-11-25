@@ -110,9 +110,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Reroute, t.Placement = nil, nil
 		t.Dispatch = nil // the hub's: written by the start that resolves the tier
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
+		t.Machine = strings.TrimSpace(t.Machine)
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if err := s.normalizePlacementConstraints(ctx, t); err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
 		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
 		}
@@ -128,12 +132,17 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
-		if m, ok := s.machineByName(ctx, t.Machine); ok && t.Role == roleLeader && s.isWorkMachine(m.ID) {
-			return "", fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only the "+
-				"reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)
+		if t.Machine != "" {
+			if m, ok := s.machineByName(ctx, t.Machine); ok && t.Role == roleLeader && s.isWorkMachine(m.ID) {
+				return "", fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only the "+
+					"reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)
+			}
 		}
 		if err := t.normalizeMachinePolicy(); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		if t.Machine == "" && (t.backendWorkspace() || t.containerWorkspace()) {
+			return "", fmt.Errorf("task %d: workspace.backend and workspace.container require an explicit machine", i+1)
 		}
 		if t.ExpectMinutes < 0 {
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
@@ -181,6 +190,26 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		if len(t.Attachments)+len(t.Mentioned) > 0 {
 			t.AttachFrom = machine
+		}
+		if t.Machine == "" {
+			if _, err := validateStartSpeed(map[string]any{"speed": t.Speed}); err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			preview := *t
+			if err := s.applyTaskTier(ctx, &preview); err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			if t.Continues != "" {
+				if prevTodo, ok := s.todoNow(t.Continues); ok {
+					if err := s.checkContinuationBlockers(ctx, prevTodo, t.Permission, t.Readonly, false); err != nil {
+						return "", fmt.Errorf("task %d: %w", i+1, err)
+					}
+				}
+			}
+			if t.ReservedTodoID == "" {
+				t.ReservedTodoID = firstNonEmpty(t.ReuseTodo, t.TodoID, "todo_"+randomHex(8))
+			}
+			continue
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
@@ -428,6 +457,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
 			} else if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
+			} else if t.Queue != nil && t.Queue.Key == pendingPlacementQueueKey {
+				fmt.Fprintf(&b, "- %s → todo %s (pending placement)\n", t.Title, t.TodoID)
 			} else {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
 			}
@@ -513,6 +544,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		} else {
 			if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s: automatic start queued (%s) → todo %s on %s (queued: %s)\n", t.Title, reason, t.TodoID, t.Machine, t.Queue.Reason)
+			} else if t.Queue != nil && t.Queue.Key == pendingPlacementQueueKey {
+				fmt.Fprintf(&b, "- %s: automatic start queued (%s) → todo %s (pending placement)\n", t.Title, reason, t.TodoID)
 			} else {
 				fmt.Fprintf(&b, "- %s: automatic start initiated (%s) → todo %s on %s (dispatching)\n", t.Title, reason, t.TodoID, t.Machine)
 			}
