@@ -24,7 +24,10 @@ from this plan, the code was followed:
 - Retention with the module off (section 7, question 1) is one constant, `kb.RetentionWithoutRecordingModule`
   (`server/internal/kb/recording_port.go`), `true`, which the owner confirmed on 2026-11-25 (decided, below).
 - PR 2 is merged (#15246). The follow-up for question 3 (stored photo images, no stored-audio route) is `GET
-  /api/v1/recordings/{id}/photos/{n}` moved to Core (section 7, question 3).
+  /api/v1/recordings/{id}/photos/{n}` moved to Core (section 7, question 3). Measured by `scripts/diag/core_size.py --no-build`: PR 2 added 441 non-test lines to Core
+  (829,602 to 830,043); the photo route adds 59 more (831,695 to 831,754: the route 56, the route list entries 3) and
+  takes 17 out of the module (9,386 to 9,369). The estimates in sections 1 and 7 for PRs 3 to 5 (what leaves `kb` and
+  the module) are unchanged; Core's read-side part is that much larger than the section 1 reader totals say.
 
 ## Decision (2026-11-25): a module that is off must not hide or change what the user already has
 
