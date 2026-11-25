@@ -31,9 +31,12 @@ import (
 // Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
+// Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
+// Antigravity shared ACP exit cleanup (#15756) and always-allow permission choices (#15785) bring the total to 265,686 B.
+// Antigravity permission mode persistence across companion restarts and resume re-application (#15807) add 273 B (265,959 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 264_619
+	const budget = 265_959
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

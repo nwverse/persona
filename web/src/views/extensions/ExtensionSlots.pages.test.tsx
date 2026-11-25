@@ -16,7 +16,7 @@ vi.mock("../../lib/extension-slots", () => ({
 }));
 vi.mock("../settings/ExtensionView", () => ({
   // the page's view, drawn: it says its title as the hub wrote it
-  ExtensionUI: (props: { onTitle?: (title?: string) => void }) => {
+  ExtensionUI: (props: { onTitle?: (title?: string) => void; onWide?: (wide: boolean) => void }) => {
     data.props.push(props);
     const { onTitle } = props;
     useEffect(() => {
@@ -124,6 +124,29 @@ describe("a Dashboards page's top bar (#15017)", () => {
     expect(openPage({ ui: "index", state: "rename" })).toBe(false);
     expect(openPage({ ui: RUN, state: "rename" })).toBe(false);
     expect(routes).toHaveLength(1);
+  });
+
+  it("widens the workspace container to 1680px when a view requests wide mode and resets on page change", async () => {
+    const container = () => host.querySelector<HTMLElement>("[data-extension-page-container]")!;
+    await open("example-net", "topology");
+    expect(container().className).toContain("max-w-[880px]");
+    expect(container().className).not.toContain("max-w-[1680px]");
+
+    const reportWide = data.props.at(-1)!.onWide as (wide: boolean) => void;
+    await act(async () => reportWide(true));
+    expect(container().className).toContain("max-w-[1680px]");
+    expect(container().className).not.toContain("max-w-[880px]");
+
+    await act(async () => reportWide(false));
+    expect(container().className).toContain("max-w-[880px]");
+
+    await act(async () => reportWide(true));
+    expect(container().className).toContain("max-w-[1680px]");
+
+    // Switching to another page before it calls onWide immediately resets to the standard column width.
+    await open("example-plain", "summary");
+    expect(container().className).toContain("max-w-[880px]");
+    expect(container().className).not.toContain("max-w-[1680px]");
   });
 });
 

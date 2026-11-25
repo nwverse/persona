@@ -100,20 +100,46 @@ describe("a list emptied by its filters (audit item 15)", () => {
     expect(cleanAll().disabled).toBe(true);
 
     // a finger's 44 px around it, and the keyboard is not dropped when the button goes with the empty state: it lands on
-    // All, the chip that now says what the list shows
+    // the first filter chip in the toolbar (no duplicate "全部" chip beside the section bar's "全部")
     const clear = button("清除筛选")!;
     expect(clear.className).toContain("touch-hit");
     act(() => clear.focus());
     await act(async () => clear.click());
     await flush();
     expect(clear.isConnected).toBe(false);
-    expect(document.activeElement).toBe(button("全部"));
-    expect(document.activeElement?.getAttribute("aria-pressed")).toBe("true");
+    expect(button("全部")).toBeUndefined();
+    expect(document.activeElement).toBe(button("飞书"));
+    expect(document.activeElement?.getAttribute("aria-pressed")).toBe("false");
     expect(localStorage.getItem("inbox.source")).toBeNull();
     expect(localStorage.getItem("inbox.kind")).toBeNull();
     expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
     expect(rows()).toEqual(["l1", "m1"]);
     expect(cleanAll().textContent).toContain("全部 · 2 件");
+  });
+
+  it("keeps only one 全部 button across the Inbox header and renders filters on a single non-wrapping row", async () => {
+    act(() => root.render(<InboxList />));
+    await flush();
+    const allButtons = [...host.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent?.trim() === "全部");
+    expect(allButtons).toHaveLength(1);
+    expect(allButtons[0]?.dataset.barChoice).toBe("all");
+
+    const toolbar = host.querySelector<HTMLElement>('[role="toolbar"][aria-label="筛选"]')!;
+    expect(toolbar.className).toContain("flex-nowrap");
+    expect(toolbar.className).toContain("overflow-x-auto");
+    expect(toolbar.className).not.toContain("flex-wrap");
+    expect(toolbar.contains(cleanAll())).toBe(false);
+    expect(host.querySelector("[data-clear-filters]")).toBeNull();
+
+    // Selecting a filter shows a contextual Clear filters button instead of a duplicate "全部" chip.
+    await act(async () => button("飞书")!.click());
+    await flush();
+    const clearChip = host.querySelector<HTMLButtonElement>("[data-clear-filters]")!;
+    expect(clearChip).not.toBeNull();
+    await act(async () => clearChip.click());
+    await flush();
+    expect(host.querySelector("[data-clear-filters]")).toBeNull();
+    expect(button("飞书")?.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("a search with no hit keeps 没有匹配的, without the green check, and Clear search empties the field", async () => {
@@ -131,7 +157,7 @@ describe("a list emptied by its filters (audit item 15)", () => {
     await act(async () => clear.click());
     await flush();
     expect(host.querySelector<HTMLInputElement>('input[aria-label="搜索收件箱"]')!.value).toBe("");
-    expect(document.activeElement).toBe(button("全部"));
+    expect(document.activeElement).toBe(button("飞书"));
     expect(rows()).toEqual(["l1", "m1"]);
   });
 

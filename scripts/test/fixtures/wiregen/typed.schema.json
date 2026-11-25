@@ -16,6 +16,18 @@
     "Section": {"type": "string", "enum": ["now", "later"], "x-enum": "closed"},
     "Legacy": {"type": "string", "enum": ["a", "b"], "description": "An open enum, unchanged."},
     "ToolInput": {"x-opaque": "a tool's own arguments, whatever its program defines", "description": "What a tool was called with."},
+    "Label": {"type": "string", "x-text": "Label", "description": "Where a watched thing is, in its watcher's words."},
+    "Replace": {"type": "boolean", "x-tristate": "Replace", "description": "Whether it replaces; absent is true."},
+    "Signal": {
+      "type": "object",
+      "required": ["label"],
+      "properties": {
+        "label": {"$ref": "#/$defs/Label"},
+        "note": {"type": "string", "maxLength": 64, "x-text": "Label"},
+        "replace": {"$ref": "#/$defs/Replace"},
+        "keep": {"type": "boolean", "x-tristate": "Replace"}
+      }
+    },
     "Ref": {
       "type": "object",
       "required": ["machine", "session"],
@@ -66,6 +78,14 @@
       "oneOf": [{"$ref": "#/$defs/Changed"}, {"$ref": "#/$defs/Gone"}],
       "x-discriminator": "type"
     },
+    "Cause": {
+      "oneOf": [{"$ref": "#/$defs/Late"}, {"$ref": "#/$defs/Lost"}],
+      "x-discriminator": "kind",
+      "x-enum": "closed",
+      "description": "Why a view went stale: a closed union, whose Go tag is a named type."
+    },
+    "Late": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "late"}, "by": {"type": "integer"}}},
+    "Lost": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "lost"}}},
     "Changed": {
       "type": "object",
       "required": ["type", "view"],

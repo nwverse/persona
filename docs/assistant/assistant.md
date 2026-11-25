@@ -424,6 +424,18 @@ feature-dev, frontend-design, mattpocock, gopls, context7 and HUD plugins, with 
 skills. User/project setting sources, auto-memory, Persona and connector skills are not disabled. Guest conversations
 keep their stricter `--tools ""` and `--strict-mcp-config` behavior. No setting is required.
 
+### Manage which updates reach your work
+
+In the main Persona conversation, ask which work receives updates from a source, or ask to change it. For example,
+“Which to-do gets updates from this pull request?” or “Send updates from the release group to the Launch direction
+and ask me before creating a to-do.” Reading your routing rules needs no approval. Before changing them, Persona
+shows the source, destination and proposed behavior on the usual approval card. New automatic forwarding and
+automatic to-do creation require your approval.
+
+Ask Persona to restore the previous rule, or use the same routing controls in Inbox, work details or Settings.
+Direction supervisors continue managing their work in their own conversations. The main conversation manages rules
+that can affect multiple directions. See [moving existing forwarding rules](inbox.md#move-existing-forwarding-rules).
+
 ## Extension MCP servers (Claude assistant only)
 
 Extensions can contribute `mcp_servers` (`docs/extensions/extensions.md` ("MCP servers")): when the named CLI is installed on the assistant computer, node attaches it as another MCP server for the **Claude assistant**
@@ -1230,7 +1242,7 @@ yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry
 
 ### Task execution context
 
-The web task editor's **Execution options**, before the prompt, is an advanced group for people who need a task to use
+The web task editor's **Advanced**, before the prompt, is an advanced group for people who need a task to use
 a particular assistant backend, model, computer or directory. Its collapsed summary shows the launcher name, actual
 agent backend, model and thinking effort. Every untouched control explicitly follows Assistant, with known inherited
 values shown; its title and summary share one line. Task rows use the same summary from their effective `execution`,

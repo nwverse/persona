@@ -4,6 +4,7 @@ import SwiftUI
 /// open platform, enters its id and secret here, pairs by sending the bot a code, and switches on what it may do.
 struct FeishuBotView: View {
     @State private var model = FeishuBotModel()
+    @State private var sync = LarkSyncModel()
     @State private var confirmUnpair = false
 
     var body: some View {
@@ -22,13 +23,19 @@ struct FeishuBotView: View {
                     }
                 }
             }
+            // Reading Lark as the owner, every day (#15392): drawn only when the hub has the sync.
+            LarkSyncSections(model: sync)
             setupSection
         }
         .themedPage()
         .detailTitle(String(localized: "Lark Bot"))
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.load() }
-        .refreshable { await model.load() }
+        .task(id: model.status?.appID) { await sync.load() } // the chat bot's app, read again when it changes
+        .refreshable {
+            await model.load()
+            await sync.load()
+        }
         .task(id: model.status?.pairing?.code) { // waiting for the code: look again until it is used
             guard model.status?.pairing != nil else { return }
             while !Task.isCancelled, model.status?.pairing != nil, model.status?.owner == nil {

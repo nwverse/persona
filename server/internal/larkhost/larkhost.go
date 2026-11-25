@@ -153,7 +153,8 @@ type Board interface {
 	WorkbenchOn(f assistantwire.FeishuFeatures, ready bool)
 	WorkbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card
 	// DivertNotices hands cards to the notifications companion when it takes them; false: they go to the chat.
-	DivertNotices(ctx context.Context, kind string, cards []*botcard.Card, fallbacks []string) bool
+	// An unknown kind is a defect, even when no companion takes the cards.
+	DivertNotices(ctx context.Context, kind assistantwire.NoticeKind, cards []*botcard.Card, fallbacks []string) bool
 }
 
 // Layer is what the core asks of the lark module: the outbound port, the Feishu turns, the cards of what is asked, the
@@ -423,10 +424,13 @@ func (None) AnswerCards(i18n.Lang, func(*url.URL) string, string, bool, []string
 func (None) MissingPiecesNote(i18n.Lang, []int) string { return "" }
 
 // No board without a channel: nothing is edited, no card carries the workbench button, no companion takes a notice.
-func (None) BoardChanged()                                                         {}
-func (None) WorkbenchOn(assistantwire.FeishuFeatures, bool)                        {}
-func (None) WorkbenchStamp(_ context.Context, c *botcard.Card) *botcard.Card       { return c }
-func (None) DivertNotices(context.Context, string, []*botcard.Card, []string) bool { return false }
+func (None) BoardChanged()                                                   {}
+func (None) WorkbenchOn(assistantwire.FeishuFeatures, bool)                  {}
+func (None) WorkbenchStamp(_ context.Context, c *botcard.Card) *botcard.Card { return c }
+func (None) DivertNotices(_ context.Context, kind assistantwire.NoticeKind, _ []*botcard.Card, _ []string) bool {
+	kind.RequireKnown()
+	return false
+}
 
 // No cards for what is asked without a channel: none is wanted, none is posted.
 func (None) AskAnnounced(proto.Interaction)                    {}
