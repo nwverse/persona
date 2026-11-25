@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { HistorySearch } from "./HistorySearch";
 import { recordSent } from "../../lib/send-history";
+import { writeInlineDraft } from "../../lib/inline-mentions";
 import { skillDraft } from "../../lib/skill-mentions";
 import { markConversationDeleted, reset } from "../../lib/store";
 import { setToken } from "../../lib/api";
@@ -20,6 +21,17 @@ beforeEach(() => {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); reset(); });
+
+it("shows readable inline references and recalls the original rich draft", () => {
+  const rich = writeInlineDraft(["Use ", { id: "fixture", kind: "skill", title: "Review", text: "Review the change.", url: "" }, "."]);
+  recordSent("history-hub/chat", rich);
+  mount();
+  const row = option("Use Review.");
+  expect(row.title).toBe("Use Review.");
+  expect(host.textContent).not.toContain("persona-inline-v1");
+  act(() => row.click());
+  expect(pick).toHaveBeenCalledExactlyOnceWith(rich);
+});
 
 it("removes another chat's text and selected skill from an already open search", () => {
   recordSent("history-hub/private", secret, undefined, 2);

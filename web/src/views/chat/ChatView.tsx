@@ -97,10 +97,8 @@ import { childCall, childCardKey, childOfCall, childPlaces, childRefOfCall, exch
 import { useChildRow, useChildSessions } from "../../lib/use-child-sessions";
 import { openExpanded } from "./expanded";
 import { seekCall } from "./jump";
-import { navRailTicks, type NavRailSource, type NavRailTick } from "../../lib/nav-rail";
-import { containsInput, indexedNavTicks, userInputRevision, windowUserInputs, USER_INPUT_PAGE_SIZE } from "../../lib/user-input-index";
+import { containsInput, userInputRevision, windowUserInputs } from "../../lib/user-input-index";
 import { useRevealedInputSeq, useUserInputs } from "./useUserInputs";
-import type { QuestionMark } from "../../lib/question-states";
 import { useChatScrollbar } from "./useChatScrollbar";
 import { ChatLineView, closedRecap, closeRecap, dismissedError, dismissError, ErrorBanner, errorKey, OpenRecapLine } from "./Lines";
 import { useTranscript } from "./useTranscript";
@@ -128,7 +126,7 @@ import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineItemIds, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
-import { OutboxBubbles } from "./OutboxBubbles";
+import { dedupeQueuedOutbox, OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
 import { AssistantFace, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
 import { PageBoundary } from "../PageBoundary";
@@ -182,9 +180,7 @@ const CommandWaitingNotice = lazyPage(() => import("./CommandWaitingNotice").the
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
-const NavRail = lazy(() => import("./NavRail").then((m) => ({ default: m.NavRail })));
-// Persona chats' question marks (#13021): their rules and read marks are a chunk of their own (QuestionMarksHost.tsx)
-const QuestionMarksHost = lazy(() => import("./QuestionMarksHost"));
+const ChatNavRail = lazy(() => import("./ChatNavRail").then((m) => ({ default: m.ChatNavRail })));
 // Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
 const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => ({ default: m.ModelFallbackCard })));
 // A message the assistant keeps after it could not go in (#10194) is rare: its status line, Retry and Delete load only in
@@ -220,8 +216,6 @@ const CHILD_LINK_PAGES = 10;
 const NO_PLACES = new Map<string, ChildPlace[]>();
 // the assistant has no subagents: one array, so the chat context does not change with every render
 const NO_SUBAGENTS: Subagent[] = [];
-// no fine pointer: the rail draws nothing, so its ticks are not read
-const NO_RAIL_TICKS: NavRailTick[] = [];
 /** How long a jump waits for layout to settle, and how long a search hit stays lit (Android: 3 s). */
 const GIVE_UP_MS = 2000;
 const HIT_MS = 3000;
@@ -262,7 +256,7 @@ function queuesWhileWorking(row?: Session): boolean {
   return Boolean(row && stateOf(row) === "working" && !row.background_waiting && (
     (row.queued?.length ?? 0) > (row.queued_relayed ?? 0) || row.capabilities?.queue_edit || row.capabilities?.queue_send_now ||
     row.space_kind === "codex_app" ||
-    (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude"))
+    (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude" || row.agent === "agy"))
   ));
 }
 
@@ -529,10 +523,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useLayoutEffect(() => {
     if (!hasQueue) queueMemory.current = undefined;
   }, [hasQueue]);
+  const visibleOutbox = useMemo(() => dedupeQueuedOutbox(outbox, session?.queued), [outbox, session?.queued]);
+  const queueCandidates = useMemo(() => [
+    ...pending,
+    ...outbox.filter((e) => e.state !== "failed").map((e) => ({ id: e.id, raw: e.text, images: e.images, before: [] as string[] })),
+  ], [pending, outbox]);
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
   // (not one this page still draws as sending: the row can come before the send's answer)
   const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
-  const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
+  const outgoing = shownPending.length + visibleOutbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   // what the chat slots are told (core/ChatSlots.tsx): this page's own id (the same chat may be open twice, a page and a
   // side panel), and who answers here
@@ -1750,7 +1749,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   linesNow.current = lines;
   const limitOn = limitLine ? lines.reduce((id, line) => (line.kind === "apiError" ? line.id : id), "") : "";
   // failed messages where they were sent: before the first message written after them (lib/outbox.ts placeFailed)
-  const placed = useMemo(() => placeFailed(lines, outbox), [lines, outbox]);
+  const placed = useMemo(() => placeFailed(lines, visibleOutbox), [lines, visibleOutbox]);
   const failedBefore = (id: string) => {
     const list = placed.before.get(id);
     return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} canRetry={!refusedNoRow} />] : [];
@@ -1763,11 +1762,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // Persona's chats mark each question's state on the rail (#13021), which then also works on touch screens
   const questionsOn = Boolean(assistant && !embedded);
   const railOn = fine || questionsOn;
-  const loadedRailTicks = useMemo(() => {
-    if (!railOn) return NO_RAIL_TICKS;
-    const ticks = navRailTicks(lines);
-    return revealedSeq === undefined ? ticks.slice(-USER_INPUT_PAGE_SIZE) : ticks;
-  }, [railOn, lines, revealedSeq]);
   const inputRevision = useMemo(() => userInputRevision(tr.items), [tr.items]);
   const completeInputIndex = useUserInputs(mid, sid, tr.history, inputRevision, railOn && !tr.loading, tr.reload);
   // the live stretch's inputs only (#5054): an earlier stretch of the live session (A → B → A) is drawn by EarlierStretches,
@@ -1778,7 +1772,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     const inputs = completeInputIndex.inputs.filter((input) => input.seq >= liveFrom);
     return windowUserInputs({ ...completeInputIndex, inputs, total: inputs.length }, revealedSeq);
   }, [completeInputIndex, liveFrom, revealedSeq]);
-  const railTicks = useMemo(() => inputIndex ? indexedNavTicks(inputIndex, lines, earlier.liveItems) : loadedRailTicks, [inputIndex, lines, earlier.liveItems, loadedRailTicks]);
   /** Brings a row (or a run of words) into view in the chat's own scroller (scrollIntoView would also scroll an opening
    *  group's clipped box): following the end stops, and the jump's first frames do not pick it up again (`jumping`). */
   const landRow = useCallback(
@@ -1833,15 +1826,6 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     },
     [beginNavigation, inputIndex, follow, landRow, loadWithScrollAnchor],
   );
-  const questions = useMemo(() => ({ on: questionsOn && !tr.loading, busy: busySegment }), [questionsOn, tr.loading, busySegment]);
-  const [questionMarks, setQuestionMarks] = useState<ReadonlyMap<string, QuestionMark> | undefined>();
-  const questionOpened = useRef<((tickId: string) => void) | undefined>(undefined);
-  const setQuestionOpened = useCallback((f: ((tickId: string) => void) | undefined) => { questionOpened.current = f; }, []);
-  const markedJump = useCallback((id: string) => {
-    questionOpened.current?.(id); // opening the answer marks it read
-    return railJump(id);
-  }, [railJump]);
-  const railSource = useMemo<NavRailSource>(() => ({ ticks: railTicks, total: inputIndex?.total, select: questionMarks ? markedJump : railJump }), [railTicks, inputIndex?.total, railJump, questionMarks, markedJump]);
   // the calls with a terminal result: a subagent call without one is one the agent still waits on (the bar's step)
   const callsAnswered = useMemo(() => terminalCalls(tr.items, tasks), [tr.items, tasks]);
   // the live work lines' clocks on screen (WorkGroup's Elapsed): while one ticks, an older hub's guess at a background
@@ -2304,8 +2288,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const queue = useMemo(
-    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} pending={pending} optimistic={optimisticQueue} memory={queueMemory} onAccepted={queuedAccepted} cancelQueued={cancelQueued} /> : null),
-    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, pending, optimisticQueue, queuedAccepted, cancelQueued],
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} pending={queueCandidates} optimistic={optimisticQueue} memory={queueMemory} onAccepted={queuedAccepted} cancelQueued={cancelQueued} /> : null),
+    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, queueCandidates, optimisticQueue, queuedAccepted, cancelQueued],
   );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
   // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
@@ -2736,14 +2720,10 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           </ChatActionsContext.Provider>
         </div>
         {/* NavRail uses the natural left gutter beside the centered transcript. */}
-        {questionsOn && (
+        {railOn && (questionsOn || lines.length > 0 || inputIndex) && (
           <Suspense fallback={null}>
-            <QuestionMarksHost mid={mid} sid={sid} on={questions.on} lines={lines} busy={questions.busy} ticks={railTicks} scroller={scrollEl} onMarks={setQuestionMarks} onOpened={setQuestionOpened} />
-          </Suspense>
-        )}
-        {railSource.ticks.length > 0 && (
-          <Suspense fallback={null}>
-            <NavRail ticks={railSource.ticks} total={railSource.total} scroller={scrollEl} onJump={railSource.select} reset={`${mid}/${sid}`} marks={questionMarks} />
+            <ChatNavRail mid={mid} sid={sid} lines={lines} items={earlier.liveItems} inputIndex={inputIndex} revealedSeq={revealedSeq}
+              scroller={scrollEl} onJump={railJump} questionsOn={questionsOn} loading={tr.loading} busy={busySegment} />
           </Suspense>
         )}
         {away && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
@@ -2884,7 +2864,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
-          onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
+          onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || ((session.agent === "claude" || session.agent === "agy") && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
           disabled={composerDisabled}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}
