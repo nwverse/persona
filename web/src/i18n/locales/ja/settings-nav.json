@@ -26,7 +26,7 @@
   "hint_channels": "WeChat や Feishu で Persona と話す",
   "hint_connectors": "メール、Feishu、GitHub を Persona が読む",
   "hint_extensions": "機能を追加：コネクタ、チャネル、音声",
-  "hint_integrations": "チャットチャネル、データソース、インストール済み拡張機能",
+  "hint_integrations": "チャットチャネル、コネクタ、受信箱のソース、拡張機能",
   "hint_devices": "ログイン中のスマホとブラウザ",
   "hint_hub": "ハブの更新、エージェントのボード、拡張機能のダウンロードミラー",
   "tab_managers": "アシスタント",

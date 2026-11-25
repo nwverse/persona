@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,6 +96,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.RetryFromAgent, t.RetryFromAllowAll = "", false // a new plan cannot import another retry's provenance
 		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
+		t.HandoffID, t.HandoffOperationID = "", ""
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
 		t.MemoryTopic = nil    // the hub's: the plan's own confirmation decision sets it (below)
@@ -196,31 +198,89 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		t.Machine, t.Cwd, t.Why = preview.Machine, preview.Cwd, preview.Why
 		t.Reroute = preview.Reroute
+		if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, t.Cwd) {
+			return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+		}
 		// What it runs on the computer it lands on (#2640): a default that computer lacks is swapped now, so the card
 		// names the launcher that will run and its why says so; a launcher this plan names that it lacks is refused.
 		takesModes := true
-		if _, ok := s.machineByName(ctx, t.Machine); ok {
-			own := t.launchPick()
-			fit, configuredMode, err := s.fitPlanTask(ctx, t)
+		own := t.launchPick()
+		resolvedLauncher := cmp.Or(t.Launcher, preview.Launcher)
+		var fit startAgent
+		var configuredMode string
+		var fitParams map[string]any
+		var fitMachine Device
+		var fitOK bool
+		if m, ok := s.machineByName(ctx, t.Machine); ok {
+			var err error
+			fit, fitParams, fitOK, err = s.resolveFitPlanTask(ctx, t)
 			if err != nil {
 				return "", fmt.Errorf("task %d: %w", i+1, err)
 			}
-			switch {
-			case t.Readonly:
-				if fit.allowAll() {
+			configuredMode, _ = fitParams["permission_mode"].(string)
+			if fitOK {
+				if err := checkStartSpeed(fitParams, fit, ""); err != nil {
+					return "", fmt.Errorf("task %d: %w", i+1, err)
+				}
+				fitMachine = m
+			}
+			if lp, _ := fitParams["launcher"].(string); lp != "" {
+				resolvedLauncher = lp
+			}
+		}
+		// Evaluate continuation blockers and provider-switch handoff guards after healthyPlace and fitPlanTask have
+		// resolved the actual landing machine and launcher (#12980).
+		if t.Continues != "" {
+			if prevTodo, ok := s.todoNow(t.Continues); ok {
+				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, t.Machine, resolvedLauncher)
+				if providerSwitch {
+					if pred, ok := s.todoPredecessor(ctx, prevTodo); ok {
+						srcPerm := cmp.Or(pred.permission(), "default")
+						if asked == "" && (!t.Readonly || srcPerm == "plan") {
+							t.Permission = srcPerm
+							cp := t.Permission
+							t.CallerPermission = &cp
+						}
+					}
+					if t.Permission == "plan" {
+						t.Readonly = true
+					}
+					if t.Permission != "" || t.Readonly {
+						t.preservePermission = true
+					}
+				}
+				if err := s.checkContinuationBlockers(ctx, prevTodo, t.Permission, t.Readonly, providerSwitch); err != nil {
+					return "", fmt.Errorf("task %d: %w", i+1, err)
+				}
+				if t.Readonly && fitOK {
+					if err := s.readonlyLauncherRefusal(ctx, fitMachine, fitParams, fit); err != nil {
+						return "", fmt.Errorf("task %d: %w", i+1, err)
+					}
+				}
+				if providerSwitch {
+					t.HandoffOperationID = "op_" + randomHex(12)
+				}
+			}
+		}
+		if fitOK {
+			if !t.preservePermission {
+				switch {
+				case t.Readonly:
+					if fit.allowAll() {
+						t.Permission = "bypassPermissions"
+					}
+				case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
+					if t.Permission == "" {
+						t.Permission = configuredMode
+					}
+				case fit.allowAllOver(t.Permission):
 					t.Permission = "bypassPermissions"
 				}
-			case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
-				if t.Permission == "" {
-					t.Permission = configuredMode
-				}
-			case fit.allowAllOver(t.Permission):
-				t.Permission = "bypassPermissions"
 			}
 			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
 			// the computer once the task starts; one a tier filled in is dropped. pi, cursor: dropped either way.
 			if takesModes = startTakesModes(fit.agent); !takesModes {
-				if err := startModesRefused(t.Launcher, fit.agent, asked, own.effort); err != nil {
+				if err := startModesRefused(cmp.Or(t.Launcher, resolvedLauncher), fit.agent, asked, own.effort); err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)
 				}
 				t.Effort = ""
@@ -283,15 +343,14 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	// Supervisors orchestrate on the owner's behalf (decision rights, 2026-11-23): a plan from the main conversation or
 	// a direction lead is the supervisor's own release, so it starts at once, read-only or writable, whether or not the
-	// owner asked for it in so many words (user_requested only records where the work came from). It waits for the
-	// owner's Start only when a task needs them: a request gate, a track that confirms every hand-off (health), or a
-	// task that spends money, speaks outward as the owner or takes an irreversible step they have not agreed to
-	// (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words handed to the wrong
-	// lead start work in the wrong place, which is reversible and its supervisor's to set right, none of the six. Not in a
-	// scheduled round, where "the user asked for this" is only the model's word. An ordinary conversation's plan is not
-	// its supervisor's release: as before.
-	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait)) &&
-		!s.inScheduledTurn(ctx, machine, sessionID)
+	// owner asked for it in so many words (user_requested only records where the work came from). This holds in
+	// scheduled follow-up and check-in rounds in that supervisor's own conversation too (user_requested is still cleared
+	// above). It waits for the owner's Start only when a task needs them: a request gate, a track that confirms every
+	// hand-off (health), or a task that spends money, speaks outward as the owner or takes an irreversible step they
+	// have not agreed to (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words
+	// handed to the wrong lead start work in the wrong place, which is reversible and its supervisor's to set right, none
+	// of the six. Ordinary conversations and standalone scheduled tasks are not a supervisor's release: as before.
+	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait))
 	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
 	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
 	// workers (scope) need no decision.
@@ -333,6 +392,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	if wait > 0 && len(a.Tasks) == 1 && scope == nil {
 		a.Tasks[0].WaitInputID = "wait_" + randomHex(16)
+	}
+	if s.settings(ctx).todosV2On() {
+		for i := range a.Tasks {
+			if a.Tasks[i].ReuseTodo == "" {
+				s.applyTodosV2DispatchDefaults(ctx, sessionID, cmp.Or(a.Tasks[i].Supervisor, sessionID), &a.Tasks[i], nil)
+			}
+		}
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
@@ -376,11 +442,14 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, and an ordinary
-	// conversation's writable work where the owner has not let such work start by itself.
+	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, a cross-provider
+	// or cross-launcher continuation handoff (#12980), an explicit owner step, and an ordinary conversation's writable
+	// work where the owner has not let such work start by itself.
 	step := planOwnerStep(p.Tasks)
 	needsOwner := policy.ConfirmOutbound || step != "" ||
-		slices.ContainsFunc(p.Tasks, func(task PlanTask) bool { return task.RequestGate != "" })
+		slices.ContainsFunc(p.Tasks, func(task PlanTask) bool {
+			return task.RequestGate != "" || task.HandoffOperationID != ""
+		})
 	var autoStartReasons []string
 	if !needsOwner && !orchestrates {
 		autoStartReasons = s.planAutoStartReasons(ctx, p.Tasks, granted)

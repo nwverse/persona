@@ -5,7 +5,7 @@ import { sessionTitle } from "./format";
 import { sameManager } from "./manager-choice";
 import type { SessionLookup } from "./todos";
 import type { Session } from "./types";
-import { conversationTitle, MAIN_TITLE } from "../views/assistant/conversations";
+import { conversationTitle, MAIN_TITLE } from "./conversations";
 
 export interface EvidenceAuthorContext {
   /** The todo's owning manager; lookups are scoped to this manager so another manager's names never leak across. */

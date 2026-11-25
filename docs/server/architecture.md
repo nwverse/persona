@@ -91,6 +91,26 @@ WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/
 
 The lists are edited by hand, with no auto-rewrite switch: the changed line shows up in the PR diff, so a reviewer can see whether it really belongs to the hub.
 
+### External source bindings
+
+The assistant manager owns external source bindings and forwarding policies for people who want to connect incoming
+updates to their work. The hub relays the full-credential routes through `assistantwire`. The manager's
+`externalbinding` core validates canonical paths and resolves policy inheritance. Its adapter uses the existing
+repository identity contract to normalize GitHub references. [External source bindings](../protocol/protocol.md#external-source-bindings)
+
+The manager migration stores canonical reference keys and sparse policies in PostgreSQL. Each reference can have
+multiple target bindings, and each target can have multiple references. A GIN index on the existing
+`todo_repository_sets.repositories` data supplies the GitHub issue and pull request projection. This indexes existing
+rows and follows committed edits, including role changes, without maintaining a second copy of repository links.
+The lookup reads explicit bindings and projected links from one snapshot. The repository write paths and delivery
+gate keep their own existing contracts.
+
+For opted-in sources, the manager commits Inbox writes and routing receipts together. The receipt uses the
+canonical object and provider event identity. The worker resolves a policy from the store snapshot, reserves a
+single action owner, and uses the existing conversation relay or task activity feed for delivery. Each routed
+source version bypasses the automatic legacy task routes. The worker owns its Postgres journal and schedules
+digest work independently of the hub's source collections.
+
 ## Contract packages
 
 The parts (the hub, the managers, the node on each computer, extensions) talk only through contracts, and the Go packages that define them hold only types, constants and trivial pure helpers:
@@ -101,6 +121,7 @@ The parts (the hub, the managers, the node on each computer, extensions) talk on
 | `kbwire` | Knowledge-base entities, identity hints, updates and chat context as they cross the bus and the connector protocol |
 | `recordingwire` | A meeting recording's data types (the recording, its upload and timeline, meeting.json, minutes, day recap, photos, live log, meeting room, hub segments), their constants, sentinel errors, pure accessors and lenient JSON readers; `kb` aliases and re-exports them and keeps its own rules as functions over them (`docs/plans/plan-kb-recording-port.md`) |
 | `connectorwire` | The connector SPI: `Connector`, its `Manifest` and capability interfaces, statuses, sign-in prompts, threads and recall errors; inbox things and replies, conversation batches, posts and snapshots from connectors (`docs/protocol/connector-protocol.md`, `docs/extensions/connectors.md`) |
+| `wireids` | The contract's ID types (`MachineID`, `SessionID`, `TodoID`, …) and `AgentRef`, generated from `schema/wire/ids.schema.json` (`ids_gen.go`, never edited by hand); core's opaque `agentref` types are separate (`docs/plans/plan-typed-core.md` 2.3) |
 | `aiwire` | A model setting (`aiwire.Config`) |
 | `dialogwire` | A terminal dialog read off a screen, as the node and the apps see it |
 | `repositorywire` | A task's requested refs, repository layouts and the preparation snapshot a manager hands to a node, with the alias and ref rules both apply; `assistant/repository` aliases them |
@@ -135,8 +156,10 @@ Domain code on the server is strict, and the rules are code: each one below is a
 section is copied from a compliant twin there, and archguard's `TestDomainModelExamples` keeps them the same. New
 domain code follows the rules from its first line. Code that predates them is held by shrink-only counts and frozen
 names in `server/internal/archguard/testdata/domain_layers`, which only fall: copy the domain kit
-(`server/internal/domainkit`), the first shared kernel (`server/internal/agentref` and its adapter) and the planted
-twins, never the packages those lists hold. A new domain package starts from the scaffold,
+(`server/internal/domainkit`), the first shared kernel (`server/internal/agentref` and its adapter), the first core
+(`server/internal/assistant/fleetcount`: the agents' and cards' Needs you, with its adapter `fleetcountadapt`, which
+fills the Live Activity's state and Persona Link's summary, and its testkit `fleetcounttest`) and the planted twins,
+never the packages those lists hold. A new domain package starts from the scaffold,
 `python3 scripts/gen/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
 its black-box tests and its hook; its output with every flag but `--shared` is the golden
 `server/internal/archguard/testdata/scaffold`, which archguard's `TestScaffoldGoldenPasses` holds to the rules and
@@ -144,11 +167,17 @@ its black-box tests and its hook; its output with every flag but `--shared` is t
 temporary module together with the flag combinations its `COMBINATIONS` table lists (the package's own types and the
 shared kernel's as parts and payloads among them), each through its own rules hook.
 
+The Swift and Kotlin clients follow the same rules in their domain modules: "Client modules", the last section here,
+names those modules and the checks that hold them.
+
 Each sentence below states a rule, and the rule holds whether or not a check sees a breach. The checks read syntax
 only (`go/ast`, no type information) and enforce each rule where the source shows it: in names, declarations,
-signatures, literals, imports and the calls they can resolve. The routes they do not see yet are listed in #15088, and
-the type-aware check #10613 plans with the fleetcount core (its item 5.2) closes more of them. A route found later is
-a bug in the check, never permission to take it.
+signatures, literals, imports and the calls they can resolve; archguard's `TestDomainTyped`
+(`server/internal/archguard/domain_typed_test.go`) adds the rules that take a value's type to see, with `go/types` over
+the gc export data of what the packages import (`go list -export -deps`), for the cores the baseline does not hold and
+every package whose production imports reach one, directly or through another package such as the core's adapter
+(the `typed-*` rows below). The routes neither sees yet are listed in #15088. A route found later is a bug in the
+check, never permission to take it.
 
 Why the rules exist, in this repository's own code:
 
@@ -184,7 +213,7 @@ package fleetcount
 | `core shared` | a shared kernel: value objects and closed sets only | directly under `server/internal`, outside the managers', the node's and the hub's trees | as a core |
 | `adapter` | the only code that converts between a core and contracts, rows, prompt inputs or log text | `<core>/<core>adapt`, and the edge adapters such as the HTTP failure writer | its core, shared kernels and their adapters, the kit, contracts, libraries, the standard library, third-party code |
 | `application` | orchestration: the clock, ids, IO, locks, goroutines, routes, retries and model calls | package `assistant`, the hub, the node, `cmd/*`, the managers, `domainkit/clock` | every layer but `testkit` |
-| `application seam` | a typed registration seam between application modules | `assistant/kernel` and later seams | as application |
+| `application seam` | a typed registration seam between application modules | `assistant/kernel/seam` and later seams | as application |
 | `library` | technical code with no domain concept; its records and named primitives are counted as application code's | `lazyre`, `osproc`, `db`, `prompts`, `apierr`, `i18n` and the like | the standard library, third-party code, libraries, contracts |
 | `contract` | plain wire data | exactly the packages `server/internal/archguard/testdata/contracts.txt` lists | the standard library and contracts |
 | `testkit` | test support, never a program (`package main`) | `domainkit/domaintest`, `domainkit/clock/clocktest`, `*test` packages | anything; imported only by tests and other testkit |
@@ -500,7 +529,9 @@ func Write(w http.ResponseWriter, f fail.Fail) {
 ```
 
 A programmer error is a defect (`defect.Raise`), never a returned failure, and only listed sites recover one, through
-`defect.Catch`. A stored row that fails to restore is skipped and logged with its code, never rebuilt half-valid.
+`defect.Catch` (`server/internal/archguard/testdata/catch_sites.txt`, rule `catch-site`), and every production call of
+`recover()` is listed too (`server/internal/archguard/testdata/recover_sites.txt`, rule `recover-site`; "Validated and
+sealed" below). A stored row that fails to restore is skipped and logged with its code, never rebuilt half-valid.
 
 ### Data objects and adapters
 
@@ -727,7 +758,7 @@ stated above; #15088 lists the ones known.
 | `core-test-package` | a core's and the kit's tests are black-box | the package |
 | `core-hook` | a declared domain or seam package has the `rules_test.go` hook | fails at once |
 | `seam-exported-field` | a seam exports no field or variable | the package |
-| `seam-any` | a seam's exported signatures take no untyped value | the package |
+| `seam-any` | a seam's exported function and method signatures, including interface methods, and its exported non-struct port types carry only typed values | the package |
 | `out-dot-import` | no dot import of a core or the kit | the core |
 | `out-alias` | no alias of a core's or the kit's type | the core |
 | `out-literal` | no literal of a core's or the kit's type outside it, tests and the zero literal included | the core |
@@ -741,15 +772,26 @@ stated above; #15088 lists the ones known.
 | `out-unsafe` | no `unsafe`, and `reflect` only for `DeepEqual`, in a file that imports a core or the kit | the first core it imports |
 | `out-rules-import` | only tests import `domainrules` | fails at once |
 | `out-log-use` | an adapter's `Log` result only as an argument of a logging call | the package it is in |
+| `recover-site` | every production `.go` file under `server/` that calls the builtin `recover()` has a line with its reason in `server/internal/archguard/testdata/recover_sites.txt`, and every line's file still calls it; archguard's `TestRecoverOnlyAtListedSites` checks it ("Validated and sealed") | fails at once |
+| `catch-site` | every production `.go` file under `server/` that refers to `defect.Catch` has a line with its reason in `server/internal/archguard/testdata/catch_sites.txt`, and every line's file still does; archguard's `TestCatchOnlyAtListedSites` checks it ("Validated and sealed") | fails at once |
+| `typed-visitor-impl` | a type that implements a core's `*Visitor` interface, whatever its methods' parameters are spelled, only in adapters, testkit and cores: read where it is declared in a package that reaches the core (imported, or through an adapter that hands out the core's values), and where such a package uses a type declared elsewhere, a generic one instantiated included | fails at once |
+| `typed-discard` | no `outcome.Of` or failure dropped, by a call written as a statement or an assignment to `_`, outside cores | fails at once |
+| `typed-codec` | no core value, nor a value that holds one, passed to `fmt`, `log`, `slog`, `json.Marshal`, `MarshalIndent` or `Encode`, or a template's `Execute` | fails at once |
+| `typed-map-range` | no range over a value whose type is a map in a core, a field or a named map type included | fails at once |
+| `typed-fail-compare` | no `==` or `!=` between two failures (a failure's code cannot be compared, so it panics); comparing with `nil` is fine | fails at once |
 | `adapter-name` | an adapter exports no type named like one of its core's | the adapter |
 | `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included, and what a contract's, `db`'s or `prompts`' type can be called with), through parameters (none of type `any`, `interface{}`, a type parameter or another package's type but `io.Writer` and `http.ResponseWriter`; a contract's, `db`'s or `prompts`' type only where what it can be called with takes what an adapter may hand out, what is called on what its methods and funcs return included) and in exported fields; it has no exported variable or constant, and no exported alias or named slice, map, array, func or chan type. What it does not read is listed above | the adapter |
 | `app-exported-record` | exported structs with an exported field, in undeclared, application and library packages (contracts, `db` and `prompts` aside) | the package |
 | `app-named-primitive` | named basic types, in undeclared, application and library packages and adapters | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |
 | `app-bridge-call` | uses of an adapter's `Wire` function, called or passed on, in undeclared, application and library packages' production code | the package |
+| `contract-bare-id` | in a contract package's production files, a struct field of plain `string` or `[]string` named `*ID`, `*Id` or `*IDs` whose `<Type>.<Field>` the wire-types baseline (`scripts/ci/wire_types_baseline.json`, bare-id in `metrics`, `wide` or `exceptions`) does not hold. Strict, no count: a field that moved between contract packages or was lifted from a Core package or module keeps its name and passes; one written anew fails at its line, a rename is a new name (add it to the baseline's `exceptions` with a PR reference) | strict |
 
 The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and, given a
-base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.
+base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`. The `typed-*` rules
+run only in `TestDomainTyped`, over production files, with a planted case and a compliant twin each under
+`server/internal/archguard/testdata/domaintyped` (`TestDomainTypedPlanted`); it fails when it inspected nothing and
+logs its time.
 
 ### The domain kit
 
@@ -784,6 +826,249 @@ The hub links none of it.
   `Fake`.
 - `domaintest` (testkit): `Ok`, `Fails` and `Describe`.
 
+### Client modules
+
+The Swift and Kotlin clients hold their domain code to the same rules, and the web joins them with its first domain
+folder. A client domain module is a functional core in a module of its own, so its compiler refuses much of what the
+rules forbid; `scripts/test/test_client_domain_modules.py` (the rules are in `scripts/test/client_domain_rules.py`)
+checks most of the rest, and the end of this section lists what it does not read yet. It finds the modules by
+their names, never through a list, so a module is checked from the day it exists. A folder, source file or import that
+is named like a domain module the manifests do not declare fails (`swift-discovery`, `kotlin-discovery`) rather than
+passing unseen, and so does a Swift target that ends in `Domain` or `Adapt` without the `Persona<Ctx>` form, which is
+checked all the same. No client has a domain module yet: #10613 plans the first ones (items 6.1 for the web, 6.5 for
+Swift and 6.11 for Kotlin), and until then the guard finds none and says so.
+
+| | Swift | Kotlin | TypeScript |
+| --- | --- | --- | --- |
+| Core | target `Persona<Ctx>Domain` in `apple/Packages/Persona<Ctx>/Package.swift` | Gradle module `:core:<ctx>:domain` in `android/core/<ctx>/domain`, package `persona.core.<ctx>.domain` | `web/src/features/<ctx>/domain` |
+| Adapter | target `Persona<Ctx>Adapt` in the same package | package `persona.core.<ctx>.adapt` of `:core:<ctx>`, in `android/core/<ctx>/src/main/kotlin/persona/core/<ctx>/adapt` | `web/src/features/<ctx>/adapt` |
+| Kit | package `PersonaDomainKit` in `apple/Packages`: target `PersonaDomainKit`, and `PersonaDomainKitAdapt` with the clocks | Gradle module `:core:domainkit` in `android/core`, with the clocks in `persona.core.domainkit.adapt` | `domain-kit` in `web/src` |
+| Tests | `Persona<Ctx>DomainTests`, black-box | `android/core/<ctx>/domain/src/test` | beside the domain files |
+
+The `:core:domain` module (package `persona.core.domain`) predates these names and is not a domain module.
+
+**Each rule on each platform.** What the compiler refuses, and the guard's rules for the rest (the table under "The
+guard's rules" says what each reads). The TypeScript column gives the shape; the web's checks, its domain folder's
+own `tsconfig.json`, eslint blocks and a boundary test, come with its first domain folder, and so does its paragraph
+here.
+
+| Rule | Swift | Kotlin | TypeScript |
+| --- | --- | --- | --- |
+| Layers and bounded contexts | A Domain target depends on `PersonaDomainKit` only, and an `*Adapt` target on no other context's `*Adapt` target. Compiler: the manifest's dependencies. Guard: `swift-manifest`, `swift-import`, `swift-context` | A domain module depends on `:core:domainkit` only, and an `.adapt` package imports no other context's `.adapt` package. Compiler: the classpath. Guard: `kotlin-module`, `kotlin-import`, `kotlin-context` | `domain/` imports only `domain/` and `domain-kit/` |
+| Values | A struct of private `let`s with a private `init`, no primitive beside another field (only a single-field value object wraps one), and no type alias, a private one included; raw input enters only through `static func parse`. Compiler: access control. Guard: `swift-stored-public`, `swift-primitive-field`, `swift-alias`, `swift-primitive-api`, `swift-factory`, `swift-state` | A class with a `private constructor` and private vals, no primitive beside another field (only a single-field value object wraps one), never a `data class` or `value class`, and no type alias, a private one included; raw input enters only through companion `parse`. Compiler: `explicitApi()`. Guard: `kotlin-ctor-property`, `kotlin-public-constructor`, `kotlin-data-class`, `kotlin-value-class`, `kotlin-primitive-field`, `kotlin-alias`, `kotlin-primitive-api`, `kotlin-extensible` | A class with `readonly #private` fields and a private constructor |
+| Tell, don't ask | Every public method, subscript and property, whatever its parameters, answers with nothing, a `Bool`, `Self` or its `Outcome`, `accept`s a visitor, or is `id`, which returns the target's own `<Name>ID` type; a staged builder's stages and `build` aside. A static or free function (an operator included) whose body only returns an input's field (`{ entry.wakes }`) is a getter too, whatever its name. No setter and no `mutating func`. Guard: `swift-accessor`, `swift-stored-public`, `swift-mutating` | No `var`; a public `val` is a computed `Boolean`; every public method, whatever its parameters, returns `Boolean`, `Unit`, its class or its `Outcome`, or is `id()`, which returns the module's own `<Name>Id` class; a staged builder's stages and `build()` aside. A companion or top-level function whose body only returns an input's field (`= entry.wakes`) is a getter too, whatever its name. Guard: `kotlin-var`, `kotlin-accessor` | A method returns `boolean`, `void`, its class or its `Outcome`, whatever its parameters, or is `id()`; no getters |
+| Building always-valid objects | `static func parse` and `new`, returning the type or its `Outcome`, and `restore`, returning an `Outcome` (`newBuilder` and `restoreBuilder`, returning the first stage, above four inputs); no factory returns an optional; only a closed set names a factory for one of its cases (`Wake.at(_:)`); no public `init`. Guard: `swift-factory` | Companion `parse` and `new`, returning the class or its `Outcome`, and `restore`, returning an `Outcome` (`newBuilder` and `restoreBuilder`, returning the first stage, above four inputs); no factory returns a nullable type; only a closed set names a factory for one of its cases (`Wake.at`, the kit's `Outcome.ok`). Guard: `kotlin-factory`, `kotlin-public-constructor` | `static parse`, `new` and `restore` |
+| Visitors and the way out | `accept(_ v: inout some XVisitor)`, whose requirements are named `visit…`; the boundary conversion is an instance's `@_spi(Boundary) public var wire`, which only `*Adapt` targets import, and no public static or free declaration is named `wire`. A value's description shows none of its fields: the core settings keep reflection metadata for the debugger only, so outside the target `String(describing:)`, interpolation, `dump` and `Mirror` find none. Compiler: SPI and the core settings. Guard: `swift-spi-import`, `swift-visitor-impl`, `swift-visitor-name`, `swift-boundary`, `swift-manifest` | `accept(v: XVisitor)`, whose functions are named `visit…`; the boundary conversion is a member `@DomainBoundary public fun wire()`, an opt-in at error level that only `.adapt` grants, and no public companion or top-level function is named `wire`. With no `data class` or `value class` and no `toString` override (a getter), a value's `toString()` is `Any`'s: its class name and hash code. Compiler: the opt-in. Guard: `kotlin-optin`, `kotlin-visitor-impl`, `kotlin-visitor-name`, `kotlin-boundary`, `kotlin-data-class`, `kotlin-value-class` | `accept(v)`; `domain/boundary.ts`, imported only from the feature's `adapt/` |
+| Closed sets and lifecycles | A struct whose one stored property is a private enum, with `public static let` values; the kit's `Outcome` is the one public enum; `evolve` stays internal. Guard: `swift-public-enum`, `swift-public-evolve` | A class whose one field is a private enum class or an internal sealed interface, with companion values; no public sealed type, enum class or data object; `evolve` stays internal. Guard: `kotlin-public-sealed`, `kotlin-public-evolve` | A class with interned static values |
+| The functional core | No Foundation, no implicit `_Concurrency` or `_StringProcessing`; no printing, trapping, randomness (`random`, `randomElement`, `shuffled`), `Mirror` or clocks; no class, actor, stored `var`, global, `nonisolated(unsafe)`, `@unchecked` or `Unsafe…` API; `Now` comes from `PersonaDomainKitAdapt`, the only importer of its `@_spi(Clock)` initializer. Compiler: the core settings. Guard: `swift-import`, `swift-banned-call`, `swift-spi-import`, `swift-state` | No platform API: an import or full name from `java.`, `kotlinx.`, `android.`, the kit's `adapt` package and the like fails; no clock, id, randomness (`Random`, `random()`, `shuffled()`), printing, lock (`synchronized`, `lazy`) or `suspend`; no mutable collection, array, package-level property or object; `Now.read` needs `@OptIn(ClockRead::class)`, granted only in `persona.core.domainkit.adapt`. Compiler: the classpath and the opt-in. Guard: `kotlin-import`, `kotlin-banned-call`, `kotlin-optin`, `kotlin-state` | No DOM, Node or `Date`: the domain `tsconfig.json`'s `lib` and `types` |
+| Domain services | No function type in the public API, and no public protocol but a `*Visitor` (the kit's `Fail` aside): no port, store or callback. Guard: `swift-callback`, `swift-extensible` | No function type in the public API (the kit's `Outcome.fold` aside), no public interface but a `*Visitor` (the kit's `Fail` aside), and no public abstract or open class. Guard: `kotlin-callback`, `kotlin-extensible` | Exported functions take domain values, never callbacks or ports |
+| Failures | `Outcome<Value, <Ctx>Fail>`; no `throws` or `Error`, and no `@discardableResult`. A dropped result is an error inside the target (`-warnings-as-errors`) and a finding in the app's and the adapters' files that import a Domain target or the kit. Guard: `swift-throws`, `swift-discardable`, `swift-app-discard` | `Outcome`; `throw` only as `throw Defect(`, and no `!!`, `error()`, `require()` or `check()`; no `@IgnorableReturnValue`. A dropped result is a compile error in the Android modules, and `val _ =` before a domain call is a finding in the app's and the adapters' files that use a domain module or the kit. Compiler: `-Xreturn-value-checker`. Guard: `kotlin-throw`, `kotlin-ignorable`, `kotlin-build-flags`, `kotlin-app-discard` | `Outcome`; a dropped one fails the boundary test |
+| Data objects and adapters | No `Codable`, description or raw value in a Domain target; the wire shape lives in `*Adapt`. Guard: `swift-conformance` | No `@Serializable`; records live in `:core:<ctx>`'s `.store` or `.adapt` package. Guard: `kotlin-serializable` | `domain/` imports no `lib/` wire type |
+| No generics | No generic public type or function, the kit's `Outcome` aside. Guard: `swift-generic` | No type parameters on public declarations, the kit's `Outcome` aside. Guard: `kotlin-generic` | No type parameters on exported declarations |
+| Tests | Black-box: `swift test --disable-testable-imports`. Guard: `swift-testable` | The domain module's tests build through `parse`, `new` and `restore` and read through visitors | Tests import only the domain's exports |
+
+The clients have no shared kernel yet, so a core that uses another context's core fails whatever that core holds; the
+first shared kernel adds to the guard how it is told apart from a context's core.
+
+**The settings.** Every Domain target and the kit build with these settings; a Domain target depends on nothing but
+the kit, and the kit on nothing. The last flag keeps reflection metadata for the debugger only, so no code outside the
+target prints a value's fields: built with Swift 6.2.4, `String(describing:)` of the planted `ItemID` prints
+`ItemID(item: "…")` without it and `ItemID()` with it, and `Mirror` finds no children.
+
+```swift
+let coreSettings: [SwiftSetting] = [
+    .swiftLanguageMode(.v6),
+    .defaultIsolation(nil),
+    .enableUpcomingFeature("InternalImportsByDefault"),
+    .enableUpcomingFeature("MemberImportVisibility"),
+    .enableUpcomingFeature("ExistentialAny"),
+    .unsafeFlags([
+        "-warnings-as-errors",
+        "-Xfrontend", "-disable-implicit-concurrency-module-import",
+        "-Xfrontend", "-disable-implicit-string-processing-module-import",
+        "-Xfrontend", "-reflection-metadata-for-debugger-only",
+    ]),
+]
+```
+
+A Kotlin domain module is a JVM library with explicit visibility, warnings as errors and every result must-use:
+
+```kotlin
+// The planted context's domain module: a JVM library on the kit alone.
+plugins {
+    id("persona.jvm.library")
+}
+
+kotlin {
+    explicitApi()
+    compilerOptions {
+        allWarningsAsErrors.set(true)
+        freeCompilerArgs.add("-Xreturn-value-checker=full")
+    }
+}
+
+dependencies {
+    implementation(project(":core:domainkit"))
+}
+```
+
+The Android modules already compile a dropped must-use result as an error
+(`android/build-logic/convention/src/main/kotlin/persona/buildlogic/ReturnValues.kt`; the few modules its warning-level
+list names keep a warning until their last such lines change), so a feature that drops a domain module's answer does
+not compile. `kotlin-build-flags` fails if that file loses `-Xreturn-value-checker=check` or
+`-Xwarning-level=RETURN_VALUE_NOT_USED:error`, if a convention stops applying it, or if its warning-level list names a
+domain module.
+
+**Where each part runs.**
+
+- **Kotlin, before merge.** `scripts/ci/android.sh`'s lint block runs `AndroidDomain` in the Android lane, which a
+  change under `android/` selects; check-fast runs the whole suite for any change under `android/` or `apple/`.
+- **Swift's text rules, before merge.** CI's Scripts tests job (`scripts/ci/python-tests.py`) runs the whole file,
+  `AppleDomain`'s scan of the manifests, the sources and `scripts/ci/apple.sh` included.
+- **Swift's public API, after merge.** The Apple lane needs a Mac, so it runs on `main`: `scripts/ci/apple.sh` tests
+  every package `python3 -B scripts/test/test_client_domain_modules.py --swift-packages` lists with
+  `--disable-testable-imports`, writes each module's symbol graph (`-emit-symbol-graph`, public symbols only, so
+  `@_spi` members are left out) and runs `AppleDomain` with `PERSONA_DOMAIN_SYMBOL_GRAPHS`; after the device build it
+  runs `AppleDomain` again on that build's log (`PERSONA_APP_BUILD_LOGS`) for the app's unused domain results.
+- **The web, before merge**, from its first domain folder.
+- **Every rule's planted cases, before merge**: `RuleTests` in the Scripts tests job.
+
+**The guard's rules.** Every finding is one line, `<path>:<line>: RULE <id> <what>. WHY <why>. FIX <the change>. GOOD
+<a compliant twin>. see docs/server/architecture.md "Domain model" ('Client modules')`, and there is no ignore marker.
+The kit's documented API may need a named exception (`KIT_EXCEPTIONS` in `scripts/test/client_domain_rules.py`, with
+its reason): today Swift's `Outcome` is the one public enum and generic type, Kotlin's `Outcome` the one generic type
+and its `fold` the one callback and the one method that hands out what it computes, and each kit's `Fail` the one
+public protocol or interface that is not a visitor. An exception the kit no longer needs fails. Comments and string
+literals are blanked before any rule reads a source.
+
+| Rule | Checks | Reads |
+| --- | --- | --- |
+| `swift-discovery` | every folder, manifest name or import named like a Domain or Adapt target belongs to a declared target, and a target named `*Domain`, `*Adapt` or `*DomainTests` is `Persona<Ctx>Domain`, `Persona<Ctx>Adapt` or `Persona<Ctx>DomainTests` | manifests, `apple/` |
+| `swift-manifest` | a Domain target depends only on `PersonaDomainKit`, and it has the core settings | `Package.swift` |
+| `swift-context` | a Domain target neither depends on nor imports another `*Domain` target, and an `*Adapt` target another context's `*Adapt` target | `Package.swift`, sources |
+| `swift-testable` | `scripts/ci/apple.sh` tests the domain packages black-box and writes their symbol graphs; each such package has a `Persona<Ctx>DomainTests` target, and each Domain target its graph | manifests, `apple.sh`, graphs |
+| `swift-import` | a Domain target imports only `PersonaDomainKit`, and never `@testable` | sources |
+| `swift-banned-call` | no `print`, `debugPrint`, `dump`, `fatalError`, `preconditionFailure`, `.random(`, `.randomElement(`, `.shuffled(`, `.shuffle(`, `SystemRandomNumberGenerator`, `Mirror(` or clock types | sources |
+| `swift-state` | no class or actor, no stored `var` outside a function body, no global, no `nonisolated(unsafe)`, `@unchecked` or `Unsafe…` API | sources |
+| `swift-throws` | no `throws`, `rethrows`, `throw` or `Error` | sources |
+| `swift-conformance` | no `Codable`, `Encodable`, `Decodable`, description, `RawRepresentable`, `CustomReflectable` or `CodingKey` | sources |
+| `swift-public-enum` | no public enum, an enum in a `public extension` included | sources, graphs |
+| `swift-mutating` | `mutating func` only as a protocol's requirement | sources |
+| `swift-discardable` | no `@discardableResult` | sources |
+| `swift-extensible` | no public protocol but a `*Visitor` | sources |
+| `swift-visitor-name` | every requirement of a `*Visitor` protocol is a function named `visit…` | sources |
+| `swift-boundary` | `@_spi(Boundary)` marks only an instance's `public var wire` (and, in the kit, an `init`); `@_spi(Clock)` only an `init` of the kit; no public static or free function or property is named `wire`, marked or not | sources |
+| `swift-stored-public` | no stored public property and no public setter, `public static let` values of the declaring type aside | sources, graphs |
+| `swift-primitive-field` | beside another stored property, no stored property (whatever its access) is a primitive or leaves its type unwritten, and an enum case with more than one value holds no primitive | sources |
+| `swift-alias` | no type alias, whatever its access, so no primitive goes under another name | sources |
+| `swift-primitive-api` | no `String`, `Character`, `Bool`, number, `Date`, `UUID`, `Data` or `URL` (or a collection of them) in the public API, but a static `parse`'s parameters, a computed `Bool` property and a `Bool` result | graphs |
+| `swift-accessor` | every public method, subscript and property, whatever its parameters, and every public type method without parameters, answers with nothing, a `Bool`, `Self` or an `Outcome` of it (not optional); `id` returns a type the target declares named `<Name>ID`; a `…Step` type's method returns the next `…Step` or `…Builder`, and a `…Builder`'s `build()` an `Outcome` of a type the target declares. No public function, static, free or a member (an operator included), and no computed property, has a body that only returns a parameter's or `self`'s field (`{ entry.wakes }`), whatever its name and whatever it returns, but an instance's `id` of the target's own `<Name>ID` type and its `@_spi(Boundary)` `wire`; a `Bool` read from a member that is not a stored property is a predicate asking another value | sources, graphs |
+| `swift-callback` | no function type in a public signature or property | graphs |
+| `swift-generic` | no generic public type, function or associated type | graphs |
+| `swift-public-evolve` | no public `evolve` or `apply` | graphs |
+| `swift-factory` | no public `init`; four parameters at most; a static method that returns its type (or an `Outcome` of it, optional or not) is `parse`, `new`, `restore`, `newBuilder` or `restoreBuilder`, or, on a closed set (a struct whose one stored property is a private enum it declares), is named for a case and not `make…`, `from…`, `of…` and the like; none returns an optional; `parse` and `new` return the type or an `Outcome` of it (a `…Builder`'s `new` may return its first stage), `restore` an `Outcome` of it, and `newBuilder` and `restoreBuilder` a `…Step` or `…Builder` the target declares | sources, graphs |
+| `swift-spi-import` | `@_spi(Boundary) import` only in `*Adapt` targets, `@_spi(Clock) import` only in `PersonaDomainKitAdapt` | `apple/` |
+| `swift-visitor-impl` | a domain visitor is implemented only in `*Adapt` targets and domain tests | `apple/` |
+| `swift-app-discard` | the app and the adapters keep every domain result: in a file that imports a Domain target or the kit, no `_ =` whose expression drops a domain call's result, and no unused-result warning on a line that calls one; a call on a type the domain does not declare (`Draft.parse(raw)`) is not one, and a warning in a file outside the repository's `apple/` is not read, while one the log places in no file counts by its name | `apple/Persona`, `apple/Shared`, `*Adapt` targets, build log |
+| `kotlin-discovery` | every folder or source in a domain or adapt package belongs to an included module | `settings.gradle.kts`, `android/` |
+| `kotlin-build-flags` | the module's `persona.jvm.library`, `explicitApi()`, `allWarningsAsErrors` and `-Xreturn-value-checker=full`; the Android-wide unused-result errors | build files, `android/build-logic` |
+| `kotlin-module` | a domain module applies no other plugin and depends only on the kit | build files |
+| `kotlin-context` | a domain module neither depends on nor imports (or names in full) another context's domain module, and an `.adapt` package imports no other context's `.adapt` package | build files, sources, `android/` |
+| `kotlin-var` | no `var` | sources |
+| `kotlin-state` | no `Mutable…` type, mutable collection or array (`mutableListOf`, `HashMap`, `arrayOf`, `toMutableList` and the like), package-level property but a `const val`, package-level object, or object holding a property | sources |
+| `kotlin-ctor-property` | a public class's constructor properties are `private` or `internal` | sources |
+| `kotlin-primitive-field` | beside another field, no primary-constructor parameter or stored body property (whatever its visibility) is a primitive or leaves its type unwritten | sources |
+| `kotlin-alias` | no type alias, whatever its visibility, so no primitive goes under another name | sources |
+| `kotlin-public-constructor` | a public class has no public constructor, its default one included | sources |
+| `kotlin-data-class` | no `data class` | sources |
+| `kotlin-value-class` | no `value class` or `inline class` | sources |
+| `kotlin-public-sealed` | no public sealed type, enum class or data object | sources |
+| `kotlin-extensible` | no public interface but a `*Visitor`, and no public abstract or open class | sources |
+| `kotlin-visitor-name` | every member of a `*Visitor` interface is a function named `visit…` | sources |
+| `kotlin-primitive-api` | primitives in the public API only as a computed `Boolean`, a `Boolean` result or companion `parse`'s parameters | sources |
+| `kotlin-accessor` | a public `val` is a computed `Boolean` or a companion value of its class; every public method (an extension included), whatever its parameters, and every public function without parameters returns `Boolean`, `Unit`, its class or its `Outcome` (not nullable); `id()` returns a class the module declares named `<Name>Id`; a `…Step` class's method returns the next `…Step` or `…Builder`, and a `…Builder`'s `build()` an `Outcome` of a class the module declares. No public function, companion, top-level or a member, and no computed `Boolean`, has a body that only returns a parameter's or `this`'s field (`= entry.wakes`), whatever its name and whatever it returns, but a member `id()` of the module's own `<Name>Id` class and the `@DomainBoundary` `wire()`; a `Boolean` read from a member that is not a stored property is a predicate asking another value | sources |
+| `kotlin-callback` | no function type in a public signature or property | sources |
+| `kotlin-generic` | no type parameter on a public class, interface or function | sources |
+| `kotlin-boundary` | `@DomainBoundary` marks only a member `fun wire()` (and, in the kit, a companion function); `@ClockRead` only a companion function of the kit; no public companion or top-level function is named `wire`, marked or not; a marked member is left to this rule as Swift's `@_spi` members are left out of the graph | sources |
+| `kotlin-import` | imports, and full names under `persona.`, only from the kit (not its `adapt` package) and the module's own package; no full name from `java.`, `javax.`, `kotlinx.`, `android.`, `androidx.`, `kotlin.random` and the like | sources |
+| `kotlin-banned-call` | no `Instant.now`, `System.`, `UUID.randomUUID`, `Random`, `.random()`, `.shuffled()`, `println`, `synchronized`, `lazy`, `@Volatile`, `suspend` and the like | sources |
+| `kotlin-serializable` | no `@Serializable`, `@SerialName`, `Parcelable` or `Serializable` | sources |
+| `kotlin-ignorable` | no `@IgnorableReturnValue` | sources |
+| `kotlin-optin` | `OptIn(DomainBoundary` only in `.adapt`; `ClockRead` only in `persona.core.domainkit.adapt`; neither through a build file | `android/` |
+| `kotlin-throw` | `throw` only as `throw Defect(`; no `!!`, `error()`, `require()`, `check()` or `TODO()` | sources |
+| `kotlin-public-evolve` | no public `evolve` or `apply` | sources |
+| `kotlin-visitor-impl` | a domain visitor is implemented only in `.adapt` and tests | `android/` |
+| `kotlin-app-discard` | the app and the adapters keep every domain result: in a file that imports a domain module or the kit, or names one in full, no `val _ =` whose expression drops a domain call's result; a call on a type the domain does not declare (`Uri.parse(raw)`) is not one | `android/` outside the domain modules and tests |
+| `kotlin-factory` | four parameters at most; a companion function that returns its class (or an `Outcome` of it, nullable or not) is `parse`, `new`, `restore`, `newBuilder` or `restoreBuilder`, or, on a closed set (a class whose one field, which its private constructor takes, is a private enum class or internal sealed type it declares), is named for a case and not `from…`, `make…`, `of…` and the like; none returns a nullable type; `parse` and `new` return the class or an `Outcome` of it (a `…Builder`'s `new` may return its first stage), `restore` an `Outcome` of it, and `newBuilder` and `restoreBuilder` a `…Step` or `…Builder` the module declares | sources |
+
+**What the guard does not read.** These rules hold on the clients too, and nothing checks them yet:
+
+- What an adapter hands out (`swift-*` and `kotlin-*` read the public API of Domain targets, domain modules and the
+  kits, not of `*Adapt` targets or `.adapt` packages): the planted `ItemWire`, a public record of public primitive
+  `var`s, passes.
+- Collections in public signatures: `[Item]` or `List<Item>` pass anywhere, not only as `new` and `restore` inputs, and
+  so does a parameter of a platform interface such as `Sequence` or `Comparable`.
+- Order that is not the code's own: Swift iterates a `Dictionary` or `Set` in an order that changes from one process to
+  the next, and a core may depend on it.
+- A domain result dropped in a file that imports no Domain target, domain module or kit (and, in Kotlin, names none in
+  full): `_ =`, `val _ =` and the build log's warnings are read only in the files that do, so code handed a domain
+  value from elsewhere that drops what its call returns passes.
+- A domain module dropping a result of its own (`_ =`, `val _ =` inside a Domain target or domain module).
+- Kotlin domain tests that read more than the module's public API.
+- A field handed out inside a larger expression: only a body that is nothing but the read (`{ entry.wakes }`,
+  `= entry.wakes`, `return entry.wakes`) fails, so `= if (late) entry.wakes else entry.since` passes.
+- Kotlin's `hashCode()`, and the default `toString()` that prints it in hex: a value whose `hashCode()` is its field's
+  (the planted `Instant`) hands out a number made from its state, which for a small `Long` is the number itself.
+- Reading a value's memory or private fields on purpose from outside, through JVM reflection or Swift's
+  `withUnsafeBytes(of:)`: the guard reads the domain modules and the uses of them named above, not every caller.
+
+**Compliant twins.** `scripts/test/fixtures/client_domain/planted` is a tree laid out like the repository: a kit, a
+compliant context (`PersonaPlanted`, `:core:planted`) that breaks no rule, and a broken one (`PersonaBroken`,
+`:core:broken`, and the app files beside them) that breaks each rule once; `expected.txt` lists every finding, and
+`RuleTests` holds the scan to exactly that list. Its symbol graphs were written by the Swift compiler
+(`python3 -B scripts/test/test_client_domain_modules.py --planted-graphs` rewrites them after a planted Swift change),
+and `missed/` is a tree whose only domain modules discovery cannot read. Each example here is copied from a compliant
+twin there, and `RuleTests` checks both; the web's comes from its own rules until it has a twin. A closed set on
+each platform:
+
+```swift
+public struct Urgency: Hashable, Sendable {
+    private enum Case: Hashable, Sendable { case routine, urgent }
+    private let urgency: Case
+    private init(_ urgency: Case) { self.urgency = urgency }
+
+    public static let routine = Urgency(.routine)
+    public static let urgent = Urgency(.urgent)
+
+    /// Whether it may interrupt the owner's quiet hours.
+    public var breaksQuiet: Bool { urgency == .urgent }
+}
+```
+
+```kotlin
+public class Urgency private constructor(private val urgency: Case) {
+    private enum class Case { ROUTINE, URGENT }
+
+    /** Whether it may interrupt the owner's quiet hours. */
+    public val breaksQuiet: Boolean get() = urgency == Case.URGENT
+
+    public companion object {
+        public val routine: Urgency = Urgency(Case.ROUTINE)
+        public val urgent: Urgency = Urgency(Case.URGENT)
+    }
+}
+```
+
+```ts
+export class Urgency {
+  readonly #urgency: "routine" | "urgent";
+  private constructor(urgency: "routine" | "urgent") { this.#urgency = urgency; }
+  static readonly routine = new Urgency("routine");
+  static readonly urgent = new Urgency("urgent");
+  breaksQuiet(): boolean { return this.#urgency === "urgent"; }
+}
+```
+
 ## Registering a domain's entries
 
 Nearly every feature used to add a line to one of a few central lists: the route calls in the assistant's `New`,
@@ -794,31 +1079,92 @@ of entry goes through the same design. The central lists keep the entries they h
 
 ### One registry per Service
 
-- **The registry**: the package `kernel`, under `server/internal/assistant`, holds one registry per assistant `Service`,
-  with a slot for each kind of entry. The slots are routes (installed through `Service.handle`), bus methods, tools
-  (each placed after a named anchor tool), the hooks for a settled turn and a new connection, snapshot parts, and loops.
-  `Kernel.Bus` is where any domain adds a new bus method, not only the Inbox. Not on `main` yet: the package comes with
-  step S1 of `docs/plans/plan-inbox-vertical-slice.md`.
+- **The registry**: package `seam`, under `server/internal/assistant/kernel`, holds one registry per assistant
+  `Service`, with a slot for each kind of entry. Routes (installed through `Service.handle`) are the first; bus methods,
+  tools (each placed after a named anchor tool), the hooks for a settled turn and a new connection, snapshot parts,
+  and loops come with the steps below. `Kernel.Bus` is where any domain adds a new bus method, not only the Inbox.
+  Package `kernel` itself hosts the built-in feature modules (`docs/architecture/core-and-modules.md`), which a build
+  may leave out and the owner may switch off; the modules registered here are part of Persona Core.
 - **Two ways in, one registry**:
-  - A module in a subpackage calls `Register(k)` from `New`, where its central line was. `saved` comes first: today
-    `New` calls `saved.Register(saved.Host{…})`, and S1 registers it through the kernel instead, keeping `saved.Host`
-    as saved's own adapter.
-  - A domain inside package `assistant` calls a package-level function from an `init()` in its own file:
-    `registerRoutes(name, (*Service).xRoutes)`, `registerTools(after, …)` or `registerLoop(name, (*Service).xLoop)`.
-    `New` adds them to the same registry before the modules register.
+  - A module in a subpackage is registered from `New`, where its central line was, and takes its own dependencies,
+    typed port interfaces, through its own constructor: `reg.Register(saved.NewModule(store, events))`.
+    `saved/module.go` builds `saved.Host` from what `NewModule` was given and the `Kernel`'s services, so `saved.Host`
+    stays saved's own adapter and no kernel infrastructure feeds it. saved's own store and events are not typed yet
+    (#15222, "Validated and sealed" below); a new module does not copy them.
+  - A domain inside package `assistant` calls a package-level front door from an `init()` in its own file, and its
+    names are values, validated where they are made: `registerRoutes(seam.NewModuleName("x"), (*Service).xRoutes)`,
+    `registerTools(after, …)` or `registerLoop(seam.NewLoopName("x"), (*Service).xLoop)`. `New` adds them to the same
+    registry before the modules register.
 - **One of each**: there is one route table and one list of loops, and tool placement is computed once, at the end of
-  `New`. Route order means nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep
+  `New`. Each registration value raises a defect where it is made, and `New` keeps one duplicate check across the
+  tables. Route order means nothing (`TestRoutesAreTheWireOnes` sorts, and `http.ServeMux` ignores it). The tools keep
   the order `server/internal/hub/testdata/prompts/mcp_tools/assistant.index.golden` pins.
+- **A seam with one catch site**: package `seam` is declared `//persona:layer application seam` and follows "Domain
+  model" ("Typed seams"), and the route handlers registered through it run under the listed catch site
+  `server/internal/assistant/kernel/seam/dispatch.go`.
 - **When each part lands**:
-  1. the kernel, with `saved` (S1);
+  1. the registry, with `saved` (S1, #15182);
   2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
   3. `registerRoutes` and `registerLoop` (#7891);
   4. `registerTools`, with or just before the Inbox's tools (S5).
 
-  Until a slot exists, its entries go where they went before. The 63 route calls already in `New`, and the tools and
+  Until a slot exists, its entries go where they went before. The route calls already in `New`, and the tools and
   loops already listed, stay where they are.
 
-How each registration is checked, and when the registry closes, is written with the kernel (S1).
+How each registration is checked, and when the registry closes, is in "Validated and sealed" below.
+
+### Validated and sealed
+
+The registry is made from typed ports and takes names as values, so a registration mistake is a programmer error, a
+defect (`server/internal/domainkit/defect`), raised at the line that made it while `New` runs; every test that builds a
+`Service` runs `New`, so the first such test fails at that line. In `New`, with the ports package `assistant`
+implements in `server/internal/assistant/seam_ports.go`:
+
+```go
+reg := s.newRegistry() // the typed seam the modules register through (seam_ports.go)
+defer reg.Seal()       // New returns it sealed: registering later is a defect
+// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
+reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
+```
+
+A module names itself and registers through the `Kernel` it is handed (`server/internal/assistant/saved/module.go`):
+
+```go
+// Name is saved's name in the kernel.
+func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
+```
+
+- **Typed ports.** `seam.NewRegistry(routes RouteTable, access Access, bodies BodyErrors, defects Defects)`:
+  `RouteTable.Install` serves a route through `Service.handle`, `Access.Full` says whether a request may do
+  everything, `BodyErrors.Write` answers a body that could not be read (413 or 400), and `Defects.Report` hears of a
+  defect a route raised. A nil port is a defect.
+- **Names are values.** `seam.NewModuleName` refuses an empty name and a character outside `[a-z0-9-]`, and
+  `Registry.Register` a name another module took. `seam.NewRoute(pattern, serve)` refuses a pattern in neither
+  `assistantwire.Routes` nor `assistantwire.InboxRoutes` and a nil handler, and `Kernel.Route` a pattern already
+  registered. Only their constructors make a `ModuleName` or a `Route`: a zero one is a defect wherever it is used.
+- **The Kernel.** Only `Registry.Register` makes one, for the module it registers, and any method of a zero `Kernel`
+  is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and, with later steps, the
+  slots that replace central lines; never a store, an untyped event or a domain method. A module takes its own
+  dependencies through its own constructor, as typed port interfaces `New` hands it: no `any`, no map of them and no
+  runtime assertion to get a port back ("Domain model", "Typed seams").
+- **saved's legacy ports.** `saved.NewModule` is the one exception, and not an example to copy: it takes saved's store
+  as `func() any` and its events as `func(context.Context, map[string]any)`, the shape `saved.Host` always had, and
+  saved asserts its ports back out of that store at run time. It stays only because open drafts edit `saved.go` and
+  the files that make those assertions; #15222 gives saved typed ports once they land.
+- **Sealed.** `New` seals the registry before it returns. `Register`, `Kernel.Route` or `Seal` after that is a
+  defect; `Full` and `BodyError` stay open, because requests use them.
+- **One catch site.** Each route registered through the kernel is served under `defer defect.Catch(…)` in
+  `server/internal/assistant/kernel/seam/dispatch.go`: a defect raised while serving is reported (the assistant logs it
+  with its stack) and answered with 500 (`internal`), so that request fails alone and the manager goes on. Any other
+  panic, `http.ErrAbortHandler` included, goes on to net/http unchanged. archguard's `TestCatchOnlyAtListedSites`
+  keeps `defect.Catch` to the files in `server/internal/archguard/testdata/catch_sites.txt`, and
+  `TestRecoverOnlyAtListedSites` keeps every production call of `recover()` to the files in
+  `server/internal/archguard/testdata/recover_sites.txt` (rules `catch-site` and `recover-site`). Each line gives its
+  reason; a file that is not listed fails, and so does a line whose file no longer does what it permits.
+- **Its layer.** Package `seam` carries the `rules_test.go` hook, so it exports no field or variable and takes no
+  `any` ("Domain model", "Typed seams"). Its parent, package `kernel`, the feature-module host, declares no layer yet
+  (it is in `server/internal/archguard/testdata/domain_layers/undeclared.txt`): its `LoadOptions` fields, `New`'s
+  `logf func(string, ...any)` and the `modapi.Host.Logf` it implements would break those rules.
 
 ### Lists that stay package variables
 

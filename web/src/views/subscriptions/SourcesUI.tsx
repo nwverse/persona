@@ -5,6 +5,7 @@
 // under a way back to it.
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
+import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { lazyPage } from "../../lib/lazy-page";
 import { useInboxSourcesGraphShown } from "../../lib/subscriptions";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
@@ -19,13 +20,26 @@ import { InboxForwardSetting } from "../settings/InboxForwardSetting";
 // The relationship view and its layout are a chunk of their own, loaded when it is first shown.
 const SourcesGraphView = lazyPage(() => import("./SourcesGraph").then((m) => m.SourcesGraphView));
 
-/** `onGraph`: the relationship view is shown or not (the page around it widens for it). */
-export function SourcesUI({ title, state, onGraph }: { title: string; state?: string; onGraph?: (shown: boolean) => void }) {
+/** `onGraph`: the relationship view is shown or not (the page around it widens for it).
+ *  `initialView`: defaults to `"list"` for legacy Settings › Inbox Sources; `"graph"` opens directly on SourcesGraph. */
+export function SourcesUI({
+  title,
+  state,
+  onGraph,
+  initialView = "list",
+  manager,
+}: {
+  title: string;
+  state?: string;
+  onGraph?: (shown: boolean) => void;
+  initialView?: "list" | "graph";
+  manager?: string;
+}) {
   const name = usePersona().name;
   const context = useMemo(() => ({ assistant: name }), [name]);
   // A page opened on one source or extension keeps to it: no switch there.
   const offered = useInboxSourcesGraphShown() && !state;
-  const [graph, setGraph] = useState(false);
+  const [graph, setGraph] = useState(initialView === "graph");
   const [opened, setOpened] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   // Leaving (another Settings tab) gives the page its usual width back.
@@ -33,7 +47,10 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
   useEffect(() => {
     reported.current = onGraph;
   });
-  useEffect(() => () => reported.current?.(false), []);
+  useEffect(() => {
+    if (offered && initialView === "graph") reported.current?.(true);
+    return () => reported.current?.(false);
+  }, [offered, initialView]);
   const show = (on: boolean, page: string | null = null) => {
     setGraph(on);
     setOpened(page);
@@ -46,10 +63,11 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
       <ExtensionUI key={first ?? ""} extension={SUBSCRIPTIONS_UI} ui="pages" title={title} bare state={first} context={context} onDepth={setDepth} />
     </ExtensionOwnerScope>
   );
-  if (!offered) return <>{pages(state)}{!state && <InboxForwardSetting />}</>;
+  const connectedWork = !state && <ExternalSourceSettingsEntry manager={manager} />;
+  if (!offered) return <div data-settings-group="inbox-sources">{pages(state)}{!state && <InboxForwardSetting />}{connectedWork}</div>;
   if (graph && opened)
     return (
-      <div>
+      <div data-settings-group="inbox-sources">
         <button type="button" onClick={() => show(true)} className="mb-3 inline-flex h-8 items-center gap-1 rounded-control px-1.5 text-[13px] font-medium text-accent hover:bg-hover">
           <Icon name="chevronLeft" size={13} stroke={2.2} />
           {t("subscriptions.view_graph")}
@@ -58,7 +76,7 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
       </div>
     );
   return (
-    <div>
+    <div data-settings-group="inbox-sources">
       {(graph || depth <= 1) && (
         <div className="mb-4 flex">
           <Segmented
@@ -78,11 +96,14 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
           <Suspense fallback={<Loading />}>
             <SourcesGraphView assistant={name} onOpen={(page) => show(true, page)} onAsk={askAssistant} />
           </Suspense>
+          <InboxForwardSetting />
+          {connectedWork}
         </>
       ) : (
         <>
           {pages()}
           {depth <= 1 && <InboxForwardSetting />}
+          {depth <= 1 && connectedWork}
         </>
       )}
     </div>
