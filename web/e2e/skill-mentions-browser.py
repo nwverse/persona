@@ -23,6 +23,9 @@ def shot(name):
 
 
 def type_draft(text):
+    if js("document.querySelector('[data-composer-input]').tagName === 'TEXTAREA'"):
+        fill_input("[data-composer-input]", text)
+        return
     js("document.querySelector('[data-composer-input]').focus()")
     press_key("Control+a")
     cdp("Input.insertText", text=text)
@@ -37,7 +40,7 @@ print(js("Array.from(document.querySelectorAll('textarea')).map(e=>({placeholder
 cdp("Emulation.setDeviceMetricsOverride", width=1365, height=900, deviceScaleFactor=1, mobile=False)
 js("document.documentElement.classList.remove('dark')")
 type_draft("@review")
-time.sleep(.4)
+wait_for_element("[role=option]", timeout=15)
 rows = js("Array.from(document.querySelectorAll('[role=option]')).map(e=>({text:e.textContent,selected:e.getAttribute('aria-selected')}))")
 print("Rendered duplicate sources:", rows)
 assert len(rows) == 2
