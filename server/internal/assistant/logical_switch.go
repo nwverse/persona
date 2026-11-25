@@ -26,13 +26,14 @@ import (
 const conversationSegmentsKey = "assistant.segments"
 
 type logicalSwitchRequest struct {
-	OperationID    string `json:"operation_id"`
-	ExpectedEpoch  int64  `json:"expected_epoch"`
-	MachineID      string `json:"machine_id"`
-	Launcher       string `json:"launcher"`
-	Model          string `json:"model,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	PermissionMode string `json:"permission_mode,omitempty"`
+	OperationID        string `json:"operation_id"`
+	ExpectedEpoch      int64  `json:"expected_epoch"`
+	MachineID          string `json:"machine_id"`
+	Launcher           string `json:"launcher"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	PermissionMode     string `json:"permission_mode,omitempty"`
+	AllowOfflineSource bool   `json:"allow_offline_source,omitempty"`
 }
 type logicalInput struct {
 	Method    string               `json:"method"`
@@ -165,6 +166,7 @@ func (s *Service) logicalSwitchRoutes() {
 			apierr.Write(w, 400, err)
 			return
 		}
+		p.AllowOfflineSource = false
 		op, err := s.beginLogicalSwitch(r.Context(), p.SourceMachine, r.PathValue("id"), p.logicalSwitchRequest)
 		if err != nil {
 			apierr.Call(w, err)
@@ -248,11 +250,18 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, err
 	}
 	row, known := s.session(ctx, machine, id)
-	if !known || !row.Assistant || row.PaneID != "" || s.isWorkMachine(p.MachineID) {
-		return nil, logicalRefusal(ctx, "unavailable")
-	}
-	if s.conversationSwitchBusy(machine, id, row) {
-		return nil, logicalRefusal(ctx, "busy")
+	offlineSource := p.AllowOfflineSource && s.machinePhysicallyOffline(ctx, machine)
+	if !known {
+		if !offlineSource || !s.isFailoverEligibleOffline(ctx, machine, id) || s.isWorkMachine(p.MachineID) {
+			return nil, logicalRefusal(ctx, "unavailable")
+		}
+	} else {
+		if !row.Assistant || row.PaneID != "" || s.isWorkMachine(p.MachineID) {
+			return nil, logicalRefusal(ctx, "unavailable")
+		}
+		if !offlineSource && s.conversationSwitchBusy(machine, id, row) {
+			return nil, logicalRefusal(ctx, "busy")
+		}
 	}
 	target, err := s.logicalTarget(ctx, p.MachineID, p.Launcher)
 	if err != nil {
@@ -266,21 +275,49 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, s.supervisionRuntimeRefusal(ctx, p.MachineID)
 	}
 	if c == nil {
-		if p.ExpectedEpoch != 1 || assistantKind(sessionEngineAgent(row)) == "" {
+		if p.ExpectedEpoch != 1 {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
-		var page historyPage
-		if err = s.physicalHistoryCall(ctx, machine, DeviceSessionItems, map[string]any{"session_id": id, "limit": 1, "lazy_images": true}, &page); err != nil {
-			return nil, err
+		var historyGen string
+		var sourceEngine string
+		if known && assistantKind(sessionEngineAgent(row)) != "" {
+			sourceEngine = proto.AssistantExecutionIdentity(sessionEngineAgent(row), row.SourceKind, row.SourceInstanceID, row.Launcher)
 		}
-		if page.History == "" {
+		if !offlineSource {
+			if assistantKind(sessionEngineAgent(row)) == "" {
+				return nil, logicalRefusal(ctx, "unknown_engine")
+			}
+			var page historyPage
+			if err = s.physicalHistoryCall(ctx, machine, DeviceSessionItems, map[string]any{"session_id": id, "limit": 1, "lazy_images": true}, &page); err != nil {
+				return nil, err
+			}
+			historyGen = page.History
+		} else {
+			// Source machine is offline: read persisted ConversationHistory from Postgres.
+			var page historyPage
+			if err = s.physicalHistoryCall(ctx, machine, DeviceSessionItems, map[string]any{"session_id": id, "limit": 1, "lazy_images": true}, &page); err == nil && page.History != "" {
+				historyGen = page.History
+			} else if hs, ok := s.store().(conversationHistoryStore); ok {
+				if h, herr := hs.ConversationHistory(ctx, machine, id); herr == nil && h != nil && h.History != "" {
+					historyGen = h.History
+				}
+			}
+			if sourceEngine == "" {
+				cfg := s.settings(ctx)
+				agent := s.launcherAgent(ctx, machine, cfg.Launcher)
+				if assistantKind(agent) == "" {
+					agent = "claude"
+				}
+				sourceEngine = proto.AssistantExecutionIdentity(agent, "", "", cfg.Launcher)
+			}
+		}
+		if historyGen == "" {
 			return nil, logicalRefusal(ctx, "missing_generation")
 		}
-		sourceEngine := proto.AssistantExecutionIdentity(sessionEngineAgent(row), row.SourceKind, row.SourceInstanceID, row.Launcher)
 		if sourceEngine == "" {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
-		if err = st.AdoptConversationAliases(ctx, machine, id, randomHex(16), sourceEngine, page.History, s.physicalAliases(machine)); err != nil {
+		if err = st.AdoptConversationAliases(ctx, machine, id, randomHex(16), sourceEngine, historyGen, s.physicalAliases(machine)); err != nil {
 			return nil, err
 		}
 		c, err = st.LogicalConversation(ctx, machine, id)
@@ -526,14 +563,28 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 			return err
 		}
 		// Pull a proven physical tail after preparation; never infer it from item count.
+		// For an offline-source failover switch, fall back to persisted Postgres ConversationHistory.
 		var tail historyPage
-		if err = s.physicalHistoryCall(ctx, source.MachineID, DeviceSessionItems, map[string]any{"session_id": source.SessionID, "limit": 1, "lazy_images": true}, &tail); err != nil {
-			return err
-		}
-		if tail.ToSeq == nil || tail.MoreAfter {
+		var tailSeq int
+		err = s.physicalHistoryCall(ctx, source.MachineID, DeviceSessionItems, map[string]any{"session_id": source.SessionID, "limit": 1, "lazy_images": true}, &tail)
+		if err == nil && tail.ToSeq != nil && !tail.MoreAfter {
+			tailSeq = *tail.ToSeq
+		} else if p.AllowOfflineSource && (errors.Is(busError(err), apierr.ErrOffline) || errors.Is(busError(err), rpc.ErrClosed) || s.machinePhysicallyOffline(ctx, source.MachineID)) {
+			seq, okTail := s.offlineHistoryTailSeq(ctx, source.MachineID, source.SessionID)
+			if !okTail {
+				if err != nil {
+					return err
+				}
+				return logicalRefusal(ctx, "missing_generation")
+			}
+			tailSeq = seq
+		} else {
+			if err != nil {
+				return err
+			}
 			return logicalRefusal(ctx, "missing_generation")
 		}
-		if err = st.PrepareConversationSegment(ctx, c.MachineID, c.SessionID, op.OperationID, conversationlog.Segment{ID: randomHex(16), MachineID: p.MachineID, SessionID: reply.SessionID, Engine: target.Engine, Launcher: p.Launcher, Model: p.Model, Effort: p.Effort, PermissionMode: p.PermissionMode}, *tail.ToSeq); err != nil {
+		if err = st.PrepareConversationSegment(ctx, c.MachineID, c.SessionID, op.OperationID, conversationlog.Segment{ID: randomHex(16), MachineID: p.MachineID, SessionID: reply.SessionID, Engine: target.Engine, Launcher: p.Launcher, Model: p.Model, Effort: p.Effort, PermissionMode: p.PermissionMode}, tailSeq); err != nil {
 			return err
 		}
 		c, err = st.LogicalConversation(ctx, c.MachineID, c.SessionID)
@@ -551,7 +602,7 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		}
 		if source, ok := c.Active(); ok {
 			_, err := s.logicalPhysical(ctx, source.MachineID, "assistant.segment.retire", map[string]any{"session_id": source.SessionID})
-			if err != nil && !errors.Is(err, apierr.ErrOffline) {
+			if err != nil && !errors.Is(err, apierr.ErrOffline) && !errors.Is(busError(err), apierr.ErrOffline) && !errors.Is(busError(err), rpc.ErrClosed) {
 				return err
 			}
 		}
@@ -814,11 +865,22 @@ func logicalHandoffTurn(item proto.Item) (prompts.HandoffTurn, bool, bool) {
 }
 
 func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation) (mainHandoff, error) {
+	var h mainHandoff
 	raw, err := s.logicalHistoryCall(ctx, st, c, DeviceAssistantHandoff, json.RawMessage(`{}`))
 	if err != nil {
+		// When the active source machine is offline and Postgres has no covered page yet,
+		// degrade to a partial handoff carrying any persisted summary instead of blocking failover.
+		if a, ok := c.Active(); ok && (errors.Is(busError(err), apierr.ErrOffline) || errors.Is(busError(err), rpc.ErrClosed) || s.machinePhysicallyOffline(ctx, a.MachineID)) {
+			h.Partial = true
+			if history, ok := s.store().(conversationHistoryStore); ok {
+				if source, herr := history.ConversationHistory(ctx, a.MachineID, a.SessionID); herr == nil && source != nil && source.SummaryKnown {
+					h.Summary = strings.TrimSpace(source.Summary)
+				}
+			}
+			return h, nil
+		}
 		return mainHandoff{}, err
 	}
-	var h mainHandoff
 	if err = json.Unmarshal(raw, &h); err != nil {
 		return h, err
 	}
