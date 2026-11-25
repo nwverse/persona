@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 const (
@@ -364,6 +366,10 @@ func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantw
 	}
 	svc.idleArchiveAudit.mu.Unlock()
 
+	if !persisted {
+		return "", false
+	}
+
 	if extAudit, ok := store.(extensionAuditWriter); ok {
 		plugin := entry.Extension
 		if plugin == "" {
@@ -400,10 +406,83 @@ func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantw
 		}
 	}
 
-	if !persisted {
-		return "", false
-	}
 	return entry.ID, true
+}
+
+type idleArchiveStage struct {
+	key       string
+	hadPrev   bool
+	prev      agentArchive
+	changedAt time.Time
+	snapshot  proto.Session
+}
+
+// stageIdleArchiveRecord writes Persona's archive record under the archive gate without emitting
+// native-archive wishes or publishing the session list, recording the prior slot so a failed close
+// or audit write can restore exact pre-call state without clobbering a concurrent change.
+func (svc *Service) stageIdleArchiveRecord(ctx context.Context, row proto.Session, provisionalClose bool) (idleArchiveStage, error) {
+	ctx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
+	defer cancel()
+	b := &svc.agentArchives
+	if err := b.lock(ctx); err != nil {
+		return idleArchiveStage{}, err
+	}
+	defer b.unlock()
+	if err := svc.loadAgentArchivesLocked(ctx); err != nil {
+		return idleArchiveStage{}, err
+	}
+	snapshot := archiveSnapshot(row)
+	snapshot.SessionID = archiveSessionOf(row)
+	key := runtimeListID(row.MachineID, snapshot.SessionID)
+	prev, hadPrev := b.records[key]
+	baseChanged := prev.ChangedAt
+	if row.ArchiveChangedAt != nil && row.ArchiveChangedAt.After(baseChanged) {
+		baseChanged = *row.ArchiveChangedAt
+	}
+	changedAt := nextAgentArchiveChangedAt(baseChanged)
+	rec := agentArchive{Session: snapshot, Archived: true, ChangedAt: changedAt}
+	if provisionalClose {
+		rec.ClosedAt = time.Now().UTC().Add(agentArchiveCloseTimeout + agentArchiveTimeout)
+	}
+	next := maps.Clone(b.records)
+	next[key] = rec
+	if err := svc.saveAgentArchivesLocked(ctx, next); err != nil {
+		return idleArchiveStage{}, err
+	}
+	delete(b.pending, key)
+	return idleArchiveStage{
+		key:       key,
+		hadPrev:   hadPrev,
+		prev:      prev,
+		changedAt: changedAt,
+		snapshot:  snapshot,
+	}, nil
+}
+
+// rollbackIdleArchiveRecord reverts only the exact generation written by stageIdleArchiveRecord,
+// preserving any newer concurrent archive or restore.
+func (svc *Service) rollbackIdleArchiveRecord(ctx context.Context, st idleArchiveStage) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
+	defer cancel()
+	b := &svc.agentArchives
+	if err := b.lock(ctx); err != nil {
+		return err
+	}
+	defer b.unlock()
+	if err := svc.loadAgentArchivesLocked(ctx); err != nil {
+		return err
+	}
+	rec, ok := b.records[st.key]
+	if !ok || !rec.ChangedAt.Equal(st.changedAt) {
+		return nil
+	}
+	next := maps.Clone(b.records)
+	if !st.hadPrev {
+		delete(next, st.key)
+	} else {
+		next[st.key] = st.prev
+	}
+	return svc.saveAgentArchivesLocked(ctx, next)
 }
 
 func (svc *Service) loadIdleArchiveAudit(ctx context.Context) ([]assistantwire.IdleArchiveAuditEntry, error) {
@@ -611,8 +690,8 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 			Actor:               actor,
 			Extension:           extID,
-			MachineID:           assistantwire.MachineID(mid),
-			SessionID:           assistantwire.SessionID(sid),
+			MachineID:           wireids.MachineID(mid),
+			SessionID:           wireids.SessionID(sid),
 			IdleMinutes:         req.IdleMinutes,
 			ObservedIdleSeconds: obsSec,
 			CloseTerminal:       closeTerminal,
@@ -665,8 +744,8 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 			Actor:               actor,
 			Extension:           extID,
-			MachineID:           assistantwire.MachineID(mid),
-			SessionID:           assistantwire.SessionID(row.SessionID),
+			MachineID:           wireids.MachineID(mid),
+			SessionID:           wireids.SessionID(row.SessionID),
 			IdleMinutes:         req.IdleMinutes,
 			ObservedIdleSeconds: &obsSec,
 			CloseTerminal:       closeTerminal,
@@ -689,19 +768,18 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 	// 8. Perform guarded archive (+ fail-closed terminal close when requested).
 	if closeTerminal {
 		if ev.offline {
-			changedAt, err := svc.noteAgentArchiveAt(ctx, row, true)
+			st, err := svc.stageIdleArchiveRecord(ctx, row, false)
 			if err != nil {
 				refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
 				return
 			}
-			row.ArchiveChangedAt = archiveChangedAt(changedAt)
-			svc.publishList(row.MachineID)
+			row.ArchiveChangedAt = archiveChangedAt(st.changedAt)
 			closeRes := &assistantwire.IdleArchiveCloseResult{Closed: false, Outcome: archiveCloseNotRunning}
 			auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 				Actor:               actor,
 				Extension:           extID,
-				MachineID:           assistantwire.MachineID(mid),
-				SessionID:           assistantwire.SessionID(row.SessionID),
+				MachineID:           wireids.MachineID(mid),
+				SessionID:           wireids.SessionID(row.SessionID),
 				IdleMinutes:         req.IdleMinutes,
 				ObservedIdleSeconds: &obsSec,
 				CloseTerminal:       true,
@@ -709,6 +787,16 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 				CloseOutcome:        archiveCloseNotRunning,
 				Reason:              req.Reason,
 			})
+			if !persisted {
+				if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
+					svc.logf("idle archive %s/%s: rollback offline archive after audit failure: %v", mid, short(row.SessionID), rbErr)
+				}
+				svc.publishList(row.MachineID)
+				apierr.WriteCode(w, http.StatusServiceUnavailable, "audit_unavailable", errors.New("could not persist idle archive audit entry"))
+				return
+			}
+			svc.nativeArchiveWanted(st.snapshot, true)
+			svc.publishList(row.MachineID)
 			apierr.WriteJSON(w, assistantwire.IdleArchiveResponse{
 				OK:                  true,
 				Archived:            true,
@@ -720,25 +808,23 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		// Live session close: fence the archive provisionally before calling the node, and
-		// roll back the provisional archive if the node refuses, is offline, or fails to close.
+		// Live session close: always stage a provisional ClosedAt fence before calling the node
+		// (including when the session is already archived so exit-transcript writes cannot unarchive
+		// it mid-close), and roll back exact pre-call state if the node refuses, is offline, or fails.
 		wasArchived := row.Archived
-		if !wasArchived {
-			provisional, err := svc.confirmationArchiveFenceAt(ctx, row, true)
-			if err != nil {
-				refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
-				return
-			}
-			row.ArchiveChangedAt = archiveChangedAt(provisional)
+		st, err := svc.stageIdleArchiveRecord(ctx, row, true)
+		if err != nil {
+			refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
+			return
 		}
+		row.ArchiveChangedAt = archiveChangedAt(st.changedAt)
 
 		res := svc.retireArchived(ctx, row)
 		if res.Outcome != archiveCloseClosed && res.Outcome != archiveCloseNotRunning {
-			if !wasArchived {
-				if rbErr := svc.confirmationArchiveFence(context.WithoutCancel(ctx), row, false); rbErr != nil {
-					svc.logf("idle archive %s/%s: rollback provisional archive: %v", mid, short(row.SessionID), rbErr)
-				}
+			if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
+				svc.logf("idle archive %s/%s: rollback provisional archive: %v", mid, short(row.SessionID), rbErr)
 			}
+			svc.publishList(row.MachineID)
 			status := http.StatusBadGateway
 			code := idleArchiveCodeCloseFailed
 			msg := "could not close idle session terminal"
@@ -785,8 +871,8 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 			Actor:               actor,
 			Extension:           extID,
-			MachineID:           assistantwire.MachineID(mid),
-			SessionID:           assistantwire.SessionID(row.SessionID),
+			MachineID:           wireids.MachineID(mid),
+			SessionID:           wireids.SessionID(row.SessionID),
 			IdleMinutes:         req.IdleMinutes,
 			ObservedIdleSeconds: &obsSec,
 			CloseTerminal:       true,
@@ -806,19 +892,19 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Archive-only path (close_terminal: false): persist archive under the per-session lock
-	// and fail closed (rolling back) if the audit record cannot be persisted.
-	changedAt, err := svc.noteAgentArchiveAt(ctx, row, true)
+	// Archive-only path (close_terminal: false): stage Persona's archive record under the per-session
+	// lock without native-archive/publish side effects, and roll back if audit persistence fails.
+	st, err := svc.stageIdleArchiveRecord(ctx, row, false)
 	if err != nil {
 		refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
 		return
 	}
-	row.ArchiveChangedAt = archiveChangedAt(changedAt)
+	row.ArchiveChangedAt = archiveChangedAt(st.changedAt)
 	auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 		Actor:               actor,
 		Extension:           extID,
-		MachineID:           assistantwire.MachineID(mid),
-		SessionID:           assistantwire.SessionID(row.SessionID),
+		MachineID:           wireids.MachineID(mid),
+		SessionID:           wireids.SessionID(row.SessionID),
 		IdleMinutes:         req.IdleMinutes,
 		ObservedIdleSeconds: &obsSec,
 		CloseTerminal:       false,
@@ -826,12 +912,14 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		Reason:              req.Reason,
 	})
 	if !persisted {
-		if rbErr := svc.confirmationArchiveFence(context.WithoutCancel(ctx), row, false); rbErr != nil {
+		if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
 			svc.logf("idle archive %s/%s: rollback archive after audit failure: %v", mid, short(row.SessionID), rbErr)
 		}
+		svc.publishList(row.MachineID)
 		apierr.WriteCode(w, http.StatusServiceUnavailable, "audit_unavailable", errors.New("could not persist idle archive audit entry"))
 		return
 	}
+	svc.nativeArchiveWanted(st.snapshot, true)
 	svc.publishList(row.MachineID)
 	apierr.WriteJSON(w, assistantwire.IdleArchiveResponse{
 		OK:                  true,

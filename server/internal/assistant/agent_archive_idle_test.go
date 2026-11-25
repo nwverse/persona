@@ -640,7 +640,7 @@ func TestIdleArchiveAdversarialReviewRegressions(t *testing.T) {
 			t.Fatal("mutation occurred despite unreadable audit store")
 		}
 
-		// Audit write failure on archive-only rolls back archive and returns 503.
+		// Audit write failure on archive-only rolls back archive, emits no native archive wish or plugin_audit row, and returns 503.
 		ft2, rec2, row2 := idleArchiveTestSetup(t, now, nil)
 		rec2.mu.Lock()
 		rec2.failAuditWrite = true
@@ -652,8 +652,56 @@ func TestIdleArchiveAdversarialReviewRegressions(t *testing.T) {
 		if archivedIDs(t, ft2.s)[row2.SessionID] {
 			t.Fatal("archive-only was not rolled back after audit write failure")
 		}
+		if rec2.count() != 0 {
+			t.Fatalf("rolled-back archive-only wrote %d plugin_audit rows, want 0", rec2.count())
+		}
+		if got := ft2.s.nativeArchiveView("mac", row2.SessionID); got != nil {
+			t.Fatalf("rolled-back archive-only leaked native archive intent: %+v", got)
+		}
 
-		// Audit write failure on refusal emits audit_persisted=false and omits audit_id.
+		// Audit write failure on offline default close_terminal=true also rolls back cleanly with no side effects.
+		ftOff, recOff, rowOff := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+			s.Status, s.State, s.PaneID = proto.StatusOffline, proto.StateOffline, ""
+		})
+		recOff.mu.Lock()
+		recOff.failAuditWrite = true
+		recOff.mu.Unlock()
+		wOff := postIdleArchive(ftOff.s, "mac", rowOff.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		if wOff.Code != http.StatusServiceUnavailable {
+			t.Fatalf("audit write failure on offline archive got %d (%s), want 503", wOff.Code, wOff.Body.String())
+		}
+		if archivedIDs(t, ftOff.s)[rowOff.SessionID] {
+			t.Fatal("offline archive was not rolled back after audit write failure")
+		}
+		if recOff.count() != 0 {
+			t.Fatalf("rolled-back offline archive wrote %d plugin_audit rows, want 0", recOff.count())
+		}
+		if got := ftOff.s.nativeArchiveView("mac", rowOff.SessionID); got != nil {
+			t.Fatalf("rolled-back offline archive leaked native archive intent: %+v", got)
+		}
+
+		// Audit write failure on post-close success omits audit_id from JSON and does not mirror to plugin_audit.
+		ftLive, recLive, rowLive := idleArchiveTestSetup(t, now, nil)
+		recLive.mu.Lock()
+		recLive.failAuditWrite = true
+		recLive.mu.Unlock()
+		wLive := postIdleArchive(ftLive.s, "mac", rowLive.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		if wLive.Code != http.StatusOK {
+			t.Fatalf("live close with audit failure got %d (%s), want 200", wLive.Code, wLive.Body.String())
+		}
+		var bLive map[string]any
+		_ = json.Unmarshal(wLive.Body.Bytes(), &bLive)
+		if bLive["audit_persisted"] != false {
+			t.Fatalf("expected audit_persisted=false, got %+v", bLive)
+		}
+		if _, hasID := bLive["audit_id"]; hasID {
+			t.Fatalf("IdleArchiveResponse serialized audit_id when audit_persisted=false: %+v", bLive)
+		}
+		if recLive.count() != 0 {
+			t.Fatalf("failed audit mirrored %d rows to plugin_audit, want 0", recLive.count())
+		}
+
+		// Audit write failure on refusal emits audit_persisted=false, omits audit_id, and skips plugin_audit.
 		ft3, rec3, row3 := idleArchiveTestSetup(t, now, func(s *proto.Session) {
 			s.Status, s.State = proto.StatusWorking, proto.StateWorking
 		})
@@ -671,6 +719,70 @@ func TestIdleArchiveAdversarialReviewRegressions(t *testing.T) {
 		}
 		if _, hasID := b3["audit_id"]; hasID {
 			t.Fatalf("refusal emitted dangling audit_id on persistence failure: %+v", b3)
+		}
+		if rec3.count() != 0 {
+			t.Fatalf("failed refusal audit mirrored %d rows to plugin_audit, want 0", rec3.count())
+		}
+	})
+
+	t.Run("R2-P1-2 closing already-archived live session fences exit transcript writes and rolls back provisional ClosedAt on refusal", func(t *testing.T) {
+		// (a) Exit transcript write during retireArchived does NOT unarchive an already-archived live session.
+		realNow := time.Now().UTC()
+		ft, _, row := idleArchiveTestSetup(t, realNow, nil)
+		// Pre-archive without closing (ClosedAt is zero).
+		wArch := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"close_terminal":false}`)
+		if wArch.Code != http.StatusOK {
+			t.Fatalf("pre-archive failed: %d %s", wArch.Code, wArch.Body.String())
+		}
+		// During session.retire, simulate the agent writing an exit transcript line and the node pushing
+		// an updated session list before retire returns.
+		ft.f.answerNode(deviceSessionRetire, func(_ string, _ json.RawMessage) (any, error) {
+			bumped := row
+			bumped.UpdatedAt = time.Now().UTC()
+			ft.d.setSessions("mac", []proto.Session{bumped})
+			if _, changed, err := ft.s.archivedSessions(context.Background(), "mac", []proto.Session{bumped}, ft.s.archiveMark()); err != nil {
+				t.Errorf("mid-close archivedSessions failed: %v", err)
+			} else if changed {
+				t.Errorf("mid-close exit transcript write unexpectedly changed archive state")
+			}
+			return map[string]any{"closed": true}, nil
+		})
+		wClose := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"close_terminal":true}`)
+		if wClose.Code != http.StatusOK {
+			t.Fatalf("close of already-archived live session got %d (%s), want 200", wClose.Code, wClose.Body.String())
+		}
+		var resp assistantwire.IdleArchiveResponse
+		_ = json.Unmarshal(wClose.Body.Bytes(), &resp)
+		if !resp.Archived || !resp.AlreadyArchived || resp.Close == nil || !resp.Close.Closed {
+			t.Fatalf("unexpected close response: %+v", resp)
+		}
+		if !archivedIDs(t, ft.s)[row.SessionID] {
+			t.Fatal("already-archived live session was unarchived by exit transcript write during close")
+		}
+
+		// (b) When node refuses close on an already-archived live session, provisional ClosedAt is cleared
+		// while Archived remains true.
+		ft2, _, row2 := idleArchiveTestSetup(t, realNow, nil)
+		wArch2 := postIdleArchive(ft2.s, "mac", row2.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"close_terminal":false}`)
+		if wArch2.Code != http.StatusOK {
+			t.Fatalf("pre-archive 2 failed: %d %s", wArch2.Code, wArch2.Body.String())
+		}
+		ft2.f.mu.Lock()
+		ft2.f.retireErr = &rpc.Error{Code: "not_retirable", Message: "cannot resume"}
+		ft2.f.mu.Unlock()
+		wRef := postIdleArchive(ft2.s, "mac", row2.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"close_terminal":true}`)
+		if wRef.Code != http.StatusConflict {
+			t.Fatalf("refused close of already-archived live session got %d (%s), want 409", wRef.Code, wRef.Body.String())
+		}
+		if !archivedIDs(t, ft2.s)[row2.SessionID] {
+			t.Fatal("refused close unexpectedly unarchived already-archived session")
+		}
+		key2 := runtimeListID("mac", archiveSessionOf(row2))
+		ft2.s.agentArchives.lock(context.Background())
+		rec2 := ft2.s.agentArchives.records[key2]
+		ft2.s.agentArchives.unlock()
+		if !rec2.Archived || !rec2.ClosedAt.IsZero() {
+			t.Fatalf("expected Archived=true and zero ClosedAt after refused close rollback, got archived=%v closedAt=%v", rec2.Archived, rec2.ClosedAt)
 		}
 	})
 }

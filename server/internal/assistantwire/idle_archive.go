@@ -1,6 +1,10 @@
 package assistantwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/wireids"
+)
 
 // CapabilityAgentSessionIdleArchive advertises the manager's guarded idle-session archive-and-close API and its audit
 // read endpoint.
@@ -27,11 +31,8 @@ type IdleArchiveCloseResult struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
-// Named ID types for idle-archive wire contracts (contract-bare-id).
-type (
-	IdleArchiveAuditID string
-	SessionID          string
-)
+// IdleArchiveAuditID identifies one idle-archive audit record (contract-bare-id).
+type IdleArchiveAuditID string
 
 // IdleArchiveResponse is returned on HTTP 200 after a guarded idle archive succeeds (or is already archived offline).
 type IdleArchiveResponse struct {
@@ -40,7 +41,7 @@ type IdleArchiveResponse struct {
 	AlreadyArchived     bool                    `json:"already_archived,omitempty"`
 	ObservedIdleSeconds int64                   `json:"observed_idle_seconds"`
 	Close               *IdleArchiveCloseResult `json:"close,omitempty"`
-	AuditID             IdleArchiveAuditID      `json:"audit_id"`
+	AuditID             IdleArchiveAuditID      `json:"audit_id,omitempty"`
 	AuditPersisted      bool                    `json:"audit_persisted"`
 }
 
@@ -51,8 +52,8 @@ type IdleArchiveAuditEntry struct {
 	At                  time.Time          `json:"at"`
 	Actor               string             `json:"actor"`
 	Extension           string             `json:"extension,omitempty"`
-	MachineID           MachineID          `json:"machine_id"`
-	SessionID           SessionID          `json:"session_id"`
+	MachineID           wireids.MachineID  `json:"machine_id"`
+	SessionID           wireids.SessionID  `json:"session_id"`
 	IdleMinutes         int                `json:"idle_minutes"`
 	ObservedIdleSeconds *int64             `json:"observed_idle_seconds,omitempty"`
 	CloseTerminal       bool               `json:"close_terminal"`
