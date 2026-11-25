@@ -237,7 +237,8 @@ The script frames what it prints with begin/end markers, and node reads only bet
   On a Mac where the login shell finds no `codex` (and has no alias or function of that name), the ChatGPT app's bundled CLI
   (`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`) is plain `codex` instead, run by that path (#10437).
   `codex-app` (the Codex App, `docs/integrations/codex.md`, "New chats in the Codex App") is only ever an explicit pick: a default that
-  gives way to a launcher the computer has never picks it (`launcherInstead`).
+  gives way to a launcher the computer has never picks it (`launcherInstead`), and Model configuration offers it to no purpose. Claude's
+  desktop app's `claude-desktop` can be Agents' default (`docs/assistant/model-config.md`, "Claude's desktop app as Agents' launcher (#13117)").
   See `docs/integrations/codex.md`, “Starting from the phone” for creating Codex sessions from the phone.
 - Not launchers: an alias named exactly `claude`, aliases running an internal Codex-fork CLI, Codex aliases doing other work (`cd x && codex`),
   or unrelated aliases (`ll`, `gst`…). If none exist, only default `claude` appears.

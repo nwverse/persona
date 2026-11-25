@@ -201,7 +201,7 @@ func (h *Manager) larkSyncPutPending(ctx context.Context, p larkSyncBinding) err
 func (h *Manager) larkSyncDevicePrompt(ctx context.Context, link, userCode string, interval int, errText string) connector.Prompt {
 	l := h.botLang(ctx)
 	p := connector.Prompt{Step: stepLarkSyncAuthorize, Kind: connector.PromptQRCode, URL: link, UserCode: userCode, Interval: interval,
-		Hint: i18n.T(l, "hub-larksync.device_hint"), Link: link, LinkText: i18n.T(l, "hub-larksync.device_open"), Error: errText}
+		Hint: i18n.T(l, "hub-larksync.device_hint"), Link: link, LinkText: i18n.T(l, "hub-larksync.device_open_link"), Error: errText}
 	if err := withQR(&p); err != nil {
 		h.logf("lark sync: device QR: %v", err)
 	}

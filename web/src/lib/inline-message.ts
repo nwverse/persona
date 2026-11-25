@@ -1,6 +1,6 @@
 // Wire reconstruction is needed for inline sends and recalled selections.
 import { canonicalAppURL } from "./compatibility";
-import { joinInline, mentionedText, INLINE_TRAILER, type InlineDocument } from "./inline-mentions";
+import { joinInline, mentionedText, INLINE_TRAILER, splitInlineTrailer, type InlineDocument } from "./inline-mentions";
 import type { ContextRef } from "./links";
 import type { Context } from "./turns";
 
@@ -50,7 +50,10 @@ export function inlineBody(doc: InlineDocument, trim = true): string {
 export function readInlineBody<T extends Context>(body: string, refs: readonly T[]) {
   const used = new Set<T>();
   const trailer = INLINE_TRAILER.exec(body);
-  if (!trailer) return { text: body, document: body ? [body] : [], used };
+  if (!trailer) {
+    const { text } = splitInlineTrailer(body);
+    return { text, document: text ? [text] : [], used };
+  }
   const text = body.slice(0, trailer.index);
   const document: (string | ContextRef)[] = [];
   const byKey = new Map(refs.map((ref) => [referenceKey(ref), ref]));
@@ -70,7 +73,7 @@ export function readInlineBody<T extends Context>(body: string, refs: readonly T
       used.add(ref);
       cursor = start + length;
     }
-  } catch { return { text: body, document: [body], used }; }
+  } catch { /* A malformed anchor map leaves the message's prose and existing contexts. */ }
   document.push(text.slice(cursor));
   return { text, document: joinInline(document), used };
 }

@@ -394,24 +394,23 @@ body {
    card keeps the column's, so nothing in it moves while the ring shows */
 [data-answer][data-search-hit] { outline-offset: 6px; } /* text has no padding of its own: the ring sits just outside it */
 [data-answer][data-search-hit]:not(:has(pre, table, .card-ui)) { width: fit-content; max-width: 100%; }
-/* Active working/thinking text shimmer (inspired by Orca tw-shimmer). */
-.chat-shimmer {
-  background-image: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 42%, transparent) 50%, currentColor 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer-text 2.2s linear infinite;
+/* Active working/thinking text shimmer (inspired by Orca tw-shimmer).
+ * Keep currentColor available to paint the gradient when the glyph fill is transparent. */
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .chat-shimmer {
+    background-image: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 42%, var(--ink)) 50%, currentColor 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer-text 2.2s linear infinite;
+  }
 }
 /* Smooth bottom fade on folded long user prompts. */
 .user-bubble-fade {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
 }
-@media (prefers-reduced-motion: reduce) {
-  .chat-shimmer { animation: none; background-image: none; color: inherit; -webkit-background-clip: border-box; background-clip: border-box; }
-}
-
 html, body, #root { height: 100%; }
 /* Pulling down at the top of a scroller must not reload the app. Vertical only: the drawer's sideways drags are unaffected. */
 html, body { overscroll-behavior-y: none; }
