@@ -671,8 +671,8 @@ func (n *Node) runAssistantRecovery(p *assistantProc, r *assistantTurnRecovery, 
 		n.recordRecoverySwitch(p.id, launcher, r.from.Model, r.probeFrom, next,
 			ModelRecoveryReason(r.lastResult), r.lastReset, r.triedOrder, r.from)
 	}
-	// Another model, or the same one where its endpoint has refused tool search since this process started: a new process.
-	err := assistantRecoverySend(withAssistantRecovery(ctx, r, !same || n.toolSearchStale(p)), n, p, launcher, cwd, execution)
+	// Another model, or the same one whose endpoint refused tool search or whose categories changed since start: a new process.
+	err := assistantRecoverySend(withAssistantRecovery(ctx, r, !same || n.toolSearchStale(p) || n.categoriesStale(p, cwd)), n, p, launcher, cwd, execution)
 	var pending *assistantPendingFailure
 	var currentProc *assistantProc
 	n.mu.Lock()

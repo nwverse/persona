@@ -329,7 +329,7 @@ func (s *Recordings) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb
 	lean := room.Batching >= kb.RoomBatchingLean
 	if !r.Attending() {
 		s.attendNote(e, id, func(l *kb.Live) { l.FedTo, l.Problem = nil, "" }) // turned on again: the meeting so far
-		_, withdraw := e.PhotosForRoom(id)
+		_, withdraw := writersOf(e).PhotosForRoom(id)
 		if lean && !room.Lean.CompactStartedAt.IsZero() && len(withdraw) > 0 {
 			// A compaction asked of the node holds the withdrawals too: settled here, none is started.
 			if at, held, _ := s.roomCompaction(ctx, e, id, l, r, now, false, true, s.roomRowRead(ctx, room)); held {
@@ -349,7 +349,7 @@ func (s *Recordings) roomFeed(ctx context.Context, e *kb.Engine, id string, l kb
 	if roomAskWaiting(l) {
 		return now.Add(feedBusyPoll) // an ask goes first; the batch after it
 	}
-	queued, withdraw := e.PhotosForRoom(id)
+	queued, withdraw := writersOf(e).PhotosForRoom(id)
 	if end {
 		queued = nil // none after the meeting's end
 	}

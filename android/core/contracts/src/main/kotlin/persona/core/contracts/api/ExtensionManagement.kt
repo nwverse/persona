@@ -37,6 +37,12 @@ interface ExtensionManagement : ExtensionUi, ExtensionMarkets {
     val uiEvents: Flow<persona.core.contracts.ExtensionUiEvent> get() = kotlinx.coroutines.flow.emptyFlow()
 
     /**
+     * The hub's `assistant_pages` events (#15017): the assistant's Dashboards places were kept, pinned, renamed, removed
+     * or switched off, so the places list ([ExtensionUi.uiPlaces]) is read again. None from a hub without Dashboards.
+     */
+    val placesChanged: Flow<Unit> get() = kotlinx.coroutines.flow.emptyFlow()
+
+    /**
      * Whether the hub shows source subscriptions (#2041, `source_subscriptions` in its features: they deliver to the Inbox and
      * the knowledge base): only then the entry rows show. The pages are drawn as an extension's under [SUBSCRIPTIONS_UI].
      */

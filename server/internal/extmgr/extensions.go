@@ -213,6 +213,9 @@ type extensions struct {
 	// (extension_autoupgrade.go).
 	markets  markets
 	upgrades extensionUpgrades
+	// upgradeBackups are the snapshots of data taken before automatic upgrades, held until each one is known to stay
+	// (extension_upgrade_backup.go).
+	upgradeBackups pendingBackups
 	// ops are the installs, upgrades and uninstalls in progress or just over (extension_operations.go).
 	ops extensionOps
 	// auth is the last sign-in status of the extensions that sign in (extension_auth.go).
@@ -699,30 +702,53 @@ func (ps *extensions) changed(c extension.Change) {
 }
 
 // watchUpgrade rolls an upgraded plugin back when it does not come up (only one that runs by itself or for a
-// connector that is on: a plugin started by calls is not started for this), and says whether it did and why.
+// connector that is on: a plugin started by calls is not started for this, unless it declares upgrade.health_check),
+// or when its upgrade.health check fails, and says whether it did and why. The snapshot of its data taken before an
+// automatic upgrade goes back with the old version (extension_upgrade_backup.go).
 func (ps *extensions) watchUpgrade(ctx context.Context, id string) (rolledBack bool, why string) {
+	key := ps.reg.StorageKeyOf(id)
+	p := ps.reg.Get(id)
+	to := ""
+	checks := false
+	if p != nil {
+		to = p.Record.Version
+		checks = p.Manifest.UpgradeHealthCheck()
+	}
+	defer ps.upgradeBackups.drop(key, to) // kept on disk; only the hold on this version's backup ends
 	hp := ps.get(id)
 	if hp == nil || hp.proc == nil {
 		return false, ""
 	}
 	wctx, cancel := context.WithTimeout(ctx, host.ReadyWithin+5*time.Second)
 	defer cancel()
+	onCall := hp.proc.Spec().OnCall
 	for wctx.Err() == nil {
-		state, why := hp.proc.Status()
-		switch state {
-		case host.StateRunning:
+		if ps.get(id) != hp {
 			return false, ""
-		case host.StateError:
-			ps.logf("plugin %s: the new version does not come up (%s): back to the one before", id, why)
-			if _, err := ps.reg.Rollback(ctx, id, "hub"); err != nil {
-				ps.logf("plugin %s: rollback: %v", id, err)
+		}
+		ch := hp.proc.Changes()
+		state, why := hp.proc.Status()
+		switch {
+		case state == host.StateRunning, state == host.StateStopped && checks && onCall:
+			if !checks {
 				return false, ""
 			}
-			return true, why
+			why := ps.upgradeHealth(wctx, id, hp)
+			if why == "" || ps.get(id) != hp || ctx.Err() != nil {
+				return false, ""
+			}
+			ps.logf("plugin %s: the new version fails its health check (%s): back to the one before", id, why)
+			return ps.rollBackUpgrade(ctx, id, hp, why)
+		case state == host.StateError:
+			if ps.get(id) != hp || ctx.Err() != nil {
+				return false, ""
+			}
+			ps.logf("plugin %s: the new version does not come up (%s): back to the one before", id, why)
+			return ps.rollBackUpgrade(ctx, id, hp, why)
 		}
 		select {
 		case <-wctx.Done():
-		case <-hp.proc.Changes():
+		case <-ch:
 		}
 	}
 	return false, ""
@@ -1100,10 +1126,22 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 		if ps.h != nil {
 			tz, locale = ps.h.userTZName(), string(ps.h.userLang())
 		}
+		var inboxVisibility json.RawMessage
+		if ps.h != nil && ps.h.cfg != nil {
+			visibility := ps.h.cfg.Inbox.Visibility
+			if err := validateInboxVisibilityCapabilities(visibility, p.Full.Connectors()); err != nil {
+				return extension.InitializeParams{}, err
+			}
+			inboxVisibility = inboxVisibilityForConnectors(visibility, p.Full.Connectors())
+		}
+		config, err := inboxVisibilityInitializeConfig(ps.reg.Config(p), inboxVisibility)
+		if err != nil {
+			return extension.InitializeParams{}, err
+		}
 		params := extension.InitializeParams{Hub: extension.HubInfo{Build: build, ExtensionPoints: extension.PointVersions(), Role: role, Timezone: tz,
 			Locale:       locale,
 			Capabilities: extension.HubCapabilities()}, Extension: info,
-			Config: ps.reg.Config(p), Secrets: secrets, Granted: p.Record.Granted, Active: map[string][]string{}}
+			Config: config, InboxVisibility: inboxVisibility, Secrets: secrets, Granted: p.Record.Granted, Active: map[string][]string{}}
 		if ps.h != nil && !ps.h.builtin() {
 			params.Hub.Manager = ps.h.opts.ManagerID
 		}

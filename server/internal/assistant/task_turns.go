@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,6 +151,30 @@ type turnSignal struct {
 	JudgeDown bool `json:"judge_down,omitempty"`
 }
 
+func (sig *turnSignal) matches(g superviseSignal) bool {
+	if sig == nil || sig.Kind != g.Kind {
+		return false
+	}
+	if sig.Key == g.Key {
+		return true
+	}
+	if g.Kind != sigReview || g.Recipient != "" || g.To != "" {
+		return false
+	}
+	// Older turn and outbox JSON kept the nanoseconds that the ordinary review's SQL row lost.
+	// Only equate that old key with its actual stored precision. Two distinct full event keys stay distinct.
+	old, stored := sig.Key, g.Key
+	if len(old) < len(stored) {
+		old, stored = stored, old
+	}
+	raw, ok := strings.CutPrefix(old, "review@")
+	if !ok {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && ordinaryReviewKey(at) == stored
+}
+
 // replayTurnSignal queues only the still-current, untold ledger signal. Recovery can wait on Inbox I/O while
 // another turn is taken or judged: replay must never use signal's normal path to replace that newer ledger entry.
 func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
@@ -164,6 +189,9 @@ func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
 	sig := current.Signal
 	if sig == nil || expected.Signal == nil || sig.Told != nil || *sig != *expected.Signal {
 		return
+	}
+	if s.outageHoldCoversTurn(todo, sig.Kind, sig.Key) {
+		return // already folded into an active outage hold; do not replay separately
 	}
 	// Keep the ledger lock until queued, so an obsolete replay cannot replace a newer pending signal.
 	// The digest releases its mutex before consulting or marking the turn ledger.
@@ -681,8 +709,10 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if sig := e.Signal; sig != nil && sig.Kind == g.Kind && sig.Told != nil && (sig.Key == g.Key || b.again[g.Todo]) {
-		if sig.Key != g.Key {
+	sig := e.Signal
+	match := sig.matches(g)
+	if sig != nil && sig.Kind == g.Kind && sig.Told != nil && (match || b.again[g.Todo]) {
+		if !match {
 			next := *sig // a turn handed out keeps the signal it was read with
 			next.Key = g.Key
 			e.Signal = &next
@@ -691,7 +721,7 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		}
 		return true
 	}
-	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key || sig.Handoff != g.Handoff {
+	if !match || sig.Handoff != g.Handoff {
 		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff, JudgeDown: g.JudgeDown}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
@@ -730,20 +760,31 @@ func (s *Service) turnsToldLocked(ctx context.Context, list []superviseSignal) b
 	b := &s.tasks.turns
 	changed := false
 	previous := map[string]*turnSignal{}
-	for _, g := range list {
-		if !turnSignalKind(g) {
-			continue
-		}
+	mark := func(g superviseSignal) {
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
-			old := *sig
-			previous[g.Todo] = &old
+		if sig := e.Signal; ok && sig.matches(g) && sig.Told == nil {
+			if _, saved := previous[g.Todo]; !saved {
+				old := *sig
+				previous[g.Todo] = &old
+			}
 			next, now := *sig, time.Now().UTC()
 			next.Told = &now
 			e.Signal = &next
 			b.doc.Turns[g.Todo] = e
 			changed = true
 		}
+	}
+	for _, g := range list {
+		if g.Kind == sigOutageRecovery && g.Outage != nil {
+			for _, tk := range g.Outage.TurnKeys {
+				mark(superviseSignal{Todo: g.Todo, Kind: tk.Kind, Key: tk.Key})
+			}
+			continue
+		}
+		if !turnSignalKind(g) {
+			continue
+		}
+		mark(g)
 	}
 	if !changed {
 		return true
@@ -769,18 +810,27 @@ func (s *Service) turnsUntold(ctx context.Context, list []superviseSignal) {
 		return
 	}
 	changed := false
-	for _, g := range list {
-		if !turnSignalKind(g) {
-			continue
-		}
+	unmark := func(g superviseSignal) {
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told != nil {
+		if sig := e.Signal; ok && sig.matches(g) && sig.Told != nil {
 			next := *sig
 			next.Told = nil
 			e.Signal = &next
 			b.doc.Turns[g.Todo] = e
 			changed = true
 		}
+	}
+	for _, g := range list {
+		if g.Kind == sigOutageRecovery && g.Outage != nil {
+			for _, tk := range g.Outage.TurnKeys {
+				unmark(superviseSignal{Todo: g.Todo, Kind: tk.Kind, Key: tk.Key})
+			}
+			continue
+		}
+		if !turnSignalKind(g) {
+			continue
+		}
+		unmark(g)
 	}
 	if changed {
 		s.saveTurnsLocked(ctx)

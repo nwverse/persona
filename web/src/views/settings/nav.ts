@@ -2,7 +2,8 @@
 // categories are in the left sidebar and /settings is "General"; phone width, /settings is the list (as on iOS), a category is
 // /settings?tab=… pushed over it, and Back goes back to the list. An item's page (an extension, a channel, a connector) is
 // pushed over its category's page the same way at any width, so Back steps out of it one level (#2800).
-import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
+import { registeredModules } from "../../core/module-host";
+import { enabledSettingsTabs } from "../../core/module-settings";
 import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
@@ -17,16 +18,16 @@ import {
 
 export { settingsHref } from "./href";
 
-export type CoreTab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "integrations" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
+export type CoreTab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "integrations" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "advanced" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
 /** A feature module's category (core/module-host.ts `settingsTabs`): its key, never a core one. */
 export type ModuleTab = string & { readonly moduleTab?: never };
 /** A category: one of the core's, or an enabled module's. */
 export type Tab = CoreTab | ModuleTab;
 /** The core's categories (core/module-host.ts CORE_SETTINGS_TABS names the same; nav.test.ts keeps them in step). */
-export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
+export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "advanced", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
-export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
+export type SettingsSection = "providers" | "model-config" | "translation" | "seen-rows" | AgentTab;
 /** A host-owned secondary page, not a connector ID. */
 export const SENT_SUB = "-sent";
 
@@ -63,6 +64,8 @@ export const TAB_INFO: Record<CoreTab, { label: string; icon: IconName; hint: st
   sources: { label: t("settings-nav.tab_sources"), icon: "inbox", hint: t("settings-nav.hint_sources") },
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
+  // #13398: the opt-in looks (theme color, extension theme, fonts, colored sidebar icons) live here, not in General.
+  advanced: { label: t("settings-nav.tab_advanced"), icon: "sliders", hint: t("settings-nav.hint_advanced") },
   // Temporary trials with a stable default, lossless rollback and a tracked exit (docs/web/web.md "Labs").
   // General owns permanent module switches. Put lasting advanced preferences in their owning category and
   // keep debug controls, demos and irreversible changes out of Labs.
@@ -79,7 +82,7 @@ export const TAB_INFO: Record<CoreTab, { label: string; icon: IconName; hint: st
 export type NavGroup = "assistant" | "device" | "hub" | "labs";
 export const NAV_GROUPS: { key: NavGroup; tabs: CoreTab[] }[] = [
   { key: "assistant", tabs: ["models", "persona", "prompts", "integrations", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
-  { key: "device", tabs: ["general", "notifications", "shortcuts"] },
+  { key: "device", tabs: ["general", "notifications", "shortcuts", "advanced"] },
   { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
   { key: "labs", tabs: ["labs"] },
 ];
@@ -99,7 +102,7 @@ export function tabInfo(k: Tab): { label: string; icon: IconName; hint: string }
 
 /** NAV_GROUPS with the enabled modules' categories, each after its group's own.
  *  When `integrationsV2` is false (default), hides `integrations` so legacy tabs stay unchanged.
- *  When `integrationsV2` is true, collapses `channels`, `connectors`, and `extensions` into `integrations`. */
+ *  When `integrationsV2` is true, collapses `channels`, `connectors`, `extensions`, and `sources` into `integrations`. */
 export function navGroups(integrationsV2 = false): { key: NavGroup; tabs: Tab[] }[] {
   const extra = enabledSettingsTabs();
   return NAV_GROUPS.map((g) => {
@@ -117,14 +120,15 @@ export function resolveSettingsTarget(
   sub: string | null,
   integrationsV2: boolean,
   filter?: string | null,
-): { tab: Tab; sub: string | null; filter?: IntegrationFilter } {
+  manager?: string | null,
+): { tab: Tab; sub: string | null; filter?: IntegrationFilter; manager?: string } {
   if (integrationsV2 && isLegacyIntegrationTab(tab)) {
-    const mapped = legacyToIntegrations(tab, sub);
+    const mapped = legacyToIntegrations(tab, sub, tab === "sources" ? manager : undefined);
     return { tab: "integrations", sub: mapped.sub, ...(mapped.filter ? { filter: mapped.filter } : {}) };
   }
   if (!integrationsV2 && tab === "integrations") {
     const mapped = integrationsToLegacy(sub, filter);
-    return { tab: mapped.tab, sub: mapped.sub };
+    return { tab: mapped.tab, sub: mapped.sub, ...(mapped.manager ? { manager: mapped.manager } : {}) };
   }
   return { tab, sub };
 }
@@ -139,7 +143,7 @@ export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: s
   const old = settingsTab(q.get("tab"));
   const legacy = old ? LEGACY_TABS[old] : undefined;
   const t = (legacy?.tab ?? old) as Tab;
-  if (!isCoreTab(t)) return isModuleTab(t) ? { tab: t, sub: null, section: null } : { tab: null, sub: null, section: null };
+  if (!isCoreTab(t)) return isModuleTab(t) ? { tab: t, sub: null, section: null } : { tab: null, sub: null, section: sectionOfHash(hash, "general") };
   const param = SUB[t];
   // ?tab=plugins&plugin=<id>: a link from before #1845
   const sub = old === "sent" ? SENT_SUB : param ? (q.get(param) ?? (t === "extensions" ? q.get("plugin") : null)) : null;
@@ -150,7 +154,7 @@ export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: s
 }
 
 /** Replace a legacy category URL (or path-based settings route) in place, retaining provider and manager parameters.
- *  Also performs bidirectional redirection between `integrations` and legacy `connectors`/`channels`/`extensions`
+ *  Also performs bidirectional redirection between `integrations` and legacy `connectors`/`channels`/`extensions`/`sources`
  *  according to `integrationsV2`. Pass `"loading"` while assistant state is still loading to avoid
  *  prematurely redirecting away from `/settings?tab=integrations`. */
 export function redirectLegacySettings(
@@ -168,6 +172,9 @@ export function redirectLegacySettings(
     if (pathRoute.sub) {
       const param = SUB[pathRoute.tab as Tab];
       if (param) q.set(param, pathRoute.sub);
+    }
+    if (pathRoute.manager && !q.get("manager")) {
+      q.set("manager", pathRoute.manager);
     }
   }
 
@@ -206,12 +213,13 @@ export function redirectLegacySettings(
     changed = true;
     const param = SUB[normalizedTab];
     const currentSub = param ? (q.get(param) ?? (normalizedTab === "extensions" ? q.get("plugin") : null)) : null;
-    const mapped = legacyToIntegrations(normalizedTab, currentSub);
+    const mapped = legacyToIntegrations(normalizedTab, currentSub, normalizedTab === "sources" ? q.get("manager") : undefined);
     q.set("tab", "integrations");
     q.delete("channel");
     q.delete("connector");
     q.delete("extension");
     q.delete("plugin");
+    q.delete("state");
     q.delete("purpose");
     if (mapped.sub) {
       q.set("integration", mapped.sub);
@@ -231,9 +239,11 @@ export function redirectLegacySettings(
     q.delete("connector");
     q.delete("extension");
     q.delete("plugin");
+    q.delete("state");
     q.delete("purpose");
     const targetParam = SUB[mapped.tab];
     if (mapped.sub && targetParam) q.set(targetParam, mapped.sub);
+    if (mapped.manager && !q.get("manager")) q.set("manager", mapped.manager);
   }
 
   if (!changed) return null;
@@ -245,7 +255,7 @@ function sectionOfHash(hash: string, tab: Tab): SettingsSection | null {
   const section = hash.startsWith("#settings-") ? hash.slice("#settings-".length) : "";
   if (tab === "models" && (section === "providers" || section === "model-config")) return section;
   if (tab === "agents" && (AGENT_KINDS as readonly string[]).includes(section)) return section as AgentTab;
-  if (tab === "general" && section === "translation") return "translation";
+  if (tab === "general" && (section === "translation" || section === "seen-rows")) return section;
   return null;
 }
 

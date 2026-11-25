@@ -20,7 +20,7 @@ func TestHealthIntakePageGoalKeepsCategoryColor(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%g", tc.kind, factor), func(t *testing.T) {
 				amount := float64(tc.goal) * factor
 				v := sumHealthIntake([]assistantwire.HealthIntakeRow{{Kind: tc.kind, Amount: amount, At: now}}, c, now, time.UTC, 7)
-				page := drawIntakePage(intakePageState{Kind: tc.kind, Days: 7}, c, v, waterReminderState{}, now, time.UTC, "en", 11, false)
+				page := drawIntakePage(intakePageState{Kind: tc.kind, Days: 7}, c, v, waterReminderState{}, now, time.UTC, "en", 11, false, true)
 				tile := page.Sections[0].Items[0].Tiles[0]
 				if tile.Color != tc.color || tile.Gauge.Color != tc.color || *tile.Gauge.Ratio != min(1.0, factor) || tile.Value != intakeNumber(amount) {
 					t.Fatalf("goal progress: %+v", tile)
@@ -47,7 +47,7 @@ func TestHealthIntakePageTimezoneCopyByKind(t *testing.T) {
 	} {
 		for _, kind := range []string{"water", "protein"} {
 			t.Run(string(tc.lang)+"/"+kind, func(t *testing.T) {
-				page := drawIntakePage(intakePageState{Kind: kind, Days: 7}, c, v, waterReminderState{}, now, time.UTC, tc.lang, 11, false)
+				page := drawIntakePage(intakePageState{Kind: kind, Days: 7}, c, v, waterReminderState{}, now, time.UTC, tc.lang, 11, false, true)
 				want := tc.water
 				if kind == "protein" {
 					want = tc.protein

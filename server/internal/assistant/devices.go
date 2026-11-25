@@ -64,6 +64,10 @@ type Devices interface {
 	// subscription accounts of each upstream provider are schedulable now and when the nearest one recovers.
 	// Read-only, from the manager's in-memory caches; the zero value when no pool is configured.
 	CapacitySnapshot(ctx context.Context) proto.CapacitySnapshot
+	// UsageAccounts is the merged subscription accounts with their 5 h / 7 d windows (proto.UsageAccount), for the
+	// pace-based headroom a tier's candidates are scored by (candidate_headroom.go). Read-only, from the same cache as
+	// CapacitySnapshot; nil when nothing is known.
+	UsageAccounts(ctx context.Context) []proto.UsageAccount
 	// GatewayRetryAt uses a bound, complete gateway inventory with fresh account observations. Zero means no hold.
 	GatewayRetryAt(source, provider string, now time.Time) time.Time
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.

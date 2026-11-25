@@ -264,6 +264,11 @@ object MachineManagementModule {
                     else -> null
                 }
             }
+        // Dashboards (#15017): the hub's assistant_pages event says the places list changed; the shell reads it again.
+        override val placesChanged: Flow<Unit> = (application as PersonaApp).hub
+            .flatMapLatest { hub -> hub?.connection?.events ?: emptyFlow() }
+            .filter { it === persona.core.contracts.AssistantPagesEvent }
+            .map { }
         // Source subscriptions (#2041): entry rows once the hub says they deliver.
         override val subscriptionsAvailable: Flow<Boolean> = features.map { "source_subscriptions" in it }.distinctUntilChanged()
         override val inboxSourcesAvailable: Flow<Boolean> = features.map { "inbox_sources" in it }.distinctUntilChanged()
