@@ -2041,6 +2041,13 @@ Clients report their errors and crashes only while `features` has `error_reports
 - **What clients put in**: no user content (message text, mail, documents, prompts, notification bodies, file names the user chose), no device ids, account, hub address or machine names; breadcrumbs carry short code-chosen text (a screen's name, a route pattern). The manager scrubs again whatever slips through.
 - **Keeping and retrying**: a client keeps reports locally until it gets a 2xx (a crash is written before the process dies and sent at the next start with `previous_launch`), at most 50 for at most 7 days, and makes each report's `id` once so a retry is recognized.
 
+## Counts view (#15512)
+
+The counts people see (badges, tab numbers, switcher counts) are to come from one view per manager, `CountsView` in
+`schema/wire/counts.schema.json`, which the hub relays as it is. The view, its count ids, how an id may change and the
+clients' fallbacks are in [counts.md](counts.md). Nothing sends it yet: its WebSocket message, feature and roster field
+get their rows here when the manager and the hub start sending it.
+
 ## REST (App → hub)
 
 | Method | Path | Notes |
