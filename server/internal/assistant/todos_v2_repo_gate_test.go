@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
-	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 )
 
 func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
@@ -207,7 +206,7 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 		}
 	}
 
-	decodeGate := func(row map[string]any) *projection.RepoGate {
+	decodeGate := func(row map[string]any) *repoGate {
 		t.Helper()
 		raw, ok := row["repo_gate"]
 		if !ok {
@@ -217,7 +216,7 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var g projection.RepoGate
+		var g repoGate
 		if err := json.Unmarshal(b, &g); err != nil {
 			t.Fatal(err)
 		}
@@ -239,8 +238,8 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 	setTodosV2(true, false)
 	enabled := getTodosRaw()
 
-	wantBlocked := &projection.RepoGate{
-		State:          projection.RepoGateBlockedCI,
+	wantBlocked := &repoGate{
+		State:          repoGateBlockedCI,
 		TargetCount:    2,
 		ReadyCount:     1,
 		ReferenceCount: 1,
@@ -255,8 +254,8 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 		t.Fatalf("blocked todo item repo_gate = %+v, want %+v", got, wantBlocked)
 	}
 
-	wantReady := &projection.RepoGate{
-		State:          projection.RepoGateReady,
+	wantReady := &repoGate{
+		State:          repoGateReady,
 		TargetCount:    2,
 		ReadyCount:     2,
 		ReferenceCount: 1,
@@ -266,8 +265,8 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 		t.Fatalf("ready todo repo_gate = %+v, want %+v", got, wantReady)
 	}
 
-	wantRefOnly := &projection.RepoGate{
-		State:          projection.RepoGateReferenceOnly,
+	wantRefOnly := &repoGate{
+		State:          repoGateReferenceOnly,
 		TargetCount:    0,
 		ReadyCount:     0,
 		ReferenceCount: 1,
@@ -364,8 +363,8 @@ func TestTodosV2RepoGateUnlinkedTargetRepoAndPrefixFallback(t *testing.T) {
 	}
 	var payload struct {
 		Todos []struct {
-			ID       string               `json:"id"`
-			RepoGate *projection.RepoGate `json:"repo_gate"`
+			ID       string    `json:"id"`
+			RepoGate *repoGate `json:"repo_gate"`
 		} `json:"todos"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
@@ -374,8 +373,8 @@ func TestTodosV2RepoGateUnlinkedTargetRepoAndPrefixFallback(t *testing.T) {
 	if len(payload.Todos) != 1 {
 		t.Fatalf("got %d todos, want 1", len(payload.Todos))
 	}
-	want := &projection.RepoGate{
-		State:          projection.RepoGateMissingPR,
+	want := &repoGate{
+		State:          repoGateMissingPR,
 		TargetCount:    2,
 		ReadyCount:     1,
 		ReferenceCount: 0,
