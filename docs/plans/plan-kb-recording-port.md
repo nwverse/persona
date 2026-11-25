@@ -72,7 +72,7 @@ the code differed from this plan and from what PR 3 expected of PR 4, the code w
   prune), `recording_title.go` (the live title round, the rename), `transcription.go` (`TranscriptionUpdate`,
   `HubRecordings`) and `hub_segments.go` (`HubTranscriptPut`, the repair, `RecordOf`), into
   `server/internal/modules/recording/writers`, bodies unchanged (the pull request shows the comparison).
-  `internal/kb` lost 2,194 non-test lines, `recordingwire` gained 317, both Core: a net 1,876 out of Core, against the
+  `internal/kb` lost 2,189 non-test lines, `recordingwire` gained 321, both Core: a net 1,867 out of Core, against the
   estimate of about 2,580 in section 6.
 - **`echo.go` did not move.** The echo rule is applied by the upload's cleaner (`cleanUpload`), which Core's track
   recordings call as `kb.CleanRecordingUpload` with no engine (`server/internal/assistant/space_recordings.go`), so it
@@ -99,7 +99,8 @@ the code differed from this plan and from what PR 3 expected of PR 4, the code w
   name are the hub transcript's (`HubTranscriptLocked`, `RenderTranscript`, `WriteDurable`), the photo delete's
   (`PurgeSearch`), the title round's (`Deferred`: the model client's "paused" and "not set up" errors are not a
   contract's) and the audio state's (`Provider`).
-- **The photo book's stored types are the contract's** (`recordingwire.PhotoBook`, `StoredPhoto`, same JSON), and
+- **The photo book's stored types are the contract's** (`recordingwire.PhotoBook`, `StoredPhoto`, same JSON; a
+  photo's id is the named type `recordingwire.PhotoID` on them and on `Photo`, `PhotoRef` and `PhotoUpload`), and
   the span arithmetic (`UnionSpans`, `GapsIn`, the sample conversions; `recordingwire/spans.go`), `SettleTranscription`,
   `CleanLive`, `MeetingLines` and `RecordChars` are rules of `recordingwire`, used by both sides.
 - **The provider**: its rounds and audio touch points are the module's code now but `SummarizeRecordings`
@@ -513,7 +514,7 @@ before and after; plus the script checks below).
 | 1 | done: `recordingwire` and movable types (#15022, #15086) | | 0 net (contracts count as Core) | | |
 | 2 | **Reader/writer split and the write-side port.** Split the mixed files by function into reader, kept-write and writer files (a move inside the package); add `Provider` with a no-op value and gate the lanes, summarise and after-prune on it; the audio hook; a Core delete route; the derived `paused` response field; the new module-off checks | `recordings.go`, `minutes.go`, `day_recap.go`, `day_recap_write.go`, `recording_day.go`, `recording_photos.go`, `recording_commit.go`, `recording_title.go`, `recording_space.go`, `live.go`, `meeting.go`, `transcription.go`, `hub_segments.go` (split only); `assistant/kb.go`, `kb_lanes.go`; `modules/recording/layer.go` | 0 (adds about 250 to 350 in Core: the port types, the no-op, the route, the paused field; estimate) | the module-off test is new; no test moves | `assistant/kb_lanes.go`, `kb.go`; the split touches the files PRs 3 to 5 move |
 | 3 | **done**: the minutes and day-recap writers, into `server/internal/modules/recording/writers`, behind the storage port `recordingwire.Core` (32 methods; see "PR 3 has landed" at the top) | `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`, `day_recap.go`, `day_recap_write.go` (moved whole; the declarations readers name stayed in the `_read.go` and `_keep.go` files) | about 3,570 out of `internal/kb`; about 500 into `recordingwire` (Core) | the minutes and day-recap tests and their prompt goldens, and the tests of other files that ran the minutes round; `internal/kb` keeps the reader, trim and module-off tests with minutes written as files | the port is the one PR 4 and PR 5 extend |
-| 4 | **done**: photos, audio, titles, transcription, the hub's transcript (see "PR 4 has landed" at the top; `echo.go` stayed) | `recording_photos.go` W side, `recording_audio.go`, `recording_title.go` W side, `transcription.go` W side, `hub_segments.go` W side | estimated about 2,580 (709 + 940 + 237 + 264 + 247 + 191 = 2,588, less declarations); measured 2,194 out of `internal/kb`, 317 into `recordingwire`, a net 1,876 | `recording_photos_test.go`, `recording_audio_test.go`, `recording_title_test.go`, `transcription*_test.go`, `hub_segments_test.go`, `echo_test.go`, `recordings_echo_test.go` | the audio socket and `meeting_audio.go` in the module; decide the audio `recFilesMu` read-lock wrapper (section 4) |
+| 4 | **done**: photos, audio, titles, transcription, the hub's transcript (see "PR 4 has landed" at the top; `echo.go` stayed) | `recording_photos.go` W side, `recording_audio.go`, `recording_title.go` W side, `transcription.go` W side, `hub_segments.go` W side | estimated about 2,580 (709 + 940 + 237 + 264 + 247 + 191 = 2,588, less declarations); measured 2,189 out of `internal/kb`, 321 into `recordingwire`, a net 1,867 | `recording_photos_test.go`, `recording_audio_test.go`, `recording_title_test.go`, `transcription*_test.go`, `hub_segments_test.go`, `echo_test.go`, `recordings_echo_test.go` | the audio socket and `meeting_audio.go` in the module; decide the audio `recFilesMu` read-lock wrapper (section 4) |
 | 5 | The store's write half and the last imports | `recordings.go` W side (608), `recording_day.go` W side (472), `live.go` (708), `meeting.go` W side (254), `meeting_material.go` (334), `recording_commit.go` W side (34), `recording_space.go` (3), `recording_upload_rest.go` (124) and the decision on `echo.go` (180); the module's imports of `internal/kb` replaced by the contract | about 2,400 (2,413, less declarations) | `recordings_test.go`, `live_test.go`, `meeting*_test.go`; kb keeps black-box tests with a fake provider and the reader/commit/retention tests | `store.go`, `edit.go`; the `liveMu`/`meetMu` order test |
 
 PRs 3 and 4 are independent after 2 and may run in parallel; PR 5 comes last. After each, the Core reader/K code stays in the
@@ -556,9 +557,9 @@ so the Core side of the move is larger than estimated below: of the five files' 
 about 500 lines came back as Core in `recordingwire` (the port's interfaces, the rules, the transitional provider
 part) and about 110 as the adapter in `internal/kb`. PRs 4 and 5 extend the same port; expect a similar ratio.
 
-**After PR 4 (measured).** The port is 40 methods. Of the 2,194 lines that left `internal/kb`, 317 came back as Core
+**After PR 4 (measured).** The port is 40 methods. Of the 2,189 lines that left `internal/kb`, 321 came back as Core
 in `recordingwire` (the photo book's types, the span arithmetic and four more rules, the port's ten new methods, the
-provider), so PRs 3 and 4 together took 4,836 net lines out of Core (2,960 and 1,876). What is still in
+provider), so PRs 3 and 4 together took 4,827 net lines out of Core (2,960 and 1,867). What is still in
 `internal/kb` for PR 5 is the files of its row in section 6.
 
 **Totals (estimates marked).** First version: about 10,000 to 10,500 net (11,500 lines leaving, 12,331 of tests moving).
