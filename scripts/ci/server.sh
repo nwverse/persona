@@ -9,6 +9,17 @@ case "$lane" in all|node|managers|other|build|core-node|core-managers|core-other
 GOFLAGS=$(sh scripts/test/go_trimpath.sh)
 export GOFLAGS
 
+# Deployment verification adapter only: focused original-8583d8f5 Lark/KB tests.
+# Production source is unchanged; the one _test.go helper rename only enables compilation.
+if [ "$lane" = other ]; then
+  echo 'EIGHTH_FOCUSED_LARK_VERIFICATION source=8583d8f5033846d6442ef330a6ac6c830a39e858 race=true'
+  ci_run 'Lark module and sync race tests' 600 bash -c 'cd server && go test -race -count=1 -timeout=5m ./internal/modules/lark/... ./internal/larksyncwire/...'
+  ci_run 'LarkSync scheduling and sender backfill race tests' 600 bash -c 'cd server && go test -race -count=1 -timeout=5m ./internal/extmgr -run TestLarkSync'
+  ci_run 'Knowledge-base race tests including dedupe and repair' 600 bash -c 'cd server && go test -race -count=1 -timeout=5m ./internal/kb/...'
+  ci_run 'Assistant knowledge-base integration race tests' 600 bash -c 'cd server && go test -race -count=1 -timeout=5m ./internal/assistant -run "TestKB|TestArchive"'
+  exit 0
+fi
+
 if [ "$lane" = all ] || [ "$lane" = build ]; then
   ci_run 'Go formatting' 120 python3 scripts/ci/gofmt.py server sdk/go
   ci_run 'Server vet' 600 bash -c 'cd server && go vet -ldflags= ./...'
