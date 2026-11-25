@@ -409,7 +409,7 @@ func (a *gatewayAligner) alignArchivedLine(id, chatName string, gl gatewayLine) 
 		a.pair(id, match)
 		return true
 	}
-	return a.withinFormatted(gw, src)
+	return false
 }
 
 // The additional format-only match is deliberately stricter than the legacy fingerprint: both exact receipt
@@ -553,7 +553,7 @@ func (a *gatewayAligner) withinArchived(gw, chatName string, src gatewayLine) bo
 			}
 		}
 	}
-	return false
+	return a.withinFormatted(gw, src)
 }
 
 // parseArchiveLine parses one formatted dayLine (from dayLines) into a gatewayLine for alignment.
