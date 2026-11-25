@@ -220,7 +220,6 @@ func (h larkHost) StartRun(ctx context.Context, rt assistantwire.ChatResolved, t
 
 func (h larkHost) Hello(ctx context.Context) Hello        { return h.s.hello(ctx) }
 func (h larkHost) AnswerLanguage(locale string) string    { return answerLanguage(locale) }
-func (h larkHost) ListSep(l i18n.Lang) string             { return listSep(l) }
 func (h larkHost) NoReplyCommand(text string) bool        { return noReplyCommand(text) }
 func (h larkHost) FinalStatus(status string) bool         { return finalStatus(status) }
 func (h larkHost) ChatRefused(err error) bool             { return chatRefused(err) }

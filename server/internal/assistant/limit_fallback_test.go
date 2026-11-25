@@ -432,9 +432,16 @@ func TestLimitFallbackRestoreReconnect(t *testing.T) {
 			r.f.nodes["assistant.segment.check"] = check
 			r.f.mu.Unlock()
 			if after == "owner pick" {
-				if err := r.d.SetConversationPick(ctx, "server", id, item.ExpectedEpoch, "backup", "owner-model", ""); err != nil {
-					t.Fatal(err)
-				}
+				waitFor(t, "the owner's pick to commit", func() bool {
+					err := r.d.SetConversationPick(ctx, "server", id, item.ExpectedEpoch, "backup", "owner-model", "")
+					if errors.Is(err, db.ErrConversationSwitchBusy) {
+						return false // NOWAIT can overlap the fallback's final logical sweep.
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					return true
+				})
 			}
 			if after == "unregistered launcher" {
 				r.f.answerNode("assistant.segment.check", func(string, json.RawMessage) (any, error) { return segmentTarget{}, nil })

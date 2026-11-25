@@ -19634,6 +19634,29 @@
         }
       }
     },
+    "%lld queued [Queue Strip]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld queued"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "キュー%lld件"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排队中 %lld 条"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
     "%lld queued · %@ will handle them in order [Queue Strip]" : {
       "localizations" : {
         "en" : {
@@ -35365,6 +35388,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "对话空闲后送达"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Arrives with the next message [Queue Strip]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrives with the next message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "次のメッセージと一緒に届きます"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随下一轮消息送达"
           }
         }
       },
@@ -95373,6 +95419,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "第 %1$lld 条：%2$@，对话空闲后送达"
+          }
+        }
+      },
+      "extractionState" : "manual"
+    },
+    "Item %lld: %@, arrives with the next message [Queue Strip]" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Item %1$lld: %2$@, arrives with the next message"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld件目：%2$@（次のメッセージと一緒に届きます）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %1$lld 条：%2$@，随下一轮消息送达"
           }
         }
       },

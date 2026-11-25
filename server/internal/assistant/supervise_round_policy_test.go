@@ -179,15 +179,21 @@ func roundMessage(lang string) string {
 var roundScanTools = append(slices.Clone(toolNames), "lark_search", "larkcli_search", "urgent_call", "lark_chats", "lark_messages")
 
 // namedTools are the tools of roundScanTools text names, quoted or bare, each once in the order it first names them.
+// The page tool (pages_tool.go) is named only quoted or with one of its actions: "page" alone is an English word.
 func namedTools(text string) []string {
 	var named []string
 	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]*`).FindAllString(text, -1) {
-		if slices.Contains(roundScanTools, w) && !slices.Contains(named, w) {
+		if w != pageToolName && slices.Contains(roundScanTools, w) && !slices.Contains(named, w) {
 			named = append(named, w)
 		}
 	}
+	if pageToolMention.MatchString(text) {
+		named = append(named, pageToolName)
+	}
 	return named
 }
+
+var pageToolMention = regexp.MustCompile("`page`|\\bpage (create|update|get|list|remove)\\b")
 
 // roundPassingMentions are the tools a round does not list that what it reads besides its own message still names, by
 // where: the description (and schema) of a tool it lists, or "context", the background supervisor's <persona-context>.

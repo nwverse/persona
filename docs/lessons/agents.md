@@ -176,6 +176,13 @@ callers the node's reported absolute executable as data for the existing scoped 
 unavailable metadata or unknown capabilities omit unverified hints, not the assignment.
 Keep the existing project context, approval snapshot and attachment order intact.
 
+Read that executable from the `node.info` the node's connection began with, as the devices keep it
+(`devices.Summary.Executable`), not from a fresh call (#14446). A node works `node.info` out whole on every call, Claude
+Code's version from an interactive login shell included (`claudeProbe`). On a computer whose shell took about 2.4 s to
+start, while `claude --version` itself took 12 ms, every fresh call outlasted the one-second bound, and every handoff
+there lost its terminal entry. A value that cannot change while the connection lasts needs no round trip: ask the node,
+within the bound, only when the devices name none.
+
 A handoff note that reads as an instruction gets followed (#12995). A Codex worker at high reasoning effort read
 "use the terminal entry below for a separate session on this assignment" as a step of its task: it handed its whole
 assignment to a child in the same checkout, telling it the parent would coordinate and verify, then polled the

@@ -58,6 +58,8 @@ SKIP_PARTS = {"PersonaTests", "PersonaUITests", "PersonaWatchTests", "Tests", "v
 DECLARATION = re.compile(
     r"^((?:(?:@\w+(?:\([^)\n]*\))?|public|internal|fileprivate|private|final|nonisolated|indirect)\s+)*)"
     r"(?:struct|class|enum|protocol|actor|typealias)\s+([A-Z]\w*)", re.M)
+# A nested private type also shadows a module symbol inside its file; module symbol collection stays top-level only.
+LOCAL_DECLARATION = re.compile(r"^\s*" + DECLARATION.pattern.removeprefix("^"), re.M)
 
 
 def declared(code):
@@ -139,20 +141,28 @@ def owner(rel, root=ROOT):
 
 
 def symbols(files):
-    """{module: set of type names} declared at the top level of each module's files."""
+    """{module: set of type names} declared only by that module, not ambiguously by the core too."""
     out = {m: set() for m in MODULES}
+    core = set()
     for rel in files:
+        names = declared(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace")))
         module = owner(rel)
         if module:
-            out[module].update(declared(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace"))))
+            out[module].update(names)
+        else:
+            core.update(names)
+    for names in out.values():
+        names.difference_update(core)
     return out
 
 
 def references(src, syms):
-    """(module, line, symbol) for each reference to a module's type in one Swift file."""
+    """(module, line, symbol) for each unambiguous reference to a module's type in one Swift file."""
     code = blank(src)
+    local = {name for _, name in LOCAL_DECLARATION.findall(code)}
     found = []
     for module, names in syms.items():
+        names = names - local
         if not names:
             continue
         pattern = re.compile(r"(?<![\w.])(?:" + "|".join(sorted(map(re.escape, names))) + r")\b")
@@ -230,6 +240,8 @@ class AppleModuleRefsTests(unittest.TestCase):
         self.assertEqual(references("MetaGlasses.shared.configure()", syms), [("glasses", 1, "MetaGlasses")])
         self.assertEqual(references("x\n.sheet { GlassesCaptureSheet { add($0) } }", syms), [("glasses", 2, "GlassesCaptureSheet")])
         self.assertEqual(references("extension MetaGlasses {}", syms), [("glasses", 1, "MetaGlasses")])
+        self.assertEqual(references("private final class MetaGlasses {}\nMetaGlasses()", syms), [])
+        self.assertEqual(references("struct Outer {\n private final class MetaGlasses {}\n func f() { MetaGlasses() }\n}", syms), [])
         self.assertEqual(references("// MetaGlasses.shared\n/* GlassesCaptureSheet */", syms), [])
         self.assertEqual(references('let s = "MetaGlasses"\nlet t = String(localized: "Glasses Photo")', syms), [])
         self.assertEqual(references('let s = #"MetaGlasses"#\nlet m = """\nMetaGlasses\n"""', syms), [])
@@ -241,6 +253,15 @@ class AppleModuleRefsTests(unittest.TestCase):
         src = ("nonisolated struct GlassesError: Error {}\n@Observable\n@MainActor\nfinal class MetaGlasses {\n"
                "    enum Inner {}\n}\nprivate struct Helper {}\n// struct Commented {}\n")
         self.assertEqual(declared(blank(src)), ["GlassesError", "MetaGlasses"])  # a private type is the file's own
+
+    def test_module_symbols_do_not_alias_core_types(self):
+        files = list(swift_files())
+        core = set()
+        for rel in files:
+            if not owner(rel):
+                core.update(declared(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace"))))
+        for module, names in symbols(files).items():
+            self.assertFalse(core & names, f"{module} aliases core types: {sorted(core & names)}")
 
     def test_compatibility_symlink_keeps_the_shared_declaration_in_core(self):
         # Persona Link shares the core's migration source, not a second ScreenShare declaration.

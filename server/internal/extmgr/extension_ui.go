@@ -512,11 +512,17 @@ func (h *Manager) extensionUIRoutes(api *http.ServeMux) {
 				base = gw.base
 			}
 		}
-		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base)))})
+		places := h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base))
+		places = append(places, h.pagesPlaces(r, placement)...) // the assistant's pages, after the extensions' own (pages_hook.go)
+		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, places)})
 	})
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/ui/{ui}", func(w http.ResponseWriter, r *http.Request) {
 		if principalOf(r.Context()).Role != roleFull {
 			writeExtensionResponseErr(w, r, http.StatusForbidden, i18n.ErrEnglish("extension-status.read_only_device"))
+			return
+		}
+		if r.PathValue("id") == PagesExtension {
+			h.pagesUI(w, r) // the assistant's pages, never an extension's process
 			return
 		}
 		var in uiRequest

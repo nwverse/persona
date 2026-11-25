@@ -311,6 +311,22 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "desktop/src/connect-input.ts": {
+      "reason": "Exact legacy pairing URL scheme accepted by existing desktop sign-in input.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "desktop/src/setup.js": {
+      "reason": "Exact legacy pairing URL scheme accepted by the desktop setup input compatibility parser.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "desktop/scripts/link-real-common.mjs": {
       "reason": "Receipt redaction retains the exact legacy pairing URL scheme and environment prefix accepted by existing clients.",
       "tokens": [

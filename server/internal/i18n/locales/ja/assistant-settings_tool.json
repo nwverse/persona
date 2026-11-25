@@ -1,4 +1,5 @@
 {
+  "title_dashboards": "Persona にダッシュボードを作らせる",
   "title_modules": "内蔵モジュール",
   "change_modules": "内蔵モジュール：{before} → {after}。次回の manager 起動時に適用され、実行中のプロセスは変わりません。",
   "modules_unchanged": "内蔵モジュールの設定は変更されていません。",
