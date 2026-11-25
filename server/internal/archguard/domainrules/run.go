@@ -108,6 +108,11 @@ func Run(pkgs []*Pkg, idx Index, scope string) ([]Finding, Stats, error) {
 	}
 	var all []Finding
 	all = append(all, Layers(pkgs, idx)...)
+	var ids findings
+	if err := bareIDs(&ids, pkgs, idx); err != nil {
+		return nil, st, err
+	}
+	all = append(all, ids.list...)
 	for _, p := range pkgs {
 		if p.decls != nil {
 			all = append(all, Core(p, idx)...)
@@ -165,7 +170,7 @@ func Strict(rule string) bool { return strict(rule) }
 // strict are the rules that take no count: what they report fails at once, frozen lists aside.
 func strict(rule string) bool {
 	switch rule {
-	case "core-hook", "core-importers", "out-rules-import", "adapter-no-application", "adapter-import":
+	case "core-hook", "core-importers", "out-rules-import", "adapter-no-application", "adapter-import", "contract-bare-id":
 		return true
 	}
 	return strings.HasPrefix(rule, "layer-")
@@ -458,12 +463,20 @@ func Check(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listRoot, _, err := moduleRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rel, err := filepath.Rel(root, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	scope := filepath.ToSlash(rel)
-	lists, err := ReadLists(filepath.Join(root, "internal", "archguard", "testdata"))
+	lists, err := ReadLists(filepath.Join(listRoot, "internal", "archguard", "testdata"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,7 +484,7 @@ func Check(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx := NewIndex(module, pkgs, lists.Contracts)
+	idx := NewIndex(module, pkgs, lists.Contracts).WithBareIDs(lists.BareIDs)
 	if p := idx.pkg(module + "/" + scope); p == nil || p.Layer == "" {
 		t.Fatalf("%s declares no layer: the hook runs in a package whose package comment has a //persona:layer line", scope)
 	}

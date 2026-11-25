@@ -37,3 +37,24 @@ const (
 	SourceHub                = recordingwire.SourceHub
 	SourceDevice             = recordingwire.SourceDevice
 )
+
+// Re-exported from recordingwire.
+var (
+	ErrHubTranscribes     = recordingwire.ErrHubTranscribes
+	ErrNotHub             = recordingwire.ErrNotHub
+	ErrTranscriptionFinal = recordingwire.ErrTranscriptionFinal
+	ErrAudioFull          = recordingwire.ErrAudioFull
+	ErrBadAudio           = recordingwire.ErrBadAudio
+)
+
+// TimelineRole is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type TimelineRole = recordingwire.TimelineRole
+
+// Timeline is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type Timeline = recordingwire.Timeline
+
+// TranscriptionView is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type TranscriptionView = recordingwire.TranscriptionView
+
+// hubTranscription is r's hub-mode transcription, nil when r is not transcribed on the hub.
+func hubTranscription(r *Recording) *MeetingTranscription { return recordingwire.HubTranscription(r) }

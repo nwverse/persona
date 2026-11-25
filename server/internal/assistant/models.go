@@ -512,6 +512,9 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 		}
 		out = append(out, p)
 	}
+	if p, ok := s.claudeDesktopProvider(ctx, s.zshrcLaunchers(ctx, false), out); ok {
+		out = append(out, p) // Agents' only (models_desktop.go)
+	}
 	for _, p := range s.voicePlugins(ctx) {
 		models := make([]proto.ProviderModel, len(p.Models))
 		for i, m := range p.Models {

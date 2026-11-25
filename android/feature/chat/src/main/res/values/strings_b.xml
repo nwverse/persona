@@ -73,7 +73,9 @@
     <string name="chat_chrome_rename_text">The tab name syncs to herdr. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="chat_chrome_rename_text_tern">The tab name syncs to Tern. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
     <string name="chat_chrome_rename_text_rex">The tab name syncs to Rex. The session name uses Claude\'s /rename, so claude --resume on the Mac shows it too.</string>
+    <string name="chat_chrome_rename_text_unified">Updates the herdr tab and, where supported, the CLI session name.</string>
     <string name="chat_chrome_save">Save</string>
+    <string name="chat_chrome_name">Name</string>
     <string name="chat_chrome_tab_name">Tab name (herdr tab)</string>
     <string name="chat_chrome_tab_name_tern">Tab name (Tern tab)</string>
     <string name="chat_chrome_tab_name_rex">Tab name (Rex tab)</string>
@@ -159,6 +161,7 @@
     <string name="chat_request_secret_run_commands">Commands, run in order</string>
     <string name="chat_request_secret_run_password">Password</string>
     <string name="chat_request_secret_run_note">Used once, never saved. The assistant never sees it.</string>
+    <string name="chat_request_secret_run_env_warning">Warning: every listed command receives your typed password directly in PERSONA_SECRET. Encoded output may evade redaction.</string>
     <string name="chat_request_secret_run_run">Run</string>
     <string name="chat_request_secret_run_decline">Decline</string>
     <string name="chat_secret_handoff_always">Always allow</string>

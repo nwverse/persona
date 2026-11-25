@@ -138,6 +138,26 @@ describe("QueuePanel row actions", () => {
     for (const r of rows()) expect(r.querySelector("button")).toBeNull();
     expect(host.querySelector("[data-queue-explain]")).toBeNull();
   });
+
+  it("renders queued terminal agy follow-ups with Send now and no edit actions (#14871)", async () => {
+    vi.mocked(api).mockResolvedValue({});
+    const agy = { ...session, agent: "agy", queued: ["Check the linter..."] } as unknown as Session;
+    const candidate = {
+      id: "c1",
+      raw: "Check the linter output carefully",
+      images: [{ mime: "image/png", data: "AAAA" }],
+      before: [],
+    };
+    render(<QueuePanel session={agy} draftKey="qp-agy" canEdit pending={[candidate]} />);
+    expect(texts()).toEqual(["Check the linter..."]);
+    expect(rows()[0].querySelector("[data-queue-edit]")).toBeNull();
+    expect(rows()[0].querySelector("[data-queue-delete]")).toBeNull();
+    expect(rows()[0].querySelector("[data-queue-photo-thumb]")).not.toBeNull();
+    const send = within(0, "[data-send-now]");
+    click(send);
+    expect(calls()).toEqual([["/sessions/m/s/queue/send-now", {}]]);
+    await settle();
+  });
 });
 
 describe("QueuePanel reorder", () => {

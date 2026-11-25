@@ -1,6 +1,6 @@
 # Plan: a recording port in the knowledge base (#13407)
 
-Status: PRs 1 to 3 have landed; PRs 4 and 5 are open. First written 2026-11-25 on `origin/main` at 4f5ff696c; revised the same day
+Status: PRs 1 to 5 have landed; the series is complete (final totals in section 7). First written 2026-11-25 on `origin/main` at 4f5ff696c; revised the same day
 on `origin/main` at 06f0bc7db (every line number and count below is from that commit unless it says otherwise).
 Audience: maintainers of the server core and of the `recording` module.
 
@@ -64,6 +64,125 @@ led there and the result:
   (the audio writers become the module's) and, as the photo and title writers arrive, five of the eight
   `MinutesFromCore` methods. `RepairDayRecap`, `RebaseRecap` and `PruneRecapNotes` go with the upload in PR 5.
 
+**PR 4 has landed** (the photo intake, the audio, title and hub-transcript writers, behind the same port). Where
+the code differed from this plan and from what PR 3 expected of PR 4, the code was followed:
+
+- **What moved**: `recording_photos.go` (the intake, the room's bookkeeping, the photo lists), `recording_audio.go`
+  (whole: the chunk files, the socket's writer, the gap upload, the final pass's reads, the drop, the sweep after a
+  prune), `recording_title.go` (the live title round, the rename), `transcription.go` (`TranscriptionUpdate`,
+  `HubRecordings`) and `hub_segments.go` (`HubTranscriptPut`, the repair, `RecordOf`), into
+  `server/internal/modules/recording/writers`, bodies unchanged (the pull request shows the comparison).
+  `internal/kb` lost 2,189 non-test lines, `recordingwire` gained 321, both Core: a net 1,867 out of Core, against the
+  estimate of about 2,580 in section 6.
+- **`echo.go` did not move.** The echo rule is applied by the upload's cleaner (`cleanUpload`), which Core's track
+  recordings call as `kb.CleanRecordingUpload` with no engine (`server/internal/assistant/space_recordings.go`), so it
+  cannot go through the provider, and it imports `golang.org/x/text`, so it cannot be a rule of the contract (contracts
+  import the standard library and other contracts only). It goes with the upload in PR 5, or stays Core as a rule of
+  both sides; PR 5 decides.
+- **The upload's part of `transcription.go` and `recording_title.go` stayed** (`putTranscriptionFields`,
+  `transcriptionOf`, `putNamed`, the summary round's `titleLine`: `recording_upload_rest.go` in `internal/kb`, 124
+  lines, until PR 5). Their callers are the upload and the summary round, PR 5's.
+- **The audio writers' state is the module's.** `audioMapMu`, the map and each recording's `audioRec.mu` left
+  `kb.Store` (`audioState`, `server/internal/modules/recording/writers/shim.go`). It is one per store, not per engine:
+  the manager makes a new engine over the same store when its settings change, the module hooks it with new writers,
+  and those take the state of the writers the store had (`Writer.Provider`), so that Core's retention hook for audio
+  (`AudioDropped`, `AudioClosed`, section 3.3) reaches the recording an open socket writes. With the module off there
+  is no state and the hook is the no-op, as before. The order is unchanged: `recMu` → `meetMu` → `liveMu` → audio
+  rec mutex → `recFilesMu` → `metaMu`.
+- **The port is 40 methods** (it was 32): `Reader` 17, `Writer` 23. Added: `Tombstoned`, `HubTranscriptLocked`,
+  `RenderTranscript` (read); `WriteDurable`, `PutPhotoBook`, `PutPhotoText`, `UpdateMeetingLocked`, `PurgeSearch`,
+  `Deferred`, `Provider` (write). Removed: `DropAudio` (the audio writers are the module's) and `PhotoTexts` (the
+  photo book is the contract's type now, so the module reads the words off it). `Locks` gained `Meeting` and
+  `FilesRead`, the read side of the files lock an audio append holds (section 4: the port hands out the lock, there
+  is no `AudioAppend` wrapper, so an append costs what it did). The audio path needed no method: `File` gained
+  `DirAttachments`, and the writers name their files in it. PR 3 expected about five additions; the five it did not
+  name are the hub transcript's (`HubTranscriptLocked`, `RenderTranscript`, `WriteDurable`), the photo delete's
+  (`PurgeSearch`), the title round's (`Deferred`: the model client's "paused" and "not set up" errors are not a
+  contract's) and the audio state's (`Provider`).
+- **The photo book's stored types are the contract's** (`recordingwire.PhotoBook`, `StoredPhoto`, same JSON; a
+  photo's id is the named type `recordingwire.PhotoID` on them and on `Photo`, `PhotoRef` and `PhotoUpload`), and
+  the span arithmetic (`UnionSpans`, `GapsIn`, the sample conversions; `recordingwire/spans.go`), `SettleTranscription`,
+  `CleanLive`, `MeetingLines` and `RecordChars` are rules of `recordingwire`, used by both sides.
+- **The provider**: its rounds and audio touch points are the module's code now but `SummarizeRecordings`
+  (`WritersInCore`). The transitional part is `UploadFromCore`, six methods: `RepairDayRecap`, `RebaseRecap`,
+  `PruneRecapNotes` (from PR 3) and `AudioGaps`, `AudioHeldEnd`, `TitleDue` (new: the upload reads the audio held and
+  whether a live title is due). `PutMinutes`, `RenderMinutes`, `RemakeMinutes`, `QuietMinutes` and
+  `DropOverviewPhotos` are gone with the photo writers. All six go with the upload in PR 5.
+- **PR 5** moves what is left: the upload and the appends (`recordings.go`, `recording_day.go`), `live.go`, the
+  meeting writers and material (`meeting.go`, `meeting_material.go`), the summary round, `recording_upload_rest.go`,
+  and decides `echo.go`. It removes `UploadFromCore` and `WritersInCore`, and can replace the module's composed
+  `MeetingUpdate` and its copies of `photosRecording`, `photosHereLocked` and `PhotoTexts` (which Core's readers
+  still have) by one home each.
+
+**PR 5 has landed** (the upload and a day's appends, the live log, the meeting writers and material, the echo rule,
+behind the same port; the last step). Where the code differed from this plan and from what PR 4 expected of PR 5,
+the code was followed:
+
+- **What moved**: `recordings.go` (the upload with its cleaner, the reconcile list), `recording_day.go` (a day's
+  appends), `live.go`, `meeting.go`, `meeting_material.go`, `recording_upload_rest.go` and `echo.go`, into
+  `server/internal/modules/recording/writers`, bodies unchanged (the pull request shows the comparison: 2,103 lines
+  identical, 17 call lines changed). `recording_space.go` is gone. `internal/kb` lost 2,379 non-test lines,
+  `recordingwire` gained 143 and `recordinghost` 2, all Core: Core as `scripts/diag/core_size.py` counts it went
+  down 2,230 lines, against the estimate of about 2,400 in section 6.
+- **`echo.go` moved, by a parameter.** PR 4 left it because Core's track recordings ran the upload's cleaner as
+  `kb.CleanRecordingUpload`. That call is reached only from the module's upload route, so the route now hands the
+  cleaner over (`recordinghost.Host.PutSpaceRecordingRoute(w, r, u, clean recordingwire.UploadCleaner)`) and Core
+  runs it at the same place in the same order. With the module off the route is not there and nothing needs the
+  cleaner.
+- **The summary round stayed in Core** (`server/internal/kb/recordings_summary.go`, 232 lines;
+  `recordingwire.WritersInCore`, one method). It is the knowledge base's own summarise, tag and link-to-projects of
+  an entry applied to a recording: it names the retry book, `applyTags`, `TopTags`, `knownProjects`, `FindProject`,
+  a project's log and a project's `putEntity`, eight Core members of which six are not about recordings. Moving it
+  would have put the tag and project machinery behind the recording port. It still runs only with the module: the
+  module's provider carries it, and `NoProvider` answers 0.
+- **`UploadFromCore` is gone** (six methods): the upload calls `repairDayRecap`, `rebaseRecap`, `pruneRecapNotes`,
+  `audioGaps`, `audioHeldEnd` and `liveTitleDue` directly again, as it did before PRs 3 and 4. The provider is seven
+  methods (it was thirteen): three rounds, `AfterPrune`, `AudioDropped`, `AudioClosed` (both take a
+  `recordingwire.ID` now) and the summary round.
+- **The port is 46 methods** (it was 40): `Reader` 22, `Writer` 24. Added, each for the upload or the material:
+  `CommitRecording` (the commit under the undo journal, section 3.5), `RecordingFile` (one committed file through a
+  pending journal: a day's append reads the stored segments, not the whole snapshot), `Deleted` (the tombstones the
+  phone is told of), `RecordingDays`, `TranscriptionReady`, `EarlierMeetings` (the three settings the upload and the
+  material read, computed by Core) and `Project` (a project's name and status for an earlier meeting's material).
+  Removed: `TranscriptOfRecord`, a pure function that is a rule of `recordingwire` now. Port and provider together
+  are 53 methods, as before this PR (40 and 13). `File` gained `FileMeeting` and `FileLive`. Four more rules both
+  sides apply moved to `recordingwire` (`MeetingParts`, `MeetingSame`, `BumpRevs`, `TranscriptOfRecord`), and the
+  append's two wire shapes (`RecordingAppend`, `RecordingAppended`).
+- **The locks, finally** (section 4 said `liveMu` would be the module's and the rest Core's; the code agrees):
+
+  | Lock, in order | Owner | Why |
+  | --- | --- | --- |
+  | `recMu` | Core (`kb.Store`), handed out by `Locks().Recordings` | Core takes it too: `DeleteRecording`, `pruneRecordings`, `HoldsRecording`, a hand edit (`update.go`) and project membership (`dedupe.go`) |
+  | `meetMu` | Core, `Locks().Meeting` | the trim's part of the transcription takes it (`transcription_keep.go`) |
+  | `liveMu` | **the module** (`storeState` in `writers/shim.go`) | only the live log's writers took it; retention removes `live.json` under `recFilesMu` alone |
+  | a recording's audio mutex | the module (since PR 4) | audio writers only; Core reaches them through `AudioDropped` and `AudioClosed` |
+  | `recFilesMu` | Core, `Locks().Files` and `FilesRead` | readers, the commit, the recovery, delete and the trim |
+  | `metaMu` | Core, `Locks().Meta` | every entry's meta.json and the project log |
+
+  The module's two are one per store, shared by the writers of every engine over it (`Writer.Provider`). The order
+  did not change. Neither side takes the other's lock of the pair `meetMu` / `liveMu`
+  (`TestLiveAndMeetingLocksNeverNest`), and a live append costs what it did: about 2.9 ms and 303 allocations
+  before, 2.9 ms and 307 after, on a log of 200 sentences (`BenchmarkLiveAppend`; the four more are the writers'
+  view of the engine made per call, `TestLiveAppendAllocatesLittleMoreThroughThePort`).
+- **The debt line stays, shorter.** The module's non-test code named 169 objects of `internal/kb` in 823 places
+  (go/types, not a text search) and names 23 in 120; `writers` names none. 20 non-test files import `internal/kb`
+  (25 before) and 23 test files (43 before). What is left is the handle Core hands the module and Core's readers
+  on it, which this plan keeps in Core: the type `kb.Engine` (69 uses: `Hook`, `Routes`, the sweeps and every
+  request take one) with its fields `Store`, `MeetingChanged` and `DayRecordingName`; `kb.RecordingCore`,
+  `kb.RecordingWriters`, `Engine.RecordingProvider` and `SetRecordingProvider` (the hook); the readers
+  `Engine.DayRecordings`, `HubTranscript`, `PhotoImage`, `PhotoTexts`, `ReadDayRecap`, `RecordingDays`,
+  `Store.ReadMinutes`, `ReadOnly`, `Recording`, `RecordingSegments`, `RecordingZone`; Core's delete
+  `Engine.DeleteRecording`; `kb.Model` with `JSONMax` (the answer model the host hands out) and the constant
+  `kb.KindProject`. Reaching zero would mean a second handle type in `recordinghost.Layer` and a dozen read methods
+  copied onto the port; section 6 said to prefer the short line, and
+  `server/internal/archguard/testdata/module_services.txt` keeps `recording internal/kb` with that reason.
+- **Tests**: 46 tests moved from `internal/kb` to the module's `writers` (the live log's, the meeting writers',
+  the day appends', the material's, the echo rule's and the trim's, run on a real knowledge base hooked as the
+  module hooks it). The tests of what Core does with a stored recording (the summary round, delete, retention, the
+  commit and its recovery, lists, search, a hand edit) stay in `internal/kb` and store their recordings with a
+  test-only plain upload through the same commit (`recording_seed_test.go`); the module-off gates in
+  `internal/assistant` seed through the port (`kb.RecordingCore(e).CommitRecording`).
+
 ## Decision (2026-11-25): a module that is off must not hide or change what the user already has
 
 The owner decided a rule for every module move (https://github.com/nwverse/persona/issues/13430#issuecomment-7149471360, "A rule for every module move in this tracker", posted 2026-11-25): **switching a module off must
@@ -105,7 +224,7 @@ the core (https://github.com/nwverse/persona/issues/13407#issuecomment-712177382
 - Step 1 is done. #15022 added `server/internal/recordingwire` and #15086 made the method-carrying types movable and moved
   them: every recording type now lives in `recordingwire` (13 non-test files, 1,805 lines) with same-name aliases in `internal/kb`
   (57 `type X = …` lines across the 19 recording files, counted in section 1), and 39 kb-bound methods became `kb` functions (the landing comment on #13407 says 39; the brief said 44)
-  (`kb.CleanRecordingUpload`, `server/internal/kb/recording_space.go:3`, is one). **The old plan's PR 1 is done.**
+  (`kb.CleanRecordingUpload`, `recording_space.go:3` in `internal/kb` then, is one). **The old plan's PR 1 is done.**
 - The 19 recording files in `internal/kb` are now **10,233 non-test lines** (they were 11,500 before #15086). Command, from
   `server/internal/kb`: `wc -l recordings.go minutes.go minutes_overview.go minutes_timeout.go day_recap.go day_recap_write.go
   recording_day.go recording_photos.go recording_audio.go recording_commit.go recording_title.go recording_trim.go
@@ -172,7 +291,7 @@ Reading it:
   detail snapshot with the hub transcript (`hub_segments.go`, 116) are bigger than the list/get functions the estimate had in mind.
 - **K is 865 lines**, and it is the surprise: Core keeps retention (the user's configured `recording_days` and `minutes_days`),
   and a trim is not a delete. It keeps minutes, the photos the minutes cite, meeting.json's private mark and the room's end
-  (`recording_trim.go:39-86`, `kb/recording_photos.go:851`, `kb/transcription.go:283`), so the photo book (251 lines) and
+  (`recording_trim.go:39-86`, `recording_photos.go:851`, `transcription.go:283`), so the photo book (251 lines) and
   the meeting.json update primitive (109) come with it. Section 3.2 gives the alternative and why not.
 - **The files that split** (R or K and W in one file): `recordings.go`, `minutes.go`, `day_recap.go`, `day_recap_write.go`
   (the five day-span helpers), `recording_day.go`, `recording_photos.go`, `recording_commit.go`, `recording_title.go`
@@ -212,7 +331,7 @@ Not counted as recording: `attribution.go` (extension write attribution; `editTa
 | `kb/archive.go` (callback fields `RecordingDaysFunc`, `MinutesDaysFunc`, `MeetingChanged`, `MinutesWritten`, `DayRecapWritten`, `DayRecordingName`) | settings and callbacks | callbacks | stay; nil callbacks are no-ops today |
 | `assistant/kb.go:538,543` | the retention tick `PruneRecordings` and `SummarizeRecordings(ctx, 3)` | write, every tick | prune stays (3.2); summarise is the module's (gated) |
 | `assistant/kb_lanes.go:118,121,124` | lanes `WriteMinutes(ctx,2)`, `TitleRecordings(ctx,2)`, `WriteDayRecaps(ctx,1)` | background jobs | the module's (gated by the port) |
-| `assistant/briefing_day.go:36,92,97` | `TodaysDayRecordings`, `ReadDayRecap`, `RecapState` for the evening briefing | read | unchanged (R) |
+| `modules/briefing/day.go:33` | `Day` and its recording/recap reads for the evening briefing | read | unchanged (R) |
 | `assistant/tools_apps.go:80-81,168-190,743-789` | `kb_list`/`kb_get` of recordings: `Recordings()`, `Recording(id)`, `PhotosMarkdown`, the trimmed-transcript note | read | unchanged (R) |
 | `assistant/space_recordings.go:160` | `HoldsRecording` | read | unchanged (R) |
 | `assistant/profile.go`, `assistant/settings_tool.go` | `kb.MinutesDaysFor` | pure | unchanged (R) |
@@ -232,7 +351,7 @@ enumerate the Engine and Store methods the module calls beyond the earlier count
 methods); PR 3 starts by listing them.
 
 Shared state and the documented order: `recMu` → `meetMu` → `liveMu` → audio rec mutex → `recFilesMu` → `metaMu`
-(`kb/recording_audio.go:32`; the field comments at `kb/store.go:213-221`). Analysis in section 4.
+(`recording_audio.go:32`; the field comments at `kb/store.go:213-221`). Analysis in section 4.
 
 The writers also reach out through the `Model` and `ModelFor` interfaces (`kb/archive.go`), `prompts`, `lazyre` and `kbwire`.
 
@@ -464,8 +583,8 @@ before and after; plus the script checks below).
 | 1 | done: `recordingwire` and movable types (#15022, #15086) | | 0 net (contracts count as Core) | | |
 | 2 | **Reader/writer split and the write-side port.** Split the mixed files by function into reader, kept-write and writer files (a move inside the package); add `Provider` with a no-op value and gate the lanes, summarise and after-prune on it; the audio hook; a Core delete route; the derived `paused` response field; the new module-off checks | `recordings.go`, `minutes.go`, `day_recap.go`, `day_recap_write.go`, `recording_day.go`, `recording_photos.go`, `recording_commit.go`, `recording_title.go`, `recording_space.go`, `live.go`, `meeting.go`, `transcription.go`, `hub_segments.go` (split only); `assistant/kb.go`, `kb_lanes.go`; `modules/recording/layer.go` | 0 (adds about 250 to 350 in Core: the port types, the no-op, the route, the paused field; estimate) | the module-off test is new; no test moves | `assistant/kb_lanes.go`, `kb.go`; the split touches the files PRs 3 to 5 move |
 | 3 | **done**: the minutes and day-recap writers, into `server/internal/modules/recording/writers`, behind the storage port `recordingwire.Core` (32 methods; see "PR 3 has landed" at the top) | `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`, `day_recap.go`, `day_recap_write.go` (moved whole; the declarations readers name stayed in the `_read.go` and `_keep.go` files) | about 3,570 out of `internal/kb`; about 500 into `recordingwire` (Core) | the minutes and day-recap tests and their prompt goldens, and the tests of other files that ran the minutes round; `internal/kb` keeps the reader, trim and module-off tests with minutes written as files | the port is the one PR 4 and PR 5 extend |
-| 4 | Photos, audio, titles, transcription | `recording_photos.go` W side, `recording_audio.go`, `recording_title.go` W side, `transcription.go` W side, `hub_segments.go` W side, `echo.go` | about 2,580 (709 + 940 + 237 + 264 + 247 + 191 = 2,588, less declarations) | `recording_photos_test.go`, `recording_audio_test.go`, `recording_title_test.go`, `transcription*_test.go`, `hub_segments_test.go`, `echo_test.go`, `recordings_echo_test.go` | the audio socket and `meeting_audio.go` in the module; decide the audio `recFilesMu` read-lock wrapper (section 4) |
-| 5 | The store's write half and the last imports | `recordings.go` W side (608), `recording_day.go` W side (472), `live.go` (708), `meeting.go` W side (254), `meeting_material.go` (334), `recording_commit.go` W side (34), `recording_space.go` (3); the module's imports of `internal/kb` replaced by the contract | about 2,400 (2,413, less declarations) | `recordings_test.go`, `live_test.go`, `meeting*_test.go`; kb keeps black-box tests with a fake provider and the reader/commit/retention tests | `store.go`, `edit.go`; the `liveMu`/`meetMu` order test |
+| 4 | **done**: photos, audio, titles, transcription, the hub's transcript (see "PR 4 has landed" at the top; `echo.go` stayed) | `recording_photos.go` W side, `recording_audio.go`, `recording_title.go` W side, `transcription.go` W side, `hub_segments.go` W side | estimated about 2,580 (709 + 940 + 237 + 264 + 247 + 191 = 2,588, less declarations); measured 2,189 out of `internal/kb`, 321 into `recordingwire`, a net 1,867 | `recording_photos_test.go`, `recording_audio_test.go`, `recording_title_test.go`, `transcription*_test.go`, `hub_segments_test.go`, `echo_test.go`, `recordings_echo_test.go` | the audio socket and `meeting_audio.go` in the module; decide the audio `recFilesMu` read-lock wrapper (section 4) |
+| 5 | **done**: the store's write half (see "PR 5 has landed" at the top: measured 2,379 out of `internal/kb`, 145 into the contracts, a net 2,230; the debt line kept, shortened). As planned: | `recordings.go` W side (608), `recording_day.go` W side (472), `live.go` (708), `meeting.go` W side (254), `meeting_material.go` (334), `recording_commit.go` W side (34), `recording_space.go` (3), `recording_upload_rest.go` (124) and the decision on `echo.go` (180); the module's imports of `internal/kb` replaced by the contract | about 2,400 (2,413, less declarations) | `recordings_test.go`, `live_test.go`, `meeting*_test.go`; kb keeps black-box tests with a fake provider and the reader/commit/retention tests | `store.go`, `edit.go`; the `liveMu`/`meetMu` order test |
 
 PRs 3 and 4 are independent after 2 and may run in parallel; PR 5 comes last. After each, the Core reader/K code stays in the
 same kb files it was split into by PR 2, so a later PR is a deletion plus a module addition.
@@ -507,6 +626,24 @@ so the Core side of the move is larger than estimated below: of the five files' 
 about 500 lines came back as Core in `recordingwire` (the port's interfaces, the rules, the transitional provider
 part) and about 110 as the adapter in `internal/kb`. PRs 4 and 5 extend the same port; expect a similar ratio.
 
+**After PR 4 (measured).** The port is 40 methods. Of the 2,189 lines that left `internal/kb`, 321 came back as Core
+in `recordingwire` (the photo book's types, the span arithmetic and four more rules, the port's ten new methods, the
+provider), so PRs 3 and 4 together took 4,827 net lines out of Core (2,960 and 1,867). What is still in
+`internal/kb` for PR 5 is the files of its row in section 6.
+
+**After PR 5 (measured), and the series.** PR 5 took 2,379 lines out of `internal/kb` and 2,230 net out of Core
+(`core_size.py`: 845,825 to 843,595 on the day's `origin/main`). The whole series, PR by PR, in Core non-test lines:
+PR 2 +441 (the port's provider, the no-op, the delete route, the paused field), the photo image route +59, PR 3
+-2,960, PR 4 -1,867, PR 5 -2,230: **a net 6,557 lines out of Core**, against the revised estimate of 7,800 to 8,200
+below. Out of `internal/kb` alone the writers' moves took 8,138 lines (3,570, 2,189, 2,379), against the estimate
+of 8,300 to 8,500; the difference to the net is what came back as Core by design: `recordingwire` grew from 1,805 to
+2,898 lines (the port's two interfaces, the provider, the rules and types both sides use) and the adapter
+`recording_core.go` is 191. What is left of recordings in `internal/kb` is 2,566 lines: the readers (`_read.go`), the
+kept writes (`_keep.go`, `recording_trim.go`), the adapter and the provider's Core side (`recording_core.go`,
+`recording_port.go`, `recording_writers.go`) and the summary round (`recordings_summary.go`). The module is 18,096
+non-test lines (9,369 before PR 3). The port ended at 46 methods where section 3.5 sketched about 12, and the
+provider at 7.
+
 **Totals (estimates marked).** First version: about 10,000 to 10,500 net (11,500 lines leaving, 12,331 of tests moving).
 Revised: of the 10,233 lines now in `internal/kb`, **702 (R) and 865 (K) stay by design**, plus an estimated 150 to 350
 declaration lines, so **about 8,300 to 8,500 non-test lines leave `internal/kb`** (estimate), and the new Core code is **about 250
@@ -526,16 +663,13 @@ walk (risk 1), the index purge on a path class change (the search view does not 
 2. **Rename and other edits with the module off.** The user can read, search, delete, and edit tags and projects; not rename.
    Recommend this for PR 2; the owner's rule does not require more, but the user's wish "my old recording has a wrong title"
    is a legitimate follow-up (a Core `rename` using the same `putNamed` path would cost about 40 lines).
-3. **Photo images and audio playback with the module off. DECIDED by the supervisor (the owner's rule: what the user
-   has stays readable): photos are readable through Core's read-only route; stored audio is not applicable.**
-   - Photos, implemented: `GET /api/v1/recordings/{id}/photos/{n}` is served by Core (`assistant/kb_recording_media.go`,
-     reading `kb.Engine.PhotoImage`, now in `kb/recording_photos_read.go`) with the module on and off: the same path, full
-     credentials only, `Content-Type` of the stored file, `X-Content-Type-Options: nosniff`, `Cache-Control: private,
-     no-store`, no Range, `404 photo_not_found` for a photo that is not listed (deleted, or removed by the trim),
-     `410`/`404` for a deleted or unknown recording, the knowledge base's `503`s. It reads under `recFilesMu` (read side)
-     as `PhotoImage` always did, writes nothing and derives nothing. Adding, listing and deleting photos stay the module's
-     routes: with the module off a client can open a photo it knows the number of (the photo texts and numbers are in the
-     recording's detail), but cannot add or delete one. The module no longer registers its copy of the GET.
+3. **Photo reads and audio playback with the module off. DECIDED by the supervisor (the owner's rule: what the user
+   has stays readable): photo lists and images are readable through Core's read-only routes; stored audio is not applicable.**
+   - Photos, implemented: `GET /api/v1/recordings/{id}/photos` and `GET …/photos/{n}` are served by Core
+     (`assistant/kb_recording_media.go`, reading `kb.Engine.PhotosRead` and `PhotoImage` in `kb/recording_photos_read.go`)
+     with the module on and off: the same paths, full credentials only, the existing JSON and image responses, and the
+     existing `410`/`404` and knowledge-base `503` errors. They write nothing. Adding and deleting photos stay the
+     module's routes; the module no longer registers its copies of the GETs.
    - Audio, no code: no client-facing route has ever served stored audio. `kb.AudioRead` is used only by the module's
      final transcription pass; the chunk files (`attachments/audio/<from>.pcm`) are raw PCM16 and are deleted after the
      final pass; the only audio routes are the phone's upload socket and the gap upload. There was nothing to keep readable,

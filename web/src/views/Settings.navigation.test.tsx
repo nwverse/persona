@@ -4,14 +4,33 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const viewport = vi.hoisted(() => ({ phone: false }));
+const viewport = vi.hoisted(() => ({ phone: false, integrationsV2: false, inboxSources: false }));
 vi.hoisted(() => {
   // a phone matches the narrow queries; a wide screen the wide ones (the list beside an item, from 900 px)
   window.matchMedia = ((query: string) => ({ get matches() { return /min-width/.test(query) ? !viewport.phone : viewport.phone; }, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
-  useStore: (select: (state: { features: string[]; machines: unknown[]; conn: string; link: { networkUp: boolean; restarting: boolean }; hubName: string; mesh: unknown[] }) => unknown) => select({ features: ["channels", "extension_manager", "connectors"], machines: [], conn: "online", link: { networkUp: true, restarting: false }, hubName: "", mesh: [] }),
+  useStore: (select: (state: {
+    features: string[];
+    machines: unknown[];
+    conn: string;
+    link: { networkUp: boolean; restarting: boolean };
+    hubName: string;
+    mesh: unknown[];
+    loaded: boolean;
+    assistant: { integrations_v2: boolean };
+  }) => unknown) =>
+    select({
+      features: ["channels", "extension_manager", "connectors", ...(viewport.inboxSources ? ["inbox_sources", "inbox_sources_graph"] : [])],
+      machines: [],
+      conn: "online",
+      link: { networkUp: true, restarting: false },
+      hubName: "",
+      mesh: [],
+      loaded: true,
+      assistant: { integrations_v2: viewport.integrationsV2 },
+    }),
 }));
 vi.mock("./settings/ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
 vi.mock("./settings/NotificationSettings", () => ({ NotificationSettings: () => <div data-page="notifications" /> }));
@@ -46,6 +65,16 @@ vi.mock("./settings/HubConnector", () => ({
   ConnectorDetail: ({ onBack }: { onBack?: () => void }) => <div data-page="connector-detail">{onBack && <button type="button" data-own-back onClick={onBack} />}</div>,
 }));
 vi.mock("./settings/SentSettings", () => ({ SentSettings: () => <div data-page="sent" /> }));
+vi.mock("./settings/Integrations", () => ({
+  Integrations: ({ open, onOpen }: { open: string | null; onOpen: (id: string | null) => void }) => (
+    <div data-page="integrations" data-open={open ?? ""}>
+      <button type="button" data-integrations-sources onClick={() => onOpen("-sources")} />
+    </div>
+  ),
+}));
+vi.mock("./subscriptions/SourcesUI", () => ({
+  SourcesUI: ({ state }: { state?: string }) => <div data-page="sources" data-state={state ?? ""} />,
+}));
 
 import { enabledNavItems, registerModule, resetModulesForTest } from "../core/module-host";
 import { forgetModuleSwitches, MODULE_SWITCH_KEY } from "../core/module-switch";
@@ -62,6 +91,8 @@ beforeAll(() => loadPages());
 
 beforeEach(() => {
   viewport.phone = false;
+  viewport.integrationsV2 = false;
+  viewport.inboxSources = false;
   localStorage.clear();
   host = document.createElement("div");
   document.body.append(host);
@@ -584,5 +615,75 @@ describe("Settings category navigation", () => {
     await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings.back")}"]`)!.click());
     expect(location.pathname + location.search).toBe("/settings");
     expect(host.querySelector("nav")).not.toBeNull();
+  });
+
+  it("folds channels/connectors/extensions/sources 4-in-1 under integrations_v2 on desktop and phone and restores losslessly when off", async () => {
+    viewport.inboxSources = true;
+    for (const phone of [false, true]) {
+      viewport.phone = phone;
+      viewport.integrationsV2 = true;
+      await mount(phone ? "/settings" : "/settings?tab=general");
+      const hasTab = (buttons: string[], label: string) => buttons.some((b) => (phone ? b.startsWith(label) : b === label));
+      const labelsOn = [...nav().querySelectorAll("button")].map((b) => b.textContent ?? "");
+      expect(hasTab(labelsOn, t("settings-nav.tab_integrations"))).toBe(true);
+      expect(hasTab(labelsOn, t("settings-nav.tab_channels"))).toBe(false);
+      expect(hasTab(labelsOn, t("settings-nav.tab_connectors"))).toBe(false);
+      expect(hasTab(labelsOn, t("settings-nav.tab_extensions"))).toBe(false);
+      expect(hasTab(labelsOn, t("settings-nav.tab_sources"))).toBe(false);
+
+      // Flipping integrations_v2 off restores all 4 legacy items identically.
+      viewport.integrationsV2 = false;
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      const labelsOff = [...nav().querySelectorAll("button")].map((b) => b.textContent ?? "");
+      expect(hasTab(labelsOff, t("settings-nav.tab_integrations"))).toBe(false);
+      expect(hasTab(labelsOff, t("settings-nav.tab_channels"))).toBe(true);
+      expect(hasTab(labelsOff, t("settings-nav.tab_connectors"))).toBe(true);
+      expect(hasTab(labelsOff, t("settings-nav.tab_extensions"))).toBe(true);
+      expect(hasTab(labelsOff, t("settings-nav.tab_sources"))).toBe(true);
+      await act(async () => root.render(null));
+    }
+  });
+
+  it("redirects sources URLs and Settings search results into integrations -sources when integrations_v2 is on and transitions live on toggle", async () => {
+    viewport.inboxSources = true;
+    viewport.integrationsV2 = true;
+    const sampleState = JSON.stringify({ p: "source", id: "sub_push_1" });
+    const enc = encodeURIComponent(sampleState);
+
+    // Direct legacy /settings/sources/<state> with manager redirects into integrations -sources@work/<encodedState>.
+    await mount(`/settings/sources/${enc}?manager=work`);
+    expect(location.pathname + location.search).toBe(
+      `/settings?manager=work&tab=integrations&integration=${encodeURIComponent(`-sources@work/${enc}`)}`,
+    );
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-open")).toBe(`-sources@work/${enc}`);
+
+    // Live toggle integrations_v2 off -> falls back to legacy sources preserving manager & state.
+    viewport.integrationsV2 = false;
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    expect(location.pathname + location.search).toBe(`/settings?manager=work&tab=sources&state=${enc}`);
+    expect(host.querySelector('[data-page="sources"]')?.getAttribute("data-state")).toBe(sampleState);
+
+    // Live toggle integrations_v2 back on -> returns smoothly to unified integrations -sources@work/<encodedState>.
+    viewport.integrationsV2 = true;
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    expect(location.pathname + location.search).toBe(
+      `/settings?manager=work&tab=integrations&integration=${encodeURIComponent(`-sources@work/${enc}`)}`,
+    );
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-open")).toBe(`-sources@work/${enc}`);
+
+    // Searching Inbox Sources in Settings search box opens Integrations -sources rather than hidden sources tab.
+    await act(async () => category(t("settings-nav.tab_general")).click());
+    const box = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_settings")}"]`)!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, t("settings-nav.tab_sources"));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const groupBtn = [...nav().querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent?.includes(`${t("settings-nav.tab_integrations")}›${t("settings-nav.tab_sources")}`),
+    )!;
+    expect(groupBtn).toBeTruthy();
+    await act(async () => groupBtn.click());
+    expect(location.pathname + location.search).toBe("/settings?tab=integrations&integration=-sources");
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-open")).toBe("-sources");
   });
 });

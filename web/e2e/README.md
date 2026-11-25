@@ -319,6 +319,16 @@ node web/e2e/machine-alerts.mjs http://127.0.0.1:<web port> <artifact-directory>
 
 Run against an exclusively owned mock-backed web server with the mock's alert fleet (made-up computers, one per alert: memory, disk, version, offline, launchers, healthy). Light and dark at 1280 and 390 px, it screenshots the cards with their alert chips, the memory sheet and its Stop idle Agents confirmation, the hand-off picker, the disk sheet with its cleanup confirmation, the version sheet, the offline and launcher sheets, and the Capabilities view; it checks that every chip is a labelled button, that the offline computer is first and the healthy one last, that the cache in use can't be picked, that the offline computer is not a hand-off target and an eligible one is ranked first, that the version sheet says how much older the node's build is, that no button's text wraps and nothing is wider than a sheet, and that the page logs no errors. Its last scene redeploys the mock's Studio Mac through the stepper to the node's new build (restart the mock to run it again). It prints one line per check and a verdict; it exits 1 on a failed check and 2 on its four-minute timeout.
 
+## Read-only to-do progress board (#12713)
+
+```sh
+PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npm run dev -- --host 127.0.0.1 --port <web port> --strictPort &)
+node web/e2e/todo-progress-board.mjs <loopback-web-origin> [--shots <artifact-directory>] [--executable <chromium>]
+```
+
+Runs against an exclusively owned mock-backed web server, replacing every to-do, session and project with synthetic data over REST and the socket; no real hub data is read. At desktop and phone widths, light and dark, and default and large text, it checks stored-project and No-project groups, responsibility, latest progress with its own timestamp, owner decisions, per-project counts, closed/shelved exclusion, the exact 72-hour boundary, positive-hour persistence and invalid input, read-only rows, detail navigation and browser Back. It records and rejects every non-GET request and permits no client socket command other than the ordinary read-only `client_hello`, including across a Board reload, then checks viewport fit and browser errors and optionally saves four screenshots. The browser clock is fixed; no fixed sleeps are used. A failing check exits non-zero, and a four-minute watchdog prints a timeout verdict.
+
 ## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
 
 ```sh
