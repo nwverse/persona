@@ -68,6 +68,7 @@ func TestWalkSizesLinksAndPrefetch(t *testing.T) {
 	root := filepath.Join(home, "proj")
 	write(t, filepath.Join(root, "big", "a.bin"), 300_000)
 	write(t, filepath.Join(root, "big", "deep", "b.bin"), 100_000)
+	write(t, filepath.Join(root, "big", "empty.bin"), 0)
 	write(t, filepath.Join(root, "small.txt"), 10)
 	// A hard link counts once; a symbolic link is never followed.
 	if err := os.Link(filepath.Join(root, "big", "a.bin"), filepath.Join(root, "big", "a-again.bin")); err != nil {
@@ -97,8 +98,8 @@ func TestWalkSizesLinksAndPrefetch(t *testing.T) {
 	if r.Node.Bytes > 500_000+64<<10 {
 		t.Errorf("root %d bytes: the link's target was counted", r.Node.Bytes)
 	}
-	// Prefetch: big carries its own children, and opening it is answered from the cache.
-	if child(*big, "deep") == nil || child(*big, "a.bin") == nil {
+	// Prefetch: big carries all its own children, and opening it is answered from the cache.
+	if child(*big, "deep") == nil || child(*big, "a.bin") == nil || child(*big, "a-again.bin") == nil || child(*big, "empty.bin") == nil {
 		t.Errorf("big's children not prefetched: %+v", big.Children)
 	}
 	if big.UsedAt == 0 || !big.HasChildren || !big.CanTrash {
@@ -110,6 +111,28 @@ func TestWalkSizesLinksAndPrefetch(t *testing.T) {
 	again := usage(t, m, filepath.Join(root, "big"))
 	if !again.Cached || child(again.Node, "deep") == nil {
 		t.Errorf("opening a prefetched child: cached %v, %+v", again.Cached, again.Node.Children)
+	}
+}
+
+func TestItemNodesKeepZeroFilesAndHideAdjustedZero(t *testing.T) {
+	home := t.TempDir()
+	adjusted := filepath.Join(home, "adjusted")
+	b := testMap(t, home).builder(context.Background(), nil)
+	b.adjust[adjusted] = adjustment{minus: 10}
+	nodes := b.itemNodes(&folder{path: home, children: []item{
+		{name: "empty", path: filepath.Join(home, "empty"), kind: kindFile},
+		{name: "empty-dir", path: filepath.Join(home, "empty-dir"), kind: kindDir},
+		{name: "adjusted", path: adjusted, kind: kindFile, bytes: 10},
+	}}, false)
+	n := proto.StorageUsageNode{Children: nodes}
+	if child(n, "empty") == nil {
+		t.Error("a zero-byte file was hidden")
+	}
+	if child(n, "empty-dir") != nil {
+		t.Error("a zero-byte folder was listed")
+	}
+	if child(n, "adjusted") != nil {
+		t.Error("an item adjusted to zero was listed")
 	}
 }
 

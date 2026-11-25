@@ -31,11 +31,11 @@ import (
 // Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
-// Following an Antigravity conversation past a rewind's abandoned export tail (#14297) and minifying the prompt code
-// #12706 and #14014 still leave unminified in its runtime (#14829 minified the helpers) together save 88 B (264,280 B).
+// Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
+// its matching visible step (#14297) add 316 B (264,813 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 264_619
+	const budget = 264_813
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

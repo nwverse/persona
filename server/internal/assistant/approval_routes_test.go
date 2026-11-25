@@ -226,6 +226,7 @@ func TestChannelClarifyRejectsPrivateAndInvalidBeforeUsingOwnerAction(t *testing
 }
 
 func TestFeishuClarifyFormOmitsPrivateAndNeverCarriesFieldValues(t *testing.T) {
+	needsLarkLayer(t) // the cards are the lark module's
 	ft := newFleetTestNoStore(t)
 	base := proto.Interaction{ID: "ix_render", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
 		CanClarify: true, Fields: []proto.Field{{Key: "password", Label: "Password"}},

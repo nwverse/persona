@@ -858,7 +858,7 @@ Each entry (`MemoryEntry`):
 | `id` | Required, `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, stable across pages and answers. The manager carries it as `memory-extension:<id>`, which a to-do's brief names. |
 | `text` | Required, 1 to 4096 characters: what the entry says, as the extension would render it. |
 | `status` | Required: `active` (the extension would use it today, whatever it calls that state itself: an extension with its own stable and shifting states answers `active` for both), `candidate` (not borne out yet), `dormant` (not seen lately), `retired` (no longer true). Only `active` is carried; any other value drops the entry. |
-| `facet` | The extension's own grouping (`^[a-z][a-z0-9_]{0,31}$`). Informational: the hub neither filters nor orders by it. |
+| `facet` | The extension's own grouping (`^[a-z][a-z0-9_]{0,31}$`). Used for explicit `decisions_query` tag matching; it does not change priority or visibility. |
 | `origin_space` | The slug of the space the entry was first said in; left out for the main space. |
 | `categories` | Up to 8 information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`); left out for a general entry. One the hub does not know makes the entry not known. |
 | `standing` | The extension kept it in every conversation (its own always-in-context entries). Only a standing entry goes to a standing channel (usage still decides); an entry without it comes in only by relevance, its `subjects` or text matched in a recall, a hand-off or the Inbox, as the extension's own "included when named" entries did. Until the source is wired in, the flag only orders entries among the extension's own. |
@@ -870,8 +870,10 @@ Each entry (`MemoryEntry`):
   field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
 - **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
   is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
-- **Bounds**: 5 seconds per call, at most 1 MB per answer, at most 5 pages and 1000 entries per assembly (past them the
-  rest are left, less important by the extension's own order). An entry that breaks a rule above (an unknown `status`
+- **Bounds**: 5 seconds per call and at most 1 MB per answer. The hub follows the existing cursors to the end, with
+  no page or entry-count cutoff, and caches the complete source. A complete read is bounded by 2 minutes and 128 MiB
+  of answers; exceeding either limit or repeating a cursor fails the read, never caches a truncated prefix. Scene
+  output budgets apply after relevance and visibility filtering. An entry that breaks a rule above (an unknown `status`
   included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
 - **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
   message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
@@ -900,7 +902,7 @@ Where the entries go (`docs/assistant/health.md` "Memory by scene" has the rules
 | A main-space conversation's standing context | Only its `standing` entries that the standing rule lets through (its own track's, general ones from elsewhere; never a sensitive entry from elsewhere), as one section of the per-message snapshot (`- 记忆…：` / `- Memory …:`), sent again only when it changes. Only for the owner's own assistant computer, never a guest's conversation or a work computer. Track conversations (spaces, health) take none, as they took none of the extension's instructions. |
 | A dispatched Agent's first message | A planned task: the hand-off rule (`handOffMemory`: general entries its words bear on, sensitive ones only after the owner's Start on a plan confirmed for their categories), noted in the to-do's brief. An Agent the assistant starts or a to-do handed to a new Agent: general entries its words bear on, never a sensitive one. Only on the owner's own computer. |
 | The Inbox's helper (triage and drafts) | General entries the item bears on, never a sensitive one, at most 1 KB, as a background block under the extension's name. |
-| A recall | `decisions_query`'s first page adds `memory: [{id, text}]` beside the ledger's `entries` (the cursor stays the ledger's): its own track's entries, general ones from elsewhere, sensitive ones only when the conversation carries every one of their categories; with `tag`, only entries whose subjects or text name it; at most 3 KB, the most important first. A filter the entries have no field for (`by`, `trust`, a `status` other than `active`) leaves them out. |
+| A recall | `decisions_query`'s first page adds `memory: [{id, text}]` beside the ledger's `entries` (the cursor stays the ledger's): its own track's entries, general ones from elsewhere, sensitive ones only when the conversation carries every one of their categories; with `tag`, every whitespace-separated term must occur in text, subjects, facet or categories (case-insensitive substring matching, terms may match different fields); at most 3 KB, the most important first. A filter the entries have no field for (`by`, `trust`, a `status` other than `active`) leaves them out and returns `memory_omitted: "ledger_filters"`; retry with `tag` alone to query extension memory. `scope` filters the ledger only. |
 
 **Text outlets.** An extension that does not declare `memory_sources` keeps its text outlets unchanged. Once an
 installed extension declares it (on or switched off, whether or not its entries can be read now), the hub stops
@@ -2544,7 +2546,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `11`; the web sends `10` (its native stream `7`), Android and iOS send `10`; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `11`; iOS sends `11` on iPhone and iPad and `8` on Apple's other systems (Vision Pro, the Mac), the web and Android send `10` (the web's native stream `7`), HarmonyOS `6` over HTTP and `7` on its native stream; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |

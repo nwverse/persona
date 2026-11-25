@@ -2157,10 +2157,10 @@ def mock_png(w=96, h=64):
 
 
 # MOCK_PERSONA_QUEUE=1 (#4342): the first Persona chat is at work with two of the user's messages queued (the second
-# went with a photo, so its words are the apps' stand-in) and one from another conversation, which the assistant holds
-# until the turn ends (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
+# went with a photo, so its words are the apps' stand-in) and one from another conversation, kept for its next
+# message (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
 QUEUED_PHOTOS = {"请看图片": [{"mime": "image/png", "data": mock_png()}]}
-PERSONA_QUEUE_MESSAGES = ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」：会议纪要整理好了，要不要发给参会的人？"]
+PERSONA_QUEUE_MESSAGES = ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」（不唤醒）：会议纪要整理好了，要不要发给参会的人？"]
 if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
@@ -20438,8 +20438,10 @@ def case_route(h, method, p, q, body):
             case_json(h, {"error": str(e)}, 400)
             return True
         CASE.close()
-        # "now": its times moved to the present, for an app on the real clock (the iOS simulator's)
-        CASE = sync_case.CaseHub(case, shift=sync_case.shift_to(time.time()) if asked.get("now") else 0)
+        # "now": move fixture times to the present for an app on the real clock (the iOS simulator's).
+        live_time = time.time if asked.get("now") else None
+        shift = sync_case.shift_to(live_time()) if live_time else 0
+        CASE = sync_case.CaseHub(case, shift=shift, live_time=live_time)
         case_json(h, CASE.state())
         return True
     if method == "GET" and MOCK_WEB and not p.startswith(("/api/", "/mock/")):

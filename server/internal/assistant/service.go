@@ -168,6 +168,7 @@ type Service struct {
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent      humanSends
 	storeApprovals storeApprovals
+	ownerWaits     ownerActionWaits
 
 	hub         Hub
 	store       func() Store
@@ -274,9 +275,11 @@ type Service struct {
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
 	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
-	spaceFill            spaceBackfill          // conversation_space_backfill.go
-	outcomeLines         outcomeLines           // todo_outcome.go
-	workerOutcomes       workerOutcomes         // worker_memory.go
+	healthTells          captureWork            // health_tell.go: wakes ordered Health delivery
+	trainingChatMu       sync.Mutex
+	spaceFill            spaceBackfill  // conversation_space_backfill.go
+	outcomeLines         outcomeLines   // todo_outcome.go
+	workerOutcomes       workerOutcomes // worker_memory.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -340,7 +343,6 @@ type Service struct {
 	work             workBook          // agents_work.go: the Agents business
 	reply            replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans            channelsBook      // channels.go
-	fdetached        detachedCards     // the Feishu cards closed when their node went away (lark_chat.go)
 	tposts           threadPoster      // the lark module's thread_posts.go: what a todo tells its chat thread
 	lark             larkLayer         // lark.go: the lark module's layer, the outbound channel port (s.chat())
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
@@ -359,6 +361,7 @@ type Service struct {
 	inbox            inboxBook         // inbox_book.go
 	board            boardBook         // workspace_board.go: the workspace board
 	viewEvents       viewNotifications // views.go: only coalesced notifications; contents are stored first
+	pages            pagesRuntime      // pages_actions.go, pages_events.go: the pages' events, taps and turns (Dashboards)
 	viewMemo         viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
 
 	devs                 Devices // the computers (devices.go); nil: no fleet
@@ -448,6 +451,7 @@ func New(o Options) *Service {
 	s.infoAccessRoutes()
 	s.trackRoutes()
 	s.captureRoutes() // captures.go: quick capture
+	s.healthTellRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -1095,6 +1099,7 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
+	go s.ownerAppeared(context.WithoutCancel(ctx), "user_spoke", r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	s.progressMade(r.MachineID, r.SessionID, time.Now()) // told something: a new stretch (supervise_progress.go)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
@@ -1127,6 +1132,7 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 	s.taskWorking(ctx, r.MachineID, r.SessionID, row)
 	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
 	s.availTurnStarted(r.MachineID, r.SessionID, newTurn, time.Now())
+	s.pageTurnStarted(r.MachineID, r.SessionID, time.Now()) // a tap on a page it took up (pages_actions.go)
 }
 
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
@@ -1148,6 +1154,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.infoTagTurnEnded(ctx, r.SessionID) // its categories are not known until it is tagged (info_use.go)
 		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
+		s.pageTurnEnded(r.MachineID, r.SessionID, time.Now())       // the taps on pages it took up are answered (pages_actions.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 		// A review's reviewer answered (supervise_autoreview.go, agents_session_review.go).
 		go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
