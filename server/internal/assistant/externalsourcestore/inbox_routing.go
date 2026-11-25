@@ -124,8 +124,8 @@ func (s *Store) ReadyExternalInboxEvents(ctx context.Context, now time.Time, lim
 
 // RecentExternalInboxOwners includes reserved decisions as well as completed ones.
 // Completed receipts keep only the owner, and discard the source content.
-func (s *Store) RecentExternalInboxOwners(ctx context.Context, ref assistantwire.ExternalRef, except string) ([]json.RawMessage, error) {
-	var owners []json.RawMessage
+func (s *Store) RecentExternalInboxOwners(ctx context.Context, ref assistantwire.ExternalRef, except string) ([]assistantwire.ExternalInboxDelivery, error) {
+	var owners []assistantwire.ExternalInboxDelivery
 	err := db.ReadSnapshot(ctx, s.database, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
 			SELECT plan->'owner' FROM assistant_external_inbox_events
@@ -136,7 +136,7 @@ func (s *Store) RecentExternalInboxOwners(ctx context.Context, ref assistantwire
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var owner json.RawMessage
+			var owner assistantwire.ExternalInboxDelivery
 			if err := rows.Scan(&owner); err != nil {
 				return err
 			}
@@ -148,7 +148,7 @@ func (s *Store) RecentExternalInboxOwners(ctx context.Context, ref assistantwire
 }
 
 // SaveExternalInboxProgress persists decisions, retries, and terminal receipts.
-func (s *Store) SaveExternalInboxProgress(ctx context.Context, key string, when time.Time, plan json.RawMessage, complete bool) error {
+func (s *Store) SaveExternalInboxProgress(ctx context.Context, key string, when time.Time, plan *assistantwire.ExternalInboxPlan, complete bool) error {
 	return s.database.Transaction(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE assistant_external_inbox_events

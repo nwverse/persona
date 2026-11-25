@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -21,7 +20,7 @@ func (s *Service) admitExternalPlan(ctx context.Context, store externalInboxStor
 			return errors.Join(err, store.SaveExternalInboxProgress(ctx, ev.work.Key, now.Add(externalInboxRetry), nil, false))
 		}
 	}
-	if err := saveExternalPlan(ctx, store, ev.work.Key, now, ev.plan, false); err != nil {
+	if err := store.SaveExternalInboxProgress(ctx, ev.work.Key, now, &ev.plan, false); err != nil {
 		return err
 	}
 	return s.deliverExternalPlan(ctx, store, now, ev)
@@ -35,11 +34,7 @@ func (s *Service) coalesceExternalOwner(ctx context.Context, store externalInbox
 	if err != nil {
 		return err
 	}
-	for _, raw := range owners {
-		var prior externalDelivery
-		if err := json.Unmarshal(raw, &prior); err != nil {
-			return err
-		}
+	for _, prior := range owners {
 		if !s.externalOwnerActive(ctx, prior) {
 			continue
 		}
@@ -118,9 +113,9 @@ func (s *Service) deliverExternalPlan(ctx context.Context, store externalInboxSt
 			when = at
 		}
 	}
-	save := func() error { return saveExternalPlan(ctx, store, ev.work.Key, now, *plan, false) }
+	save := func() error { return store.SaveExternalInboxProgress(ctx, ev.work.Key, now, plan, false) }
 	retry := func(err error) error {
-		return errors.Join(err, saveExternalPlan(ctx, store, ev.work.Key, now.Add(externalInboxRetry), *plan, false))
+		return errors.Join(err, store.SaveExternalInboxProgress(ctx, ev.work.Key, now.Add(externalInboxRetry), plan, false))
 	}
 	if owner := plan.Owner; owner != nil && !owner.Delivered {
 		at, allowed := ev.selection.deliveryTime(*owner, true)
@@ -167,7 +162,7 @@ func (s *Service) deliverExternalPlan(ctx context.Context, store externalInboxSt
 			plan.Ask = false
 		}
 	}
-	return saveExternalPlan(ctx, store, ev.work.Key, when, *plan, when.IsZero())
+	return store.SaveExternalInboxProgress(ctx, ev.work.Key, when, plan, when.IsZero())
 }
 
 func (selection externalSelection) deliveryTime(d externalDelivery, owner bool) (time.Time, bool) {

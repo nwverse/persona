@@ -2,7 +2,6 @@ package externalsourcestore_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -50,7 +49,9 @@ func TestExternalInboxReceiptsCommitAndDeduplicateAcrossWriters(t *testing.T) {
 	if got, err := next.ReadyExternalInboxEvents(ctx, now, 5); err != nil || len(got) != 1 || got[0].EventID != ev.EventID {
 		t.Fatalf("event receipt: %+v, %v", got, err)
 	}
-	plan := json.RawMessage(`{"owner":{"target":{"id":"todo_a","kind":"todo"}}, "fyi":[]}`)
+	plan := &w.ExternalInboxPlan{Owner: &w.ExternalInboxDelivery{
+		Target: w.ExternalInboxTarget{ID: "todo_a", Kind: w.ExternalTargetTodo},
+	}}
 	if err := next.SaveExternalInboxProgress(ctx, ev.Key, time.Time{}, plan, true); err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +61,8 @@ func TestExternalInboxReceiptsCommitAndDeduplicateAcrossWriters(t *testing.T) {
 	if got, err := d.ReadyExternalInboxEvents(ctx, now, 5); err != nil || len(got) != 0 {
 		t.Fatalf("a replay re-opened a completed receipt: %+v, %v", got, err)
 	}
-	if owners, err := d.RecentExternalInboxOwners(ctx, ev.Ref, "other_event"); err != nil || len(owners) != 1 {
-		t.Fatalf("a new event cannot find the old owner: %s, %v", owners, err)
+	if owners, err := d.RecentExternalInboxOwners(ctx, ev.Ref, "other_event"); err != nil || len(owners) != 1 || owners[0].Target != plan.Owner.Target {
+		t.Fatalf("a new event cannot find the old owner: %+v, %v", owners, err)
 	}
 }
 

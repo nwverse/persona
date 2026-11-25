@@ -21,8 +21,8 @@ type externalInboxStore interface {
 	WithExternalInboxSweep(context.Context, func() error) error
 	ReadyExternalInboxEvents(context.Context, time.Time, int) ([]assistantwire.ExternalInboxWork, error)
 	LoadExternalInboxItem(context.Context, assistantwire.ExternalInboxItemID) (json.RawMessage, error)
-	RecentExternalInboxOwners(context.Context, assistantwire.ExternalRef, string) ([]json.RawMessage, error)
-	SaveExternalInboxProgress(context.Context, string, time.Time, json.RawMessage, bool) error
+	RecentExternalInboxOwners(context.Context, assistantwire.ExternalRef, string) ([]assistantwire.ExternalInboxDelivery, error)
+	SaveExternalInboxProgress(context.Context, string, time.Time, *assistantwire.ExternalInboxPlan, bool) error
 }
 
 func (s *Service) externalInboxDB() externalInboxStore {

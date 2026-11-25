@@ -15,10 +15,9 @@ import (
 
 const externalDigestDefault = 60 * time.Minute
 
-type externalTarget struct {
-	ID   w.ExternalTargetID   `json:"id"`
-	Kind w.ExternalTargetKind `json:"kind"`
-}
+type externalTarget = w.ExternalInboxTarget
+type externalDelivery = w.ExternalInboxDelivery
+type externalPlan = w.ExternalInboxPlan
 
 // This is the complete candidate record sent to the triage model.
 type externalCandidateBrief struct {
@@ -55,23 +54,6 @@ type externalVerdict struct {
 }
 
 type externalInboxTriager func(context.Context, externalTriageInput) ([]externalVerdict, error)
-
-type externalDelivery struct {
-	Target    externalTarget `json:"target"`
-	Scope     externalTarget `json:"scope"` // authorizing target, including the direction of a created to-do
-	AutoTodo  bool           `json:"auto_todo,omitempty"`
-	Method    string         `json:"method,omitempty"`
-	Machine   string         `json:"machine,omitempty"`
-	Session   string         `json:"session,omitempty"`
-	Tried     bool           `json:"tried,omitempty"`
-	Delivered bool           `json:"delivered,omitempty"`
-}
-
-type externalPlan struct {
-	Owner *externalDelivery  `json:"owner,omitempty"`
-	FYI   []externalDelivery `json:"fyi,omitempty"`
-	Ask   bool               `json:"ask,omitempty"`
-}
 
 // selectExternalCandidates chooses the first scope with a live, eligible
 // candidate. Within a scope the explicit binding supplies its policy and

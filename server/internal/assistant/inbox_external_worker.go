@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"time"
 
@@ -83,13 +82,8 @@ func (s *Service) routeReadyExternalInbox(ctx context.Context, store externalInb
 			continue
 		}
 		if !visible {
-			failures = append(failures, saveExternalPlan(ctx, store, ev.Key, now, externalPlan{}, true))
+			failures = append(failures, store.SaveExternalInboxProgress(ctx, ev.Key, now, nil, true))
 			continue
-		}
-		if len(ev.Plan) != 0 {
-			if err := json.Unmarshal(ev.Plan, &ready.plan); err != nil {
-				return err
-			}
 		}
 		selection, err := s.externalSelection(ctx, store, ev)
 		if err != nil {
@@ -97,7 +91,8 @@ func (s *Service) routeReadyExternalInbox(ctx context.Context, store externalInb
 			continue
 		}
 		ready.selection = selection
-		if len(ev.Plan) != 0 {
+		if ev.Plan != nil {
+			ready.plan = *ev.Plan
 			failures = append(failures, s.deliverExternalPlan(ctx, store, now, ready))
 			continue
 		}
@@ -270,7 +265,7 @@ func (s *Service) triageExternalInboxBatch(ctx context.Context, store externalIn
 			continue
 		}
 		if !visible {
-			failures = append(failures, saveExternalPlan(ctx, store, ev.work.Key, now, externalPlan{}, true))
+			failures = append(failures, store.SaveExternalInboxProgress(ctx, ev.work.Key, now, nil, true))
 			continue
 		}
 		plan, err := externalPlanFromVerdict(ev.work, ev.selection, verdicts[i])
@@ -307,12 +302,4 @@ func (s *Service) askExternalInboxTriage(ctx context.Context, input externalTria
 	system := prompts.RenderExternalInboxTriage(answerLanguage(s.hello(ctx).Locale))
 	err = s.inboxModelJSON(ctx, purposeTriage, system, string(raw), 400+len(input.Summaries)*250, &answer)
 	return answer.Results, err
-}
-
-func saveExternalPlan(ctx context.Context, store externalInboxStore, key string, at time.Time, plan externalPlan, done bool) error {
-	raw, err := json.Marshal(plan)
-	if err != nil {
-		return fmt.Errorf("encode external decision: %w", err)
-	}
-	return store.SaveExternalInboxProgress(ctx, key, at, raw, done)
 }
