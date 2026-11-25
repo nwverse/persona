@@ -113,14 +113,19 @@ func (s *Service) nodeSessionsWhere(machine string, keep func(*proto.Session) bo
 	return kept, listed
 }
 
-// assistantSessions are this manager's assistant's conversations on machine m (isAssistant), copied out of its node's
-// list without the rest: a machine can list thousands of coding sessions beside them.
-func (s *Service) assistantSessions(m fleetMachine) []proto.Session {
+// assistantSessions are this manager's assistant's conversations on machine m, copied out of its node's
+// list without the rest: a machine can list thousands of coding sessions beside them. Keep logical
+// placeholders and background-supervisor matches in parity with decorateInventory so GET /api/v1/assistant
+// lists every unarchived conversation that conversations_list sees.
+func (s *Service) assistantSessions(ctx context.Context, m fleetMachine) []proto.Session {
 	if s.devs == nil {
 		return nil
 	}
 	dir := m.assistantCwd()
-	list, _ := s.devs.SessionsWhere(m.ID, func(sess *proto.Session) bool { return isAssistantSession(sess, dir, m.manager) })
+	bgMatch := s.backgroundMatcher(ctx, m.ID)
+	list, _ := s.devs.SessionsWhere(m.ID, func(sess *proto.Session) bool {
+		return (sess.LogicalPlaceholder && sess.Assistant) || isAssistantSession(sess, dir, m.manager) || bgMatch.matches(sess)
+	})
 	return list
 }
 

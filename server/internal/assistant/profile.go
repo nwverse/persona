@@ -931,7 +931,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			// Select the headless conversations before copying, decorating or serializing the inventory: coding
 			// sessions can outnumber them by thousands.
 			if m, found := s.fleetMachine(d.ID); found {
-				list = s.decorateInventory(m.ID, s.assistantSessions(m), false)
+				list = s.decorateInventory(m.ID, s.assistantSessions(ctx, m), false)
 			}
 		} else {
 			list, _ = s.sessions(ctx, d.ID)

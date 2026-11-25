@@ -67,6 +67,75 @@ func TestAssistantViewSelectsBeforeDecorating(t *testing.T) {
 	}
 }
 
+func TestAssistantViewIncludesLogicalOfflinePinnedLeaders(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub()
+	f.hello.Assistant.MachineID = "box"
+	f.hello.Assistant.Machines = []string{"box"}
+	f.devices = []Device{{ID: "box", Home: "/home/u"}}
+	d := newFleetDevs()
+	d.add("box", "Computer")
+	st := newFleetMem()
+	leaders := []string{
+		"dir-1", "dir-2", "dir-3", "dir-4", "dir-5", "dir-6", "dir-7", "dir-8", "dir-9", "dir-archived",
+	}
+	if err := st.PutSettings(ctx, map[string]any{
+		"assistant.main":    "main",
+		"assistant.leaders": leaders,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Hub: f, Devices: d, Store: func() Store { return st }})
+
+	list := []proto.Session{
+		{SessionID: "main", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		{SessionID: "dir-1", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		{SessionID: "dir-2", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		{SessionID: "dir-3", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		{SessionID: "dir-4", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		{SessionID: "dir-5", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		{SessionID: "dir-6", Cwd: "/home/u/.persona/assistant", Status: proto.StatusIdle},
+		// Logical conversations whose active physical segment is offline have Cwd=="" and LogicalPlaceholder==true.
+		{SessionID: "dir-7", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
+		{SessionID: "dir-8", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
+		{SessionID: "dir-9", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
+		{SessionID: "dir-archived", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
+		{SessionID: "coding", Cwd: "/code/example", Status: proto.StatusWorking},
+		{SessionID: "non-assistant-placeholder", Status: proto.StatusOffline, Assistant: false, LogicalPlaceholder: true},
+	}
+	d.setSessions("box", list)
+	s.fleet.rep.sessions = map[string]SessionView{
+		"main":         {Title: "Persona"},
+		"dir-7":        {Title: "Direction 7"},
+		"dir-8":        {Title: "Direction 8"},
+		"dir-9":        {Title: "Direction 9"},
+		"dir-archived": {Title: "Archived direction", Archived: true},
+	}
+
+	wantIDs := []string{"main", "dir-1", "dir-2", "dir-3", "dir-4", "dir-5", "dir-6", "dir-7", "dir-8", "dir-9"}
+	idsOf := func(rows []proto.Session) []string {
+		out := make([]string, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, r.SessionID)
+		}
+		return out
+	}
+
+	listed, _ := s.conversations(ctx, false, "")
+	if got := idsOf(listed); !reflect.DeepEqual(got, wantIDs) {
+		t.Fatalf("conversations() = %v, want %v", got, wantIDs)
+	}
+	view := s.view(ctx, false)
+	if got := idsOf(view.Conversations); !reflect.DeepEqual(got, wantIDs) {
+		t.Fatalf("view(withArchived=false).Conversations = %v, want %v", got, wantIDs)
+	}
+	withArchived := s.view(ctx, true)
+	wantWithArchived := append(append([]string{}, wantIDs...), "dir-archived")
+	if got := idsOf(withArchived.Conversations); !reflect.DeepEqual(got, wantWithArchived) {
+		t.Fatalf("view(withArchived=true).Conversations = %v, want %v", got, wantWithArchived)
+	}
+}
+
 func TestPartialStateMarksKeepOtherSessions(t *testing.T) {
 	s := &Service{}
 	start := time.Now()
