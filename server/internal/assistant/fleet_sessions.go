@@ -436,6 +436,7 @@ func (s *Service) tellArchived(machine string, part archivedPart, hide map[[2]st
 		f.archived = map[string]archivedSent{}
 	}
 	f.archived[machine] = sent
+	s.attachArchivedViews(machine, rows) // Session.view on the archived rows too (fleet_views.go)
 	s.hub.Tell(assistantwire.EventFleetArchived, assistantwire.FleetArchived{MachineID: machine, Sessions: rows})
 }
 

@@ -297,7 +297,8 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
 
 `Session.view` (`schema/wire/agent-view.schema.json`, #15397, the typed core plan's 2.1, step P5) is the one view of
 an Agent every client draws: `{phase, reason, counted, rank}`. The manager computes it on every list it publishes
-(`server/internal/assistant/agentview`, through `fleetcountadapt.Views` in `fleet_views.go`); the hub relays it and
+(`server/internal/assistant/agentview`, through `fleetcountadapt.Views` in `fleet_views.go`), the archived rows a hub
+takes apart included; the hub relays it and
 advertises the feature `agent_view` (`proto.FeatureAgentView`). `state` and `status` above stay frozen and are still
 sent, for older clients. A new client draws `view` and sorts by `rank`; it never derives a phase, a count or an order
 of its own. `spec/fixtures/agent-view` pins every case.

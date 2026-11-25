@@ -13,3 +13,12 @@ func (s *Service) attachViews(machine string, list []proto.Session) {
 		return s.mutedAs(machine, sess.SessionID, sess.SpaceName)
 	}, cards)
 }
+
+// attachArchivedViews is attachViews for the archived rows told apart from the list (tellArchived): a hub that takes
+// them apart shows them with the same views as one that gets them in the list. sentMu is held.
+func (s *Service) attachArchivedViews(machine string, rows []proto.Session) {
+	cards, _ := s.visiblePendingCards()
+	s.fleet.archViews.Attach(rows, func(sess *proto.Session) bool {
+		return s.mutedAs(machine, sess.SessionID, sess.SpaceName)
+	}, cards)
+}
