@@ -24,7 +24,7 @@ class SchemaError(Exception):
 class TypeRef:
     kind: str  # string | int | int64 | number | bool | time | any | array | map | ref
     of: "TypeRef | None" = None
-    ref: str = ""
+    ref: str = ""  # a ref's definition; on a bool, the x-tristate definition Go writes it as
 
 
 @dataclass
@@ -40,7 +40,7 @@ class Field:
 @dataclass
 class Def:
     name: str
-    kind: str  # struct | enum | union | any | id (x-id) | opaque (x-opaque)
+    kind: str  # struct | enum | union | any | id (x-id) | text (x-text) | tristate (x-tristate) | opaque (x-opaque)
     doc: str = ""
     fields: list[Field] = field(default_factory=list)
     values: list[str] = field(default_factory=list)  # enum
@@ -57,29 +57,63 @@ class Def:
     unknown_policy: str = "skip"  # stream operations recover; lifecycle requests reject
     # Opt-in keywords (#15397). Each is off unless a schema names it, so every schema without them generates the
     # same bytes as before.
-    closed: bool = False  # x-enum "closed": a real enum whose unknown values decode to an explicit Unknown(raw)
+    closed: bool = False  # x-enum "closed": a real enum whose unknown values decode to an explicit Unknown(raw); on a
+    # union, Go's discriminator is a named type of its tags (the other languages' unions are closed already)
     count_unknown: bool = False  # x-unknown "count": decoding an unknown value calls the file's defect hook
     strict: bool = False  # x-decode "strict": decoding throws on a missing or mistyped field instead of defaulting
     reason: str = ""  # x-opaque: why this JSON stays open
+    keyed: str = ""  # a struct made from an enum-keyed map: the closed enum its fields are the values of
+    external: str = ""  # an x-id definition of a shared file (ids.schema.json) a property names: used, never emitted
 
 
 # The opt-in keywords and the values they take.
 ENUM_MODES = ("closed",)
 UNKNOWN_MODES = ("count",)
 DECODE_MODES = ("strict",)
+# The keywords that make types of what is otherwise a string or a map. A target a schema lists in x-typed-except is
+# generated with them taken out, as if the schema had none of them (see load's typed).
+TYPED_KEYWORDS = ("x-enum", "x-unknown", "x-id", "x-text", "x-tristate")
+
+
+def untyped(s):
+    """s without the typed keywords, at any depth."""
+    if isinstance(s, dict):
+        return {k: untyped(v) for k, v in s.items() if k not in TYPED_KEYWORDS}
+    if isinstance(s, list):
+        return [untyped(v) for v in s]
+    return s
+
+
+# Keywords that name a definition and may stand on a property in place of a $ref to it, with the property's JSON type.
+NAMED = {"x-id": "string", "x-text": "string", "x-tristate": "boolean"}
 
 
 def is_scalar(s: dict) -> bool:
     return s.get("type") in ("string", "integer", "number", "boolean") and "enum" not in s
 
 
-def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
+def load(schema_dir: Path, schema_files: list[str], *, shared: tuple[str, ...] = (), typed: bool = True) -> dict[str, Def]:
+    """The definitions of schema_files. shared names files in schema_dir (ids.schema.json) whose x-id definitions a
+    property's x-id may name when schema_files define no such name: such a definition is returned with external set to
+    its file, for the generators to refer to and never write. typed=False reads every file without the typed keywords
+    (TYPED_KEYWORDS), as if the schemas had none: closed enums are open ones, IDs and enum-keyed structs strings and
+    maps."""
     raw: dict[str, tuple[str, dict]] = {}
+    shared_raw: dict[str, tuple[str, dict]] = {}
+    externals: dict[str, Def] = {}
     sides: dict[str, str] = {}
     decode: dict[str, str] = {}  # a file's x-decode: the default of its objects
     synthesized: dict[str, tuple[str, Def]] = {}  # structs made from enum-keyed maps, with the file of their owner
+    for f in shared:
+        if f in schema_files or not (schema_dir / f).exists():
+            continue
+        for name, s in json.loads((schema_dir / f).read_text()).get("$defs", {}).items():
+            if s.get("x-id") == name:
+                shared_raw[name] = (f, s)
     for f in schema_files:
         doc = json.loads((schema_dir / f).read_text())
+        if not typed:
+            doc = untyped(doc)
         sides[f] = doc.get("x-side", "")
         decode[f] = doc.get("x-decode", "")
         if decode[f] and decode[f] not in DECODE_MODES:
@@ -110,7 +144,9 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
                 if name in aliases:
                     raise SchemaError(f"{at}: cyclic validation alias {name}")
                 return typeof(target, name, aliases + (name,))
-            if "x-opaque" in target or "x-id" in target:
+            if "x-tristate" in target:
+                return TypeRef("bool", ref=name)
+            if "x-opaque" in target or "x-id" in target or "x-text" in target:
                 return TypeRef("ref", ref=name)
             if target.get("x-untagged"):
                 return TypeRef("ref", ref=name) if target.get("x-json-value") else TypeRef("any")
@@ -120,12 +156,19 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
         if "x-opaque" in s:
             raise SchemaError(f"{at}: x-opaque names a type: put it on a definition and $ref that")
         t = s.get("type")
-        if "x-id" in s:
-            # A property may name its ID type in place of a $ref: the definition with that x-id, in these files.
-            name = s["x-id"]
-            if t != "string" or name not in raw or raw[name][1].get("x-id") != name:
-                raise SchemaError(f"{at}: x-id {name!r} is not a string definition with that x-id")
-            return TypeRef("ref", ref=name)
+        for key, json_type in NAMED.items():
+            if key not in s:
+                continue
+            # A property may name its ID, label or three-state type in place of a $ref: the definition with that
+            # keyword, in these files, or (an ID) in a shared file (ids.schema.json).
+            name = s[key]
+            if key == "x-id" and t == json_type and name not in raw and name in shared_raw:
+                f, target = shared_raw[name]
+                externals[name] = Def(name, "id", target.get("description", ""), external=f)
+                return TypeRef("ref", ref=name)
+            if t != json_type or name not in raw or raw[name][1].get(key) != name:
+                raise SchemaError(f"{at}: {key} {name!r} is not a {json_type} definition with that {key}")
+            return TypeRef("bool", ref=name) if key == "x-tristate" else TypeRef("ref", ref=name)
         if t is None:
             if "const" in s:
                 return TypeRef("string")
@@ -168,18 +211,30 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
         if name in raw or (name in synthesized and synthesized[name][1].fields[0].type != value):
             raise SchemaError(f"{at}: the struct {name} its enum-keyed map makes is also defined elsewhere")
         doc = f"One field for each {enum} of {at}."
-        synthesized[name] = (raw[owner][0], Def(name, "struct", doc, fields=[Field(k, value, True) for k in es["enum"]]))
+        synthesized[name] = (raw[owner][0], Def(name, "struct", doc, fields=[Field(k, value, True) for k in es["enum"]],
+                                                keyed=enum))
         return TypeRef("ref", ref=name)
 
     defs: dict[str, Def] = {}
     for name, (f, s) in raw.items():
         doc = s.get("description", "")
-        if ("x-enum" in s or "x-unknown" in s) and not (s.get("type") == "string" and "enum" in s):
+        union = "oneOf" in s and s.get("type") != "object" and not s.get("x-untagged")
+        if "x-unknown" in s and not (s.get("type") == "string" and "enum" in s):
             raise SchemaError(f"{name}: x-enum and x-unknown go on a string enum")
+        if "x-enum" in s and not (s.get("type") == "string" and "enum" in s) and not union:
+            raise SchemaError(f"{name}: x-enum goes on a string enum or a discriminated union")
         if "x-id" in s:
             if s["x-id"] != name or s.get("type") != "string" or "enum" in s:
                 raise SchemaError(f"{name}: x-id goes on a string definition and repeats its name")
             defs[name] = Def(name, "id", doc)
+        elif "x-text" in s:
+            if s["x-text"] != name or s.get("type") != "string" or "enum" in s or "format" in s:
+                raise SchemaError(f"{name}: x-text goes on a string definition and repeats its name")
+            defs[name] = Def(name, "text", doc)
+        elif "x-tristate" in s:
+            if s["x-tristate"] != name or s.get("type") != "boolean":
+                raise SchemaError(f"{name}: x-tristate goes on a boolean definition and repeats its name")
+            defs[name] = Def(name, "tristate", doc)
         elif "x-opaque" in s:
             if not isinstance(s["x-opaque"], str) or not s["x-opaque"].strip():
                 raise SchemaError(f"{name}: x-opaque takes the reason this JSON stays open")
@@ -203,6 +258,10 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
                 raise SchemaError(f"{name}: a oneOf needs x-discriminator (or x-untagged for free JSON)")
             variants = [resolve(v["$ref"], name) for v in s["oneOf"]]
             defs[name] = Def(name, "union", doc, variants=variants, discriminator=disc)
+            if "x-enum" in s:  # a closed union: Go types its discriminator (the other languages already close it)
+                if s["x-enum"] not in ENUM_MODES:
+                    raise SchemaError(f"{name}: x-enum {s['x-enum']!r}: only {', '.join(ENUM_MODES)}")
+                defs[name].closed = True
         elif s.get("type") == "string" and "enum" in s:
             defs[name] = Def(name, "enum", doc, values=list(s["enum"]))
             closed_enum(defs[name], s)
@@ -212,6 +271,9 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
             for fname, fs in s.get("properties", {}).items():
                 fields.append(Field(fname, typeof(fs, f"{name}.{fname}"), fname in req, fs.get("description", ""),
                                     bool(fs.get("x-go-pointer")), fs.get("const")))
+                if fields[-1].type.kind == "bool" and fields[-1].type.ref and (fields[-1].required or fields[-1].pointer):
+                    raise SchemaError(f"{name}.{fname}: an x-tristate field is optional (its absence is the third "
+                                      "value) and takes no x-go-pointer")
             exclusive = []
             for option in s.get("oneOf", []):
                 if set(option) != {"required"} or len(option["required"]) != 1:
@@ -247,6 +309,7 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
     for name, (f, d) in synthesized.items():
         d.side, d.strict = sides[f], decode[f] == "strict"
         defs[name] = d
+    defs.update(externals)
 
     for u in [d for d in defs.values() if d.kind == "union"]:
         for v in u.variants:

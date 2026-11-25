@@ -186,6 +186,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				t.Error = err.Error()
 				continue
 			}
+			s.applyTodosV2DispatchDefaults(ctx, p.Conversation, supervisors[i], t, &todo)
 			if t.Continues != "" && (t.HandoffOperationID != "" || s.isProviderSwitchContinuation(ctx, todo, t.Machine, t.Launcher)) {
 				if err := s.prepareContinuationHandoff(ctx, t, todo, pred, hasPred); err != nil {
 					t.Error = err.Error()
@@ -218,6 +219,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				}
 			}
 		} else {
+			s.applyTodosV2DispatchDefaults(ctx, p.Conversation, supervisors[i], t, nil)
 			title, retitle := s.taskTitle(ctx, t.Title, t.Prompt) // the assistant's own title stays when it is a real one
 			if t.InboxItem != "" {
 				s.tasks.mu.Lock()
@@ -369,6 +371,32 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		s.drainWorkspaceQueue(ctx, target.machine, target.path)
 	}
 	return p, nil
+}
+
+// applyTodosV2DispatchDefaults fills default direction_id and audience for a planned task when todos_v2 is enabled (#15654).
+// It never overwrites an explicit caller value or an existing reused to-do's non-empty value, and is a complete no-op when
+// todos_v2 is off.
+func (s *Service) applyTodosV2DispatchDefaults(ctx context.Context, conversation, supervisor string, t *PlanTask, existing *Todo) {
+	if !s.settings(ctx).todosV2On() {
+		return
+	}
+	effSup := supervisor
+	if effSup == "" {
+		effSup = cmp.Or(t.Supervisor, conversation)
+	}
+	isLeaderSup := effSup != "" && s.isLeader(ctx, effSup)
+	if t.DirectionID == "" && (existing == nil || existing.DirectionID == "") && isLeaderSup {
+		t.DirectionID = effSup
+	}
+	if t.Audience == "" && (existing == nil || existing.Audience == "") {
+		partOf := t.PartOf
+		if partOf == "" && existing != nil {
+			partOf = existing.PartOf
+		}
+		if isLeaderSup || !t.UserRequested || partOf != "" || t.Parent != "" {
+			t.Audience = db.AudienceAutonomous
+		}
+	}
 }
 
 // failPlanSupervision closes a prepared card whose required ledger could not be stored. Keeping TodoID preserves the
@@ -794,15 +822,16 @@ func (s *Service) activateDeferredTaskStart(ctx context.Context, t *PlanTask, mi
 	return s.call(ctx, mid, DeviceSessionSend, params, nil)
 }
 
-// closeDeferredTaskStart discards a newly created ACP session that provably never got its first prompt. It is not used
-// for an uncertain activation: that session may already be running and remains linked for recovery instead.
+// closeDeferredTaskStart discards a newly created ACP session that provably never got its first prompt. It stops only
+// the Agent and leaves the user's terminal open. It is not used for an uncertain activation: that session may already
+// be running and remains linked for recovery instead.
 func (s *Service) closeDeferredTaskStart(ctx context.Context, t *PlanTask, mid, sid string) {
 	if t.deferredStart == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 	defer cancel()
-	if err := s.call(ctx, mid, "session.close", map[string]any{"session_id": sid}, nil); err != nil {
+	if err := s.call(ctx, mid, deviceSessionStop, map[string]any{"session_id": sid}, nil); err != nil {
 		s.logf("task %s: close deferred Companion session %s/%s: %v", t.TodoID, mid, sid, err)
 	}
 }

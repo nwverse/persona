@@ -38,7 +38,7 @@ import { StartPageGroup } from "./settings/StartPage";
 import { AgentsDisplayRow } from "./settings/AgentsDisplayRow";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
-import { PersonaPicker } from "./assistant/Persona";
+import { PersonaPicker } from "./assistant/PersonaPicker";
 import { TriageSettings } from "./settings/TriageSettings";
 import { TranslationSettings } from "./settings/TranslationSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
@@ -51,6 +51,7 @@ import { settingsTarget } from "../lib/channels";
 import { extensionsRoute, routeSub } from "../lib/extension-market";
 import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
+import { RecoverySettings } from "./settings/RecoverySettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
@@ -499,10 +500,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
               {tab === "devices" && <Devices />}
-              {tab === "hub" && <>
-                <HubSettings />
+              {tab === "hub" && (sub === "recovery" ? <RecoverySettings onBack={() => pick("hub")} /> : <>
+                <HubSettings onOpenRecovery={() => pick("hub", "recovery")} />
                 <AgentGroup />
-              </>}
+              </>)}
               {tab === "managers" && <ManagersSettings />}
               {!isCoreTab(tab) && <ModuleSettingsPage tab={tab} />}
             </div>

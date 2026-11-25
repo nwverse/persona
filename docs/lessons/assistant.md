@@ -1,5 +1,23 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A supervision transcript fixture must not use push policy as its write switch (#15498). Side conversations can
+  receive user-level supervision with `hold_pushes=false`; it still writes a user item. Select fake writes by message
+  source, keep missing-item injection independent, and name push-held fixtures explicitly. Test both notification
+  policies without relaxing transcript confirmation, once-ID or retry assertions.
+
+- Mixed core/module fixtures must keep testing the core when a module is absent (#15500). Check generic scheduled
+  failure routing first, then make the optional briefing hook assert absence or its normal fallback. Do not skip the
+  whole test, weaken the default-build assertion or wait for a notification from a module that is not loaded.
+
+- Timer completion accounting belongs to the registered callback wrapper (#15499). A direct call of a stopped
+  callback guard has no matching `WaitGroup.Add`; decrementing there can panic and strand teardown on a negative
+  counter. Keep the real timer's Add/Done pairing and prove shutdown drains an in-flight callback without rearming.
+
+- A single-reviewer guard must preserve conversationless supervisor fallbacks (#15497). A legacy reporting-only
+  direction can retain its recorded assignment while its review reminder goes to main. Authorize that same reviewer
+  without authorizing an unrelated conversation or taking over a real supervisor's offline queue; test direct, busy
+  and restart-restored delivery with the assignment unchanged.
+
 - A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
   appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
   Near their due time, a catalog test can count both the workout report and a briefing, while waiting for only the
@@ -1013,3 +1031,17 @@ it the CLI declares only five-minute markers on an API key or a gateway, whateve
 
 Adding an always-loaded tool to the top-level list can invalidate a warm Claude conversation prefix. Test
 the full ordered list before and after discovery and reconnection, including a different upstream order.
+
+## A supervision hold belongs to the turn that ended (#15549)
+
+Save the hold timestamp and promotion together. Clear the active record at the end of its turn and carry that
+turn's decision to the delayed push and channel mirror. Reading the conversation's current hold at notification
+time can pick up the next round. A restart test for promotion must show the hold still exists before it checks
+that a silent finish is refused.
+
+## An inbox row can carry more than one provider event (#15517)
+
+Keep the deduplication key independent of the Inbox row and the binding that matched. Two readers can report
+the same comment, and the row can collect a later comment while the first is waiting for its digest. Commit the
+source receipt with the Inbox write. Reserve only one action owner and pin the delivery before contacting the
+Agent. Record uncertain delivery against that recipient so a restarted worker does not try another one.

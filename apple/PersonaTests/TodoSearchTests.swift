@@ -14,7 +14,7 @@ struct TodoSearchTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let words = TodoWords(locale: Locale(identifier: "en_US"))
 
-    private func filed(_ id: String, _ section: String) -> TodoFiled {
+    private func filed(_ id: String, _ section: TodoListSection) -> TodoFiled {
         TodoFiled(id: id, manager: nil, section: section, closed: section == TodoListSection.done, rank: 0, inactive: false,
                   byView: true, quiet: false, partOf: nil, project: nil, asks: [])
     }
@@ -48,8 +48,8 @@ struct TodoSearchTests {
     /// outside the search. What was found is the row's own (`TodosListModel.Row.search`): its words stay as worked out.
     @MainActor @Test func aResultSaysWhatMatchedAndOffersNoInlineAction() throws {
         let item = TodoItem(id: "a", title: "Book the dentist", notes: "Ask for the 9:00 slot. Bring the card.")
-        let view = TodoSummary(phase: "ready", section: TodoListSection.justFinished, reason: "finished_seen",
-                               line: TodoLine(key: TodoLineKey.finishedSeen), rank: 0)
+        let view = TodoSummary(phase: TodoPhase.ready, section: TodoListSection.justFinished, reason: TodoReason.finishedSeen,
+                               line: TodoLine(key: TodoLineKey.finishedSeen.rawValue), rank: 0)
         let c = TodoRowContentLogic.content(filed("a", TodoListSection.justFinished), item: item, view: view, now: now, words: words)
         #expect(c.offersMarkDone(nil) && c.found(by: nil) == nil && c.spoken(nil) == c.spoken, "outside the search")
         let byTitle = try #require(TodoSearch.hit(item, words: "dentist"))
@@ -88,8 +88,8 @@ struct TodoSearchTests {
     @MainActor @Test func aResultOffersNoAnswers() throws {
         let ask = OwnerAsk(id: "a", kind: OwnerAskKind.decision, home: OwnerAskHome.todo, round: "r", recommend: "Ryokan Hanami",
                            options: [.init(label: "Ryokan Hanami"), .init(label: "Kaede")], risk: OwnerAskRisk.safe)
-        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "owner_decides",
-                               line: TodoLine(key: TodoLineKey.decision, args: ["recommend": "Ryokan Hanami"]), asks: [ask])
+        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.ownerDecides,
+                               line: TodoLine(key: TodoLineKey.decision.rawValue, args: ["recommend": "Ryokan Hanami"]), asks: [ask])
         let item = TodoItem(id: "a", title: "Book a room in Kyoto", notes: "Two of us. A ryokan near Gion.")
         let row = filed("a", TodoListSection.needsYou)
         let open = TodoRowContentLogic.content(row, item: item, view: view, now: now, words: words)
@@ -181,7 +181,7 @@ struct TodoSearchModelTests {
         TodoViewJSON.row("w", title: "Draft the newsletter", extra: #""notes":"Mention the ryokan trip. Keep it short.""#,
                          view: TodoViewJSON.view(TodoListSection.working)),
         TodoViewJSON.row("d", title: "Book the ryokan", extra: #""done_at":"2027-01-13T09:00:00Z""#,
-                         view: TodoViewJSON.view(TodoListSection.done, phase: "done", line: "done")),
+                         view: TodoViewJSON.view(TodoListSection.done, phase: TodoPhase.done, line: "done")),
         TodoViewJSON.row("t", title: "Renew passport", view: TodoViewJSON.view(TodoListSection.todo, line: "rest")),
     ]
 
@@ -214,14 +214,15 @@ struct TodoSearchModelTests {
         #expect(n == 2 && !list.groups.flatMap(\.drawnKeys).contains("/d"), "the closed one is not in the list")
         list.query = "ryokan"
         try await waitForSearchTest { list.searchedWords == "ryokan" }
-        #expect(list.groups.map(\.id) == [TodoListSection.needsYou, TodoListSection.working, "done:week"], "closed two days ago")
+        #expect(list.groups.map(\.id) == [TodoListSection.needsYou.rawValue, TodoListSection.working.rawValue, "done:week"],
+                "closed two days ago")
         #expect(list.groups.flatMap(\.drawnKeys) == ["/n", "/w", "/d"])
         #expect(list.groups.map(\.count) == [1, 1, 1], "what matches")
         #expect(list.needsYou == n && store.countsSource.needsYou == n, "N stays")
         #expect(list.row("/w")?.search?.found?.text == "Mention the ryokan trip.", "the notes' sentence")
         #expect(list.row("/n")?.search == TodoSearchHit(), "found by its name")
         list.query = ""
-        #expect(!list.searching && list.groups.map(\.id).first == TodoListSection.needsYou && list.groups[0].keys == ["/n", "/n2"],
+        #expect(!list.searching && list.groups.map(\.id).first == TodoListSection.needsYou.rawValue && list.groups[0].keys == ["/n", "/n2"],
                 "cleared: the list again at once")
         #expect(list.row("/w")?.search == nil && list.row("/n")?.search == nil, "their own lines again")
     }
@@ -309,7 +310,7 @@ struct TodoSearchModelTests {
                 return TodoViewJSON.row("t\(n)", title: renamed.contains(n) ? "To-do \(n), renamed" : "To-do \(n) about \(topic)",
                                         extra: #""notes":"\#(notes)""# + done,
                                         view: TodoViewJSON.view(closed ? TodoListSection.done : sections[n % 3], rank: n,
-                                                                phase: closed ? "done" : nil, line: closed ? "done" : "rest"))
+                                                                phase: closed ? TodoPhase.done : nil, line: closed ? "done" : "rest"))
             }
         }
         let hub = FakeHub()

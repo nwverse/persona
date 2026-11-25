@@ -465,7 +465,7 @@ struct AskCardModelTests {
 
     /// "OK: ‹option›" while it fits 260 pt at the text size, else "OK": from its length and the scale, never measured.
     @Test func theOKSaysOKWhenItsWordsWouldNotFit() throws {
-        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "owner_decides",
+        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.ownerDecides,
                                asks: [OwnerAsk(id: "a", kind: OwnerAskKind.decision, home: OwnerAskHome.todo, round: "r", recommend: "Ryokan Hanami",
                                                options: [.init(label: "Ryokan Hanami"), .init(label: "Kaede")], risk: OwnerAskRisk.safe)])
         let answers = try #require(TodoRowAnswersLogic.answers(view, section: TodoListSection.needsYou, closed: false, mark: nil))
@@ -493,11 +493,11 @@ struct AskCardModelTests {
     /// A run's ask offers nothing on the row, a safe question with its card included: its home is its session, and the
     /// row's tap opens the to-do, where it is. A failed start offers Retry and Options; nothing on a closed row.
     @Test func aRunsAskOffersNothingOnTheRow() throws {
-        let run = TodoRunRef(machineId: "macbook", sessionId: "s1", title: "Widget")
+        let run = TodoRunRef(machineId: MachineID("macbook"), sessionId: SessionID("s1"), title: "Widget")
         let question = OwnerAsk(id: "run:macbook/s1@x", kind: OwnerAskKind.question, home: OwnerAskHome.run, text: "Which icon set?",
-                                run: run, risk: OwnerAskRisk.safe, interaction: "ix1")
+                                run: run, risk: OwnerAskRisk.safe, interaction: InteractionID("ix1"))
         let view = { (ask: OwnerAsk) in
-            TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "agent_asks", asks: [ask])
+            TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.agentAsks, asks: [ask])
         }
         #expect(TodoRowAnswersLogic.answers(view(question), section: TodoListSection.needsYou, closed: false, mark: nil) == nil)
         let retry = OwnerAsk(id: "todo:retry@x", kind: OwnerAskKind.retry, home: OwnerAskHome.todo, risk: OwnerAskRisk.safe)
@@ -518,7 +518,7 @@ struct AskCardModelTests {
         ask.recommend = nil
         #expect(ask.recommendedOption == nil)
         #expect(AskCard.optionRows(ask) == [["Ryokan Hanami", "Kaede"], ["Tsuki", "Hoshi"]])
-        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "owner_decides", asks: [ask])
+        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.ownerDecides, asks: [ask])
         let answers = try #require(TodoRowAnswersLogic.answers(view, section: TodoListSection.needsYou, closed: false, mark: nil))
         #expect(answers.primary == nil && answers.options)
         ask.recommend = "Somewhere else"

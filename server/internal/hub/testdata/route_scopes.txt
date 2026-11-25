@@ -53,6 +53,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/assistant/conversations/{id}/model
 -                    DELETE /api/v1/assistant/conversations/{id}/undelivered/{msg}
 -                    DELETE /api/v1/assistant/directions/offers/{id}
+-                    DELETE /api/v1/assistant/external-source-bindings/{id}
 -                    DELETE /api/v1/assistant/followups/{id}
 -                    DELETE /api/v1/assistant/health/intake/{id}
 -                    DELETE /api/v1/assistant/memory/{name}
@@ -167,6 +168,11 @@ dispatch.guard       GET /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy GET /api/v1/assistant/dispatch-policy
 assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/extension-trust
+-                    GET /api/v1/assistant/external-source-bindings
+-                    GET /api/v1/assistant/external-source-bindings/lookup
+-                    GET /api/v1/assistant/external-source-bindings/summary
+-                    GET /api/v1/assistant/external-source-policies
+-                    GET /api/v1/assistant/external-source-policies/effective
 -                    GET /api/v1/assistant/feishu/notices
 -                    GET /api/v1/assistant/followups
 -                    GET /api/v1/assistant/health/intake
@@ -243,6 +249,7 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/extensions/{id}/-/{$}
 -                    GET /api/v1/fleet
 -                    GET /api/v1/health
+-                    GET /api/v1/hub/recovery
 -                    GET /api/v1/hub/update
 -                    GET /api/v1/hub/update/backups
 -                    GET /api/v1/hub/update/history
@@ -498,6 +505,7 @@ leaders.write        POST /api/v1/assistant/directions
 leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/directions/{id}/start
 -                    POST /api/v1/assistant/entries/{id}/wrong
+-                    POST /api/v1/assistant/external-source-bindings
 -                    POST /api/v1/assistant/feed/{id}/dismiss
 -                    POST /api/v1/assistant/feed/{id}/undo-dismiss
 -                    POST /api/v1/assistant/feishu/notices/action
@@ -580,6 +588,8 @@ market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/extensions/{id}/-/ui/{ui}
 -                    POST /api/v1/extensions/{id}/-/upgrade
 -                    POST /api/v1/extensions/{id}/-/widget/{ui}
+-                    POST /api/v1/hub/recovery/bundles/{id}/inspect
+-                    POST /api/v1/hub/recovery/bundles/{id}/verify
 -                    POST /api/v1/hub/update
 -                    POST /api/v1/hub/update/backups/{id}/apply
 -                    POST /api/v1/hub/update/check
@@ -798,6 +808,8 @@ spaces               PUT /api/v1/assistant/conversations/{id}/categories
 dispatch.guard       PUT /api/v1/assistant/dispatch-guard
 assistant.dispatch_policy PUT /api/v1/assistant/dispatch-policy
 -                    PUT /api/v1/assistant/extension-trust/{id}
+-                    PUT /api/v1/assistant/external-source-bindings/{id}
+-                    PUT /api/v1/assistant/external-source-policies
 -                    PUT /api/v1/assistant/feishu/companions
 -                    PUT /api/v1/assistant/health/items
 -                    PUT /api/v1/assistant/history
