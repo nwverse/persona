@@ -402,10 +402,12 @@ describe("uploaded looks in the picker", () => {
     const uploadCard = byLabel(t("assistant-persona.upload_label"))!;
     const { dt } = dispatchDrag(uploadCard, "dragover");
     expect(uploadCard.getAttribute("data-drop-over")).toBe("true");
+    expect((uploadCard as HTMLElement).style.outlineStyle).toBe("dashed");
     expect(dt.dropEffect).toBe("copy");
 
     await dispatchDrop(uploadCard);
     expect(uploadCard.getAttribute("data-drop-over")).toBeNull();
+    expect((uploadCard as HTMLElement).style.outlineStyle).toBe("");
     const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dlg).not.toBeNull();
     expect(dlg.textContent).toContain(t("assistant-lookupload.title"));
@@ -420,10 +422,12 @@ describe("uploaded looks in the picker", () => {
     const doudouCard = radios().find((r) => r.getAttribute("aria-label") === "Doudou")!;
     const { dt } = dispatchDrag(doudouCard, "dragover");
     expect(doudouCard.getAttribute("data-drop-over")).toBe("true");
+    expect((doudouCard as HTMLElement).style.outlineStyle).toBe("dashed");
     expect(dt.dropEffect).toBe("copy");
 
     await dispatchDrop(doudouCard);
     expect(doudouCard.getAttribute("data-drop-over")).toBeNull();
+    expect((doudouCard as HTMLElement).style.outlineStyle).toBe("");
     const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dlg).not.toBeNull();
     expect(dlg.textContent).toContain(t("assistant-lookupload.edit_title"));

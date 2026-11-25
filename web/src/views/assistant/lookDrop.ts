@@ -3,6 +3,12 @@
 // so nothing here ever enters the cold first screen.
 import { useEffect, useRef, useState, type DragEvent } from "react";
 
+/**
+ * A targeted picker card's dashed outline, inline so no new utility class reaches the global stylesheet the first
+ * screen loads (the other outline classes are already in it).
+ */
+export const DASHED_OUTLINE = { outlineStyle: "dashed" } as const;
+
 /** True when a drag event carries OS files (ignores in-page text drags). */
 export function hasDragFiles(dt: DataTransfer | null | undefined): boolean {
   return !!dt && [...dt.types].includes("Files");

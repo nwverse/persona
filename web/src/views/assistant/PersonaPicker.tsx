@@ -11,7 +11,7 @@ import { deleteUploadedLook, LOOK_UPLOADS_FEATURE, LOOK_UPLOADS_STATES_FEATURE, 
 import { Button, cx, Dialog, IconButton } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { lazyDialog } from "../LazyOverlay";
-import { fileDropGuard, useFileDrop } from "./lookDrop";
+import { DASHED_OUTLINE, fileDropGuard, useFileDrop } from "./lookDrop";
 import { MochiFace } from "./MochiFace";
 import { currentLanguage, t } from "../../i18n";
 import { tRich } from "../../i18n/rich";
@@ -149,11 +149,12 @@ function UploadedLookCard({
         aria-checked={selected}
         aria-label={card.label}
         data-drop-over={drop.over ? "true" : undefined}
+        style={drop.over ? DASHED_OUTLINE : undefined}
         onClick={onChoose}
         className={cx(
           "flex min-w-0 flex-1 flex-col items-center gap-2 rounded-card px-2 pt-3.5 pb-2.5 transition-[background-color,box-shadow] duration-150",
           drop.over
-            ? "bg-accent-tint outline-1 outline-dashed outline-accent -outline-offset-1"
+            ? "bg-accent-tint outline-1 outline-accent -outline-offset-1"
             : selected
               ? "bg-accent-tint shadow-[inset_0_0_0_1.5px_var(--accent)]"
               : "bg-inset shadow-hairline hover:bg-hover",
@@ -275,12 +276,13 @@ export function PersonaPicker({ onExtensions }: { onExtensions?: () => void } = 
             type="button"
             aria-label={t("assistant-persona.upload_label")}
             data-drop-over={uploadDrop.over ? "true" : undefined}
+            style={uploadDrop.over ? DASHED_OUTLINE : undefined}
             onClick={() => setUpload((u) => ({ open: true, key: u.key + 1 }))}
             {...uploadDrop.props}
             className={cx(
               "flex min-w-0 flex-col items-center gap-2 rounded-card px-2 pt-3.5 pb-2.5 transition-[background-color,box-shadow] duration-150",
               uploadDrop.over
-                ? "bg-accent-tint outline-1 outline-dashed outline-accent -outline-offset-1"
+                ? "bg-accent-tint outline-1 outline-accent -outline-offset-1"
                 : "bg-inset shadow-hairline hover:bg-hover",
             )}
           >
