@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// Meeting minutes of the phone's recordings (kb/minutes.go, docs/assistant/meeting-minutes.md): asking for them, the
+// Meeting minutes of the phone's recordings (modules/recording/writers/minutes.go, docs/assistant/meeting-minutes.md): asking for them, the
 // push when they are written, and the to-dos the user confirms from their action items.
 
 // codeMinutesStale: the minutes were written again since the version the app sent; it reads them again.

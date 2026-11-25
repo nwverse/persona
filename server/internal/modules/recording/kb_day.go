@@ -19,7 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// All-day recordings and their daily recap (#4741; kb/recording_day.go, kb/day_recap.go): the phone's appends
+// All-day recordings and their daily recap (#4741; kb/recording_day.go, modules/recording/writers/day_recap.go): the phone's appends
 // (POST …/segments), the refusals of a PUT that only a day recording has, the recap through the minutes' routes
 // (kb_minutes.go), the day's one push, and the names and the recap time the knowledge base asks the manager for. The
 // evening routine's facts about the day are briefing_day.go's.
