@@ -46,6 +46,8 @@ GET /mock/churn?todos=1[&n=20&ms=3000]  n times, ms apart, the newsletter's work
 GET /mock/todo-view   the mode, whether the hello names the view now, the late phase and the managers.
 GET /mock/todo-view?seen_hours=25  until /mock/reset, a finished to-do's seen mark counts as that many hours old, so a
                       row seen now reads as seen a day ago: To do with finished_seen (the list's Mark Done).
+GET /mock/todo-view?done_hours=t08:50  until /mock/reset, the closed to-do t08 closed that many hours before now (and
+                      `todos` is pushed), so a search finds it under an earlier day whatever the hour.
 
 Time: the moment the mock starts plays the prototype's now (Wednesday 18 November 2026, 10:14), and every time is
 placed from it as the prototype places it, so a row the prototype shows as 16 minutes old is 16 minutes old when the
@@ -1167,9 +1169,15 @@ def route(h, method, path):
     if method == "POST" and receipts(h, path):
         return True
     if method == "GET" and path == "/mock/todo-view":
-        hours = parse_qs(urlparse(h.path).query).get("seen_hours")
+        query = parse_qs(urlparse(h.path).query)
+        hours = query.get("seen_hours")
         if hours:
             _state["seen_hours"] = float(hours[0])
+        tid, _, back = (query.get("done_hours") or [""])[0].partition(":")
+        closed = find(tid) if tid and back else None
+        if closed and closed.get("done_at"):
+            closed["done_at"] = stamp(datetime.now(timezone.utc) - timedelta(hours=float(back)))
+            _hub["push_todos"]()
         return h.send_json({"mode": MODE, "listed": listed(), "phase": _state["phase"], "managers": managers(),
                             "churn": _state["churn"]}) or True
     query = parse_qs(urlparse(h.path).query) if path == "/mock/churn" else {}

@@ -706,6 +706,7 @@ type agyPageParams struct {
 	FromSeq    int    `json:"from_seq"`
 	ThroughSeq int    `json:"through_seq"`
 	UserInputs bool   `json:"user_inputs"`
+	MetaOnly   bool   `json:"meta_only"`
 	FoldWork   bool   `json:"fold_work"`
 }
 
@@ -766,6 +767,11 @@ func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) an
 		items := h.items
 		if p.BeforeSeq > 0 {
 			items = items[:agyIndex(items, p.BeforeSeq)]
+		}
+		if p.MetaOnly {
+			var compact transcript.CompactInputIndex
+			compact.Add(items)
+			return compact.Index(h.token)
 		}
 		inputs := transcript.UserInputPositions(items)
 		return proto.UserInputIndex{History: h.token, Inputs: inputs, Total: len(inputs)}
@@ -838,7 +844,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 		return okResult(nil), nil, true
 	case "session.info":
 		return n.agyPaneSessionInfo(id, pane), nil, true
-	case "session.items", "session.item", "session.image", "session.watch":
+	case "session.items", "session.item", "session.image", "session.watch", proto.MethodSessionInputPreviews, proto.MethodSessionItemsWindow:
 	default:
 		return nil, nil, false
 	}
@@ -904,6 +910,10 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	}
 	if method == "session.image" {
 		return nil, &rpc.Error{Code: codeNotFound, Message: "no image"}, true
+	}
+	if method == proto.MethodSessionInputPreviews || method == proto.MethodSessionItemsWindow {
+		res, err := serveSessionNavigation(ctx, h, method, raw)
+		return res, err, true
 	}
 	return h.pageWith(p, id, &n.toolViews), nil, true
 }
