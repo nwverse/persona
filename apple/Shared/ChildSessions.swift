@@ -257,7 +257,7 @@ nonisolated enum ChildSessions {
     /// Drop the `is_subagent` rows that name no parent (client-side fallback so no orphan, embedded, same-machine or
     /// cross-machine subagent leaks into the main Agents list) as well as any row whose folded parent this list holds,
     /// and show folded state on the rows that stay. A subtask that names its parent stays: the list nests it under the
-    /// parent's Subtasks row (`CodexTasks`, docs/apple/ios.md "Subtasks", #14502).
+    /// parent's Subtasks row (`CodexTasks`, docs/apple/ios.md "Information architecture", #14502).
     /// `asks` is the line a waiting child puts on its parent when the parent itself is not waiting.
     static func fold(_ sessions: [Session], asks: [SessionKey: String] = [:]) -> [Session] {
         let listed = Set(sessions.map(\.key))
