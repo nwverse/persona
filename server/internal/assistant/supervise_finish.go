@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // promoteSupervision is monotone within a wake-up: a later silent finish cannot hide a user action.
@@ -15,9 +19,57 @@ func (s *Service) promoteSupervision(self string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.init()
-	if _, held := b.hold[key]; held {
+	if _, held := b.hold[key]; held || !b.pendingHold[key].at.IsZero() {
 		b.visible[key] = true
 	}
+}
+
+type pendingSupervisionHold struct {
+	at       time.Time
+	machine  string
+	clientID string
+}
+
+func (s *Service) hasSupervisionHold(id string) bool {
+	b := &s.supervise
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, held := b.hold[id]
+	return held || !b.pendingHold[id].at.IsZero()
+}
+
+// A missed transcript check is not proof that the relay never started. Stop
+// suppressing pushes until the matching logical delivery is visible, while
+// remembering which attempt and promotion state a finishing tool can verify.
+func (s *Service) deferSupervisionHold(machine, id, onceID string, at time.Time) {
+	b := &s.supervise
+	b.mu.Lock()
+	if held, ok := b.hold[id]; !ok || held != at {
+		b.mu.Unlock()
+		return
+	}
+	delete(b.hold, id)
+	b.pendingHold[id] = pendingSupervisionHold{at, machine, proto.SegmentOnceIDPrefix + onceID}
+	b.mu.Unlock()
+	s.publish(context.Background())
+}
+
+func (s *Service) pendingSupervisionIsCurrent(ctx context.Context, id string, pending pendingSupervisionHold) bool {
+	ctx, cancel := context.WithTimeout(ctx, relayCheckWait)
+	defer cancel()
+	var page struct{ Items []proto.Item }
+	if err := s.call(ctx, pending.machine, DeviceSessionItems, map[string]any{"session_id": id, "turns": 1, "lazy_images": true, "strict_read": true}, &page); err != nil {
+		return false
+	}
+	for i := len(page.Items) - 1; i >= 0; i-- {
+		it := page.Items[i]
+		if it.Role != "user" || (it.Kind != proto.KindText && it.Kind != proto.KindImage) {
+			continue
+		}
+		src := prompts.ItemSource(it)
+		return !it.Queued && it.ClientMsgID == pending.clientID && src != nil && src.Kind == proto.SourceSupervision
+	}
+	return false
 }
 
 // quietInternalAcceptedReview uses only the current plan binding and supervision
@@ -63,6 +115,23 @@ func (s *Service) toolSupervisionFinish(ctx context.Context, self string, args j
 	b := &s.supervise
 	b.mu.Lock()
 	_, held := b.hold[key]
+	pending := b.pendingHold[key]
+	restored := false
+	if !held && !pending.at.IsZero() && time.Since(pending.at) <= superviseHoldMax {
+		b.mu.Unlock()
+		current := s.pendingSupervisionIsCurrent(ctx, key, pending)
+		b.mu.Lock()
+		// An owner send, another relay, or a newer attempt can replace the hold while the read is in flight.
+		if current && b.pendingHold[key] == pending {
+			b.hold[key] = pending.at
+			delete(b.pendingHold, key)
+			restored = true
+		}
+		held = b.hold[key] == pending.at
+	}
+	if restored {
+		defer s.publish(ctx)
+	}
 	if !held || a.Visibility == "silent" && b.visible[key] {
 		b.mu.Unlock()
 		return "", errors.New("this is not an unpromoted supervision turn; normal user messages cannot be hidden")

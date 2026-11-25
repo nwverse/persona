@@ -304,8 +304,9 @@ type superviseBook struct {
 	// waiting), noMainLogged when that was last logged (sendDigest).
 	noMainSince, noMainLogged time.Time
 	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
-	visible                   map[string]bool      // an explicit user action makes the current triage turn visible
-	sideLinks                 map[string][]string  // side conversation → task/conversation links to attach to its user-level supervision push
+	pendingHold               map[string]pendingSupervisionHold
+	visible                   map[string]bool     // an explicit user action makes the current triage turn visible
+	sideLinks                 map[string][]string // side conversation → task/conversation links to attach to its user-level supervision push
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
@@ -319,6 +320,7 @@ func (b *superviseBook) init() {
 	if b.pending == nil {
 		b.pending, b.sent, b.asks, b.hold = map[string]superviseSignal{}, map[string]string{}, map[string]string{}, map[string]time.Time{}
 		b.visible = map[string]bool{}
+		b.pendingHold = map[string]pendingSupervisionHold{}
 		b.sideLinks = map[string][]string{}
 		b.legacyBackground = map[string]bool{}
 	}
@@ -1443,6 +1445,12 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 			delete(b.hold, id)
 			delete(b.visible, id)
 			changed = true
+		}
+	}
+	for id, hold := range b.pendingHold {
+		if now.Sub(hold.at) > superviseHoldMax {
+			delete(b.pendingHold, id)
+			delete(b.visible, id)
 		}
 	}
 	b.mu.Unlock()

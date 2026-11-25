@@ -71,6 +71,25 @@ describe("supervision rounds", () => {
     expect(chatLines([user(1, raw.replace('level="triage"', 'level="user"'))])[0].kind).toBe("segment");
   });
 
+  it("folds a hub-marked logical supervision relay between ordinary messages", () => {
+    const digest = user(2, raw, {
+      client_msg_id: "segment-once:relay-000000000000000000000001",
+      source: { kind: "supervision" },
+      injected: { kind: "system", state: "supervise", level: "triage", line: "Supervision" },
+    });
+    const finish = call(3, "mcp__persona__supervision_finish", { visibility: "silent" });
+    const lines = chatLines([
+      user(1, "Earlier owner request"),
+      digest,
+      finish,
+      result(4, finish, receipt("silent")),
+      answer(5),
+      user(6, raw, { client_msg_id: "example-owner-input" }),
+    ]);
+    expect(lines.map((line) => line.kind)).toEqual(["segment", "supervision", "segment"]);
+    expect(lines[1].kind === "supervision" && lineOfItem(lines[1].lines, [], digest.id)).toBeDefined();
+  });
+
   it("preserves every original input block and its images before display parsing", () => {
     const original = `<persona-context kind="context">Fictional snapshot</persona-context>\n${raw}`;
     const image: Item = { id: "u1#1", seq: 1, role: "user", kind: "image", image: { mime: "image/png", lazy: true } };

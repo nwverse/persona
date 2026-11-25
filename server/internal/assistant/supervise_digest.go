@@ -1407,15 +1407,18 @@ func (s *Service) consumeSideSupervisionLinks(id string) []string {
 
 // holdPushes: a supervision message went into conversation id: its turn's normal finish is not pushed (the hub and the
 // channels read it off the snapshot, SessionView.Supervising) until the user or anything else speaks there.
-func (s *Service) holdPushes(ctx context.Context, id string) {
+func (s *Service) holdPushes(ctx context.Context, id string) time.Time {
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	b.hold[id] = time.Now()
+	at := time.Now()
+	b.hold[id] = at
+	delete(b.pendingHold, id)
 	delete(b.visible, id)
 	delete(b.sideLinks, id)
 	b.mu.Unlock()
 	s.publish(ctx)
+	return at
 }
 
 // holdPushesParam marks an assistant.send whose supervision turn holds the conversation's pushes (holdPushes).
@@ -1428,6 +1431,7 @@ func (s *Service) releasePushes(ctx context.Context, id string) {
 	b.mu.Lock()
 	_, held := b.hold[id]
 	delete(b.hold, id)
+	delete(b.pendingHold, id)
 	delete(b.visible, id)
 	delete(b.sideLinks, id)
 	b.mu.Unlock()
