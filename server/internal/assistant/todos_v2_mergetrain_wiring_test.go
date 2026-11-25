@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/todo/mergetrain"
 )
 
-func setTodosV2Flag(t *testing.T, s *Service, want, expected bool) {
+func setMergeTrainTodosV2Flag(t *testing.T, s *Service, want, expected bool) {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{"todos_v2": want, "expected_todos_v2": expected})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestTodosV2MergeTrainBypassWhenFlagOff(t *testing.T) {
 func TestTodosV2MergeTrainSameRepoSerialAndCrossRepoParallel(t *testing.T) {
 	s, _ := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	setTodosV2Flag(t, s, true, false)
+	setMergeTrainTodosV2Flag(t, s, true, false)
 
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -154,7 +154,7 @@ func TestTodosV2MergeTrainSameRepoSerialAndCrossRepoParallel(t *testing.T) {
 func TestTodosV2MergeTrainHumanReviewGuardNeverAutoMerges(t *testing.T) {
 	s, _ := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	setTodosV2Flag(t, s, true, false)
+	setMergeTrainTodosV2Flag(t, s, true, false)
 
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -208,7 +208,7 @@ func TestTodosV2MergeTrainHumanReviewGuardNeverAutoMerges(t *testing.T) {
 func TestTodosV2MergeTrainTwoStrikeConflictEscalationDedupAndReset(t *testing.T) {
 	s, _ := newQuietServiceOn(t, nil)
 	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
-	setTodosV2Flag(t, s, true, false)
+	setMergeTrainTodosV2Flag(t, s, true, false)
 
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -287,8 +287,8 @@ func TestTodosV2MergeTrainTwoStrikeConflictEscalationDedupAndReset(t *testing.T)
 func TestTodosV2MergeTrainRollbackClearsStateAndConcurrentIsolation(t *testing.T) {
 	s1, _ := newQuietServiceOn(t, nil)
 	s2, _ := newQuietServiceOn(t, nil)
-	setTodosV2Flag(t, s1, true, false)
-	setTodosV2Flag(t, s2, true, false)
+	setMergeTrainTodosV2Flag(t, s1, true, false)
+	setMergeTrainTodosV2Flag(t, s2, true, false)
 
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -326,7 +326,7 @@ func TestTodosV2MergeTrainRollbackClearsStateAndConcurrentIsolation(t *testing.T
 	}
 
 	// Disabling todos_v2 at runtime immediately clears and bypasses s1's merge train without affecting s2.
-	setTodosV2Flag(t, s1, false, true)
+	setMergeTrainTodosV2Flag(t, s1, false, true)
 	if snap := s1.mergeTrainSnapshot(ctx); len(snap.Repos) != 0 {
 		t.Fatalf("disabling todos_v2 did not clear merge train: %+v", snap)
 	}
