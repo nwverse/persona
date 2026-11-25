@@ -165,10 +165,11 @@ TABLE = (
          ("scripts/test/test_name_freezes.py",)),
         (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
     ),
-    # The domain slice scaffold (scripts/new_domain_slice.py, #15179): test_new_domain_slice.py compiles and tests what
+    # The domain slice scaffold (scripts/gen/new_domain_slice.py, #15179): test_new_domain_slice.py compiles and tests what
     # it writes against the domain kit and the rules, and compares the golden, so a change to any of them runs it.
     (
-        (("server/internal/domainkit/*", "server/internal/archguard/domainrules/*",
+        (("scripts/gen/new_domain_slice.py", "scripts/new_domain_slice.py", "scripts/test/test_new_domain_slice.py",
+          "server/internal/domainkit/*", "server/internal/archguard/domainrules/*",
           "server/internal/archguard/testdata/scaffold/*", "server/internal/archguard/testdata/domain_layers/*",
           "server/internal/agentref/*"), ("scripts/test/test_new_domain_slice.py",)),
     ),

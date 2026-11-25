@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""scripts/new_domain_slice.py writes what the domain rules accept, and keeps writing it.
+"""scripts/gen/new_domain_slice.py writes what the domain rules accept, and keeps writing it.
 
 The golden, server/internal/archguard/testdata/scaffold, is a run with every flag but --shared (a shared kernel holds
 no entity). Here it is written again and compared byte for byte; archguard's TestScaffoldGoldenPasses runs the domain
@@ -22,7 +22,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVER = ROOT / "server"
-SCRIPT = ROOT / "scripts" / "new_domain_slice.py"
+SCRIPT = ROOT / "scripts" / "gen" / "new_domain_slice.py"
 GOLDEN = SERVER / "internal" / "archguard" / "testdata" / "scaffold"
 UPDATE = "SCAFFOLD_GOLDEN_UPDATE"
 
