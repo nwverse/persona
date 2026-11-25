@@ -31,6 +31,6 @@ class IDsWireTest {
     }
 
     @Test fun anAgentRefNeedsBothFields() {
-        assertThrows(Exception::class.java) { codec.decodeFromString<AgentRef>("""{"machine":"m"}""") }
+        assertThrows(Exception::class.java) { val _ = codec.decodeFromString<AgentRef>("""{"machine":"m"}""") }
     }
 }
