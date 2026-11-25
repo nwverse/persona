@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/modules/recording/writers"
 )
 
 // The phone's recording sync (docs/protocol/protocol.md "Recording sync", kb/recordings.go): transcripts into the knowledge base,
@@ -152,9 +153,9 @@ func (s *Recordings) recordingRoutes(engine func(http.ResponseWriter, *http.Requ
 			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_title"))
 			return
 		}
-		rec, err := e.RenameRecording(r.PathValue("id"), *in.Title, time.Now())
+		rec, err := writersOf(e).RenameRecording(r.PathValue("id"), *in.Title, time.Now())
 		switch {
-		case errors.Is(err, kb.ErrBadTitle):
+		case errors.Is(err, writers.ErrBadTitle):
 			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_title"))
 			return
 		case errors.Is(err, kb.ErrBadRecording):

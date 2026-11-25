@@ -101,7 +101,7 @@ func TestPlacementReportsClientStartsAndResumes(t *testing.T) {
 			s, _, d := admissionHub(t)
 			busyOverloaded(d)
 			store := &memStore{}
-			s.store = func() Store { return store }
+			s.setStore(func() Store { return store })
 			devices := &placementBusDevices{resourceDevs: d}
 			b := NewBusHub(BusOptions{Devices: devices})
 			b.svc = s

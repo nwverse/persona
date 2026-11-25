@@ -585,7 +585,11 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // #14398: the Agents list's ⋯ menu toggles "按最近更新排序" and "显示筛选" (sidebar.sort_activity, sidebar.show_list_filter;
 // the sidebar namespace is first-screen whole) add 77 B to the ja first screen, measured with origin/main 1ad9a001e6
 // merged: en 482,711 B, ja 485,382 B, zh-Hans 483,352 B. The budget moves by the same 77 B plus 10 B of room.
-export const FIRST_SCREEN_BUDGET = 485_392;
+// #12585: keeping read Unread/Just finished Agent rows in place until refresh adds lib/seen-rows.ts, heldSeen grouping
+// in lib/agent-groups.ts, and sidebar/store wiring (SeenRowsNotice, ClearSeenButton, SeenRowsSetting and seen-rows
+// strings stay lazy); measured on origin/main 9baa8e3a1: en 483,193 B, ja 485,750 B, zh-Hans 483,805 B. Raise budget
+// to the measured ja size plus 10 B of room.
+export const FIRST_SCREEN_BUDGET = 485_760;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
@@ -821,7 +825,10 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // And 26 B for the stalled-background hint (#13744): the idle sidebar rows (SidebarRows.tsx) draw "Background commands
 // quiet for N h" under a Working row whose background work has stalled (ui/BackgroundStallHint.tsx). Main 7b023aa70 with
 // #13842 sends 46,091 B at idle, 16 B over; 10 B of room on top.
-export const IDLE_TIER_BUDGET = 46_101;
+// And 33 B for Dashboards phase 2 watch rendering (#13020): the idle renderer (ViewBody.tsx) wraps a lone metric's
+// label and detail instead of truncating and caps a row's value at max-w-[45%]. Core-only build on main 9760656350
+// with #13020 sends 46,124 B at idle (23 B over); 10 B of room on top.
+export const IDLE_TIER_BUDGET = 46_134;
 
 const gzip = promisify(gzipCompress);
 

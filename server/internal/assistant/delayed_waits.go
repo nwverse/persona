@@ -51,9 +51,6 @@ type delayedWaitCAS interface {
 // updateDelayedWaits serializes local writers and uses the setting revision to fence other managers. repositorystore
 // exposes the database's CompareSetting; the PutSetting fallback keeps small test stores compatible.
 func (s *Service) updateDelayedWaits(ctx context.Context, change func(*delayedWaitDoc) (bool, error)) error {
-	if s.store == nil {
-		return errDelayedWaitStore
-	}
 	st := s.store()
 	if st == nil {
 		return errDelayedWaitStore
@@ -88,9 +85,6 @@ func (s *Service) updateDelayedWaits(ctx context.Context, change func(*delayedWa
 
 func (s *Service) readDelayedWaits(ctx context.Context) (delayedWaitDoc, error) {
 	var doc delayedWaitDoc
-	if s.store == nil {
-		return doc, errDelayedWaitStore
-	}
 	st := s.store()
 	if st == nil {
 		return doc, errDelayedWaitStore
@@ -413,7 +407,7 @@ func (s *Service) releaseReceiptRecheck(ctx context.Context, w delayedWait, toke
 func (s *Service) restoreDelayedWaits(ctx context.Context) bool {
 	s.delayedRecoveryMu.Lock()
 	defer s.delayedRecoveryMu.Unlock()
-	if s.store == nil {
+	if s.storeFn.Load() == nil {
 		return true
 	}
 	if s.store() == nil {
