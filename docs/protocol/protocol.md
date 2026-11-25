@@ -6319,7 +6319,7 @@ The prose can end with a blank line followed by `<!-- persona-inline-v1 […] --
 from the end of the prose to the anchor's start, its length in UTF-16 units, and its reference key. The key uses the
 context kind and the selected identity (skill `ref`, scoped file path, workspace `machine` and `cwd`, `repo_id`, or
 canonical session URL). Equal names can therefore point to different contexts. The Web parser keeps the prose and
-the trailer available separately. `readInlineBody` in `web/src/lib/inline-mentions.ts` verifies each anchor's text
+the trailer available separately. `readInlineBody` in `web/src/lib/inline-message.ts` verifies each anchor's text
 against its matching context. Quote prefixes and description enrichment leave this lookup intact. A missing or
 unmatched anchor keeps its ordinary text, and unreferenced blocks keep their context display.
 

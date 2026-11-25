@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { contextXML, withContexts } from "./context-xml";
 import {
-  draftText, editorText, inlineBody, inlineReferences, readInlineBody, readInlineDraft,
-  replaceInlineRange, writeInlineDraft,
+  draftText, editorText, readInlineDraft, replaceInlineRange, writeInlineDraft,
 } from "./inline-mentions";
+import { inlineBody, inlineReferences, readInlineBody } from "./inline-message";
 import type { ContextRef } from "./links";
 import { skillContext, splitSkillDraft } from "./skill-mentions";
 

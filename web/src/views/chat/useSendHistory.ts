@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { hasFinePointer } from "../../lib/viewport";
 import { canRecall, opensSearch, readHistory, recallIndexOf, recallStep, recordSent } from "../../lib/send-history";
 import { skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
-import { editorText, inlineBody, readInlineDraft } from "../../lib/inline-mentions";
+import { editorText, inlineMessage, readInlineDraft } from "../../lib/inline-mentions";
 import type { InlineMentionInputHandle } from "./InlineMentionInput";
 
 export interface SendHistory {
@@ -26,7 +26,8 @@ export interface SendHistory {
 // History keeps local draft IDs. Transcript edits have the same anchors even if a hub enriched a context body.
 function editableIdentity(raw: string) {
   const { skills, text } = splitSkillDraft(raw);
-  return skillDraft(skills, inlineBody(readInlineDraft(text)).trim());
+  const doc = readInlineDraft(text);
+  return skillDraft(skills, (inlineMessage()?.inlineBody(doc) ?? text).trim());
 }
 
 export function useSendHistory(o: {

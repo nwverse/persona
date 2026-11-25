@@ -14,7 +14,7 @@ import { chooseManager, MANAGER_HEADER, resetManagerChoice } from "../../lib/man
 import { useMentionRows, type MentionSource } from "../chat/ComposerPanel";
 import { toast } from "../../ui/atoms";
 import { changeComposerField, composerField, composerFieldText } from "../chat/composer-test-field";
-import { readInlineBody } from "../../lib/inline-mentions";
+import { readInlineBody } from "../../lib/inline-message";
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/api", async (original) => ({ ...(await original<typeof import("../../lib/api")>()), api }));

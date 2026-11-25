@@ -26,14 +26,14 @@ import { base64File, releaseAttachments } from "../../lib/attachments";
 import { imageLimitsFor, MAX_PICTURE_SOURCE, pictureRoom, type ImageLimits } from "../../lib/image-limits";
 import { addFiles as addComposerFiles, filesBusy, MAX_FILES, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ContextRef, type ComposerHandle } from "../../lib/links";
-import { addQuote, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, type DraftImage } from "../../lib/drafts";
+import { addQuote, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, type DraftEvent, type DraftImage } from "../../lib/drafts";
 import type { EditedImage } from "../../lib/image-edit";
 import { mentionAt, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
 import { machineWithHub } from "../../lib/mesh";
 import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
 import { contextXML } from "../../lib/context-xml";
 import {
-  editorText, inlineBody, inlineReferences, joinInline, readInlineBody, readInlineDraft, sliceInline,
+  editorText, inlineMessage, INLINE_TRAILER_START, joinInline, loadInlineMessage, readInlineDraft, sliceInline,
   writeInlineDraft, type InlineDocument, type InlineSelection,
 } from "../../lib/inline-mentions";
 import { parseUserText } from "../../lib/turns";
@@ -59,8 +59,8 @@ import type { ComposerAction } from "../../core/module-host";
 
 // Preload the editor once an image is attached, when there is something to edit.
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor));
-// The + / @ panel, drawn only while it is open: its own chunk and words, fetched by the idle preload or the first opening.
-const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel), { idle: true });
+// The + / @ panel loads on picker intent.
+const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel));
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
 const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay));
 const preloadComposerOverlay = () => void ComposerOverlay.preload().catch(() => {});
@@ -266,7 +266,7 @@ export const Composer = memo(function Composer({
   const promptDoc = useMemo(() => readInlineDraft(editor?.text ?? ""), [editor?.text]);
   const doc = editor ? promptDoc : chatDraft;
   const draft = useMemo(() => editorText(doc), [doc]);
-  const inlineRefs = useMemo(() => inlineReferences(doc), [doc]);
+  const hasInline = doc.some((part) => typeof part !== "string");
   const editingPrompt = Boolean(editor);
   const [atts, setAtts] = useState<Attachment[]>([]);
   // The suggestion just sent with its arrow: it stays on the hub until the agent starts, and each tap would be a new message.
@@ -337,7 +337,7 @@ export const Composer = memo(function Composer({
   useEffect(() => {
     setActive(0);
     if (editingPrompt && !skillEnvironment) return;
-    if (previousSkillEnvironment.current && previousSkillEnvironment.current !== skillEnvironment && [...contexts, ...inlineRefs].some((r) => r.kind === "skill")) {
+    if (previousSkillEnvironment.current && previousSkillEnvironment.current !== skillEnvironment && [...contexts, ...doc].some((part) => typeof part !== "string" && part.kind === "skill")) {
       toast(t("chat-composer.skills_changed"), "error");
     }
     previousSkillEnvironment.current = skillEnvironment;
@@ -433,103 +433,116 @@ export const Composer = memo(function Composer({
   // "Quote" / "Edit" / a queued message pulled back / an edited picture, from the chat (lib/drafts.ts)
   const draftNow = useRef(doc);
   draftNow.current = doc;
-  useEffect(
-    () =>
-      editingPrompt ? undefined : onDraftEvent(draftKey, (e) => {
-        if (!canWriteDraft()) return;
-        // a send from an earlier box of this conversation failed: its words come back even while sending is off
-        if (e.type === "unsent") {
-          const split = splitSkillDraft(e.text);
-          split.skills.forEach((r) => addContext(draftKey, r));
-          setDraft((cur) => joinDrafts(readInlineDraft(split.text), cur));
+  useEffect(() => {
+    if (editingPrompt) return;
+    let lastReplace = 0;
+    function applyEvent(e: DraftEvent) {
+      if (!canWriteDraft()) return;
+      // a send from an earlier box of this conversation failed: its words come back even while sending is off
+      if (e.type === "unsent") {
+        const split = splitSkillDraft(e.text);
+        split.skills.forEach((r) => addContext(draftKey, r));
+        setDraft((cur) => joinDrafts(readInlineDraft(split.text), cur));
+        return;
+      }
+      if (!canTake.current) return;
+      if (e.type === "image") {
+        const room = roomForImage(e.image.data.length);
+        if (room !== "ok") {
+          spillLater(base64File(e.image.name, e.image.mime, e.image.data), room);
           return;
         }
-        if (!canTake.current) return;
-        if (e.type === "image") {
-          const room = roomForImage(e.image.data.length);
-          if (room !== "ok") {
-            spillLater(base64File(e.image.name, e.image.mime, e.image.data), room);
-            return;
-          }
-          appendImage(fromDraftImage(e.image, uuid(), e.edited));
-          input.current?.focus({ preventScroll: true });
-          return;
-        }
-        if (e.type === "quote") {
-          // the input keeps what is typed; the bar shows the quote, a new one in place of the last
-          addQuote(draftKey, { text: e.text.trim(), from: e.from, ts: e.ts, task: e.task }, false);
-          requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
-          return;
-        }
-        // other words in place of an edit's (Edit as new, a rewind's message): no longer an edit
-        const startsEdit = e.type === "replace" && Boolean(e.edit);
-        if (e.type === "replace" && !startsEdit) editNow.current?.cancel();
-        // "Edit" a message sent with files: they go back to their tiles (#8361), the words to the input
-        const sentFiles = e.type === "replace" ? splitFileTags(e.text) : null;
-        const overflow = sentFiles ? restoreFiles(draftKey, sentFiles.files) : [];
-        // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
-        const selected = sentFiles ? splitSkillDraft(withFiles(sentFiles.text, overflow)) : null;
-        const parsed = sentFiles ? parseUserText(sentFiles.text) : null;
-        const restored = parsed?.inlineTrailer && readInlineBody(parsed.text + parsed.inlineTrailer, parsed.contexts);
-        const replaced = restored ? joinDrafts(restored.document, readInlineDraft(withFiles("", overflow))) : readInlineDraft(selected?.text ?? "");
-        const replacementText = editorText(replaced);
-        const split = e.type === "replace" ? splitQuotes(replacementText) : null;
-        const nextQuotes = e.type === "replace" ? (split ? parseQuotes(split.quotes) : []) : null;
-        const next = split ? sliceInline(replaced, replacementText.length - split.rest.length) : selected ? replaced : joinDrafts(draftNow.current, readInlineDraft(e.text));
-        // "Edit" or a rewind over unsent words, quotes or comments puts the message in at once, with no question first:
-        // the notice's Undo brings back what was typed, the quotes on the bar and where the caret was (#2450). An empty
-        // bar, or one that would send the same blocks, loses nothing.
-        const before = getQuotes(draftKey).list;
-        const dropsQuotes = before.length > 0 && withQuoteBlock(before, "") !== withQuoteBlock(nextQuotes ?? [], "");
-        const kept =
-          nextQuotes && (replaceNeedsConfirm(writeInlineDraft(draftNow.current), writeInlineDraft(next)) || dropsQuotes || getContexts(draftKey).some((r) => r.kind === "skill"))
-            ? { text: writeInlineDraft(draftNow.current), skills: getContexts(draftKey).filter((r) => r.kind === "skill"), quotes: before, caret: input.current?.selection()[0] ?? editorText(draftNow.current).length }
-            : null;
-        if (kept) {
-          toast(t("chat-composer.replaced"), "ok", {
-            label: t("chat-composer.undo"),
-            run: () => {
-              if (!canWriteDraft()) return;
-              if (startsEdit) editNow.current?.cancel();
-              setQuotes(draftKey, kept.quotes);
-              const previous = restoreSkills(skillDraft(kept.skills, kept.text));
-              // the box went away or shows another conversation: the words go back to this one's stored draft
-              if (!mounted.current || keyNow.current !== draftKey) {
-                storeDraft(draftKey, skillDraft(kept.skills, kept.text));
-                return;
-              }
-              setDraft(previous);
-              setDismissed(false);
-              requestAnimationFrame(() => {
-                const el = input.current;
-                if (!el) return;
-                el.focus({ preventScroll: true });
-                el.setSelectionRange(kept.caret, kept.caret);
-                setCaret(kept.caret);
-              });
-            },
-          });
-        }
-        if (nextQuotes) setQuotes(draftKey, nextQuotes);
-        if (restored && parsed) {
-          restoreSkills("");
-          for (const ref of parsed.contexts) if (!restored.used.has(ref)) {
-            addContext(draftKey, { ...newContext(ref.kind as ContextRef["kind"], ref.title ?? "", ref.url ?? "", ref.text), attrs: ref.attrs });
-          }
-        } else if (selected) restoreSkills(skillDraft(selected.skills, selected.text));
-        setDraft(next);
-        setDismissed(false);
-        requestAnimationFrame(() => {
-          const el = input.current;
-          if (!el) return;
-          el.focus({ preventScroll: true });
-          const end = editorText(next).length;
-          el.setSelectionRange(end, end);
-          setCaret(end);
+        appendImage(fromDraftImage(e.image, uuid(), e.edited));
+        input.current?.focus({ preventScroll: true });
+        return;
+      }
+      if (e.type === "quote") {
+        // the input keeps what is typed; the bar shows the quote, a new one in place of the last
+        addQuote(draftKey, { text: e.text.trim(), from: e.from, ts: e.ts, task: e.task }, false);
+        requestAnimationFrame(() => input.current?.focus({ preventScroll: true }));
+        return;
+      }
+      // other words in place of an edit's (Edit as new, a rewind's message): no longer an edit
+      const startsEdit = e.type === "replace" && Boolean(e.edit);
+      if (e.type === "replace" && !startsEdit) editNow.current?.cancel();
+      // "Edit" a message sent with files: they go back to their tiles (#8361), the words to the input
+      const sentFiles = e.type === "replace" ? splitFileTags(e.text) : null;
+      const overflow = sentFiles ? restoreFiles(draftKey, sentFiles.files) : [];
+      // "Edit" a message sent with a quote: the quote goes back to the bar, the words to the input
+      const selected = sentFiles ? splitSkillDraft(withFiles(sentFiles.text, overflow)) : null;
+      const parsed = sentFiles?.text.includes(INLINE_TRAILER_START) ? parseUserText(sentFiles.text) : null;
+      const restored = parsed?.inlineTrailer && inlineMessage()?.readInlineBody(parsed.text + parsed.inlineTrailer, parsed.contexts);
+      const replaced = restored ? joinDrafts(restored.document, readInlineDraft(withFiles("", overflow))) : readInlineDraft(selected?.text ?? "");
+      const replacementText = editorText(replaced);
+      const split = e.type === "replace" ? splitQuotes(replacementText) : null;
+      const nextQuotes = e.type === "replace" ? (split ? parseQuotes(split.quotes) : []) : null;
+      const next = split ? sliceInline(replaced, replacementText.length - split.rest.length) : selected ? replaced : joinDrafts(draftNow.current, readInlineDraft(e.text));
+      // "Edit" or a rewind over unsent words, quotes or comments puts the message in at once, with no question first:
+      // the notice's Undo brings back what was typed, the quotes on the bar and where the caret was (#2450). An empty
+      // bar, or one that would send the same blocks, loses nothing.
+      const before = getQuotes(draftKey).list;
+      const dropsQuotes = before.length > 0 && withQuoteBlock(before, "") !== withQuoteBlock(nextQuotes ?? [], "");
+      const kept =
+        nextQuotes && (replaceNeedsConfirm(writeInlineDraft(draftNow.current), writeInlineDraft(next)) || dropsQuotes || getContexts(draftKey).some((r) => r.kind === "skill"))
+          ? { text: writeInlineDraft(draftNow.current), skills: getContexts(draftKey).filter((r) => r.kind === "skill"), quotes: before, caret: input.current?.selection()[0] ?? editorText(draftNow.current).length }
+          : null;
+      if (kept) {
+        toast(t("chat-composer.replaced"), "ok", {
+          label: t("chat-composer.undo"),
+          run: () => {
+            if (!canWriteDraft()) return;
+            if (startsEdit) editNow.current?.cancel();
+            setQuotes(draftKey, kept.quotes);
+            const previous = restoreSkills(skillDraft(kept.skills, kept.text));
+            // the box went away or shows another conversation: the words go back to this one's stored draft
+            if (!mounted.current || keyNow.current !== draftKey) {
+              storeDraft(draftKey, skillDraft(kept.skills, kept.text));
+              return;
+            }
+            setDraft(previous);
+            setDismissed(false);
+            requestAnimationFrame(() => {
+              const el = input.current;
+              if (!el) return;
+              el.focus({ preventScroll: true });
+              el.setSelectionRange(kept.caret, kept.caret);
+              setCaret(kept.caret);
+            });
+          },
         });
-      }),
-    [draftKey, canWriteDraft, editingPrompt],
-  );
+      }
+      if (nextQuotes) setQuotes(draftKey, nextQuotes);
+      if (restored && parsed) {
+        restoreSkills("");
+        for (const ref of parsed.contexts) if (!restored.used.has(ref)) {
+          addContext(draftKey, { ...newContext(ref.kind as ContextRef["kind"], ref.title ?? "", ref.url ?? "", ref.text), attrs: ref.attrs });
+        }
+      } else if (selected) restoreSkills(skillDraft(selected.skills, selected.text));
+      setDraft(next);
+      setDismissed(false);
+      requestAnimationFrame(() => {
+        const el = input.current;
+        if (!el) return;
+        el.focus({ preventScroll: true });
+        const end = editorText(next).length;
+        el.setSelectionRange(end, end);
+        setCaret(end);
+      });
+    }
+    const unsubscribe = onDraftEvent(draftKey, (e) => {
+      if (e.type !== "replace") return applyEvent(e);
+      const request = ++lastReplace;
+      if (!e.text.includes(INLINE_TRAILER_START) || inlineMessage()) return applyEvent(e);
+      void loadInlineMessage().then(() => {
+        if (request === lastReplace) applyEvent(e);
+      }, () => {
+        if (request !== lastReplace || !canWriteDraft()) return;
+        if (e.edit) editNow.current?.cancel();
+        toast(t("chat-composer.reference_load_failed"), "error");
+      });
+    });
+    return () => { lastReplace++; unsubscribe(); };
+  }, [draftKey, canWriteDraft, editingPrompt]);
 
   // What is typed goes into the conversation's stored draft 250 ms after the last key; one still waiting is written at
   // once when the box goes away or moves to another conversation, and when the page is hidden (closed, reloaded,
@@ -629,7 +642,7 @@ export const Composer = memo(function Composer({
   // your saved prompts (#7329) after the chat's own commands, read once a box has the focus or a "/"
   const savedPrompts = useSavedPromptRows(focused || draft.startsWith("/"));
   const allCommands = useMemo(() => [...commands, ...savedPrompts, ...promptCommands(quickPrompts)], [commands, savedPrompts, quickPrompts]);
-  const query = dismissed || inlineRefs.length ? null : parseSlash(draft);
+  const query = dismissed || hasInline ? null : parseSlash(draft);
   // A /loop draft gets a line under the box saying what it will do (only where the menu offers /loop: Claude agents).
   const loop = commands.some((c) => c.text === LOOP_TEXT) ? loopHint(draft) : null;
   // Keep bare "/" focused on commands; a non-empty "/<keyword>" also matches against the active skill catalog.
@@ -649,6 +662,9 @@ export const Composer = memo(function Composer({
   useEffect(() => {
     if (mOpen || slashSkillActive || plusOpen) preloadInlineField();
   }, [mOpen, slashSkillActive, plusOpen]);
+  useEffect(() => {
+    if (hasInline && !inlineMessage()) void loadInlineMessage().catch(() => {});
+  }, [hasInline]);
 
   const trackCaret = ([from, to]: InlineSelection) => setCaret(from === to ? from : -1);
 
@@ -868,9 +884,19 @@ export const Composer = memo(function Composer({
   };
 
   const submit = async (value = doc, now = false) => {
-    if (!canWriteDraft()) return;
+    if (!canWriteDraft() || ime.tracker.current.active) return;
     const text = editorText(value);
     if (pickerCommand(text)) return;
+    let codec = inlineMessage();
+    if (!codec && hasInline) {
+      try {
+        codec = await loadInlineMessage();
+      } catch {
+        if (mounted.current && keyNow.current === draftKey && canWriteDraft()) toast(t("chat-composer.reference_load_failed"), "error");
+        return;
+      }
+      if (!mounted.current || keyNow.current !== draftKey || draftNow.current !== value || !canWriteDraft()) return;
+    }
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     // a file still on its way holds the message, as a video does on the phone (#8361); the words stay in the box
@@ -881,8 +907,8 @@ export const Composer = memo(function Composer({
     const hasFiles = readyFiles(draftKey).length > 0;
     const sentPasted = pastedBlocks;
     const fullDoc = sentPasted.length ? joinInline([sentPasted.map((b) => b.text).join("\n\n")], text.trim() ? ["\n\n"] : [], text.trim() ? value : []) : value;
-    const fullText = inlineBody(fullDoc);
-    const selected = inlineReferences(value);
+    const fullText = codec?.inlineBody(fullDoc) ?? editorText(fullDoc);
+    const selected = codec?.inlineReferences(value) ?? [];
     if (editor || disabled || blocked || loadingDraft || (!fullText.trim() && !atts.length && !hasFiles && !refs.length && !q.length)) return;
     // Any message spends the suggestion shown: it stays on the hub until the agent starts (#4644).
     if (suggestion) setSentPill(suggestion);

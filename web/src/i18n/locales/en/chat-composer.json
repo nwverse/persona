@@ -1,5 +1,6 @@
 {
   "skills_changed": "Execution environment changed. Your draft is kept; remove selected skills and select them again.",
+  "reference_load_failed": "Couldn't load the references. Your draft is still available. Try again.",
   "cmd_continue_word": "/continue",
   "cmd_continue_desc": "Keep going",
   "cmd_continue_text": "Continue",
