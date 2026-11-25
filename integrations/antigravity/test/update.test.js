@@ -410,6 +410,36 @@ test('waits for an open permission card and active ACP turn to settle before exi
   assert.equal(exits[0], v2.hash)
 })
 
+test('a valid package whose hash differs from the hello offer is not installed', async (t) => {
+  const { dir, binary, agyDir, store, socketPath } = makeEnv(t)
+  const node = await startFakeNode(t, { path: socketPath })
+  const [running, offered, replacement] = ['offer-A', 'offer-B', 'offer-C'].map((marker) => offerOf(marker))
+  const current = verifyPackage(running, PACKAGE_NAME)
+  installCurrent(store, current.hash, current.files)
+  node.offer = offered
+  const push = node.packageCalls.push.bind(node.packageCalls)
+  node.packageCalls.push = (...args) => {
+    const result = push(...args)
+    node.offer = replacement // A different valid package answers the fetch for B.
+    return result
+  }
+  const runtime = createAgyRuntime({
+    agyBin: binary,
+    agyDir,
+    home: dir,
+    socketPath: node.path,
+    retryMs: 20,
+    log: () => {},
+    update: { name: PACKAGE_NAME, hash: running.hash, store },
+  })
+  t.after(() => runtime.stop())
+  runtime.start()
+  await until('the replacement package answered', () => node.packageCalls.length === 1)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(readlinkSync(join(store, 'current')), running.hash, 'C is not cached or installed for the B offer')
+  assert.equal(node.packageCalls.length, 1, 'the mismatched response does not start a retry loop')
+})
+
 test('rejects a tampered package without touching current or retrying the bad hash', async (t) => {
   const { dir, binary, agyDir, store, socketPath } = makeEnv(t)
   const exits = []

@@ -862,6 +862,30 @@ test('when the reload brings the same version back, it connects again and does n
   assert.equal(host.retired, false)
 })
 
+test('a valid package whose hash differs from the hello offer is not installed', async (t) => {
+  const dir = store(t)
+  const running = offerOf('offer-A')
+  const offered = offerOf('offer-B')
+  const replacement = offerOf('offer-C')
+  installCurrent(dir, running.hash, running.files.map((file) => ({ path: file.path, data: Buffer.from(file.data, 'base64') })))
+  const n = await startFakeNode(t)
+  n.offer = offered
+  const push = n.packageCalls.push.bind(n.packageCalls)
+  n.packageCalls.push = (...args) => {
+    const result = push(...args)
+    n.offer = replacement
+    return result
+  }
+  const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/') }, web: { port: 1, host: '127.0.0.1' } },
+    { socketPath: n.path, retryMs: 20, listDisk: true, update: { name: PKG, hash: running.hash, store: dir } })
+  t.after(() => host.stop())
+  host.start()
+  await until('the replacement package answered', () => n.packageCalls.length === 1)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(readlinkSync(join(dir, 'current')), running.hash, 'C is not cached or installed for the B offer')
+  assert.equal(n.packageCalls.length, 1, 'the mismatched response does not start a retry loop')
+})
+
 test('a package whose files do not match its hash is not installed', async (t) => {
   const dir = store(t)
   const { n, host } = await setup(t, { update: { name: PKG, hash: 'the-running-version', store: dir } })

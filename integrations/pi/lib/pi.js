@@ -702,7 +702,7 @@ export function createPiHost(deps, options = {}) {
         pkg = verifyPackage(fetched, update.name)
       }
       const { hash, files } = pkg
-      if (!currentUpdate(offer) || hash === update.hash || bad.has(hash)) return
+      if (!currentUpdate(offer) || hash !== offer.hash || hash === update.hash || bad.has(hash)) return
       installCurrent(update.store, hash, files, { keep: [update.hash] })
       log(`persona: ${update.name} ${hash.slice(0, 12)} from the node is installed (running ${update.hash.slice(0, 12)})`)
       clearUpdateRetry()
