@@ -93,7 +93,7 @@ export const AssistantSwitcher = memo(function AssistantSwitcher(props: Switcher
 
 export function ManagerBadgesCollector({ onChange }: { onChange: (badges: Record<string, number>) => void }) {
   const badges = useManagerBadges();
-  const published = useRef<Record<string, number>>();
+  const published = useRef<Record<string, number> | undefined>(undefined);
   useLayoutEffect(() => {
     if (published.current && sameValue(published.current, badges)) return;
     published.current = badges;
