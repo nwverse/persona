@@ -486,7 +486,7 @@ func (d *dayFixture) recap(id string) *kb.DayRecap {
 	d.t.Helper()
 	e := d.engine()
 	for range 5 {
-		e.WriteDayRecaps(context.Background(), 1)
+		e.RecordingProvider().WriteDayRecaps(context.Background(), 1)
 		if r, ok := e.Store.Recording(id); ok && r.RecapState == kb.MinutesReady {
 			rc, err := e.ReadDayRecap(id)
 			if err != nil {
@@ -526,7 +526,7 @@ func (m *meetingFixture) minutesFor(id, reply string) {
 	e := m.engine()
 	model := minutesModel{reply: reply}
 	e.Model, e.ModelFor = model, func(string) kb.Model { return model }
-	if n := e.WriteMinutes(context.Background(), 5); n < 1 {
+	if n := e.RecordingProvider().WriteMinutes(context.Background(), 5); n < 1 {
 		m.t.Fatalf("no minutes written for %s", id)
 	}
 }

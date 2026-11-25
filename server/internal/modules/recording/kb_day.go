@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/modules/recording/writers"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,7 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
-// All-day recordings and their daily recap (#4741; kb/recording_day.go, kb/day_recap.go): the phone's appends
+// All-day recordings and their daily recap (#4741; kb/recording_day.go, modules/recording/writers/day_recap.go): the phone's appends
 // (POST …/segments), the refusals of a PUT that only a day recording has, the recap through the minutes' routes
 // (kb_minutes.go), the day's one push, and the names and the recap time the knowledge base asks the manager for. The
 // evening routine's facts about the day are briefing_day.go's.
@@ -286,7 +287,7 @@ func (s *Recordings) kbOwnerLanguage() i18n.Lang { return s.lang(s.runCtx()) }
 // minutes: an id from the recording, the version and the action (todo_day_…), so a retried request makes none twice,
 // and notes that name the day and the clock time it was said in the recording's own zone. The knowledge base records
 // each with its action as that version has it (who, what and when it was said), so a recap written again meanwhile
-// gets it only on the same task said at the same time (kb.Engine.SetDayRecapTodos).
+// gets it only on the same task said at the same time (writers.Writers.SetDayRecapTodos).
 func (s *Recordings) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Recording, version int, actions []string) ([]any, *kb.DayRecap, error) {
 	s.minutesMu.Lock()
 	defer s.minutesMu.Unlock()
@@ -295,7 +296,7 @@ func (s *Recordings) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Re
 		return nil, nil, err
 	}
 	if rc.Version != version {
-		return nil, nil, kb.ErrMinutesStale
+		return nil, nil, writers.ErrMinutesStale
 	}
 	note := s.dayRecapTodoNotes(ctx, e, rec, rc)
 	out, made, _, err := s.actionTodos(ctx, rc.Actions, actions, todosOfRecap, rec.ID, version, note)
@@ -308,13 +309,13 @@ func (s *Recordings) dayRecapTodos(ctx context.Context, e *kb.Engine, rec *kb.Re
 	}
 	if err != nil {
 		if made != nil { // those made so far are recorded all the same, as minutesTodos records them
-			if _, serr := e.SetDayRecapTodos(rec.ID, version, confirmed); serr != nil {
+			if _, serr := writersOf(e).SetDayRecapTodos(rec.ID, version, confirmed); serr != nil {
 				s.logf("assistant: recap to-dos of %s: %v", rec.ID, serr)
 			}
 		}
 		return out, nil, err
 	}
-	rc, err = e.SetDayRecapTodos(rec.ID, version, confirmed)
+	rc, err = writersOf(e).SetDayRecapTodos(rec.ID, version, confirmed)
 	return out, rc, err
 }
 

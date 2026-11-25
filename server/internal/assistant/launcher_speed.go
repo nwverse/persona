@@ -74,7 +74,8 @@ func (s *Service) resolveFitPlanTask(ctx context.Context, t *PlanTask) (startAge
 	if t.Host != "" {
 		params["host"] = t.Host // as startTaskAgent fits it: a read-only check depends on where it starts (#13464)
 	}
-	own, err := s.resolveStart(ctx, params, false)
+	tierCtx, _ := withTierStart(ctx, t.Machine) // the candidate the start on t.Machine would take
+	own, err := s.resolveStart(tierCtx, params, false)
 	if err != nil {
 		return startAgent{}, nil, false, err
 	}

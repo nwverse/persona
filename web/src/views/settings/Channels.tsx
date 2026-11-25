@@ -434,7 +434,7 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
 }
 
 /** "Send messages to": the main conversation, a new one, or one of the assistant's conversations. */
-function TargetPicker({ open, current, onClose, onPick }: { open: boolean; current?: ChannelTarget; onClose: () => void; onPick: (t: ChannelTarget) => void }) {
+export function TargetPicker({ open, current, onClose, onPick }: { open: boolean; current?: ChannelTarget; onClose: () => void; onPick: (t: ChannelTarget) => void }) {
   const sessions = useStore((s) => s.sessions);
   const conversations = useMemo(
     () =>

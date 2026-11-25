@@ -1828,7 +1828,7 @@ every platform are described from #13430; this section is the Apple side.
   its types 8 times in 4 files; now 0.
 - **Module homes and the core-only build** (#14017). A module that has left `apple/Persona/` lives in
   `apple/Modules/<Name>/`. `apple/modules.yml` (included by `project.yml`) compiles each home into the iPhone and Vision
-  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`), under which `Modules.builtIn`
+  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`, `PERSONA_MODULE_VOICE`), under which `Modules.builtIn`
   lists it;
   `apple/modules-core-only.yml`, enabled by `PERSONA_CORE_ONLY=YES` at `xcodegen generate`, leaves every home out, as
   the server's `persona_core_only` tag does. `scripts/ci/apple.sh ios-core-only` (and the local `all` lane) builds
@@ -1852,6 +1852,18 @@ every platform are described from #13430; this section is the Apple side.
   (`AppModel`, `Session.isHealth`), the phone's Health tools, the widgets and Health's settings stay in the core until
   their slots (`phone_tools`, widgets, `settings`) are served. The ratchet counts type names only: a core call to a
   module's method (a `View` extension) is caught by the core-only build, not by the ratchet.
+- **`voice`** (`apple/Modules/Voice/`, #13431, `feature` = `module.voice`): full-duplex voice in a conversation's page —
+  the composer's phone icon and Voice Chat, the call's bar in the composer's place, the line a call that ended by itself
+  leaves, its captions as the thread's last rows, Asking by Voice on a card, the voice settings on the voice extension's
+  page (`VoiceTimbreSection`) and the DEBUG switches `-showVoiceSample` / `-openVoice`. It provides `ConversationVoice`
+  (`apple/Persona/App/ConversationVoice.swift`), which the chat, the meeting page's follow-up, the question cards and
+  Settings ask for through `AppModel.voice`; without it the page offers no call, no Voice Chat row, no bar and no
+  captions, and the composer's microphone (dictation, core) is all there is. What a call runs on stays in the core for
+  now, because system calls, CarPlay and recording share it: the engine (`VoiceCalls`, `VoiceConversation`, the audio,
+  the socket; `apple/Persona/Voice`), the starts and refusals (`VoiceEntry`), the call screens (`apple/Persona/Calls`,
+  `apple/Persona/CarPlay`) and the call intents. `-openVoice silent`'s audio (`SilentVoiceAudio`) is core, since a call to
+  Persona takes it too. The ratchet counts `apple/Modules/Voice` (and `apple/PersonaCallIntents`); the voice directories
+  still in `apple/Persona` count as the core until they move (`guarded_dirs` in `scripts/test/test_apple_module_refs.py`).
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type
@@ -1881,7 +1893,7 @@ every platform are described from #13430; this section is the Apple side.
   Affirmative buttons require unlocking (`.authenticationRequired`); Deny does not. Plan approval from a notification uses `acceptEdits` (the whole plan has not been viewed, so commands still need individual approval),
   and "Approve and run automatically" is App-only. Buttons call resolve directly in the background without opening the App; failure (already handled, cannot reach hub) produces a local notification explaining why. Questions and terminal interactions have no buttons; tap to handle them.
   MCP forms and links are pushed too (#2433, `docs/protocol/protocol.md` "MCP elicitation"): the iOS app alone registers `features: ["withdraw", "elicitation"]` (`PushRegistrar.features`, the rule of `LiveConnection.helloFeatures`), so the hub pushes it these cards and waits for it while no app that shows them is open. Category `INTERACTION_ELICITATION` has no buttons: a tap opens the conversation, where the card arrives over the socket; the hub's withdrawal push takes it back like any card's. The alert names the MCP server and never carries the link or a form's values.
-  What the hub gives for taking a to-do's recommendation with one tap (#2056, `docs/assistant/todos.md` "Waiting for the owner"; the App's rows are in "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)"): each to-do waiting for the owner has `ask: {outcome?, verdict, recommend?, asked_at}` in `GET /api/v1/todos` (a `{"type":"todos"}` event when it comes up, is taken or ends), and a decision with a recommended option is pushed with category `TODO_DECIDE`, whose Take Recommendation action takes it, and a top-level `todo: {id, asked_at, recommend, manager}`; from a manager that says how the push may answer it, `todo` also has `ask` and `lockscreen`, with `options` and `aps.mutable-content: 1` when `lockscreen` is `answer`, while `open_only` sends category `TODO_DECIDE_OPEN`, with no action (#10465); both are taken with `POST /api/v1/todos/{id}/accept {"asked_at"}` (409: already handled, refresh; 423 with a `code` such as `dialog_open`: the Agent's node refused it and nothing was taken, #7343; 502: the recommendation did not reach the Agent, nothing taken). The watch's answer-only credential cannot call either route yet.
+  What the hub gives for taking a to-do's recommendation with one tap (#2056, `docs/assistant/todos.md` "Waiting for the owner"; the App's rows are in "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)"): each to-do waiting for the owner has `ask: {outcome?, verdict, recommend?, asked_at}` in `GET /api/v1/todos` (a `{"type":"todos"}` event when it comes up, is taken or ends), and a decision with a recommended option is pushed with category `TODO_DECIDE`, whose Take Recommendation action takes it, a top-level `todo_id` (without `interaction_id`), and `todo: {id, asked_at, recommend, manager}`; from a manager that says how the push may answer it, `todo` also has `ask` and `lockscreen`, with `options` and `aps.mutable-content: 1` when `lockscreen` is `answer`, while `open_only` sends category `TODO_DECIDE_OPEN`, with no action (#10465); both are taken with `POST /api/v1/todos/{id}/accept {"asked_at"}` (409: already handled, refresh; 423 with a `code` such as `dialog_open`: the Agent's node refused it and nothing was taken, #7343; 502: the recommendation did not reach the Agent, nothing taken). Delivered decision and needs-user pushes are keyed by `card_id` (`todo-ask:<todo id>`) and `todo_id` (falling back to `todo.id` from older hubs, without `interaction_id`) in `NotificationWithdrawal`, so `todo-ask:<todo id>` (via silent withdrawal push or WebSocket `interaction_resolved`) removes them from Notification Center while `NotificationWithdrawal.stale` never sweeps unanswered assistant cards or to-do decisions (#13916, #14388). The watch's answer-only credential cannot call either route yet.
   Settings › Notifications (`NotificationSettingsView`): "When you are needed" toggle, "When an Agent finishes" never / long tasks only / every time, Live Activities (Lock Screen and Dynamic Island / show details on Lock Screen / what each side of Dynamic Island shows, `IslandSettingsView`, `docs/apple/live-activity.md`), stored per device on the hub (`PushRegistrar.deviceID`). Changes save one at a time in the order they were made, each PUT the hub's last answer plus that one change, so a failed one reverts alone and no later PUT carries it (`NotificationSettingsModel.change`, #1913; the web's queue, #1285); quiet hours keep their own endpoint.
   Tapping a notification opens its session: use the completion-handler version of `UNUserNotificationCenterDelegate`, switch to the main queue to handle it, then call back (the async version returns on a background executor,
   UIKit receives completion off the main thread and a notification-triggered cold launch crashes).
@@ -3592,6 +3604,30 @@ Clicking a worktree's title or branch opens its first direct Agent in the sideba
 Right-click a worktree title, branch or direct Agent row on Mac, or long-press it on iPhone, for the same worktree commands: Open Worktree, New Session, New Child Worktree, Copy Path, Copy Worktree Name and, when present, Open Parent Worktree. It uses that exact workspace as the initial code source and parent, including a nested or Agent-free container. The form can change either choice independently; a folder needs a Git code source. Successful creation refreshes the sidebar catalog and opens the existing New Session form for the new child using the server-acknowledged parent. All regions use the owning worktree's identity. An Agent row also retains its session commands. A title with one Agent offers those commands directly; with multiple Agents it offers named submenus so session actions have an explicit target. Each descendant keeps its own menu scope. The UI names these containers worktrees; protocol and accessibility identifiers retain their workspace names for compatibility.
 
 New Session also offers a searchable workspace picker, with full ancestor paths and an explicit Choose by Folder fallback. A chosen workspace sends its source ID and directory to the existing session-start route. New Child Worktree separates Code Source (the repository and base commit) from Parent Worktree (any Orca workspace on the same computer, including empty folders and other projects). On a phone, the selected parent's name has its own line above the ancestor path so a deep breadcrumb cannot hide the selected destination. The node advertises `choose_parent` before the client enables independent parent selection. With `automatic_name`, Create Worktree is ready without entering a branch or path on every supported engine. The native form keeps those overrides in Advanced, collapsed initially. An unnamed create sends `auto_name: true`. Orca receives a generated creature seed without a branch override and owns its prefix, retired-name/collision policy and first-work rename. Other supported hosts use a unique node-generated branch and directory through their existing creation route; subsequent naming follows the host’s capabilities. Explicit branch/path inputs retain their existing validation; older nodes keep the manual form. A created worktree appears through discovery even if the New Session form is cancelled before an Agent starts. Stale explicit launch targets and missing parents are refused rather than silently redirected.
+
+## Disk usage map (#14576)
+
+The contract is `docs/server/machine-usage-map.md`; the look and the interactions are `docs/design/DESIGN_SYSTEM.md`
+"Usage treemap".
+
+- Ways in: the Disk almost full chip on a computer's card and the Disk tile in its details open the map in reclaim mode
+  when the disk level is raised (the biggest reclaimable items are marked and listed as chips under a headline); a
+  banner in the details, shown while the disk is above normal, offers "See What's Using Space". The route is
+  `MachineUsageMapRoute` (registered next to `MachineDetailRoute`; on iPad it opens in the right column).
+- Wire models: `PersonaWire/MachineUsageMap.swift` (unknown enum values decode to a fallback). Calls:
+  `APIClient` "Disk usage map" (usage, trash / untrash / purge, the existing `POST /cleanup`, offload providers,
+  inventory, run, jobs).
+- `UsageMapModel` (`@Observable`, `Deps` for tests with `FakeHub`) polls while the hub is still measuring and only
+  while the page is visible (`.tabActiveTask(id:)`), keeps a zoom trail per side, the selection, the tint (kind or last
+  used), the providers and the inventory. Layout runs off the main thread (`TreemapLayout`, cached by node id, size and
+  depth). An offload that answers 409 `tool_install_required` asks a second, separate confirmation to install the tool;
+  the job is polled until it ends, then the map refreshes in place. Trash shows an Undo notice; Delete Permanently
+  is its own confirmation.
+- No provider: the cloud side's empty state links to Settings › Extensions. An older hub without the usage route shows
+  "Can't Show the Disk" with what to update.
+- Debug: `-tab settings -openMachines YES -openUsageMap <machine>` (or `reclaim:<machine>`). Mock: `MOCK_USAGE_MAP=1`
+  (`old` answers as a hub without the route). UI test: `UsageMapUITests` with
+  `TEST_RUNNER_PERSONA_USAGE_MAP_HUB=http://127.0.0.1:<port>`.
 
 ## Model profiles
 

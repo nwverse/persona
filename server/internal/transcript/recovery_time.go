@@ -17,16 +17,20 @@ const (
 	// minEpochSeconds rejects small integers (e.g. "resets_at": 60) from being misread as 1970 Unix timestamps.
 	minEpochSeconds = 1_000_000_000
 	maxEpochSeconds = 4_102_444_800 // 2100-01-01T00:00:00Z
+	// An error may carry a JSON fragment. End at the field boundary so a malformed exponent cannot leave a valid prefix.
+	jsonRecoveryValue    = `("[^"\r\n]*"|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*(?:[,}]|$)`
+	recoveryDurationPart = `\d+(?:\.\d+)?\s*(?:milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)`
 )
 
 var (
-	jsonRecoveryTimeRe = lazyre.New(`(?i)"(?:resets?_at|resetsAt|resetAt|retry_at|retryAt|available_at|availableAt|available_again_at|availableAgainAt|recover(?:y)?_at|recover(?:y)?At)"\s*:\s*("[^"\r\n]*"|-?\d+(?:\.\d+)?)`)
-	jsonRetryAfterRe   = lazyre.New(`(?i)"(retry_after|retryAfter|retry_after_seconds|retryAfterSeconds|retry_after_ms|retryAfterMs)"\s*:\s*("[^"\r\n]*"|-?\d+(?:\.\d+)?)`)
+	jsonRecoveryTimeRe = lazyre.New(`(?i)"(?:resets?_at|resetsAt|resetAt|retry_at|retryAt|available_at|availableAt|available_again_at|availableAgainAt|recover(?:y)?_at|recover(?:y)?At)"\s*:\s*` + jsonRecoveryValue)
+	jsonRetryAfterRe   = lazyre.New(`(?i)"(retry_after|retryAfter|retry_after_seconds|retryAfterSeconds|retry_after_ms|retryAfterMs)"\s*:\s*` + jsonRecoveryValue)
 	keywordRFC3339Re   = lazyre.New(`(?i)\b(?:available again at|available at|resets?(?:\s+at)?|retry\s+after|retry\s+at|try\s+again\s+at|recovers?(?:\s+at)?|resets?_at|retry_at|available_at|recovery_at)\s*[:=]?\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))`)
 	retryAfterDateRe   = lazyre.New(`(?i)\bretry[-_]after\s*[:=]\s*([^\r\n;)\]}"]+)`)
 	retryAfterSecsRe   = lazyre.New(`(?i)\bretry[-_]after\s*[:=]\s*([^\r\n;)\]}",]+)`)
-	tryAgainPhraseRe   = lazyre.New(`(?i)\b(?:try again in|retry (?:again )?in|retry after)\s+((?:\d+(?:\.\d+)?\s*(?:ms|milliseconds?|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\s*)+)\b`)
-	tryAgainPartRe     = lazyre.New(`(\d+(?:\.\d+)?)\s*([A-Za-z]+)`)
+	tryAgainPhraseRe   = lazyre.New(`(?i)\b(?:try again in|retry (?:again )?in|retry after)\s+(` + recoveryDurationPart +
+		`(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*)` + recoveryDurationPart + `)*)\b`)
+	tryAgainPartRe = lazyre.New(`(\d+(?:\.\d+)?)\s*([A-Za-z]+)`)
 )
 
 // ProviderRecoveryAt parses an explicit, machine-readable recovery time from a terminal provider error message.

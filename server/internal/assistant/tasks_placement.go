@@ -225,7 +225,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// What the task itself named, kept from its first try in this process. The task as stored never carries what a
 	// tier, Model configuration › Agents or a start-defaults policy filled in (storedLaunch, #12618), so a task read
 	// back from the store (task_retry, a remedy, a queued start, a retry from the card, a manager restart) names only
-	// its own and is resolved again against the current defaults.
+	// its own and is resolved again against the current defaults, except that a tier keeps the candidate the task's
+	// previous Agent ran on (its Dispatch, below; candidate_keep.go, #14701).
 	firstTry := t.callerPick == nil
 	if t.callerPick == nil {
 		own := t.launchPick()
@@ -265,9 +266,48 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if withDefaults {
 		presetNote = s.applyStartPreset(ctx, t, caller, defaults, params)
 	}
-	own, err := s.resolveStart(ctx, params, t.LauncherDefaultModel)
+	tierCtx, tierSlot := withTierStart(ctx, t.Machine)
+	// Another Agent of the same task (a retry, a continuation, a queued or restarted start read back) keeps the
+	// candidate its previous Agent ran on, unless this start names a launcher, a model or another tier of its own
+	// (candidate_keep.go, #14701): the tier's pick keeps it, or re-picks it on a clear problem.
+	if keep := s.taskKeep(ctx, t); keep != nil {
+		prof, _, _ := s.activeModelProfile(ctx)
+		if keepsTier(prof, params, keep.Prev) {
+			if tier, _ := params["tier"].(string); strings.TrimSpace(tier) == "" {
+				params["tier"] = keep.Prev.Tier
+			}
+			tierSlot.keep = keep
+		}
+	}
+	own, err := s.resolveStart(tierCtx, params, t.LauncherDefaultModel)
 	if err != nil {
 		return "", "", err
+	}
+	// The candidate the tier gave this start (pickTierCandidate): on the plan card as the task's dispatch, and one
+	// model_routing row once the Agent started.
+	t.Dispatch, t.tierChoice = nil, tierSlot.pick
+	if tierSlot.pick != nil {
+		if t.startFilled.preset {
+			// A start-defaults policy chose this tier for this start only: the next Agent rolls again, it keeps nothing.
+			if tierSlot.pick.Args == nil {
+				tierSlot.pick.Args = map[string]any{}
+			}
+			tierSlot.pick.Args[dispatchPresetArg] = true
+		}
+		t.Dispatch = tierSlot.pick.dispatch()
+		if k := tierSlot.keep; k != nil && k.Prev.Launcher == t.Dispatch.Launcher && k.Prev.Model == t.Dispatch.Model {
+			t.Dispatch.Failed = k.Prev.Failed // the same candidate again: its failed starts in a row go on counting
+		}
+		defer func() {
+			if err != nil && failedStart(err) {
+				t.Dispatch.Failed++
+			}
+			if err == nil && sid != "" {
+				row := modelRoutingOf(*tierSlot.pick, mid)
+				row.TodoID, row.PlanID, row.TaskIndex, row.SessionID = t.TodoID, t.planID, t.planIndex, sid
+				s.recordModelRouting(ctx, row)
+			}
+		}()
 	}
 	if t.defaulted || t.Launcher == "" {
 		own.launcher, t.defaulted = "", true // filled in from a default, by this try or an earlier one

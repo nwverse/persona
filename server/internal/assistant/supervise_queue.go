@@ -228,6 +228,14 @@ func (s *Service) recheckDigestTarget(ctx context.Context, cfg Settings, g super
 // Recheck structured queue entries at the last delivery boundary. Unknown task state keeps the original queue.
 // Legacy text-only entries retain their behavior; their task facts cannot safely be reconstructed from prose.
 func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayMsg) (relayMsg, bool, bool) {
+	return s.recheckQueuedDigestAt(ctx, to, msg, false, nil)
+}
+
+// recheckQueuedDigestAt is recheckQueuedDigest, optionally for a queued message behind the head. The timeout sweep
+// uses anywhere only while the source conversation is not draining; the ordinary drain always rechecks the head.
+// change runs after the original signal's validity recheck, so an escalation cannot revive a resolved worker signal.
+func (s *Service) recheckQueuedDigestAt(ctx context.Context, to string, msg relayMsg, anywhere bool,
+	change func(superviseSignal) (superviseSignal, bool)) (relayMsg, bool, bool) {
 	var signals []superviseSignal
 	if msg.Signals == "" {
 		return msg, false, false
@@ -292,6 +300,14 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 			if _, handled, _ := s.leaderRoute(g); handled {
 				return msg, false, true
 			}
+			if change != nil {
+				if changed, replace := change(g); replace {
+					g = changed
+					if e, ok = s.digestEntryRecheck(ctx, g, web, tried); !ok {
+						continue
+					}
+				}
+			}
 			target := s.recheckDigestTarget(ctx, here, g)
 			if target == "" {
 				return msg, false, true
@@ -325,7 +341,14 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	b := &s.relays
 	b.mu.Lock()
 	q := b.st.Queue[to]
-	if len(q) == 0 || q[0] != msg {
+	index := 0
+	if anywhere {
+		index = slices.Index(q, msg)
+		if index < 0 || b.draining[to] || b.replacing[to] {
+			b.mu.Unlock()
+			return msg, false, true
+		}
+	} else if len(q) == 0 || q[0] != msg {
 		b.mu.Unlock()
 		return msg, false, true
 	}
@@ -341,9 +364,9 @@ func (s *Service) recheckQueuedDigest(ctx context.Context, to string, msg relayM
 	}
 	if len(groups[to]) > 0 {
 		state.Queue[to] = slices.Clone(q)
-		state.Queue[to][0] = next
+		state.Queue[to][index] = next
 	} else {
-		state.Queue[to] = slices.Clone(q[1:])
+		state.Queue[to] = slices.Delete(slices.Clone(q), index, index+1)
 		if len(state.Queue[to]) == 0 {
 			delete(state.Queue, to)
 		}

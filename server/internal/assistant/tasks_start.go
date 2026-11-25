@@ -836,11 +836,31 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		stop()
 	}
 	launched := err == nil
+	if !launched && t.Dispatch != nil {
+		// A failed start keeps its dispatch, with the candidate's failed starts in a row, for the next try to read
+		// (candidate_keep.go: three re-pick).
+		write, stop := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		if saveErr := s.patchPlanTask(write, planID, i, func(pt *PlanTask) {
+			if pt.TodoID == t.TodoID {
+				pt.Dispatch = t.Dispatch
+			}
+		}); saveErr != nil {
+			s.logf("task %s: record dispatch: %v", t.TodoID, saveErr)
+		}
+		stop()
+	}
 	if launched {
 		// The start's own context can be spent already: an unanswered start whose session was just reconciled
 		// (#6540) reaches here after taskStartTimeout, and a database write on that context fails at once, which
 		// would fail the task although its agent is running. The link gets its own time, like the bookkeeping below.
 		linkCtx, linkCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+		if saveErr := s.patchPlanTask(linkCtx, planID, i, func(pt *PlanTask) {
+			if pt.TodoID == t.TodoID {
+				pt.Dispatch = t.Dispatch // the latest start's: a start on no tier clears an earlier one
+			}
+		}); saveErr != nil {
+			s.logf("task %s: record dispatch: %v", t.TodoID, saveErr)
+		}
 		if t.TerminalTarget.Machine != "" {
 			if saveErr := s.patchPlanTask(linkCtx, planID, i, func(pt *PlanTask) {
 				if pt.TodoID == t.TodoID && pt.CloseTabOnAccept && pt.TerminalCleanup == "" && pt.TerminalTarget.Machine == "" {
