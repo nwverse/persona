@@ -1,13 +1,16 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -443,4 +446,474 @@ func TestCodexHomeOf(t *testing.T) {
 	if got := codexHomeOf(filepath.Join(home, "archived_sessions", "rollout-x.jsonl")); got != "" {
 		t.Errorf("an archived rollout's home %q", got)
 	}
+}
+
+// resetCodexVersionTestHooks resets the process-lookup and binary-version test seams and cache between tests.
+func resetCodexVersionTestHooks(t *testing.T) {
+	t.Helper()
+	oldExec, oldArgv, oldRun := codexProcessExecPath, codexProcessArgv, codexRunVersion
+	oldTimeout, oldRetry := codexBinaryVersionTimeout, codexBinaryVersionRetry
+	clearCache := func() {
+		codexBinaryVersions.Lock()
+		codexBinaryVersions.byPath = map[string]codexBinaryVersionEntry{}
+		codexBinaryVersions.Unlock()
+	}
+	clearCache()
+	t.Cleanup(func() {
+		codexProcessExecPath, codexProcessArgv, codexRunVersion = oldExec, oldArgv, oldRun
+		codexBinaryVersionTimeout, codexBinaryVersionRetry = oldTimeout, oldRetry
+		clearCache()
+	})
+}
+
+// writeFakeCodexBin writes an executable file at path and returns its path. On Unix it is a runnable shell script that
+// records each `--version` invocation into countFile (when non-empty) and runs body; on Windows a regular placeholder
+// file is written for stubbed-runner tests.
+func writeFakeCodexBin(t *testing.T, path, body string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func setPaneForegroundPIDs(f *fakeHerdr, pids ...int) {
+	procs := make([]any, 0, len(pids))
+	for _, pid := range pids {
+		procs = append(procs, map[string]any{"pid": pid, "name": "codex", "argv0": "codex"})
+	}
+	f.reply("pane.process_info", map[string]any{"process_info": map[string]any{"foreground_processes": procs}})
+}
+
+// Issue #13290: the running Codex binary's version decides whether `/model` takes arguments, not the rollout's first
+// session_meta. A pre-0.169 session resumed by 0.169+ offers model/effort and switches them; a session whose running
+// Codex is older than 0.169 is refused with modes_codex_version with nothing typed, whatever started it; an unreadable
+// process or failing binary falls back to session_meta.cli_version; unknown on both sides stays refused.
+func TestCodexTerminalRunningVersion(t *testing.T) {
+	t.Run("pre-0.169 rollout resumed by 0.169+ switches model and effort", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, f, path := cxTerminalNode(t, proto.StatusIdle, "0.163.0", "gpt-a", "medium")
+		cxModelAnswers(t, f, path, "gpt-a", nil)
+		bin := writeFakeCodexBin(t, filepath.Join(t.TempDir(), "codex"), "stub")
+		const pid = 41001
+		setPaneForegroundPIDs(f, pid)
+		codexProcessExecPath = func(p int) string {
+			if p == pid {
+				return bin
+			}
+			return ""
+		}
+		codexRunVersion = func(_ context.Context, exe string) ([]byte, error) {
+			if exe != bin {
+				t.Errorf("unexpected exe %q", exe)
+			}
+			return []byte("codex-cli 0.169.1\n"), nil
+		}
+		s := paneRow(t, n, cxID)
+		if s.Capabilities.Model == nil || !*s.Capabilities.Model {
+			t.Fatalf("capabilities.model = %v, want true", s.Capabilities.Model)
+		}
+		if !slices.Equal(s.Efforts, []string{"low", "medium", "high"}) {
+			t.Fatalf("efforts = %v, want [low medium high]", s.Efforts)
+		}
+		if err := cxModes(t, n, map[string]any{"model": "gpt-b", "effort": "max"}); err != nil {
+			t.Fatalf("session.modes refused: %v", err)
+		}
+		if typed := cxTyped(f); len(typed) != 1 || typed[0] != "/model gpt-b --reasoning=max" {
+			t.Fatalf("typed %q", typed)
+		}
+		if row := paneRow(t, n, cxID); row.Model != "gpt-b" || row.Effort != "max" {
+			t.Fatalf("row after switch = %q / %q", row.Model, row.Effort)
+		}
+	})
+
+	t.Run("pre-0.169 rollout resumed by prerelease 0.171.0-alpha.13.2", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, f, _ := cxTerminalNode(t, proto.StatusIdle, "0.163.0", "gpt-a", "medium")
+		bin := writeFakeCodexBin(t, filepath.Join(t.TempDir(), "codex"), "stub")
+		const pid = 41002
+		setPaneForegroundPIDs(f, pid)
+		codexProcessExecPath = func(p int) string {
+			if p == pid {
+				return bin
+			}
+			return ""
+		}
+		codexRunVersion = func(context.Context, string) ([]byte, error) {
+			return []byte("codex-cli 0.171.0-alpha.13.2\n"), nil
+		}
+		s := paneRow(t, n, cxID)
+		if s.Capabilities.Model == nil || !*s.Capabilities.Model {
+			t.Fatalf("capabilities.model = %v, want true", s.Capabilities.Model)
+		}
+	})
+
+	t.Run("0.170 rollout resumed by pre-0.169 binary refused with nothing typed", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, f, _ := cxTerminalNode(t, proto.StatusIdle, "0.170.0", "gpt-a", "medium")
+		bin := writeFakeCodexBin(t, filepath.Join(t.TempDir(), "codex"), "stub")
+		const pid = 41003
+		setPaneForegroundPIDs(f, pid)
+		codexProcessExecPath = func(p int) string {
+			if p == pid {
+				return bin
+			}
+			return ""
+		}
+		codexRunVersion = func(context.Context, string) ([]byte, error) {
+			return []byte("codex-cli 0.168.2\n"), nil
+		}
+		s := paneRow(t, n, cxID)
+		if s.Capabilities.Model != nil && *s.Capabilities.Model {
+			t.Fatalf("downgraded Codex offered model control")
+		}
+		if len(s.Efforts) != 0 {
+			t.Fatalf("downgraded Codex offered efforts %v", s.Efforts)
+		}
+		if err := cxModes(t, n, map[string]any{"effort": "high"}); refusalCode(err) != proto.CodeModesCodexVersion {
+			t.Fatalf("err = %v, want %s", err, proto.CodeModesCodexVersion)
+		}
+		if typed := cxTyped(f); len(typed) != 0 {
+			t.Fatalf("typed %q into downgraded Codex", typed)
+		}
+	})
+
+	t.Run("binary error falls back to rollout session_meta cli_version", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, rolloutVer string
+			runOut           string
+			runErr           error
+			wantModel        bool
+		}{
+			{"exec error with 0.169 rollout", "0.169.1", "", errors.New("permission denied"), true},
+			{"exec error with 0.163 rollout", "0.163.0", "", errors.New("permission denied"), false},
+			{"unparseable output with 0.169 rollout", "0.169.1", "not a version", nil, true},
+			{"missing version on both sides", "", "", errors.New("failed"), false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				resetCodexVersionTestHooks(t)
+				n, f, _ := cxTerminalNode(t, proto.StatusIdle, tc.rolloutVer, "gpt-a", "medium")
+				bin := writeFakeCodexBin(t, filepath.Join(t.TempDir(), "codex"), "stub")
+				const pid = 41004
+				setPaneForegroundPIDs(f, pid)
+				codexProcessExecPath = func(p int) string {
+					if p == pid {
+						return bin
+					}
+					return ""
+				}
+				codexRunVersion = func(context.Context, string) ([]byte, error) {
+					return []byte(tc.runOut), tc.runErr
+				}
+				s := paneRow(t, n, cxID)
+				if got := s.Capabilities.Model != nil && *s.Capabilities.Model; got != tc.wantModel {
+					t.Fatalf("capabilities.model = %v, want %v", got, tc.wantModel)
+				}
+				if !tc.wantModel {
+					if err := cxModes(t, n, map[string]any{"effort": "high"}); refusalCode(err) != proto.CodeModesCodexVersion {
+						t.Fatalf("err = %v, want %s", err, proto.CodeModesCodexVersion)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("unreadable process falls back to rollout cli_version", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, f, _ := cxTerminalNode(t, proto.StatusIdle, "0.169.1", "gpt-a", "medium")
+		setPaneForegroundPIDs(f, 41005)
+		codexProcessExecPath = func(int) string { return "" } // another user or remote pane
+		called := false
+		codexRunVersion = func(context.Context, string) ([]byte, error) {
+			called = true
+			return nil, nil
+		}
+		s := paneRow(t, n, cxID)
+		if s.Capabilities.Model == nil || !*s.Capabilities.Model {
+			t.Fatal("fallback to 0.169.1 rollout failed when process executable was unreadable")
+		}
+		if called {
+			t.Fatal("ran --version when no executable was resolved")
+		}
+	})
+
+	t.Run("ForegroundPID resolves version without pane.process_info", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, f, _ := cxTerminalNode(t, proto.StatusIdle, "0.163.0", "gpt-a", "medium")
+		bin := writeFakeCodexBin(t, filepath.Join(t.TempDir(), "codex"), "stub")
+		const pid = 41006
+		n.mu.Lock()
+		a := n.agents[cxID]
+		a.ForegroundPID = pid
+		n.agents[cxID] = a
+		n.mu.Unlock()
+		codexProcessExecPath = func(p int) string {
+			if p == pid {
+				return bin
+			}
+			return ""
+		}
+		codexRunVersion = func(context.Context, string) ([]byte, error) {
+			return []byte("codex-cli 0.170.0\n"), nil
+		}
+		s := paneRow(t, n, cxID)
+		if s.Capabilities.Model == nil || !*s.Capabilities.Model {
+			t.Fatal("ForegroundPID did not enable terminal model controls")
+		}
+		for _, c := range f.calls() {
+			if c.Method == "pane.process_info" {
+				t.Fatal("queried pane.process_info despite readable ForegroundPID")
+			}
+		}
+	})
+
+	t.Run("skips non-codex foreground binaries and prefers exact codex name", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, f, _ := cxTerminalNode(t, proto.StatusIdle, "0.163.0", "gpt-a", "medium")
+		dir := t.TempDir()
+		zshBin := writeFakeCodexBin(t, filepath.Join(dir, "zsh"), "stub")
+		helperBin := writeFakeCodexBin(t, filepath.Join(dir, "codex-mcp-server"), "stub")
+		codexBin := writeFakeCodexBin(t, filepath.Join(dir, "codex"), "stub")
+		setPaneForegroundPIDs(f, 41010, 41011, 41012)
+		codexProcessExecPath = func(p int) string {
+			switch p {
+			case 41010:
+				return zshBin
+			case 41011:
+				return helperBin
+			case 41012:
+				return codexBin
+			}
+			return ""
+		}
+		var ran []string
+		codexRunVersion = func(_ context.Context, exe string) ([]byte, error) {
+			ran = append(ran, exe)
+			return []byte("codex-cli 0.169.1\n"), nil
+		}
+		s := paneRow(t, n, cxID)
+		if s.Capabilities.Model == nil || !*s.Capabilities.Model {
+			t.Fatal("exact codex binary not selected")
+		}
+		if !slices.Equal(ran, []string{codexBin}) {
+			t.Fatalf("ran --version on %v, want only [%s]", ran, codexBin)
+		}
+	})
+
+	t.Run("resolves interpreter wrapper script via process argv", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, f, _ := cxTerminalNode(t, proto.StatusIdle, "0.163.0", "gpt-a", "medium")
+		dir := t.TempDir()
+		nodeBin := writeFakeCodexBin(t, filepath.Join(dir, "node"), "stub")
+		script := writeFakeCodexBin(t, filepath.Join(dir, "codex.js"), "#!/usr/bin/env node\n")
+		setPaneForegroundPIDs(f, 41020)
+		codexProcessExecPath = func(p int) string {
+			if p == 41020 {
+				return nodeBin
+			}
+			return ""
+		}
+		codexProcessArgv = func(p int) ([]string, error) {
+			if p == 41020 {
+				return []string{nodeBin, "--no-warnings", script, "resume"}, nil
+			}
+			return nil, errors.New("unknown pid")
+		}
+		codexRunVersion = func(_ context.Context, exe string) ([]byte, error) {
+			if exe != script {
+				t.Fatalf("ran --version on %q, want %q", exe, script)
+			}
+			return []byte("codex-cli 0.169.2\n"), nil
+		}
+		s := paneRow(t, n, cxID)
+		if s.Capabilities.Model == nil || !*s.Capabilities.Model {
+			t.Fatal("wrapper script version did not enable model control")
+		}
+	})
+
+	t.Run("missing hosts falls back to rollout version without panicking", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		n, _, _ := cxTerminalNode(t, proto.StatusIdle, "0.169.1", "gpt-a", "medium")
+		n.hosts = nil
+		if _, why, ok := n.codexOnTerminal(cxID); !ok || why != nil {
+			t.Fatalf("codexOnTerminal with nil hosts: why=%v ok=%v", why, ok)
+		}
+	})
+}
+
+// codexBinaryVersion caches `<exe> --version` by (path, mtime, size, inode), invalidates on mtime change or atomic
+// replacement, keeps separate paths independent, throttles failed probes without poisoning cancelled callers, and
+// executes a real binary end-to-end on Unix.
+func TestCodexVersionCache(t *testing.T) {
+	t.Run("caches by path and invalidates on mtime change with identical file size", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		bin := writeFakeCodexBin(t, filepath.Join(t.TempDir(), "codex"), "12345678")
+		var runs atomic.Int32
+		ver := "codex-cli 0.168.0\n"
+		codexRunVersion = func(context.Context, string) ([]byte, error) {
+			runs.Add(1)
+			return []byte(ver), nil
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.168.0" {
+			t.Fatalf("first read = %q, want 0.168.0", got)
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.168.0" {
+			t.Fatalf("cached read = %q, want 0.168.0", got)
+		}
+		if runs.Load() != 1 {
+			t.Fatalf("ran --version %d times on unchanged file, want 1", runs.Load())
+		}
+		// Bump mtime while keeping size and inode identical.
+		ver = "codex-cli 0.169.0\n"
+		next := time.Now().Add(5 * time.Second)
+		if err := os.Chtimes(bin, next, next); err != nil {
+			t.Fatal(err)
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.169.0" {
+			t.Fatalf("after mtime change = %q, want 0.169.0", got)
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.169.0" {
+			t.Fatalf("re-cached read = %q, want 0.169.0", got)
+		}
+		if runs.Load() != 2 {
+			t.Fatalf("ran --version %d times after mtime change, want 2", runs.Load())
+		}
+	})
+
+	t.Run("invalidates on atomic replacement and caches distinct paths independently", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		dir := t.TempDir()
+		binA := writeFakeCodexBin(t, filepath.Join(dir, "a", "codex"), "same-len")
+		binB := writeFakeCodexBin(t, filepath.Join(dir, "b", "codex"), "same-len")
+		stamp := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(binA, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		versions := map[string]string{binA: "codex-cli 0.168.1\n", binB: "codex-cli 0.170.0\n"}
+		var runs atomic.Int32
+		codexRunVersion = func(_ context.Context, exe string) ([]byte, error) {
+			runs.Add(1)
+			return []byte(versions[exe]), nil
+		}
+		if got := codexBinaryVersion(context.Background(), binA); got != "0.168.1" {
+			t.Fatalf("binA = %q", got)
+		}
+		if got := codexBinaryVersion(context.Background(), binB); got != "0.170.0" {
+			t.Fatalf("binB = %q", got)
+		}
+		if got := codexBinaryVersion(context.Background(), binA); got != "0.168.1" {
+			t.Fatalf("binA second read = %q", got)
+		}
+		if got := codexBinaryVersion(context.Background(), binB); got != "0.170.0" {
+			t.Fatalf("binB second read = %q", got)
+		}
+		if runs.Load() != 2 {
+			t.Fatalf("two distinct binaries thrashed cache: %d runs, want 2", runs.Load())
+		}
+		// Atomically replace binA with a new file carrying the exact same size and mtime.
+		tmp := writeFakeCodexBin(t, filepath.Join(dir, "a", "codex.new"), "same-len")
+		if err := os.Chtimes(tmp, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, binA); err != nil {
+			t.Fatal(err)
+		}
+		versions[binA] = "codex-cli 0.171.0\n"
+		if got := codexBinaryVersion(context.Background(), binA); got != "0.171.0" {
+			t.Fatalf("after atomic replace = %q, want 0.171.0", got)
+		}
+		if runs.Load() != 3 {
+			t.Fatalf("runs = %d, want 3", runs.Load())
+		}
+	})
+
+	t.Run("failed run backs off until mtime change or retry window, cancelled ctx not cached", func(t *testing.T) {
+		resetCodexVersionTestHooks(t)
+		codexBinaryVersionRetry = time.Minute
+		bin := writeFakeCodexBin(t, filepath.Join(t.TempDir(), "codex"), "stub")
+		var runs atomic.Int32
+		fail := true
+		codexRunVersion = func(ctx context.Context, _ string) ([]byte, error) {
+			runs.Add(1)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if fail {
+				return nil, errors.New("exit status 1")
+			}
+			return []byte("codex-cli 0.169.5\n"), nil
+		}
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		if got := codexBinaryVersion(cancelled, bin); got != "" {
+			t.Fatalf("cancelled ctx returned %q", got)
+		}
+		if runs.Load() != 0 {
+			t.Fatalf("pre-cancelled ctx ran --version %d times", runs.Load())
+		}
+		// First real failure caches backoff so repeated list refreshes do not respawn failing binary.
+		if got := codexBinaryVersion(context.Background(), bin); got != "" {
+			t.Fatalf("failing binary returned %q", got)
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "" {
+			t.Fatalf("backed-off binary returned %q", got)
+		}
+		if runs.Load() != 1 {
+			t.Fatalf("failing binary ran %d times during backoff, want 1", runs.Load())
+		}
+		// Updating the binary's mtime immediately bypasses backoff and reads the fixed binary.
+		fail = false
+		next := time.Now().Add(10 * time.Second)
+		if err := os.Chtimes(bin, next, next); err != nil {
+			t.Fatal(err)
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.169.5" {
+			t.Fatalf("fixed binary after mtime bump = %q, want 0.169.5", got)
+		}
+		if runs.Load() != 2 {
+			t.Fatalf("runs = %d, want 2", runs.Load())
+		}
+	})
+
+	t.Run("real executable script end-to-end with mtime invalidation and timeout fallback", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("uses POSIX shell script as fake codex binary")
+		}
+		resetCodexVersionTestHooks(t)
+		dir := t.TempDir()
+		logPath := filepath.Join(dir, "runs")
+		bin := filepath.Join(dir, "codex")
+		writeFakeCodexBin(t, bin, "#!/bin/sh\necho x >> "+logPath+"\necho 'codex-cli 0.168.9'\n")
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.168.9" {
+			t.Fatalf("real script first read = %q, want 0.168.9", got)
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.168.9" {
+			t.Fatalf("real script cached read = %q, want 0.168.9", got)
+		}
+		b, err := os.ReadFile(logPath)
+		if err != nil || strings.Count(string(b), "x") != 1 {
+			t.Fatalf("real script ran %d times, want 1", strings.Count(string(b), "x"))
+		}
+		writeFakeCodexBin(t, bin, "#!/bin/sh\necho x >> "+logPath+"\necho 'codex-cli 0.169.1'\n")
+		next := time.Now().Add(5 * time.Second)
+		if err := os.Chtimes(bin, next, next); err != nil {
+			t.Fatal(err)
+		}
+		if got := codexBinaryVersion(context.Background(), bin); got != "0.169.1" {
+			t.Fatalf("real script upgraded read = %q, want 0.169.1", got)
+		}
+		b, err = os.ReadFile(logPath)
+		if err != nil || strings.Count(string(b), "x") != 2 {
+			t.Fatalf("real script ran %d times after upgrade, want 2", strings.Count(string(b), "x"))
+		}
+		// Hanging binary times out cleanly and returns "" (triggering rollout fallback).
+		codexBinaryVersionTimeout = 100 * time.Millisecond
+		hang := writeFakeCodexBin(t, filepath.Join(dir, "codex-hang"), "#!/bin/sh\nsleep 5\n")
+		if got := codexBinaryVersion(context.Background(), hang); got != "" {
+			t.Fatalf("hanging binary returned %q, want empty", got)
+		}
+	})
 }

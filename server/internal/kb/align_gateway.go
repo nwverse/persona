@@ -118,22 +118,51 @@ func syncSource(src Source) bool {
 	return false
 }
 
+// ownerSender is how archive lines (buildLine) and syncMessage name the owner's own messages.
+const ownerSender = "我" // i18n-ignore: archive data
+
+// unknownSender is how archive lines (buildLine) and syncMessage mark a message whose sender has no display name.
+const unknownSender = "?"
+
 // within reports whether gateway chat gw archived m.
 func (a *gatewayAligner) within(gw string, sc SourceChat, m SourceMessage) bool {
 	sender, body, media := syncMessage(m)
+	senderUnknown := sender == unknownSender
 	want := map[string]bool{}
 	for k := -1; k <= 1; k++ {
 		want[messageFingerprint(sc.Name, sender, m.At.Add(time.Duration(k)*2*time.Second), body)] = true
 	}
 	same := messageFingerprint(sc.Name, sender, m.At, body)
+	var wantNoSender map[string]bool
+	var sameNoSender string
+	ensureNoSender := func() {
+		if wantNoSender != nil {
+			return
+		}
+		wantNoSender = make(map[string]bool, 3)
+		for k := -1; k <= 1; k++ {
+			wantNoSender[messageFingerprint(sc.Name, "", m.At.Add(time.Duration(k)*2*time.Second), body)] = true
+		}
+		sameNoSender = messageFingerprint(sc.Name, "", m.At, body)
+	}
 	for _, day := range alignDays(m.At, a.s.Zone()) {
 		for _, l := range a.day(gw, day) {
 			if l.body == "" && body == "" && (!l.media || !media) {
 				continue // two empty texts are the same message only when both were attachments
 			}
+			// When one side has no display name (for example a bot/app sender or a binding without contact scope)
+			// and the other side is not the owner's own message, degrade to the senderless fingerprint
+			// (chat name + 2-second bucket + body) so the message still aligns with the gateway's copy.
+			fallbackSender := (senderUnknown && l.sender != ownerSender) || (l.sender == unknownSender && sender != ownerSender)
 			if !l.exact.IsZero() {
 				if want[messageFingerprint(sc.Name, l.sender, l.exact, l.body)] {
 					return true
+				}
+				if fallbackSender {
+					ensureNoSender()
+					if wantNoSender[messageFingerprint(sc.Name, "", l.exact, l.body)] {
+						return true
+					}
 				}
 				continue
 			}
@@ -143,6 +172,14 @@ func (a *gatewayAligner) within(gw string, sc SourceChat, m SourceMessage) bool 
 			}
 			if messageFingerprint(sc.Name, l.sender, m.At, l.body) == same {
 				return true
+			}
+			// On a minute-only line (no exact timestamp), require a non-empty body before ignoring the sender so
+			// two unnamed attachment-only messages in the same minute do not collide.
+			if fallbackSender && body != "" {
+				ensureNoSender()
+				if messageFingerprint(sc.Name, "", m.At, l.body) == sameNoSender {
+					return true
+				}
 			}
 		}
 	}
@@ -156,12 +193,12 @@ var syncPlaceholder = lazyre.New(`\s*\[(?:image|file(?: [^\]]*)?)\]\s*$`)
 // syncMessage is m's sender as an archive line names it (buildLine: the owner is "我") and its text without the
 // attachments the line would carry.
 func syncMessage(m SourceMessage) (sender, body string, media bool) {
-	sender = m.SenderName
+	sender = strings.TrimSpace(m.SenderName)
 	if m.Mine {
-		sender = "我" // i18n-ignore: archive data
+		sender = ownerSender
 	}
 	if sender == "" {
-		sender = "?"
+		sender = unknownSender
 	}
 	body = strings.TrimSpace(m.Text)
 	media = len(m.Media) > 0

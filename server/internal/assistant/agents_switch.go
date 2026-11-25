@@ -189,6 +189,12 @@ func (s *Service) switchPlan(ctx context.Context, m Device, c proto.Session, t s
 		it.plan, it.why = switchRefused, err.Error()
 		return it
 	}
+	if refused, why := sessionSafetyRefusal(c); refused {
+		return refuse(fmt.Errorf("blocked by a provider safety refusal (%s): a safety refusal remains a recorded blocker and cannot trigger a provider switch or replay", why))
+	}
+	if s.sessionUnresolvedApproval(c) {
+		return refuse(fmt.Errorf("has an unresolved approval or question: resolve it directly with the owner first; switching never grants or dismisses approvals"))
+	}
 	stopped := switchStopped(c)
 	if stopped && !c.Assistant && c.SourceKind == "" && (c.Agent == "" || c.Agent == "claude") {
 		if cmp.Or(c.Launcher, "claude") == t.Launcher {
@@ -459,6 +465,10 @@ func (s *Service) runSwitchQueue(ctx context.Context, machine string) {
 			drop = "it runs there already"
 		case cmp.Or(c.Launcher, "claude") != w.From:
 			drop = "it moved to another launcher meanwhile"
+		case func() bool { r, _ := sessionSafetyRefusal(c); return r }():
+			drop = "blocked by a provider safety refusal"
+		case s.sessionUnresolvedApproval(c):
+			drop = "has an unresolved approval or question"
 		case switchStopped(c): // stopped meanwhile: its Resume is pointed there instead
 		case !limitStopped(c) && switchWaits(c):
 			continue

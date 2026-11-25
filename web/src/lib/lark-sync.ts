@@ -12,7 +12,7 @@ import { MANAGER_HEADER, managerHeaderFor } from "./manager-choice";
 /** What a bot's app may read as the owner (larksyncwire TierDocs / TierFull). */
 export const TIER_DOCS = "docs_standard";
 export const TIER_FULL = "full_with_im";
-export const TIERS = [TIER_DOCS, TIER_FULL] as const;
+export const TIERS = [TIER_FULL, TIER_DOCS] as const;
 
 /** The path the open platform sends the owner back to after authorizing; the hub accepts only this path. */
 export const OAUTH_RETURN_PATH = "/lark-oauth";

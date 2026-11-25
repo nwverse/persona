@@ -407,6 +407,7 @@ todos.read           GET /api/v1/todos/{id}
 -                    GET /api/v1/todos/{id}/backend-workspace
 -                    GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}
 todos.read           GET /api/v1/todos/{id}/decisions
+-                    GET /api/v1/todos/{id}/handoffs
 -                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
@@ -436,6 +437,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {peerPath}
 -                    PATCH /api/v1/agent-shares/{share_id}
 inbox.write          PATCH /api/v1/inbox/policies/{id}
+-                    PATCH /api/v1/looks/uploads/{id}
 -                    PATCH /api/v1/machines/{mid}/files/entry
 -                    PATCH /api/v1/managers/{id}
 -                    PATCH /api/v1/model-config/purposes/{id}
@@ -751,6 +753,7 @@ todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
+-                    POST /api/v1/todos/{id}/handoff
 -                    POST /api/v1/todos/{id}/retry
 -                    POST /api/v1/todos/{id}/start/answer
 todos.write          POST /api/v1/todos/{id}/workspace-naming/plans

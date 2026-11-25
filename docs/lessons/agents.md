@@ -63,6 +63,11 @@
 - Bind anything that waits to act on "the agent" to the process it was decided for: pid plus start mark (`hookTurns.process`, else `sessions/<pid>.json` via `liveClaudes`), checked with `processAlive` at every look and again right before acting. Drop it once that process is gone or the hooks report another one; refuse it where the process cannot be told.
 - Keep the wait short. "Once this turn ends" is not "whenever this conversation next runs".
 
+## Create an agy ACP session before its role-scoped MCP (#15327)
+
+- The Companion's first `session/resume` both attaches `personad mcp` and triggers native agy's initial catalog read. A task role linked only after `session.start` returns is therefore too late for that catalog; `notifications/tools/list_changed` is not evidence that agy lists again. Create with no MCP, return the real `agy-<uuid>` as `starting: true`, link the role and supervision relationship, then let the ordinary first `session.send` resume with MCP and prompt.
+- Rolling upgrades need no new activation RPC: an older Companion ignores `defer_mcp` and finishes normally, so only an answer actually marked `starting: true` gets the post-link send. Keep the same `client_msg_id` across the start and activation. Close a definite unused start, but never close or retry an uncertain activation whose prompt may already be running.
+
 ## Project MCP enums only in agy's tool declarations (#9944)
 
 agy can turn a valid boolean enum such as `task_review`'s `evidence.ready: enum [true]` into an empty Gemini string
