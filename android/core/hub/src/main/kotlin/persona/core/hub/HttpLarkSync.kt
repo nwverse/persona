@@ -93,7 +93,7 @@ class HttpLarkSync internal constructor(
         /** The page the open platform sends the owner back to; the hub accepts only this path. */
         const val OAuthReturnPath = "/lark-oauth"
 
-        private fun segment(value: String) = URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
+        private fun segment(value: String) = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
         private fun bot(id: String) = "$Sync/bots/${segment(id)}"
         private fun binding(key: String) = "$Sync/bindings/${segment(key)}"
 
