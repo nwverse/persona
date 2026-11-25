@@ -48,7 +48,6 @@ internal/cliport
 internal/clitext
 internal/cliwire
 internal/closeout
-internal/compat
 internal/compatprobe
 internal/configuration
 internal/connector
@@ -58,7 +57,6 @@ internal/connector/serve
 internal/connectorwire
 internal/db
 internal/db/dbtest
-internal/deeplink
 internal/depguard
 internal/devices
 internal/devicewire
@@ -89,7 +87,6 @@ internal/hub
 internal/hubcli
 internal/hubclient
 internal/hubedge
-internal/i18n
 internal/identity
 internal/imageorient
 internal/imessagewire
@@ -99,7 +96,6 @@ internal/kbwire
 internal/knowledgeuihost
 internal/lark
 internal/larkhost
-internal/lazyre
 internal/lcuconfirm
 internal/link
 internal/linktray
@@ -215,7 +211,6 @@ internal/teamdocs
 internal/terminalmaintenance
 internal/terncli
 internal/testhome
-internal/textfmt
 internal/tmux
 internal/toolcli
 internal/toolschema

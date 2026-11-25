@@ -62,6 +62,9 @@ import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
 import { useShortcuts } from "../../lib/use-shortcuts";
 import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
+import { withContexts } from "../../lib/context-xml";
+import { inlineBody } from "../../lib/inline-message";
+import { skillContext } from "../../lib/skill-mentions";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
@@ -225,11 +228,36 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   await vi.waitFor(() => expect(words).toEqual([{ text: "row 4", fade: true }]));
 });
 
+it("a pushed inline reference and its disclosure leave the header and composer alone", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const ref = skillContext({ id: "review", name: "Review", source: "Project", description: "Look for edge cases." });
+  await push(1, { role: "user", text: withContexts([ref], inlineBody(["Use ", ref, "."])) });
+  const token = () => host.querySelector<HTMLButtonElement>("[data-bubble-text] button[aria-expanded]");
+  await vi.waitFor(async () => {
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(token()?.textContent).toBe("Review");
+  });
+  act(() => token()!.click());
+  expect(host.textContent).toContain("Look for edge cases.");
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
+});
+
 // the first page: this many exchanges, a question and its reply each
 const serve = (exchanges: number) => {
   const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
   fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
 };
+
+it("shows the latest finished reply's actions at rest when replies share a timestamp", async () => {
+  serve(2);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const bars = () => [...host.querySelectorAll<HTMLElement>('[data-reply-bar]:not([data-reply-bar="loading"])')];
+  await vi.waitFor(() => expect(bars()).toHaveLength(2));
+  const [earlier, latest] = bars();
+  expect(earlier.querySelector("time")?.closest(".opacity-0")).toBe(earlier);
+  expect(latest.querySelector("time")?.closest(".opacity-0")).toBeNull();
+  expect(latest.querySelector("button")?.closest(".opacity-0")).toBeNull();
+});
 
 it("a turn starting or ending renders the message actions of its own exchange only", async () => {
   const flip = async (sid: string, exchanges: number) => {

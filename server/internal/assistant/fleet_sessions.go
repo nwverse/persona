@@ -147,11 +147,14 @@ func (s *Service) turnEndSeen(machine string, sess proto.Session, now time.Time)
 		s.inOrder(func() { go s.turnEnded(context.Background(), ref, true) })
 		return
 	}
-	s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(machine+"/"+sess.SessionID, now, backgroundRunning(sess)))
+	ctx := context.Background()
+	background := backgroundRunning(sess)
+	end := s.endSupervisionTurn(ctx, sess.SessionID, now, background || limitTakenUp(sess, now))
+	s.notifyFinished(machine, sess.SessionID, s.turnsBook().ended(machine+"/"+sess.SessionID, now, background), end)
 	s.suggestTurnEnded(machine, sess) // the next message, when nothing else suggests it (suggest_next.go)
 	// A new assistant conversation is named after its first turn; a task from one may be done. After the items of the
 	// turn (a channel's answer is read from them).
-	s.inOrder(func() { go s.TurnEnded(context.Background(), ref) })
+	s.inOrder(func() { go s.TurnEnded(context.WithValue(ctx, supervisionEndKey{}, end), ref) })
 }
 
 // reconnectedTurnEnd is sess's stop in the first list of its node's new connection, taken as the end of its turn only

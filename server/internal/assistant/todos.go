@@ -1013,6 +1013,7 @@ func (s *Service) todoRoutes() {
 	s.todoReorganizeRoute()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
+	s.todoHandoffRoutes()
 	s.todoAskRoutes()
 	s.todoTimelineRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo

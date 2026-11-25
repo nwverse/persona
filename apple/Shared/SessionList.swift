@@ -67,10 +67,26 @@ nonisolated struct SessionListPage<Row: Decodable & Sendable>: Decodable, Sendab
     var nextCursor: String?
     var revision: String?
     var total: Int?
+    /// Hub aggregates delivered with these rows (`with_counts=1`, `sessions_page_counts`), never a separate read.
+    var counts: SessionListCounts? = nil
     var isPaged: Bool { revision != nil && hasMore != nil && total != nil }
     enum CodingKeys: String, CodingKey {
-        case sessions, remove, revision, total
+        case sessions, remove, revision, total, counts
         case hasMore = "has_more", nextCursor = "next_cursor"
+    }
+}
+
+nonisolated extension SessionListPage {
+    /// An invalid optional counts object must not discard an otherwise usable page: the model falls back to `counts=1`.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessions = try container.decode([Row].self, forKey: .sessions)
+        remove = try container.decodeIfPresent([String].self, forKey: .remove)
+        hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore)
+        nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
+        revision = try container.decodeIfPresent(String.self, forKey: .revision)
+        total = try container.decodeIfPresent(Int.self, forKey: .total)
+        counts = try? container.decodeIfPresent(SessionListCounts.self, forKey: .counts)
     }
 }
 
@@ -81,6 +97,25 @@ nonisolated struct SessionListCounts: Decodable, Equatable, Sendable {
     var group: [String: Int]
     var state: [String: Int]
     var revision: String
+    var justFinished: Int? = nil
+    enum CodingKeys: String, CodingKey {
+        case total, machine, project, group, state, revision
+        case justFinished = "just_finished"
+    }
+}
+
+nonisolated extension SessionListCounts {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        total = try container.decode(Int.self, forKey: .total)
+        machine = try container.decode([String: Int].self, forKey: .machine)
+        project = try container.decode([String: Int].self, forKey: .project)
+        group = try container.decode([String: Int].self, forKey: .group)
+        state = try container.decode([String: Int].self, forKey: .state)
+        revision = try container.decode(String.self, forKey: .revision)
+        // Older hubs omit this additive count; a malformed one does not invalidate the other aggregates.
+        justFinished = try? container.decodeIfPresent(Int.self, forKey: .justFinished)
+    }
 }
 
 extension APIClient {
@@ -96,6 +131,7 @@ extension APIClient {
             parameters = ["summary": "0", "limit": String(SessionListQuery.completePageSize)]
             if query.includeHidden { parameters["include_hidden"] = "1" }
         }
+        if sessionsPageCounts && !query.legacy && cursor == nil { parameters["with_counts"] = "1" }
         if let cursor { parameters["cursor"] = cursor }
         if let since { parameters["since"] = since }
         let data = try await request("GET", "/api/v1/sessions", query: parameters)

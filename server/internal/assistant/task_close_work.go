@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetview"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -72,7 +73,7 @@ func (s *Service) taskCloseWorkSnapshot(t Todo, now time.Time) *taskCloseWork {
 			b.mu.Lock()
 			quote := b.ownerExcerpt[runtimeListID(a.MachineID, a.SessionID)]
 			b.mu.Unlock()
-			return &taskCloseWork{session: runtimeListID(a.MachineID, a.SessionID), title: agentTitle(&c, 80), items: strings.Join(items, ", "), quote: quote}
+			return &taskCloseWork{session: runtimeListID(a.MachineID, a.SessionID), title: fleetview.AgentTitle(sessionTitle(&c), 80), items: strings.Join(items, ", "), quote: quote}
 		}
 	}
 	return nil
@@ -140,6 +141,25 @@ func (s *Service) unconfirmedTaskClose(ctx context.Context, t Todo) *taskCloseWo
 		return nil
 	}
 	return work
+}
+
+// acceptTryFromApp asks before taking an owner Pass that would close a live Agent's work.
+// The answer path revalidates the round after the user responds to the card.
+func (s *Service) acceptTryFromApp(ctx context.Context, id, askedAt string) (acceptResult, error) {
+	t, ok := s.todoNow(id)
+	if ok && t.DoneAt == nil && userCheckAsked(t) {
+		a, found := s.askCopy(id)
+		at, err := time.Parse(timeKeyLayout, askedAt)
+		if err == nil && found && a.AskedAt.Equal(at) && a.AcceptedAt.IsZero() && !acceptAskStale(&a, t) {
+			if work := s.taskCloseWorkSnapshot(t, time.Now()); work != nil {
+				ctx, err = s.confirmOwnerTaskClose(ctx, t, work, true)
+				if err != nil {
+					return acceptResult{}, err
+				}
+			}
+		}
+	}
+	return s.acceptTryFromBrief(ctx, id, askedAt)
 }
 
 // The app's first press requests a one-time owner approval using the existing app

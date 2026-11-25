@@ -100,4 +100,25 @@ describe("item-coalescer", () => {
     advance(100);
     expect(batches).toHaveLength(1);
   });
+
+  it("returns buffered items without emitting and cancels timer on drain()", () => {
+    const { clock, advance } = fakeClock();
+    const batches: Item[][] = [];
+    const c = createItemCoalescer((b) => batches.push(b), { clock });
+
+    c.push([item(1)]);
+    advance(10);
+    c.push([item(2)]);
+    c.push([item(3)]);
+    const drained = c.drain();
+    expect(drained.map((i) => i.seq)).toEqual([2, 3]);
+    expect(c.drain()).toEqual([]);
+    advance(100);
+    expect(batches).toHaveLength(1);
+
+    // Next push after drain emits immediately on a fresh leading edge
+    c.push([item(4)]);
+    expect(batches).toHaveLength(2);
+    expect(batches[1].map((i) => i.seq)).toEqual([4]);
+  });
 });

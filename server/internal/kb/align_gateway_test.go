@@ -24,6 +24,17 @@ func TestMessageFingerprintVector(t *testing.T) {
 	if messageFingerprint("Example Team", "Example Sender", at.Add(-time.Second), "hello world") != want {
 		t.Fatal("1700000000 and 1700000001 share a bucket")
 	}
+	// Empty sender produces the deterministic senderless fallback key (matching larksync.MessageFingerprint).
+	noSender := messageFingerprint("  Example   Team ", "", at, "Hello\n  World ")
+	if noSender == want {
+		t.Fatal("empty sender must not collide with a named sender")
+	}
+	if got := messageFingerprint("Example Team", "  ", at.Add(-time.Second), "hello world"); got != noSender {
+		t.Fatalf("senderless fingerprint %s, want %s", got, noSender)
+	}
+	if got := messageFingerprint("Example Team", "", at.Add(time.Second), "hello world"); got == noSender {
+		t.Fatal("senderless fingerprint must still separate 2-second buckets")
+	}
 }
 
 // alignAt is a time whose 2-second bucket starts at it, an hour ago (inside the text days, clear of the cutoff).
@@ -186,6 +197,62 @@ func TestGatewayAlignerMinuteLinesAndOtherSources(t *testing.T) {
 	}
 }
 
+// When a synced message has no display name (for example a bot/app sender or a binding without contact scope),
+// alignment degrades to the senderless fingerprint (chat name + time window + body) so it still deduplicates against
+// the gateway's named copy without matching the owner's own lines or unrelated messages.
+func TestGatewayAlignerFallbackWhenSenderNameEmpty(t *testing.T) {
+	e, _ := alignEngine(t)
+	ctx := context.Background()
+	at := alignAt()
+	gw := SourceChat{ID: "f_bot", Name: "Example Team", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{
+		{ID: "g_bot", SenderID: "b1", SenderName: "Example Bot", Text: "Build succeeded", At: at},
+		{ID: "g_usr", SenderID: "u1", SenderName: "Example Sender", Text: "Looks good", At: at.Add(10 * time.Second)},
+		{ID: "g_me", SenderID: "u_me", SenderName: "Owner", Mine: true, Text: "Owner note", At: at.Add(20 * time.Second)},
+		{ID: "g_anon", SenderID: "u2", SenderName: "", Text: "Gateway unnamed note", At: at.Add(30 * time.Second)},
+		// Minute-only gateway lines (no ID -> unbound receipts).
+		{SenderName: "Example Bot", Text: "Minute bot alert", At: at.Add(2 * time.Minute)},
+		{SenderName: "Example Sender", Text: "", Media: []string{"img.png"}, At: at.Add(4 * time.Minute)},
+	}); err != nil || n != 6 {
+		t.Fatalf("gateway ingest: %d, %v", n, err)
+	}
+
+	sync := SourceChat{ID: "oc_bot", Name: "Example Team", Kind: "group"}
+	n, err := e.Ingest(ctx, named("larksync"), sync, []SourceMessage{
+		// Exact-time bot message with empty SenderName -> deduped against "Example Bot" and pairs crosswalk.
+		{ID: "om_bot_dup", SenderID: "cli_example_bot", SenderName: "", Text: "build succeeded", At: at.Add(time.Second)},
+		// Exact-time user message with empty SenderName (e.g. contact lookup failed) -> deduped against "Example Sender".
+		{ID: "om_usr_dup", SenderID: "ou_1", SenderName: "", Text: "Looks good", At: at.Add(11 * time.Second)},
+		// Different body from unnamed bot -> kept.
+		{ID: "om_bot_new", SenderID: "cli_example_bot", SenderName: "", Text: "Build failed", At: at.Add(time.Second)},
+		// Non-mine unnamed message with same text/time as owner's own line ("我") -> NOT deduped.
+		{ID: "om_not_mine", SenderID: "cli_example_bot", SenderName: "", Text: "Owner note", At: at.Add(20 * time.Second)},
+		// Reverse direction: gateway line had empty sender ("?"), sync has display name -> deduped.
+		{ID: "om_rev_dup", SenderID: "ou_2", SenderName: "Example Sender", Text: "Gateway unnamed note", At: at.Add(31 * time.Second)},
+		// Minute-only non-empty body with empty SenderName -> deduped.
+		{ID: "om_min_dup", SenderID: "cli_example_bot", SenderName: "", Text: "Minute bot alert", At: at.Add(2*time.Minute + 20*time.Second)},
+		// Minute-only attachment-only (empty body) with empty SenderName vs named gateway line -> kept (no collision).
+		{ID: "om_min_img", SenderID: "cli_example_bot", SenderName: "", Text: "[image]", Media: []string{"ref"}, At: at.Add(4*time.Minute + 20*time.Second)},
+	})
+	if err != nil || n != 3 {
+		t.Fatalf("sync ingest: added %d, want 3 (om_bot_new, om_not_mine, om_min_img), %v", n, err)
+	}
+	text := e.Store.Since("larksync-oc_bot", time.Time{}, 1<<20)
+	for _, gone := range []string{"build succeeded", "Looks good", "Gateway unnamed note", "Minute bot alert"} {
+		if strings.Contains(text, gone) {
+			t.Errorf("duplicate %q was written to sync archive:\n%s", gone, text)
+		}
+	}
+	for _, kept := range []string{"Build failed", "Owner note"} {
+		if !strings.Contains(text, kept) {
+			t.Errorf("expected %q to be kept in sync archive:\n%s", kept, text)
+		}
+	}
+	if w := readCrosswalk(t, e.Store); w["larksync-oc_bot"] != "lark-f_bot" {
+		t.Fatalf("crosswalk %v, want larksync-oc_bot -> lark-f_bot", w)
+	}
+}
+
 func TestSyncMessageAsALineWouldNameIt(t *testing.T) {
 	for _, c := range []struct {
 		m            SourceMessage
@@ -194,6 +261,7 @@ func TestSyncMessageAsALineWouldNameIt(t *testing.T) {
 		{SourceMessage{SenderName: "Example Sender", Text: " text "}, "Example Sender", "text"},
 		{SourceMessage{Mine: true, SenderName: "Owner", Text: "text"}, "我", "text"}, // i18n-ignore: archive data
 		{SourceMessage{Text: "text"}, "?", "text"},
+		{SourceMessage{SenderName: "  ", Text: "text"}, "?", "text"},
 		{SourceMessage{SenderName: "S", Text: "look [image]", Media: []string{"ref"}}, "S", "look"},
 		{SourceMessage{SenderName: "S", Text: "[file report.pdf]", Media: []string{"ref"}}, "S", ""},
 		{SourceMessage{SenderName: "S", Text: "literal [image]"}, "S", "literal [image]"},

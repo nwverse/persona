@@ -97,7 +97,7 @@ func TestAgentSessionArchivesPersistAndRestore(t *testing.T) {
 		}
 	}
 	restarted, _ := archiveTestService(t)
-	restarted.s.store = func() Store { return ft.st }
+	restarted.s.setStore(func() Store { return ft.st })
 	restarted.d.setSessions("mac", nil)
 	rows := archiveRows(t, restarted.s)
 	if len(rows) != 2 {
@@ -117,7 +117,7 @@ func TestAgentSessionArchivesPersistAndRestore(t *testing.T) {
 		t.Fatalf("restore stayed archived: %+v", got)
 	}
 	again, _ := archiveTestService(t)
-	again.s.store = func() Store { return ft.st }
+	again.s.setStore(func() Store { return ft.st })
 	again.d.setSessions("mac", nil)
 	restored := again.s.decorated("mac")
 	if len(restored) != 2 {
@@ -155,7 +155,7 @@ func TestAgentSessionArchiveActivityPermanentlyRestores(t *testing.T) {
 				}
 			}
 			restarted, _ := archiveTestService(t)
-			restarted.s.store = func() Store { return ft.st }
+			restarted.s.setStore(func() Store { return ft.st })
 			restarted.d.setSessions("mac", nil)
 			if got := archiveRows(t, restarted.s); len(got) != 0 {
 				t.Fatalf("restore not persisted: %+v", got)
