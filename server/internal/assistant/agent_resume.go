@@ -31,7 +31,8 @@ import (
 //     then the text sent with compact_if_full, so the node runs the runtime's own /compact and sends once it is done
 //     (node compact_before_send.go). Only a failed compaction, or a runtime Persona cannot compact, falls back to a
 //     replacement, saying why;
-//   - refused for user/unknown stops, offline computers, or the node's own start refusals.
+//   - refused for the user's stops, archived Agents with no recorded non-user stop, offline computers, or the node's own
+//     start refusals. An unknown stop is resumable (#11528).
 
 // resumeRequest is what agent_send's resume asks for: why its context is needed.
 type resumeRequest struct {
@@ -72,9 +73,17 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 		}
 		cause = info.StopCause
 	}
-	if !cause.AllowsSupervisorResume() {
-		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. User stops and unknown causes require "+
-			"the user's Resume on its terminal page. Nothing was started or sent", agentLabel(c), cause)
+	// Every stop but the user's may be resumed (#11528): an unknown cause too, an Agent that quit by itself or that a
+	// restart of its machine cut off. An archived one only with a cause the node recorded as not the user's: archiving
+	// it was the user's (or the assistant's own close, which records its cause).
+	if c.Capabilities == nil && !c.Archived {
+		return fmt.Errorf("%s cannot be resumed by the assistant: its computer's node reports no stop cause (too old). "+
+			"The user's Resume on its terminal page can. Nothing was started or sent", agentLabel(c))
+	}
+	if c.Archived && !cause.AllowsSupervisorResume() || !cause.SupervisorMayResume() {
+		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. %s require "+
+			"the user's Resume on its terminal page. Give that instruction separately from the choices on a decision card. Nothing was started or sent",
+			agentLabel(c), cause, userResumeOnly(c.Archived, cause))
 	}
 	if why == "" {
 		return fmt.Errorf("resume_why is required: say why this agent's own context is needed (the user sees it). Nothing was started or sent")
@@ -105,6 +114,31 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 		return fmt.Errorf("%w; it is not yours to resume. Nothing was started or sent", err)
 	}
 	return nil
+}
+
+// eventMayResume: an event Persona routes on its own (a PR's, an Inbox item's) may resume c only after a stop the node
+// recorded as not the user's. An unknown stop or a supervision timeout stop is left to the supervisor's deliberate
+// agent_send resume; an event does not decide that on its own (#11528). An archived one is left to resumeAllowed,
+// which reads the node's own cause.
+func eventMayResume(c proto.Session) error {
+	if c.Capabilities != nil && c.Capabilities.StopCause == proto.StopTimeout {
+		return fmt.Errorf("%s stopped on supervision timeout: an event does not resume it; its supervisor may", agentLabel(c))
+	}
+	if c.Archived || c.Capabilities != nil && c.Capabilities.StopCause.AllowsSupervisorResume() {
+		return nil
+	}
+	return fmt.Errorf("%s has no recorded non-user stop: an event does not resume it; its supervisor may", agentLabel(c))
+}
+
+// userResumeOnly names the stops that need the user's Resume, for resumeAllowed's refusal of one with cause.
+func userResumeOnly(archived bool, cause proto.StopCause) string {
+	switch {
+	case cause.UserStopped():
+		return "Stops by the user (Stop, Close, Archive and close, /exit)"
+	case archived:
+		return "Archived Agents without a recorded non-user stop"
+	}
+	return "Stop causes this hub does not know"
 }
 
 // contextFull: what the model saw in c's latest reply fills proto.ContextNearlyFullShare of its window (both known).
@@ -227,6 +261,9 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 	} else if id, ok := params["client_msg_id"]; ok {
 		startParams["client_msg_id"] = id
 	}
+	if task != nil {
+		sctx = context.WithValue(sctx, placementTaskKey{}, task.todo.ID)
+	}
 	err = s.call(sctx, am.ID, DeviceSessionStart, startParams, &res)
 	if err != nil {
 		if full && sendUnknown(err) {
@@ -269,6 +306,7 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 	} else {
 		sendNote.sent(sctx, err)
 	}
+	s.progressMade(am.ID, c.SessionID, time.Now())
 	s.logf("resume %s on %s for %s: %s", short(c.SessionID), am.ID, self, why)
 	note := s.resumeNote(sctx, c, am, why)
 	said := ""
@@ -276,9 +314,17 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 		said = task.sent(sctx, s, told)
 		s.noteResume(sctx, self, task.todo.ID, am.ID, c.SessionID, note)
 		s.ensureSupervisor(sctx, task.todo.ID) // made or kept by adoptAgent; never left without a supervisor
+		if err := s.clearTimedOut(sctx, task.todo.ID); err != nil {
+			s.logf("task %s: clear timed_out on resume: %v", task.todo.ID, err)
+		}
 	} else if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
 		s.ensureSupervisor(sctx, t.ID) // its task goes on with a supervisor, as a successor's does (tasks_successor.go)
 		s.releaseHold(sctx, t.ID)      // its supervisor sent it on: follow-ups go again (decision.go)
+		if t.Supervision != nil && t.Supervision.state(t) == reviewTimedOut {
+			if err := s.clearTimedOut(sctx, t.ID); err != nil {
+				s.logf("task %s: clear timed_out on resume: %v", t.ID, err)
+			}
+		}
 		if _, err := s.appendFeed(sctx, self, feedRouted, t.ID, map[string]string{"text": told, "from": routedFromAssistant,
 			"machine_id": am.ID, "session_id": c.SessionID}); err != nil {
 			s.logf("task %s: routed feed: %v", t.ID, err)

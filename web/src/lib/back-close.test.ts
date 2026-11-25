@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isOverlayEntry, onOverlayEntry, openOverlay, overlayDepth, overlayState, settleOverlayEntry, takeOverlayEntry } from "./back-close";
+import { isOverlayEntry, onOverlayEntry, openOverlay, overlayDepth, overlayState, settleOverlayEntry, takeOverlayEntry, withoutOverlayState } from "./back-close";
 import { navigate } from "./router";
 
 describe("overlay history entries", () => {
@@ -13,6 +13,11 @@ describe("overlay history entries", () => {
     expect(isOverlayEntry(null, "o1")).toBe(false);
     expect(isOverlayEntry(overlayState(null, "o2"), "o1")).toBe(false);
     expect(overlayState("x", "o3")).toEqual({ personaOverlay: "o3" });
+  });
+  it("strips overlay markers without discarding the page's own state", () => {
+    expect(withoutOverlayState(null)).toBeNull();
+    expect(withoutOverlayState({ personaOverlay: "o1", personaOverlayAt: "/a", personaOverlayDepth: 1 })).toBeNull();
+    expect(withoutOverlayState({ extPage: 2, personaOverlay: "o1", personaOverlayAt: "/a", personaOverlayDepth: 1 })).toEqual({ extPage: 2 });
   });
 });
 
@@ -115,6 +120,35 @@ describe("openOverlay", () => {
     await vi.runAllTimersAsync();
     expect(overlayDepth()).toBe(0);
     expect(onOverlayEntry()).toBe(false);
+  });
+
+  it("closes stacked overlays strictly one layer at a time (three deep)", async () => {
+    const b = fakeBrowser();
+    const onFirst = vi.fn();
+    const onSecond = vi.fn();
+    const onThird = vi.fn();
+    openOverlay(onFirst);
+    openOverlay(onSecond);
+    openOverlay(onThird);
+    expect(overlayDepth()).toBe(3);
+
+    b.pressBack();
+    await vi.runAllTimersAsync();
+    expect(onThird).toHaveBeenCalledOnce();
+    expect(onSecond).not.toHaveBeenCalled();
+    expect(onFirst).not.toHaveBeenCalled();
+    expect(overlayDepth()).toBe(2);
+
+    b.pressBack();
+    await vi.runAllTimersAsync();
+    expect(onSecond).toHaveBeenCalledOnce();
+    expect(onFirst).not.toHaveBeenCalled();
+    expect(overlayDepth()).toBe(1);
+
+    b.pressBack();
+    await vi.runAllTimersAsync();
+    expect(onFirst).toHaveBeenCalledOnce();
+    expect(overlayDepth()).toBe(0);
   });
 
   it("an overlay entry written before the depth field still counts as one", () => {

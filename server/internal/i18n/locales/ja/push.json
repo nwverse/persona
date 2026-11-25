@@ -14,6 +14,7 @@
   "fill_in_suffix": "（Personaを開いて入力）",
   "done_body": "完了しました",
   "health_title": "ヘルスケア",
+  "health_tell_unconfirmed": "ヘルスケアへのメッセージが届いたか確認できませんでした。Personaを開いて確認してください",
   "health_body": "ヘルスケアスペースに新着があります。Personaを開いて確認してください",
   "delegate_recommend_suffix": "\nアシスタントのおすすめ：{answer}",
   "question_more_options": " ほか {count} 個",
@@ -21,5 +22,6 @@
   "question_more_other": "ほかに {count} 問",
   "usage_limit": "利用上限に達しました。リセット後に続けさせてください：{error}",
   "private_card": "Persona があなたの返事を待っています。Persona を開いて確認してください。",
-  "registration_required": "このデバイスの通知の登録が無効になりました。Persona の「設定 › 通知」で理由を確認してください。"
+  "registration_required": "このデバイスの通知の登録が無効になりました。Persona の「設定 › 通知」で理由を確認してください。",
+  "sealed_fallback": "新しいメッセージがあります"
 }

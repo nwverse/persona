@@ -109,10 +109,11 @@ func (s *Service) toolAgentsSwitch(ctx context.Context, machine, self string, ar
 	}
 	// One confirmation for the whole batch (in the health space: one card), never one per agent.
 	summary := fmt.Sprintf("→ %s\n\n%s", t.Launcher, strings.Join(lines, "\n"))
-	if ok, err := s.confirmOutbound(ctx, machine, self, "agents_switch", summary, args); err != nil {
+	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "agents_switch", "", summary, args); err != nil {
 		return "", err
 	} else if !ok {
-		return "The user declined on the phone: no agent was moved and nothing was sent.", nil
+		return outboundNotDone(outcome, "The user declined on the phone: no agent was moved and nothing was sent.",
+			"no agent was moved and nothing was sent"), nil
 	}
 	sem := make(chan struct{}, switchParallel)
 	var wg sync.WaitGroup
@@ -188,6 +189,12 @@ func (s *Service) switchPlan(ctx context.Context, m Device, c proto.Session, t s
 		it.plan, it.why = switchRefused, err.Error()
 		return it
 	}
+	if refused, why := sessionSafetyRefusal(c); refused {
+		return refuse(fmt.Errorf("blocked by a provider safety refusal (%s): a safety refusal remains a recorded blocker and cannot trigger a provider switch or replay", why))
+	}
+	if s.sessionUnresolvedApproval(c) {
+		return refuse(fmt.Errorf("has an unresolved approval or question: resolve it directly with the owner first; switching never grants or dismisses approvals"))
+	}
 	stopped := switchStopped(c)
 	if stopped && !c.Assistant && c.SourceKind == "" && (c.Agent == "" || c.Agent == "claude") {
 		if cmp.Or(c.Launcher, "claude") == t.Launcher {
@@ -249,13 +256,15 @@ func (s *Service) switchNowOrQueue(ctx context.Context, it *switchItem, t switch
 		return
 	}
 	text := ""
+	var source *proto.MessageSource
 	if it.plan == switchContinued {
 		text = prompts.RenderAgentLimitContinue(answerLanguage(s.hello(ctx).Locale))
+		source = autoContinueSource()
 		if _, theirs, err := s.supervisedElsewhere(ctx, self, it.m, it.c); err == nil && theirs {
 			text = prompts.RenderSideConversation(text)
 		}
 	}
-	err := s.moveAgent(ctx, it.m, it.c, t, text)
+	err := s.moveAgent(ctx, it.m, it.c, t, text, source)
 	switch {
 	case err == nil:
 		it.outcome = it.plan
@@ -456,6 +465,10 @@ func (s *Service) runSwitchQueue(ctx context.Context, machine string) {
 			drop = "it runs there already"
 		case cmp.Or(c.Launcher, "claude") != w.From:
 			drop = "it moved to another launcher meanwhile"
+		case func() bool { r, _ := sessionSafetyRefusal(c); return r }():
+			drop = "blocked by a provider safety refusal"
+		case s.sessionUnresolvedApproval(c):
+			drop = "has an unresolved approval or question"
 		case switchStopped(c): // stopped meanwhile: its Resume is pointed there instead
 		case !limitStopped(c) && switchWaits(c):
 			continue
@@ -504,14 +517,16 @@ func (s *Service) runQueuedSwitch(ctx context.Context, w queuedSwitch, c proto.S
 	}
 	t := switchTarget{Launcher: w.Launcher, Model: w.Model, Effort: w.Effort}
 	text := ""
+	var source *proto.MessageSource
 	var err error
 	if switchStopped(c) {
 		err = s.retargetStopped(ctx, m, c, t)
 	} else {
 		if limitStopped(c) {
 			text = prompts.RenderAgentLimitContinue(answerLanguage(s.hello(ctx).Locale))
+			source = autoContinueSource()
 		}
-		err = s.moveAgent(ctx, m, c, t, text)
+		err = s.moveAgent(ctx, m, c, t, text, source)
 	}
 	q.mu.Lock()
 	delete(q.running, k)

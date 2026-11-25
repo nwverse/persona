@@ -27,6 +27,49 @@ They do not need the app in the foreground and do not use WebSocket: each call r
 | `IntentAnswerSnippet.swift` | The answer card for Ask Persona (question + full text) |
 | `PersonaShortcuts.swift` | `AppShortcutsProvider`, Chinese phrases and icons |
 
+## Log Water (#13274)
+
+**Log Water** (`apple/Shared/LogWaterIntent.swift`) is available in Shortcuts on iPhone, iPad, Apple Watch
+(watchOS 10 or later) and Apple Vision Pro. It runs in the background. **Amount (ml)** is optional: leave it empty
+to record the hub's current glass size, or enter 1–3000 ml. The result value and dialog say
+"Logged X ml, today Y / Z ml", using the recorded amount and today's total returned by the hub.
+
+The action reads this device's App Group credentials, as Run Extension Action does; the watch's container holds
+only the watch's own restricted credentials. It uses the app's selected hub group (`hub.group`), or the default
+group before a selection; a sole paired group also works. A missing selected group never redirects a write to
+another hub. It reads the goal first, then sends `POST /api/v1/assistant/health/intake?space=health` to the default
+manager, with a fresh UUID for each invocation. No automatic write retry is added. A 404 (older iPhone hub) or 403
+(older hub refusing the watch's route) asks to update the hub; neither revokes extension widgets or shortcut catalogs.
+
+After recording, widget timelines reload. When running inside the app, the action also invalidates its health totals
+and waits for any available Home Screen snapshot to be written. It adds no App Shortcut phrase: the iPhone's ten
+slots are full. Make a shortcut containing Log Water, then say that shortcut's name to Siri or select it for the
+Action button (`docs/apple/siri.md`).
+
+When intake includes `items`, Log Water first checks that `water` is added (#14715). If it is
+absent, the action says **First add Water in Health** and sends no write. A missing `items`
+field keeps the older hub's behavior. Removing Water never deletes its records.
+
+## Tell Health (#14715)
+
+**Tell Health** (`apple/Shared/TellHealthIntent.swift`) takes one optional **Text** parameter and runs in the
+background on iPhone, iPad and Apple Watch (watchOS 10 or later). Empty text asks for content without sending.
+It uses the selected hub's App Group credential; the watch uses its own answer credential and forwarded capabilities.
+The hub must advertise `health_tell`. Missing capability asks to update the hub; no message is sent elsewhere.
+
+The action posts only `client_id` and `text` to `POST /api/v1/assistant/health/tell`, through the default manager.
+Each invocation creates one UUID. Transient network errors and HTTP 500/502/503/504 retry at most twice, using that
+same UUID. A lost receipt can therefore return the same accepted message with `duplicate: true` rather than send a
+second sentence. The 202 receipt (`received`) and a duplicate 200 (`received` or `delivered`) say **Sent to Health**;
+this acknowledges receipt, not that a plan or response is ready. Refusals, a failed receipt and exhausted retries
+show failure. An uncertain send asks the owner to check Health before starting another invocation.
+
+In Shortcuts, create an automation for **Apple Watch Workout · Strength Training Starts**, then add **Tell Health**
+with “Strength training has started”. Health can plan today from the last workout. The same sentence works in a
+Health conversation. Whether an automation runs without confirmation is the system's decision. This adds no App
+Shortcut phrase (the ten slots remain unchanged), chooses no space and never sends to the main conversation.
+On newer compilers the phone shows a receipt snippet; the watch and older compilers return the same text and dialog.
+
 ## Extension actions (#1147)
 
 `apple/Shared/RunExtensionActionIntent.swift` adds **Run Extension Action** to the containing Apple apps, including watchOS 10; Apple Vision Pro's `PersonaShortcuts` offers its localized Siri phrase. On the iPhone it is an action in the Shortcuts app without a phrase: Apple allows ten App Shortcuts, and Call Persona took its place (#9290, `docs/apple/siri.md`). Dynamic entity ids encode hub group, extension and action together. Execution uses `APIClient` with the exact selected group's App Group credential; missing groups never use the default hub. The watch's separate container contains only credentials already issued to the watch.

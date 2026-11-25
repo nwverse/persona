@@ -5,13 +5,16 @@ import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionHistoryNotFo
 import { sessionLoadError } from "../../lib/session-link";
 import { getState, listenSession, markConversationDeleted, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
-import { mergeItems, withoutFolded } from "../../lib/turns";
+import { insideFold, isUserInput, mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
 import { discardFeedCache, discardMemoryPage, feedCacheScope, readFeedCache, readMemoryPage, writeFeedCache, writeMemoryPage, type FeedCache } from "../../lib/feed-cache";
 import type { Item, ItemsPage } from "../../lib/types";
 import { createTextThrottle, type TextThrottle } from "../../ui/stream/throttle";
 import { unlandedLive } from "../../lib/live-text";
 import { clearLive } from "../../lib/live";
+import { endPull, pullKey as gateKeyOf, resetPullGatesForTests, startPull } from "../../lib/pull-gate";
+import { archivedNow } from "../../lib/agent-archives";
+import { createItemCoalescer, type ItemCoalescer } from "../../lib/item-coalescer";
 
 const PAGE = "turns=2&fold_work=1&lazy_images=1";
 /** How often a page checks whether it is behind (a pure comparison; nothing is asked unless it is, lib/stale-page.ts). */
@@ -50,6 +53,7 @@ const isNotLoaded = (e: unknown) => e instanceof ApiError && e.code === "not_loa
 /** Tests only: forget the asks, as a fresh page load does (each sync case starts its clock at the same moment again). */
 export function resetStalePullsForTests() {
   lastPulls.clear();
+  resetPullGatesForTests();
 }
 
 export interface Transcript {
@@ -74,6 +78,8 @@ export interface Transcript {
   streaming: string;
   /** The stream ended while its final transcript item is still on the way. */
   streamEnded?: boolean;
+  /** Transcript cursor when the reply preview arrived. A newer user echo belongs to a different turn. */
+  streamEndedThrough?: number;
   /** The stream keeps losing items (the page got them by asking): say so, with a reload. */
   notLive: boolean;
   reload: () => void;
@@ -101,7 +107,7 @@ function cachedPage(mid: string, sid: string, cache?: TranscriptCache): FeedCach
  *  it has no rev), what the stale-page check compares; the hub's `revs` event moves the rev too.
  *  `assistant`: a Persona conversation, whose live text is the headless assistant's whole reply so far (any reply item
  *  ends it); otherwise it is an agent's message as Claude shows it, which the transcript replaces by its start. */
-export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; rev?: number; cache?: TranscriptCache; assistant?: boolean } = {}): Transcript {
+export function useTranscript(mid: string, sid: string, opts: { starting?: boolean; updatedAt?: string; rev?: number; cache?: TranscriptCache; assistant?: boolean; readOnly?: boolean } = {}): Transcript {
   const [initial] = useState(() => cachedPage(mid, sid, opts.cache));
   const [items, setItems] = useState<Item[]>(initial?.items ?? []);
   const [loading, setLoading] = useState(!initial);
@@ -120,7 +126,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [earlierPage, setEarlierPage] = useState<symbol>();
   const [replaceEpoch, setReplaceEpoch] = useState(0);
   const [streaming, setStreaming] = useState("");
-  const [streamEnded, setStreamEnded] = useState(false);
+  const [streamEndedThrough, setStreamEndedThrough] = useState<number>();
   const reread = useRef<() => void>(() => {});
   const replacing = useRef(false);
   const [notLive, setNotLive] = useState(false);
@@ -155,9 +161,12 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const deltas = useRef<TextThrottle>(null!);
   deltas.current ??= createTextThrottle(setStreaming);
   const assistant = Boolean(opts.assistant);
+  // Read-only audit views page over HTTP but never subscribe/unsubscribe or otherwise act as the visible chat.
+  const readOnly = opts.readOnly === true;
   // an agent's last delta as it came, and what of it the page shows (lib/live-text.ts)
   const liveRaw = useRef("");
   const liveShown = useRef("");
+  const coalescer = useRef<ItemCoalescer | null>(null);
 
   const apply = useCallback((batch: Item[]) => {
     if (!batch.length) return;
@@ -203,6 +212,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     };
     replacing.current = false;
     const ctl = new AbortController();
+    const itemCoalescer = createItemCoalescer(apply);
+    coalescer.current = itemCoalescer;
     // Older pages and folds still on their way were asked for from what is shown now: they must not land on what replaces it.
     const disownReads = () => {
       invalidateHistoryReads();
@@ -215,12 +226,14 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       cancelSave();
       clearTimeout(handoffTimer);
       ctl.abort();
+      itemCoalescer.cancel();
+      if (coalescer.current === itemCoalescer) coalescer.current = null;
       disownReads();
       snapshot.current = null;
       setItems([]);
       setStreaming("");
       deltas.current.cancel();
-      send({ type: "unsubscribe", machine_id: mid, session_id: sid });
+      if (!readOnly) send({ type: "unsubscribe", machine_id: mid, session_id: sid });
     });
     disownReads();
     const kept = snapshot.current;
@@ -232,7 +245,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     setError("");
     historyMissing.current = false;
     updateHasMore(cached?.hasMore ?? false);
-    setStreamEnded(false);
+    setStreamEndedThrough(undefined);
     deltas.current.flush("");
     liveRaw.current = liveShown.current = "";
     covered.current = 0;
@@ -318,6 +331,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     const rewritten = (nextHistory = "") => {
       disownReads();
       cancelSave();
+      itemCoalescer.cancel();
       replacing.current = true;
       authoritative = false;
       ready = false;
@@ -344,15 +358,25 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       handoffTimer = undefined;
       liveRaw.current = liveShown.current = "";
       deltas.current.flush("");
-      setStreamEnded(false);
+      setStreamEndedThrough(undefined);
     };
     const showLive = (batch?: Item[]) => {
-      if (liveRaw.current && liveThrough && batch?.some((i) => i.role === "user" && i.kind === "text" && !i.queued && i.seq > liveThrough)) return endLive();
+      // A preview without an input can claim a late echo. Once bound, the next input supersedes it,
+      // even when the previous turn's end marker has not arrived yet.
+      const input = liveRaw.current && batch?.findLast((i) => i.seq > liveThrough && !i.queued && isUserInput(i));
+      if (input) {
+        const message = input.id.split("#")[0];
+        if (message !== liveInput && (liveInput !== undefined || handoffTimer !== undefined)) return endLive();
+        liveInput = message;
+        liveThrough = input.seq;
+        if (handoffTimer !== undefined) setStreamEndedThrough(liveThrough);
+      }
       if (assistant) {
         if (batch?.some((i) => i.role === "assistant" && i.kind === "text" && i.seq >= liveThrough)) endLive();
         return;
       }
       const want = liveRaw.current && unlandedLive(liveRaw.current, latest);
+      if (!batch && liveRaw.current && want !== liveRaw.current) itemCoalescer.flush();
       if (!want && liveRaw.current) return endLive();
       if (want === liveShown.current) return;
       liveShown.current = want;
@@ -360,6 +384,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       else deltas.current.push(want);
     };
     let liveThrough = 0;
+    let liveInput: string | undefined;
     const onDelta = (text: string) => {
       if (dead) return;
       if (replacing.current) {
@@ -370,15 +395,20 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (!text) {
         if (!liveRaw.current || handoffTimer !== undefined) return;
         // The end marker and saved words travel separately. If a run ended without an item, release its preview.
-        setStreamEnded(true);
+        setStreamEndedThrough(liveThrough);
         deltas.current.flush(liveShown.current);
         handoffTimer = window.setTimeout(endLive, READ_TIMEOUT_MS);
         return;
       }
+      if (!liveRaw.current || handoffTimer !== undefined) {
+        liveThrough = Math.max(covered.current, latest.at(-1)?.seq ?? 0);
+        const boundary = latest.findLast((item) => !item.queued &&
+          (isUserInput(item) || (item.role === "assistant" && item.kind === "text")));
+        liveInput = boundary && isUserInput(boundary) ? boundary.id.split("#")[0] : undefined;
+      }
       clearTimeout(handoffTimer);
       handoffTimer = undefined;
-      setStreamEnded(false);
-      liveThrough = covered.current;
+      setStreamEndedThrough(undefined);
       liveRaw.current = text;
       if (assistant) {
         liveShown.current = text;
@@ -387,7 +417,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     };
 
     const subscribe = () => {
-      if (dead || conversationDeleted(mid, sid)) return;
+      if (readOnly || dead || conversationDeleted(mid, sid)) return;
       send({ type: "subscribe", machine_id: mid, session_id: sid, since_seq: covered.current || undefined, lazy_images: true, fold_work: true });
       subscribed = true;
     };
@@ -407,7 +437,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         const got = p.items ?? [];
         // Not what the stream brought while this was on its way: those are merged as they are, and not a miss.
         fresh += got.filter((i) => i.seq > covered.current).length;
-        apply(got);
+        if (got.length) {
+          itemCoalescer.flush();
+          apply(got);
+        }
         remember(got, Boolean(p.more_after));
         showLive(got);
         if (p.to_seq) covered.current = Math.max(covered.current, p.to_seq);
@@ -420,11 +453,21 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (!dead && version === pageRequest) rewritten(history.current);
       return fresh;
     };
+    // Every automatic read of what came after goes through the session's gate (lib/pull-gate.ts): one at a time across
+    // this tab's views of the session, and after a failure the next waits longer (#13677).
+    const gateKey = gateKeyOf("after", mid, sid);
+    const gatedPull = (): Promise<number> | undefined => {
+      if (startPull(gateKey, Date.now()) > 0) return undefined;
+      return pull().then(
+        (fresh) => { endPull(gateKey, "ok", Date.now()); return fresh; },
+        (e: unknown) => { endPull(gateKey, isAbort(e) ? "aborted" : "failed", Date.now()); throw e; },
+      );
+    };
     const queueGapFill = () => {
       // Schedule once per gap so frequent pushes cannot postpone the fill.
       gapTimer.current ??= window.setTimeout(() => {
         gapTimer.current = undefined;
-        void pull().catch(() => {});
+        void gatedPull()?.catch(() => {});
       }, 1500);
     };
     const keepExpanded = (batch: Item[]) => batch.filter(i => {
@@ -442,9 +485,13 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         updatedAt: asked, lastItemAt: newestItemAt(itemsRef.current), revUnread: revs.unread, revMovedAt: revs.movedAt, lastArrival,
         lastPull: lastPulls.get(pullKey) ?? 0, checkedFor, now, visible: document.visibilityState === "visible", pulling,
       })) return;
+      // An archived session gets no new lines: nothing to catch up on, and on a slow link every ask costs (#13677).
+      if (archivedNow(mid, sid)) return;
+      const asking = gatedPull();
+      if (!asking) return; // another view of it is asking, or the last ask failed and the wait is not over
       lastPulls.set(pullKey, now);
       pulling = true;
-      pull()
+      asking
         .then((fresh) => {
           checkedFor = asked;
           tally = afterPull(tally, fresh > 0 ? "found" : "empty");
@@ -454,6 +501,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         })
         .finally(() => {
           pulling = false;
+          // The next ask is timed from when this one ended: a slow ask (29.5 s) no longer lets the next go at once.
+          lastPulls.set(pullKey, Date.now());
           if (!dead) setNotLive(tallyNotLive(tally));
         });
     };
@@ -491,6 +540,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         recovered();
         // The first replay can stand in for a failed read. Later replays describe only the newest two turns.
         const skips = !replay && skipsCached(batch);
+        if (skips) itemCoalescer.cancel();
+        else itemCoalescer.flush();
         if (!replay) updateHasMore(latestMore);
         if (skips) disownReads();
         latest = skips ? [] : withoutFolded(latest, batch);
@@ -501,13 +552,15 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       }
       const gap = covered.current > 0 && ((e.from_seq ?? covered.current) > covered.current || (replay && batch.length > 0 && batch[0].seq > covered.current + 1));
       remember(e.items ?? [], gap);
+      const prevLiveShown = liveShown.current;
       showLive(e.items ?? []);
+      const liveHandoff = liveShown.current !== prevLiveShown;
       lastArrival = Date.now();
       if (e.items?.length && tally !== FRESH_TALLY) {
         tally = afterPush(tally); // the stream works
         setNotLive(false);
       }
-      apply(visible);
+      itemCoalescer.push(visible, e.has_more !== undefined || liveHandoff);
       if (!gap && e.to_seq) covered.current = Math.max(covered.current, e.to_seq);
       if (gap || e.more_after) queueGapFill();
     };
@@ -536,13 +589,14 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const changed = Boolean(p.history && history.current && p.history !== history.current);
       const active = authoritative && !replacing.current && !changed;
       const replace = replacing.current || changed || !batch.length || (!active && skipsCached(batch));
+      const buffered = replace ? (itemCoalescer.cancel(), []) : itemCoalescer.drain();
       const gap = active && !replace && batch[0].seq > covered.current + 1;
       if (replace) disownReads();
       if (replacing.current || changed) setReplaceEpoch((n) => n + 1);
       const pushes = changed && !replacing.current && pendingHistory !== p.history ? [] : pendingItems;
       const refreshed = (have: Item[], page: Item[]) => mergeItems(mergeItems(replace ? [] : withoutFolded(have, page), page), withoutFolded(pushes, page));
       const visible = active ? keepExpanded(batch) : batch;
-      setItems(have => refreshed(have, visible));
+      setItems(have => refreshed(buffered.length ? mergeItems(have, buffered) : have, visible));
       latest = refreshed(latest, batch);
       latestMore = Boolean(p.has_more);
       if (replace || !active) updateHasMore(latestMore);
@@ -622,6 +676,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       off();
       clearTimeout(refused);
       clearTimeout(handoffTimer);
+      itemCoalescer.cancel();
+      if (coalescer.current === itemCoalescer) coalescer.current = null;
       deltas.current.cancel();
       clearTimeout(gapTimer.current);
       gapTimer.current = undefined; // the next session's first gap starts its own
@@ -629,10 +685,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", flushSave);
       clearLive(mid, sid);
-      send({ type: "unsubscribe", machine_id: mid, session_id: sid });
+      if (!readOnly) send({ type: "unsubscribe", machine_id: mid, session_id: sid });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mid, sid, cacheScope, memoryScope, cacheManager, assistant, invalidateHistoryReads, updateHasMore]);
+  }, [mid, sid, cacheScope, memoryScope, cacheManager, assistant, readOnly, invalidateHistoryReads, updateHasMore]);
 
   // After the effect above, which starts each conversation's watch from the rev it has then.
   useEffect(() => {
@@ -661,7 +717,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           rewrite.current(p.history);
           return;
         }
-        apply(p.items ?? []);
+        const older = p.items ?? [];
+        if (older.length) {
+          coalescer.current?.flush();
+          apply(older);
+        }
         updateHasMore(Boolean(p.has_more));
         setError("");
         earlierRetryAt.current = 0;
@@ -707,12 +767,18 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         from = batch[batch.length - 1].seq + 1;
       }
       if (complete) expanded.current.set(fold.id, fold.fold);
-      apply(out);
+      // from_seq..through_seq is line-granular, so boundary lines can carry blocks of an adjacent fold (#13859).
+      const expandedItems = out.filter((i) => insideFold(i, fold));
+      if (expandedItems.length) {
+        coalescer.current?.flush();
+        apply(expandedItems);
+      }
       // The closeout's evidence reader needs to know a capped or superseded read; existing fold UI keeps the partial steps.
       return complete;
     },
     [mid, sid, apply],
   );
 
-  return { items, history: history.current, replaceEpoch, loading, firstRead, error, hasMore, loadingEarlier, earlierPage, loadEarlier, expandFold, streaming, streamEnded, notLive, reload: () => reread.current() };
+  return { items, history: history.current, replaceEpoch, loading, firstRead, error, hasMore, loadingEarlier, earlierPage,
+    loadEarlier, expandFold, streaming, streamEnded: streamEndedThrough !== undefined, streamEndedThrough, notLive, reload: () => reread.current() };
 }

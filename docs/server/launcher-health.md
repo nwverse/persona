@@ -26,6 +26,8 @@ runtime errors. Shell launchers, managed launchers and older runtimes keep their
   Runtime launchers (DSH, agy and others, whose `source` is the runtime's id) are not checked, with one exception (#10369): the main chat's launcher and the Agents' default launcher.
   While one of those has a failing record on a computer that lists it (`failing`, `repairing` or `blocked` within 6 hours, or a usage limit in force), the round checks it there like any launcher (once per interval, through the runtime's own `launchers.check`, as the on-demand probe below already does), and so does `POST /api/v1/launchers/health/check`; a failure updates the record's check time, a pass clears it.
   A runtime launcher of theirs that passed, or never failed there, is not checked again, so no runtime spends a request each interval; its record stays while the computer lists the launcher. Before, nothing rechecked such a record (a round dropped it instead, as a launcher the computer does not have), so the main chat's readiness could stay in setup for up to 6 hours after the cause was fixed.
+  Asked for by name (`POST /api/v1/launchers/health/check?machine=<id>&launcher=<name>`, the alert sheet's **Test again**), any runtime launcher the computer lists is checked, whatever its record says and whoever runs on it (#14534): a person asked for that one request. Before, a runtime launcher that was neither the main chat's nor the Agents' got no check and an empty answer, so a failure a start had recorded stayed until it went stale.
+  A check drops only the records of launchers the computer no longer lists (its whole list, not just the ones that run checks), so checking one launcher never erases another's record.
   The desktop apps' launchers (`claude_desktop`, `codex_app`), whose check runs no prompt, are never checked.
 - A failed Agent start is recorded too: when `agent_start`, a task plan starting an Agent (`startTaskAgent`) or a repair Agent's start gets an error from `session.start`, it is recorded as a failure (source `start`),
   and a check runs right away to confirm (one network blip should not leave a launcher unavailable; if the check passes, it recovers).
@@ -120,9 +122,10 @@ Nothing is ever taken away by a failure. "No new information" means the fold cha
 | --- | --- | --- |
 | `onboarding` | `hasCompletedOnboarding` missing or false: Claude Code's first-run setup is unfinished (the headless probe passes, an interactive start stalls on the first-run screens) | None, however many in a row: only a person at the machine can finish the setup. Stays `failing`; periodic and on-demand probes clear it to `ok` once setup is done |
 | `usage_limit` | Checked first: Claude Code's own line (`You've hit your session limit · resets 4:20pm (Area/City)`, also after a prefix such as `Error:`; an older `Claude AI usage limit reached`), Codex's (`You've hit your usage limit`, `usage_limit_exceeded`, `usageLimitExceeded`, `usage limit reached`). A gateway's generic 429, `rate limit` or `quota` stays in its own class | None, however many in a row: nothing on the computer is broken. Unavailable until the reset (below) |
+| `upstream` | Explicit upstream account-pool exhaustion (`no eligible upstream`, `no other eligible account`, `upstream attempt budget`, #13372), matched before `model_route` even when the message also names the requested model | None, however many in a row: nothing on the computer is broken |
 | `model_route` | `Bare Claude model name`, `cannot be routed`, `no account match`, model does not exist / not supported | Repair Agent (reconfigure the gateway's model) |
 | `auth` | 401 / 403, `invalid … api key`, `authentication_error`, `Not logged in`, expired token | Repair Agent (reconfigure the gateway's key) |
-| `cli_outdated` | `unknown option`, asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
+| `cli_outdated` | `unknown option`, a JSON-RPC `Method not found` (a CLI older than a method its runtime calls), asks to upgrade / version too old / no longer supported | First the node upgrades itself (`claude update`); if that fails, a repair Agent |
 | `timeout` | `context deadline exceeded`, no answer within 150 seconds (twice: a timed-out check is asked again at once) | Counts only after two in a row; handed to a repair Agent |
 | `other` | Everything else | Same: repaired only after two in a row |
 | `not_in_terminal` | A start's new terminal tab could not run the launcher or its claude (`launcher_missing` / `claude_missing` with `where: "terminal"`, #1642, `docs/integrations/launchers.md` "The terminal's shell is another environment") | None: `blocked` at once, the reason says to define the launcher where the terminal's shell reads it or add it as a model provider |
@@ -141,7 +144,7 @@ The main chat's **Test** (`GET /api/v1/assistant/readiness?probe=1`, `docs/assis
 Saving a Persona-managed provider with a new key, base URL, auth, model, headers or environment drops its failure records on every computer: it counts as never checked there until the next check or start.
 A `not_in_terminal` record and a usage limit before its known reset stay; a change that touches none of these (its display name) keeps every record.
 
-A **usage limit** (`usage_limit`) is `failing`, never `repairing` or `blocked`: the request got through to the subscription, so a block left by an earlier error is lifted and no repair round takes it.
+A **usage limit** (`usage_limit`) is `failing`, never `repairing` or `blocked`: the request got through to the subscription, so a block left by an earlier error is lifted and no repair round takes it. An **upstream pool outage** (`upstream`, #13372) likewise never starts a repair round (`repairNow` is false), since nothing on the computer is broken.
 Its reset (`resets_at`) is read off the words when they name a time zone (`resets 4:20pm (Area/City)`), or comes from the Agent's own record of the limit (source `session`); Codex's "try again at 3:05 PM" names none.
 With a reset, the launcher is unavailable until then unless a passing check proves quota recovered earlier (not bounded by the 6 hours; a reset more than 8 days off is taken as misread, as if there were none), and available again from that moment. A successful `session.start` alone does not prove the subscription can answer a model request and does not clear this record.
 The periodic rounds spend no check on it before the reset (it would be refused too), nor does a forced check of all launchers; the first round from a minute after the reset checks it whatever the interval, and a passing check clears it.
@@ -165,8 +168,8 @@ Every new Agent is now held to what its target computer can start before anythin
 
 - **What the computer has**: `machineLaunchers` (its own list without the hidden ones, plus Persona-managed ones), the launchers `hub.json` names for it, plain `claude` and every managed launcher (both run anywhere). The same answer backs `launcherAvailable`, which keeps the main chat off a launcher that is gone.
 - **An implicit default it lacks** (the caller named no launcher or tier; only the `agent.new` binding or a profile gave the launcher): the start runs on `claude` when the computer has Claude Code (its node reported a version, or its list names `claude`), otherwise on the first launcher in its list that takes a prompt (not a runtime's), otherwise on `claude` anyway.
-  The default's model and effort are dropped (the new launcher runs its own default model; an effort the caller gave stays).
-  The task's `why` says so in the user's language ("<launcher> isn't on <computer>, so this runs on claude with its default model"), and the plan card names the launcher that will run: the plan is changed when the card is made, or, when the computer's list couldn't be read then, at dispatch (the card updates).
+  The default's model and effort are dropped (the new launcher runs its own default model; an effort the caller gave stays). An explicitly chosen model is preserved instead: the fallback starts that model rather than the replacement's default.
+  The task's `why` says so in the user's language ("<launcher> isn't on <computer>, so this runs on claude with its default model"; with an explicit model, it says the chosen model is preserved), and the plan card names the launcher that will run: the plan is changed when the card is made, or, when the computer's list couldn't be read then, at dispatch (the card updates).
   `agent_start` puts the same line on its confirmation and in its answer (`Note: …`).
 - **An explicit tier whose launcher the computer lacks** (#12032): a tier the caller named is a caller choice, the same as naming the launcher itself, so it is refused rather than swapped — no terminal or process starts, and the tier's model, effort, model fingerprint and speed are preserved on the card instead of being cleared. The same applies to a tier a start-defaults policy selected for that start. The refusal reuses `launcher_not_on_machine` and names the launchers the computer has: `task_plan` fails that task, `agent_start` starts nothing (before the user is asked to confirm), New Agent gets a 400, and a plan whose launcher disappears between the card and `session.start` fails that task at dispatch. When the tier's launcher *is* present, its full preset (launcher, model, effort, speed) reaches the start unchanged. A tier supplied alongside an explicitly named launcher keeps the old precedence: the named launcher wins and the tier contributes nothing.
 - **A launcher the caller named** that the computer lacks: refused before any tab opens, naming the ones the computer has: `task_plan` fails that task, `agent_start` starts nothing (before the user is asked to confirm), New Agent gets a 400. A plan card moved to such a computer fails that task at dispatch the same way.
@@ -176,6 +179,7 @@ Every new Agent is now held to what its target computer can start before anythin
 
 ## Automatic repair
 
+- Only launchers covered by the periodic check are eligible for automatic repair. The latest failure must still be in effect. Other listed runtime launchers keep their records for inspection and can be checked with **Test again**.
 - One repair round per computer at a time (several launchers on one computer usually share one cause: the gateway config is broken and every launcher returns 400); at most two repairs per round, then it is recorded as `blocked` and waits for a person.
   Blocked launchers are still retested at the normal interval and recover on their own when they pass.
 - **Upgrade the CLI**: the node's `launchers.repair {name, action: "upgrade_cli"}` does only a fixed thing: for Claude launchers it runs `claude update` (login shell, 5-minute timeout);
@@ -205,16 +209,18 @@ set `default` if you want it to wait for your approval at every step. Member hub
 ## API for the board
 
 - `GET /api/v1/launchers/health?state=blocked&machine=`: all records (or filtered by state or computer), `{records: [{machine, launcher, state, kind, error, checked_at, source, fails, missing_fails?, repair?, blocked_reason?, resets_at?, limit_models?, limit_resets?}]}`.
-- `POST /api/v1/launchers/health/check?machine=&launcher=`: check right now (without parameters, all online computers), returns this run's results.
+- `POST /api/v1/launchers/health/check?machine=&launcher=`: check right now (without parameters, all online computers), returns this run's results. With no record in the answer for the launcher it asked about (the computer is offline, or no longer lists it), the web alert sheet reads `GET /api/v1/launchers/health` again, so it shows what the hub holds now.
 - A state change broadcasts a `launcher_health` event (`{type, record}`, only to connected clients, not a push).
   The "decisions / blocked / progress" board reads `state=blocked` records, or subscribes to this event, to list what is blocked.
 
 ## In the App
 
 Decided with the user (2026-11-11): the two model lists offer only what works now, so a launcher whose latest check failed is not listed at all (#4437). Earlier (#1643) the clients grayed out a `blocked` launcher with the reason and kept it selectable.
+Decided with the owner (2026-11-24, #14535): New Agent still does not offer such a launcher, but no longer leaves it missing. It comes in the answer's `unavailable` (code `launcher_unhealthy`) with a reason in the request's language: the failure's class on that computer (key or sign-in rejected, gateway can't use the model, CLI too old, no answer, usage limit, no gateway account free, first-run setup, else failed its last check) and the record's line, clipped to one short line. The clients already draw `unavailable` after the launchers, grayed with its reason and How to fix (the provider's page, whose Test availability clears the record), and never pick it, so a person can tell a failing launcher from one the computer does not have. The main chat's list is unchanged.
 
 - **New Agent** (iOS / Mac / visionOS `LauncherPicker` in `NewChatView`, web `NewAgent.tsx`) and the main chat's launcher menu both read `GET /api/v1/machines/{mid}/launchers`, which now leaves out a launcher whose latest check failed on that computer
   (a `failing`, `repairing` or `blocked` record within 6 hours, a usage limit until its reset) — the same records that route starts elsewhere. `failing` and `repairing` used to be offered; they are hidden too now.
+  For New Agent (`purpose` empty or `agent.new`) the launchers left out come back in `unavailable` with why (#14535, above), never in both lists; the presets that name them stay out.
   A launcher that was never checked stays: no result is not a failure, and the periodic checks are off unless the manager turns them on.
 - It comes back with a passing check on that computer (a periodic round when those are on, or **Test availability**), or when the record stops counting: the failure is older than 6 hours, or a usage limit's reset has passed.
   A successful start does not clear these: `recordStartSuccess` only clears `not_in_terminal`.
@@ -238,31 +244,40 @@ asked for it) and uses it only on the detour path (`healthDetour`, the chokepoin
   "no schedulable `<provider>` account in the pool right now" and, when known, "the nearest one recovers …". Stale data or any schedulable account
   says nothing, and no pool configured means the original wording, unchanged.
 - The launcher's provider is its health record's `agent`, falling back to a Persona-managed launcher's `agent`; an unknown provider gets no note.
-- This first cut never reorders machines or blocks a start: one launcher maps to one provider, so every machine offering it sees the same
+- Capacity never reorders machines or blocks a start: one launcher maps to one provider, so every machine offering it sees the same
   provider-level capacity, and two different providers are not equivalent (an explicit model configuration is never silently changed,
-  `docs/assistant/model-config.md`). Deferring starts until recovery, per-machine gateway attribution and the App/Lark entries are later work.
+  `docs/assistant/model-config.md`). Per-machine gateway attribution and the App/Lark entries are later work.
+- **Choosing among a tier's candidates** (#14701) is where quota does reorder: only among the candidates the user listed on one Agent preset,
+  in their order. The pace-based headroom there reads the merged usage accounts (`Devices.UsageAccounts`, the cache this snapshot uses) and
+  maps a launcher to a provider the same way, or through its admission group's `quota_pool`; a candidate whose launcher this computer lacks or
+  whose health check failed is passed over before any score (`docs/assistant/model-profiles.md` "Choosing a candidate"). A continuation keeps
+  its previous candidate while it is healthy; three failed starts in a row on it re-pick (`docs/assistant/model-profiles.md` "Continuations keep the candidate").
 
 ## Execution-agent admission gate
 
-The hub machine once ran 40+ claude processes at load 160 and timed out, so starting an execution Agent is now gated on the target computer's
-reported resources (`server/internal/assistant/admission.go`, #6608). The gate runs on the two execution-Agent start paths only — a task plan's
-`startTaskAgent` and the `agent_start` tool — both of which use `session.start`. The assistant's own conversations (main, leaders, scheduled) start
-through `assistant.send` and never pass it.
+Every execution-Agent start goes through manager placement (#13355). Task plans and `agent_start` enforce admission.
+Other starts, including dispatch, successors, repair, reviewers, New Agent and resumes, report the applicable lines and
+bind to the requested computer. They take no admission claim. Assistant conversations use `assistant.send`.
 
-The data is the manager's retained 10-second node sample (`machines` monitoring, `docs/server/machines.md`): available memory
-(`MemTotal − MemUsed`), load1, the system's core count, and the node-reported `claude_procs` count (Linux only; nil skips the process condition).
-A start is refused when any line is hit: free memory below the threshold, the claude process count at its cap, load1 above cores × the multiplier,
-or the task's direction already at its running-Agent cap. Thresholds live in the `assistant.admission` setting with code defaults (hub machine 2.5
-GiB free / 20 processes, other machines 2 GiB, load multiplier 4, direction cap 3 with a per-project override map); machine-specific lines are keyed
-by machine id, never hard-coded. A managed machine whose sample is missing, stale (older than 30 s) or lacks a load reading is refused (unknown
-load denies); a computer the resource layer does not retain is skipped, and a hub without a devices manager leaves the gate inert.
+Available memory (total minus used), load1 and core count come from the retained node sample. The concurrency line
+counts working sessions in the latest fleet snapshot on every platform, including a snapshot with zero working sessions.
+Only when the manager has no session snapshot does the node's optional `claude_procs` reading stand in.
+In-flight claims count toward concurrency. Defaults in `assistant.admission` are 2.5 GiB free on the hub computer,
+2 GiB elsewhere, 20 working sessions, load1 at most four times the core count and eight running Agents per direction.
+A direction override takes precedence over a project override. A retained computer with missing or stale metrics
+(older than 30 seconds), unknown cores or ambiguous memory fails admission. Missing optional load or process readings
+skip their respective lines. A computer outside the resource layer skips machine checks.
 
 A refused `machine_policy=fixed` task stays put and gets the reason plus the least-loaded reachable alternative. A `flexible` task is moved to that
 alternative when its launcher runs there and its directory exists (the same `fs.stat` and reroute-trail rules as the launcher detour); no alternative means refusal. The
 direction cap refuses either policy, since moving machines does not free a direction slot. The check and the slot reservation happen in one critical section
 (`claimIfAllowed`), so concurrent admits cannot both take the last slot; a task's claim is held from the decision until its agent is linked into the todo or the start
-fails for good (an `agent_start` tool call has no todo, so its claim ends with the call), covering both the RPC race and the 10-second metrics/ledger gap. Other
-`session.start` callers (dispatch, self-heal, successor Agents, Feishu cards) are intentionally not wired in this first cut.
+fails for good. The `agent_start` tool holds its claim across the start attempt.
+
+The manager keeps each decision in `agent_placements`, including the requested machine, candidates, filter keys and
+readings, scores used to pick an alternative, choice and built-in policy version. A queued attempt has no bound machine.
+Task and session IDs link the decision to the work, including starts with no plan. The plan also carries its current
+decision for the card and receipt. Directory and leader-trust checks on alternatives apply when a plan can move.
 
 A plan task the gate refuses is not failed: it waits in the admission queue (`server/internal/assistant/task_queue.go`), its card reads waiting
 with the reason, and the hub retries it every 90 seconds. The queue record is stored in the plan, so a hub restart resumes the wait. After 10

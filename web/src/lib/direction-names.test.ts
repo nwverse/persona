@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countsLabel, directionLabel, directionNames, leaderCounts, totalCounts } from "./direction-names";
+import { countsLabel, directionLabel, directionNames, leaderCounts, leaderExternalDirections, totalCounts, treeLeaders, visibleSectionCounts } from "./direction-names";
 
 describe("direction names", () => {
   it("keep the current leaders' names by id, leaving out ended ones and blank names", () => {
@@ -18,6 +18,23 @@ describe("direction names", () => {
     expect(directionLabel(names, "a", "1110 | explore | x")).toBe("Product");
     expect(directionLabel(names, "b", "Trip plan")).toBe("Trip plan");
   });
+
+  it("preserve external metadata in tree and leaders-list projections, keyed by direction id", () => {
+    const list = [
+      { id: "direction-outside", name: "Outside", external: true, machine_id: "mac", session_id: "agent-7" },
+      { id: "direction-targetless", name: "Targetless", external: true },
+      { id: "direction-ended", name: "Ended", external: true, machine_id: "mac", session_id: "old", ended: true },
+      { id: "lead-a", name: "Product", machine_id: "hub", session_id: "lead-a" },
+    ];
+    expect([...leaderExternalDirections(list)]).toEqual([
+      ["direction-outside", { external: true, machine_id: "mac", session_id: "agent-7" }],
+      ["direction-targetless", { external: true }],
+    ]);
+    expect(treeLeaders({ directions: [
+      { id: "direction-outside", name: "Outside", external: true, machine_id: "mac", session_id: "agent-7", counts: { working: 1, needs_you: 2, stuck: 0, review: 0 }, running: true },
+      { id: "main", name: "", secretary: true, counts: { working: 0, needs_you: 0, stuck: 0, review: 0 }, running: false },
+    ] })).toEqual([{ id: "direction-outside", name: "Outside", external: true, machine_id: "mac", session_id: "agent-7", counts: { running: true, needs_you: 2 } }]);
+  });
 });
 
 describe("what a lead's row shows of its direction (#4331, #6626)", () => {
@@ -35,5 +52,18 @@ describe("what a lead's row shows of its direction (#4331, #6626)", () => {
     const c = new Map([["a", { running: false, needs_you: 1 }], ["b", { running: true, needs_you: 2 }]]);
     expect(totalCounts(c, ["a", "b", "gone"])).toEqual({ running: true, needs_you: 3 });
     expect(totalCounts(c, ["a"])).toEqual({ running: false, needs_you: 1 });
+  });
+  it("tallies only visible directions and visible recent chats, excluding hidden directions, main, and unlisted rows", () => {
+    const c = new Map([
+      ["dir-alpha", { running: true, needs_you: 2 }],
+      ["dir-beta", { running: false, needs_you: 1 }],
+      ["dir-hidden", { running: true, needs_you: 5 }],
+      ["bg-supervisor", { running: false, needs_you: 3 }],
+      ["main", { running: false, needs_you: 1 }],
+      ["recent-visible", { running: false, needs_you: 1 }],
+      ["recent-folded", { running: false, needs_you: 2 }],
+    ]);
+    expect(visibleSectionCounts(c, ["dir-alpha", "dir-beta"])).toEqual({ running: true, needs_you: 3 });
+    expect(visibleSectionCounts(c, ["dir-alpha", "dir-beta", "dir-alpha"], ["recent-visible", "dir-alpha"])).toEqual({ running: true, needs_you: 4 });
   });
 });

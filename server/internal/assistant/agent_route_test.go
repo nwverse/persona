@@ -131,7 +131,7 @@ func TestHandStartedAgentUnderALeaderGetsItsSignals(t *testing.T) {
 
 	agentTurn(s, f, proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
 	waitFor(t, "the leader's message", func() bool { return len(f.noticesTo("lead1")) == 1 })
-	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "📋 督办") || !strings.Contains(n, "只督办用户显式挂给你的手动 Agent") || !strings.Contains(n, "signal=review") {
+	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "📋 督办") || !strings.Contains(n, "你督办自己派出和转交给你的任务") || !strings.Contains(n, "signal=review") {
 		t.Fatalf("the leader's message:\n%s", n)
 	}
 	if got := f.noticesTo("conv1"); len(got) != 0 {
@@ -157,8 +157,7 @@ func TestHandStartedAgentUnderALeaderGetsItsSignals(t *testing.T) {
 	}
 }
 
-// task_plan validates an explicitly named leader as before, but every new plan is supervised by main (#5732); a custom
-// supervisor no longer creates a second supervision route.
+// Main may explicitly select a direction lead; ordinary side conversations cannot assign another supervisor.
 func TestTaskPlanSupervisor(t *testing.T) {
 	s, f := newQuietService(t)
 	f.known["lead1"] = true
@@ -180,11 +179,11 @@ func TestTaskPlanSupervisor(t *testing.T) {
 		t.Fatalf("handed to a conversation that is no leader: %v", err)
 	}
 	res, err := plan("conv1", "lead1")
-	if err != nil || !strings.Contains(res, "You supervise them") {
-		t.Fatalf("main supervises the explicit-leader plan too: %s %v", res, err)
+	if err != nil || !strings.Contains(res, "Leader conversation lead1 supervises them") {
+		t.Fatalf("explicit leader did not supervise the plan: %s %v", res, err)
 	}
 	waitFor(t, "the task", func() bool { return len(onlyTodo(s).Agents) == 1 })
-	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "conv1" || len(v.DoneWhen) != 1 {
+	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "lead1" || v.SupervisorSource != "plan" || len(v.DoneWhen) != 1 {
 		t.Fatalf("supervision: %+v", v)
 	}
 }

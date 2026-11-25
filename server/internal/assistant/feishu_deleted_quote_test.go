@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botport"
+
+	"github.com/nwverse/persona/server/internal/botcard"
 )
 
 // Serve synthetic readback through the production Open API client and fake hub boundary.
@@ -31,7 +33,7 @@ func quoteReadbackAPI(t *testing.T, f *fakeHub, items []map[string]any, code int
 		}
 	}))
 	t.Cleanup(api.Close)
-	client := feishubot.New("cli_fixture", "synthetic-secret", api.URL)
+	client := botport.New("cli_fixture", "synthetic-secret", api.URL)
 	f.answerApp(AppFeishu, FeishuMessages, func(p json.RawMessage) (any, error) {
 		var req struct {
 			MessageID string `json:"message_id"`
@@ -47,6 +49,8 @@ func quoteReadbackAPI(t *testing.T, f *fakeHub, items []map[string]any, code int
 // A deleted parent can still contain its old body and resource keys in a successful readback.
 // Both the private handler and botSend must omit that quote while retaining the new message's media.
 func TestFeishuReplyDeletedQuote(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
+	needsLarkModule(t)
 	parents := []struct{ kind, body string }{
 		{"text", `{"text":"old-quote-text"}`},
 		{"post", `{"title":"old-quote-title","content":[[{"tag":"text","text":"old-quote-text"},{"tag":"img","image_key":"img_old"}]]}`},
@@ -94,8 +98,8 @@ func TestFeishuReplyDeletedQuote(t *testing.T) {
 						if entry == "private" {
 							e.deliver(ev)
 						} else {
-							content := feishubot.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
-							if err := e.s.botSend(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
+							content := botcard.ParseContent(ev.Message.MessageType, ev.Message.Content, nil)
+							if err := e.s.larkModule().Send(context.Background(), &ev, content, botTarget{Kind: targetMain}); err != nil {
 								t.Fatal(err)
 							}
 						}
@@ -173,6 +177,8 @@ func TestFeishuReplyDeletedQuote(t *testing.T) {
 }
 
 func TestFeishuReplyUnavailableQuote(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
+	needsLarkModule(t)
 	for _, tc := range []struct {
 		name   string
 		parent bool

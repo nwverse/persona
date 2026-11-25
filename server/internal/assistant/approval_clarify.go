@@ -141,8 +141,10 @@ func (s *Service) waitPreparedCard(ctx context.Context, ix proto.Interaction, op
 // awaitPrepared releases only the original tool call on clarification. Final
 // resolution, expiry and replacement still finish the interaction normally.
 // Every waiter listens to the broadcast, never the one-shot p.done: a snapshot
-// waiter cannot steal the original caller's terminal result.
-func (s *Service) awaitPrepared(ctx context.Context, p *pending) (proto.Resolution, error) {
+// waiter cannot steal the original caller's terminal result. An auxiliary
+// snapshot waiter's cancellation detaches only that waiter; the original
+// caller owns the prepared operation's cancellation lifecycle.
+func (s *Service) awaitPrepared(ctx context.Context, p *pending, auxiliary bool) (proto.Resolution, error) {
 	s.fleet.mu.Lock()
 	if p.resolved == nil {
 		p.resolved = make(chan struct{})
@@ -177,7 +179,7 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending) (proto.Resoluti
 		s.fleet.mu.Lock()
 		settled := p.claimed || p.prepared.terminal
 		orphaned := false
-		if !settled && p.ix.Resumable && s.fleet.interactions[p.ix.ID] == p {
+		if !settled && !auxiliary && p.ix.Resumable && s.fleet.interactions[p.ix.ID] == p {
 			orphaned = s.orphanLocked(p)
 		}
 		s.fleet.mu.Unlock()
@@ -187,6 +189,11 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending) (proto.Resoluti
 			// card that has already finished.
 			<-resolved
 			return terminal()
+		}
+		if auxiliary {
+			// The snapshot stopped asking for this card. Its auxiliary waiter
+			// leaves, but the original operation and owner card remain pending.
+			return proto.Resolution{Dismiss: true}, nil
 		}
 		if orphaned {
 			// Match the ordinary hook waiter: a transient disconnect does not
@@ -241,6 +248,13 @@ func (s *Service) expirePrepared(p *pending) {
 // final outcome reaches the conversation through the approval journal, as after a question. It keeps nothing waiting
 // when the caller already went away, once the card has clarified (its own timing applies) or ended. False: expire.
 func (s *Service) keepWaiting(p *pending) bool {
+	// A scheduled task's own conversation has nobody present to continue the turn
+	// between rounds. Let its detachable card expire at the initial window instead
+	// of retaining a needs-you session that makes every later round skip as busy.
+	// Classification reads settings and the schedule book, so it runs without mu.
+	if p.ix.Detachable && s.dispatchConversationClass(context.Background(), p.ix.MachineID, p.ix.SessionID) == dispatchClassScheduled {
+		return false
+	}
 	for {
 		s.fleet.mu.Lock()
 		a := p.prepared
@@ -261,6 +275,16 @@ func (s *Service) keepWaiting(p *pending) bool {
 		s.fleet.mu.Unlock()
 
 		err := s.approvalJournalStarted(context.Background(), ix)
+		deadline := time.Time{}
+		if err == nil {
+			deadline = time.Now().Add(approvalWaitingWindow).UTC()
+			err = s.updateInteractionDeadline(context.Background(), ix.ID, ix.CreatedAt, deadline)
+			if err != nil {
+				// approvalJournalStarted succeeded, so balance its new entry before
+				// this card expires. A failed start already removed that entry.
+				s.approvalJournalAborted(context.Background(), ix.ID)
+			}
+		}
 		s.fleet.mu.Lock()
 		a.attempt = nil
 		close(attempt.done)
@@ -275,7 +299,7 @@ func (s *Service) keepWaiting(p *pending) bool {
 			return ended // ended meanwhile: nothing more to do; its caller gone: it expires as before
 		}
 		a.clarified, a.waiting = true, true
-		p.ix.ExpiresAt = time.Now().Add(approvalWaitingWindow).UTC()
+		p.ix.ExpiresAt = deadline
 		a.decisionDeadline = p.ix.ExpiresAt
 		ix = p.ix
 		if a.decisionTimer != nil {
@@ -605,6 +629,7 @@ type approvalBook struct {
 	mu         sync.Mutex
 	loaded     bool
 	list       []approvalJournalEntry
+	handled    map[string]bool
 	delivering bool
 	again      bool
 	retry      bool

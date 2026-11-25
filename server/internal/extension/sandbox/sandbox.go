@@ -137,13 +137,33 @@ func (s Support) Available() bool {
 }
 
 var (
-	probeOnce sync.Once
-	probed    Support
+	// probeMu guards the probe's cache; probeFn runs the probe itself (tests replace it).
+	probeMu  sync.Mutex
+	probeFn  = probe
+	probed   Support
+	probedAt time.Time
+	probedOK bool
 )
 
-// Probe finds out once what this machine can do.
+// probeRetryInterval is how long a failed probe is reused before it is tried again. A missing bwrap is the exception
+// (see Probe): LookPath is cheap, so it is tried on every call and recovers the moment bwrap is installed.
+const probeRetryInterval = 2 * time.Second
+
+// Probe finds out what this machine can do. A machine that can sandbox is probed once. A machine that cannot is
+// probed again at most every probeRetryInterval (a broken mount stays cached so list endpoints do not spawn bwrap over
+// and over), except that a missing bwrap is checked on every call: LookPath costs microseconds and one installed a
+// moment ago is picked up at once (#13540).
 func Probe() Support {
-	probeOnce.Do(func() { probed = probe() })
+	probeMu.Lock()
+	defer probeMu.Unlock()
+	if probedOK {
+		return probed
+	}
+	if !probedAt.IsZero() && (probed.Reason == nil || probed.Reason.Key != "extension-status.sandbox_no_bwrap") && time.Since(probedAt) < probeRetryInterval {
+		return probed
+	}
+	probed, probedAt, probedOK = probeFn(), time.Now(), false
+	probedOK = probed.Available()
 	return probed
 }
 
@@ -251,7 +271,8 @@ func bwrapProbeArgs(pkg, data, run, trueBin string) []string {
 		args = append(args, "--ro-bind-try", d, d)
 	}
 	args = append(args,
-		"--proc", "/proc",
+		// Bind the outer procfs read-only rather than mounting another: the fresh PID namespace still controls visibility.
+		"--ro-bind", "/proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",
 		"--tmpfs", "/run",
@@ -311,7 +332,7 @@ func linuxSetup(plan Plan) []string {
 	args := []string{"--die-with-parent"}
 	if plan.Strict {
 		args = append(args, "--unshare-user", "--unshare-ipc", "--unshare-pid", "--unshare-net", "--unshare-uts", "--cap-drop", "ALL",
-			"--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
+			"--ro-bind", "/proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
 			"--ro-bind", plan.Self, SelfPath, "--ro-bind", plan.ProxySocket, plan.ProxySocket)
 		for _, m := range plan.ReadOnly {
 			if m.DataFD > 0 {
@@ -326,7 +347,7 @@ func linuxSetup(plan Plan) []string {
 	for _, d := range systemDirs {
 		args = append(args, "--ro-bind-try", d, d)
 	}
-	args = append(args, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
+	args = append(args, "--ro-bind", "/proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run",
 		"--ro-bind", plan.Pkg, plan.Pkg,
 		"--bind", plan.Data, plan.Data,
 		"--bind", plan.Run, plan.Run,
@@ -345,10 +366,17 @@ func linuxSetup(plan Plan) []string {
 	return args
 }
 
-// ProxyEnv points every common HTTP client at proxy, and nothing past it.
+// ProxyEnv points every common HTTP client at proxy, and nothing past it. Node's own fetch and WebSocket ignore these
+// variables unless NODE_USE_ENV_PROXY is set (Node 24.0 / 22.21 and later; older versions ignore it), so a sandboxed
+// Node program would otherwise dial straight out and fail with ENETUNREACH before the proxy ever sees it (#15707).
+// With no proxy (strict sandboxes, which address their broker explicitly) Node is not told to use one.
 func ProxyEnv(proxy string) []string {
-	return []string{"HTTP_PROXY=" + proxy, "HTTPS_PROXY=" + proxy, "http_proxy=" + proxy, "https_proxy=" + proxy,
+	env := []string{"HTTP_PROXY=" + proxy, "HTTPS_PROXY=" + proxy, "http_proxy=" + proxy, "https_proxy=" + proxy,
 		"ALL_PROXY=" + proxy, "all_proxy=" + proxy, "NO_PROXY=", "no_proxy="}
+	if proxy != "" {
+		env = append(env, "NODE_USE_ENV_PROXY=1")
+	}
+	return env
 }
 
 // toolsRule lets the program read its command-line programs (manifest.tools), when it has any.

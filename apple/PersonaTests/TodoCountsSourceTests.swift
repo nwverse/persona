@@ -27,9 +27,16 @@ private final class TodoPendingWrites {
     var value: [String: TodoCountsSource.Pending] = [:]
 }
 
+/// The answers still on the device, as `TodoOutbox.answering` gives them: watched, as the outbox's entries are.
+@MainActor @Observable
+private final class TodoHeldAnswers {
+    var value: [String: Set<String>] = [:]
+}
+
 /// One number per place (#10465, docs/apple/ios.md "Filing and counts"): with one manager the hub's counts and places as
-/// sent; with several, counted from the current assistant's rows, with only its own project places; less the answers
-/// given on this device that the hub's view does not show yet.
+/// sent, each project's part counted from the rows as its place counts them; with several, counted from the current
+/// assistant's rows, with only its own project places; less the answers given on this device that the hub's view does
+/// not show yet.
 @MainActor
 struct TodoCountsSourceTests {
     @MainActor private final class Flag { var on = false }
@@ -58,7 +65,8 @@ struct TodoCountsSourceTests {
         return hub
     }
 
-    /// One manager: the numbers are the hub's as sent, its places too, All carrying N.
+    /// One manager: the numbers are the hub's as sent, its places too, All carrying N; a project's part is its rows',
+    /// as its place's Filter and Needs you header say it.
     @Test func oneManagerShowsTheHubsNumbers() async throws {
         let hub = Self.hub()
         // The hub's counts differ from what the rows would give: they are the ones shown.
@@ -70,7 +78,9 @@ struct TodoCountsSourceTests {
         #expect(store.countsSource.needsYou == 5 && store.countsSource.counts.open == 9)
         #expect(store.countsSource.places.map(\.id) == ["all", "today", "upcoming", "project:kyoto", "project:release"])
         #expect(store.countsSource.places.first?.needsYou == 5, "All carries N")
-        #expect(store.countsSource.places.last?.needsYou == 2)
+        #expect(store.countsSource.places.last?.needsYou == 0, "the hub says 2, but no row of it needs the owner")
+        await store.refresh(api: Self.hub().client)
+        #expect(store.countsSource.places.last?.needsYou == 2, "the release's two rows in Needs you")
     }
 
     /// Several managers: the hub adds both up, the pages list the current assistant's: N is counted from its rows, and
@@ -116,6 +126,31 @@ struct TodoCountsSourceTests {
         ], counts: TodoViewJSON.counts(needsYou: 1, inProgress: 1, open: 2)))
         await store.refresh(api: hub.client)
         #expect(source.needsYou == 1, "the hub's number, nothing taken off twice")
+    }
+
+    /// An answer held on this device (`TodoOutbox.answering`) moves every reader in one update: N (the drawer and
+    /// sidebar row, the folded Pages tally, the guard line), the Needs you header's count and All's place change in the
+    /// same recount, at the tap, before the hub has it; undone or refused, all of them are back together.
+    @Test func anAnswerHeldHereMovesEveryReaderInOneUpdate() async throws {
+        let held = TodoHeldAnswers()
+        var v1 = TodoStore.V1.on()
+        v1.answering = { held.value }
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
+        defer { store.forget() }
+        await store.refresh(api: Self.hub().client)
+        let source = store.countsSource
+        #expect(source.needsYou == 3 && source.counts.sections[TodoListSection.needsYou] == 3)
+        let seen = Flag()
+        withObservationTracking { _ = source.counts } onChange: { MainActor.assumeIsolated { seen.on = true } }
+        held.value = ["w1": ["todo:decision@1"]]
+        try await waitForCount { seen.on }
+        // The recount that told the readers set every number: none of them waits for another update.
+        #expect(source.needsYou == 2 && source.counts.sections[TodoListSection.needsYou] == 2)
+        #expect(source.places.first?.needsYou == 2 && source.places.last?.needsYou == 1, "All and the project with it")
+        held.value = ["w1": ["another ask"]]
+        try await waitForCount { source.needsYou == 3 }
+        held.value = [:]
+        try await waitForCount { source.needsYou == 3 && source.places.first?.needsYou == 3 }
     }
 
     /// Each number is set only when it changes: a read that moves none draws nothing that reads them.
@@ -181,11 +216,11 @@ struct TodoCountsSourceTests {
         let pending = TodoPendingWrites()
         let source = TodoCountsSource(scope: { nil }, pending: { pending.value })
         let rows = [TodoItem(id: "n", title: "N"), TodoItem(id: "a", title: "A"), TodoItem(id: "w", title: "W")]
-        let views = ["n": TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "decision"),
-                     "a": TodoSummary(phase: TodoPhase.todo, section: TodoListSection.todo, reason: "rest"),
-                     "w": TodoSummary(phase: TodoPhase.working, section: TodoListSection.working, reason: "persona_working")]
+        let views = ["n": TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.ownerDecides),
+                     "a": TodoSummary(phase: TodoPhase.todo, section: TodoListSection.todo, reason: TodoReason.rest),
+                     "w": TodoSummary(phase: TodoPhase.working, section: TodoListSection.working, reason: TodoReason.personaWorking)]
         let hubCounts = TodoCounts(open: 3, needsYou: 1, inProgress: 1,
-                                   sections: [TodoListSection.needsYou: 1, TodoListSection.todo: 1, TodoListSection.working: 1])
+                                   sections: TodoCountsSections(needsYou: 1, working: 1, todo: 1))
         for counts in [hubCounts, nil] {
             pending.value = [:]
             source.update(.init(rows: rows, views: views, counts: counts, now: Date()))
@@ -199,6 +234,31 @@ struct TodoCountsSourceTests {
             #expect(source.filed.map(\.id) == ["x", "a", "n"], "the new one first in To do, then Someday")
             pending.value = [:]
             try await waitForCount { source.needsYou == 1 && source.counts.open == 3 }
+        }
+    }
+
+    /// A write still on the device on a Needs-you row of a project (deleted, or put in Someday) comes off that project's
+    /// part and off All's N once each, with the hub's counts and places (one manager): the places count each part from
+    /// the rows with the writes applied, so nothing takes it off a second time. Both come back when the write goes.
+    @Test func aWriteInAProjectComesOffItsPartOnce() async throws {
+        let pending = TodoPendingWrites()
+        let source = TodoCountsSource(scope: { nil }, pending: { pending.value })
+        let rows = [TodoItem(id: "k1", title: "K1", project: "kyoto"), TodoItem(id: "k2", title: "K2", project: "kyoto"),
+                    TodoItem(id: "r1", title: "R1", project: "release")]
+        let needs = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.ownerDecides)
+        let hubCounts = TodoCounts(open: 3, needsYou: 3, sections: TodoCountsSections(needsYou: 3))
+        let places = try JSON.decoder.decode(TodoPlaces.self, from: Data(Self.places.utf8))
+        source.update(.init(rows: rows, views: ["k1": needs, "k2": needs, "r1": needs], counts: hubCounts, places: places, now: Date()))
+        let part = { (slug: String) in source.places.first { $0.id == "project:" + slug }?.needsYou }
+        try await waitForCount { source.needsYou == 3 && part("kyoto") == 2 }
+        for write in [TodoCountsSource.Pending.gone, .someday] {
+            pending.value = ["k1": write]
+            try await waitForCount { source.needsYou == 2 }
+            #expect(part("kyoto") == 1 && part("release") == 1, "\(write): off its project's part once")
+            #expect(source.places.first?.needsYou == 2, "\(write): and off All's N once")
+            pending.value = [:]
+            try await waitForCount { source.needsYou == 3 }
+            #expect(part("kyoto") == 2 && source.places.first?.needsYou == 3)
         }
     }
 }

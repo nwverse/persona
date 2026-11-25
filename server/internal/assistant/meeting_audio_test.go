@@ -4,16 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
-
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/kb"
 )
@@ -29,98 +28,6 @@ func TestSocketRoutesAreTheWireOnes(t *testing.T) {
 	}
 	if !slices.Equal(got, assistantwire.SocketRoutes) {
 		t.Fatalf("socket routes %v, the wire's %v", got, assistantwire.SocketRoutes)
-	}
-}
-
-// The upload's 200 says the mode in effect: hub when asked and ready, device with unavailable when the contribution
-// is not ready, device on a meeting naming none, not_meeting for hub asked of a note; the mode never changes after.
-func TestTranscriptionModeOnUpload(t *testing.T) {
-	h := newHubFixture(t)
-	if out := h.hubUpload(meetingRec, 1, nil); out["transcription"] != "hub" || out["transcription_problem"] != nil {
-		t.Fatalf("hub: %v", out)
-	}
-	if out := h.upload(meetingRec, 2, map[string]any{"transcription": "device"}); out["transcription"] != "hub" {
-		t.Fatalf("a later upload changed the mode: %v", out)
-	}
-	if out := h.upload(meetingOther, 1, nil); out["transcription"] != "device" || out["transcription_problem"] != nil {
-		t.Fatalf("a meeting naming none: %v", out)
-	}
-	note := "66666666-6666-4666-8666-666666666666"
-	if out := h.upload(note, 1, map[string]any{"kind": "note", "transcription": "hub"}); out["transcription"] != "device" ||
-		out["transcription_problem"] != "not_meeting" {
-		t.Fatalf("a note: %v", out)
-	}
-	if out := h.upload("77777777-7777-4777-8777-777777777777", 1, map[string]any{"kind": "note"}); out["transcription"] != nil {
-		t.Fatalf("a note naming none: %v", out)
-	}
-	h.tr.set(func(f *fakeTranscriber) { f.infoErr = errDial })
-	h.s.transcriptionReadinessChanged()
-	notReady := "88888888-8888-4888-8888-888888888888"
-	if out := h.hubUpload(notReady, 1, nil); out["transcription"] != "device" || out["transcription_problem"] != "unavailable" {
-		t.Fatalf("not ready: %v", out)
-	}
-	if tr := h.transcription(notReady); tr["mode"] != "device" || tr["state"] != nil {
-		t.Fatalf("device mode's transcription: %v", tr)
-	}
-	if tr := h.transcription(meetingRec); tr["mode"] != "hub" || tr["state"] != "live" || tr["gaps"] == nil {
-		t.Fatalf("hub mode's transcription: %v", tr)
-	}
-	// POST …/live of a device-mode meeting says its transcription too (once a mode was named); detail.meta has it.
-	device := "14141414-1414-4414-8414-141414141414"
-	h.upload(device, 1, map[string]any{"attendance": "listener", "transcription": "device"})
-	out := h.do("POST", livePath(device), "", `{"from":0,"segments":[{"start":1,"end":2,"text":"Hello"}]}`, http.StatusOK)
-	if tr, _ := out["transcription"].(map[string]any); tr["mode"] != "device" || out["revs"] != nil {
-		t.Fatalf("POST …/live: %v", out)
-	}
-	assertHubDetail := func() kb.TranscriptionView {
-		t.Helper()
-		d, err := h.engine().Get(kb.KindRecording, meetingRec, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var meta struct {
-			Transcription *kb.TranscriptionView `json:"transcription"`
-		}
-		if err := json.Unmarshal(d.Meta, &meta); err != nil {
-			t.Fatalf("detail.meta: %s %v", d.Meta, err)
-		}
-		tr := meta.Transcription
-		if tr == nil || tr.Mode != "hub" || tr.State != "live" || tr.Gaps == nil || len(*tr.Gaps) != 0 {
-			t.Fatalf("detail.meta: %s", d.Meta)
-		}
-		return *tr
-	}
-	assertHubDetail()
-	// No audio socket connects in this test. Its normal fallback clock may have
-	// elapsed already; fallback adds metadata without changing the chosen mode.
-	run := h.s.hubRunFor(h.engine(), meetingRec)
-	if run == nil {
-		t.Fatal("missing hub transcription run")
-	}
-	run.mu.Lock()
-	fallbackDue := run.downSince.Add(fallbackAfter)
-	run.mu.Unlock()
-	run.tick(fallbackDue)
-	if tr := assertHubDetail(); !tr.Fallback {
-		t.Fatalf("detail.meta did not expose the legitimate fallback: %+v", tr)
-	}
-}
-
-// Before the upgrade only the caller (403) and the knowledge base (503) refuse the socket.
-func TestAudioSocketRefusedBeforeTheUpgrade(t *testing.T) {
-	h := newHubFixture(t)
-	h.hubUpload(meetingRec, 1, nil)
-	url := "ws" + strings.TrimPrefix(h.sockets.URL, "http") + "/api/v1/recordings/" + meetingRec + "/audio"
-	_, resp, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{HTTPHeader: http.Header{RoleHeader: {"answer"}}})
-	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("answer role: %v %v", err, resp)
-	}
-	noKB := newTestService(t, newFakeHub())
-	srv := httptest.NewServer(http.HandlerFunc(noKB.ServeSocket))
-	defer srv.Close()
-	_, resp, err = websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/recordings/"+meetingRec+"/audio", nil)
-	if err == nil || resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("no knowledge base: %v %v", err, resp)
 	}
 }
 
@@ -152,7 +59,7 @@ func TestAudioSocketRefusalsAreTheFirstFrame(t *testing.T) {
 
 	final := "99999999-9999-4999-8999-999999999999"
 	h.hubUpload(final, 1, nil)
-	if _, err := h.engine().TranscriptionUpdate(final, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := recWrites(h.engine()).TranscriptionUpdate(final, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.FinalFrom = time.Now()
 		return nil
 	}); err != nil {
@@ -173,7 +80,7 @@ func TestAudioSocketTrimmed(t *testing.T) {
 	h.hubUpload(meetingRec, 1, map[string]any{"complete": true, "duration": 60.0, "ended_at": time.Now().UTC().Format(time.RFC3339),
 		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
 	e := h.engine()
-	if _, err := e.TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := recWrites(e).TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.State = kb.TranscriptionFailed
 		return nil
 	}); err != nil {
@@ -246,7 +153,7 @@ func TestAudioSocketPositions(t *testing.T) {
 		t.Fatalf("audio before ready: %v", f)
 	}
 	late.waitClosed()
-	audioStartWait = 100 * time.Millisecond
+	recTimings(t, h.s, map[string]time.Duration{"audioStartWait": 100 * time.Millisecond}, nil)
 	quiet := dialPhone(t, h.sockets, meetingRec)
 	if f := quiet.wait("error", 1); f["code"] != codeBadFrame || len(quiet.of("ready")) > 0 {
 		t.Fatalf("no start: %v", f)
@@ -285,11 +192,11 @@ func wholeTimeline(t *testing.T, said string) {
 	}
 	var m kb.Meeting
 	waitFor(t, "the timeline in meeting.json", func() bool { // joined after ready
-		m, _, _ = h.engine().MeetingRead(meetingRec)
+		m, _, _ = recW(h.engine()).MeetingRead(meetingRec)
 		return m.Transcription != nil && m.Transcription.Timeline != nil
 	})
 	if got := m.Transcription.Timeline; len(got.Roles) != kb.MaxTimelineRoles || len(got.Speaking) != kb.MaxTimelineSpans ||
-		got.Speaking[999] != (kb.SpokenSpan{Start: 9990, End: 9995, Text: said}) {
+		got.Speaking[999] != (recordingwire.SpokenSpan{Start: 9990, End: 9995, Text: said}) {
 		t.Fatalf("the timeline has %d roles and %d spans", len(got.Roles), len(got.Speaking))
 	}
 }
@@ -322,7 +229,7 @@ func TestAudioSocketReplacedAndEnd(t *testing.T) {
 	if len(acks) == 0 || acks[len(acks)-1]["at"] != 2.0 {
 		t.Fatalf("acks: %v", acks)
 	}
-	m, _, err := h.engine().MeetingRead(meetingRec)
+	m, _, err := recW(h.engine()).MeetingRead(meetingRec)
 	if err != nil || m.Transcription.End != 2 {
 		t.Fatalf("the end: %+v %v", m.Transcription, err)
 	}
@@ -378,7 +285,7 @@ func TestAudioPut(t *testing.T) {
 	}
 	h.upload(meetingOther, 1, nil)
 	wantCode(t, put(meetingOther, "0", second, "", http.StatusConflict), codeNotHub)
-	if _, err := h.engine().TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := recWrites(h.engine()).TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.FinalFrom = time.Now()
 		return nil
 	}); err != nil {

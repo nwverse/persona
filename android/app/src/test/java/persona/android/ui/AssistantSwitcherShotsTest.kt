@@ -461,7 +461,7 @@ class AssistantSwitcherShotsTest {
      * assistants… start out of view, come wholly into view inside the menu's visible part, and take a real tap there.
      * (New assistant's name dialog is not opened here: its field's blinking cursor never lets Robolectric go idle.)
      */
-    @Config(qualifiers = "zh-w400dp-h400dp-xhdpi", fontScale = 2f)
+    @Config(qualifiers = "zh-w400dp-h300dp-xhdpi", fontScale = 2f)
     @Test fun atTheLargestTextSizeTheActionsScrollIntoViewAndWork() {
         AssistantManagerChoice.choose("hub", null, "assistant")
         var managed = 0

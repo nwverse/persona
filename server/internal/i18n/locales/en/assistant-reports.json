@@ -1,4 +1,5 @@
 {
+  "manual_terminal_resume": "Open the Agent’s terminal and use Resume there. The decision is still open.",
   "title": "Task progress: {n}",
   "title_needs": "{n} need your call",
   "tag_report": "Report",
@@ -47,6 +48,10 @@
   "verdict_decide": "🤔 Needs your decision",
   "verdict_line": "{verdict}: {reason}",
   "verdict_deployed": "deployed, check it below",
+  "verdict_verify_pr": "PR open, not deployed yet; check it below",
+  "verdict_verify_merged": "merged, not deployed yet; check it below",
+  "verdict_verify_off": "deployed, off by default; check it below",
+  "verdict_verify": "please verify the result below",
   "verdict_done_default": "met what it was for",
   "verdict_title": "Conclusion: {task}",
   "verdict_recommend": "Recommended: {option}",

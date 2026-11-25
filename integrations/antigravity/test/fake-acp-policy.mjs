@@ -66,6 +66,16 @@ function onRequest(msg) {
       return answer({})
     case 'session/set_config_option':
       answer({})
+      if (params.value === 'wake-idle') {
+        send({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: params.sessionId,
+            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'autonomous step' } },
+          },
+        })
+      }
       if (params.value === 'ask-idle') askPermission(params.sessionId)
       return
     case 'session/prompt': {
@@ -103,10 +113,15 @@ function onNotification(msg) {
 }
 
 if (ignoreTerm) {
-  process.on('SIGTERM', () => {})
+  process.on('SIGTERM', () => record({ term: process.pid }))
   setInterval(() => {}, 60_000)
 }
-record({ started: process.pid })
+record({
+  started: process.pid,
+  fakeExtensionCredential: process.env.EXAMPLE_EXTENSION_CREDENTIAL ?? null,
+  fakeExtensionAccount: process.env.EXAMPLE_EXTENSION_ACCOUNT ?? null,
+  path: process.env.PATH ?? '',
+})
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', (line) => {
   if (!line.trim()) return

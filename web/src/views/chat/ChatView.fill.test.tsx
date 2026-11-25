@@ -35,6 +35,7 @@ vi.mock("../../lib/panel", async (importOriginal) => ({ ...await importOriginal<
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
 import { applyCompleteSessions, reset } from "../../lib/store";
+import { resetPullGatesForTests } from "../../lib/pull-gate";
 const { ChatView } = await import("./ChatView");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -61,6 +62,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reset();
+  resetPullGatesForTests(); // a case's failed index read must not hold the next case's back
   vi.restoreAllMocks();
   vi.clearAllTimers();
   vi.useRealTimers();
@@ -102,16 +104,51 @@ describe("ChatView older pages", () => {
     expect(loadEarlier).not.toHaveBeenCalled();
   });
 
+  it("keeps the same line at the same offset when a prepend and new activity commit together", async () => {
+    await open({ scrollHeight: 6_000, clientHeight: 800 });
+    let release!: (page: symbol) => void;
+    transcript.loadEarlier = vi.fn(() => new Promise<symbol>((resolve) => { release = resolve; }));
+    const render = () => act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    render();
+    const sc = host.querySelector<HTMLElement>("[data-chat-scroll]")!;
+    const line = sc.querySelector('[data-line="seg:u1#0"]')!.firstElementChild!;
+    let lineTop = 180;
+    vi.spyOn(line, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, lineTop - sc.scrollTop, 600, 300));
+    act(() => sc.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 })));
+    sc.scrollTop = 220;
+    act(() => sc.dispatchEvent(new Event("scroll")));
+    expect(transcript.loadEarlier).toHaveBeenCalledOnce();
+    const offset = line.getBoundingClientRect().top;
+
+    const page = Symbol();
+    await act(async () => release(page));
+    lineTop += 800;
+    size.scrollHeight += 800 + 150;
+    Object.assign(transcript, { earlierPage: page, hasMore: false, items: [
+      { ...background[0], id: "earlier", seq: 1 }, ...background,
+      { id: "compact", seq: 12, role: "system", kind: "notice", compact: { trigger: "manual" } },
+      { ...background[0], id: "supervision", seq: 13, injected: { kind: "system", state: "supervise", line: "Check tasks" } },
+    ] });
+    render();
+    expect(line.isConnected).toBe(true);
+    expect(line.getBoundingClientRect().top).toBe(offset);
+  });
+
   it("anchors a prepended page when the rail joins a read started elsewhere", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
-      String(input).includes("user_inputs=1") ? { total: 3, history: "", inputs: [
-        { id: "distant#0", seq: 1 }, { id: "intermediate#0", seq: 5 }, { id: "u1#0", seq: 10 },
-      ] } : {},
-    ), { headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const query = new URL(String(input), "https://example.com").searchParams;
+      if (query.has("around_seq")) return Response.json({ code: "node_outdated" }, { status: 409 });
+      return Response.json(query.has("user_inputs") ? { total: 3, history: "", inputs: [
+        { id: "distant#0", seq: 1, preview: "Compare the earlier drafts", answer: "The second draft is shorter." },
+        { id: "intermediate#0", seq: 5 }, { id: "u1#0", seq: 10 },
+      ] } : {});
+    }));
     await open({ scrollHeight: 6_000, clientHeight: 800 });
     // Advancing the viewport timers does not wait for the lazy rail module.
     await act(async () => { await vi.dynamicImportSettled(); });
-    expect(rail.props?.ticks.map((tick) => tick.id)).toContain("seg:distant#0");
+    expect(rail.props?.ticks).toContainEqual(expect.objectContaining({
+      id: "seg:distant#0", preview: "Compare the earlier drafts", answerExcerpt: "The second draft is shorter.",
+    }));
     const scroller = host.querySelector<HTMLElement>("[data-chat-scroll]")!;
     scroller.scrollTop = 3_200;
     let release!: (page: symbol) => void;
@@ -120,7 +157,10 @@ describe("ChatView older pages", () => {
     // The underlying read started outside the scroll loader, so it did not take an anchor.
     Object.assign(transcript, { loadEarlier, loadingEarlier: true });
     act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
-    act(() => { void rail.props!.onJump("seg:distant#0"); });
+    await act(async () => {
+      void rail.props!.onJump("seg:distant#0");
+      await vi.dynamicImportSettled();
+    });
     expect(loadEarlier).toHaveBeenCalledOnce();
     expect(scroller.scrollTop).toBe(3_200);
 

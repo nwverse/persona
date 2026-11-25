@@ -2,6 +2,12 @@
 
 Pitfalls, unusual behavior, and the trade-offs made at the time (originally in "Lessons" in `CLAUDE.md`; see the index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+## Anchor trailers belong to the wire body (#15410)
+
+An inline reference's trailer ends one text item. A forward can join another item after it, and a paged transcript
+can cut it partway. Hide the trailer line in both cases. Global chat search also has to strip trailers from rows
+already in its index, before cutting snippets. Preserve the complete wire body for edit and replay.
+
 ## Inline HTML is not one Markdown node (#9420)
 
 An inline script or style can have its tags in separate raw HTML nodes and its body in ordinary text, emphasis or code-span nodes. Track the hidden element across nodes when building searchable prose, but keep literal code examples and ordinary preview formatting. Render separate source fields independently so an unclosed tag in one cannot hide text from another; test the real search index, not only the text helper.
@@ -90,6 +96,11 @@ Use synthetic conversations for screenshots, not the user's real main conversati
 - User images take two paths: ordinary messages contain user image blocks; messages sent while Claude is working are "absorbed mid-turn" as `attachment/queued_command`, with images in the prompt's block array
   (before 2026-10-29, the parser took only text blocks, so bubbles showed no images). In App turns awakened by background tasks, keep the user's images together with their message in the original position, not in the work trace.
 - A long chat's slow first screen is not caused by the hub / node (cold read: 0.12 s), but by the page being too large: one long Codex session's last two turns contained 1412 entries and 1.08 MB, with just 6 reply entries; the rest were tools and thinking already collapsed in the UI.
+- A navigation read can seek to a cold source line using the file's offset table (#15736). Establish the branch
+  topology first so an old question and its reply stay hidden after a rewind in the parsed tail. A detached window
+  has its own covered interval. Attach it to a chat view at that interval so the ordinary continuity fill can
+  still detect actual gaps. Scope preview extraction at the source because filtering positions after excerpt
+  extraction cannot remove a reply already copied from a frozen segment's tail.
 - Codex commentary is assistant text, not `Reasoning` (#5853). Keep an internal-only `Narration` marker so folding can handle completed narration without exposing a new wire kind or counting it as thinking. Only the latest page leaves the newest commentary visible until a final answer follows; a historical page may end before a final answer stored on the next page. Changing only the item kind let 110 commentary rows escape the fold and broke the long-session 40-item / 32 KB budget; cover real running pages, completed folds, expansion merging and golden output together.
 - The App requests `fold_work`. Pages read backward from the end replace each work segment with one `kind: fold` entry (counts and ranges only). Expanding a work row fetches it with `from_seq` / `through_seq`
   (`docs/protocol/protocol.md`, "Folded work"). `after_seq` catch-up and live pushes are not folded. Neither are tool_use entries still running or tool_result entries whose other half is outside the page, or they cannot be paired.
@@ -100,6 +111,7 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   ends, it is stopped or it expires. Do not remove every task named by a notification; use its parsed kind/status.
 - The App merges its on-disk chat cache by item id. If the hub changes the contents of a type of item (for example, adding fields to notices), new pages do not overwrite old cached items. When the item structure or the hub's kind / text for an existing item changes,
   bump the `ChatCache` directory version (`ChatCache.folder`) so the old representation is dropped.
+- A completed Codex rollout `image_gen.generation` with `savedPath` maps to a `Read` call and result. Its path appears once in the folded work's viewed-image strip; failed or pathless events remain notices. The parser does not read image bytes. Invalidate Codex `File.History` and the App chat cache when changing this projection so saved notices do not outlive the mapping.
 - Backward pagination has a parsing budget, but must not return an empty page while earlier content remains. An empty page + `has_more: true` leaves the App with no seq to fetch next, making earlier history permanently inaccessible (large Codex rollouts can have tens of MB of lines that produce no entries between two turns).
 - Parsing `<persona-context>` must not assume all attributes are present or in a fixed order (2026-11-03, #876). iOS once recognized it only when all three of `kind`, `title`, and `url` were present. Lark /agent contexts had no `url`, so the tag went unrecognized, leaving the whole prompt and large blank areas in the bubble.
   Truncating user messages for pagination must also avoid cutting through tags: a cut in the middle leaves an unclosed `<persona-context`, which every client displays as body text (`lightContexts` in `transcript/contexts.go` trims only the body of each block).
@@ -112,6 +124,10 @@ Use synthetic conversations for screenshots, not the user's real main conversati
   trace does not automatically open its nested work summary; rule 2 requires manual inspection for both. Keep the pending
   stream hidden after the turn stops too: the store can retain it until its transcript item arrives. Determine its
   newest transcript owner, not only whether the round is still running.
+
+## Removing a silent round is a projection split, not a row filter
+
+Dropping a quiet wrapper alone leaves two leaks: `task`, `routed` and `answered` feed cards merge back by timestamp, and a done session still reads unread. Split the main timeline from Background activity before work or supervision expansion, retain only those three feed kinds inside the round's half-open interval, and leave plans, messages, notices and decisions visible. Keep full transcript and feed APIs unchanged and use the full renderer for inspection. Unread needs its own rule: compare `seen_at` with the latest non-silent round's end, preserve earlier visible unread, and fail open when the history scan cannot prove it. Opening Background activity never calls `markSeen`.
 
 ## Refusal fallback is session state, not a model setting (#2203)
 
@@ -235,6 +251,17 @@ A view that fetches once per id cannot recover when the store puts the same id b
 - Esc stops only the tool call that is running. The queue survives and starts the next turn, so "stop" and "the queued
   message" are independent; after an interrupt, look for the queued message becoming a new turn rather than assuming the
   interrupt cancelled it. The parser must not treat that later turn as a new user message typed after the stop.
+
+## Messages queued behind a turn with no tool call come back as one line (2026-11-24, #14338, Claude Code 2.1.330)
+
+- A turn that makes no more tool calls has no tool boundary left to take a queued message at. When it ends, Claude Code
+  dequeues every message queued meanwhile and writes them as **one** `user` line. Each message keeps its own blocks, in
+  the order typed: the assistant's live snapshot, interjection note, pictures and text.
+- Seen with bursts of five and six channel messages sent within seconds. The first message had its own line. The others
+  shared the next one.
+- Anything that ties a send to "its line" must let one line hold several sends. The echo now splits such a line into
+  each send's items (`docs/protocol/protocol.md`, "Matching pending messages"). Before that, a folded channel run waited
+  for messages that were never tied, and ended asking for a resend.
 
 ## A herdr started from inside a Claude session makes its panes write no transcript (measured Claude Code 2.1.2xx; re-check)
 
@@ -395,3 +422,10 @@ A view that fetches once per id cannot recover when the store puts the same id b
 - Keep the request as a user-role turn boundary with explicit scheduled provenance and its existing item id. Show the
   instructions in a constrained preview. The quiet decision is an answer with no updates, not protocol text or a signal
   to close a turn early; `task_complete` still determines completion and recorded duration.
+
+## Late Codex completions are not new turns
+
+Codex can append a command completion after `task_complete`. It remains visible in the transcript but must not
+advance `LastActivity` or `updated_at`: doing so makes a finished, seen turn look newly completed. If a bounded
+read starts after the turn closed, recover its state from the previous read or bounded lookback before using the
+command's timestamp.

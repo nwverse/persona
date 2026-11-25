@@ -161,6 +161,9 @@ func (s *Service) toolTodoGet(ctx context.Context, machine, self string, args js
 	var b strings.Builder
 	b.WriteString(todoLine(t, now, loc) + "\n")
 	fmt.Fprintf(&b, "created %s, updated %s\n", t.CreatedAt.In(loc).Format(toolTimeLayout), t.UpdatedAt.In(loc).Format(toolTimeLayout))
+	if brief, ok := s.briefOfTodo(t.ID); ok {
+		fmt.Fprintf(&b, "scope_revision: %s\n", brief.scopeRevision().Format(time.RFC3339Nano))
+	}
 	if t.failedStart() {
 		// Stored done (#1077), but nothing was done: it is open and waits on the owner, as the app shows it (#10365).
 		fmt.Fprintf(&b, "did not start %s: not done, it still waits on the owner; task_retry starts it again (optionally with "+
@@ -278,6 +281,9 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		Priority           string          `json:"priority"`
 		Project            string          `json:"project"`
 		Kind               string          `json:"kind"`
+		Audience           string          `json:"audience"`
+		DirectionID        string          `json:"direction_id"`
+		ItemType           string          `json:"item_type"`
 		PartOf             json.RawMessage `json:"part_of"`
 		After              json.RawMessage `json:"after"`
 		RepositoryBindings json.RawMessage `json:"repository_bindings"`
@@ -316,6 +322,21 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		return "", err
 	}
 	plan.Priority = &pr
+	aud, err := todoAudience(a.Audience)
+	if err != nil {
+		return "", err
+	}
+	plan.Audience = &aud
+	if dir := strings.TrimSpace(a.DirectionID); dir != "" {
+		plan.DirectionID = &dir
+	}
+	if s.settings(ctx).todosV2On() && strings.TrimSpace(a.ItemType) != "" {
+		it, err := todoItemType(a.ItemType)
+		if err != nil {
+			return "", err
+		}
+		plan.ItemType = &it
+	}
 	if err := s.setTodoProject(ctx, &a.Project, &plan); err != nil {
 		return "", err
 	}
@@ -344,8 +365,8 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		}
 		return "Concern recorded (it stays open until you report its outcome with concern_report): " + todoLine(t, now, loc), nil
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_create", title, args); err != nil || !ok {
-		return todoNotAllowed(err)
+	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "todo_create", "", title, args); err != nil || !ok {
+		return todoNotAllowed(outcome, err)
 	}
 	if s.isLeader(ctx, self) {
 		t, err := s.createDirectionTodo(ctx, self, title, strings.TrimSpace(a.Notes), plan, bindings)
@@ -373,15 +394,18 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 
 func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		ID       string          `json:"id"`
-		Title    json.RawMessage `json:"title"`
-		Notes    json.RawMessage `json:"notes"`
-		Due      json.RawMessage `json:"due"`
-		Remind   json.RawMessage `json:"remind"`
-		Priority json.RawMessage `json:"priority"`
-		Project  json.RawMessage `json:"project"`
-		PartOf   json.RawMessage `json:"part_of"`
-		After    json.RawMessage `json:"after"`
+		ID          string          `json:"id"`
+		Title       json.RawMessage `json:"title"`
+		Notes       json.RawMessage `json:"notes"`
+		Due         json.RawMessage `json:"due"`
+		Remind      json.RawMessage `json:"remind"`
+		Priority    json.RawMessage `json:"priority"`
+		Project     json.RawMessage `json:"project"`
+		Audience    json.RawMessage `json:"audience"`
+		DirectionID json.RawMessage `json:"direction_id"`
+		ItemType    json.RawMessage `json:"item_type"`
+		PartOf      json.RawMessage `json:"part_of"`
+		After       json.RawMessage `json:"after"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
@@ -415,6 +439,16 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 			return err
 		}},
 		{"project", a.Project, func(v string) error { return s.setTodoProject(ctx, &v, &e) }},
+		{"audience", a.Audience, func(v string) error {
+			aud, err := todoAudience(v)
+			e.Audience = &aud
+			return err
+		}},
+		{"direction_id", a.DirectionID, func(v string) error {
+			dir := strings.TrimSpace(v)
+			e.DirectionID = &dir
+			return nil
+		}},
 	} {
 		v, set, err := optionalText(f.raw, f.name)
 		if err == nil && set {
@@ -424,6 +458,20 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 			return "", err
 		}
 		changed = changed || set
+	}
+	if s.settings(ctx).todosV2On() && a.ItemType != nil {
+		v, set, err := optionalText(a.ItemType, "item_type")
+		if err != nil {
+			return "", err
+		}
+		if set {
+			it, err := todoItemType(v)
+			if err != nil {
+				return "", err
+			}
+			e.ItemType = &it
+			changed = true
+		}
 	}
 	pieces, err := pieceArgs(a.PartOf, a.After)
 	if err != nil {
@@ -439,10 +487,10 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 	e.PartOf, e.After = links.PartOf, links.After
 	changed = changed || !pieces.empty()
 	if !changed {
-		return "", errors.New("nothing to change: give title, notes, due, remind, priority, project, part_of or after")
+		return "", errors.New("nothing to change: give title, notes, due, remind, priority, project, audience, direction_id, part_of or after")
 	}
-	if ok, err := s.confirmOutbound(ctx, machine, self, "todo_update", t.Title, args); err != nil || !ok {
-		return todoNotAllowed(err)
+	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "todo_update", "", t.Title, args); err != nil || !ok {
+		return todoNotAllowed(outcome, err)
 	}
 	out, err := s.editTodo(ctx, t.ID, e)
 	if err != nil {
@@ -464,10 +512,16 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 	if complete && t.isConcern() {
 		return "", fmt.Errorf("%s is a concern: it closes only when you report its outcome to the user with concern_report", t.ID)
 	}
-	supervisor := supervisorOf(t)
-	direct := complete && self != "" && t.PlanID == "" && s.hello(ctx).Assistant.CompleteAgentlessTodos && !todoHasAgents(t) &&
-		(supervisor == self || supervisor == "" && t.Origin == self)
-	if todoHasWork(t) && !direct {
+	var needsConfirm bool
+	if complete && s.settings(ctx).todosV2On() {
+		needsConfirm = s.todoHasActiveAgents(ctx, t)
+	} else {
+		supervisor := supervisorOf(t)
+		direct := complete && self != "" && t.PlanID == "" && s.hello(ctx).Assistant.CompleteAgentlessTodos && !todoHasAgents(t) &&
+			(supervisor == self || supervisor == "" && t.Origin == self)
+		needsConfirm = todoHasWork(t) && !direct
+	}
+	if needsConfirm {
 		key := "assistant-todos.reopen_card"
 		if complete {
 			key = "assistant-todos.complete_card"
@@ -476,8 +530,8 @@ func (s *Service) toolTodoDone(ctx context.Context, machine, self, name string, 
 		if err != nil || said != "" {
 			return said, err
 		}
-	} else if ok, err := s.confirmOutbound(ctx, machine, self, name, t.Title, args); err != nil || !ok {
-		return todoNotAllowed(err)
+	} else if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, "", t.Title, args); err != nil || !ok {
+		return todoNotAllowed(outcome, err)
 	}
 	out, err := s.editTodo(ctx, t.ID, db.TodoEdit{Done: &complete})
 	if err != nil {
@@ -525,17 +579,18 @@ func (s *Service) confirmTodoCard(ctx context.Context, machine, self, tool, summ
 		return "", err
 	}
 	if r.Allow == nil || !*r.Allow {
-		return "The user declined on the phone (or did not answer): nothing changed.", nil
+		return outboundNotDone(r.Outcome(), "The user declined on the phone: nothing changed.", "nothing changed"), nil
 	}
 	return "", nil
 }
 
-// todoNotAllowed is what a health conversation is told when the user did not let a change out of the space.
-func todoNotAllowed(err error) (string, error) {
+// todoNotAllowed is what a health conversation is told when a change did not get out of the space (outcome: how the
+// card ended, confirmOutbound): the user's decline only when they declined it themselves, else nobody answered.
+func todoNotAllowed(outcome string, err error) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "The user did not allow it on the phone: nothing changed.", nil
+	return outboundNotDone(outcome, "The user did not allow it on the phone: nothing changed.", "nothing changed"), nil
 }
 
 // ---- helpers ----

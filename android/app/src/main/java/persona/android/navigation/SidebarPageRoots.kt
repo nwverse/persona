@@ -20,8 +20,8 @@ import persona.core.navigation.TerminalRoute
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.TodosRoute
 import persona.feature.assistant.AssistantSidebarShade
-import persona.feature.knowledge.KnowledgeKindRoute
-import persona.feature.knowledge.KnowledgeRoute
+import persona.core.navigation.KnowledgeKindRoute
+import persona.core.navigation.KnowledgeRoute
 
 /**
  * The roots of the Assistant page beside the sidebar column, and the drill-down each was left with (#9667, iOS #8359).
@@ -70,7 +70,12 @@ internal class SidebarPageRoots {
         }
         if (path.isEmpty()) saved.remove(current) else saved[current] = path
         current = root
-        val restored = saved.remove(root) ?: emptyList()
+        val restored = if (contentChanged) {
+            saved.remove(root)
+            emptyList()
+        } else {
+            saved.remove(root) ?: emptyList()
+        }
         return Step(root, restored, Move.SwitchRoot)
     }
 

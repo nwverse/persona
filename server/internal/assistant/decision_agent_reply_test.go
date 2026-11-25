@@ -209,12 +209,17 @@ func TestDecisionAgentReplyPauseSurvivesReload(t *testing.T) {
 	ownerTurnTimes(t, 0, 0)
 	database := todoTestDB(t)
 	s, f, todo, _, _ := conclusionServiceOn(t, database, false)
+	// This process never tells the supervisor: the pause must reach the reloaded one. With the test's 20 ms gather the
+	// reply's digest could go out while UserSpoke was still running on a loaded machine, before the timer below was
+	// stopped (#13670).
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 	waitsForReview(t, s, f, todo.ID, "Choose a rollout option.")
 	reviewTask(t, s, todo.ID, rolloutDecision())
 	setSettings(t, s, func(v *Settings) { v.Main = "" })
 	a := askOf(s, todo.ID)
+	// Model the old process stopping after the reply is persisted, before its supervisor can deliver it.
+	s.supervise.digestMu.Lock()
 	s.UserSpoke(context.Background(), SessionRef{MachineID: a.MachineID, SessionID: a.SessionID})
-	s.supervise.dedupMu.Lock()
 	s.supervise.mu.Lock()
 	if s.supervise.timer != nil {
 		s.supervise.timer.Stop()
@@ -222,7 +227,7 @@ func TestDecisionAgentReplyPauseSurvivesReload(t *testing.T) {
 	}
 	s.supervise.pending = map[string]superviseSignal{}
 	s.supervise.mu.Unlock()
-	s.supervise.dedupMu.Unlock()
+	s.supervise.digestMu.Unlock()
 	var stored map[string]*acceptAsk
 	if _, err := database.Setting(context.Background(), acceptanceKey, &stored); err != nil {
 		t.Fatal(err)
