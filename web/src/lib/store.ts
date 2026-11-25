@@ -35,7 +35,7 @@ import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
 import { nextLaunchExpiry, registerLaunchRowObserver, settledLaunches } from "./launch-handoff";
 import type { AgentLaunch } from "./new-agent";
-import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo } from "./todos";
+import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo, type TodoBoardProjection } from "./todos";
 import { releaseAttachments } from "./attachments";
 import { dropElicitationDraft } from "./elicitation";
 import type { OutboxEntry } from "./outbox";
@@ -109,6 +109,8 @@ export interface State {
   todos: Todo[];
   /** Optional `shared_blockers` summary from GET /todos under todos_v2 (#14728); parsed lazily by the To-dos view. */
   sharedBlockers: unknown[];
+  /** Optional server-computed `board` projection tree from GET /todos under todos_v2 (#15800). */
+  todoBoard: TodoBoardProjection | null;
   todosSupported: boolean;
   todosLoaded: boolean;
   todosError: string | null;
@@ -156,6 +158,7 @@ let state: State = {
   outbox: {},
   todos: [],
   sharedBlockers: [],
+  todoBoard: null,
   todosSupported: true,
   todosLoaded: false,
   todosError: null,
@@ -1667,14 +1670,25 @@ function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) 
 // no body. Most {"type":"todos"} pushes change nothing the list holds, and the whole list is hundreds of KB on a busy
 // hub, so a read sends the tag and a 304 applies the kept answer again, as a 200 with those same bytes would. Memory
 // only, one login's: reset() drops it, and a tag kept under another login is not sent.
-let keptTodos: { owner: string; etag: string; revision: string; answer: { todos: Todo[]; shared_blockers?: unknown[] } } | null = null;
+type TodosListAnswer = { todos: Todo[]; shared_blockers?: unknown[]; board?: TodoBoardProjection };
 
-async function readTodos(): Promise<{ todos: Todo[]; shared_blockers?: unknown[] }> {
+function validTodoBoard(raw: unknown): TodoBoardProjection | null {
+  if (!raw || typeof raw !== "object") return null;
+  const b = raw as Partial<TodoBoardProjection>;
+  if (!Array.isArray(b.status_groups) || !Array.isArray(b.direction_groups) || !Array.isArray(b.sidebar_tree) || !b.counts || typeof b.counts !== "object") {
+    return null;
+  }
+  return b as TodoBoardProjection;
+}
+
+let keptTodos: { owner: string; etag: string; revision: string; answer: TodosListAnswer } | null = null;
+
+async function readTodos(): Promise<TodosListAnswer> {
   const owner = credentialOwner();
   const kept = keptTodos?.owner === owner ? keptTodos : null;
   let status = 0;
   let reply: Headers | undefined;
-  const answer = await api<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", {
+  const answer = await api<TodosListAnswer>("/todos", {
     headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
     onResponse: (headers, code) => { status = code; reply = headers; },
   });
@@ -1689,7 +1703,7 @@ async function readTodos(): Promise<{ todos: Todo[]; shared_blockers?: unknown[]
   return answer;
 }
 
-const todosAsked = numbered<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", readTodos);
+const todosAsked = numbered<TodosListAnswer>("/todos", readTodos);
 const assistantAsked = numbered<AssistantInfo>("/assistant");
 
 // refresh() calls, numbered the same way: one that started before the last one applied, or before reset(), is older
@@ -1755,21 +1769,22 @@ export async function refresh() {
 }
 
 /** Both refresh paths share the list, error and unsupported-hub (404) handling; only a fresh answer finishes loading. */
-function applyTodos(todos: PromiseSettledResult<{ todos: Todo[]; shared_blockers?: unknown[] }>, fresh: () => boolean) {
+function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => boolean) {
   if (!fresh()) return; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
     const list = todos.value.todos ?? [];
     const sharedBlockers = Array.isArray(todos.value.shared_blockers) ? todos.value.shared_blockers : [];
+    const todoBoard = validTodoBoard(todos.value.board);
     for (const t of list) {
       if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
     }
-    set({ todos: list, sharedBlockers, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    set({ todos: list, sharedBlockers, todoBoard, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
     keepTaskRows([]);
     void lookUpTaskAgents();
     return;
   }
   const reason = todos.reason;
-  if (reason instanceof ApiError && reason.status === 404) return set({ sharedBlockers: [], todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+  if (reason instanceof ApiError && reason.status === 404) return set({ sharedBlockers: [], todoBoard: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
   set({ todosLoaded: true, todosError: errorText(reason) });
 }
 
@@ -2124,6 +2139,7 @@ export function reset() {
     pins: NO_PINS,
     todos: [],
     sharedBlockers: [],
+    todoBoard: null,
     todosSupported: true,
     todosLoaded: false,
     todosError: null,

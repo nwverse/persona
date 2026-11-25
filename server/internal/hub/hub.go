@@ -83,6 +83,7 @@ type Hub struct {
 	fsWatchForceMu       sync.Mutex
 	fsWatchForceByID     map[string]bool
 	push                 *Pusher
+	gradingReconcile     pushGradingLayerReconciler
 	agentWork            agentWork    // whether the manager is there to ask (agents_link.go)
 	store                Store        // nil in unit tests: nothing is persisted
 	lockTests            lockTestWake // wakes the lock test dispatcher when a test is scheduled (locktest.go)

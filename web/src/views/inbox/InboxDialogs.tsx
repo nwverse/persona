@@ -25,6 +25,7 @@ import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
+import { useLarkItemReadOnly } from "./lark-write-gate";
 import { handOffAgents, Target, TARGET_SUB } from "./HandOffTargets";
 
 export function InboxExternalSourceDialog({ item, source, onClose }: {
@@ -55,6 +56,7 @@ export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
 }
 
 function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
+  const readOnly = useLarkItemReadOnly(item);
   const sessions = useStore((s) => s.sessions);
   const assistant = useStore((s) => s.assistant);
   const key = itemKey(item);
@@ -125,10 +127,11 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   };
 
   const send = () => {
+    if (readOnly) return;
     void sendReply(item, text.trim(), kept);
     onClose();
   };
-  const canSend = !loading && (text.trim().length > 0 || kept.length > 0);
+  const canSend = !readOnly && !loading && (text.trim().length > 0 || kept.length > 0);
 
   return (
     <Dialog
@@ -139,7 +142,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       footer={
         <>
           <Button tone="quiet" onClick={cancel}>{t("common.cancel")}</Button>
-          <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>
+          {!readOnly && <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>}
         </>
       }
     >
