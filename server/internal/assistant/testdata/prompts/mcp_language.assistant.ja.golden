@@ -2734,7 +2734,7 @@
   },
   {
     "name": "task_review",
-    "description": "accepted closes work after the delivery gate (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback to that Agent. If opted in at Start, accepted done cleans up the idle tab unless user_check. Report closed/skipped/pending; never close the tab yourself. rework caps stalled/low-ROI churn at 2 rounds (external_input/substantive_new cap at 10 total); accept with a brief note instead of bouncing for low-ROI edge cases or style nitpicks. Replace stopped Agents via agent_start. Use parked with evidence for external waits and needs_user if only the owner can contact, approve, or trigger work.\n\nFor accepted (outcome=done), include each done_when criterion once in checks (met=true, nonblank evidence), even with user_check. outcome=cannot, cancelled and no-criteria tasks are unchanged. Other verdicts can omit checks and keep progress. Report each criterion met/not_met/dropped, then also_done. Judge the scoped brief over handovers or Agent claims.\n\nIf an outcome decision or your review leaves part of the original brief for later, use needs_user to ask, or include deferred_scope with user_check or an open linked follow_up_todo_id. Keep the remaining scope visible even when every done_when check passes.\n\nGive accepted outcome/reason/link; pass direct PR/MR/doc URL in link for needs_user when available. The hub sends conclusion cards and passes verification unless user_check. needs_user defaults to recommend at 24h/deadline; irreversible/visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repeating or acting irreversibly/externally.\n\nA non-main reviewer of another supervisor's task may only accept/cancel; send gaps via agent_send. A leader's needs_user reaches main too. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "accepted closes work after delivery (default delivery_gate=merged: park verified open PRs; linked issues must close). user_check keeps the task and Agent open until owner Pass and routes feedback back. If opted in at Start, accepted done cleans up an idle tab unless user_check. Report closed/skipped/pending; never close tabs yourself. Rework caps stalled/low-ROI churn at 2 rounds, external_input/substantive_new at 10 total. Accept low-ROI edge cases or style nits with a note. Replace stopped Agents via agent_start. Use parked with external evidence or needs_user for owner-only contact, approval or action.\n\nFor accepted (outcome=done), list every done_when once in checks (met=true, nonblank evidence), even with user_check. Exempt outcome=cannot, cancelled and no-criteria tasks. Other verdicts may omit checks and keep progress. Report met/not_met/dropped per criterion, then also_done. Judge the scoped brief over handovers or claims.\n\nFor deferred original scope, ask via needs_user or include deferred_scope with user_check or an open linked follow_up_todo_id, even when all checks pass.\n\nGive accepted outcome/reason/link. For needs_user use a direct PR/MR/doc URL when available. The hub sends conclusion cards and passes verification unless user_check. At 24h/deadline needs_user defaults to recommend; irreversible/visible_to_others only remind. Recheck at 24h. “You decide”, “This isn't what I asked for” and “Tell me the background first” return to supervision. Clarify without repetition or irreversible/external action.\n\nNon-main reviewers of others' tasks may only accept/cancel; send gaps via agent_send. Leaders' needs_user also reaches main. Cancel only duplicates/unwanted tasks; their Agents close/archive and cards end.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2744,7 +2744,7 @@
       "properties": {
         "todo_id": {
           "type": "string",
-          "description": "the task's todo id (todo_…), from the 督办 message or the context snapshot"
+          "description": "todo id (todo_…) from 督办 or context"
         },
         "verdict": {
           "type": "string",
@@ -2764,7 +2764,7 @@
             "repeated_error",
             "low_roi_edge"
           ],
-          "description": "rework, optional: external_input (external review/conflict/owner input; skips 2-round stalled cap), substantive_new (prior gap fixed, new defect found; resets stalled cap), repeated_error/low_roi_edge (default when omitted; cap 2 stalled, 10 total)"
+          "description": "rework: external_input (review/conflict/owner input) skips the stalled cap; substantive_new (gap fixed, new defect) resets it; default repeated_error/low_roi_edge caps at 2 stalled, 10 total"
         },
         "checks": {
           "type": "array",
@@ -2777,18 +2777,18 @@
             "properties": {
               "criterion": {
                 "type": "string",
-                "description": "one done_when criterion (or what the task was for, when it had none)"
+                "description": "one done_when criterion, or task purpose if none"
               },
               "met": {
                 "type": "boolean"
               },
               "evidence": {
                 "type": "string",
-                "description": "proof it is met (link, command output), or what is missing"
+                "description": "proof (link/output) or what's missing"
               }
             }
           },
-          "description": "each criterion with evidence/gap; updates state, evidence, time, and supervisor. Omitted entries keep progress"
+          "description": "updates criterion state, evidence, time and supervisor; omissions keep progress"
         },
         "note": {
           "type": "string",
@@ -2800,11 +2800,11 @@
             "done",
             "cannot"
           ],
-          "description": "accepted: done (work complete or answer yes) or cannot (proved impossible); default done"
+          "description": "accepted: done (complete or yes; default) or cannot (proved impossible)"
         },
         "reason": {
           "type": "string",
-          "description": "one sentence in the user's language: accepted (why; default note's first line), needs_user (required: what to decide), or parked (required: what it waits for; include PR link if waiting on a PR)"
+          "description": "one sentence in the user's language: accepted why (default: note's first line), needs_user decision (required), or parked wait (required; link PR if relevant)"
         },
         "waiting_on": {
           "type": "string",
@@ -2813,7 +2813,7 @@
             "external_event",
             "date"
           ],
-          "description": "parked (required): someone_else (person acts/answers), external_event (outside event), or date. Owner decisions use needs_user; legacy owner_priority parks stay readable"
+          "description": "parked (required): person action/reply, external event, or date. Owner decisions use needs_user; legacy owner_priority stays readable"
         },
         "until": {
           "type": "string",
@@ -2821,11 +2821,11 @@
         },
         "link": {
           "type": "string",
-          "description": "accepted/needs_user: direct PR/MR/doc URL when available (shown on decision card); defaults to task PR/MR, note/checks URL, or chat"
+          "description": "accepted/needs_user card URL: direct PR/MR/doc, or defaults to task PR/MR, note/checks URL or chat"
         },
         "recommend": {
           "type": "string",
-          "description": "needs_user (required): recommended option label (first in options); owner OK sends it to the agent"
+          "description": "needs_user (required): first option label; owner OK sends it to the Agent"
         },
         "why_owner": {
           "type": "string",
@@ -2836,7 +2836,7 @@
             "acceptance",
             "only_owner_knows"
           ],
-          "description": "needs_user (required): irreversible (delete/prod write/spend), visible_to_others (external message/comment/review), priority (whether/order), acceptance (visual check), only_owner_knows (private fact); decide anything else yourself"
+          "description": "needs_user (required): irreversible (delete/prod/spend), visible_to_others (external message/comment/review), priority (whether/order), acceptance (visual check), only_owner_knows (private fact); otherwise decide yourself"
         },
         "options": {
           "type": "array",
@@ -2871,7 +2871,7 @@
         },
         "can_wait": {
           "type": "boolean",
-          "description": "needs_user, optional: defer to next daily briefing (low cost, nobody blocked today, no deadline \u003c12h); no push/card, listed in Needs you. Ignored for irreversible/visible_to_others, deadline \u003c12h, reversible=false, or no briefing with facts due within 24h and \u003e=12h before deadline; default false"
+          "description": "needs_user: low-cost wait, nobody blocked today; list in Needs you without push/card. Requires reversible, excludes irreversible/visible_to_others, and needs a briefing with facts within 24h and \u003e=12h before deadline; default false"
         },
         "deadline": {
           "type": "string",
@@ -2883,11 +2883,11 @@
           "items": {
             "type": "string"
           },
-          "description": "accepted, optional: what was done beyond the task's brief (one line each); the task's page lists it after the criteria"
+          "description": "accepted: work beyond brief, one line each, shown after criteria"
         },
         "withdraw_needs_user": {
           "type": "boolean",
-          "description": "accepted only, task in needs_user: its supervisor or main takes it back and closes it silently (no card/push)"
+          "description": "accepted on needs_user: supervisor or main withdraws and closes silently"
         },
         "user_check": {
           "type": "boolean",
@@ -2896,11 +2896,11 @@
         "deferred_scope": {
           "type": "string",
           "maxLength": 600,
-          "description": "accepted: describe in the owner's language which work in the original brief is deferred or requires separate approval. The personal verification card shows the first 120 characters"
+          "description": "accepted: original work deferred or needing approval, in the owner's language. Verify card shows first 120 characters"
         },
         "follow_up_todo_id": {
           "type": "string",
-          "description": "With deferred_scope and without user_check, identify the open to-do that owns the remaining work. Its part_of must name this to-do, or its after must name this piece of the same request"
+          "description": "With deferred_scope and no user_check: open follow-up whose part_of or after names this to-do"
         },
         "reversible": {
           "type": "boolean",
