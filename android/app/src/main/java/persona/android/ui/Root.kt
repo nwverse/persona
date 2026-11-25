@@ -343,6 +343,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     fun sidebarDestination(key: NavKey) {
         dismissSidebar()
         window.clearPending()
+        val wasOnPersona = selected == AppTab.Persona
         selected = AppTab.Persona
         // Regular: SidebarPageRoots.select, then the Inbox enters or lands (inboxPicked,
         // AssistantView.swift:633–640). Compact: the drawer keeps a host, and an Inbox item on it
@@ -352,6 +353,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             { stacks[AppTab.Persona] = it },
             inboxLandings.getValue(AppTab.Persona),
             session.inbox.snapshot.value.records,
+            alreadyInFront = wasOnPersona,
         )
     }
     /**
@@ -436,7 +438,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns,
         openPlace = { openPlace(it) }, leavePlaceRoot = { leavePlaceRoot() },
-        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() }) }
+        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() },
+        keepPersonaAgents = { currentMerged.value }) }
     fun openResolved(route: ResolvedRoute): AppTab {
         // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
         // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.
@@ -939,18 +942,58 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     AssistantSidebarContent(assistant, session.assistant, sidebar.active, sidebarOperations, session.demo != null,
                         onOpen = { key ->
                             dismissSidebar()
-                            selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
+                            val route = ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)
+                            if (!embeddedAssistant) {
+                                selected = openResolved(ResolvedRoute(AppTab.Persona, route))
+                            } else {
+                                val wasOnPersona = selected == AppTab.Persona
+                                val sameConversation = sidebar.active == key && !sidebar.healthInFront && sidebar.spaceInFront == null
+                                navigator.noteDirectOpen(route)
+                                window.clearPending()
+                                val kept = selectSidebarConversation(
+                                    useRootHost = window.regular || currentMerged.value,
+                                    alreadyOnPersona = wasOnPersona,
+                                    sameConversation = sameConversation,
+                                    pageRoots = pageRoots,
+                                    hosts = hosts,
+                                    assistantStack = assistantStack,
+                                    showHost = ::showHost,
+                                    assignPersona = { stacks[AppTab.Persona] = it },
+                                )
+                                selected = AppTab.Persona
+                                if (!kept) assistantPending = key
+                            }
                         },
                         onAction = { action ->
                             dismissSidebar()
+                            val wasOnPersona = selected == AppTab.Persona
                             if (window.regular || merged) {
-                                // Assistant actions use its embedded conversation host. A Merged Scheduled Tasks pick
-                                // uses the same screen on a place host.
-                                val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
-                                showHost(step.root, step.stack)
-                                selected = AppTab.Persona
-                            } else showAssistantHome()
-                            sidebar.action = action
+                                if (action == persona.feature.assistant.AssistantSidebarAction.MainConversation) {
+                                    val sameConversation = sidebar.active == null && !sidebar.healthInFront && sidebar.spaceInFront == null
+                                    val kept = selectSidebarConversation(
+                                        useRootHost = true,
+                                        alreadyOnPersona = wasOnPersona,
+                                        sameConversation = sameConversation,
+                                        pageRoots = pageRoots,
+                                        hosts = hosts,
+                                        assistantStack = assistantStack,
+                                        showHost = ::showHost,
+                                        assignPersona = { stacks[AppTab.Persona] = it },
+                                    )
+                                    selected = AppTab.Persona
+                                    if (!kept) sidebar.action = action
+                                } else {
+                                    // Assistant actions use its embedded conversation host. A Merged Scheduled Tasks pick
+                                    // uses the same screen on a place host.
+                                    val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
+                                    showHost(step.root, step.stack)
+                                    selected = AppTab.Persona
+                                    sidebar.action = action
+                                }
+                            } else {
+                                showAssistantHome()
+                                sidebar.action = action
+                            }
                         },
                         onSettings = {
                             dismissSidebar()
@@ -1414,7 +1457,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                                 merged = merged,
                                             ) { _, hostStack, hostShown ->
                                                 val hostPolicy = assistantPanePolicy(tab, hostStack, currentRegular.value, widePhone)
-                                                val hostDirective = if (hostPolicy.singleRightStack) directive.onePane() else directive
+                                                val singleRightStack = hostPolicy.singleRightStack || (currentRegular.value && merged)
+                                                val hostDirective = if (singleRightStack) directive.onePane() else directive
                                                 val hostDetail = detailOf(hostStack)
                                                 val hostList = rememberShellListDetail(
                                                     tab, hostDirective, paneMaxWidth, paneHinges, detailOpen = hostDetail != null,
@@ -1459,7 +1503,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                                             else hostTransitions.pop
                                                         },
                                                         predictivePopTransitionSpec = { hostTransitions.predictivePop },
-                                                        entryProvider = { key -> panes(key, hostPolicy.singleRightStack) },
+                                                        entryProvider = { key -> panes(key, singleRightStack) },
                                                     )
                                                 }
                                             }

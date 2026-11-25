@@ -100,6 +100,10 @@ func TestMain(m *testing.M) {
 		serveMemorySourceExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "offload" { // extension_offload_test.go
+		serveOffloadExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "repos" {
 		serveRepositoryProviderExtensionForTest()
 		return

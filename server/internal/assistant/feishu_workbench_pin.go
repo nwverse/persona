@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -57,7 +58,7 @@ func (s *Service) workbenchLoop() {
 
 // standingCard is what the standing board shows: the home card with the workbench on, the waiting list without.
 func (s *Service) standingCard(ctx context.Context) (card *botcard.Card, fallback, said string) {
-	if f, ready := s.feishuFeatures(ctx); s.workbenchOn(f, ready) {
+	if f, ready := s.chat().Features(ctx); s.workbenchOn(f, ready) {
 		return s.larkModule().HomeCard(ctx, f)
 	}
 	return s.boardCard(ctx)
@@ -151,21 +152,19 @@ func (s *Service) workbenchBringCard(ctx context.Context, id string) {
 	if !found || s.interactionEnded(id) {
 		return
 	}
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx)
 	old := ""
-	if c, ok := b.cards[id]; ok {
-		old = c.MessageID
-	}
-	s.keepBotCardLocked(id, nil)
-	b.mu.Unlock()
+	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) {
+		if c, ok := b.Card(id); ok {
+			old = c.MessageID
+		}
+		b.KeepCard(id, nil)
+	})
 	if old != "" {
 		if err := s.appCall(ctx, AppFeishu, FeishuRecall, map[string]any{"message_id": old}, nil); err != nil {
 			s.logf("bots: workbench: withdraw a card: %v", err)
 		}
 	}
-	s.postInteractionCard(ctx, ix)
+	s.larkModule().AskPost(ctx, ix)
 }
 
 func wbT(l i18n.Lang, key string, args ...i18n.Args) string {

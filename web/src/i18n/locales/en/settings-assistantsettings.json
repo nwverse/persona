@@ -154,6 +154,8 @@
   "recent_task_chats_footer": "Chats your scheduled tasks and the background supervisor start also appear in the sidebar's Recent, by time. All your devices follow.",
   "next_suggestions": "Suggest the next message",
   "next_suggestions_footer": "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.",
+  "dashboards": "Let Persona make dashboards",
+  "dashboards_footer": "When on, the assistant can draft pages you come back to; tap Keep in the chat and they appear in the sidebar.",
   "idle_close": "Stop idle Agents after",
   "idle_close_hint": "Their terminal stays. 0 turns it off.",
   "idle_close_unit": "hours",

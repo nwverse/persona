@@ -1001,8 +1001,14 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		if p := v.parking(); p != nil && p.Handoff != nil || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false // an acknowledged handoff already explains the stop
 		}
-		if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
-			return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
+		if !strings.HasPrefix(g.Key, nodeRecoveryKeyPrefix) {
+			if o, ok := s.orphanOf(t.ID); !ok || o.key != g.Key {
+				return prompts.SuperviseEntry{}, false // an agent is back at it, or it is another stretch by now
+			}
+		}
+	case sigRecovered:
+		if st == reviewClosing || st == reviewTimedOut || st == reviewUserCheck || st == reviewPending {
+			return prompts.SuperviseEntry{}, false // closed, timed out, or already waiting for review meanwhile
 		}
 	case sigUndecidable:
 		if st != reviewNeedsUser {
@@ -1039,6 +1045,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	case sigNeedsUserExternalInfo:
 		if !s.needsUserExternalInfoStillHolds(t, g) {
 			return prompts.SuperviseEntry{}, false // answered, superseded, or closed meanwhile
+		}
+	case sigOwnerPresent:
+		if !s.ownerPresentStillHolds(t, g) {
+			return prompts.SuperviseEntry{}, false // closed, card already active, or no longer waiting on owner
 		}
 	case sigInbox:
 		if g.Inbox == nil || !s.inboxSignalsOn(ctx) {
@@ -1119,7 +1129,8 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	}
 	if g.Kind == sigDecide {
 		e.Recommend = g.Ask // the task leader's recommendation
-		e.LeaderGone = g.Unreachable
+		e.LeaderGone = g.Unreachable && g.Recipient == ""
+		e.SupervisorGone = g.Unreachable && g.Recipient != ""
 	}
 	if g.Kind == sigAsk {
 		e.Asks, e.Decisions = asks, s.todoDecisionsContext(ctx, t.ID) // what was settled already, not to be gone against
@@ -1235,7 +1246,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigRecovered: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

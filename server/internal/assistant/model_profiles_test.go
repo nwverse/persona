@@ -90,12 +90,15 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 				t.Fatalf("capture lost launcher field %s", field.name)
 			}
 		}
-		strong, standard := p.Tiers["strong"], p.Tiers["standard"]
-		if strong.Description == "" || standard.Description == "" {
+		// Seeded by the kind of work (#14700): core is the main chat's choice, dev the Agents'.
+		core, dev := p.Tiers["core"], p.Tiers["dev"]
+		if core.Description == "" || dev.Description == "" || len(p.Tiers) != 2 {
 			t.Fatalf("seeded tiers say nothing of when to use them: %+v", p.Tiers)
 		}
-		strong.Description, standard.Description = "", ""
-		if strong != (ModelTier{Launcher: "current", Model: "test-chat"}) || standard != (ModelTier{Launcher: "current", Model: "test-agents"}) {
+		core.Description, dev.Description = "", ""
+		// Each answers to its older name too, as a migrated one does (#15010).
+		if !core.equal(ModelTier{Launcher: "current", Model: "test-chat", Aliases: []string{"strong"}}) ||
+			!dev.equal(ModelTier{Launcher: "current", Model: "test-agents", Aliases: []string{"standard"}}) {
 			t.Fatalf("tiers are not the current configuration: %+v", p.Tiers)
 		}
 	}
@@ -1125,7 +1128,8 @@ func TestModelProfilePutCrossVersionTolerantDecoding(t *testing.T) {
 	idx := slices.IndexFunc(v.Profiles, func(p ModelProfileView) bool { return p.ID == "cross" })
 	if idx < 0 || v.Profiles[idx].Purposes["assistant"].Model != "claude-opus-5-5" ||
 		v.Profiles[idx].Purposes["assistant"].PermissionMode != "auto" ||
-		v.Profiles[idx].Tiers["strong"].Speed != "fast" {
+		v.Profiles[idx].Tiers["core"].Speed != "fast" || !slices.Contains(v.Profiles[idx].Tiers["core"].Aliases, "strong") {
+		// a tier named strong is read back as core, with strong kept as its alias (#14700)
 		t.Fatalf("known fields lost on tolerant save: %+v", v.Profiles)
 	}
 
@@ -1207,12 +1211,12 @@ func TestModelProfileLegacyModelOnlyBindingMigration(t *testing.T) {
 			ModelProfile{
 				ID: "legacy", Name: "Legacy",
 				Purposes: map[string]ModelBinding{
-					"assistant":      {Model: "chat-model"},                              // resolves to launcher.gw (matches live!)
-					"agent.new":      {Model: "agent-model"},                             // resolves to launcher.claude
-					"kb":             {Model: "kb-model"},                                // resolves to launcher.api-default
-					"inbox.triage":   {Provider: "launcher.triage-gw", Model: "fast-m"},  // explicit provider in profile
-					"agent.delegate": {Model: "delegate-model"},                          // must follow profile's inbox.triage (launcher.triage-gw), not live!
-					"translate":      {Model: "translate-model"},                         // must follow profile's inbox.triage (launcher.triage-gw)
+					"assistant":      {Model: "chat-model"},                             // resolves to launcher.gw (matches live!)
+					"agent.new":      {Model: "agent-model"},                            // resolves to launcher.claude
+					"kb":             {Model: "kb-model"},                               // resolves to launcher.api-default
+					"inbox.triage":   {Provider: "launcher.triage-gw", Model: "fast-m"}, // explicit provider in profile
+					"agent.delegate": {Model: "delegate-model"},                         // must follow profile's inbox.triage (launcher.triage-gw), not live!
+					"translate":      {Model: "translate-model"},                        // must follow profile's inbox.triage (launcher.triage-gw)
 				},
 			},
 			ModelProfile{

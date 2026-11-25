@@ -2,6 +2,7 @@ import { t } from "../../i18n";
 import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
 import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
 import { MODULE_FEATURES_ID } from "../../core/module-features";
+import { isLegacyIntegrationTab } from "./integrations-route";
 import { tabInfo, TABS, type Tab } from "./nav";
 
 // ── search ──────────────────────────────────────────────
@@ -16,6 +17,8 @@ export interface SearchGroup {
   anchor: string;
   /** More words it is found by (the choices a row offers, the rows only shown once it is on), never shown. */
   hint?: string;
+  /** Optional item sub-route to open when selecting this search result. */
+  sub?: string;
 }
 
 const path = (...parts: string[]) => parts.join(" › ");
@@ -37,14 +40,11 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // General › Appearance
   { tab: "general", group: t("settings.appearance"), anchor: "appearance" },
   { tab: "general", group: words(t("settings.theme_light"), t("settings.theme_dark")), hint: t("language.system"), anchor: "theme" },
-  { tab: "general", group: t("ui-look.accent"), anchor: "theme-color" },
   { tab: "general", group: t("ui-look.text_size"), anchor: "text-size" },
-  { tab: "general", group: t("ui-look.font"), hint: words(t("ui-look.font_sans"), t("ui-look.font_mono")), anchor: "font" },
   { tab: "general", group: t("language.label"), anchor: "language" },
   { tab: "general", group: t("settings.reply_motion"), anchor: "reply-motion" },
   { tab: "general", group: t("settings.starred_messages"), anchor: "starred-messages" },
   { tab: "general", group: t("ui-look.recent_chats"), anchor: "recent-chats" },
-  { tab: "general", group: t("ui-look.sidebar_icons"), hint: words(t("ui-look.sidebar_icons_monochrome"), t("ui-look.sidebar_icons_colored")), anchor: "sidebar-icons" },
   { tab: "general", group: t("ui-look.sidebar_usage"), anchor: "sidebar-usage" },
   { tab: "general", group: t("settings.start_page"), anchor: "start-page" },
   { tab: "general", group: t("settings.start_page_open_on"), hint: t("settings.start_page_main"), anchor: "open-on" },
@@ -66,6 +66,12 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.install_app"), anchor: "install-app" },
   { tab: "general", group: t("settings.disconnect_browser"), hint: t("disconnect.sign_out"), anchor: "disconnect" },
   { tab: "general", group: t("settings.source_code"), hint: t("settings.about_persona"), anchor: "about-persona" },
+  // Advanced › Appearance (#13398): the non-default looks. General keeps the default appearance and text size.
+  { tab: "advanced", group: t("settings.appearance"), anchor: "appearance" },
+  { tab: "advanced", group: t("ui-look.accent"), anchor: "theme-color" },
+  { tab: "advanced", group: t("ui-extensionthemepicker.label"), anchor: "extension-theme" },
+  { tab: "advanced", group: t("ui-look.font"), hint: words(t("ui-look.font_sans"), t("ui-look.font_mono")), anchor: "font" },
+  { tab: "advanced", group: t("ui-look.sidebar_icons"), hint: words(t("ui-look.sidebar_icons_monochrome"), t("ui-look.sidebar_icons_colored")), anchor: "sidebar-icons" },
   // the assistant's profile
   { tab: "persona", group: t("settings-assistantsettings.routines"), hint: t("settings-assistantsettings.proactive_title"), anchor: "routines" },
   { tab: "persona", group: t("settings-assistantsettings.quiet_tasks"), anchor: "quiet-tasks" },
@@ -73,6 +79,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-assistantsettings.relay_replies"), anchor: "relay-replies" },
   { tab: "persona", group: t("settings-assistantsettings.recent_task_chats"), anchor: "recent-task-chats" },
   { tab: "persona", group: t("settings-assistantsettings.next_suggestions"), anchor: "next-suggestions" },
+  { tab: "persona", group: t("settings-assistantsettings.dashboards"), anchor: "dashboards" },
   { tab: "persona", group: t("settings-assistantsettings.claude_interactive"), anchor: "claude-interactive" },
   { tab: "persona", group: t("settings-assistantsettings.start_requested"), hint: t("settings-assistantsettings.start_title"), anchor: "start-requested" },
   { tab: "persona", group: t("settings-assistantsettings.workspace_preference"), anchor: "workspace-preference" },
@@ -184,6 +191,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "agents", group: t("settings.sort_by_activity"), hint: t("settings.sort_by_activity_hint"), anchor: "agents-sort-by-activity" },
   { tab: "agents", group: t("settings.show_agents_filter"), hint: t("settings.show_agents_filter_hint"), anchor: "agents-show-filter" },
   { tab: "agents", group: t("settings.use_herdr_tab_name"), hint: t("settings.use_herdr_tab_name_hint"), anchor: "herdr-tab-session-name" },
+  { tab: "agents", group: t("herdr-sessions.title"), hint: t("herdr-sessions.footer"), anchor: "settings-herdr-sessions" },
   { tab: "hub", group: t("workspace-board.setting_label"), anchor: "workflow-board" },
   { tab: "hub", group: t("settings-hubsettings.mirrors"), hint: words(t("settings-hubsettings.registry_mirror"), t("settings-hubsettings.catalog_mirror")), anchor: "mirrors" },
   // Devices: the list (each with its own token, revoked there) and pairing a new one
@@ -205,8 +213,17 @@ function moduleSwitchEntries(): SearchGroup[] {
 // What is typed and what is matched, compared without case or spaces: "timezone" finds "Time zone", "apikey" "API Key".
 const fold = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, "");
 
-/** The search box's matches: categories by label / hint, and page groups and settings by their heading or label. */
-export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGroup[] } {
+const INTEGRATIONS_ANCHOR_SUB: Record<string, string | undefined> = {
+  mail: "builtin:mail",
+  lark: "builtin:lark",
+  sent: "-sent",
+  market: "-market",
+};
+
+/** The search box's matches: categories by label / hint, and page groups and settings by their heading or label.
+ *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions` into `integrations` and remaps
+ *  their indexed groups so quick search jumps directly to the unified Integrations & Extensions view. */
+export function searchSettings(query: string, integrationsV2 = false): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
   if (!q) return { tabs: [], groups: [] };
   const featureEntries = moduleSwitchEntries();
@@ -216,8 +233,23 @@ export function searchSettings(query: string): { tabs: Tab[]; groups: SearchGrou
     return { tabs: [], groups: [features] };
   }
   const has = (...texts: (string | undefined)[]) => texts.some((s) => s && fold(s).includes(q));
+  const searchableTabs = [...TABS, ...enabledSettingsTabs().map((m) => m.key)].filter((k) =>
+    integrationsV2 ? !isLegacyIntegrationTab(k) : k !== "integrations",
+  );
+  const tabMatches = (k: Tab) => {
+    const info = tabInfo(k);
+    if (has(info.label, info.hint)) return true;
+    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions") still finds Integrations.
+    if (integrationsV2 && k === "integrations") {
+      return (["channels", "connectors", "extensions"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
+    }
+    return false;
+  };
+  const indexed = integrationsV2
+    ? SEARCH_INDEX.map((g) => (isLegacyIntegrationTab(g.tab) ? { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor] } : g))
+    : SEARCH_INDEX;
   return {
-    tabs: [...TABS, ...enabledSettingsTabs().map((m) => m.key)].filter((k) => has(tabInfo(k).label, tabInfo(k).hint)),
-    groups: [...SEARCH_INDEX, ...featureEntries].filter((g) => has(g.group, g.hint)),
+    tabs: searchableTabs.filter(tabMatches),
+    groups: [...indexed, ...featureEntries].filter((g) => has(g.group, g.hint)),
   };
 }

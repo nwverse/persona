@@ -1557,4 +1557,5 @@ without one read `notes › Agents`; every Agent row under it then ended with `<
 the headings' names. Give both projections the same rule: a level that only repeats its heading's name is left out, and
 the heading takes the row's marks and menu. A host that does not say which workspace is the main checkout (herdr has no
 `is_main`) leaves it to the folder, the workspace at the repository's own folder, and that guess may only mark and
-order the tree: actions keep reading what the host said.
+order the tree: actions keep reading what the host said. Guess only for a host that names no project: a desktop app's
+project lists each of its folders as its own `project_path`, so the section's first folder wore the home mark (#14497).

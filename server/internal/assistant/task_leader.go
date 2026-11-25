@@ -823,7 +823,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	b.mu.Lock()
 	b.init()
 	var keys []string
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigEstimateDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigRecovered, sigEstimateDue} {
 		key := t.ID + "|" + k
 		delete(b.pending, key) // reviewed: what waited is answered
 		keys = append(keys, key)

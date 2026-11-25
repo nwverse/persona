@@ -501,7 +501,7 @@ func sameAgyFile(a, b os.FileInfo) bool {
 }
 
 func agyStepsHistory(conversation string) agyHistory {
-	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v1:lazy-media:checkpoints:wakes:file-links:full-text"}
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v1:lazy-media:checkpoints:wakes:file-links:full-text:tool-headers"}
 }
 
 // agyRead projects the compact export when present, filling in verified text
@@ -697,7 +697,24 @@ func agyUserInput(it proto.Item) bool {
 	return it.Role == "user" && (it.Kind == proto.KindText || (it.Kind == proto.KindImage && it.ToolUseID == ""))
 }
 
+func (h agyHistory) toolUses() map[string]proto.Item {
+	var uses map[string]proto.Item
+	for _, it := range h.items {
+		if it.Kind == proto.KindToolUse && it.ToolUseID != "" {
+			if uses == nil {
+				uses = map[string]proto.Item{}
+			}
+			uses[it.ToolUseID] = it
+		}
+	}
+	return uses
+}
+
 func (h agyHistory) page(p agyPageParams) any {
+	return h.pageWith(p, "", nil)
+}
+
+func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) any {
 	if p.UserInputs {
 		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
 		for _, it := range h.items {
@@ -708,18 +725,24 @@ func (h agyHistory) page(p agyPageParams) any {
 		index.Total = len(index.Inputs)
 		return index
 	}
+	uses := h.toolUses()
 	items := h.items
 	if p.ThroughSeq > 0 {
 		from, to := agyIndex(items, p.FromSeq), agyAfter(items, p.ThroughSeq)
 		items = items[min(from, to):to]
 		if len(items) > 1000 {
 			end := agyAfter(items, items[999].Seq)
-			return map[string]any{"items": agyLightItems(items[:end]), "more": end < len(items)}
+			light := agyLightItems(items[:end])
+			tv.attachWithUses(id, light, false, uses)
+			return map[string]any{"items": light, "more": end < len(items)}
 		}
-		return map[string]any{"items": agyLightItems(items), "more": false}
+		light := agyLightItems(items)
+		tv.attachWithUses(id, light, false, uses)
+		return map[string]any{"items": light, "more": false}
 	}
 	if p.AfterSeq != nil {
 		page, span, more := h.after(*p.AfterSeq)
+		tv.attachWithUses(id, page, true, uses)
 		return withSpan(map[string]any{"items": page, "has_more": false, "more_after": more}, span, true)
 	}
 	span := transcript.Span{History: h.token, To: h.seq}
@@ -754,6 +777,7 @@ func (h agyHistory) page(p agyPageParams) any {
 		start = agyIndex(items, items[start].Seq)
 	}
 	items = agyLightItems(items[start:])
+	tv.attachWithUses(id, items, p.BeforeSeq == 0, uses)
 	if p.FoldWork && p.BeforeSeq == 0 {
 		items = transcript.FoldWorkLatest(items)
 	} else if p.FoldWork {
@@ -819,7 +843,9 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 					}
 				}
 				if n.agyConversation(id, pane) == conversation {
-					return it, nil, true
+					one := []proto.Item{it}
+					n.toolViews.attachWithUses(id, one, false, h.toolUses())
+					return one[0], nil, true
 				}
 				break
 			}
@@ -834,7 +860,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	if method == "session.image" {
 		return nil, &rpc.Error{Code: codeNotFound, Message: "no image"}, true
 	}
-	return h.page(p), nil, true
+	return h.pageWith(p, id, &n.toolViews), nil, true
 }
 
 func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
@@ -976,7 +1002,9 @@ func (n *Node) pollAgyPane(w *watch) {
 			}
 			if n.peer != nil {
 				span := transcript.Span{History: h.token, From: since, To: since}
-				err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": agyLightItems(updated)}, span, true))
+				light := agyLightItems(updated)
+				n.toolViews.attachWithUses(w.id, light, true, h.toolUses())
+				err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": light}, span, true))
 				if err != nil {
 					return
 				}
@@ -989,6 +1017,7 @@ func (n *Node) pollAgyPane(w *watch) {
 			return
 		}
 		if n.peer != nil {
+			n.toolViews.attachWithUses(w.id, items, true, h.toolUses())
 			err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": items}, span, true))
 			if err != nil {
 				return

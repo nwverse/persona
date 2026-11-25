@@ -58,6 +58,7 @@ repository_add
 view_show
 view_update
 view_get
+page
 conversations_list
 conversations_switch
 conversation_read

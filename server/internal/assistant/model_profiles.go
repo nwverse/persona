@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"cmp"
 	"context"
 	"maps"
 	"slices"
@@ -28,6 +27,8 @@ const (
 
 	maxModelProfiles    = 20
 	maxModelTiers       = 12
+	maxTierCandidates   = 6 // the ordered candidates one tier lists (#14700)
+	maxTierAliases      = 8 // older names one tier answers to
 	maxProfileEvents    = 50
 	maxProfileRollbacks = 10
 	modelProfileName    = 40  // runes
@@ -95,31 +96,120 @@ type launcherField struct {
 
 func profileValue(v string) *string { return &v }
 
-// ModelTier is what an Agent started on a tier runs on: a launcher, and its model, effort, start speed and permission
-// mode ("" for its defaults). Description says when to use it (Paseo's "When to use"): the assistant reads it to pick
-// a tier, the New Agent form shows it.
+// ModelTier is what an Agent started on a tier (an Agent preset) runs on: a launcher, and its model, effort, start
+// speed and permission mode ("" for its defaults). Description says when to use it (Paseo's "When to use"): the
+// assistant reads it to pick a tier, the New Agent form shows it.
+//
+// A tier may list several ordered candidates (#14700): the hub picks one at dispatch (pickTierCandidate), in the
+// user's order. The flat fields are always candidate 0, so an older client that reads or writes only them keeps
+// working; Candidates is empty for a tier with one candidate, which behaves exactly as a tier did before. Aliases are
+// older names the tier still answers to (strong for core, standard for dev): a stored plan task, a start-defaults
+// preset or an older client naming one resolves to this tier.
 type ModelTier struct {
+	Launcher       string          `json:"launcher"`
+	Model          string          `json:"model,omitempty"`
+	Effort         string          `json:"effort,omitempty"`
+	Speed          string          `json:"speed,omitempty"`
+	PermissionMode string          `json:"permission_mode,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Candidates     []TierCandidate `json:"candidates,omitempty"`
+	Aliases        []string        `json:"aliases,omitempty"`
+}
+
+// TierCandidate is one launcher a tier may run on, with its model, effort, start speed and permission mode.
+type TierCandidate struct {
 	Launcher       string `json:"launcher"`
 	Model          string `json:"model,omitempty"`
 	Effort         string `json:"effort,omitempty"`
 	Speed          string `json:"speed,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
-	Description    string `json:"description,omitempty"`
 }
 
-// runs is what the tier runs on, in a line: its launcher, then the model, effort, speed and permission mode it sets.
-func (t ModelTier) runs() string {
-	parts := []string{t.Launcher}
-	for _, v := range []string{t.Model, t.Effort} {
+// first is candidate 0: the flat fields.
+func (t ModelTier) first() TierCandidate {
+	return TierCandidate{Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Speed: t.Speed, PermissionMode: t.PermissionMode}
+}
+
+// list is every candidate in the user's order; one (the flat fields) for a tier that lists none.
+func (t ModelTier) list() []TierCandidate {
+	if len(t.Candidates) == 0 {
+		return []TierCandidate{t.first()}
+	}
+	return t.Candidates
+}
+
+// on is t run on candidate c alone: c's fields with t's description, no other candidate and no alias. A start uses it,
+// so the code after the pick sees the one-candidate tier it always did.
+func (t ModelTier) on(c TierCandidate) ModelTier {
+	return ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort, Speed: c.Speed, PermissionMode: c.PermissionMode, Description: t.Description}
+}
+
+// setFirst replaces candidate 0 with c and keeps the others.
+func (t *ModelTier) setFirst(c TierCandidate) {
+	t.Launcher, t.Model, t.Effort, t.Speed, t.PermissionMode = c.Launcher, c.Model, c.Effort, c.Speed, c.PermissionMode
+	if len(t.Candidates) > 0 {
+		t.Candidates = slices.Clone(t.Candidates)
+		t.Candidates[0] = c
+	}
+}
+
+// normalize makes the flat fields candidate 0 and drops a list of one (the flat fields say it all), so a tier with
+// one candidate is stored exactly as before. Aliases are trimmed, in order, without repeats.
+func (t *ModelTier) normalize() {
+	switch len(t.Candidates) {
+	case 0:
+		t.Candidates = nil
+	case 1:
+		c := t.Candidates[0]
+		t.Candidates = nil
+		t.setFirst(c)
+	default:
+		t.Candidates = slices.Clone(t.Candidates)
+		t.setFirst(t.Candidates[0])
+	}
+	var aliases []string
+	for _, a := range t.Aliases {
+		if a = strings.TrimSpace(a); a != "" && !slices.Contains(aliases, a) {
+			aliases = append(aliases, a)
+		}
+	}
+	t.Aliases = aliases
+}
+
+// equal: the same candidates, description and aliases.
+func (t ModelTier) equal(o ModelTier) bool {
+	return t.first() == o.first() && t.Description == o.Description && slices.Equal(t.Candidates, o.Candidates) &&
+		slices.Equal(t.Aliases, o.Aliases)
+}
+
+// answersTo: name is t's alias.
+func (t ModelTier) answersTo(name string) bool { return slices.Contains(t.Aliases, name) }
+
+// runs is what the tier runs on, in a line: candidate 0's launcher, then the model, effort, speed and permission mode
+// it sets.
+func (t ModelTier) runs() string { return t.first().runs() }
+
+// allRuns is every candidate in a line, in order (one candidate: runs).
+func (t ModelTier) allRuns() string {
+	parts := make([]string, 0, len(t.list()))
+	for _, c := range t.list() {
+		parts = append(parts, c.runs())
+	}
+	return strings.Join(parts, " / ")
+}
+
+func (c TierCandidate) runs() string {
+	parts := []string{c.Launcher}
+	for _, v := range []string{c.Model, c.Effort} {
 		if v != "" {
 			parts = append(parts, v)
 		}
 	}
-	if proto.FasterSpeed(t.Speed) {
-		parts = append(parts, t.Speed)
+	if proto.FasterSpeed(c.Speed) {
+		parts = append(parts, c.Speed)
 	}
-	if t.PermissionMode != "" {
-		parts = append(parts, t.PermissionMode)
+	if c.PermissionMode != "" {
+		parts = append(parts, c.PermissionMode)
 	}
 	return strings.Join(parts, " · ")
 }
@@ -147,7 +237,7 @@ type modelProfiles struct {
 }
 
 type modelProfileState struct {
-	Active         string              `json:"active,omitempty"`           // the profile last switched to ("" none yet)
+	Active         string              `json:"active,omitempty"` // the profile last switched to ("" none yet)
 	At             time.Time           `json:"at,omitzero"`
 	By             ProfileActor        `json:"by,omitzero"`
 	Previous       *modelProfileImage  `json:"previous,omitempty"`         // latest rollback point (synced with Rollbacks for backward compatibility)
@@ -454,15 +544,71 @@ func (s *Service) readModelProfiles(ctx context.Context) (modelProfiles, bool, e
 	// The profile the main chat's new conversations start in is never a model profile's (#4633): one stored holding
 	// it anyway is read without it, so it neither shows a change it cannot make nor fails checkModelProfile at a
 	// switch or an edit, and the next write stores it clean.
-	for _, p := range ps.Profiles {
+	for i := range ps.Profiles {
+		p := &ps.Profiles[i]
 		for id, b := range p.Purposes {
 			if b.ConfigDir != "" {
 				b.ConfigDir = ""
 				p.Purposes[id] = b
 			}
 		}
+		migrateSeededTiers(p)
 	}
 	return ps, ok, err
+}
+
+// seededTierNames are the two tiers Persona seeded under strength names before tiers were named by the kind of work
+// (#14700), with the names they have now.
+var seededTierNames = [][2]string{{"strong", "core"}, {"standard", "dev"}}
+
+// seededTierAliases are the older names the seeded tier name answers to (strong for core, standard for dev), in a
+// fresh slice. The templates and a capture give them to the tiers they make, as migrateSeededTiers gives them to a
+// migrated tier, so a stored plan task, a start-defaults preset or an older client naming the old one resolves on
+// every profile, whichever is in use.
+func seededTierAliases(name string) []string {
+	for _, names := range seededTierNames {
+		if names[1] == name {
+			return []string{names[0]}
+		}
+	}
+	return nil
+}
+
+// migrateSeededTiers renames the two seeded tiers as p is read: strong to core, standard to dev, with the old name kept
+// as an alias and nothing else changed, so a plan task, a start-defaults preset or an older client naming the old one
+// resolves to the same launcher and model. The next write stores it. A tier the user made keeps its name, and so does
+// a seeded one whose new name is taken.
+func migrateSeededTiers(p *ModelProfile) {
+	for _, names := range seededTierNames {
+		from, to := names[0], names[1]
+		t, ok := p.Tiers[from]
+		if !ok {
+			continue
+		}
+		if _, taken := p.lookupTier(to); taken {
+			continue
+		}
+		tiers := maps.Clone(p.Tiers)
+		delete(tiers, from)
+		t.Aliases = append(slices.Clone(t.Aliases), from)
+		t.normalize()
+		tiers[to] = t
+		p.Tiers = tiers
+	}
+}
+
+// lookupTier is tier name of p, by its name, else by one of its aliases; with the tier's own name.
+func (p *ModelProfile) lookupTier(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if _, ok := p.Tiers[name]; ok {
+		return name, true
+	}
+	for _, own := range slices.Sorted(maps.Keys(p.Tiers)) {
+		if p.Tiers[own].answersTo(name) {
+			return own, true
+		}
+	}
+	return "", false
 }
 
 func (s *Service) readModelProfileState(ctx context.Context) (modelProfileState, error) {
@@ -518,7 +664,9 @@ func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, bool,
 }
 
 // captureModels is the configuration as a profile would set it: every category's own choice, the model fields of the
-// providers added in Persona those categories run on, and two tiers (strong: the main chat's, standard: the Agents').
+// providers added in Persona those categories run on, and two tiers named by the kind of work (core: the main chat's
+// choice, for core design and implementation; dev: the Agents', for development, debugging and research), each
+// answering to its older name too (strong, standard), as a migrated one does.
 func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, map[string]LauncherModels, map[string]ModelTier, error) {
 	stored, err := s.readStoredLaunchers(ctx)
 	if err != nil {
@@ -551,14 +699,14 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 			continue
 		}
 		used[name] = true
-		tier := map[string]string{"assistant": "strong", "agent.new": "standard"}[id]
+		tier := map[string]string{"assistant": "core", "agent.new": "dev"}[id]
 		if tier != "" {
 			model := effective.Model
 			if !proto.ValidModelID(model) {
 				model = "" // configured before #1644 held models to the rule: the launcher's default, as applyModel runs it
 			}
 			tiers[tier] = ModelTier{Launcher: name, Model: model, Effort: effective.Effort,
-				Description: i18n.T(l, "assistant-model_profiles.tier_"+tier)}
+				Description: i18n.T(l, "assistant-model_profiles.tier_"+tier), Aliases: seededTierAliases(tier)}
 		}
 	}
 	launchers := map[string]LauncherModels{}
@@ -579,31 +727,6 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 }
 
 // ---- tiers ----
-
-// tierModel is what an Agent started on tier runs on: the tier in the profile in use.
-func (s *Service) tierModel(ctx context.Context, tier string) (ModelTier, error) {
-	p, active, err := s.activeModelProfile(ctx)
-	if err != nil {
-		return ModelTier{}, err
-	}
-	if p == nil && active != "" {
-		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_active_profile_missing", i18n.Args{"profile": i18n.Verbatim(active)})
-	}
-	if p == nil {
-		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_no_active_profile")
-	}
-	t, ok := p.Tiers[tier]
-	if !ok {
-		return ModelTier{}, i18n.ErrEnglish("assistant-model_profiles.err_tier_not_found", i18n.Args{
-			"profile": i18n.Verbatim(cmp.Or(p.Name, p.ID)), "tier": i18n.Verbatim(strings.TrimSpace(tier)),
-			"tiers": i18n.Verbatim(strings.Join(slices.Sorted(maps.Keys(p.Tiers)), ", ")),
-		})
-	}
-	if proto.IsExternalLauncher(t.Launcher) {
-		return ModelTier{}, i18n.Err("external-adapter.purpose_unsupported")
-	}
-	return t, nil
-}
 
 // withTier fills a start's launcher, model and effort from tier: what the start names itself wins, and the tier's
 // model and effort go only with the tier's launcher.

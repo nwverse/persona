@@ -15,9 +15,6 @@ import (
 // (each told to the to-do's topic through the outbound port), and the agents' finished turns and asks a topic is told of.
 
 const (
-	// topicAnchorsKeep and topicAnchorsKeepFor bound the topic messages remembered to reply to.
-	topicAnchorsKeep    = 200
-	topicAnchorsKeepFor = 30 * 24 * time.Hour
 	// threadPostSettle is how long the lark module lets a quiet to-do's first topic line wait (its thread_posts.go), so
 	// what comes right behind it is one line; a source report planned at a start that failed waits as long.
 	threadPostSettle = 3 * time.Second
@@ -29,63 +26,6 @@ type threadPoster struct {
 	after func(d time.Duration, f func())
 	// asked, when set, is called when threadAgentAsks has decided (tests: the decision runs on its own goroutine).
 	asked func()
-}
-
-// topicAnchor is a message of the topic the bot can reply into it with: the latest one the owner said there.
-// Feishu replies into a thread by a message in it; the todo only keeps the thread's id.
-type topicAnchor struct {
-	MessageID string    `json:"message_id"`
-	At        time.Time `json:"at"`
-}
-
-// rememberTopicMessage notes message id as the latest of the topic, kept with the chat's state (a restart does not
-// lose where to reply).
-func (s *Service) rememberTopicMessage(ctx context.Context, chatID, threadID, id string) {
-	if chatID == "" || threadID == "" || id == "" {
-		return
-	}
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if !b.loaded {
-		return
-	}
-	if b.st.Topics == nil {
-		b.st.Topics = map[string]*topicAnchor{}
-	}
-	b.st.Topics[chatID+"/"+threadID] = &topicAnchor{MessageID: id, At: b.clock()}
-	s.saveBotStateLocked()
-}
-
-// topicMessage is the message to reply to in the topic, "" when none is known.
-func (s *Service) topicMessage(ctx context.Context, chatID, threadID string) string {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if a := b.st.Topics[chatID+"/"+threadID]; a != nil {
-		return a.MessageID
-	}
-	return ""
-}
-
-// pruneTopicAnchors drops the anchors older than topicAnchorsKeepFor, then the oldest beyond topicAnchorsKeep.
-func pruneTopicAnchors(m map[string]*topicAnchor, now time.Time) {
-	for k, a := range m {
-		if a == nil || now.Sub(a.At) > topicAnchorsKeepFor {
-			delete(m, k)
-		}
-	}
-	for len(m) > topicAnchorsKeep {
-		oldest := ""
-		for k, a := range m {
-			if oldest == "" || a.At.Before(m[oldest].At) {
-				oldest = k
-			}
-		}
-		delete(m, oldest)
-	}
 }
 
 // threadOf is the thread todo id is bound to, from memory; nil when it has none (or is gone).
@@ -114,18 +54,6 @@ func (s *Service) insertDecision(ctx context.Context, st todoStore, row db.TodoD
 		s.chat().ThreadPost(row.TodoID, larkhost.ThreadEvent{Kind: larkhost.ThreadDecision, Text: decisionLine(row)})
 	}
 	return ok, err
-}
-
-// forgetTopicMessage drops the anchor of the topic when it is still the one given (a newer message may have come).
-func (s *Service) forgetTopicMessage(ctx context.Context, chatID, threadID, id string) {
-	b := &s.fbot
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	if a := b.st.Topics[chatID+"/"+threadID]; a != nil && a.MessageID == id {
-		delete(b.st.Topics, chatID+"/"+threadID)
-		s.saveBotStateLocked()
-	}
 }
 
 // threadAgentDone: an agent's finished turn (the one the phone is pushed, notifyFinished) is told to the topic of
@@ -161,7 +89,7 @@ func (s *Service) threadAgentAsks(ix proto.Interaction) {
 	defer cancel()
 	ev := larkhost.ThreadEvent{Kind: larkhost.ThreadAgentNeeds, Agent: threadName(firstNonEmpty(ix.SessionTitle, ix.TaskTitle))}
 	switch {
-	case !s.feishuCardWanted(ctx, ix):
+	case !s.larkModule().AskWanted(ctx, ix):
 		// No card anywhere: the line is the notice, and says what is asked, except for a permission: what a tool is about
 		// to do (a command, a path) is not for a group chat, only that the Agent needs the user.
 		if ix.Kind != proto.IxPermission {
