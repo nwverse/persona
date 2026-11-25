@@ -13,6 +13,7 @@ internal/extwire
 internal/githubwire
 internal/imessagewire
 internal/kbwire
+internal/larksyncwire
 internal/linkwire
 internal/mailwire
 internal/modapi

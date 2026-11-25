@@ -58,6 +58,11 @@ type Engine struct {
 	Index func(kind, id, name string, t Tagging, oneLine string, updated time.Time)
 	// Unindex removes index rows (recordings deleted or past their retention; optional).
 	Unindex func(kind string, ids []string)
+	// Align says whether a message Ingest is handed is one the knowledge base already has from another source (the
+	// Lark user sync reading a message the Lark gateway archived: NewGatewayAligner). Such a message is received (its
+	// ID joins the chat's receipts, so it is not asked about again) but not written. Called under the ingest lock,
+	// once per message not received before; optional.
+	Align func(src Source, sc SourceChat, m SourceMessage) (dup bool)
 	// RecordingDaysFunc is how many days recordings are kept (the assistant's recording_days; nil or <= 0: 14).
 	RecordingDaysFunc func() int
 	// MinutesDaysFunc is how many days a meeting's minutes are kept once its transcript went (the assistant's
@@ -400,7 +405,10 @@ func (e *Engine) saveArchived(c *Chat, cursor string, n int, listed time.Time) e
 	return nil
 }
 
-var docLink = lazyre.New(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides)/[A-Za-z0-9]+`)
+// docLink is a link to a Feishu or Lark document, wiki page or minutes in a message: each becomes a stub item
+// (noteDoc) keyed by its token, which a source that reads the content itself (the Lark user sync) later fills in
+// (CollectItems' link-token alignment, items_canonical.go).
+var docLink = lazyre.New(`https?://[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)/(?:docx|docs|wiki|sheets|base|mindnotes|slides|minutes)/[A-Za-z0-9]+`)
 
 // DownloadFunc saves one media path of a message to dst (Source.Download, or a connector's attachments).
 type DownloadFunc func(ctx context.Context, media, dst string) error
@@ -619,11 +627,17 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 // has no signals), so neither an excluded nor a pruned document comes back through an old message that links it.
 func (e *Engine) noteDoc(u string, chat *Chat, at time.Time) {
 	id := SafeID(u[strings.LastIndex(u, "/")+1:])
-	if _, ok := e.Store.Item(KindDoc, id); ok {
+	// A minutes link is a meeting: the Lark user sync files the minutes themselves under meetings with the same token,
+	// so the stub and the synced minutes are one item.
+	kind := KindDoc
+	if strings.Contains(u, "/minutes/") {
+		kind = KindMeeting
+	}
+	if _, ok := e.Store.Item(kind, id); ok {
 		return
 	}
 	now := time.Now().UTC()
-	it := &Item{Kind: KindDoc, ID: id, URL: u, At: at, Where: chat.ID, Source: chat.Connector, Seen: now}
+	it := &Item{Kind: kind, ID: id, URL: u, At: at, Where: chat.ID, Source: chat.Connector, Seen: now}
 	if sel := e.selection(); sel != nil {
 		if x := sel.Item(chat.Connector, ItemDoc, id); x != nil && !x.Read {
 			return
