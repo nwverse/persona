@@ -1100,8 +1100,7 @@ and the extensions' `agent.needs_you` / `agent.finished` events still leave the 
   space. `assistant.conversations` and `assistant.messages` leave health sessions out, and `assistant.memory` reads only
   the memory of tracks the extension may read. The assistant's `agents_list`, `agent_read` and `agent_send` use the calling
   conversation's space to filter their targets. `GET /api/v1/assistant` lists none of them (`?space=health` lists
-  nothing, and no `?space=` lists a space's conversations to an extension; with the `spaces` scope, only
-  `GET /api/v1/assistant/tracks/{slug}/conversations` does, never the health space's, and row by row by its policy), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one whose space
+  nothing, and no `?space=` lists a space's conversations to an extension; with the `spaces` scope, only `GET /api/v1/assistant/tracks/{slug}/conversations` does, never the health space's, and row by row by its policy), and a chat's feed (`GET …/conversations/{id}/feed`) answers 404 for one of them, or for one whose space
   cannot be told. `agent.finished` is not sent of such a chat either.
 - **Private and health cards**: a card a Just me turn raised (`private`, `docs/assistant/meeting-minutes.md` "Just me"), a card of
   the health space (by its directory or its conversation's space), and a card without a directory whose conversation cannot be found
