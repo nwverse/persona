@@ -191,7 +191,8 @@ func TestLinuxSandboxNodeEgressForReal(t *testing.T) {
 		t.Errorf("a direct connection left the sandbox: %q", v)
 	}
 	st := px.Stats("connector")
-	if st.Allowed < 2 || st.Denied < 3 {
+	// Counted per connection to the proxy: Node may carry the fetch and the WebSocket over one tunnel.
+	if st.Allowed < 1 || st.Denied < 3 {
 		t.Errorf("proxy counts %+v: Node's own clients did not go through the proxy", st)
 	}
 	logMu.Lock()
