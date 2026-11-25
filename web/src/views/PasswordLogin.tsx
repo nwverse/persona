@@ -1,7 +1,8 @@
 import { t } from "../i18n";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { errorText, setToken } from "../lib/api";
-import { pair } from "../lib/auth";
+import { api, ApiError, errorText, setPairedToken, setToken } from "../lib/api";
+import { deviceName, forgetUnrevoked, pairToken, unrevokedTokenId } from "../lib/auth";
+import { storedCredentials } from "../lib/compatibility";
 import {
   loginWithPassword,
   passwordApi,
@@ -18,7 +19,7 @@ export type PasswordLoginMode = "password" | "token";
 export interface PasswordLoginDeps {
   passwordApi?: (path: string, json?: unknown) => Promise<PasswordState>;
   loginWithPassword?: (password: string, native: NativeLogin | null) => Promise<PasswordCredential | { code: string }>;
-  pair?: (input: string) => Promise<void>;
+  pair?: (input: string, signal?: AbortSignal) => Promise<void>;
   setToken?: (token: string, id?: string) => void;
   formatError?: (error: unknown) => string;
   assignLocation?: (url: string) => void;
@@ -60,6 +61,36 @@ export interface NativePasswordLoginProps {
 
 const noop = () => {};
 const defaultAssignLocation = (url: string) => window.location.assign(url);
+
+// Mirrors lib/auth.ts pair(), but verifies `isCurrent()` and `signal` before committing global credentials so an
+// unmounted or superseded login view cannot silently persist auth while dropping `onDone()`.
+async function defaultPair(input: string, signal: AbortSignal, isCurrent: () => boolean): Promise<boolean> {
+  const tok = pairToken(input);
+  await api("/machines", { token: tok, signal });
+  if (signal.aborted || !isCurrent()) return false;
+  let use = tok;
+  let tokenId: string | undefined;
+  let exchanged = false;
+  if (!tok.startsWith("jd_")) {
+    try {
+      const replaces = storedCredentials().tokenId || unrevokedTokenId();
+      const json = { name: deviceName(), kind: "web", ...(replaces ? { replaces } : {}) };
+      const r = await api<{ token: string; id: string }>("/auth/tokens", { method: "POST", json, token: tok, signal });
+      if (signal.aborted || !isCurrent()) return false;
+      use = r.token;
+      tokenId = r.id;
+      exchanged = true;
+    } catch (err) {
+      if (signal.aborted || !isCurrent()) return false;
+      if (!(err instanceof ApiError) || err.status !== 404) throw err;
+    }
+  }
+  if (signal.aborted || !isCurrent()) return false;
+  if (exchanged) forgetUnrevoked(); // the hub has had its one chance at it
+  if (tokenId === undefined) setPairedToken(use);
+  else setPairedToken(use, tokenId);
+  return true;
+}
 
 /** Pure presentational view for connection-password and token sign-in. */
 export function PasswordLoginView({
@@ -153,12 +184,13 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null, sc
 
   const activeEpochRef = useRef(0);
   const submitSeqRef = useRef(0);
-  const pendingSubmitRef = useRef<{ epoch: number; seq: number } | null>(null);
+  const pendingSubmitRef = useRef<{ epoch: number; seq: number; controller: AbortController } | null>(null);
 
   useLayoutEffect(() => {
     activeEpochRef.current = scope.epoch;
     return () => {
       activeEpochRef.current = 0;
+      pendingSubmitRef.current?.controller.abort();
       pendingSubmitRef.current = null;
       submitSeqRef.current += 1;
     };
@@ -201,9 +233,11 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null, sc
     const runNative = nativeRef.current;
     const credential = runMode === "password" ? token : token.trim();
     if (!credential) return;
+    const controller = new AbortController();
     const runSeq = ++submitSeqRef.current;
-    pendingSubmitRef.current = { epoch: runEpoch, seq: runSeq };
-    const isCurrent = () => activeEpochRef.current === runEpoch && pendingSubmitRef.current?.seq === runSeq;
+    pendingSubmitRef.current = { epoch: runEpoch, seq: runSeq, controller };
+    const isCurrent = () =>
+      !controller.signal.aborted && activeEpochRef.current === runEpoch && pendingSubmitRef.current?.seq === runSeq;
     setBusy(true);
     setError("");
     try {
@@ -223,9 +257,12 @@ export function PasswordLogin({ onDone, error: linkError = "", native = null, sc
           onDoneRef.current();
         }
       } else {
-        const runPair = depsRef.current?.pair ?? pair;
-        await runPair(credential);
-        if (!isCurrent()) return;
+        if (depsRef.current?.pair) {
+          await depsRef.current.pair(credential, controller.signal);
+          if (!isCurrent()) return;
+        } else if (!(await defaultPair(credential, controller.signal, isCurrent))) {
+          return;
+        }
         onDoneRef.current();
       }
     } catch (err) {

@@ -8,9 +8,15 @@ const globals = vi.hoisted(() => ({
   passwordApi: vi.fn<(path: string, json?: unknown) => Promise<PasswordState>>(),
   loginWithPassword: vi.fn<(password: string, native: NativeLogin | null) => Promise<PasswordCredential | { code: string }>>(),
   readNativeLogin: vi.fn<(href: string) => NativeLogin | null>(),
-  pair: vi.fn<(input: string) => Promise<void>>(),
+  api: vi.fn<(path: string, init?: { method?: string; json?: unknown; token?: string; signal?: AbortSignal }) => Promise<unknown>>(),
+  setPairedToken: vi.fn<(token: string, id?: string) => void>(),
   setToken: vi.fn<(token: string, id?: string) => void>(),
   errorText: vi.fn<(err: unknown) => string>((e) => (e instanceof Error ? e.message : String(e))),
+  pairToken: vi.fn<(input: string) => string>(),
+  deviceName: vi.fn<() => string>(),
+  unrevokedTokenId: vi.fn<() => string>(),
+  forgetUnrevoked: vi.fn<() => void>(),
+  storedCredentials: vi.fn<() => { token: string; tokenId: string }>(),
 }));
 
 vi.mock("../lib/password", () => ({
@@ -19,16 +25,57 @@ vi.mock("../lib/password", () => ({
   readNativeLogin: (href: string) => globals.readNativeLogin(href),
 }));
 
-vi.mock("../lib/auth", () => ({
-  pair: (input: string) => globals.pair(input),
-}));
+vi.mock("../lib/auth", async (actual) => {
+  const real = await actual<typeof import("../lib/auth")>();
+  return {
+    ...real,
+    pairToken: (input: string) => {
+      globals.pairToken(input);
+      return real.pairToken(input);
+    },
+    deviceName: () => {
+      globals.deviceName();
+      return real.deviceName();
+    },
+    unrevokedTokenId: () => {
+      globals.unrevokedTokenId();
+      return real.unrevokedTokenId();
+    },
+    forgetUnrevoked: () => {
+      globals.forgetUnrevoked();
+      return real.forgetUnrevoked();
+    },
+  };
+});
 
-vi.mock("../lib/api", () => ({
-  setToken: (token: string, id?: string) => globals.setToken(token, id),
-  errorText: (err: unknown) => globals.errorText(err),
-}));
+vi.mock("../lib/compatibility", async (actual) => {
+  const real = await actual<typeof import("../lib/compatibility")>();
+  return {
+    ...real,
+    storedCredentials: (...args: Parameters<typeof real.storedCredentials>) => {
+      globals.storedCredentials();
+      return real.storedCredentials(...args);
+    },
+  };
+});
+
+vi.mock("../lib/api", async (actual) => {
+  const real = await actual<typeof import("../lib/api")>();
+  return {
+    ...real,
+    api: (path: string, init?: { method?: string; json?: unknown; token?: string; signal?: AbortSignal }) => globals.api(path, init),
+    setPairedToken: (token: string, id?: string) => {
+      globals.setPairedToken(token, id);
+      real.setPairedToken(token, id);
+    },
+    setToken: (token: string, id?: string) => globals.setToken(token, id),
+    errorText: (err: unknown) => globals.errorText(err),
+  };
+});
 
 import { initI18n, t } from "../i18n";
+import { ApiError } from "../lib/api";
+import { UNREVOKED_KEY } from "../lib/auth";
 import {
   NativePasswordLogin,
   PasswordLogin,
@@ -61,9 +108,15 @@ function expectNoGlobalCalls() {
   expect(globals.passwordApi).not.toHaveBeenCalled();
   expect(globals.loginWithPassword).not.toHaveBeenCalled();
   expect(globals.readNativeLogin).not.toHaveBeenCalled();
-  expect(globals.pair).not.toHaveBeenCalled();
+  expect(globals.api).not.toHaveBeenCalled();
+  expect(globals.setPairedToken).not.toHaveBeenCalled();
   expect(globals.setToken).not.toHaveBeenCalled();
   expect(globals.errorText).not.toHaveBeenCalled();
+  expect(globals.pairToken).not.toHaveBeenCalled();
+  expect(globals.deviceName).not.toHaveBeenCalled();
+  expect(globals.unrevokedTokenId).not.toHaveBeenCalled();
+  expect(globals.forgetUnrevoked).not.toHaveBeenCalled();
+  expect(globals.storedCredentials).not.toHaveBeenCalled();
 }
 
 function inputEl(): HTMLInputElement {
@@ -98,12 +151,19 @@ async function submitForm() {
 
 beforeEach(async () => {
   await initI18n("en");
+  localStorage.clear();
   globals.passwordApi.mockReset();
   globals.loginWithPassword.mockReset();
   globals.readNativeLogin.mockReset();
-  globals.pair.mockReset();
+  globals.api.mockReset();
+  globals.setPairedToken.mockReset();
   globals.setToken.mockReset();
   globals.errorText.mockReset().mockImplementation((e) => (e instanceof Error ? e.message : String(e)));
+  globals.pairToken.mockReset();
+  globals.deviceName.mockReset();
+  globals.unrevokedTokenId.mockReset();
+  globals.forgetUnrevoked.mockReset();
+  globals.storedCredentials.mockReset();
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -206,7 +266,7 @@ describe("PasswordLogin controlled mode", () => {
     vi.mocked(deps.pair!).mockRejectedValueOnce(new Error("invalid token"));
     await typeValue("  bad-tok  ");
     await submitForm();
-    expect(deps.pair).toHaveBeenCalledWith("bad-tok");
+    expect(deps.pair).toHaveBeenCalledWith("bad-tok", expect.any(AbortSignal));
     expect(alertText()).toBe(t("password.invalid_token"));
 
     vi.mocked(deps.pair!).mockResolvedValueOnce();
@@ -546,10 +606,13 @@ describe("PasswordLogin controlled mode", () => {
 });
 
 describe("PasswordLogin default fallback compatibility", () => {
-  it("delegates to default passwordApi, loginWithPassword, setToken, pair, and readNativeLogin when deps are omitted", async () => {
+  it("delegates to default passwordApi, loginWithPassword, setToken, real default token pairing persistence, and readNativeLogin when deps are omitted", async () => {
+    localStorage.setItem(UNREVOKED_KEY, "cred_prev");
     globals.passwordApi.mockResolvedValue(enabledState);
-    globals.loginWithPassword.mockResolvedValue({ token: "tok_default", id: "dev_default", hub_id: "hub-1" });
-    globals.pair.mockResolvedValue();
+    globals.loginWithPassword.mockResolvedValue({ token: "tok_default", id: "cred_default", hub_id: "hub-1" });
+    globals.api.mockImplementation(async (path: string) => (
+      path === "/auth/tokens" ? { token: "jd_exchanged", id: "cred_exchanged" } : { machines: [] }
+    ));
     globals.readNativeLogin.mockReturnValue(nativeA);
 
     const onDone = vi.fn();
@@ -562,13 +625,28 @@ describe("PasswordLogin default fallback compatibility", () => {
     await typeValue("default-pw");
     await submitForm();
     expect(globals.loginWithPassword).toHaveBeenCalledWith("default-pw", null);
-    expect(globals.setToken).toHaveBeenCalledWith("tok_default", "dev_default");
+    expect(globals.setToken).toHaveBeenCalledWith("tok_default", "cred_default");
     expect(onDone).toHaveBeenCalledOnce();
 
     await act(async () => modeToggleButton()!.click());
-    await typeValue("tok_pair");
+    await typeValue("persona://pair?url=https%3A%2F%2Fhub.example&token=jp_good");
     await submitForm();
-    expect(globals.pair).toHaveBeenCalledWith("tok_pair");
+    expect(globals.api).toHaveBeenCalledWith(
+      "/machines",
+      expect.objectContaining({ token: "jp_good", signal: expect.any(AbortSignal) }),
+    );
+    expect(globals.api).toHaveBeenCalledWith(
+      "/auth/tokens",
+      expect.objectContaining({
+        method: "POST",
+        token: "jp_good",
+        json: expect.objectContaining({ kind: "web", replaces: "cred_prev" }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(localStorage.getItem("persona.token")).toBe("jd_exchanged");
+    expect(localStorage.getItem("persona.tokenId")).toBe("cred_exchanged");
+    expect(localStorage.getItem(UNREVOKED_KEY)).toBeNull();
     expect(onDone).toHaveBeenCalledTimes(2);
 
     // NativePasswordLogin with no props reads window.location.href via default readNativeLogin
@@ -576,5 +654,163 @@ describe("PasswordLogin default fallback compatibility", () => {
       root.render(<NativePasswordLogin />);
     });
     expect(globals.readNativeLogin).toHaveBeenCalledWith(window.location.href);
+  });
+
+  it("does not persist default token pairing credentials or forgetUnrevoked when unmounted before /machines or /auth/tokens settles", async () => {
+    localStorage.setItem(UNREVOKED_KEY, "cred_keep");
+    globals.passwordApi.mockResolvedValue(enabledState);
+
+    // Phase 1: unmount while /machines is pending (late resolve ignores AbortSignal)
+    const machines1 = deferred<{ machines: unknown[] }>();
+    let machinesSignal1!: AbortSignal;
+    globals.api.mockImplementation((path: string, init?: { signal?: AbortSignal }) => {
+      if (path === "/machines") {
+        machinesSignal1 = init!.signal!;
+        return machines1.promise;
+      }
+      throw new Error("unexpected /auth/tokens after unmount");
+    });
+
+    const onDone = vi.fn();
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} />);
+    });
+    await act(async () => modeToggleButton()!.click());
+    await typeValue("jp_unmount_machines");
+    await submitForm();
+    expect(machinesSignal1.aborted).toBe(false);
+
+    await act(async () => root.unmount());
+    expect(machinesSignal1.aborted).toBe(true);
+
+    await act(async () => {
+      machines1.resolve({ machines: [] });
+      await Promise.resolve();
+    });
+    expect(globals.api).toHaveBeenCalledTimes(1);
+    expect(globals.setPairedToken).not.toHaveBeenCalled();
+    expect(globals.forgetUnrevoked).not.toHaveBeenCalled();
+    expect(localStorage.getItem("persona.token")).toBeNull();
+    expect(localStorage.getItem("persona.tokenId")).toBeNull();
+    expect(localStorage.getItem(UNREVOKED_KEY)).toBe("cred_keep");
+    expect(onDone).not.toHaveBeenCalled();
+
+    // Phase 2: unmount while /auth/tokens exchange is pending (late resolve ignores AbortSignal)
+    const tokens2 = deferred<{ token: string; id: string }>();
+    let tokensSignal2!: AbortSignal;
+    globals.api.mockReset().mockImplementation((path: string, init?: { signal?: AbortSignal }) => {
+      if (path === "/machines") return Promise.resolve({ machines: [] });
+      tokensSignal2 = init!.signal!;
+      return tokens2.promise;
+    });
+
+    root = createRoot(host);
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} />);
+    });
+    await act(async () => modeToggleButton()!.click());
+    await typeValue("jp_unmount_exchange");
+    await submitForm();
+    expect(tokensSignal2.aborted).toBe(false);
+
+    await act(async () => root.unmount());
+    expect(tokensSignal2.aborted).toBe(true);
+
+    await act(async () => {
+      tokens2.resolve({ token: "jd_stale_unmount", id: "cred_stale_unmount" });
+      await Promise.resolve();
+    });
+    expect(globals.setPairedToken).not.toHaveBeenCalled();
+    expect(globals.forgetUnrevoked).not.toHaveBeenCalled();
+    expect(localStorage.getItem("persona.token")).toBeNull();
+    expect(localStorage.getItem("persona.tokenId")).toBeNull();
+    expect(localStorage.getItem(UNREVOKED_KEY)).toBe("cred_keep");
+    expect(onDone).not.toHaveBeenCalled();
+
+    // Phase 3: unmount while old-hub 404 fallback on /auth/tokens is pending must also persist nothing
+    const tokens404 = deferred<{ token: string; id: string }>();
+    globals.api.mockReset().mockImplementation((path: string) => (
+      path === "/machines" ? Promise.resolve({ machines: [] }) : tokens404.promise
+    ));
+
+    root = createRoot(host);
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} />);
+    });
+    await act(async () => modeToggleButton()!.click());
+    await typeValue("master_old_hub");
+    await submitForm();
+    await act(async () => root.unmount());
+
+    await act(async () => {
+      tokens404.reject(new ApiError(404, "not found", {}));
+      await Promise.resolve();
+    });
+    expect(globals.setPairedToken).not.toHaveBeenCalled();
+    expect(localStorage.getItem("persona.token")).toBeNull();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("fences delayed default token pairing persistence and busy state across scopeKey ABA switches", async () => {
+    localStorage.setItem(UNREVOKED_KEY, "cred_aba_old");
+    globals.passwordApi.mockResolvedValue(enabledState);
+
+    const tokenExchanges: Array<{ deferred: ReturnType<typeof deferred<{ token: string; id: string }>>; signal: AbortSignal }> = [];
+    globals.api.mockImplementation((path: string, init?: { signal?: AbortSignal }) => {
+      if (path === "/machines") return Promise.resolve({ machines: [] });
+      const entry = { deferred: deferred<{ token: string; id: string }>(), signal: init!.signal! };
+      tokenExchanges.push(entry);
+      return entry.deferred.promise;
+    });
+
+    const onDone = vi.fn();
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} scopeKey="hub-a" />);
+    });
+    await act(async () => modeToggleButton()!.click());
+    await typeValue("jp_aba_first");
+    await submitForm();
+    expect(tokenExchanges).toHaveLength(1);
+    expect(tokenExchanges[0]!.signal.aborted).toBe(false);
+    expect(submitButton().disabled).toBe(true);
+
+    // Switch scopeKey A -> B -> A while attempt #1's /auth/tokens is still pending
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} scopeKey="hub-b" />);
+    });
+    expect(tokenExchanges[0]!.signal.aborted).toBe(true);
+
+    await act(async () => {
+      root.render(<PasswordLogin onDone={onDone} scopeKey="hub-a" />);
+    });
+    await act(async () => modeToggleButton()!.click());
+    await typeValue("jp_aba_second");
+    await submitForm();
+    expect(tokenExchanges).toHaveLength(2);
+    expect(submitButton().disabled).toBe(true);
+
+    // Late resolution of stale attempt #1 must NOT persist credentials, clear UNREVOKED_KEY, call onDone, or clear busy
+    await act(async () => {
+      tokenExchanges[0]!.deferred.resolve({ token: "jd_stale_aba", id: "cred_stale_aba" });
+      await Promise.resolve();
+    });
+    expect(globals.setPairedToken).not.toHaveBeenCalled();
+    expect(globals.forgetUnrevoked).not.toHaveBeenCalled();
+    expect(localStorage.getItem("persona.token")).toBeNull();
+    expect(localStorage.getItem("persona.tokenId")).toBeNull();
+    expect(localStorage.getItem(UNREVOKED_KEY)).toBe("cred_aba_old");
+    expect(onDone).not.toHaveBeenCalled();
+    expect(submitButton().disabled).toBe(true);
+
+    // Active attempt #2 commits credentials and invokes onDone exactly once
+    await act(async () => {
+      tokenExchanges[1]!.deferred.resolve({ token: "jd_fresh_aba", id: "cred_fresh_aba" });
+      await Promise.resolve();
+    });
+    expect(localStorage.getItem("persona.token")).toBe("jd_fresh_aba");
+    expect(localStorage.getItem("persona.tokenId")).toBe("cred_fresh_aba");
+    expect(localStorage.getItem(UNREVOKED_KEY)).toBeNull();
+    expect(globals.setPairedToken).toHaveBeenCalledExactlyOnceWith("jd_fresh_aba", "cred_fresh_aba");
+    expect(onDone).toHaveBeenCalledOnce();
   });
 });
