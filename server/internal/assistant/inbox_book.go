@@ -101,6 +101,11 @@ type inboxBook struct {
 
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 
+	// Scoped routing receives source arrivals under mu and wakes the outbox worker after persistence.
+	externalCapture bool
+	externalTriage  externalInboxTriager
+	externalWake    chan struct{}
+
 	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
 	forwarding      sync.Mutex
 	forwardAgain    atomic.Bool
@@ -124,6 +129,7 @@ type inboxVia struct {
 func (b *inboxBook) init() {
 	b.once.Do(func() {
 		b.items = map[string]*InboxItem{}
+		b.externalWake = make(chan struct{}, 1)
 		b.extensions, b.builtin, b.kinds, b.names = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]string{}
 		b.vias = map[string]inboxVia{}
 		b.retriaged, b.settleAsked, b.settleSeen = map[string]bool{}, map[string]time.Time{}, map[string]string{}

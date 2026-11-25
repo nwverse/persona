@@ -35,21 +35,28 @@ func (s *Store) ExternalSourcePolicies(ctx context.Context, path []assistantwire
 			}
 			binding = &b
 		}
-		rows, err := tx.Query(ctx, `
-			SELECT external_ref, policy FROM assistant_external_source_policies
-			WHERE external_ref IN (SELECT value FROM jsonb_array_elements($1::jsonb))`, path)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var p assistantwire.ExternalScopedPolicy
-			if err := rows.Scan(&p.ExternalRef, &p.Policy); err != nil {
-				return err
-			}
-			list = append(list, p)
-		}
-		return rows.Err()
+		var err error
+		list, err = scopedPolicies(ctx, tx, path)
+		return err
 	})
 	return list, binding, err
+}
+
+func scopedPolicies(ctx context.Context, tx pgx.Tx, path []assistantwire.ExternalRef) ([]assistantwire.ExternalScopedPolicy, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT external_ref, policy FROM assistant_external_source_policies
+		WHERE external_ref IN (SELECT value FROM jsonb_array_elements($1::jsonb))`, path)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []assistantwire.ExternalScopedPolicy{}
+	for rows.Next() {
+		var p assistantwire.ExternalScopedPolicy
+		if err := rows.Scan(&p.ExternalRef, &p.Policy); err != nil {
+			return nil, err
+		}
+		list = append(list, p)
+	}
+	return list, rows.Err()
 }

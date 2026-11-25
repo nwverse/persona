@@ -16,7 +16,7 @@ func TestInboxPostRebaseCoversUnexportedFields(t *testing.T) {
 			unexported = append(unexported, f.Name)
 		}
 	}
-	if want := []string{"replyClassifySerial", "receivedInCollection"}; !slices.Equal(unexported, want) {
+	if want := []string{"externalMoves", "externalChecking", "replyClassifySerial", "receivedInCollection"}; !slices.Equal(unexported, want) {
 		t.Fatalf("InboxItem's unexported fields are %v; rebaseInboxBookkeeping (inbox_post.go) handles %v: rebase the new one there", unexported, want)
 	}
 }
