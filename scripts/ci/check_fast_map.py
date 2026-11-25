@@ -124,7 +124,9 @@ TABLE = (
         (("scripts/app/*android*",), ("android",)),
         (("scripts/test/test_external_service_refs.py",), ("external-refs",)),
         (("scripts/gen/sdk_bundle.py", "scripts/test/test_sdk_bundle.py"), ("sdk-bundle",)),
-        (("scripts/gen/*extension*", "scripts/test/test_extension_schema.py"), ("extension-schema",)),
+        (("scripts/gen/*extension*", "scripts/gen/wiregen/*", "scripts/test/fixtures/wiregen/*",
+          "scripts/test/test_wiregen_typed.py", "scripts/test/test_extension_schema.py"),
+         ("extension-schema",)),
         # Any other script, nested ones included: the seconds-long repository checks.
         (("scripts/*",), ("pr-needs-issue", "extension-schema")),
         (("apple/*",), ("apple",)),
@@ -299,7 +301,7 @@ TABLE = (
     # test_wire_schema.py holds every sample the shared fixtures keep for a wire schema to that schema, at any depth;
     # it imports the extension test's validator.
     (
-        (("schema/wire/*", "spec/fixtures/*", "scripts/gen/extension_schema.py",
+        (("schema/wire/*", "spec/fixtures/*", "scripts/gen/extension_schema.py", "scripts/gen/wiregen/*",
           "scripts/test/test_extension_schema.py"), ("scripts/test/test_wire_schema.py",)),
     ),
     # test_todo_fixtures.py holds the to-do page and window fixtures to their READMEs' rules; it also reads the view
