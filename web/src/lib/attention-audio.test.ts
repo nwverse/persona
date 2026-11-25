@@ -30,9 +30,7 @@ beforeEach(async () => {
   localStorage.clear();
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.resetModules(); // a fresh module: its AudioContext is not made yet
-  const signals = await import("./attention-signals");
-  await signals.preloadAttentionSignals();
-  ({ armAudio } = signals);
+  ({ armAudio } = await import("./attention-signals"));
   ({ setAttentionSoundEnabled: setSound } = await import("./attention"));
 });
 

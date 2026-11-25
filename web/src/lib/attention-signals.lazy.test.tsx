@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /// <reference types="node" />
-// attention-signals.ts stays an ultra-thin first-screen shell (document.title, favicon badge, desktop Dock badge)
-// while the heavy background notification, audio, Web Push, desktop lifecycle, and Service Worker reply runtime
-// loads dynamically in attention-signals-runtime.ts without entering IDLE_TIER_BUDGET or startup-namespaces.json.
+// attention-signals.ts stays an ultra-thin first-screen shell (document.title, favicon badge, desktop Dock badge,
+// synchronous gesture-driven AudioContext unlock, and lightweight cold-window `ws_notify` / baseline continuity)
+// while the heavy background notification, audio synthesis, Web Push, desktop lifecycle, and Service Worker reply
+// runtime loads dynamically in attention-signals-runtime.ts without entering IDLE_TIER_BUDGET or startup-namespaces.json.
 import { readFileSync } from "node:fs";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -58,11 +59,14 @@ describe("attention-signals lazy shell runtime loading", () => {
   let sessions: Session[];
   let interactions: Interaction[];
   let helloListeners: Set<() => void>;
+  let hubEventListeners: Map<string, Set<(msg: Record<string, unknown>) => void>>;
+  let helloExtrasFn: () => string[];
+  let sayHelloMock: ReturnType<typeof vi.fn>;
   let sendMock: ReturnType<typeof vi.fn>;
   let answerCardMock: ReturnType<typeof vi.fn<(ix: Interaction, body: unknown) => Promise<{ ok: true; already: false }>>>;
   let posted: { title: string; body?: string; tag?: string }[];
 
-  const session = (id: string, state: AgentState): Session => ({
+  const session = (id: string, state: AgentState, extra: Partial<Session> = {}): Session => ({
     machine_id: "m",
     session_id: id,
     title: id,
@@ -70,7 +74,12 @@ describe("attention-signals lazy shell runtime loading", () => {
     status: state,
     state,
     last_text: `${id} last line`,
+    ...extra,
   });
+
+  const emitHubEvent = (type: string, msg: Record<string, unknown>) => {
+    hubEventListeners.get(type)?.forEach((fn) => fn(msg));
+  };
 
   function stubCanvasAndImage() {
     vi.stubGlobal(
@@ -115,6 +124,9 @@ describe("attention-signals lazy shell runtime loading", () => {
     sessions = [];
     interactions = [];
     helloListeners = new Set();
+    hubEventListeners = new Map();
+    helloExtrasFn = () => [];
+    sayHelloMock = vi.fn();
     sendMock = vi.fn();
     answerCardMock = vi.fn(async (_ix: Interaction, _body: unknown) => ({ ok: true as const, already: false }));
     posted = [];
@@ -145,10 +157,20 @@ describe("attention-signals lazy shell runtime loading", () => {
         helloListeners.add(fn);
         return () => void helloListeners.delete(fn);
       },
-      onHubEvent: () => () => {},
+      onHubEvent: (type: string, fn: (msg: Record<string, unknown>) => void) => {
+        let set = hubEventListeners.get(type);
+        if (!set) {
+          set = new Set();
+          hubEventListeners.set(type, set);
+        }
+        set.add(fn);
+        return () => void set?.delete(fn);
+      },
       send: sendMock,
-      sayHello: () => {},
-      setHelloExtras: () => {},
+      sayHello: sayHelloMock,
+      setHelloExtras: (fn: () => string[]) => {
+        helloExtrasFn = fn;
+      },
       appSocketReady: () => true,
       connect: () => {},
       disconnect: () => {},
@@ -177,6 +199,7 @@ describe("attention-signals lazy shell runtime loading", () => {
     vi.doUnmock("./sessions");
     vi.doUnmock("./api");
     vi.doUnmock("./card-answer");
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     localStorage.clear();
@@ -273,8 +296,173 @@ describe("attention-signals lazy shell runtime loading", () => {
     expect(posted).toEqual([expect.objectContaining({ tag: "m/a#needs" })]);
   });
 
-  it("cancels runtime mount cleanly when unmounted before the lazy chunk resolves", async () => {
-    const createSpy = vi.fn(() => ({ setPane: vi.fn(), syncLoaded: vi.fn(), update: vi.fn(), dispose: vi.fn() }));
+  it("declares ws_notify synchronously on initial hello and replays post-silence cold hub notify events without dropping the ring", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-26T00:00:00.000Z"));
+    localStorage.setItem("persona.systemNotify", "1");
+    const runtimeMod = await vi.importActual<typeof import("./attention-signals-runtime")>("./attention-signals-runtime");
+    let releaseRuntime!: (mod: typeof import("./attention-signals-runtime")) => void;
+    const runtimeDeferred = new Promise<typeof import("./attention-signals-runtime")>((resolve) => { releaseRuntime = resolve; });
+    vi.doMock("./attention-signals-runtime", () => runtimeDeferred);
+
+    const { AttentionSignals, preloadAttentionSignals } = await import("./attention-signals");
+    await act(async () => {
+      root.render(<AttentionSignals label="Persona" pane={undefined} />);
+    });
+
+    // The socket sends its initial client_hello while the lazy runtime is still loading: ws_notify MUST be declared.
+    expect(helloExtrasFn()).toEqual(["ws_notify"]);
+    sayHelloMock.mockClear();
+
+    // A hub replay burst inside the 3s startup silence window stays suppressed.
+    vi.advanceTimersByTime(500);
+    emitHubEvent("notify", { kind: "alert", title: "Old replay", body: "Suppressed burst", path: "/persona", tag: "hub#old" });
+
+    // A fresh hub alert arriving after the 3s startup silence window while the chunk is still cold must be preserved.
+    vi.advanceTimersByTime(3_000);
+    emitHubEvent("notify", { kind: "alert", title: "Live alert", body: "Arrived during cold load", path: "/persona", tag: "hub#live" });
+    expect(posted).toEqual([]);
+
+    // Runtime handoff keeps ws_notify state (no redundant sayHello / reset silence window) and announces only the live alert.
+    await act(async () => {
+      releaseRuntime(runtimeMod);
+      await preloadAttentionSignals();
+    });
+    expect(sayHelloMock).not.toHaveBeenCalled();
+    expect(posted).toEqual([expect.objectContaining({ title: "Live alert", body: "Arrived during cold load" })]);
+    expect(posted[0]?.tag).toMatch(/^alert:/);
+  });
+
+  it("preserves a newly added session's working baseline across >32 cold snapshot updates so its needs_you alert is never dropped", async () => {
+    localStorage.setItem("persona.systemNotify", "1");
+    const runtimeMod = await vi.importActual<typeof import("./attention-signals-runtime")>("./attention-signals-runtime");
+    let releaseRuntime!: (mod: typeof import("./attention-signals-runtime")) => void;
+    const runtimeDeferred = new Promise<typeof import("./attention-signals-runtime")>((resolve) => { releaseRuntime = resolve; });
+    vi.doMock("./attention-signals-runtime", () => runtimeDeferred);
+
+    const { AttentionSignals, preloadAttentionSignals } = await import("./attention-signals");
+    sessions = [session("busy", "working")];
+    await act(async () => {
+      root.render(<AttentionSignals label="Persona" pane={undefined} />);
+    });
+
+    // Churn >32 snapshots on an existing session before a brand-new session appears in working state.
+    for (let i = 1; i <= 35; i++) {
+      sessions = [session("busy", "working", { last_text: `tick ${i}` })];
+      await act(async () => {
+        root.render(<AttentionSignals label="Persona" pane={undefined} />);
+      });
+    }
+
+    // New session appears as working on snapshot 36, then transitions to needs_you with a permission card on snapshot 37.
+    sessions = [session("busy", "working"), session("late", "working")];
+    await act(async () => {
+      root.render(<AttentionSignals label="Persona" pane={undefined} />);
+    });
+
+    const lateCard: Interaction = {
+      id: "perm-late",
+      machine_id: "m",
+      session_id: "late",
+      kind: "permission",
+      tool_name: "Bash",
+      tool_input: { command: "rm -rf build" },
+    };
+    interactions = [lateCard];
+    sessions = [session("busy", "working"), session("late", "needs_you")];
+    await act(async () => {
+      root.render(<AttentionSignals label="Persona" pane={undefined} />);
+    });
+
+    // Additional churn updates after the transition must not wipe out the late session's baseline either.
+    for (let i = 38; i <= 45; i++) {
+      sessions = [session("busy", "working", { last_text: `tick ${i}` }), session("late", "needs_you")];
+      await act(async () => {
+        root.render(<AttentionSignals label="Persona" pane={undefined} />);
+      });
+    }
+    expect(posted).toEqual([]);
+
+    await act(async () => {
+      releaseRuntime(runtimeMod);
+      await preloadAttentionSignals();
+    });
+    expect(posted).toEqual([expect.objectContaining({ tag: "m/late#needs" })]);
+    expect(posted[0]?.body).toContain("rm -rf build");
+  });
+
+  it("synchronously unlocks AudioContext on a sole user gesture during cold load so runtime plays sound after activation expires", async () => {
+    localStorage.setItem("persona.attentionSound", "1");
+    const runtimeMod = await vi.importActual<typeof import("./attention-signals-runtime")>("./attention-signals-runtime");
+    let releaseRuntime!: (mod: typeof import("./attention-signals-runtime")) => void;
+    const runtimeDeferred = new Promise<typeof import("./attention-signals-runtime")>((resolve) => { releaseRuntime = resolve; });
+    vi.doMock("./attention-signals-runtime", () => runtimeDeferred);
+
+    const contexts: { state: string; resume: ReturnType<typeof vi.fn>; oscCount: number }[] = [];
+    let gestureActive = false;
+    class FakeAudioContext {
+      state = "suspended";
+      currentTime = 0;
+      destination = {};
+      oscCount = 0;
+      resume = vi.fn(() => {
+        if (gestureActive) this.state = "running";
+        return Promise.resolve();
+      });
+      constructor() {
+        contexts.push(this);
+      }
+      createOscillator() {
+        this.oscCount++;
+        return {
+          type: "sine",
+          frequency: { value: 0 },
+          connect: (g: unknown) => g,
+          start: vi.fn(),
+          stop: vi.fn(),
+        };
+      }
+      createGain() {
+        return {
+          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+          connect: () => ({}),
+        };
+      }
+    }
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    Object.defineProperty(navigator, "userActivation", { value: { isActive: false }, configurable: true });
+
+    const { AttentionSignals, preloadAttentionSignals } = await import("./attention-signals");
+    sessions = [session("a", "working")];
+    await act(async () => {
+      root.render(<AttentionSignals label="Persona" pane={undefined} />);
+    });
+
+    // User performs their sole click while the lazy runtime chunk is still pending; transient activation ends right after.
+    gestureActive = true;
+    window.dispatchEvent(new Event("pointerdown"));
+    gestureActive = false;
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].resume).toHaveBeenCalledTimes(1);
+    expect(contexts[0].state).toBe("running");
+
+    // Runtime finishes loading after transient activation has expired, then a transition happens: sound plays on the pre-unlocked context.
+    await act(async () => {
+      releaseRuntime(runtimeMod);
+      await preloadAttentionSignals();
+    });
+    sessions = [session("a", "needs_you")];
+    await act(async () => {
+      root.render(<AttentionSignals label="Persona" pane={undefined} />);
+    });
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0].oscCount).toBe(2);
+  });
+
+  it("cancels runtime mount cleanly when unmounted before the lazy chunk resolves and clears early hello extras", async () => {
+    localStorage.setItem("persona.systemNotify", "1");
+    const createSpy = vi.fn(() => ({ setPane: vi.fn(), syncLoaded: vi.fn(), update: vi.fn(), replayHubNotify: vi.fn(), dispose: vi.fn() }));
     let releaseRuntime!: (mod: Partial<typeof import("./attention-signals-runtime")>) => void;
     const runtimeDeferred = new Promise<Partial<typeof import("./attention-signals-runtime")>>((resolve) => { releaseRuntime = resolve; });
     vi.doMock("./attention-signals-runtime", () => runtimeDeferred);
@@ -283,11 +471,15 @@ describe("attention-signals lazy shell runtime loading", () => {
     await act(async () => {
       root.render(<AttentionSignals label="Persona" pane={undefined} />);
     });
+    expect(helloExtrasFn()).toEqual(["ws_notify"]);
+
     await act(async () => {
       root.unmount();
     });
+    expect(helloExtrasFn()).toEqual([]);
+
     await act(async () => {
-      releaseRuntime({ createAttentionRuntime: createSpy, armAudio: () => () => {}, play: () => {} });
+      releaseRuntime({ createAttentionRuntime: createSpy, playOnContext: () => {} });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -295,12 +487,12 @@ describe("attention-signals lazy shell runtime loading", () => {
   });
 
   it("retries loading the lazy runtime after a transient load failure when loaded becomes true", async () => {
-    const createSpy = vi.fn(() => ({ setPane: vi.fn(), syncLoaded: vi.fn(), update: vi.fn(), dispose: vi.fn() }));
+    const createSpy = vi.fn(() => ({ setPane: vi.fn(), syncLoaded: vi.fn(), update: vi.fn(), replayHubNotify: vi.fn(), dispose: vi.fn() }));
     let attempt = 0;
     vi.doMock("./attention-signals-runtime", () => {
       attempt++;
       if (attempt === 1) return Promise.reject(new Error("offline"));
-      return Promise.resolve({ createAttentionRuntime: createSpy, armAudio: () => () => {}, play: () => {} });
+      return Promise.resolve({ createAttentionRuntime: createSpy, playOnContext: () => {} });
     });
 
     const { AttentionSignals } = await import("./attention-signals");
@@ -324,29 +516,33 @@ describe("attention-signals lazy shell runtime loading", () => {
     expect(attempt).toBe(2);
   });
 
-  it("answers Service Worker notification clicks once the lazy runtime loads and honors cold armAudio cancellation", async () => {
+  it("answers Service Worker notification clicks once the lazy runtime loads and forwards cold play calls when audio is unlocked", async () => {
+    localStorage.setItem("persona.attentionSound", "1");
     const swListeners = new Set<(e: MessageEvent) => void>();
     const startMessages = vi.fn();
     vi.stubGlobal("navigator", {
       ...navigator,
+      userActivation: { isActive: true },
       serviceWorker: {
         addEventListener: (_type: string, fn: (e: MessageEvent) => void) => swListeners.add(fn),
         removeEventListener: (_type: string, fn: (e: MessageEvent) => void) => swListeners.delete(fn),
         startMessages,
       },
     });
-    const innerCleanup = vi.fn();
-    const armSpy = vi.fn(() => innerCleanup);
-    const playSpy = vi.fn();
+    class RunningAudioContext {
+      state = "running";
+      resume = vi.fn(() => Promise.resolve());
+    }
+    vi.stubGlobal("AudioContext", RunningAudioContext);
+
+    const playOnContextSpy = vi.fn();
     const runtimeMod = await vi.importActual<typeof import("./attention-signals-runtime")>("./attention-signals-runtime");
     let releaseRuntime!: (mod: typeof import("./attention-signals-runtime")) => void;
     const runtimeDeferred = new Promise<typeof import("./attention-signals-runtime")>((resolve) => { releaseRuntime = resolve; });
     vi.doMock("./attention-signals-runtime", () => runtimeDeferred);
 
     const { AttentionSignals, armAudio, play } = await import("./attention-signals");
-    const stopCancelled = armAudio();
-    stopCancelled(); // cancelled before lazy chunk resolves
-    const stopActive = armAudio(); // remains active until after lazy chunk resolves
+    const stopAudio = armAudio();
     play("needs");
 
     const perm: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", tool_name: "Bash", tool_input: { command: "ls" } };
@@ -355,17 +551,14 @@ describe("attention-signals lazy shell runtime loading", () => {
       root.render(<AttentionSignals label="Persona" pane={undefined} />);
     });
     await act(async () => {
-      releaseRuntime({ ...runtimeMod, armAudio: armSpy, play: playSpy });
+      releaseRuntime({ ...runtimeMod, playOnContext: playOnContextSpy });
       await Promise.resolve();
       await Promise.resolve();
     });
     await vi.waitFor(() => expect(swListeners.size).toBe(1));
 
-    // Only the uncancelled cold armAudio and play calls forwarded to the lazy runtime.
-    expect(armSpy).toHaveBeenCalledTimes(1);
-    expect(playSpy).toHaveBeenCalledWith("needs");
-    stopActive();
-    expect(innerCleanup).toHaveBeenCalledTimes(1);
+    expect(playOnContextSpy).toHaveBeenCalledWith(expect.any(RunningAudioContext), "needs");
+    stopAudio();
     expect(startMessages).toHaveBeenCalledTimes(1);
 
     const port = { postMessage: vi.fn() };
