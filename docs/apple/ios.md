@@ -1876,6 +1876,11 @@ every platform are described from #13430; this section is the Apple side.
   `apple/Persona/CarPlay`) and the call intents. `-openVoice silent`'s audio (`SilentVoiceAudio`) is core, since a call to
   Persona takes it too. The ratchet counts `apple/Modules/Voice` (and `apple/PersonaCallIntents`); the voice directories
   still in `apple/Persona` count as the core until they move (`guarded_dirs` in `scripts/test/test_apple_module_refs.py`).
+- **`recording`, a flag without a packaged module** (#15214): the recording code is still core app code
+  (`apple/Persona/Recording`), so nothing is registered and `Modules.builtIn` does not list it. The app still follows
+  the hub's `module.recording` flag: `RecordingModule.allowance` asks the registry's hub answer with the descriptor id
+  `recording` (the same `HubModules.allows`). What goes and what stays when it is off: `docs/apple/recording.md`,
+  "With the hub's recording module off (#15214)".
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type
