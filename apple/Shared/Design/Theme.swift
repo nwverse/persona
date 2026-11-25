@@ -310,6 +310,16 @@ nonisolated enum Theme {
         static var edge: Color { Theme.accent.opacity(0.45) }
         static let dash: [CGFloat] = [Theme.Space.xs, Theme.Space.xs]
     }
+
+    /// The avatar sheet's Theme Color and Pictures for Each State (#15449, `AvatarStatesPages`).
+    enum AvatarSheet {
+        /// A theme color's swatch, round, beside its name.
+        static let swatch = Size.iconS
+        /// The edge around a swatch, so a white or a black one still reads on the row.
+        static let swatchEdge = Color.primary.opacity(0.15)
+        /// A state's picture in its row, as it will move: the size of the top bar's dot.
+        static let preview = Size.avatarL
+    }
     #endif
 
     /// The image viewer's backdrop (`ImageViewer`), as Photos has it: the page's own color while its bars show (white
