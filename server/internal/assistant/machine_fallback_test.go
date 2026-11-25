@@ -44,6 +44,11 @@ func newMachineFallbackRig(t *testing.T) *machineFallbackTestRig {
 	base.f.mu.Lock()
 	base.f.hello.Assistant.Machines = []string{"server", "backup-a", "backup-b", "work-pc"}
 	base.f.hello.Assistant.WorkMachines = []string{"work-pc"}
+	for _, id := range []string{"server", "backup-a", "backup-b", "work-pc"} {
+		if _, ok := base.f.sessions[id]; !ok {
+			base.f.sessions[id] = []proto.Session{}
+		}
+	}
 	base.f.mu.Unlock()
 	r.syncDevices()
 
@@ -161,17 +166,20 @@ func newMachineFallbackRig(t *testing.T) *machineFallbackTestRig {
 		return mainHandoff{Summary: "live summary"}, nil
 	})
 
-	base.f.answerNode(DeviceSessionSend, func(machine string, raw json.RawMessage) (any, error) {
-		if err := checkOnline(machine); err != nil {
-			return nil, err
-		}
-		r.mu.Lock()
-		r.sends = append(r.sends, DeviceCall{Device: machine, Method: DeviceSessionSend, Params: append(json.RawMessage(nil), raw...)})
-		r.mu.Unlock()
-		var p map[string]any
-		_ = json.Unmarshal(raw, &p)
-		return map[string]any{"ok": true, "session_id": p["session_id"]}, nil
-	})
+	for _, method := range []string{DeviceSessionSend, DeviceAssistantSend} {
+		m := method
+		base.f.answerNode(m, func(machine string, raw json.RawMessage) (any, error) {
+			if err := checkOnline(machine); err != nil {
+				return nil, err
+			}
+			r.mu.Lock()
+			r.sends = append(r.sends, DeviceCall{Device: machine, Method: m, Params: append(json.RawMessage(nil), raw...)})
+			r.mu.Unlock()
+			var p map[string]any
+			_ = json.Unmarshal(raw, &p)
+			return map[string]any{"ok": true, "session_id": p["session_id"]}, nil
+		})
+	}
 
 	return r
 }
@@ -283,7 +291,7 @@ func TestMachineFallbackMovesMainWhenOfflinePastThresholdAndDrainsUndelivered(t 
 	// Simulate primary going offline and dropping its live session cache.
 	r.setOnline("server", false)
 	r.f.mu.Lock()
-	delete(r.f.sessions, "server")
+	r.f.sessions["server"] = []proto.Session{}
 	r.f.mu.Unlock()
 
 	// Keep an owner message in assistant.undelivered while primary is offline.
@@ -374,7 +382,7 @@ func TestMachineFallbackMovesLeaderPreservesSupervisionAndDrainsRelay(t *testing
 
 	r.setOnline("server", false)
 	r.f.mu.Lock()
-	delete(r.f.sessions, "server")
+	r.f.sessions["server"] = []proto.Session{}
 	r.f.mu.Unlock()
 
 	base := time.Now().Add(-10 * time.Minute)
@@ -470,10 +478,10 @@ func TestMachineFallbackReconnectNoSplitBrainAndEpochFenceProtectsManualChange(t
 		t.Fatalf("expected active backup-a segment to authenticate as server/main-chat, got %s/%s err=%v", lm, ls, err)
 	}
 	// 3) Old segment on server received session.close via ClosePending.
-	closed := r.closedSessions()
-	if !containsString(closed, "server/main-chat") {
-		t.Fatalf("expected retired segment server/main-chat to be closed on reconnect, closed=%+v", closed)
-	}
+	waitFor(t, "retired segment server/main-chat to be closed on reconnect", func() bool {
+		r.s.logicalSweep(ctx)
+		return containsString(r.closedSessions(), "server/main-chat")
+	})
 
 	// 4) Epoch fence: a stale failover batch with an outdated ExpectedEpoch is refused and never overwrites.
 	r.s.conversationSwitches.mu.Lock()
