@@ -23,10 +23,16 @@ const (
 // TrackConversationTextMax is the most runes a row's LastText carries.
 const TrackConversationTextMax = 200
 
+// The ids a space's conversation is known by: named at this wire boundary only, their JSON bytes are plain strings.
+type (
+	SpaceMachineID string
+	SpaceSessionID string
+)
+
 // TrackConversations is GET /api/v1/assistant/tracks/{slug}/conversations's answer.
 type TrackConversations struct {
 	// MachineID is the assistant's machine, where the space's conversations run.
-	MachineID string `json:"machine_id"`
+	MachineID SpaceMachineID `json:"machine_id"`
 	// Total counts the space's open conversations the caller is shown, before the limit.
 	Total int `json:"total"`
 	// Conversations are the newest of them, by UpdatedAt.
@@ -35,9 +41,9 @@ type TrackConversations struct {
 
 // TrackConversation is one open conversation of a space.
 type TrackConversation struct {
-	SessionID string `json:"session_id"`
-	MachineID string `json:"machine_id"`
-	Title     string `json:"title"`
+	SessionID SpaceSessionID `json:"session_id"`
+	MachineID SpaceMachineID `json:"machine_id"`
+	Title     string         `json:"title"`
 	// LastText is the beginning of its latest message, at most TrackConversationTextMax runes.
 	LastText  string    `json:"last_text"`
 	UpdatedAt time.Time `json:"updated_at"`

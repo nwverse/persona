@@ -68,7 +68,7 @@ func decodeTrackConversations(t *testing.T, w *httptest.ResponseRecorder) (assis
 	}
 	var ids []string
 	for _, c := range out.Conversations {
-		ids = append(ids, c.SessionID)
+		ids = append(ids, string(c.SessionID))
 	}
 	return out, strings.Join(ids, ",")
 }

@@ -45,11 +45,12 @@ func (s *Service) trackConversations(w http.ResponseWriter, r *http.Request) {
 		rows = slices.DeleteFunc(rows, func(c proto.Session) bool { return s.extensionHidesConversation(ctx, c) })
 	}
 	slices.SortStableFunc(rows, func(a, b proto.Session) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
-	out := assistantwire.TrackConversations{MachineID: s.settings(ctx).MachineID, Total: len(rows),
+	machine := s.settings(ctx).MachineID
+	out := assistantwire.TrackConversations{MachineID: assistantwire.SpaceMachineID(machine), Total: len(rows),
 		Conversations: make([]assistantwire.TrackConversation, 0, min(len(rows), limit))}
 	for _, c := range rows[:min(len(rows), limit)] {
-		out.Conversations = append(out.Conversations, assistantwire.TrackConversation{SessionID: c.SessionID,
-			MachineID: cmp.Or(c.MachineID, out.MachineID), Title: c.Title,
+		out.Conversations = append(out.Conversations, assistantwire.TrackConversation{SessionID: assistantwire.SpaceSessionID(c.SessionID),
+			MachineID: assistantwire.SpaceMachineID(cmp.Or(c.MachineID, machine)), Title: c.Title,
 			LastText:  clipRunesTo(c.LastText, assistantwire.TrackConversationTextMax),
 			UpdatedAt: c.UpdatedAt, Space: c.Space})
 	}
