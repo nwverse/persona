@@ -98,7 +98,7 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
             return "JsonNull"
         if d.kind == "enum":
             return f'{kname(t.ref)}.Unknown("")' if d.closed else '""'
-        if d.kind == "id":
+        if d.kind in ("id", "text"):
             return f'{kname(t.ref)}("")'
         if d.kind == "union":
             raise SchemaError(f"a required field of union type {t.ref}: not in the subset")
@@ -145,8 +145,9 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
     for d in defs.values():
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
-        elif d.kind == "id":
-            out += kdoc((d.doc or f"{d.name}: an ID.") + " It encodes as the bare string.")
+        elif d.kind in ("id", "text"):
+            what = "a label (free text, not a closed set)" if d.kind == "text" else "an ID"
+            out += kdoc((d.doc or f"{d.name}: {what}.") + " It encodes as the bare string.")
             out += ["@Serializable", "@JvmInline", f"value class {kname(d.name)}(val raw: String) {{",
                     "    override fun toString(): String = raw", "}", ""]
         elif d.kind == "opaque":

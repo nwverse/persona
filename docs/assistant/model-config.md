@@ -137,6 +137,8 @@ Each sample has a required nonempty `user` and optional `system`, `id`, and `lab
 A `via_machine` response is first buffered by the existing `model.http` transport under its separate 16 MiB cap, then
 subject to the same 1 MiB probe parsing cap. Returned text is credential-redacted and UTF-8-safely truncated to 8 KiB;
 redaction replaces every occurrence of a stored credential/header value, even when it appears as ordinary answer text.
+Provider-controlled block types and `Retry-After` are redacted too. A usage entry whose field name requires redaction is
+omitted rather than returned under a colliding `***` key; ordinary numeric usage is unchanged.
 Results remain in input order and report `index`,
 optional `id`/`label`, `ok`, full sample `ms`, `http_status`, redacted `error`, ordered unique `block_types`, bounded
 `text`, separate `text_truncated` (the 8 KiB output cap) and `generation_truncated` (the provider's token limit), optional
@@ -150,7 +152,7 @@ model-specific low-effort fallback. Existing bounded Chat compatibility retries 
 rename `max_tokens` to `max_completion_tokens`, or remove `stream_options` after a 400/422 rejection; the per-sample
 `effort` describes the final attempt and becomes empty
 when effort was removed, while the top-level `effort` remains the requested/resolved value. A 429 is never retried: its
-status and original `Retry-After` header are returned. HTTP, network, timeout, malformed-response, stream-error,
+status and credential-redacted `Retry-After` header are returned (ordinary values are unchanged). HTTP, network, timeout, malformed-response, stream-error,
 HTTP-200 provider errors, refusals and empty/unfinished-stream failures remain attached to their sample instead of being
 silently counted as successes. A provider token-limit ending remains a successful inference with
 `generation_truncated:true` so partial text cannot be mistaken for a complete answer.

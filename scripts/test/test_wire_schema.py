@@ -106,13 +106,20 @@ def item_detail(expected):
     return detail
 
 
+def counts_views():
+    """(definition, sample) of every view counts/view_samples.json expects (#15512)."""
+    for c in cases("counts/view_samples.json"):
+        yield "CountsView", f"counts/view_samples.json {c['name']}.expected.view", c["expected"]["view"]
+
+
 def wire_ids():
     """(definition, sample) of every ID and AgentRef in ids/ids.json."""
     for where, c in domain_cases("ids"):
         yield c["expected"]["definition"], f"{where}.expected.value", c["expected"]["value"]
 
 
-SAMPLES = {"ids.schema.json": wire_ids, "recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}
+SAMPLES = {"counts.schema.json": counts_views, "ids.schema.json": wire_ids, "recents.schema.json": recent_setups,
+           "todo-view.schema.json": todo_views}
 
 
 def walk(doc, schema, value, at, reached):
