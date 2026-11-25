@@ -2847,6 +2847,10 @@ the hub's `features` includes `extension_ui_v3`, and `hub.extension_points.ui` i
   `title` is the new page's title before the View returns. The target must be a full page (`extension_page` / `nav_page`): cards and machine-page sections must specify `ui` to navigate. The hub checks push targets in every View; an invalid target rejects the whole page (502).
 - A `ui.action` response may contain `push` (as above, e.g. going to details after saving) and `pop: true` (return to the previous page, which redraws): "list → details → edit → save → back".
 - The stack is at most 8 levels (the app stops pushing). The `state` carried by `push` has the same 16 KB limit as a View's.
+- A pushed page is still an `extension_page` of its own: **Settings › Extensions** lists it as a row and opens it with an
+  empty `state`. A page that needs its `state` (a detail or an edit page) renders something useful without it, such as
+  the list to pick from, and never calls the hub with an empty identifier; an `ui.render` or `ui.action` error reaches
+  the app as a failed page (502). Answer input problems with a `toast`, not an error.
 
 ### `ui.invalidate`
 
