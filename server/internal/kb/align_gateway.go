@@ -88,6 +88,7 @@ type gatewayLine struct {
 	exact      time.Time // its time from the chat's receipts; zero when they do not bind it to one
 	sender     string
 	body       string // without its trailing attachments
+	formatBody string // retains named file placeholders for the stricter format-only comparison
 	media      bool   // it had attachments
 	mediaCount int    // number of archived attachment markers, or live media references
 }
@@ -199,7 +200,7 @@ func (a *gatewayAligner) within(gw string, sc SourceChat, m SourceMessage) bool 
 			}
 		}
 	}
-	return a.withinFormatted(gw, gatewayLine{exact: m.At, sender: sender, body: body, media: media, mediaCount: len(m.Media)})
+	return a.withinFormatted(gw, gatewayLine{exact: m.At, sender: sender, body: body, formatBody: m.Text, media: media, mediaCount: len(m.Media)})
 }
 
 // syncPlaceholder is the text the sync gives an image or a file of a message ("[image]", "[file <name>]"), which the
@@ -419,7 +420,11 @@ func (a *gatewayAligner) withinFormatted(gw string, src gatewayLine) bool {
 	if src.exact.IsZero() || src.sender == "" || src.sender == unknownSender {
 		return false
 	}
-	body := equivalentGatewayBody(src.body, src.mediaCount)
+	body := src.formatBody
+	if body == "" {
+		body = src.body
+	}
+	body = equivalentGatewayBody(body, src.mediaCount)
 	if body == "" {
 		return false
 	}
@@ -444,7 +449,7 @@ func (a *gatewayAligner) withinFormatted(gw string, src gatewayLine) bool {
 
 var gatewayMarkdownLink = lazyre.New(`\[([^\[\]\n]+)\]\((https?://[^\s()]+)\)`)
 var gatewayAutoLink = lazyre.New(`<((?:https?://)[^<>\s]+)>`)
-var gatewayInlineMedia = lazyre.New(`\[(?:image|video|audio|file(?: [^\]]*)?)\]`)
+var gatewayInlineMedia = lazyre.New(`\[(?:image|video|audio)\]`)
 
 // equivalentGatewayBody reconciles the sync's "label (URL)" and Markdown links, escaped entities and inline
 // attachment placeholders backed by real media. Code and unsupported Markdown remain literal. A caption and
@@ -583,6 +588,7 @@ func parseArchiveLine(dl dayLine, day string, zone *time.Location, exact time.Ti
 		text, gl.media = text[:loc[0]], true
 		gl.mediaCount++
 	}
+	gl.formatBody = strings.TrimSpace(text)
 	// Also strip larksync attachment placeholders when attachments were not downloaded (older than attachment_days).
 	if gl.media {
 		for {

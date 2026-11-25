@@ -507,7 +507,7 @@ func TestGatewayAlignerEquivalentBodyAndAttachmentFormats(t *testing.T) {
 }
 
 func TestGatewayAlignerFormatFallbackRefusesUncertainMatches(t *testing.T) {
-	for _, name := range []string{"different_sender", "unknown_sender", "different_time", "minute_only", "different_url", "url_case", "literal_media", "media_count", "code", "attachment_only", "ambiguous_lines", "ambiguous_chats"} {
+	for _, name := range []string{"different_sender", "unknown_sender", "different_time", "minute_only", "different_url", "url_case", "literal_media", "media_count", "file_name", "code", "attachment_only", "ambiguous_lines", "ambiguous_chats"} {
 		t.Run(name, func(t *testing.T) {
 			e, _ := alignEngine(t)
 			ctx := context.Background()
@@ -532,6 +532,9 @@ func TestGatewayAlignerFormatFallbackRefusesUncertainMatches(t *testing.T) {
 			case "media_count":
 				g.Text, m.Text = "Before after", "Before [image] after"
 				g.Media, m.Media = []string{"one"}, []string{"one", "two"}
+			case "file_name":
+				m.Text += " [file different-report.pdf]"
+				g.Media, m.Media = []string{"one"}, []string{"other"}
 			case "code":
 				g.Text, m.Text = "`A &amp; B`", "`A & B`"
 			case "attachment_only":
