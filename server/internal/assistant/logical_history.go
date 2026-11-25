@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,7 +24,7 @@ func visibleSegments(c *db.LogicalConversation) []conversationlog.Segment {
 	return out
 }
 
-func (s *Service) physicalHistoryCall(ctx context.Context, machine, method string, p map[string]any, out any) error {
+func (s *Service) physicalHistoryCall(ctx context.Context, machine, method string, p any, out any) error {
 	ctx = context.WithValue(ctx, logicalSourceKey{}, true)
 	raw, err := json.Marshal(p)
 	if err != nil {
@@ -40,6 +41,12 @@ func (s *Service) physicalHistoryCall(ctx context.Context, machine, method strin
 }
 
 func (s *Service) logicalHistoryCall(ctx context.Context, st logicalConversationStore, c *db.LogicalConversation, method string, raw json.RawMessage) (json.RawMessage, error) {
+	switch method {
+	case proto.MethodSessionInputPreviews:
+		return s.logicalInputPreviews(ctx, st, c, raw)
+	case proto.MethodSessionItemsWindow:
+		return s.logicalItemsWindow(ctx, st, c, raw)
+	}
 	var p historyParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
@@ -91,7 +98,7 @@ func (s *Service) logicalHistoryCall(ctx context.Context, st logicalConversation
 		return json.Marshal(h)
 	}
 	if p.UserInputs {
-		return s.logicalUserInputs(ctx, st, c)
+		return s.logicalUserInputs(ctx, st, c, p.MetaOnly)
 	}
 	page, err := s.logicalHistoryPage(ctx, st, c, p)
 	if err != nil {
@@ -241,6 +248,17 @@ func (s *Service) logicalHistoryPage(ctx context.Context, st logicalConversation
 		if err := s.physicalHistoryCall(ctx, seg.MachineID, DeviceSessionItems, params, &source); err != nil {
 			return page, err
 		}
+		// A raw range can omit its generation. In a frozen segment, a newer source can supply a verified
+		// continuation so a cursor from a detached window can still page forward through that segment.
+		if source.History == "" && p.After != nil && seg.FrozenEnd != nil {
+			from := max(1, *p.After+1-seg.Offset)
+			through := from + min(*seg.FrozenEnd-from, 2*proto.MaxWindowRadius)
+			scoped := proto.ItemsWindowRequest{SessionID: proto.NavigationSessionID(seg.SessionID), FromSeq: from, ThroughSeq: through, BeforeSeq: *seg.FrozenEnd + 1}
+			var window proto.ItemsWindow
+			if err := s.physicalHistoryCall(ctx, seg.MachineID, proto.MethodSessionItemsWindow, scoped, &window); err == nil && window.Matches(scoped) {
+				source = historyPage{Items: window.Items, History: window.History, FromSeq: &window.FromSeq, ToSeq: &window.ToSeq, MoreAfter: window.MoreAfter}
+			}
+		}
 		if source.History == "" {
 			return page, logicalRefusal(ctx, "missing_generation")
 		}
@@ -284,6 +302,9 @@ func (s *Service) logicalHistoryPage(ctx context.Context, st logicalConversation
 		}
 		page.Partial = page.Partial || source.Partial
 		moreSource = moreSource || source.MoreAfter || source.More
+		if p.After != nil && seg.FrozenEnd != nil && source.MoreAfter {
+			break // finish this segment before advancing to its successor
+		}
 		if len(page.Items) >= limit && p.Turns <= 0 {
 			moreSource = moreSource || forward && index+1 < len(segs)
 			break
@@ -393,17 +414,25 @@ func (s *Service) checkLogicalRead(ctx context.Context, st logicalConversationSt
 	if latest == nil || latest.Deleted {
 		return db.ErrConversationDeleted
 	}
-	if latest.Epoch != c.Epoch || latest.History != c.History {
+	// Preparing a switch freezes the active source before activation moves epoch or history.
+	if latest.Epoch != c.Epoch || latest.History != c.History ||
+		!slices.EqualFunc(visibleSegments(c), visibleSegments(latest), func(a, b conversationlog.Segment) bool {
+			return a.ID == b.ID && a.Offset == b.Offset && (a.FrozenEnd == nil) == (b.FrozenEnd == nil) &&
+				intValue(a.FrozenEnd) == intValue(b.FrozenEnd)
+		}) {
 		s.logicalChanged()
 		return db.ErrConversationHistoryChanged
 	}
 	return nil
 }
 
-func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationStore, c *db.LogicalConversation) (json.RawMessage, error) {
+func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationStore, c *db.LogicalConversation, metaOnly bool) (json.RawMessage, error) {
 	out := proto.UserInputIndex{History: c.History, Inputs: []proto.UserInputPosition{}}
 	for _, seg := range visibleSegments(c) {
 		params := map[string]any{"session_id": seg.SessionID, "user_inputs": true}
+		if metaOnly {
+			params["meta_only"] = true
+		}
 		if seg.FrozenEnd != nil {
 			// Scope excerpts as well as positions. The final visible input can have a reply in the private tail.
 			params["before_seq"] = *seg.FrozenEnd + 1
@@ -425,6 +454,9 @@ func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationS
 			if seg.FrozenEnd != nil && it.Seq > *seg.FrozenEnd {
 				continue
 			}
+			if metaOnly {
+				it = it.WithoutExcerpts()
+			}
 			seq, err := seg.Seq(it.Seq)
 			if err != nil {
 				return nil, err
@@ -433,15 +465,8 @@ func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationS
 			out.Inputs = append(out.Inputs, it)
 		}
 	}
-	latest, err := st.LogicalConversation(ctx, c.MachineID, c.SessionID)
-	if err != nil {
+	if err := s.checkLogicalRead(ctx, st, c); err != nil {
 		return nil, err
-	}
-	if latest == nil || latest.Deleted {
-		return nil, db.ErrConversationDeleted
-	}
-	if latest.Epoch != c.Epoch || latest.History != c.History {
-		return nil, db.ErrConversationHistoryChanged
 	}
 	out.Total = len(out.Inputs)
 	return json.Marshal(out)
