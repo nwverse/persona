@@ -749,11 +749,11 @@ func TestMeetingPhotoNoteTool(t *testing.T) {
 		}
 		return b.String()
 	}
-	rev := r.engine().PhotosRev(meetingRec)
+	rev := recWrites(r.engine()).PhotosRev(meetingRec)
 	if res := call(sid, `{"photo":1,"text":"  The Q3 budget on the board is 40k.  "}`); res.IsError {
 		t.Fatalf("note: %s", text(res))
 	}
-	if ps := r.photosOf(meetingRec); ps[0]["note"] != "The Q3 budget on the board is 40k." || r.engine().PhotosRev(meetingRec) != rev+1 {
+	if ps := r.photosOf(meetingRec); ps[0]["note"] != "The Q3 budget on the board is 40k." || recWrites(r.engine()).PhotosRev(meetingRec) != rev+1 {
 		t.Fatalf("noted %v", ps[0])
 	}
 	for name, c := range map[string]struct{ args, want string }{
@@ -1057,3 +1057,12 @@ func tellDayRecap(e *kb.Engine, r kb.Recording, rc kb.DayRecap) ([]string, error
 		TellDayRecap(context.Context, kb.Recording, kb.DayRecap) ([]string, error)
 	}).TellDayRecap(context.Background(), r, rc)
 }
+
+// recordingWrites is what these tests call of the recording module's writers (writers.Writers), reached as
+// tellDayRecap reaches them: through the knowledge base's provider.
+type recordingWrites interface {
+	PhotosRev(rawID string) int64
+	TranscriptionUpdate(rawID string, fn func(t *kb.MeetingTranscription, r kb.Recording) error) (kb.MeetingTranscription, error)
+}
+
+func recWrites(e *kb.Engine) recordingWrites { return e.RecordingProvider().(recordingWrites) }

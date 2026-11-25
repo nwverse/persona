@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
@@ -41,7 +41,7 @@ func cleanHubSegments(segs []RecordingSegment) []RecordingSegment {
 // chars (and plans the minutes again with them) and indexes the recording; rev is the transcript's revision after it.
 // ErrNotFound when the recording was deleted or trimmed (also meanwhile), ErrReadOnly, ErrNotHub when it is not
 // transcribed on the hub, ErrTranscriptionFinal for a live pass once a final one is stored.
-func (e *Engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (rev int64, err error) {
+func (e *engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (rev int64, err error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return 0, ErrNotFound
@@ -57,7 +57,7 @@ func (e *Engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (
 		return 0, ErrReadOnly
 	}
 	r, ok := st.Recording(id)
-	if _, gone := st.tombstones()[id]; gone || !ok || r.Trimmed() {
+	if gone := st.tombstoned(id); gone || !ok || r.Trimmed() {
 		return 0, ErrNotFound
 	}
 	if !r.HubTranscribed() {
@@ -81,7 +81,7 @@ func (e *Engine) HubTranscriptPut(rawID, pass string, segs []RecordingSegment) (
 
 // putHubLocked writes recording r's hub_segments.json (segs, cleaned, from pass) and transcript.md from the transcript
 // of record after it, not when the recording was deleted or trimmed meanwhile (ErrNotFound). The caller holds recMu.
-func (s *Store) putHubLocked(r *Recording, pass string, segs []RecordingSegment) (HubTranscript, []RecordingSegment, error) {
+func (s *store) putHubLocked(r *Recording, pass string, segs []RecordingSegment) (HubTranscript, []RecordingSegment, error) {
 	s.recFilesMu.Lock()
 	defer s.recFilesMu.Unlock()
 	if err := s.recoverRecordingLocked(r.ID); err != nil {
@@ -103,20 +103,20 @@ func (s *Store) putHubLocked(r *Recording, pass string, segs []RecordingSegment)
 	if err != nil {
 		return HubTranscript{}, nil, err
 	}
-	if err := writeRecordingFile(s.path(KindRecording, r.ID, hubSegmentsFile), append(raw, '\n')); err != nil {
+	if err := s.writeRecordingFile(s.path(KindRecording, r.ID, hubSegmentsFile), append(raw, '\n')); err != nil {
 		return HubTranscript{}, nil, err
 	}
 	device, err := s.diskSegmentsLocked(r.ID)
 	if err != nil {
 		return h, nil, err
 	}
-	record := TranscriptOfRecord(true, device, segs)
+	record := s.TranscriptOfRecord(true, device, segs)
 	md := []byte(s.renderTranscript(r, record))
-	return h, record, writeRecordingFile(s.path(KindRecording, r.ID, "transcript.md"), md)
+	return h, record, s.writeRecordingFile(s.path(KindRecording, r.ID, "transcript.md"), md)
 }
 
 // diskSegmentsLocked is recording id's segments.json as committed. The caller holds recFilesMu and recovered it.
-func (s *Store) diskSegmentsLocked(id string) ([]RecordingSegment, error) {
+func (s *store) diskSegmentsLocked(id string) ([]RecordingSegment, error) {
 	var segs []RecordingSegment
 	raw, err := os.ReadFile(s.path(KindRecording, id, "segments.json"))
 	if os.IsNotExist(err) {
@@ -129,7 +129,7 @@ func (s *Store) diskSegmentsLocked(id string) ([]RecordingSegment, error) {
 }
 
 // trimmedLocked: recording id's meta.json says it was trimmed. The caller holds recFilesMu.
-func (s *Store) trimmedLocked(id string) bool {
+func (s *store) trimmedLocked(id string) bool {
 	var trim struct {
 		TrimmedAt *time.Time `json:"trimmed_at"`
 	}
@@ -137,22 +137,14 @@ func (s *Store) trimmedLocked(id string) bool {
 	return err == nil && json.Unmarshal(raw, &trim) == nil && trim.TrimmedAt != nil
 }
 
-// hubSegmentsOf is recording id's hub sentences (none when it has none or they cannot be read), for an upload.
-func (s *Store) hubSegmentsOf(id string) []RecordingSegment {
-	s.recFilesMu.RLock()
-	defer s.recFilesMu.RUnlock()
-	h, _ := s.readHubLocked(id)
-	return h.Segments
-}
-
 // RecordOf is recording rawID's transcript of record (the final pass's reference frames): ErrRecordingDeleted after a
 // delete, ErrNotFound with no upload of it.
-func (e *Engine) RecordOf(rawID string) ([]RecordingSegment, error) {
+func (e *engine) RecordOf(rawID string) ([]RecordingSegment, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
 	}
-	if _, gone := e.Store.tombstones()[id]; gone {
+	if gone := e.Store.tombstoned(id); gone {
 		return nil, ErrRecordingDeleted
 	}
 	files, m, h, err := e.Store.recordSnapshot(id)
@@ -162,13 +154,13 @@ func (e *Engine) RecordOf(rawID string) ([]RecordingSegment, error) {
 	if files["meta.json"] == nil {
 		return nil, ErrNotFound
 	}
-	return nonNilSegments(recordOf(files, m, h)), nil
+	return nonNilSegments(e.Store.recordOf(files, m, h)), nil
 }
 
 // repairRecord mends hub-mode recording id after a crash between hub_segments.json and transcript.md (HubTranscriptPut)
 // or meta.json: transcript.md and chars made what the transcript of record says, each only when it does not already.
 // Whether anything changed. The caller holds recMu.
-func (e *Engine) repairRecord(r *Recording) (bool, error) {
+func (e *engine) repairRecord(r *Recording) (bool, error) {
 	st := e.Store
 	if !r.HubTranscribed() || r.Trimmed() {
 		return false, nil
@@ -192,7 +184,7 @@ func (e *Engine) repairRecord(r *Recording) (bool, error) {
 	path := st.path(KindRecording, r.ID, "transcript.md")
 	changed := false
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != want {
-		if err := writeRecordingFile(path, []byte(want)); err != nil {
+		if err := st.writeRecordingFile(path, []byte(want)); err != nil {
 			st.recFilesMu.Unlock()
 			return false, err
 		}

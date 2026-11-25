@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"bytes"
@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // pcmAt is n samples of audio from sample from, each sample saying where it is (so a read shows what was stored where).
@@ -27,12 +29,12 @@ func pcmAt(from, n int64) []byte {
 func secs(t float64) int64 { return atSample(t) }
 
 // hubMeeting stores recording id as a hub-mode meeting, not complete yet, started an hour before now.
-func hubMeeting(t *testing.T, e *Engine, id string, now time.Time) {
+func hubMeeting(t *testing.T, e *testEngine, id string, now time.Time) {
 	t.Helper()
 	putRecording(t, e, id, hubUpload(1, now.Add(-time.Hour), false, nil), now)
 }
 
-func audioDirOf(e *Engine, id string) string { return e.Store.audioPath(id) }
+func audioDirOf(e *testEngine, id string) string { return ws(e.Store).audioPath(id) }
 
 // The socket's writes: stored from where they say, what is held already ignored, a seek forward leaving a gap that
 // meeting.json's gaps (and PartTranscription) follow; ack is the end of the contiguous audio around the latest write,
@@ -81,7 +83,7 @@ func TestAudioWriteSyncAndHeld(t *testing.T) {
 	if tr := transcriptionNow(t, e, recID); !sameSpans(tr.Gaps, [][2]float64{{2, 5}}) {
 		t.Fatalf("gaps %v", tr.Gaps)
 	}
-	if len(*changed) != 1 || !slices.Equal((*changed)[0], []string{PartTranscription}) {
+	if len(*changed) != 1 || !slices.Equal((*changed)[0], []string{kb.PartTranscription}) {
 		t.Fatalf("told %v", *changed)
 	}
 	// Bad frames.
@@ -125,7 +127,7 @@ func TestAudioWriteSyncAndHeld(t *testing.T) {
 		t.Fatalf("end %+v %v, told %v", tr.Gaps, err, *changed)
 	}
 	if tr, err := e.TranscriptionUpdate(recID, func(t *MeetingTranscription, _ Recording) error {
-		t.State, t.FinalFrom = TranscriptionFinishing, time.Now()
+		t.State, t.FinalFrom = kb.TranscriptionFinishing, time.Now()
 		return nil
 	}); err != nil || !sameSpans(tr.Gaps, [][2]float64{{6, 8}}) {
 		t.Fatalf("final pass %+v %v", tr.Gaps, err)
@@ -186,11 +188,11 @@ func TestAudioChunksAndRestart(t *testing.T) {
 	}
 	f.Write([]byte{9})
 	f.Close()
-	st, err := NewStore(e.Store.Dir)
+	st, err := kb.NewStore(e.Store.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again := &Engine{Store: st, TranscriptionReady: e.TranscriptionReady}
+	again := newTestEngine(&kb.Engine{Store: st, TranscriptionReady: e.TranscriptionReady})
 	w2, err := again.AudioOpen(recID)
 	if err != nil {
 		t.Fatal(err)
@@ -267,13 +269,11 @@ func TestAudioPutAndRefusals(t *testing.T) {
 	const dev, trimmed, final, deleted = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b", "6c7d4e5b-2e3f-4a91-8b2c-3d4e5f6a7b8c",
 		"7d8e5f6c-3f40-4b02-9c3d-4e5f6a7b8c9d", "8e9f6a7d-4051-4c13-8d4e-5f6a7b8c9dae"
 	du := meetingUpload(1, now.Add(-time.Hour), "一句")
-	du.SetTranscription(TranscriptionDevice, nil)
+	du.SetTranscription(kb.TranscriptionDevice, nil)
 	putRecording(t, e, dev, du, now)
 	putRecording(t, e, trimmed, hubUpload(1, now.Add(-time.Hour), true, nil, "一句"), now)
 	putMeetingMinutes(t, e, trimmed, Minutes{Version: 1, Title: "Design review", When: "w"})
-	if _, _, err := e.Store.trimRecording(recordingNow(t, e, trimmed), now); err != nil {
-		t.Fatal(err)
-	}
+	trimRecording(t, e, trimmed, now)
 	hubMeeting(t, e, final, now)
 	if _, err := e.TranscriptionUpdate(final, func(t *MeetingTranscription, _ Recording) error { t.FinalFrom = now; return nil }); err != nil {
 		t.Fatal(err)
@@ -282,16 +282,16 @@ func TestAudioPutAndRefusals(t *testing.T) {
 	if _, err := e.DeleteRecording(deleted, now); err != nil {
 		t.Fatal(err)
 	}
-	ro, err := OpenReadOnly(e.Store.Dir)
+	ro, err := kb.OpenReadOnly(e.Store.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roe := &Engine{Store: ro}
+	roe := newTestEngine(&kb.Engine{Store: ro})
 	const missing = "9fa07b8e-5162-4d24-9e5f-6a7b8c9daebf"
 	odd := []byte{1, 2, 3}
 	for _, c := range []struct {
 		name      string
-		e         *Engine
+		e         *testEngine
 		id        string
 		at        float64
 		pcm       []byte
@@ -337,7 +337,7 @@ func TestAudioFinalClosesWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := e.TranscriptionUpdate(recID, func(t *MeetingTranscription, _ Recording) error {
-		t.State, t.FinalFrom = TranscriptionFinishing, now
+		t.State, t.FinalFrom = kb.TranscriptionFinishing, now
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -401,9 +401,7 @@ func TestAudioGoesWithTheRecording(t *testing.T) {
 			cites.Points = []MinutesPoint{{Text: "白板", Photo: 1}}
 		}
 		putMeetingMinutes(t, e, id, cites)
-		if _, _, err := e.Store.trimRecording(recordingNow(t, e, id), now); err != nil {
-			t.Fatal(err)
-		}
+		trimRecording(t, e, id, now)
 		if err := w.Write(1, pcmAt(secs(1), 100)); !errors.Is(err, ErrTranscriptExpired) {
 			t.Fatalf("write after the trim: %v", err)
 		}
@@ -419,7 +417,7 @@ func TestAudioGoesWithTheRecording(t *testing.T) {
 	// Through the retention: the trimmed recording keeps its mode and state, no gaps, its audio noted gone.
 	const kept = "7d8e5f6c-3f40-4b02-9c3d-4e5f6a7b8c9d"
 	old := now.AddDate(0, 0, -20)
-	u := hubUpload(1, old, true, &Timeline{Speaking: spk(1, 2)}, "一句")
+	u := hubUpload(1, old, true, &kb.Timeline{Speaking: spk(1, 2)}, "一句")
 	u.Duration = 10
 	putRecording(t, e, kept, u, old)
 	if _, err := e.AudioPut(kept, 0, pcmAt(0, secs(1))); err != nil {
@@ -428,11 +426,11 @@ func TestAudioGoesWithTheRecording(t *testing.T) {
 	putMeetingMinutes(t, e, kept, Minutes{Version: 1, Title: "Design review", When: "w"})
 	e.PruneRecordings(now)
 	tr := transcriptionNow(t, e, kept)
-	if tr.Mode != TranscriptionHub || tr.State != TranscriptionLive || tr.Gaps != nil || tr.Timeline != nil || tr.AudioGoneAt.IsZero() {
+	if tr.Mode != TranscriptionHub || tr.State != kb.TranscriptionLive || tr.Gaps != nil || tr.Timeline != nil || tr.AudioGoneAt.IsZero() {
 		t.Fatalf("trimmed %+v", tr)
 	}
 	m, _, _ := e.MeetingRead(kept)
-	if v := m.TranscriptionView(nil); v == nil || v.State != TranscriptionLive || v.Gaps == nil || len(*v.Gaps) != 0 {
+	if v := m.TranscriptionView(nil); v == nil || v.State != kb.TranscriptionLive || v.Gaps == nil || len(*v.Gaps) != 0 {
 		t.Fatalf("trimmed view %+v", v)
 	}
 	if _, err := os.Stat(audioDirOf(e, kept)); !os.IsNotExist(err) {
@@ -505,8 +503,8 @@ func TestAudioWritesRacingTheDelete(t *testing.T) {
 }
 
 // openChunk is the chunk file recording id's audio has open for writing (nil: none).
-func openChunk(e *Engine, id string) *os.File {
-	rec := e.Store.audioRec(id)
+func openChunk(e *testEngine, id string) *os.File {
+	rec := ws(e.Store).audioRec(id)
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	return rec.f
@@ -551,9 +549,7 @@ func TestAudioLeavesNoChunkOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	putMeetingMinutes(t, e, trimmed, Minutes{Version: 1, Title: "Design review", When: "w"})
-	if _, _, err := e.Store.trimRecording(recordingNow(t, e, trimmed), now); err != nil {
-		t.Fatal(err)
-	}
+	trimRecording(t, e, trimmed, now)
 	for _, id := range []string{deleted, trimmed} {
 		if f := openChunk(e, id); f != nil {
 			t.Fatalf("%s: %s still open after its audio went", id, f.Name())

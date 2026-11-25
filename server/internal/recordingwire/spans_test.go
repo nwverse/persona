@@ -1,4 +1,4 @@
-package kb
+package recordingwire
 
 import (
 	"math"
@@ -7,7 +7,7 @@ import (
 
 func TestUnionSpans(t *testing.T) {
 	got := UnionSpans([][2]float64{{5, 6}, {1, 2}, {2, 3}, {1.5, 2.5}, {8, 8}, {4, 3}, {math.NaN(), 1}, {9, math.Inf(1)}})
-	if want := [][2]float64{{1, 3}, {5, 6}, {8, 8}}; !sameSpans(got, want) {
+	if want := [][2]float64{{1, 3}, {5, 6}, {8, 8}}; !SameSpans(got, want) {
 		t.Fatalf("union %v, want %v", got, want)
 	}
 	if UnionSpans(nil) != nil || UnionSpans([][2]float64{{2, 1}}) != nil {
@@ -58,12 +58,12 @@ func TestGapsIn(t *testing.T) {
 		{"nothing held", nil, 0, 5, [][2]float64{{0, 5}}},
 		{"empty range", held, 5, 5, nil},
 	} {
-		if got := GapsIn(c.held, c.from, c.to); !sameSpans(got, c.want) {
+		if got := GapsIn(c.held, c.from, c.to); !SameSpans(got, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
 	// Two gaps 0.05 s apart are one; 0.2 s apart two.
-	if got := GapsIn([][2]float64{{0, 1}, {2, 2.05}, {3, 3.2}, {4, 5}}, 0, 5); !sameSpans(got, [][2]float64{{1, 3}, {3.2, 4}}) {
+	if got := GapsIn([][2]float64{{0, 1}, {2, 2.05}, {3, 3.2}, {4, 5}}, 0, 5); !SameSpans(got, [][2]float64{{1, 3}, {3.2, 4}}) {
 		t.Fatalf("joined %v", got)
 	}
 }

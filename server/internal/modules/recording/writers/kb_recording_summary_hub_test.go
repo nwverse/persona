@@ -1,15 +1,17 @@
-package kb
+package writers
 
 import (
 	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // hubCompleteMeeting stores a complete hub-mode meeting of the phone's lines (uploaded at *clock), its live hub
 // sentences and some audio.
-func hubCompleteMeeting(t *testing.T, e *Engine, id string, at time.Time, phone []string, hub []RecordingSegment) {
+func hubCompleteMeeting(t *testing.T, e *testEngine, id string, at time.Time, phone []string, hub []RecordingSegment) {
 	t.Helper()
 	putRecording(t, e, id, hubUpload(1, at.Add(-time.Hour), true, nil, phone...), at)
 	if len(hub) > 0 {
@@ -24,7 +26,7 @@ func hubCompleteMeeting(t *testing.T, e *Engine, id string, at time.Time, phone 
 
 // finishTranscription runs what the manager does at the end of the final pass: the final sentences, the state, and
 // FinalTranscriptStored.
-func finishTranscription(t *testing.T, e *Engine, id, state string, final []RecordingSegment) {
+func finishTranscription(t *testing.T, e *testEngine, id, state string, final []RecordingSegment) {
 	t.Helper()
 	if final != nil {
 		if _, err := e.HubTranscriptPut(id, HubPassFinal, final); err != nil {
@@ -42,11 +44,11 @@ func finishTranscription(t *testing.T, e *Engine, id, state string, final []Reco
 // The short summary is made again from the final transcript, also when its call from the live text was still running
 // as the final pass ended, and when a crash kept FinalTranscriptStored from being told.
 func TestHubSummaryMadeAgainAfterTheFinalPass(t *testing.T) {
-	var e *Engine
+	var e *testEngine
 	race := true
 	m := &funcModel{f: func(n int, _, user string) (string, error) {
 		if race && n == 1 { // the final pass ends while the live text's summary is being made
-			finishTranscription(t, e, recID, TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
+			finishTranscription(t, e, recID, kb.TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
 		}
 		return `{"title": "Design review", "summary": "A summary.", "one_line": "One line."}`, nil
 	}}
@@ -77,7 +79,7 @@ func TestHubSummaryMadeAgainAfterTheFinalPass(t *testing.T) {
 	if _, err := e.HubTranscriptPut(crashed, HubPassFinal, []RecordingSegment{hseg(0, 8, "crashed final words")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.TranscriptionUpdate(crashed, func(t *MeetingTranscription, _ Recording) error { t.State = TranscriptionFinal; return nil }); err != nil {
+	if _, err := e.TranscriptionUpdate(crashed, func(t *MeetingTranscription, _ Recording) error { t.State = kb.TranscriptionFinal; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.SummarizeRecordings(ctx, 3); n != 1 || !strings.Contains(m.calls[len(m.calls)-1][1], "crashed final words") {
