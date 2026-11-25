@@ -49,7 +49,9 @@ rows at the end of the assistant's group, with the module's own title and icon t
 nothing, and nothing is left greyed out (principle 2). No new component or token: rows and actions reuse `JRow` and
 `JAction`.
 
-What the user already has stays readable when its module is off (#13430): the page shows the stored content with the
+## Stored data when its module is off (#13430, #15995)
+
+Audience: everyone on a hub whose owner turned a module off. What the user already has stays readable: the page shows the stored content with the
 module's controls left out, not greyed, and never an error or a Retry that cannot succeed. When part of the content
 is not stored (web, #15995: a mail's full body and attachments are fetched from the mail server each time), the
 stored part is followed by one plain line saying what is missing and why ("Mail is turned off on the hub machine, so
