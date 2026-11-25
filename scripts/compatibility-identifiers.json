@@ -1245,6 +1245,7 @@
       "tokens": [
         "JARVIS_ASSISTANT",
         "JARVIS_ASSISTANT_BIN",
+        "JARVIS_CATEGORIES",
         "JARVIS_GUEST",
         "JARVIS_SESSION_ID",
         "JARVIS_SPACE",

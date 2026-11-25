@@ -271,7 +271,7 @@ func TestQuietNoticeWaitsForTheTurn(t *testing.T) {
 	}
 }
 
-// Tasks from another conversation are not quiet: the hub pushes as always and main supervises them (#5732). With the
+// Tasks from a live side conversation are not quiet and stay supervised by that side conversation (#13657). With the
 // setting off a task from the main conversation is not quiet (the hub pushes) but is still supervised.
 func TestNotQuietTasksAreNotTold(t *testing.T) {
 	for _, c := range []struct {
@@ -280,17 +280,17 @@ func TestNotQuietTasksAreNotTold(t *testing.T) {
 		supervisor string
 		told       bool
 	}{
-		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, "conv-main", true},
+		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, "conv1", true},
 		{"setting off", func(v *Settings) { v.MainTasksQuiet = new(false) }, "conv1", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f := newQuietService(t)
 			f.judge = `{"verdict":"done","reason":"好了"}`
 			setSettings(t, s, c.set)
-			if c.supervisor != "conv1" {
-				f.known[c.supervisor] = true
+			if c.name == "side conversation" {
+				f.known["conv-main"] = true
 				f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
-					proto.Session{SessionID: c.supervisor, MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+					proto.Session{SessionID: "conv-main", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 			}
 			if todo := startedTask(t, s, f); todo.Quiet || todo.Supervision == nil || todo.Supervision.Supervisor != c.supervisor {
 				t.Fatalf("todo = %+v (supervision %+v)", todo, todo.Supervision)
