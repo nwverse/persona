@@ -747,6 +747,7 @@ stated above; #15088 lists the ones known.
 | `app-named-primitive` | named basic types, in undeclared, application and library packages and adapters | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |
 | `app-bridge-call` | uses of an adapter's `Wire` function, called or passed on, in undeclared, application and library packages' production code | the package |
+| `contract-bare-id` | struct fields of plain `string` or `[]string` whose name ends in `ID`, `Id` or `IDs`, in the contract packages (production files) | the contract layer (`contracts`), so a type moved between contract packages changes nothing |
 
 The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and, given a
 base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.

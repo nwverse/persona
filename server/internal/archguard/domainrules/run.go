@@ -198,7 +198,7 @@ type Measure struct {
 func Measured(findings []Finding, counts []Count) Measure {
 	m := Measure{Counts: Tally(findings, counts), Names: map[string]map[string]bool{}}
 	for _, c := range counts {
-		if !allowable(c.Rule) {
+		if !allowable(c.Rule) && c.Rule != "contract-bare-id" {
 			continue
 		}
 		id := c.Key + " " + c.Rule
@@ -354,8 +354,22 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *B
 		}
 		if c, ok := byID[id]; ok {
 			what := c.Key + " adds " + countWhat(rule) + " (count " + itoa(n) + " > " + itoa(top) + ")"
-			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+". Counted: "+
-				strings.Join(c.Names, ", ")+". If its code only moved here, "+movesHint+" carries its lines.")
+			names, counted := c.Names, ". Counted: "
+			if rule == "contract-bare-id" {
+				// The layer holds hundreds: name those the merge base's tree lacks, when there is one.
+				counted = ". Counted: "
+				if base != nil {
+					names = nil
+					for _, name := range c.Names {
+						if !base.Measure.Names[id][name] {
+							names = append(names, name)
+						}
+					}
+					counted = ". New since the merge base: "
+				}
+			}
+			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+counted+
+				strings.Join(names, ", ")+". If its code only moved here, "+movesHint+" carries its lines.")
 			continue
 		}
 		for _, f := range groupsByID[id] {
@@ -438,6 +452,8 @@ func countWhat(rule string) string {
 		return "an exported-field record"
 	case "app-named-primitive":
 		return "a named primitive type"
+	case "contract-bare-id":
+		return "a struct field of plain string or []string named *ID, *Id or *IDs"
 	case "app-bridge-call":
 		return "a use of an adapter's Wire, which unwraps a domain value in application code"
 	}

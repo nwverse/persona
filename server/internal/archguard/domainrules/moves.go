@@ -148,9 +148,21 @@ func (b *Base) roomRises(l Lists, g groups) []string {
 	}
 	now, lines, order := room(l.Baseline, func(e BaselineEntry) bool { return b.allowsType(e, g) })
 	then, _, _ := room(b.Lists.Baseline, func(BaselineEntry) bool { return true })
+	// A rule the merge base's baseline has no line for yet (a rule landing, or a count that had reached zero) may
+	// start at what the merge base's tree measures, which is what Judge holds the count to anyway.
+	measured := map[string]int{}
+	for id, n := range b.Measure.Counts {
+		if key, rule, _ := strings.Cut(id, " "); !strict(rule) {
+			measured[g.of(key)+" "+rule] += n
+		}
+	}
 	var out []string
 	for _, gid := range order {
-		if now[gid] <= then[gid] {
+		top, listed := then[gid]
+		if !listed {
+			top = measured[gid]
+		}
+		if now[gid] <= top {
 			continue
 		}
 		var at []string
@@ -165,7 +177,7 @@ func (b *Base) roomRises(l Lists, g groups) []string {
 			}
 		}
 		out = append(out, baselineFile+" line "+strings.Join(at, ", ")+": "+strings.Join(keys, ", ")+" "+rule+
-			" gives room for "+itoa(now[gid])+", more than the "+itoa(then[gid])+" the merge base's baseline gives: "+
+			" gives room for "+itoa(now[gid])+", more than the "+itoa(top)+" the merge base's baseline gives: "+
 			"a count's line only falls, so put it back and fix the code its count names; code that only moved here "+
 			"carries its lines with "+movesHint)
 	}

@@ -187,6 +187,7 @@ var plantedWant = []string{
 	"app-named-primitive internal/assistant/badapp 1",
 	"app-named-primitive internal/assistant/notadapt 2",
 	"app-named-primitive internal/badlib 1",
+	"contract-bare-id contracts 1",
 	"core-accessor internal/assistant/badcore/accessor.go:10",
 	"core-accessor internal/assistant/badcore/accessor.go:13",
 	"core-accessor internal/assistant/badcore/accessor.go:16",
