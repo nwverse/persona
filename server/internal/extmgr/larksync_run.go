@@ -645,6 +645,14 @@ func (h *Manager) larkSyncFinish(ctx context.Context, key, mode string, res lark
 		if backfillVer > b.BackfillVersion {
 			b.BackfillVersion = backfillVer
 		}
+		for _, e := range res.Errors {
+			if e.Resource == "sender_names" && e.Kind == larksyncwire.ErrKindScope {
+				// New unnamed messages can arrive after an earlier repair completed. Keep those eligible
+				// for repair when the owner restores contact access, not just pre-upgrade messages.
+				b.BackfillVersion = 0
+				break
+			}
+		}
 		health, detail := larksyncwire.HealthOK, ""
 		failed := false
 		switch {

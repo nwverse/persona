@@ -366,14 +366,17 @@ func TestLarkSyncBackfillSenderNamesIdempotentAndScoped(t *testing.T) {
 // It must reach settings health without losing progress; a renewed grant lets the scheduler retry the pending
 // repair without a manual run or cursor reset, including when the first attempt resolved only some names.
 func TestLarkSyncSenderRepairRetriesAfterReauthorization(t *testing.T) {
-	for _, partialNames := range []bool{false, true} {
-		t.Run(fmt.Sprint("partial_names=", partialNames), func(t *testing.T) {
+	for _, tc := range []struct{ partialNames, completed bool }{{false, false}, {true, false}, {false, true}} {
+		t.Run(fmt.Sprintf("partial_names=%v/completed=%v", tc.partialNames, tc.completed), func(t *testing.T) {
 			w := newLarkWorld(t)
 			ctx := context.Background()
 			w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierFull)
 			key, acc := w.adopt(t, "bsync", "ou_owner", "access-old", "refresh-old", 24*time.Hour)
 			if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
 				st.binding(key).Tier = larksyncwire.TierFull
+				if tc.completed {
+					st.binding(key).BackfillVersion = larkSyncBackfillVersion
+				}
 				return nil
 			}); err != nil {
 				t.Fatal(err)
@@ -400,7 +403,7 @@ func TestLarkSyncSenderRepairRetriesAfterReauthorization(t *testing.T) {
 				calls.Add(1)
 				if !granted.Load() {
 					names := map[string]string{}
-					if partialNames {
+					if tc.partialNames {
 						names["ou_one"] = "Example One"
 					}
 					return names, &larksyncwire.Error{Kind: larksyncwire.ErrKindScope, Msg: "contact:contact.base:readonly required"}
@@ -413,7 +416,11 @@ func TestLarkSyncSenderRepairRetriesAfterReauthorization(t *testing.T) {
 			}
 			w.mu.Unlock()
 			w.script("bsync", acc, func(_ context.Context, _ larksyncwire.Binding, _ func(context.Context) (string, error), _ map[string]string, _ larksyncwire.Index) (larksyncwire.Result, error) {
-				return larksyncwire.Result{Cursors: map[string]string{"im:oc_example": "200"}}, nil
+				res := larksyncwire.Result{Cursors: map[string]string{"im:oc_example": "200"}}
+				if tc.completed && !granted.Load() {
+					res.Errors = []larksyncwire.ResourceError{{Resource: "sender_names", Kind: larksyncwire.ErrKindScope, Detail: "contact:contact.base:readonly required"}}
+				}
+				return res, nil
 			})
 			if err := w.h.larkSyncRunMode(ctx, key, larksyncwire.ModeIM); err != nil {
 				t.Fatal(err)
@@ -447,7 +454,11 @@ func TestLarkSyncSenderRepairRetriesAfterReauthorization(t *testing.T) {
 				t.Fatal("authorization did not preserve pending repair and make both schedules due")
 			}
 			w.h.larkSyncTick(ctx)
-			if b = w.binding(t, key); b.Health != larksyncwire.HealthOK || b.BackfillVersion != larkSyncBackfillVersion || calls.Load() != 2 {
+			wantCalls := int32(2)
+			if tc.completed {
+				wantCalls = 1
+			}
+			if b = w.binding(t, key); b.Health != larksyncwire.HealthOK || b.BackfillVersion != larkSyncBackfillVersion || calls.Load() != wantCalls {
 				t.Fatalf("scheduler did not recover repair: health=%s version=%d calls=%d", b.Health, b.BackfillVersion, calls.Load())
 			}
 			rows, err := w.store.LarkSyncOutboxAfter(ctx, db.LarkSyncChat, 1, 10)
@@ -471,7 +482,7 @@ func TestLarkSyncSenderRepairRetriesAfterReauthorization(t *testing.T) {
 			}
 			w.advance(larkSyncIMEvery)
 			w.h.larkSyncTick(ctx)
-			if calls.Load() != 2 {
+			if calls.Load() != wantCalls {
 				t.Fatal("completed repair was not idempotent")
 			}
 		})
