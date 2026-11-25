@@ -78,7 +78,7 @@ func TestDomainLayers(t *testing.T) {
 func domainRun(t *testing.T, pkgs []*domainrules.Pkg, lists domainrules.Lists) ([]domainrules.Finding,
 	[]domainrules.Count, domainrules.Stats) {
 	t.Helper()
-	idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts)
+	idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts).WithBareIDs(lists.BareIDs)
 	findings, st, err := domainrules.Run(pkgs, idx, "")
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestDomainLayerNames(t *testing.T) {
 		}
 	}
 	measure := func(pkgs []*domainrules.Pkg) (lines, others []string, err error) {
-		idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts)
+		idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts).WithBareIDs(lists.BareIDs)
 		findings, _, err := domainrules.Run(pkgs, idx, "")
 		if err != nil {
 			return nil, nil, err
