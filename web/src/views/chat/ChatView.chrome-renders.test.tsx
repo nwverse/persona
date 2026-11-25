@@ -165,7 +165,8 @@ it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws
 it("an agent's page: pushed items leave its header and composer alone, a session change still reaches them", async () => {
   await open(<ChatView mid="mac" sid="s1" inPage />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);
-  expect(host.textContent).toContain("row 10");
+  // Non-critical bursts share the transcript's coalescing window; the commits it makes still leave the chrome alone.
+  await vi.waitFor(() => expect(host.textContent).toContain("row 10"));
   expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 
   act(() => applyCompleteSessions([row({ title: "Renamed" })]));
@@ -179,7 +180,7 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   for (let seq = 1; seq <= 3; seq++) await push(seq);
   words.length = 0;
   await push(4);
-  expect(words).toEqual([{ text: "row 4", fade: true }]);
+  await vi.waitFor(() => expect(words).toEqual([{ text: "row 4", fade: true }]));
 });
 
 // the first page: this many exchanges, a question and its reply each
@@ -264,7 +265,8 @@ it("finished exchanges before the last two skip drawing while off screen, from a
 it("the assistant: the header draws again only when what its face reads changes", async () => {
   await open(<ChatView mid="mac" sid="s1" assistant />);
   for (let seq = 1; seq <= 10; seq++) await push(seq);
-  expect(host.textContent).toContain("row 10");
+  // Non-critical bursts share the transcript's coalescing window; the commits it makes still leave the chrome alone.
+  await vi.waitFor(() => expect(host.textContent).toContain("row 10"));
   expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 
   // a message of yours last: the face thinks again (lib/persona.ts personaState)
