@@ -16,7 +16,7 @@ import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { closePanel, getPanel } from "./panel";
 import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, noteConversation, routedConversationManager } from "./manager-choice";
-import type { ChatLine } from "./turns";
+import { canonicalMcpToolName, stripToolResultTimestampHeaders, type ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
@@ -1007,11 +1007,11 @@ function lineTime(l: DisplayLine): number | undefined {
 
 /** A reminder or an event the assistant added on the phone, from its tool call. */
 export function quickResult(use: Item, result?: Item): QuickResult | undefined {
-  const short = (use.tool_name ?? "").split("__").at(-1);
+  const short = (canonicalMcpToolName(use.tool_name) ?? "").split("__").at(-1);
   const kind = short === "phone_reminders_create" ? "reminder" : short === "phone_calendar_create_event" ? "event" : undefined;
   if (!kind || !result || result.is_error || !result.text) return undefined;
   try {
-    const o = JSON.parse(result.text) as Record<string, unknown>;
+    const o = JSON.parse(stripToolResultTimestampHeaders(result.text)) as Record<string, unknown>;
     if (typeof o.id !== "string" || !o.id) return undefined;
     const when = kind === "reminder" ? o.due : o.start;
     const place = kind === "reminder" ? o.list : o.calendar;

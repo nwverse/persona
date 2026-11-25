@@ -195,6 +195,9 @@ func modelVersionPart(s string) (int, bool) {
 // setContext copies cached title provenance and cumulative output alongside the context fields.
 // The context fields stay zero (and so off the wire) while the transcript has no reply yet.
 func setContext(s *proto.Session, m quickMeta) {
+	if m.codex && m.serviceTier != "" {
+		s.ServiceTier = m.serviceTier
+	}
 	s.OutputTokens = m.outputTokens
 	s.ContextRestartRecommended = m.contextRestartRecommended
 	s.TitleManual = s.TitleManual || m.titleManual
@@ -216,6 +219,14 @@ func setContext(s *proto.Session, m quickMeta) {
 		}
 	}
 	s.SetContextBreakdown(transcript.BuildContextBreakdown(m.contextStats, int(s.ContextTokens), int(s.ContextWindow), 0, m.contextFullWindow))
+}
+
+// Claude Desktop's meter uses the effective budget when its process sets an earlier compaction threshold.
+func setClaudeProcessWindow(s *proto.Session, env map[string]string) {
+	limit := smallerCapacity(contextLimit(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"]), contextLimit(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]))
+	if limit > 0 {
+		s.ContextWindow = proto.Tokens32(smallerCapacity(int(s.ContextWindow), limit))
+	}
 }
 
 // setRuntimeContext is setContext for a runtime's session whose conversation is a transcript here (Paseo). The model

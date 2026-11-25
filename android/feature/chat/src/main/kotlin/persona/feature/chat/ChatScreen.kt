@@ -21,9 +21,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -940,9 +946,35 @@ private fun ChatPage(
             }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
             val windowHeightPx = LocalWindowInfo.current.containerSize.height
             val pageDensity = LocalDensity.current
+            val footerChrome = LocalChromeInsets.current
+            val navigationInsets = WindowInsets.navigationBars
+            val imeInsets = WindowInsets.ime
+            val trayFooterBudget = remember { AssistantTrayFooterBudget() }
             // Until the page is measured (its first frame) the window's height stands in.
             val pageHeight: () -> Dp = { with(pageDensity) { (if (pageHeightPx >= 0) pageHeightPx else windowHeightPx).toDp() } }
-            val trayMax: () -> Dp = { pageHeight() * AssistantTrayTokens.maximumHeightFraction }
+            val trayMaxForChrome: (Dp) -> Dp = { trayChromeHeight ->
+                with(pageDensity) {
+                    val measuredPagePx = pageHeightPx
+                    val page = (if (trayFooterBudget.pageHeightPx >= 0) trayFooterBudget.pageHeightPx
+                        else if (measuredPagePx >= 0) measuredPagePx
+                        else windowHeightPx).toDp()
+                    val header = footerChrome.top + topBarHeight.toDp()
+                    val bottomInset = if (footerChrome.handlesNavigationBar) footerChrome.bottom
+                        else (navigationInsets.getBottom(pageDensity) - imeInsets.getBottom(pageDensity)).coerceAtLeast(0).toDp()
+                    val keyboardOpen = imeInsets.getBottom(pageDensity) > 0
+                    val hasPending = trayFooterBudget.pendingSlots > 0
+                    val floor = if (keyboardOpen && !hasPending) Tokens.Space.flush else Tokens.Space.xl
+                    val pendingReserve = Tokens.MinTouch.android * trayFooterBudget.pendingSlots
+                    assistantTrayMaxHeight(
+                        page = page,
+                        header = header,
+                        occupied = trayFooterBudget.fixedHeightPx.toDp() + pendingReserve + trayChromeHeight,
+                        bottomInset = bottomInset,
+                        floor = floor,
+                    )
+                }
+            }
+            val trayMax: () -> Dp = { trayMaxForChrome(Tokens.Space.flush) }
             Box(Modifier.fillMaxSize().padding(bottom = linkInset).onSizeChanged { pageHeightPx = it.height }
                 // The chat under a page a wide window pushed into this column: drawn as it was, and out of screen readers' way.
                 .then(if (pushedDetail != null) Modifier.clearAndSetSemantics {} else Modifier)) {
@@ -995,7 +1027,9 @@ private fun ChatPage(
                         }
                     }
                     // In a box of its own: with no cards it is nothing, and its height reads 0 again.
-                    Box(Modifier.onSizeChanged { if (task) taskHeight = it.height else stackHeight = it.height }) {
+                    Box(Modifier
+                        .then(if (cards.isNotEmpty()) Modifier.layoutId(PendingCardsFooterSlot) else Modifier)
+                        .onSizeChanged { if (task) taskHeight = it.height else stackHeight = it.height }) {
                         InteractionPanel(cards, machine, cap, taps.busyId, taps.uncertain, { interaction, resolution ->
                             interactionController.answer(interaction, resolution)
                         }, terminal, { if (task) taskOverlay = it else stackOverlay = it }, linkVisible = linkVisible,
@@ -1083,7 +1117,7 @@ private fun ChatPage(
                             ForwardPickFooter(messageMenu.forwardPick, snapshot.items, Modifier.onSizeChanged { footerHeight = it.height })
                             return@footer
                         }
-                        Column(Modifier.onSizeChanged { footerHeight = it.height }) {
+                        ChatFooterColumn(trayFooterBudget, Modifier.onSizeChanged { footerHeight = it.height }) {
                             if (renderStyle == ChatRenderStyle.Assistant && (status.submitting || status.processing ||
                                     (status.unconfirmed && sendReceipts.isNotEmpty()))) StatusLine(status)
                             if (renderStyle != ChatRenderStyle.Assistant) ChatSessionStatusLine(status, session, snapshot.turnDurationSeconds, projection.turns.lastOrNull()?.toolCount ?: 0,
@@ -1191,8 +1225,10 @@ private fun ChatPage(
                                                 ?.let { todo -> openTask(host, todo) } ?: run { host.sheet.value = TaskSheet.Agent(raw) }
                                         }, onSend = ::sendTray, onSchedule = { pageTrays.traySchedule.value = it }, onPlan = { pageTrays.trayPlan.value = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
-                                        under = computerPill?.let { pill -> { pill(Modifier) } },
-                                        groupByOrigin = foldsBackground)
+                                        groupByOrigin = foldsBackground,
+                                        modifier = Modifier.layoutId(AssistantTrayFooterSlot),
+                                        maximumHeightForChrome = trayMaxForChrome,
+                                        under = computerPill?.let { pill -> { pill(Modifier) } })
                                     // Where the next message goes, never only inside the In progress tray (iOS RouteChip, #4339 C15).
                                     TaskRouteChip(host)
                                 }
@@ -1357,6 +1393,93 @@ private fun ChatPage(
             pageTakeover?.let { CodexTakeoverDialogs(it) }
         }
     }
+}
+
+private object AssistantTrayFooterSlot
+private object PendingCardsFooterSlot
+
+private class AssistantTrayFooterBudget {
+    var fixedHeightPx: Int = 0
+    var pageHeightPx: Int = -1
+    var pendingSlots: Int = 0
+}
+
+private fun chatFooterMeasurePolicy(budget: AssistantTrayFooterBudget) = MeasurePolicy { measurables, constraints ->
+    val loose = constraints.copy(minWidth = 0, minHeight = 0)
+    val placeables = arrayOfNulls<Placeable>(measurables.size)
+    var trayIndex = -1
+    val pendingIndices = ArrayList<Int>(2)
+    var fixedHeight = 0
+    // 1. Measure non-tray, non-pending children bottom-up first so the composer, route chip, and queue strip
+    //    always claim their full natural height before expandable cards/trays take what remains.
+    for (index in measurables.lastIndex downTo 0) {
+        val measurable = measurables[index]
+        when (measurable.layoutId) {
+            AssistantTrayFooterSlot -> { trayIndex = index; continue }
+            PendingCardsFooterSlot -> { pendingIndices.add(index); continue }
+        }
+        val childMaxHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - fixedHeight).coerceAtLeast(0)
+        } else {
+            constraints.maxHeight
+        }
+        val placeable = measurable.measure(loose.copy(maxHeight = childMaxHeight))
+        placeables[index] = placeable
+        fixedHeight += placeable.height
+    }
+    budget.fixedHeightPx = fixedHeight
+    budget.pageHeightPx = if (constraints.hasBoundedHeight) constraints.maxHeight else -1
+    budget.pendingSlots = pendingIndices.size
+    var usedHeight = fixedHeight
+    // 2. Measure AssistantTrays next (reserving each active pending-card slot's minimum touch floor in trayMax)
+    //    so an open tray takes its room before pending cards yield via PendingStack.cap.
+    if (trayIndex >= 0) {
+        val pendingReservePx = Tokens.MinTouch.android.roundToPx() * pendingIndices.size
+        val trayMaxHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - usedHeight - pendingReservePx).coerceAtLeast(0)
+        } else {
+            constraints.maxHeight
+        }
+        val placeable = measurables[trayIndex].measure(loose.copy(maxHeight = trayMaxHeight))
+        placeables[trayIndex] = placeable
+        usedHeight += placeable.height
+    }
+    // 3. Measure active pending-card slots last within whatever height remains.
+    for (index in pendingIndices) {
+        val childMaxHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - usedHeight).coerceAtLeast(0)
+        } else {
+            constraints.maxHeight
+        }
+        val placeable = measurables[index].measure(loose.copy(maxHeight = childMaxHeight))
+        placeables[index] = placeable
+        usedHeight += placeable.height
+    }
+    val totalWidth = placeables.maxOfOrNull { it?.width ?: 0 } ?: 0
+    val totalHeight = placeables.sumOf { it?.height ?: 0 }
+    layout(constraints.constrainWidth(totalWidth), constraints.constrainHeight(totalHeight)) {
+        var y = 0
+        for (placeable in placeables) {
+            if (placeable != null) {
+                placeable.placeRelative(0, y)
+                y += placeable.height
+            }
+        }
+    }
+}
+
+/**
+ * Inline vertical chat footer layout (matching [Column]'s zero extra RecomposeScope overhead during IME slides)
+ * that measures the composer and fixed chrome before [AssistantTrays] and pending cards in a single pass.
+ */
+@Composable
+private inline fun ChatFooterColumn(
+    budget: AssistantTrayFooterBudget,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val policy = remember(budget) { chatFooterMeasurePolicy(budget) }
+    Layout(content = content, modifier = modifier, measurePolicy = policy)
 }
 
 @Composable

@@ -77,6 +77,10 @@ type pending struct {
 	told bool
 	// route: on its way up to the user through its task's supervisors (ask_route.go); nil once it is the user's.
 	route *askRoute
+	// seenTTL and deadlineChanged govern owner-only timed cards whose short countdown starts only
+	// when the user views the card in an app (owner_card_expiry.go).
+	seenTTL         time.Duration
+	deadlineChanged chan struct{}
 }
 
 // resumeGrace is how long a resumable interaction outlives its node: a little longer than hooks keep reconnecting
@@ -129,6 +133,9 @@ func (s *Service) announce(ix proto.Interaction) {
 	}
 	if forget := s.delegable(ix); forget != nil {
 		s.delegate(ix, forget)
+		return
+	}
+	if s.handNonOwnerCard(ix) {
 		return
 	}
 	s.tell(ix)
@@ -264,7 +271,13 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		}
 	}
 	inAssistant := s.ixInAssistant(ctx, ix)
-	ix = nodeCard(ix, s.fleetStore() != nil, s.ixPolicy(ctx, ix).ConfirmOutbound, inAssistant)
+	inboxWholeBash := s.isInboxWholeBashAlways(ctx, ix)
+	if inboxWholeBash {
+		ix.AlwaysKeys = nil
+	}
+	confirms := s.ixPolicy(ctx, ix).ConfirmOutbound || inboxWholeBash ||
+		(ix.ToolName == "Bash" && len(ix.AlwaysKeys) == 0 && s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, false))
+	ix = nodeCard(ix, s.fleetStore() != nil, confirms, inAssistant)
 	if ix.Kind == proto.IxPermission {
 		l := s.lang(ctx)
 		ix.ToolTitle = personaToolTitle(l, ix.ToolName, ix.ToolInput)
@@ -328,6 +341,7 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	// A Just me turn's card, the node's or the manager's own (ask_user, a confirmation): pushed without its content,
 	// never to Lark or a channel (meeting_justme.go).
 	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
+	ix, seenTTL := applyOwnerCardDeadline(ix, time.Now().UTC())
 	if ix.ExpiresAt.IsZero() && !persistentOwnerProposal(ix) {
 		ix.ExpiresAt = time.Now().Add(s.notifyTimings().hookTimeout()).UTC()
 	}
@@ -343,6 +357,12 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 		restartPrepared := false
 		s.fleet.mu.Lock()
 		if p := s.fleet.interactions[ix.ID]; p != nil && p.local == nil {
+			if !p.claimed && len(p.ix.AlwaysKeys) > 0 && len(ix.AlwaysKeys) == 0 && ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
+				// Reclaiming a resumable card after origin registration or a manager upgrade must not
+				// retain a previously stripped/disallowed Always option (#15267).
+				p.ix.AlwaysKeys = nil
+				p.ix.AlwaysHonored = ix.AlwaysHonored
+			}
 			if p.prepared != nil {
 				// The reconnecting hook is now the caller whose lifetime governs the
 				// initial wait. The disconnected context must not expire a card its
@@ -399,7 +419,7 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 		return proto.Resolution{Dismiss: true}, nil
 	}
-	p := &pending{ix: ix, done: make(chan proto.Resolution, 1), prepared: prepared}
+	p := &pending{ix: ix, done: make(chan proto.Resolution, 1), prepared: prepared, seenTTL: seenTTL, deadlineChanged: make(chan struct{}, 1)}
 	var replaced *pending
 	var dropped []*pending
 	for {
@@ -494,29 +514,60 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 	if p.resolved == nil {
 		p.resolved = make(chan struct{})
 	}
+	if p.deadlineChanged == nil {
+		p.deadlineChanged = make(chan struct{}, 1)
+	}
 	resolved := p.resolved
+	deadlineChanged := p.deadlineChanged
 	id := p.ix.ID
 	expiresAt := p.ix.ExpiresAt
 	persistent := persistentOwnerProposal(p.ix)
 	s.fleet.mu.Unlock()
 	var timer *time.Timer
 	var timeout <-chan time.Time
-	if !expiresAt.IsZero() && !persistent {
-		timer = time.NewTimer(time.Until(expiresAt))
-		timeout = timer.C
-		defer timer.Stop()
+	resetTimer := func(at time.Time) {
+		if timer != nil {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer = nil
+			timeout = nil
+		}
+		if !at.IsZero() && !persistent {
+			timer = time.NewTimer(time.Until(at))
+			timeout = timer.C
+		}
 	}
+	resetTimer(expiresAt)
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	status := "cancelled"
-	select {
-	case <-resolved:
-		s.finishInteraction(id)
-		return *p.resolution, nil
-	case r := <-p.done:
-		s.finishInteraction(id)
-		return r, nil
-	case <-timeout:
-		status = "expired"
-	case <-ctx.Done():
+awaitLoop:
+	for {
+		select {
+		case <-resolved:
+			s.finishInteraction(id)
+			return *p.resolution, nil
+		case r := <-p.done:
+			s.finishInteraction(id)
+			return r, nil
+		case <-deadlineChanged:
+			s.fleet.mu.Lock()
+			expiresAt = p.ix.ExpiresAt
+			s.fleet.mu.Unlock()
+			resetTimer(expiresAt)
+		case <-timeout:
+			status = "expired"
+			break awaitLoop
+		case <-ctx.Done():
+			break awaitLoop
+		}
 	}
 	// Decide under the same lock as resolve: an answer already claimed must be
 	// persisted before any waiter can record a competing timeout or disconnect.
@@ -565,7 +616,11 @@ func (s *Service) await(ctx context.Context, p *pending) (proto.Resolution, erro
 	}
 	p.claimed, p.graceEnded = true, true
 	p.expired = status == "expired"
+	expiredIx := p.ix
 	s.fleet.mu.Unlock()
+	if status == "expired" && ownerOnlyTimedCard(expiredIx) {
+		s.noteOwnerActionCardExpired(expiredIx)
+	}
 	s.recordEndBy(id, status, endedByOfStatus(status), nil)
 	s.finishInteraction(id)
 	// Why nobody answered it, so that whoever waits on it never takes the end for the user's decline: its time
@@ -950,6 +1005,9 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		s.recordEndBy(id, status, by, &told)
 	}
 	s.channelsEnded(p.ix, &told)
+	if ownerOnlyTimedCard(p.ix) {
+		s.clearOwnerActionCardWait(p.ix)
+	}
 	go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 	if remember {
 		s.keepAlways(p.ix, r) // kept before the hook hears: its next card may follow at once
@@ -1406,10 +1464,46 @@ func alwaysCard(ix proto.Interaction) bool {
 		len(ix.AlwaysKeys) <= maxAlwaysKeys && len(ix.Fields) == 0
 }
 
+type interactionOriginKey struct{}
+
+func withInteractionOrigin(ctx context.Context, origin string) context.Context {
+	return context.WithValue(ctx, interactionOriginKey{}, origin)
+}
+
+func interactionOrigin(ctx context.Context) string {
+	origin, _ := ctx.Value(interactionOriginKey{}).(string)
+	return origin
+}
+
+// isInboxOrigin checks the node's attested interaction.create origin hint first (covering the
+// first-turn window before Start records the origin and transient store errors), then the
+// manager's origin book. When failClosed is true, an unreadable origin book is treated as Inbox.
+func (s *Service) isInboxOrigin(ctx context.Context, machine, session string, failClosed bool) bool {
+	if interactionOrigin(ctx) == OriginInbox {
+		return true
+	}
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return failClosed
+	}
+	o := b.m[session]
+	return o != nil && o.Origin == OriginInbox && (o.MachineID == "" || s.sameMachine(machine, o.MachineID))
+}
+
+// isInboxWholeBashAlways reports whether ix asks for a whole-tool "tool:Bash" session grant on an
+// Inbox handling conversation. Inbox turns process untrusted external messages, so a single Always
+// click on a benign read command must never auto-approve arbitrary later shell mutations (#15267).
+func (s *Service) isInboxWholeBashAlways(ctx context.Context, ix proto.Interaction) bool {
+	return slices.Contains(ix.AlwaysKeys, "tool:Bash") &&
+		s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, true)
+}
+
 // alwaysAllowed: every key ix names was granted with "Always allow in this session" in its conversation.
 func (s *Service) alwaysAllowed(ctx context.Context, ix proto.Interaction) (proto.Resolution, bool) {
 	st := s.fleetStore()
-	if st == nil || !alwaysCard(ix) {
+	if st == nil || !alwaysCard(ix) || s.isInboxWholeBashAlways(ctx, ix) {
 		return proto.Resolution{}, false
 	}
 	ok, err := st.AlwaysAllowed(ctx, ix.SessionID, ix.AlwaysKeys)
@@ -1434,6 +1528,10 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+	if s.isInboxWholeBashAlways(ctx, ix) {
+		cancel()
+		return
+	}
 	err := st.AllowAlways(ctx, ix.SessionID, ix.ToolName, ix.AlwaysKeys)
 	cancel()
 	if err != nil {
@@ -1494,7 +1592,7 @@ func (s *Service) cancelMachineInteractions(machineID string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	s.feishuDetach(ids)
+	s.larkModule().AskDetached(ids, resumeGrace)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The computer that owned this approval disconnected; nothing changed.") {
 			continue
@@ -1517,7 +1615,7 @@ func (s *Service) cancelSessionInteractions(machineID, sessionID string) {
 	if len(ids) == 0 {
 		return
 	}
-	s.feishuDetach(ids)
+	s.larkModule().AskDetached(ids, resumeGrace)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The superseded Agent was released during node recovery; nothing changed.") {
 			continue
@@ -1557,6 +1655,13 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 	}
 	for _, id := range cancelled {
 		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
+	}
+	for i := range resumable {
+		if s.isInboxWholeBashAlways(ctx, resumable[i]) {
+			resumable[i].AlwaysKeys = nil
+			notKept := false
+			resumable[i].AlwaysHonored = &notKept
+		}
 	}
 	var back []proto.Interaction
 	s.fleet.mu.Lock()

@@ -657,7 +657,21 @@ export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" |
  * nothing Enter submits: the commands run on a click on Run, never on a key pressed while typing. The card's own keys
  * are only Esc back to the composer — no digits (they are the password), no Enter (never a key runs these commands).
  */
+const ownerCardsSeenSent = new Set<string>();
+
+/** Report once when an unseen owner-only timed card is displayed so the server can start its post-view countdown. */
+function useOwnerCardSeen(ix: Interaction) {
+  useEffect(() => {
+    if (!ix.seen_ttl_seconds || ix.seen_at || ownerCardsSeenSent.has(ix.id)) return;
+    ownerCardsSeenSent.add(ix.id);
+    void fetch(`/api/v1/interactions/${encodeURIComponent(ix.id)}/seen`, { method: "POST" }).catch(() => {
+      ownerCardsSeenSent.delete(ix.id);
+    });
+  }, [ix.id, ix.seen_at, ix.seen_ttl_seconds]);
+}
+
 function SecretRunCard({ ix }: { ix: Interaction }) {
+  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"run" | "decline" | null>(null);
   const [password, setPassword] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -753,6 +767,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
  * each variable with the item it comes from, the Agent and its computer, where it runs and what it is asked.
  */
 function SecretHandoffCard({ ix }: { ix: Interaction }) {
+  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"allow" | "always" | "deny" | null>(null);
   const keys = useCardKeys();
   const tapGuard = useChatCardTapGuard(ix);
