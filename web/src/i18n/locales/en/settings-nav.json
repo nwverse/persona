@@ -26,7 +26,7 @@
   "hint_channels": "Talk to Persona in WeChat, Feishu",
   "hint_connectors": "Let Persona read mail, Feishu, GitHub",
   "hint_extensions": "Add abilities: connectors, channels, voice",
-  "hint_integrations": "Chat channels, data sources, and installed extensions",
+  "hint_integrations": "Chat channels, connectors, inbox sources, and extensions",
   "hint_devices": "Signed-in phones and browsers",
   "hint_hub": "Hub updates, the agent board and extension download mirrors",
   "tab_managers": "Assistants",
