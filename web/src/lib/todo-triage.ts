@@ -106,7 +106,7 @@ function ms(at: string | null | undefined): number {
 }
 
 /** Unread on one session does not hide another session's live turn or background work. */
-function hasActiveAgentWork(todo: Todo, lookup: SessionLookup | undefined): boolean {
+export function hasActiveAgentWork(todo: Todo, lookup: SessionLookup | undefined): boolean {
   return (todo.agents ?? []).some((a) => {
     if (a.released_at || a.start_error) return false;
     const background = lookup?.(a.machine_id, a.session_id)?.background_working;
@@ -206,8 +206,9 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
     // Only work with no acceptance still required becomes an external merge wait.
     return at("parked", "pr_open");
   }
-  if (status === "working" || status === "waiting" || (!settled && hasActiveAgentWork(todo, lookup))) return at("working", "agent_running");
+  if (status === "working" || status === "waiting") return at("working", "agent_running");
   if (todo.done_at) return at(todo.kind === "concern" && fresh(ms(todo.done_at)) ? "just_done" : "done", "closed");
+  if (!settled && hasActiveAgentWork(todo, lookup)) return at("working", "agent_running");
   // A fallback date is not a state transition: keep overdue waits visible until the hub actually wakes them.
   if (review === "parked") return at("parked", "parked");
   if (!concern && acceptanceStands(todo)) return at("done", "accepted");

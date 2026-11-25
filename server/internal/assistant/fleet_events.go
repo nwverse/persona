@@ -302,8 +302,12 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 		var c assistantwire.Clients
 		if json.Unmarshal(params, &c) == nil {
 			s.fleet.mu.Lock()
+			wasOnline := s.fleet.clients.AppOnline
 			s.fleet.clients = c
 			s.fleet.mu.Unlock()
+			if c.AppOnline && !wasOnline {
+				go s.ownerAppeared(context.WithoutCancel(ctx), "app_online", "")
+			}
 		}
 	case assistantwire.EventMutes:
 		var p assistantwire.FleetMutes
@@ -321,6 +325,11 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 			if m, ok := s.fleetMachine(p.MachineID); ok {
 				s.markSeen(ctx, m.ID, p.SessionID)
 			}
+		}
+	case assistantwire.EventInteractionSeen:
+		var p assistantwire.FleetInteractionSeen
+		if json.Unmarshal(params, &p) == nil && p.InteractionID != "" {
+			s.markInteractionSeen(ctx, p.InteractionID)
 		}
 	default:
 		return false
