@@ -97,7 +97,7 @@ func forgetOnlyPhoto(path string, n int) error {
 		return err
 	}
 	var photos []struct {
-		ID string `json:"id"`
+		ID recordingwire.PhotoID `json:"id"`
 	}
 	if err := json.Unmarshal(b["photos"], &photos); err != nil {
 		return err

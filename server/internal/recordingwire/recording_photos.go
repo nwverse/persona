@@ -7,11 +7,15 @@ import (
 	"time"
 )
 
+// PhotoID is a photo's id: the phone's, a lowercase UUID, the same in every retry of its upload. It is stored and sent
+// as the text it is.
+type PhotoID string
+
 // Photo is a meeting photo as the apps read it (GET …/photos): Cited follows the current minutes, Forwarded says the
 // hub sent it into the room (deleting it withdraws it there).
 type Photo struct {
 	N         int       `json:"n"`
-	ID        string    `json:"id"`
+	ID        PhotoID   `json:"id"`
 	At        float64   `json:"at"`
 	Mime      string    `json:"mime"`
 	Width     int       `json:"width"`
@@ -28,7 +32,7 @@ type Photo struct {
 // recording's start (clamped into it here), Data the decoded image of Mime, Width × Height pixels, Text and Caption
 // trimmed ("" when blank), Digest of the request's body, so that a retry with the same body is the same photo.
 type PhotoUpload struct {
-	ID            string
+	ID            PhotoID
 	At            float64
 	Mime          string
 	Data          []byte
@@ -39,8 +43,8 @@ type PhotoUpload struct {
 
 // PhotoRef names a photo: its number and the phone's id.
 type PhotoRef struct {
-	N  int    `json:"n"`
-	ID string `json:"id"`
+	N  int     `json:"n"`
+	ID PhotoID `json:"id"`
 }
 
 // PhotoText is a listed photo's words, all the hub's models read of it: the owner's caption, the phone's recognized
@@ -99,7 +103,7 @@ func (b *PhotoBook) Index(n int) int {
 // Queued while it waits to go into the room (until its send succeeded: Queued and Forwarded is a send in doubt).
 type StoredPhoto struct {
 	N         int       `json:"n"`
-	ID        string    `json:"id"`
+	ID        PhotoID   `json:"id"`
 	At        float64   `json:"at"`
 	Mime      string    `json:"mime"`
 	Width     int       `json:"width"`

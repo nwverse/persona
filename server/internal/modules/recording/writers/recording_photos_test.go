@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // photoUpload is photo i (its id made of i) taken at seconds into the recording: a JPEG, its digest covering the body.
 func photoUpload(i int, at float64, caption, text string) PhotoUpload {
 	id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", i)
 	data := []byte(fmt.Sprintf("image bytes %d", i))
-	return PhotoUpload{ID: id, At: at, Mime: PhotoJPEG, Data: data, Width: 1600, Height: 1200, Text: text, Caption: caption,
+	return PhotoUpload{ID: recordingwire.PhotoID(id), At: at, Mime: PhotoJPEG, Data: data, Width: 1600, Height: 1200, Text: text, Caption: caption,
 		Digest: fmt.Sprintf("%s|%v|%s|%s|%s", id, at, caption, text, data)}
 }
 

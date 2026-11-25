@@ -25,6 +25,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Meeting photos (docs/assistant/meeting-minutes.md "Phase 3: photos"): the phone adds the photos taken during a
@@ -164,10 +165,11 @@ func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
 	if json.Unmarshal(in.ID, &id) != nil {
 		return u, i18n.Err("assistant-meeting.bad_ask_id")
 	}
-	var ok bool
-	if u.ID, ok = kb.RecordingID(id); !ok {
+	id, ok := kb.RecordingID(id)
+	if !ok {
 		return u, i18n.Err("assistant-meeting.bad_ask_id")
 	}
+	u.ID = recordingwire.PhotoID(id)
 	if !given(in.At) || json.Unmarshal(in.At, &u.At) != nil {
 		return u, i18n.Err("assistant-meeting.bad_photo_at")
 	}
@@ -277,10 +279,10 @@ func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r 
 	}
 	var msgs []roomMsg
 	for i := range withdraw {
-		msgs = append(msgs, roomMsg{msgID: "photo-withdrawn-" + withdraw[i].ID, w: &withdraw[i]})
+		msgs = append(msgs, roomMsg{msgID: "photo-withdrawn-" + string(withdraw[i].ID), w: &withdraw[i]})
 	}
 	for i := range queued {
-		msgs = append(msgs, roomMsg{msgID: "photo-" + queued[i].ID, p: &queued[i]})
+		msgs = append(msgs, roomMsg{msgID: "photo-" + string(queued[i].ID), p: &queued[i]})
 	}
 	tries := func(m roomMsg) int {
 		if n := s.room.photoTriesOf(m.msgID); n >= photoSendTries {

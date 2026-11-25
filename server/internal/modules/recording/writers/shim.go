@@ -273,15 +273,15 @@ func readJSON(p string, out any) (bool, error) {
 	return true, json.Unmarshal(raw, out)
 }
 
-// uuidRe is the knowledge base's check of a lowercase UUID, as its pattern has it (recordingwire.RecordingID
+// uuidRe is the knowledge base's check of a lowercase UUID, here of a photo's id, as its pattern has it (recordingwire.RecordingID
 // normalizes before it checks; a text it leaves as it is matched the pattern).
 var uuidRe uuidCheck
 
 type uuidCheck struct{}
 
-func (uuidCheck) MatchString(s string) bool {
-	id, ok := recordingwire.RecordingID(s)
-	return ok && id == s
+func (uuidCheck) MatchString(s recordingwire.PhotoID) bool {
+	id, ok := recordingwire.RecordingID(string(s))
+	return ok && id == string(s)
 }
 
 func badRecording(f string, a ...any) error {
