@@ -177,6 +177,7 @@ go server/internal/manager core
 go server/internal/managercli core
 go server/internal/managerconf core
 go server/internal/managerupdate core
+go server/internal/lookmedia core
 go server/internal/mcpserver core
 go server/internal/mcptoolgolden core
 go server/internal/mcpwait core
