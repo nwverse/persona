@@ -4,12 +4,13 @@ import { chromium } from 'playwright-core';
 import { mkdir, writeFile, mkdtemp, symlink, unlink, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
-const [base, out] = process.argv.slice(2);
+const [origin, out] = process.argv.slice(2);
 const executablePath = process.argv[process.argv.indexOf('--executable') + 1];
-if (!base || !out || !process.argv.includes('--executable')) throw new Error('Expected URL, screenshot directory and --executable');
-const address = new URL(base);
+if (!origin || !out || !process.argv.includes('--executable')) throw new Error('Expected URL, screenshot directory and --executable');
+const address = new URL(origin);
 assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(address.hostname), 'Use the owned loopback fixture');
 assert.ok(!address.username && !address.password && address.pathname === '/' && !address.search && !address.hash, 'Supply an origin');
+const base = address.origin;
 const probe = await (await fetch(base + '/__fixture', { signal: AbortSignal.timeout(5000) })).json();
 assert.equal(probe.fixture, 'persona-web-development-ui', 'Refuse non-fixture services');
 await mkdir(out, { recursive: true });
@@ -96,6 +97,12 @@ try {
     assert.match(await pipeline.innerText(), /Target b{12}/);
     assert.match(await pipeline.innerText(), /personad \(linux-amd64\) · Items 3\/4/);
     assert.equal(await pipeline.evaluate(el => el.scrollWidth > el.clientWidth), false, 'Pipeline horizontal overflow');
+    if (width === 390) {
+      const selectedVersion = page.getByRole('combobox', { name: 'Update version' }).locator('..').locator(':scope > [aria-hidden="true"]');
+      assert.equal(await selectedVersion.isVisible(), true);
+      assert.match(await selectedVersion.innerText(), /2026-11-13 18:23:45 · b{12}/);
+      assert.equal(await selectedVersion.evaluate(el => el.scrollWidth > el.clientWidth), false, 'Selected version horizontal overflow');
+    }
     await pipeline.evaluate(el => el.scrollIntoView({ block: 'center' }));
     await shot(`${width}-${theme}-${size}-pipeline`);
     await context.close();
@@ -106,8 +113,8 @@ try {
     const channelAnchor = page.locator('[data-settings-row="hub-channel"]');
     assert.equal(await channelAnchor.getByRole('combobox', { name: 'Update source' }).count(), 1);
     await page.getByRole('textbox', { name: 'Search settings' }).fill('Channel');
-    await page.getByRole('button', { name: /Hub\s*›\s*Channel/ }).click();
-    await page.waitForFunction(() => document.querySelector('[data-settings-row="hub-channel"]').style.boxShadow.includes('inset'));
+    await page.getByRole('button', { name: /This hub\s*›\s*Channel/ }).click();
+    await page.waitForFunction(() => document.querySelector('[data-settings-row="hub-channel"]')?.style.boxShadow.includes('inset'));
     const automatic = page.getByRole('switch', { name: 'Update hub automatically', exact: true });
     await automatic.click(); await page.waitForFunction(() => document.querySelector('[role="switch"][aria-label="Update hub automatically"]').getAttribute('aria-checked') === 'true');
     await page.getByRole('switch', { name: 'Update computers automatically', exact: true }).click();

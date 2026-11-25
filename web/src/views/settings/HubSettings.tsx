@@ -271,15 +271,8 @@ function HubUpdates() {
 
       <Group title={t("settings-hubsettings.update")} anchor="hub-update" footer={status.can_update ? t("settings-hubsettings.update_footer") : undefined}>
         {showUpdateVersion && <>
-          <Row label={t("settings-hubsettings.update_version")} stackOnNarrow>
-            <select aria-label={t("settings-hubsettings.update_version")} className={cx(settingsInputClass, "min-w-0 max-w-full tabular-nums")}
-              value={selectedID} disabled={working || checking || starting || savingSource || loadingBackups}
-              onChange={e => setSelectedVersion(e.target.value)}>
-              <option value="">{t("settings-hubsettings.latest_main")}{status.latest?.commit && !status.latest.backup_id ? ` · ${datedCommit(status.latest.commit, status.latest.updated_at)}` : ""}</option>
-              {backups.map(v => <option key={v.id} value={v.id}>{t("settings-hubsettings.backup_version")} · {datedCommit(v.commit, v.updated_at)}</option>)}
-              {activeBackup && !backups.some(v => v.id === activeBackup) && <option value={activeBackup}>{t("settings-hubsettings.backup_version")} · {datedCommit(status.latest?.commit, status.latest?.updated_at)}</option>}
-            </select>
-          </Row>
+          <UpdateVersionRow latest={status.latest} backups={backups} activeBackup={activeBackup} selectedID={selectedID}
+            disabled={working || checking || starting || savingSource || loadingBackups} onSelect={setSelectedVersion} />
           {backupError && <div className="flex items-center gap-3 px-4 py-2.5">
             <p role="alert" className="min-w-0 flex-1 text-label break-words text-red">{t("settings-hubsettings.backup_error", { error: backupError })}</p>
             <Button disabled={loadingBackups} onClick={() => void loadBackups()}>{t("settings-hubsettings.retry")}</Button>
@@ -402,6 +395,42 @@ function HubUpdates() {
         </p>
       </Dialog>
     </>
+  );
+}
+
+function UpdateVersionRow({ latest, backups, activeBackup, selectedID, disabled, onSelect }: {
+  latest?: HubUpdateStatus["latest"];
+  backups: HubUpdateBackup[];
+  activeBackup?: string;
+  selectedID: string;
+  disabled: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const mainLabel = t("settings-hubsettings.latest_main");
+  const backupLabel = t("settings-hubsettings.backup_version");
+  const options = [
+    { id: "", label: latest?.commit && !latest.backup_id ? `${mainLabel} · ${datedCommit(latest.commit, latest.updated_at)}` : mainLabel },
+    ...backups.map(v => ({ id: v.id, label: `${backupLabel} · ${datedCommit(v.commit, v.updated_at)}` })),
+  ];
+  if (activeBackup && !backups.some(v => v.id === activeBackup)) {
+    options.push({ id: activeBackup, label: `${backupLabel} · ${datedCommit(latest?.commit, latest?.updated_at)}` });
+  }
+  const selected = options.find(option => option.id === selectedID) ?? options[0];
+  return (
+    <Row label={t("settings-hubsettings.update_version")} stackOnNarrow>
+      <div className="relative w-full min-w-0 max-w-full">
+        <select aria-label={t("settings-hubsettings.update_version")}
+          className={cx(settingsInputClass, "peer min-w-0 max-w-full tabular-nums max-sm:absolute max-sm:inset-0 max-sm:h-full max-sm:opacity-0")}
+          value={selected.id} disabled={disabled} onChange={e => onSelect(e.target.value)}>
+          {options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
+        {/* Native select text is single-line. Paint its selected option with wrapping on narrow screens. */}
+        <span aria-hidden className="pointer-events-none flex min-h-11 items-center gap-2 rounded-control bg-field px-2.5 py-1.5 text-label text-ink shadow-inset-field tabular-nums peer-focus:shadow-[inset_0_0_0_1px_var(--accent)] peer-disabled:opacity-60 sm:hidden">
+          <span className="min-w-0 flex-1 break-words">{selected.label}</span>
+          <Icon name="chevron" size={12} className="shrink-0 text-ink-3" />
+        </span>
+      </div>
+    </Row>
   );
 }
 
