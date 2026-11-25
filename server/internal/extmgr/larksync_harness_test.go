@@ -318,6 +318,16 @@ func (s *fakeSyncer) Media(ctx context.Context, b larksyncwire.Binding, token fu
 	return []byte(b.Key + " " + tok + " " + ref), "image/png", nil
 }
 
+func (s *fakeSyncer) ResolveUserNames(ctx context.Context, b larksyncwire.Binding, token func(context.Context) (string, error), openIDs []string) (map[string]string, error) {
+	s.w.mu.Lock()
+	fn := s.w.resolveNames
+	s.w.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, b, token, openIDs)
+	}
+	return nil, nil
+}
+
 type larkRun func(ctx context.Context, b larksyncwire.Binding, token func(context.Context) (string, error), cursors map[string]string, idx larksyncwire.Index) (larksyncwire.Result, error)
 
 // larkWorld is a manager with the sync: the primary chat bot's app from hub.json, the fakes, a clock it moves.
@@ -328,11 +338,12 @@ type larkWorld struct {
 	reg   *fakeRegistrar
 	mux   http.Handler
 
-	mu      sync.Mutex
-	clock   time.Time
-	runs    map[string]larkRun // "<bot>/<account id>" → what its reader does
-	ran     []string
-	readers int
+	mu           sync.Mutex
+	clock        time.Time
+	runs         map[string]larkRun // "<bot>/<account id>" → what its reader does
+	resolveNames func(ctx context.Context, b larksyncwire.Binding, token func(context.Context) (string, error), openIDs []string) (map[string]string, error)
+	ran          []string
+	readers      int
 }
 
 func newLarkWorld(t *testing.T) *larkWorld {
