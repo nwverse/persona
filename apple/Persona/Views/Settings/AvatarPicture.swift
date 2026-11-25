@@ -194,8 +194,9 @@ nonisolated enum AvatarMotion {
 /// picture, by the method `spec/fixtures/look-colors/README.md` pins in whole numbers (from `make_persona.py`'s
 /// `extract_colors`), so the swatch the sheet shows is the color the hub will write.
 nonisolated enum AvatarColor {
-    /// The longest side the crop is read at for the sheet's swatch.
-    static let side = 256
+    /// The side the crop is read at for the sheet's swatch: the size a still crop is sent at, which the hub reads as
+    /// it comes (so for a still picture the swatch is the hub's seed exactly).
+    static let side = AvatarImage.outputSide
     /// The seed when too little of the picture is colorful: #787878.
     static let gray: UInt32 = (120 << 16) | (120 << 8) | 120
 
