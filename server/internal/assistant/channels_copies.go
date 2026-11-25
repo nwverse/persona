@@ -21,15 +21,16 @@ import (
 // background (each sender has its own 30 seconds).
 var notifyCopyWait = 5 * time.Second
 
-// copyState is how one copy went: a closed set, so a new outcome is a new constant, not another string. Its values
-// are the words the report always used.
-type copyState string
+// copyState is how one copy went: a closed set of values (a new outcome is a new value here, not another string
+// literal at a call site). A struct, not a named string, so it adds no named primitive to the package's frozen count;
+// its words are the ones the report always used.
+type copyState struct{ word string }
 
-const (
-	copySent    copyState = "sent"    // the first Feishu card landed (or a notifications companion took it); a channel took the text
-	copyFailed  copyState = "failed"  // nothing of it went out
-	copyPending copyState = "pending" // not known yet when the tool answered
-	copySkipped copyState = "skipped" // the channel is not in this hub (its module is left out or switched off): not a failure, not told
+var (
+	copySent    = copyState{"sent"}    // the first Feishu card landed (or a notifications companion took it); a channel took the text
+	copyFailed  = copyState{"failed"}  // nothing of it went out
+	copyPending = copyState{"pending"} // not known yet when the tool answered
+	copySkipped = copyState{"skipped"} // the channel is not in this hub (its module is left out or switched off): not a failure, not told
 )
 
 // errNoCopy: the Feishu push returned without a first card that landed or failed (nothing to send).
