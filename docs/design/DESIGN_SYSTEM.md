@@ -673,9 +673,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   under a finished turn's last reply, never under narration in a work summary or words still streaming. Copy message ·
   Start a new session ("Start a new chat" in Persona conversations) · ⋯ More message actions (Quote, Forward, Use as
   context) · the relative time (12 px `--ink-3`, the exact time as its tooltip). 24 × 24 round buttons 2 px apart, 14 px
-  icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. Shown on hover or keyboard focus, it stays 250 ms after
-  the pointer leaves and fades over 250 ms; an open ⋯ keeps it. Touch screens keep the copy + ⋯ row under that reply;
-  the right-click / long-press menu keeps every action. A reply cut short by an error or an interruption carries
+  icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. The latest finished reply keeps the full row left-aligned
+  below its text (#15428). Its resting `--ink-3` shifts to `--ink-2` on reply hover or keyboard focus within the bar.
+  Earlier bars appear on hover or keyboard focus, stay 250 ms after the pointer leaves and fade over 250 ms. An open ⋯
+  keeps the bar visible. Touch screens keep the copy + ⋯ row under a finished reply. The right-click / long-press menu
+  keeps every action. A reply cut short by an error or an interruption carries
   cindy's "This reply did not complete" line above it (13 px `--ink-2`). After the time (#5426, `TurnUsage`, cindy's
   usage cell): what the exchange cost, 6 px on, 12 px `--ink-3`, half a pixel down, "Worth $0.12" in an Agent session
   with cindy's usage card (320 px, `--surface`, `--line` border, 12 px radius, `shadow-overlay`, 16 px padding, 12 px
@@ -929,6 +931,7 @@ existing overview list style.
   - On the V1 To-dos list (below; iOS, hubs with `todo_view`, from #10465's switch-on) there is no Got it: opening a to-do counts as seeing it; Shelved becomes the Inactive mark inside To do.
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740). The V1 To-dos list on iOS (below) keeps the filter at the foot toolbar and the sort in ⋯.
+- **Read-only To-dos progress board** (web, #12713; `web/src/views/TodoBoard.tsx`): a display mode beside List and Calendar for reviewing open work across projects, not a fourth status grouping or a filter. It reuses the existing view `Segmented`, project surfaces, `Tag`, field styling and type tokens. Every open row uses the page's `countsAsOpen` placement (closed, accepted, cancelled and Shelved work stays out) and its stored `project`, with No project last. Headings count the rows actually shown: open, the existing `owner_decides` rule as Waiting on you, and strictly older than the visible positive-hour threshold as Stale. The threshold defaults to 72 hours and is a reversible browser-local display choice, not a hub or to-do setting; changing it recomputes locally and invalid input preserves the last valid value. Progress text and time come from the same stored report/session pair; no such pair means No progress yet and creation time for staleness. Rows only open the existing to-do detail. The board has no editing, completion, assignment or follow-up controls, starts no model or Agent work and writes nothing. Why a new mode: the actionable status list and due-date calendar do not answer cross-project ownership, last-progress and staleness questions in one read-only view; the new count definitions and progress-source precedence are recorded in `docs/web/web.md`.
 - **To-dos list** (#10465; iOS, hubs with `todo_view`, from #10465's switch-on; `docs/design/proposals/todos-redesign.md`
   3.3 and 3.4, the page, the row and the container the owner chose on 11-21, which supersede the V1 frames
   `iphone/list`, `docs/design/prototypes/todos/v1/notes.md`): the hub files each to-do (its `view`'s section) and the list draws the sections in the hub's order, what the

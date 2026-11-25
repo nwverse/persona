@@ -15,8 +15,8 @@ import (
 
 // Limits of one upload.
 const (
-	maxRecordingSegments = 20000
-	maxRecordingText     = 4 << 20
+	maxRecordingSegments = recordingwire.MaxRecordingSegments
+	maxRecordingText     = recordingwire.MaxRecordingText
 )
 
 // RecordingBookmark is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
@@ -255,7 +255,7 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	// An ended hub-mode meeting is as long as the audio the hub holds when the upload says less (#9587): a phone killed
 	// mid-segment loses the segment it was writing and ends the recording before it, while the hub got that audio.
 	if r.EndedAt != nil && r.HubTranscribed() {
-		if held := e.audioHeldEnd(id); held > r.Duration {
+		if held := e.RecordingProvider().AudioHeldEnd(recordingwire.ID(id)); held > r.Duration {
 			r.Duration = held
 			if end := r.StartedAt.Add(time.Duration(held * float64(time.Second))); end.After(*r.EndedAt) {
 				r.EndedAt = &end
@@ -300,7 +300,7 @@ func (e *Engine) putRecording(rawID string, u RecordingUpload, now time.Time) (p
 	put.Status, put.Attendance = RecordingStored, r.AttendanceRole()
 	put.Revision, put.Base, put.Next = r.Revision, r.Base, r.Next
 	putNamed(&put.RecordingPut, r)
-	put.TitleDue = liveTitleDue(r, now)
+	put.TitleDue = e.RecordingProvider().TitleDue(r, now)
 	st.notify(KindRecording, id, "metadata")
 	st.notify(KindRecording, id, "messages")
 	e.index(KindRecording, id, r.Name, r.Tagging, r.OneLine, r.StartedAt)

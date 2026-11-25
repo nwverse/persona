@@ -806,7 +806,7 @@ func (s *Service) forwardInboxToTodos(ctx context.Context) {
 		}
 	}
 	for _, it := range b.items {
-		if !it.open() || !inboxTaskLinkEligible(it) {
+		if it.VisibilityExcluded || !it.open() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if isSelfAuthoredInboxItem(it, owner, ownEmails) {
@@ -860,6 +860,10 @@ type todoForwardDelivery struct {
 }
 
 func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, snap InboxItem, m todoForwardMatch) {
+	allowed, visErr := s.inboxVisibilityModelAllowed(ctx, &snap)
+	if visErr != nil || !allowed {
+		return
+	}
 	claimed, pending, err := s.claimTodoForward(ctx, snap.ID, m.todo.ID, snap.Last)
 	if err != nil {
 		s.logf("inbox: todo forward ledger check for %s -> %s: %v", snap.ID, m.todo.ID, err)
