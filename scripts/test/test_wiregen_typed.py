@@ -82,6 +82,7 @@ class Model(unittest.TestCase):
         self.assertTrue(defs["Phase"].closed and defs["Phase"].count_unknown)
         self.assertTrue(defs["Section"].closed and not defs["Section"].count_unknown)
         self.assertFalse(defs["Legacy"].closed)
+        self.assertTrue(defs["Cause"].closed and not defs["Event"].closed)
         self.assertTrue(defs["View"].strict)
         self.assertFalse(defs["Lenient"].strict)
         fields = {f.name: f.type for f in defs["View"].fields}
@@ -139,6 +140,11 @@ class Model(unittest.TestCase):
             "x-unknown 'drop'": {"X": {"type": "string", "enum": ["a"], "x-enum": "closed", "x-unknown": "drop"}},
             "make a name": {"X": {"type": "string", "enum": ["1st"], "x-enum": "closed"}},
             "same name": {"X": {"type": "string", "enum": ["a_b", "a-b"], "x-enum": "closed"}},
+            "only closed": {"X": {"oneOf": [{"$ref": "#/$defs/A"}], "x-discriminator": "k", "x-enum": "open"},
+                            "A": {"type": "object", "required": ["k"], "properties": {"k": {"const": "a"}}}},
+            "x-unknown go on a string enum": {
+                "X": {"oneOf": [{"$ref": "#/$defs/A"}], "x-discriminator": "k", "x-unknown": "count"},
+                "A": {"type": "object", "required": ["k"], "properties": {"k": {"const": "a"}}}},
             "on an object": {"X": {"type": "string", "enum": ["a"], "x-decode": "strict"}},
             "additionalProperties is not": {"X": {"type": "object", "additionalProperties": True, "x-decode": "strict"}},
         }
@@ -174,6 +180,15 @@ class Languages(unittest.TestCase):
         self.assertIn("type ToolInput json.RawMessage", go)
         self.assertIn("func (v ToolInput) MarshalJSON() ([]byte, error)", go)
         self.assertIn("It stays opaque: a tool's own arguments", go)
+        # x-enum closed on a union: a named tag type with typed constants, its ordered list and Valid; an open
+        # union keeps its string tag
+        self.assertRegex(go, r'Kind CauseKind `json:"kind"`')
+        self.assertIn("type CauseKind string", go)
+        self.assertRegex(go, r'CauseLate\s+CauseKind = "late"')
+        self.assertIn("var CauseKinds = []CauseKind{CauseLate, CauseLost}", go)
+        self.assertIn("func (v CauseKind) Valid() bool {", go)
+        self.assertRegex(go, r'Type\s+string\s+`json:"type"`')
+        self.assertIn('var EventTypes = []string{"changed", "gone"}', go)
         # a union's field of a closed enum keeps the type
         self.assertRegex(go, r'Phase\s+Phase\s+`json:"phase,omitempty"`')
         # x-text: a named string, no closed set
