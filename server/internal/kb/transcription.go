@@ -2,43 +2,11 @@ package kb
 
 import (
 	"encoding/json"
-	"errors"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/recordingwire"
-)
-
-// Hub transcription (#3862 phase 5, docs/assistant/meeting-minutes.md "Phase 5: hub transcription"): a meeting
-// uploaded with transcription hub is transcribed on the hub from the audio the phone streams. What the knowledge base
-// keeps of it: the mode, the state and the timeline in meeting.json (never meta.json, as the room: an older manager
-// after a rollback rewrites meta.json without fields it does not know), the hub's own transcript in hub_segments.json
-// (hub_segments.go), the audio in attachments/audio/ until the minutes from the final transcript are written
-// (recording_audio.go). The transcript of record (TranscriptOfRecord) is what everything that reads the transcript
-// reads: transcript.md, detail.segments, search, the minutes, the summary and the follow-up's seed. The manager owns
-// the socket, the jobs and the final pass; it changes the state through TranscriptionUpdate.
-
-// Re-exported from recordingwire.
-const (
-	TranscriptionDevice      = recordingwire.TranscriptionDevice
-	TranscriptionHub         = recordingwire.TranscriptionHub
-	TranscriptionLive        = recordingwire.TranscriptionLive
-	TranscriptionFinishing   = recordingwire.TranscriptionFinishing
-	TranscriptionFinal       = recordingwire.TranscriptionFinal
-	TranscriptionFailed      = recordingwire.TranscriptionFailed
-	TranscriptionUnavailable = recordingwire.TranscriptionUnavailable
-	TranscriptionNotMeeting  = recordingwire.TranscriptionNotMeeting
-	PartTranscription        = recordingwire.PartTranscription
-	PartInterim              = recordingwire.PartInterim
-	MaxTimelineRoles         = recordingwire.MaxTimelineRoles
-	MaxTimelineSpans         = recordingwire.MaxTimelineSpans
-	AudioRate                = recordingwire.AudioRate
-	MaxAudioSeconds          = recordingwire.MaxAudioSeconds
-	HubPassLive              = recordingwire.HubPassLive
-	HubPassFinal             = recordingwire.HubPassFinal
-	SourceHub                = recordingwire.SourceHub
-	SourceDevice             = recordingwire.SourceDevice
 )
 
 // minutesHubWait is how long a hub-mode meeting's minutes wait for its final transcript after the complete upload.
@@ -65,11 +33,6 @@ type Timeline = recordingwire.Timeline
 func ParseTimeline(raw json.RawMessage) (t Timeline, ok bool) {
 	return recordingwire.ParseTimeline(raw)
 }
-
-// ---- meeting.json's transcription ----
-
-// MeetingTranscription is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MeetingTranscription = recordingwire.MeetingTranscription
 
 // transcriptionTimeline is t's timeline (empty without one).
 func transcriptionTimeline(t *MeetingTranscription) Timeline {
@@ -104,25 +67,6 @@ func settleTranscription(t *MeetingTranscription, now time.Time) {
 	if t.Timeline != nil && len(t.Timeline.Roles) == 0 && len(t.Timeline.Speaking) == 0 {
 		t.Timeline = nil
 	}
-}
-
-// transcriptionShown is what of t the apps read (TranscriptionView): PartTranscription moves when it changes, not
-// when only the timeline grows or the bookkeeping does.
-func transcriptionShown(t *MeetingTranscription) any {
-	if t == nil {
-		return nil
-	}
-	var gaps [][2]float64
-	if len(t.Gaps) > 0 {
-		gaps = t.Gaps
-	}
-	done, end, _ := t.FinalProgress()
-	return struct {
-		Mode, State, Problem string
-		Gaps                 [][2]float64
-		Fallback             bool
-		FinalDone, End       float64
-	}{t.Mode, t.State, t.Problem, gaps, t.Fallback, done, end}
 }
 
 // TranscriptionView is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
@@ -275,30 +219,6 @@ func (e *Engine) HubRecordings() ([]string, error) {
 		out = append(out, r.ID)
 	}
 	return out, nil
-}
-
-// trimTranscription is the trim's part of recording id's transcription (PruneRecordings, under recMu): a trimmed
-// recording keeps its mode and state, with no gaps, problem, fallback or timeline, and its audio is gone. The parts
-// that changed, for MeetingChanged once the store's locks are let go.
-func (e *Engine) trimTranscription(id string, now time.Time) []string {
-	st := e.Store
-	st.meetMu.Lock()
-	defer st.meetMu.Unlock()
-	_, parts, err := e.meetingUpdateLocked(id, func(m *Meeting, _ Recording) error {
-		t := m.Transcription
-		if t == nil {
-			return nil
-		}
-		t.Gaps, t.Problem, t.Fallback, t.Timeline = nil, "", false, nil
-		if t.Hub() && t.AudioGoneAt.IsZero() {
-			t.AudioGoneAt = now.UTC()
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrRecordingDeleted) {
-		e.logf("recording %s: trim transcription: %v", id, err)
-	}
-	return parts
 }
 
 // transcriptionMode is s as a mode ("" when it names none).

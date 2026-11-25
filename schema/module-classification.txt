@@ -64,6 +64,8 @@ go server/cmd/persona-node core
 go server/cmd/persona-projects core
 go server/cmd/personad core
 go server/internal/acceptloop core
+go server/internal/agentref core
+go server/internal/agentref/agentrefadapt core
 go server/internal/agents core
 go server/internal/agentsend core
 go server/internal/ai core
