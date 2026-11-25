@@ -263,6 +263,79 @@ func TestPushGradingLayerLifecycleManagerIsolationAndQuiesce(t *testing.T) {
 			t.Fatalf("layer remained after retry: %+v err=%v", snap, err)
 		}
 	})
+
+	t.Run("transient prune failure retries automatically with backoff and exits cleanly on shutdown", func(t *testing.T) {
+		h, _ := gradingHub(t)
+		deployCtx, stopHub := context.WithCancel(context.Background())
+		defer stopHub()
+		h.deployCtx = deployCtx
+		h.gradingReconcile.retryBase = 15 * time.Millisecond
+		h.gradingReconcile.retryMax = 40 * time.Millisecond
+
+		baseStore := h.push.store.(*gradingStore)
+		flaky := &flakyGradingLayerStore{gradingStore: baseStore}
+		h.push.store = flaky
+		extA := extGradingPrincipal(assistantwire.AssistantID, "ext-a")
+
+		if code, body := gradingLayerHTTP(t, h, extA, http.MethodPut, "/api/v1/push/grading/layer", `{"version":1}`); code != http.StatusOK {
+			t.Fatalf("PUT: %d %s", code, body)
+		}
+		flaky.mu.Lock()
+		flaky.failPrune = true
+		flaky.mu.Unlock()
+
+		h.reconcilePushGradingLayer(assistantwire.AssistantID, nil)
+		// Wait for the initial failure to be recorded into rec.deferred before allowing the store to recover.
+		initCtx, cancelInit := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelInit()
+		if h.waitPushGradingLayerReconciled(initCtx) {
+			t.Fatal("expected initial prune attempt to fail while failPrune=true")
+		}
+		if snap, err := readPushGradingSnapshot(context.Background(), baseStore); err != nil || snap.Layer == nil {
+			t.Fatalf("layer disappeared while failPrune=true: %+v err=%v", snap, err)
+		}
+
+		// Store recovers; automatic backoff retry must prune the layer without manual resume.
+		flaky.mu.Lock()
+		flaky.failPrune = false
+		flaky.mu.Unlock()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			snap, err := readPushGradingSnapshot(context.Background(), baseStore)
+			if err == nil && snap.Layer == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("automatic backoff retry did not prune layer: %+v err=%v", snap, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		// Verify shutdown cancels any scheduled backoff retry promptly with no goroutine leak.
+		if code, body := gradingLayerHTTP(t, h, extA, http.MethodPut, "/api/v1/push/grading/layer", `{"version":1}`); code != http.StatusOK {
+			t.Fatalf("PUT 2: %d %s", code, body)
+		}
+		flaky.mu.Lock()
+		flaky.failPrune = true
+		flaky.mu.Unlock()
+		h.gradingReconcile.retryBase = 10 * time.Second
+		h.gradingReconcile.retryMax = 10 * time.Second
+		h.reconcilePushGradingLayer(assistantwire.AssistantID, nil)
+		waitCtx, cancelWait := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelWait()
+		_ = h.waitPushGradingLayerReconciled(waitCtx)
+		stopHub()
+		done := make(chan struct{})
+		go func() {
+			h.nodeWorkers.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("scheduled reconcile retry did not exit promptly on hub shutdown")
+		}
+	})
 }
 
 func TestPushGradingLayerRoutesAndLifecycleRealPostgres(t *testing.T) {

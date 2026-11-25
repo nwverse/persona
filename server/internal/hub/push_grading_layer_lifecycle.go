@@ -14,7 +14,11 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-const codePushGradingLayerTaken = "layer_taken"
+const (
+	codePushGradingLayerTaken     = "layer_taken"
+	pushGradingReconcileRetryBase = time.Second
+	pushGradingReconcileRetryMax  = 30 * time.Second
+)
 
 // pushGradingLayerView is the public HTTP representation of the persisted
 // singleton extension layer. Manager stays internal to storage and ownership
@@ -55,12 +59,16 @@ func pushGradingLayerViewOf(layer *pushGradingLayer) *pushGradingLayerView {
 // off the bus read loop and serializes singleton layer writes with pruning so
 // stale reports cannot delete a newer claim after re-enable.
 type pushGradingLayerReconciler struct {
-	writeMu  sync.Mutex
-	mu       sync.Mutex
-	pending  map[string][]string
-	deferred map[string][]string
-	running  bool
-	idle     chan struct{}
+	writeMu        sync.Mutex
+	mu             sync.Mutex
+	pending        map[string][]string
+	deferred       map[string][]string
+	running        bool
+	idle           chan struct{}
+	retryScheduled bool
+	retryDelay     time.Duration
+	retryBase      time.Duration
+	retryMax       time.Duration
 }
 
 func (h *Hub) pushGradingLayerStore() Store {
@@ -406,8 +414,10 @@ func (h *Hub) runPushGradingLayerReconcile() {
 			}
 		}
 		rec.writeMu.Unlock()
-		h.quiesce.end()
 
+		// Record any transient failure before releasing the quiesce slot so a
+		// concurrent pause/resume cannot observe an empty deferred map and skip retry.
+		var retryDelay time.Duration
 		if err != nil {
 			h.pushGradingLogf("push grading: reconcile layer for %s: %v", mgr, err)
 			rec.mu.Lock()
@@ -417,8 +427,63 @@ func (h *Hub) runPushGradingLayerReconcile() {
 				}
 				rec.deferred[mgr] = active
 			}
+			if len(rec.deferred) > 0 && !rec.retryScheduled && h.deployCtx != nil && h.deployCtx.Err() == nil {
+				base := rec.retryBase
+				if base <= 0 {
+					base = pushGradingReconcileRetryBase
+				}
+				maxDelay := rec.retryMax
+				if maxDelay <= 0 {
+					maxDelay = pushGradingReconcileRetryMax
+				}
+				if maxDelay < base {
+					maxDelay = base
+				}
+				if rec.retryDelay <= 0 {
+					rec.retryDelay = base
+				} else {
+					rec.retryDelay = min(rec.retryDelay*2, maxDelay)
+				}
+				retryDelay = rec.retryDelay
+				rec.retryScheduled = true
+				h.nodeWorkers.Add(1)
+			}
+			rec.mu.Unlock()
+		} else {
+			rec.mu.Lock()
+			if len(rec.deferred) == 0 {
+				rec.retryDelay = 0
+			}
 			rec.mu.Unlock()
 		}
+
+		h.quiesce.end()
+		if retryDelay > 0 {
+			go h.waitAndResumePushGradingLayerReconcile(retryDelay)
+		}
+	}
+}
+
+func (h *Hub) waitAndResumePushGradingLayerReconcile(delay time.Duration) {
+	defer h.nodeWorkers.Done()
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-h.deployCtx.Done():
+		rec := &h.gradingReconcile
+		rec.mu.Lock()
+		rec.retryScheduled = false
+		rec.mu.Unlock()
+		return
+	case <-timer.C:
+	}
+	rec := &h.gradingReconcile
+	rec.mu.Lock()
+	rec.retryScheduled = false
+	hasDeferred := len(rec.deferred) > 0
+	rec.mu.Unlock()
+	if hasDeferred && h.deployCtx.Err() == nil {
+		h.resumePushGradingLayerReconcile()
 	}
 }
 
