@@ -35,7 +35,7 @@ import { firstAndCurrent } from "../lib/persona-nav";
 import { recentConversations } from "../lib/conversation-origins";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
 import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-recent";
-import { countsLabel, directionExternal, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
+import { countsLabel, directionExternal, directionLabel, useDirectionNames, useLeaderCounts, visibleSectionCounts } from "../lib/direction-names";
 import type { ExternalDirection } from "../lib/direction-tree";
 import { SidebarDirectionRow } from "./SidebarDirections";
 import { conversationPage } from "../lib/conversation-page";
@@ -393,7 +393,6 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
     if (assistant?.main) owned.add(assistant.main);
     return pendingPlanCounts(baseCounts, plans, manager, owned);
   }, [baseCounts, plans, assistant, manager]);
-  const leaderTotal = totalCounts(counts, [...counts.keys()]);
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
   // a conversation row's ⋯ / right click (iOS: its long press)
@@ -404,6 +403,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
+  const leaderTotal = visibleSectionCounts(counts, directions.map((d) => d.id), recentFolded ? [] : recent.map((c) => c.session_id));
   const { nav, reg, hover, highlight } = useGlide(activeKey);
   useStickyTop(nav);
   const go = useGo(onNavigate);
