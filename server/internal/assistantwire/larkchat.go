@@ -9,7 +9,7 @@ import (
 // ---- the Feishu chat's records the core and the lark module both name (internal/larkhost, #13404) ----
 //
 // The chat's state (the settings row bots.feishu.state) is the lark module's. These are the parts of it the core still
-// reads or writes while the cards, the standing board and the companion bots are the core's, and what the module asks
+// reads or writes while the standing board, the workbench pin and the companion bots are the core's, and what the module asks
 // the core about a chat's target. Field names and JSON tags are the state's own: the stored bytes do not change.
 
 // ChatTarget is where a message of the chat goes: the main conversation (whichever it is when the message is sent),
@@ -115,13 +115,11 @@ type CompanionBot struct {
 	AppID string `json:"app_id"` // its Lark app: the button opens the chat with it
 }
 
-// ChatBook is the chat's records as the core's cards, standing board and companion bots read and write them, under
+// ChatBook is the chat's records as the core's standing board, workbench pin and companion bots read and write them, under
 // the chat's lock (larkhost.Layer.Book). Every write is saved with the chat's state.
 type ChatBook interface {
 	// Loaded: the chat's state was read (nothing is saved before it is).
 	Loaded() bool
-	// Now is the chat's clock.
-	Now() time.Time
 	// Card is the card asking interaction id; KeepCard records it (nil forgets it; one with no message yet is only
 	// claimed, not saved); Cards are all of them.
 	Card(id string) (ChatCard, bool)
@@ -131,11 +129,6 @@ type ChatBook interface {
 	// message parent is, "" for none or for more than one.
 	CardRef(id string) (ChatCardRef, bool)
 	ProposalFor(parent string) string
-	// NoteEnded remembers c, a question card that ended without being answered in the chat, so an option typed for it
-	// late is not sent on as a new message.
-	NoteEnded(c ChatCard)
-	// Bound says whether a thread of the chat was bound to the conversation within the last d.
-	Bound(machine, session string, d time.Duration) bool
 	// Board is the standing board's card (nil: none), SetBoard records it; Pairing is the pairing the state belongs
 	// to (nil: not recorded yet).
 	Board() *ChatBoardRef

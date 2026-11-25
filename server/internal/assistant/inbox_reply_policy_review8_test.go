@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -110,7 +110,7 @@ func replyPolicyReview8DraftPosts(h *inboxHub) chan string {
 }
 
 func replyPolicyReview8WorkbenchAction(h *inboxHub, value map[string]any, form map[string]any, mid string) {
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = value
 	action.Action.FormValue = form
 	action.Context.MessageID = mid
@@ -130,6 +130,7 @@ func replyPolicyReview8OrdinaryItem(h *inboxHub, it *InboxItem) {
 }
 
 func TestInboxReplyPolicyWorkbenchDraftCardBindsGeneratedTextAndVersion(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	h, lark, it := handledHub(t)
 	replyPolicyReview8OrdinaryItem(h, it)
 	_ = replyPolicyEnableWorkbench(h)
@@ -288,6 +289,7 @@ func TestInboxReplyPolicyFailedPublicationMarkerSurvivesConcurrentMetadataReload
 }
 
 func TestInboxReplyPolicyUnversionedWorkbenchRedraftFailsClosed(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
@@ -440,6 +442,7 @@ func TestInboxReplyPolicyOmittedSourcesNonLarkCoverAllStages(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchPublishedCardSend(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
@@ -478,6 +481,7 @@ func TestInboxReplyPolicyWorkbenchPublishedCardSend(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchFeishuActionDispatch(t *testing.T) {
+	needsLarkLayer(t) // the Workbench action arrives through the lark module's real card handler
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
@@ -489,7 +493,7 @@ func TestInboxReplyPolicyWorkbenchFeishuActionDispatch(t *testing.T) {
 	finalReviewInstallMirror(h, it, text)
 	h.in.setModel(fakeModel(t, `{"category":"ordinary_coordination"}`))
 	value := replyPolicyWorkbenchActionValue(t, h.draftCard(context.Background(), *it, text, nil, "").JSON(), "send")
-	action := &feishubot.CardAction{}
+	action := &botcard.CardAction{}
 	action.Action.Value = value
 	action.Action.FormValue = map[string]any{"text": text}
 	action.Context.MessageID = "synthetic-real-feishu-action-card"

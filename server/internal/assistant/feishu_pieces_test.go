@@ -58,22 +58,6 @@ func TestFeishuAnswerSaysWhichPieceIsMissing(t *testing.T) {
 	}
 }
 
-func TestMissingPiecesNote(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
-	if got := missingPiecesNote("en", []int{2, 4}); !strings.Contains(got, "2 parts") || !strings.Contains(got, "2, 4") {
-		t.Fatalf("en %q", got)
-	}
-	if got := missingPiecesNote("zh-Hans", []int{3}); !strings.Contains(got, "1 段") || !strings.Contains(got, "第 3 段") {
-		t.Fatalf("zh %q", got)
-	}
-	if got := missingPiecesNote("zh-Hans", []int{2, 4}); !strings.Contains(got, "第 2、4 段") {
-		t.Fatalf("zh list %q", got)
-	}
-	if got := missingPiecesNote("ja", []int{2, 4}); !strings.Contains(got, "2、4 番目") || strings.Contains(got, "件") {
-		t.Fatalf("ja %q", got)
-	}
-}
-
 // failSecondPost makes f's second FeishuPost fail; it returns the count of posts tried and the chat lines said.
 func failSecondPost(f *fakeHub) (*int, *[]string) {
 	n := 0

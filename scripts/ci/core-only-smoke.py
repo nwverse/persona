@@ -17,6 +17,11 @@ PERSONA_HOME) is read. The hub starts the persona-manager beside it, as an insta
   is not in /api/v1/connectors?all=1, and its route (/api/v1/connectors/<id>/auth) answers 404;
 - every built-in extension a connector module adds (MODULE_EXTENSIONS) is not in /api/v1/extensions, and the routes
   a module serves through its seam (MODULE_ROUTES: mail, recording) answer 404;
+- a module that is off keeps what the user has (#13430, docs/architecture/core-and-modules.md): two recordings a hub
+  with the recording module wrote (a meeting with its transcript and minutes, and one whose minutes were still to be
+  written) are in the knowledge base before the hub starts; without the module they are still listed, opened and
+  found by search through the knowledge base's own routes, the one in flight says `paused: module_off` in the
+  response only, and once the hub has stopped every file under recordings/ is byte for byte what it was;
 - SIGTERM stops the hub and the manager within the timeout, exit 0.
 
 --full runs the same against a default build and expects the opposite (every module loaded, the programs, extensions
@@ -123,6 +128,83 @@ MODULE_EXTENSIONS = {"imessageport": "imessage"}
 # A route a module serves through its provider seam (not the kernel's hub_routes), by module id: answered (not 404)
 # while it is there, 404 once it is gone.
 MODULE_ROUTES = {"mail": "/api/v1/mail/accounts", "recording": "/api/v1/recordings"}
+
+
+# The recordings the knowledge base holds before the hub starts (server/internal/kb/recording_fixture_test.go writes them
+# with the knowledge base's own writers, as a hub with the recording module leaves them): a meeting with its transcript
+# and minutes, and one whose minutes were still to be written. KEPT_WORDS are found by search: a word of the transcript
+# and one of the minutes.
+KEPT_RECORDING, KEPT_PENDING = "6f1c2a3b-0000-4000-8000-00000000c0de", "6f1c2a3b-0000-4000-8000-00000000beef"
+KEPT_WORDS = ("quokka", "wombat")
+
+
+def seed_recordings(home, server=SERVER):
+    """Write the kept recordings into the knowledge base of the hub whose home is `home` (before it starts)."""
+    data = home / ".persona/data"
+    data.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, PERSONA_RECORDING_FIXTURE_DIR=str(data))
+    r = run(["go", "test", "-count=1", "-run", "^TestWriteRecordingFixture$", "./internal/kb/"], 600, cwd=server, env=env)
+    if r.returncode != 0:
+        raise Failed("writing the kept recordings: " + (r.stdout + r.stderr).strip()[-2000:])
+    check(recording_files(home), f"the fixture wrote no recording under {data}")
+
+
+def recording_files(home):
+    """Every file under the knowledge base's recordings/, by its path there: its bytes."""
+    root = home / ".persona/data/recordings"
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def files_changed(before, after):
+    """The paths whose bytes differ, appeared or went between two recording_files."""
+    return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+
+
+def kept_recordings(base, token, module_on):
+    """What the knowledge base's own routes answer for the kept recordings, as (check, ok, detail) rows: listed,
+    opened and found, with or without the recording module; `paused` only without it, on the one in flight."""
+    rows = []
+    state = "with" if module_on else "without"
+
+    def get(path):
+        status, body = http(base + path, token)
+        return status, (json.loads(body) if status == 200 else {})
+
+    status, body = get("/api/v1/kb/recordings")
+    paused = {i["id"]: i.get("paused", "") for i in body.get("items") or []}
+    want = {KEPT_RECORDING: "", KEPT_PENDING: "" if module_on else "module_off"}
+    rows.append((f"the stored recordings are listed {state} the module (GET /api/v1/kb/recordings)",
+                 status == 200 and all(i in paused for i in want), f"status {status}, ids {sorted(paused)}"))
+    rows.append((f"the list marks only the recording in flight as paused {state} the module",
+                 {i: paused.get(i) for i in want} == want, str(paused)))
+    status, body = get(f"/api/v1/kb/recordings/{KEPT_RECORDING}")
+    d = body.get("detail") or {}
+    rows.append((f"a stored recording opens with its transcript and minutes {state} the module",
+                 status == 200 and len(d.get("segments") or []) == 3 and KEPT_WORDS[1] in json.dumps(d.get("minutes"))
+                 and KEPT_WORDS[0] in d.get("recent", "") and "paused" not in d,
+                 f"status {status}, keys {sorted(d)}"))
+    status, body = get(f"/api/v1/kb/recordings/{KEPT_PENDING}")
+    d2 = body.get("detail") or {}
+    rows.append((f"the recording in flight opens and says paused={'(absent)' if module_on else 'module_off'} {state} the module",
+                 status == 200 and d2.get("paused", "") == want[KEPT_PENDING], f"status {status}, paused {d2.get('paused')!r}"))
+    for word in KEPT_WORDS:
+        status, body = get(f"/api/v1/kb-search?results=1&q={word}")
+        rows.append((f"search finds the stored recording by {word!r} {state} the module",
+                     status == 200 and KEPT_RECORDING in json.dumps(body), f"status {status}, {json.dumps(body)[:300]}"))
+    return rows, d
+
+
+def check_kept(base, token, module_on):
+    """kept_recordings as the smoke's own checks; the opened recording's detail."""
+    deadline = time.monotonic() + 90  # the knowledge base opens with the manager's first use of it
+    while True:
+        rows, detail = kept_recordings(base, token, module_on)
+        if all(ok for _, ok, _ in rows) or time.monotonic() > deadline:
+            break
+        time.sleep(2)
+    for what, ok, detail_text in rows:
+        check(ok, f"{what}: {detail_text}")
+    return detail
 
 
 def module_connectors():
@@ -390,6 +472,8 @@ def main():
         database = postgres(container)
         port, token = free_port(), secrets.token_hex(24)
         write_hub_json(home, port, token, database)
+        seed_recordings(home)
+        stored = recording_files(home)
         base = f"http://127.0.0.1:{port}"
         hub = start_hub(bindir, home, work, log)
         loaded = wait_ready(hub, base, log, 0)
@@ -401,6 +485,7 @@ def main():
         else:
             check(not loaded, f"a core-only manager loaded modules: {loaded}")
             expect(base, token, loaded, [], ids, programs, connectors, module_exts, flags=False)
+        opened = check_kept(base, token, "recording" in loaded)
         if off:
             rest = [i for i in ids if i not in off]
             for phase, disabled, present, absent in (("off", off, rest, off), ("on again", [], ids, [])):
@@ -409,19 +494,31 @@ def main():
                 hub = None
                 mark = len(log.read_text())
                 hub = start_hub(bindir, home, work, log)
+                if phase == "off":
+                    stored = recording_files(home)  # as the hub with every module left them
+                elif "recording" in off:
+                    changed = files_changed(stored, recording_files(home))
+                    check(not changed, f"files under recordings/ changed while the recording module was off: {changed}")
                 loaded = wait_ready(hub, base, log, mark)
                 expect(base, token, loaded, present, absent, programs, connectors, module_exts)
+                again = check_kept(base, token, "recording" in loaded)
+                if "recording" in off:
+                    check(again == opened, f"the stored recording's detail differs ({phase}): {json.dumps(again)[:400]} / {json.dumps(opened)[:400]}")
                 print(f"restarted with modules {json.dumps({'disabled': disabled})} (in {', '.join(dbs)}): "
                       f"modules loaded: {', '.join(loaded) or 'none'}", flush=True)
         stop_hub(hub, bindir)
         hub = None
+        if not default:  # no module at all: nothing may have written under recordings/
+            changed = files_changed(stored, recording_files(home))
+            check(not changed, f"files under recordings/ changed on a hub without the recording module: {changed}")
         gone = off if off else ([] if a.full else ids)
         print(f"PASS {kind} smoke: built, hub healthy, modules loaded: {', '.join(loaded) or 'none'}, "
               f"absent{' then back' if off else ''}: {', '.join(gone) or 'none'} (module programs "
               f"{', '.join(flat(programs, gone)) or 'none'}, connectors {', '.join(flat(connectors, gone)) or 'none'}, "
               f"extensions {', '.join(flat(module_exts, gone)) or 'none'}, routes "
               f"{', '.join(MODULE_ROUTES[i] for i in gone if i in MODULE_ROUTES) or 'none'}), node commands "
-              f"{'present' if default else 'absent'} ({', '.join(flat(commands)) or 'none'}), clean shutdown "
+              f"{'present' if default else 'absent'} ({', '.join(flat(commands)) or 'none'}), stored recordings listed, "
+              f"opened and found{'' if a.full else ', files unchanged without the recording module'}, clean shutdown "
               f"({time.monotonic() - started:.0f}s)")
         return 0
     except (Failed, TimedOut) as e:

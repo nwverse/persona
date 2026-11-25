@@ -31,6 +31,8 @@ type turns struct {
 	posts threadPoster
 	// book is the chat's state (chat_state.go).
 	book feishuBook
+	// detached are the cards closed when their node went away (asks.go).
+	detached detachedCards
 }
 
 // wait waits for the workers, or ctx.
@@ -89,16 +91,30 @@ func (s core) botUpdateCard(ctx context.Context, messageID string, card *botcard
 	return s.h.UpdateCard(ctx, messageID, card)
 }
 
+// botReplyTo writes text under messageID at to: key makes the same line, sent again, land once; full says the text is
+// a task's whole answer (the hub's full_answer).
+func (s core) botReplyTo(ctx context.Context, to feishuTarget, messageID, text, key string, full bool) error {
+	return s.appCall(ctx, FeishuText, targetParams(to, map[string]any{"reply_to": messageID, "text": text, "uuid": key, "full_answer": full}), nil)
+}
+
 func (s core) botReact(ctx context.Context, messageID, emoji string) (string, error) {
-	return s.h.React(ctx, messageID, emoji)
+	var res struct {
+		ReactionID string `json:"reaction_id"`
+	}
+	err := s.appCall(ctx, FeishuReact, map[string]any{"message_id": messageID, "emoji": emoji}, &res)
+	return res.ReactionID, err
 }
 
 func (s core) botUnreact(ctx context.Context, messageID, reactionID string) {
-	s.h.Unreact(ctx, messageID, reactionID)
+	_ = s.appCall(ctx, FeishuUnreact, map[string]any{"message_id": messageID, "reaction_id": reactionID}, nil)
 }
 
 func (s core) botMessages(ctx context.Context, messageID string) ([]botcard.Item, error) {
-	return s.h.Messages(ctx, messageID)
+	var res struct {
+		Items []botcard.Item `json:"items"`
+	}
+	err := s.appCall(ctx, FeishuMessages, map[string]any{"message_id": messageID}, &res)
+	return res.Items, err
 }
 
 func (s core) workbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card {
@@ -130,20 +146,6 @@ func (s core) openButton(ctx context.Context, machine, session string) botcard.B
 // rememberRun binds a message the bot posted in the private chat to run r's conversation: replying to it talks there.
 func (s core) rememberRun(messageID string, r *channel.Run) {
 	s.rememberBotThread(messageID, botTargetOf(r), r.Label)
-}
-
-func (s core) processPanel(l i18n.Lang, c *botcard.Card, steps []string) {
-	s.h.ProcessPanel(l, c, steps)
-}
-
-// answerCards are an answer's cards (the core's answerCards): each with the text it goes as when refused.
-func (s core) answerCards(l i18n.Lang, name func(*url.URL) string, answer string, quiet bool, steps []string, foot string) []botAnswerCard {
-	cards, fallbacks := s.h.AnswerCards(l, name, answer, quiet, steps, foot)
-	out := make([]botAnswerCard, len(cards))
-	for i, c := range cards {
-		out[i] = botAnswerCard{card: c, fallback: fallbacks[i]}
-	}
-	return out
 }
 
 // botAnswerCard is one card of an answer and the text it goes as when refused.
