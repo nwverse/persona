@@ -8,7 +8,6 @@ import { openPanel } from "../../lib/panel";
 import { addressOf } from "../../lib/preview";
 import type { DraftQuote } from "../../lib/drafts";
 import { cx, toast } from "../../ui/atoms";
-import { Icon } from "../../ui/icons";
 import { t } from "../../i18n";
 
 /** `staged`, `unstaged`, `commit 1a2b3c4d`, worded for the reader. */
