@@ -107,10 +107,11 @@ func TestFixedTaskHealthChangesBetweenPreviewDispatchAndRetry(t *testing.T) {
 	if starts := taskStartMachines(f); len(starts) != 0 {
 		t.Fatalf("unhealthy fixed target dispatched: %v", starts)
 	}
-	stored, err := s.loadPlan(ctx, id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var stored *TaskPlan
+	waitFor(t, "fixed target failure on the plan", func() bool {
+		stored, err = s.loadPlan(ctx, id)
+		return err == nil && len(stored.Tasks) == 1 && stored.Tasks[0].Error != ""
+	})
 	if task := stored.Tasks[0]; task.Machine != "l4" || task.MachinePolicy != machineFixed || task.Error == "" || task.Cwd != "/home/me/code/app" {
 		t.Fatalf("fixed refusal was not retained: %+v", task)
 	}

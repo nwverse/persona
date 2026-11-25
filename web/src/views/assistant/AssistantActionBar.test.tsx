@@ -241,6 +241,28 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(status().className).toContain("text-ink-2");
   });
 
+  it("presents a mixed usage-limit and foreground-working recheck as active, not Parked", () => {
+    const until = new Date(now.getTime() + 4 * 3_600_000).toISOString();
+    const limited: Session = { machine_id: "demo", session_id: "limited-worker", title: "Limited agent", cwd: "/demo", status: "idle", state: "idle", updated_at: at,
+      turn_error: "You've hit your usage limit.", turn_error_kind: "usage_limit", turn_error_resets_at: until };
+    act(() => {
+      upsertSession(limited);
+      putTodo({ ...todo,
+        agents: [...todo.agents!, { machine_id: "demo", session_id: limited.session_id, linked_at: at }],
+        supervision: { ...todo.supervision!, state: "parked", parked: { reason: "Check the active work", until, waiting_on: "date", count: 1 } },
+      });
+    });
+    act(() => entry("running").click());
+    const row = host.querySelector("[data-task-slot]")!;
+    expect(row.querySelector("[data-task-status]")!.getAttribute("data-task-status")).toBe("usage_limit");
+    expect(row.querySelector("[data-task-todo-state]")).toBeNull();
+    expect(row.textContent).toContain(t("task-wait.recheck", { time: formatDate(until, { dateStyle: "medium", timeStyle: "short" }) }));
+    // Once the foreground turn ends, the quiet usage-limited Agent alone does not keep the task active.
+    act(() => upsertSession({ machine_id: "demo", session_id: "worker", title: "Demo agent", cwd: "/demo", status: "idle", state: "idle", updated_at: at }));
+    expect(entry("running").textContent).toBe(label.running);
+    expect(entry("parked").textContent).toBe(`${label.parked}1`);
+  });
+
   it("names what a waiting task waits on in its status column, in the neutral color (#11090)", () => {
     act(() => entry("running").click());
     const status = () => host.querySelector("[data-task-slot]")!.querySelector<HTMLElement>("[data-task-status]")!;
@@ -730,7 +752,9 @@ describe("Assistant Needs you / In progress trays", () => {
   it("puts a task waiting on the user and a draft in Needs you only, without sending anything", async () => {
     const draft: FeedItem = { id: "tray-draft", conversation, at, kind: "message", ref: "draft-ref", body: { draft: "Demo reply", text: "Demo message" } };
     getFeedState().feeds[conversation] = [...feed, draft];
-    act(() => putTodo({ ...todo, supervision: { ...todo.supervision!, state: "needs_user" } }));
+    // Keep the mocked hub in the same state: putTodo's lazy push setup may refresh it.
+    todo = { ...todo, supervision: { ...todo.supervision!, state: "needs_user" } };
+    act(() => putTodo(todo));
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}2`, label.running]);
     await act(async () => {
       entry("needs").click();

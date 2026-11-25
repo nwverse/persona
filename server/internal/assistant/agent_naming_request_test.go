@@ -394,9 +394,9 @@ func TestRequestedAgentNameRunsOncePerSession(t *testing.T) {
 		status, body := autoname(t, s, roleFull, "server", sid)
 		answers <- answer{status, body}
 	}
-	// Every caller has reached the singleflight gate, so all six share the call already held by the model.
+	// Release the model only after all six callers have joined its outstanding request.
 	admitted := make(chan struct{}, waiting)
-	s.agentNames.beforeRequest = func() { admitted <- struct{}{} }
+	s.agentNames.requestJoined = func() { admitted <- struct{}{} }
 	go ask("s1")
 	select {
 	case <-started:
@@ -413,7 +413,7 @@ func TestRequestedAgentNameRunsOncePerSession(t *testing.T) {
 			t.Fatal("a request never reached the shared call")
 		}
 	}
-	s.agentNames.beforeRequest = nil
+	s.agentNames.requestJoined = nil
 	// Another session has its own model call; this one still has only one caller.
 	go ask("s2")
 	select {

@@ -43,14 +43,14 @@ func (s *Service) admitChannelMessage(ctx context.Context, id string, m channel.
 		thread = channelRouteKey(s.channelPrefLocked(id).ThreadMode, m)
 	}
 	a := &channelAdmission{key: channelAdmissionKey{channel: id, thread: thread, generation: c.generation[id]}}
-	if a.key.thread != "" {
-		if c.receiving == nil {
-			c.receiving = map[channelAdmissionKey]chan struct{}{}
-		}
-		a.prev = c.receiving[a.key]
-		a.done = make(chan struct{})
-		c.receiving[a.key] = a.done
+	// An empty thread is this channel's ordinary route. Its replies fold into the latest
+	// receipt too, even when the earlier message's send RPC takes longer.
+	if c.receiving == nil {
+		c.receiving = map[channelAdmissionKey]chan struct{}{}
 	}
+	a.prev = c.receiving[a.key]
+	a.done = make(chan struct{})
+	c.receiving[a.key] = a.done
 	next := append(seen, m.ID)
 	if len(next) > channelSeenKeep {
 		next = next[len(next)-channelSeenKeep:]
@@ -62,32 +62,28 @@ func (s *Service) admitChannelMessage(ctx context.Context, id string, m channel.
 		} else {
 			delete(c.st.Seen, id)
 		}
-		if a.done != nil {
-			if a.prev == nil {
-				delete(c.receiving, a.key)
-			} else {
-				c.receiving[a.key] = a.prev
-			}
+		if a.prev == nil {
+			delete(c.receiving, a.key)
+		} else {
+			c.receiving[a.key] = a.prev
 		}
 		return nil, err
 	}
 	return a, nil
 }
 
-// run keeps one binding generation's thread ordered. A new binding never waits for an old generation's RPC.
+// run keeps one binding generation's ordinary route or thread ordered. A new binding never waits for an old generation's RPC.
 // The routing code still gates destinations on the channel's threads capability.
 func (a *channelAdmission) run(s *Service, m channel.Message, action string) {
-	if a.done != nil {
-		defer func() {
-			c := &s.chans
-			c.mu.Lock()
-			if c.receiving[a.key] == a.done {
-				delete(c.receiving, a.key)
-			}
-			close(a.done)
-			c.mu.Unlock()
-		}()
-	}
+	defer func() {
+		c := &s.chans
+		c.mu.Lock()
+		if c.receiving[a.key] == a.done {
+			delete(c.receiving, a.key)
+		}
+		close(a.done)
+		c.mu.Unlock()
+	}()
 	if a.prev != nil {
 		<-a.prev
 	}

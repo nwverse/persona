@@ -132,7 +132,7 @@ func (s *Service) recordingAudioSocket(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) recordingHook(e *kb.Engine) {
 	if s.rec != nil {
-		s.rec.Hook(e)
+		s.rec.Hook(e, kb.RecordingCore(e))
 	}
 }
 

@@ -1,7 +1,7 @@
 import PersonaWire
 import SwiftUI
 
-/// Under the map (docs/server/machine-usage-map.md "Selection and \"what if\""): the last trash's notice with Undo and
+/// Under the map (docs/server/machine-usage-map.md "The map"): the last trash's notice with Undo and
 /// Delete Permanently, an offload's progress, the "what if" line, the selection as rows (the map's non-visual
 /// equivalent: every box action is here too) with its actions, and the free-up goal.
 struct UsageMapTray: View {
@@ -184,7 +184,7 @@ struct UsageConfirmations: ViewModifier {
     func body(content: Content) -> some View {
         let shown = Binding(get: { model.confirmation != nil }, set: { if !$0 { model.confirmation = nil } })
         let c = model.confirmation
-        content.confirmationDialog(c.map(title) ?? "", isPresented: shown, titleVisibility: .visible, presenting: c) { c in
+        content.accessibleConfirmationDialog(c.map(title) ?? "", isPresented: shown, titleVisibility: .visible, hasCancel: true, presenting: c) { c in
             Button(confirmLabel(c), role: destructive(c) ? .destructive : nil) { Task { await model.confirm(c) } }
                 .accessibilityIdentifier("usage.confirm")
             Button("Cancel", role: .cancel) { model.confirmation = nil }

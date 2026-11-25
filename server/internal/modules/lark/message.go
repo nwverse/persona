@@ -258,14 +258,14 @@ func (s core) botSendIn(ctx context.Context, ev *botcard.MessageEvent, content b
 	text := prompts.RenderBotMessage(in)
 	if strings.TrimSpace(content.Text) == "" && in.Quote == nil && in.Forward == "" && len(images) == 0 && len(in.Files) == 0 {
 		if len(tooLarge) > 0 {
-			return errors.New(i18n.T(s.botLang(ctx), "assistant-feishu.file_too_large_only", i18n.Args{"files": strings.Join(tooLarge, s.h.ListSep(s.botLang(ctx)))}))
+			return errors.New(i18n.T(s.botLang(ctx), "assistant-feishu.file_too_large_only", i18n.Args{"files": strings.Join(tooLarge, listSep(s.botLang(ctx)))}))
 		}
 		return errors.New(i18n.T(s.botLang(ctx), "assistant-feishu.cannot_read"))
 	}
 	if len(tooLarge) > 0 {
 		defer func() {
 			if started {
-				s.botNoteTo(context.WithoutCancel(ctx), to, msg.MessageID, i18n.T(s.botLang(ctx), "assistant-feishu.file_too_large", i18n.Args{"files": strings.Join(tooLarge, s.h.ListSep(s.botLang(ctx)))}))
+				s.botNoteTo(context.WithoutCancel(ctx), to, msg.MessageID, i18n.T(s.botLang(ctx), "assistant-feishu.file_too_large", i18n.Args{"files": strings.Join(tooLarge, listSep(s.botLang(ctx)))}))
 			}
 		}()
 	}

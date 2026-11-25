@@ -139,6 +139,24 @@ func TestKBSearchKind(t *testing.T) {
 	}
 }
 
+func TestRecordingFactsHTTPConditionalUpdate(t *testing.T) {
+	m := newMeetingFixture(t)
+	m.upload(meetingRec, 1, map[string]any{"title": "Facts"})
+	path := "/api/v1/kb/recordings/" + meetingRec
+	initial := m.do("GET", path, "", nil, http.StatusOK)
+	if initial["supports_expected_pinned"] != true {
+		t.Fatal(initial)
+	}
+	m.do("PUT", path, "", map[string]any{"pinned": "existing"}, http.StatusOK)
+	m.do("PUT", path, "", map[string]any{"expected_pinned": "", "pinned": "stale", "importance": "P0"}, http.StatusConflict)
+	detail := m.do("GET", path, "", nil, http.StatusOK)["detail"].(map[string]any)
+	meta := detail["meta"].(map[string]any)
+	if meta["pinned"] != "existing" || meta["importance"] == "P0" {
+		t.Fatal(meta)
+	}
+	m.do("PUT", path, "", map[string]any{"expected_pinned": "existing", "pinned": ""}, http.StatusOK)
+}
+
 // A recording the knowledge base holds stays there (#13501): a later upload naming a track is refused with
 // recording_in_kb instead of writing a second copy into the track.
 func TestRecordingInKBRefusesSpace(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -18,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Dashboards (#15017): pages an assistant conversation drafts and the owner keeps in the sidebar. A page starts as a
@@ -46,9 +47,11 @@ const (
 	AssistantPagesRemovedMost = 100
 	AssistantPageTapLife      = 90 * 24 * time.Hour
 	AssistantPageTapsKept     = 200
-	assistantPageViewBytes    = 64 << 10
-	assistantPageTitleMost    = 40
-	assistantPageWriteWindow  = time.Hour
+	// AssistantPageReasonMost is how many characters an Agent's reason for removing a page has at most.
+	AssistantPageReasonMost  = 200
+	assistantPageViewBytes   = 64 << 10
+	assistantPageTitleMost   = 40
+	assistantPageWriteWindow = time.Hour
 
 	// AssistantPagesRateKey is the setting holding the write window of all pages together.
 	AssistantPagesRateKey = "assistant.pages_rate"
@@ -116,8 +119,8 @@ func AssistantPageTitleKey(title string) string {
 }
 
 var (
-	assistantPageID       = regexp.MustCompile(`^pg_[0-9a-f]{16}$`)
-	assistantPageActionID = regexp.MustCompile(`^pa_[0-9a-f]{16}$`)
+	assistantPageID       = lazyre.New(`^pg_[0-9a-f]{16}$`)
+	assistantPageActionID = lazyre.New(`^pa_[0-9a-f]{16}$`)
 )
 
 // NewAssistantPageID is a new page id: pg_ and 16 lowercase hex digits.
@@ -163,6 +166,8 @@ type AssistantPageRow struct {
 	ContentAt         time.Time
 	RemovedAt         *time.Time
 	RemovedBy         string
+	// RemovedReason is why an Agent removed it (page remove), for the owner; empty otherwise.
+	RemovedReason string
 }
 
 // Listed is a removed page shown in Recently removed: one the owner had kept, removed by the owner, an Agent or with its
@@ -198,7 +203,7 @@ type AssistantPageWriter struct {
 
 const assistantPageSummary = `id, status, title, icon, icon_color, owner_kind, owner_machine, owner_ref, created_machine,
 	created_session, offer_view, why, version, pinned, pinned_at, paused, paused_by, kept_device, kept_at, writes_window_start,
-	writes_window_n, created_at, updated_at, content_at, removed_at, removed_by`
+	writes_window_n, created_at, updated_at, content_at, removed_at, removed_by, removed_reason`
 
 const assistantPageColumns = assistantPageSummary + `, view`
 
@@ -206,7 +211,7 @@ func scanAssistantPage(row pgx.Row, withView bool) (*AssistantPageRow, error) {
 	var p AssistantPageRow
 	dest := []any{&p.ID, &p.Status, &p.Title, &p.Icon, &p.IconColor, &p.OwnerKind, &p.OwnerMachine, &p.OwnerRef,
 		&p.CreatedMachine, &p.CreatedSession, &p.OfferView, &p.Why, &p.Version, &p.Pinned, &p.PinnedAt, &p.Paused,
-		&p.PausedBy, &p.KeptDevice, &p.KeptAt, &p.WritesWindowStart, &p.WritesWindowN, &p.CreatedAt, &p.UpdatedAt, &p.ContentAt, &p.RemovedAt, &p.RemovedBy}
+		&p.PausedBy, &p.KeptDevice, &p.KeptAt, &p.WritesWindowStart, &p.WritesWindowN, &p.CreatedAt, &p.UpdatedAt, &p.ContentAt, &p.RemovedAt, &p.RemovedBy, &p.RemovedReason}
 	if withView {
 		dest = append(dest, &p.View)
 	}
@@ -688,8 +693,17 @@ func (d *DB) RenameAssistantPage(ctx context.Context, id, title, device string, 
 // AssistantPageRemovedLife brings it back. Recently removed keeps the latest AssistantPagesRemovedMost: older ones are
 // deleted. Removing a page removed already changes nothing; a draft is declined, not removed.
 func (d *DB) RemoveAssistantPage(ctx context.Context, id, by string, at time.Time) (p *AssistantPageRow, changed bool, err error) {
+	return d.RemoveAssistantPageWithReason(ctx, id, by, "", at)
+}
+
+// RemoveAssistantPageWithReason is RemoveAssistantPage with why it was removed (an Agent's page remove), at most
+// AssistantPageReasonMost characters, kept until the page is restored.
+func (d *DB) RemoveAssistantPageWithReason(ctx context.Context, id, by, reason string, at time.Time) (p *AssistantPageRow, changed bool, err error) {
 	if by != AssistantPageRemovedByOwner && by != AssistantPageRemovedByAgent {
 		return nil, false, fmt.Errorf("an assistant page is removed by the owner or an agent, not %q", by)
+	}
+	if utf8.RuneCountInString(reason) > AssistantPageReasonMost {
+		return nil, false, fmt.Errorf("a removal's reason has at most %d characters", AssistantPageReasonMost)
 	}
 	at = at.UTC().Truncate(time.Microsecond)
 	err = d.pagesTx(ctx, true, func(tx pgx.Tx) error {
@@ -705,8 +719,8 @@ func (d *DB) RemoveAssistantPage(ctx context.Context, id, by string, at time.Tim
 			return ErrAssistantPageNotKept
 		}
 		p, err = scanAssistantPage(tx.QueryRow(ctx, `UPDATE assistant_pages SET status = 'removed', removed_at = $2,
-			removed_by = $3, pinned = false, pinned_at = NULL, updated_at = $2 WHERE id = $1 RETURNING `+assistantPageSummary,
-			id, at, by), false)
+			removed_by = $3, removed_reason = $4, pinned = false, pinned_at = NULL, updated_at = $2 WHERE id = $1
+			RETURNING `+assistantPageSummary, id, at, by, reason), false)
 		if err != nil {
 			return err
 		}
@@ -750,7 +764,7 @@ func (d *DB) RestoreAssistantPage(ctx context.Context, id string, at time.Time) 
 			return err
 		}
 		p, err = scanAssistantPage(tx.QueryRow(ctx, `UPDATE assistant_pages SET status = 'active', removed_at = NULL,
-			removed_by = '', updated_at = $2,
+			removed_by = '', removed_reason = '', updated_at = $2,
 			owner_kind = CASE WHEN removed_by = 'conversation_deleted' THEN 'main' ELSE owner_kind END,
 			owner_machine = CASE WHEN removed_by = 'conversation_deleted' THEN '' ELSE owner_machine END,
 			owner_ref = CASE WHEN removed_by = 'conversation_deleted' THEN '' ELSE owner_ref END

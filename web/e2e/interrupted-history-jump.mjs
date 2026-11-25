@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 export const interruptedJumps = [
   { size: "wide", theme: "light", source: "rail", action: "Jump to bottom" },
-  { size: "narrow", theme: "light", source: "rail", action: "wheel to bottom" },
+  { size: "wide", theme: "light", source: "rail", action: "wheel to bottom" },
   { size: "wide", theme: "dark", source: "link", action: "pick another target" },
   { size: "narrow", theme: "dark", source: "link", action: "wheel into history" },
 ];
@@ -39,17 +39,21 @@ export async function checkInterruptedJump({ page, url, run, output, target, sec
   if (source === "link") url.searchParams.set("at", target.id);
   await page.goto(url.href);
   const chat = page.locator("[data-chat-scroll]");
-  await page.locator('[data-nav-source="server"]').waitFor();
+  await chat.locator("[data-user-bubble]").first().waitFor();
   run.initialBodies = await chat.locator("[data-user-bubble]").count();
   const box = await chat.boundingBox();
   const wheel = async dy => {
-    await page.mouse.move(box.x + 40, box.y + box.height / 2);
+    await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2);
     await page.mouse.wheel(0, dy);
   };
   if (source === "rail") {
+    const rail = page.locator('[data-nav-source="server"]');
+    await rail.waitFor();
     await wheel(-1200);
     await page.waitForFunction(() => document.querySelector("[data-jump-pill]"));
-    await page.locator('[data-nav-rail] [data-tick="0"]').click();
+    await rail.focus();
+    await page.keyboard.press("Home");
+    await rail.locator('[data-tick="0"]').click();
   }
   await page.locator("[data-loading-earlier]").waitFor();
   assert.equal(run.olderReads, 1);

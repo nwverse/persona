@@ -71,6 +71,9 @@ type InitializeParams struct {
 	Extension ExtensionInfo `json:"extension"`
 	// Config is the plugin's configuration with the schema's defaults filled in.
 	Config json.RawMessage `json:"config,omitempty"`
+	// InboxVisibility is the manager's source-privacy boundary, sent only to an extension contributing a selected
+	// connector. It is runtime authorization input, not extension settings persisted in the extension registry.
+	InboxVisibility json.RawMessage `json:"inbox_visibility,omitempty"`
 	// Secrets are the plugin's own (declared in its manifest, filled in by the user), by name.
 	Secrets map[string]string `json:"secrets,omitempty"`
 	// Granted are the permissions the user accepted.

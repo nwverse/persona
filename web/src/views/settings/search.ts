@@ -79,6 +79,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-assistantsettings.relay_replies"), anchor: "relay-replies" },
   { tab: "persona", group: t("settings-assistantsettings.recent_task_chats"), anchor: "recent-task-chats" },
   { tab: "persona", group: t("settings-assistantsettings.next_suggestions"), anchor: "next-suggestions" },
+  { tab: "persona", group: t("settings-assistantsettings.dashboards"), anchor: "dashboards" },
   { tab: "persona", group: t("settings-assistantsettings.claude_interactive"), anchor: "claude-interactive" },
   { tab: "persona", group: t("settings-assistantsettings.start_requested"), hint: t("settings-assistantsettings.start_title"), anchor: "start-requested" },
   { tab: "persona", group: t("settings-assistantsettings.workspace_preference"), anchor: "workspace-preference" },
@@ -162,6 +163,8 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // Connectors
   { tab: "connectors", group: t("settings-connectors.mail"), anchor: "mail" },
   { tab: "connectors", group: t("settings-connectors.lark"), anchor: "lark" },
+  // the daily sync to the knowledge base (LarkSyncSection.tsx), inside the Lark settings: found by its heading, opens the Lark row
+  { tab: "connectors", group: t("settings-larksync.title"), hint: words(t("settings-larksync.add"), t("settings-larksync.schedule_label")), anchor: "lark" },
   { tab: "connectors", group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent" },
   // Extensions: an extension's secrets are on its page, opened from the list; a market's token under Manage markets
   { tab: "extensions", group: t("settings-extensions.title"), anchor: "extensions" },

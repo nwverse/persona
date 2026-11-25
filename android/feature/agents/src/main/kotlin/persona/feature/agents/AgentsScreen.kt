@@ -168,6 +168,7 @@ internal fun AgentsScreen(
     }
     val outbox by model.sender.outbox.collectAsStateWithLifecycle()
     val delivery by model.delivery.collectAsStateWithLifecycle()
+    val commandInputErrors by model.commandInputErrors.collectAsStateWithLifecycle()
     val requestHistory by model.requestHistory.collectAsStateWithLifecycle()
     val refreshing by model.refreshing.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
@@ -1260,7 +1261,7 @@ internal fun AgentsScreen(
                 navigator.navigate(TerminalRoute(request.machineId, request.sessionId))
             }), machine = machine,
             blockedReason = session?.takeIf { !it.canAnswerInteraction(request) }?.let { approveBlocked },
-            terminalHelp = session?.canTerminal != false)
+            terminalHelp = session?.canTerminal != false, refusal = commandInputErrors[request.id]?.notice(resources, request))
     }
 }
 

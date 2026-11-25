@@ -4,11 +4,9 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"math"
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/recordingwire"
@@ -46,19 +44,11 @@ const (
 	GapErased      = recordingwire.GapErased
 )
 
-// RecordingCoverage is the phone's view of a day recording, sent whole every time: To is the seconds since started_at
-// up to which everything it holds is transcribed and appended, Gaps the time with no text and why.
-type RecordingCoverage struct {
-	To   float64       `json:"to"`
-	Gaps []CoverageGap `json:"gaps,omitempty"`
-}
+// RecordingCoverage is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type RecordingCoverage = recordingwire.RecordingCoverage
 
-// CoverageGap is a stretch of the day with no text: seconds since started_at, and why (Gap*).
-type CoverageGap struct {
-	From   float64 `json:"from"`
-	To     float64 `json:"to"`
-	Reason string  `json:"reason"`
-}
+// CoverageGap is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type CoverageGap = recordingwire.CoverageGap
 
 // Re-exported from recordingwire.
 var (
@@ -104,9 +94,9 @@ type RecordingAppended struct {
 	Wake     bool
 }
 
-// cleanDay checks a day upload's own fields: day a real YYYY-MM-DD, tz an IANA zone (the owner's when empty), part
+// cleanUploadDay checks a day upload's own fields: day a real YYYY-MM-DD, tz an IANA zone (the owner's when empty), part
 // 1–99 (1 when absent), the coverage mended. The calendar hint is dropped: a day recording is never a meeting.
-func (u *RecordingUpload) cleanDay() error {
+func cleanUploadDay(u *RecordingUpload) error {
 	u.Day, u.TZ = strings.TrimSpace(u.Day), strings.TrimSpace(u.TZ)
 	if !validDay(u.Day) {
 		return badRecording("day must be a date, YYYY-MM-DD")
@@ -136,21 +126,19 @@ func validDay(s string) bool {
 	return err == nil && d.Format(time.DateOnly) == s
 }
 
-// dropRoom ignores a day upload's room, private mark and timeline, as attending is: a role asked for is off with
+// dropUploadRoom ignores a day upload's room, private mark and timeline, as attending is: a role asked for is off with
 // AttendanceNotMeeting (problem, normalizeAttendance's, wins when it has one). Its transcription mode is never stored
 // (putTranscriptionFields): hub asked for is answered device with TranscriptionNotMeeting.
-func (u *RecordingUpload) dropRoom(problem string) string {
-	if u.room != nil {
-		if _, p := u.roomRole(); problem == "" {
+func dropUploadRoom(u *RecordingUpload, problem string) string {
+	if u.Room != nil {
+		if _, p := uploadRoomRole(u); problem == "" {
 			problem = p
 		}
-		u.room = nil
+		u.Room = nil
 	}
-	u.Private, u.timeline = nil, nil
+	u.Private, u.Timeline = nil, nil
 	return problem
 }
-
-func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 // mendCoverage is c as the hub keeps it, mended rather than refused: to and the gaps clamped to 0 and above, a gap's
 // ends put in order, empty gaps dropped, the rest sorted; overlapping gaps (and touching ones) of the same reason are
@@ -240,35 +228,6 @@ func joinGaps(gaps []CoverageGap, may func(a, b CoverageGap) bool) []CoverageGap
 	return out
 }
 
-var dayZones sync.Map // IANA name → *time.Location, loaded once
-
-// dayLocation is the IANA zone name ("Local" is not one).
-func dayLocation(name string) (*time.Location, error) {
-	if l, ok := dayZones.Load(name); ok {
-		return l.(*time.Location), nil
-	}
-	if name == "" || name == "Local" {
-		return nil, fmt.Errorf("unknown time zone %q", name)
-	}
-	l, err := time.LoadLocation(name)
-	if err != nil {
-		return nil, err
-	}
-	dayZones.Store(name, l)
-	return l, nil
-}
-
-// RecordingZone is the zone r's clock times are in: a day recording's own (tz), else (and when it cannot be loaded)
-// the user's.
-func (s *Store) RecordingZone(r *Recording) *time.Location {
-	if r.Kind == RecordingDay && r.TZ != "" {
-		if l, err := dayLocation(r.TZ); err == nil {
-			return l
-		}
-	}
-	return s.Zone()
-}
-
 // recordingName is Store.recordingName, a day recording's in the owner's language (Engine.DayRecordingName) unless
 // the user titled it.
 func (e *Engine) recordingName(r *Recording) string {
@@ -280,22 +239,14 @@ func (e *Engine) recordingName(r *Recording) string {
 	return e.Store.recordingName(r)
 }
 
-// now is the engine's clock (a test sets clock).
-func (e *Engine) now() time.Time {
-	if e.clock != nil {
-		return e.clock()
-	}
-	return time.Now()
-}
-
 // putDay sets a day recording's own fields from upload u (cleaned, a new base): its count, and the revisions an
 // older manager would otherwise match and summarize it at. Its text is another (TextRev): every finished chunk is
 // looked at again, and noted again when the PUT changed its lines.
-func (r *Recording) putDay(u *RecordingUpload) {
+func putDay(r *Recording, u *RecordingUpload) {
 	r.Day, r.TZ, r.Part, r.Coverage = u.Day, u.TZ, u.Part, u.Coverage
-	r.Base, r.Next = u.Revision, u.next
+	r.Base, r.Next = u.Revision, u.Next
 	r.Calendar, r.Meeting, r.MinutesAsked = nil, nil, false
-	r.dayGuard()
+	dayGuard(r)
 	r.TextRev++
 	if !r.Complete {
 		r.RecapComplete = false // complete again later: another final recap
@@ -304,7 +255,7 @@ func (r *Recording) putDay(u *RecordingUpload) {
 
 // dayGuard keeps a day recording's matched_rev and summarized_rev at its revision: an older manager after a rollback
 // then neither matches it to a calendar item nor summarizes the whole day.
-func (r *Recording) dayGuard() {
+func dayGuard(r *Recording) {
 	r.MatchedRev, r.SummarizedRev = r.Revision, r.Revision
 }
 
@@ -409,7 +360,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	}
 	before, _ := json.Marshal(r)
 	zone := st.RecordingZone(r)
-	wasComplete, oldTo := r.Complete, r.coverageTo()
+	wasComplete, oldTo := r.Complete, coverageTo(r)
 	if a.Revision >= r.Revision {
 		if a.Duration != nil {
 			r.Duration = *a.Duration
@@ -446,9 +397,9 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	for _, sg := range add {
 		r.Chars += len([]rune(sg.Text))
 	}
-	r.dayGuard()
-	r.planMinutes()
-	r.planRecap()
+	dayGuard(r)
+	planMinutes(r)
+	planRecap(r)
 	r.Name = e.recordingName(r)
 	r.Updated = now.UTC()
 	if err := st.commitRecording(r, all); err != nil {
@@ -456,7 +407,7 @@ func (e *Engine) AppendRecording(rawID string, a RecordingAppend) (RecordingAppe
 	}
 	out.Status, out.Revision, out.Next, out.Complete = RecordingStored, r.Revision, r.Next, r.Complete
 	hour := func(sec float64) time.Time { return hourStart(r.StartedAt.Add(seconds(sec)), zone) }
-	out.Wake = r.Complete && !wasComplete || hour(r.coverageTo()).After(hour(oldTo))
+	out.Wake = r.Complete && !wasComplete || hour(coverageTo(r)).After(hour(oldTo))
 	for _, sg := range add {
 		if hour(sg.Start).Before(hour(oldTo)) {
 			out.Wake = true // a late sentence in an hour read already: that hour is read again
@@ -489,62 +440,8 @@ func (s *Store) daySegments(r *Recording) ([]RecordingSegment, error) {
 }
 
 // sortDaySegments orders a day recording's segments as segments.json keeps them: by start, then position.
-func sortDaySegments(segs []RecordingSegment) {
-	sort.SliceStable(segs, func(i, j int) bool {
-		if segs[i].Start != segs[j].Start {
-			return segs[i].Start < segs[j].Start
-		}
-		return segs[i].N < segs[j].N
-	})
-}
-
-// coverageTo is how far r's text reaches, in seconds since started_at: its coverage's to, its duration without one
-// (the recap reads up to its last segment then, recapLines).
-func (r *Recording) coverageTo() float64 {
-	if r.Coverage != nil {
-		return r.Coverage.To
-	}
-	return r.Duration
-}
-
-func seconds(sec float64) time.Duration { return time.Duration(sec * float64(time.Second)) }
+func sortDaySegments(segs []RecordingSegment) { recordingwire.SortDaySegments(segs) }
 
 // hourStart is the start of t's clock hour in zone, by the zone's offset at t, so every hour is an hour of absolute
 // time: the hour a fall-back repeats is two of them, never one of two hours.
-func hourStart(t time.Time, zone *time.Location) time.Time {
-	_, off := t.In(zone).Zone()
-	shift := time.Duration(off) * time.Second
-	return t.Add(shift).Truncate(time.Hour).Add(-shift).In(zone)
-}
-
-// DayRecordings are the day recordings of day (YYYY-MM-DD, in each one's zone), by part, then start.
-func (e *Engine) DayRecordings(day string) []Recording {
-	return e.dayRecordings(func(r *Recording) bool { return r.Day == day })
-}
-
-// TodaysDayRecordings are the day recordings recorded on the owner's day of now in zone owner (the evening routine's:
-// a read-only knowledge base's store is not put in it), as the recap time takes them (DaySpan: one still open counts
-// until now), by part, then start: what the evening routine reads.
-func (e *Engine) TodaysDayRecordings(now time.Time, owner *time.Location) []Recording {
-	from, to, _ := dayStart(now.In(owner).Format(time.DateOnly), owner)
-	return e.dayRecordings(func(r *Recording) bool { return e.recordedWithin(r, now, from, to) })
-}
-
-// DaySpan is when day recording r was recorded as of now (daySpan): from its start to its end, or until now while it
-// is open, within its day.
-func (e *Engine) DaySpan(r *Recording, now time.Time) (time.Time, time.Time) {
-	return e.daySpan(r, now)
-}
-
-func (e *Engine) dayRecordings(keep func(r *Recording) bool) []Recording {
-	var out []Recording
-	for _, r := range e.Store.Recordings() {
-		if r.Kind == RecordingDay && keep(r) {
-			out = append(out, *r)
-		}
-	}
-	slices.SortFunc(out, func(a, b Recording) int {
-		return cmp.Or(cmp.Compare(a.Part, b.Part), a.StartedAt.Compare(b.StartedAt), strings.Compare(a.ID, b.ID))
-	})
-	return out
-}
+func hourStart(t time.Time, zone *time.Location) time.Time { return recordingwire.HourStart(t, zone) }

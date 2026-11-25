@@ -926,7 +926,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false
 		}
 	case sigReview:
-		if st != reviewPending || v.handoffResult() != nil {
+		if st != reviewPending || v.handoffResult() != nil || g.Recipient != "" && g.Recipient != v.Supervisor {
 			return prompts.SuperviseEntry{}, false
 		}
 		if g.externalPRReview() {
@@ -1045,6 +1045,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	case sigNeedsUserExternalInfo:
 		if !s.needsUserExternalInfoStillHolds(t, g) {
 			return prompts.SuperviseEntry{}, false // answered, superseded, or closed meanwhile
+		}
+	case sigOwnerPresent:
+		if !s.ownerPresentStillHolds(t, g) {
+			return prompts.SuperviseEntry{}, false // closed, card already active, or no longer waiting on owner
 		}
 	case sigInbox:
 		if g.Inbox == nil || !s.inboxSignalsOn(ctx) {
