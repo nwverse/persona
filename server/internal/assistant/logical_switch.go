@@ -733,7 +733,84 @@ func renderLogicalHandoff(language string, h mainHandoff, text string) string {
 	for _, t := range h.Recent {
 		turns = append(turns, prompts.HandoffTurn{Role: t.Role, Text: t.Text})
 	}
-	return prompts.RenderSegmentHandoff(prompts.SegmentHandoff{Language: language, Summary: h.Summary, Recent: turns, Text: text, Partial: h.Partial})
+	return prompts.RenderSegmentHandoff(prompts.SegmentHandoff{
+		Language:     language,
+		FromLauncher: h.FromLauncher,
+		FromModel:    h.FromModel,
+		Summary:      h.Summary,
+		Recent:       turns,
+		Text:         text,
+		Partial:      h.Partial,
+	})
+}
+
+func logicalHandoffExecution(row proto.Session, c *db.LogicalConversation, items []proto.Item) (string, string) {
+	prev := conversationExecutionNow(c.MachineID, row, c)
+	launcher, model := strings.TrimSpace(prev.Launcher), strings.TrimSpace(prev.Model)
+	if model == "" {
+		model = strings.TrimSpace(row.Model)
+	}
+	if model == "" {
+		for i := len(items) - 1; i >= 0; i-- {
+			if items[i].Role == "assistant" {
+				if m := strings.TrimSpace(items[i].Model); m != "" {
+					model = m
+					break
+				}
+			}
+		}
+	}
+	return launcher, model
+}
+
+func logicalHandoffTurn(item proto.Item) (prompts.HandoffTurn, bool, bool) {
+	switch item.Kind {
+	case proto.KindText:
+		if item.Role != "user" && item.Role != "assistant" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		if item.Stored != nil && !item.Stored.Complete {
+			return prompts.HandoffTurn{}, false, true
+		}
+		text := strings.TrimSpace(transcript.StripInjected(item.Text))
+		if text == "" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		return prompts.HandoffTurn{Role: item.Role, Text: text}, true, false
+	case proto.KindToolUse:
+		name := strings.TrimSpace(item.ToolName)
+		raw := strings.TrimSpace(string(item.ToolInput))
+		if name == "" && raw == "" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		text := name
+		if raw != "" {
+			text = name + "(" + clip(oneLine(raw), 400) + ")"
+		}
+		return prompts.HandoffTurn{Role: "tool_use", Text: text}, true, item.Stored != nil && !item.Stored.Complete
+	case proto.KindToolResult:
+		name := strings.TrimSpace(item.ToolName)
+		body := strings.TrimSpace(transcript.StripInjected(item.Text))
+		if name == "" && body == "" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		var b strings.Builder
+		if item.IsError {
+			b.WriteString("[error] ")
+		}
+		if name != "" {
+			b.WriteString(name)
+			if body != "" {
+				b.WriteString(": ")
+			}
+		}
+		if body != "" {
+			b.WriteString(clip(body, 800))
+		}
+		return prompts.HandoffTurn{Role: "tool_result", Text: b.String()}, true, item.Stored != nil && !item.Stored.Complete
+	default:
+		return prompts.HandoffTurn{}, false, false
+	}
 }
 
 func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation) (mainHandoff, error) {
@@ -745,6 +822,8 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 	if err = json.Unmarshal(raw, &h); err != nil {
 		return h, err
 	}
+	row, _ := s.session(ctx, c.MachineID, c.SessionID)
+	h.FromLauncher, h.FromModel = logicalHandoffExecution(row, c, nil)
 	previousSummary := h.Summary
 	h.Summary = ""
 	if a, ok := c.Active(); ok {
@@ -775,31 +854,33 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 	if err != nil {
 		return h, err
 	}
+	if h.FromLauncher == "" || h.FromModel == "" {
+		h.FromLauncher, h.FromModel = logicalHandoffExecution(row, c, page.Items)
+	}
 	summaryTurns := []prompts.HandoffTurn{}
 	size := 0
 	for i := len(page.Items) - 1; i >= 0; i-- {
-		item := page.Items[i]
-		if item.Kind != proto.KindText || (item.Role != "user" && item.Role != "assistant") {
-			continue
-		}
-		if item.Stored != nil && !item.Stored.Complete {
+		turn, ok, partial := logicalHandoffTurn(page.Items[i])
+		if partial {
 			h.Partial = true
+		}
+		if !ok {
 			continue
 		}
-		text := strings.TrimSpace(transcript.StripInjected(item.Text))
-		if text == "" {
-			continue
-		}
-		if size+len(text) > 120000 {
+		if size+len(turn.Text) > 120000 {
 			h.Partial = true
 			break
 		}
-		size += len(text)
-		summaryTurns = append(summaryTurns, prompts.HandoffTurn{Role: item.Role, Text: text})
+		size += len(turn.Text)
+		summaryTurns = append(summaryTurns, turn)
 	}
 	slices.Reverse(summaryTurns)
 	h.Partial = h.Partial || page.Partial || (page.HasMore != nil && *page.HasMore)
-	input, _ := json.Marshal(map[string]any{"previous_summary": previousSummary, "history": summaryTurns})
+	payload := map[string]any{"previous_summary": previousSummary, "history": summaryTurns}
+	if h.FromLauncher != "" || h.FromModel != "" {
+		payload["previous_execution"] = map[string]string{"launcher": h.FromLauncher, "model": h.FromModel}
+	}
+	input, _ := json.Marshal(payload)
 	call, err := checkModelCall(assistantwire.ModelCompleteParams{System: prompts.RenderSegmentSummary(answerLanguage(s.hello(ctx).Locale)), Messages: []assistantwire.ModelMessage{{Role: "user", Content: string(input)}}, MaxTokens: 2048})
 	if err != nil {
 		return h, err
