@@ -7,6 +7,7 @@
 import { Suspense, act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { storedKeyAlias } from "../lib/compatibility";
 import type { Interaction } from "../lib/types";
 import type { ChatPageProps, ChatSlotComponents, ComposerAction, ModuleCode, ModuleDescriptor } from "./module-host";
 
@@ -15,7 +16,7 @@ import type { ChatPageProps, ChatSlotComponents, ComposerAction, ModuleCode, Mod
 const HUB_A = "https://hub-a.example";
 const HUB_B = "https://hub-b.example";
 const PROXY_ORIGIN = "https://proxy.example";
-const CREDENTIAL_KEYS = new Set(["persona.token", "persona.tokenId", "jarvis.token", "jarvis.tokenId"]);
+const CREDENTIAL_KEYS = new Set(["persona.token", "persona.tokenId"].flatMap((key) => [key, storedKeyAlias(key)!]));
 
 class Socket {
   static last: Socket | undefined;

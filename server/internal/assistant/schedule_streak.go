@@ -66,7 +66,7 @@ func streakToldLocked(sc *schedule, i int, wasOK bool) (t Task, n int, tell bool
 		return Task{}, 0, false
 	}
 	j := sc.indexLocked(r.RefID)
-	if j < 0 || sc.tasks[j].Repeat == repeatOnce {
+	if j < 0 || sc.tasks[j].Repeat == repeatOnce || sc.tasks[j].PageID != "" {
 		return Task{}, 0, false
 	}
 	n, newer, told, in := runStreak(sc.runs, r.RefID, r.ID)
@@ -87,6 +87,10 @@ func streakToldLocked(sc *schedule, i int, wasOK bool) (t Task, n int, tell bool
 // task goes through once. It says whether it handled the notice: not into a muted conversation, where the run's own
 // failure notice is all the user gets (#4785).
 func (s *Service) pushStreak(t Task, count int, last ScheduleRun) bool {
+	if t.PageID != "" {
+		s.pageChanged(t.PageID, pageStatus)
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if last.SessionID != "" && s.muted(last.MachineID, last.SessionID) {

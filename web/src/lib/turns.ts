@@ -55,6 +55,8 @@ export interface UserMessage {
   promptHidden?: boolean;
   /** Inside an opened background round: drawn as its source block, not as the raw model input supervision shows. */
   sourceInTrace?: boolean;
+  /** An explicitly promoted main-chat round keeps this conversation input behind its source disclosure by default. */
+  promotedRelay?: boolean;
 }
 
 /** A <persona-file kind="video" path="…" name="…" size="…" duration="…"/> in a message (docs/protocol/protocol.md "Sending video"). */
@@ -243,7 +245,8 @@ export function parseUserText(raw: string): { text: string; inlineTrailer?: stri
   let text = withoutViewErrors(raw).replace(CONTEXT_RE, (_, attrs: string, body: string) => {
     const { kind, title, url, ...rest } = tagAttrs(attrs);
     if (kind === "skill-instructions" || isInterjectContext({ kind, title })) return "";
-    contexts.push({ kind: kind ?? "context", title, url, text: body.trim(), ...(Object.keys(rest).length ? { attrs: rest } : {}) });
+    const words = body.trim();
+    contexts.push({ kind: kind ?? "context", title, url, text: kind === "forward" ? splitInlineTrailer(words).text : words, ...(Object.keys(rest).length ? { attrs: rest } : {}) });
     return "";
   });
   text = text.replace(FILE_RE, (_, attrs: string) => {
@@ -777,8 +780,8 @@ export function supervisionTool(rawName?: string): "notify_user" | "ask_user" | 
 }
 
 /** Visibility is round-wide and derived again after every page merge. Arguments alone never prove success. */
-function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Item> | undefined, live: boolean, routineMainRelay = false, attentionReply?: string): { visible: boolean; completedSilent: boolean } {
-  if (ordered.some((i) => i.supervisionUser || i.fold?.supervision_user || (injectedOf(i)?.state === "supervise" && injectedOf(i)?.level === "user"))) return { visible: true, completedSilent: false };
+function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Item> | undefined, live: boolean, routineMainRelay = false, attentionReply?: string): { visible: boolean; completedSilent: boolean; promoted: boolean } {
+  if (ordered.some((i) => i.supervisionUser || i.fold?.supervision_user || (injectedOf(i)?.state === "supervise" && injectedOf(i)?.level === "user"))) return { visible: true, completedSilent: false, promoted: true };
   let silent = false;
   for (const use of ordered) {
     if (use.kind !== "tool_use") continue;
@@ -787,7 +790,7 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
     const result = use.tool_use_id ? results?.get(use.tool_use_id) : undefined;
     // ask_user waits for a person before it has a result; never bury its pending answer card.
     if (!result) {
-      if (name === "ask_user" && live) return { visible: true, completedSilent: false };
+      if (name === "ask_user" && live) return { visible: true, completedSilent: false, promoted: true };
       continue;
     }
     if (result.is_error) continue;
@@ -802,20 +805,20 @@ function supervisionVisibility(ordered: Item[], results: ReadonlyMap<string, Ite
           // Legacy and malformed receipts keep the accepted review visible.
         }
       }
-      if ((verdict === "accepted" || verdict === "needs_user") && !internalAccepted) return { visible: true, completedSilent: false };
+      if ((verdict === "accepted" || verdict === "needs_user") && !internalAccepted) return { visible: true, completedSilent: false, promoted: true };
       continue;
     }
-    if (name !== "supervision_finish") return { visible: true, completedSilent: false };
+    if (name !== "supervision_finish") return { visible: true, completedSilent: false, promoted: true };
     try {
       const { visibility } = JSON.parse(stripToolResultTimestampHeaders(result.text ?? ""));
-      if (visibility === "user") return { visible: true, completedSilent: false };
+      if (visibility === "user") return { visible: true, completedSilent: false, promoted: true };
       if (visibility === "silent") silent = true;
     } catch {
       // A failed or malformed receipt does not decide visibility.
     }
   }
   const visible = !live && hasBackgroundReply(ordered, routineMainRelay, attentionReply, silent);
-  return { visible, completedSilent: !live && silent && !visible };
+  return { visible, completedSilent: !live && silent && !visible, promoted: false };
 }
 
 export function supervisionVisible(ordered: Item[], results: ReadonlyMap<string, Item>, live: boolean, routineMainRelay = false, attentionReply?: string): boolean {
@@ -1044,8 +1047,14 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
   const flush = (until?: string) => {
     if (!round) return;
     const visibility = supervisionVisibility(round.ordered, results, round.live, opts.foldRoutineRelayReplies === true && round.source?.kind === "conversation", attentionReply);
-    if (visibility.visible) out.push(...round.lines);
-    else out.push({
+    if (visibility.visible) {
+      if (opts.main === true && visibility.promoted && round.source?.kind === "conversation") {
+        for (const line of round.lines) {
+          if (line.kind === "segment" && line.seg.user?.source?.kind === "conversation") line.seg.user.promotedRelay = true;
+        }
+      }
+      out.push(...round.lines);
+    } else out.push({
       kind: "supervision", id: round.lines[0].id, lines: round.lines, live: round.live,
       ...(round.source ? { source: round.source } : {}),
       ...(opts.main && visibility.completedSilent ? { completedSilent: true, start: round.ordered.find((i) => i.ts)?.ts, until } : {}),

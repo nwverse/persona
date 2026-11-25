@@ -91,6 +91,7 @@
   "scope_models": "設定 › モデル設定 で選んだモデルを使う（キーには触れない）",
   "scope_transcription": "自分の音声を、会議用に選んだ文字起こしで文字にする（キーには触れず、ほかの音声は受け取らない）",
   "scope_market_refresh_own": "自身のインストール元の拡張機能マーケットを再読み込み",
+  "scope_assistant_events": "観測した出来事を Persona のメイン会話に知らせる（伝えるかはアシスタントが判断。会話の作成や変更はできません）",
   "scope_call": "拡張機能「{id}」の API を呼び出し",
   "slot_nav_page": "メインナビゲーションの項目",
   "slot_overview_card": "概要ページのカード",
