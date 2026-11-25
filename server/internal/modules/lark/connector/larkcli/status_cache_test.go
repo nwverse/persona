@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/connectorwire"
 )
@@ -62,19 +61,8 @@ func TestStatusShowsSignInRightAfterLogin(t *testing.T) {
 	if _, err := c.LoginStep(ctx, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		p, err := c.LoginStep(ctx, "device", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if p.Done {
-			break
-		}
-		if p.Error != "" || time.Now().After(deadline) {
-			t.Fatalf("login prompt = %+v", p)
-		}
-		time.Sleep(10 * time.Millisecond)
+	if p := waitForLogin(t, c); !p.Done || p.Error != "" {
+		t.Fatalf("login prompt = %+v", p)
 	}
 	if st := c.Status(ctx); st.State != connectorwire.StateOK {
 		t.Fatalf("after login: status = %+v", st)

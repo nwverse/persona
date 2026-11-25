@@ -197,19 +197,13 @@ func TestAuthStatusCacheDroppedWhenLoginFinishes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		done, err := p.Poll()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if done {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("login did not finish")
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-p.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("login did not finish")
+	}
+	if _, err := p.Poll(); err != nil {
+		t.Fatal(err)
 	}
 	if auth, err := r.AuthStatus(ctx); err != nil || !auth.LoggedIn {
 		t.Fatalf("after login: auth = %+v, err = %v", auth, err)
