@@ -121,9 +121,9 @@ nonisolated enum AgentViewFallback {
         case usageLimit(resumes: Bool)
 
         init(_ s: Session) {
-            if text(s.startError) != nil || text(s.startErrorCode) != nil {
+            if AgentViewFallback.text(s.startError) != nil || AgentViewFallback.text(s.startErrorCode) != nil {
                 self = .startRefused
-            } else if text(s.turnError) == nil || s.turnErrorKind == "stopped" {
+            } else if AgentViewFallback.text(s.turnError) == nil || s.turnErrorKind == "stopped" {
                 self = .noFailure
             } else if s.turnErrorKind == "usage_limit" {
                 self = .usageLimit(resumes: s.turnErrorResumes == true)
