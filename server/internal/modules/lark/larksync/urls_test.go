@@ -45,6 +45,30 @@ func TestTokenFromURL(t *testing.T) {
 	}
 }
 
+func TestDocLinkFromURL(t *testing.T) {
+	cases := []struct {
+		url, objType, token string
+		ok                  bool
+	}{
+		{"https://my.feishu.cn/docx/doxcnAbC123", "docx", "doxcnAbC123", true},
+		{"https://my.feishu.cn/file/boxcnF1", "file", "boxcnF1", true},
+		{"https://my.feishu.cn/drive/file/boxcnF2?from=copy", "file", "boxcnF2", true},
+		{"https://my.feishu.cn/sheets/shtcnS1?sheet=abc", "sheet", "shtcnS1", true},
+		{"https://my.feishu.cn/base/bascnB1", "bitable", "bascnB1", true},
+		{"https://my.feishu.cn/wiki/wikcnW1", "wiki", "wikcnW1", true},
+		{"https://my.feishu.cn/minutes/obcnM1", "minutes", "obcnM1", true},
+		{"https://my.feishu.cn/wiki/space/123456", "", "", false},
+		{"https://my.feishu.cn/drive/folder/fldA", "", "", false},
+		{"https://example.com/docx/doxA", "", "", false},
+	}
+	for _, c := range cases {
+		typ, tok, ok := docLinkFromURL(c.url)
+		if typ != c.objType || tok != c.token || ok != c.ok {
+			t.Errorf("docLinkFromURL(%q) = %q, %q, %v; want %q, %q, %v", c.url, typ, tok, ok, c.objType, c.token, c.ok)
+		}
+	}
+}
+
 // The fingerprint as the spec writes it, computed apart from the code under test (the knowledge base computes the
 // same, internal/kb/align_gateway.go).
 func specFingerprint(chat, sender string, at time.Time, body string) string {

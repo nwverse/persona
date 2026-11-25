@@ -3,14 +3,13 @@ package writers
 import (
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // hubEngine is an engine whose manager can transcribe on the hub (TranscriptionReady), collecting MeetingChanged.
@@ -25,7 +24,7 @@ func hubEngine(t *testing.T, m Model) (*testEngine, *[][]string) {
 }
 
 // hubUpload is a meeting upload in hub mode with the phone's lines (10 seconds each) and timeline tl.
-func hubUpload(rev int64, start time.Time, complete bool, tl *kb.Timeline, texts ...string) RecordingUpload {
+func hubUpload(rev int64, start time.Time, complete bool, tl *recordingwire.Timeline, texts ...string) RecordingUpload {
 	u := recUpload(rev, start, complete, texts...)
 	u.Kind = RecordingMeeting
 	u.SetTranscription(TranscriptionHub, tl)
@@ -57,15 +56,15 @@ func TestTranscriptionUploadModes(t *testing.T) {
 	}{
 		{"hub", `"kind":"meeting","transcription":"hub"`, true, TranscriptionHub, "", TranscriptionHub, true},
 		{"hub in capitals", `"kind":"meeting","transcription":" HUB "`, true, TranscriptionHub, "", TranscriptionHub, true},
-		{"device", `"kind":"meeting","transcription":"device"`, true, kb.TranscriptionDevice, "", kb.TranscriptionDevice, false},
-		{"hub not ready", `"kind":"meeting","transcription":"hub"`, false, kb.TranscriptionDevice, kb.TranscriptionUnavailable, kb.TranscriptionDevice, true},
-		{"another string", `"kind":"meeting","transcription":"cloud"`, true, kb.TranscriptionDevice, "", "", false},
-		{"a number", `"kind":"meeting","transcription":1`, true, kb.TranscriptionDevice, "", "", false},
-		{"null", `"kind":"meeting","transcription":null`, true, kb.TranscriptionDevice, "", "", false},
-		{"absent", `"kind":"meeting"`, true, kb.TranscriptionDevice, "", "", false},
-		{"a note", `"kind":"note","transcription":"hub","timeline":{"roles":[{"at":0,"attendance":"listener"}]}`, true, kb.TranscriptionDevice, kb.TranscriptionNotMeeting, "", false},
-		{"a note asking device", `"kind":"note","transcription":"device"`, true, kb.TranscriptionDevice, "", "", false},
-		{"a day", `"kind":"day","day":"2026-11-10","tz":"Asia/Shanghai","transcription":"hub","timeline":{"speaking":[{"start":1,"end":2}]}`, true, kb.TranscriptionDevice, kb.TranscriptionNotMeeting, "", false},
+		{"device", `"kind":"meeting","transcription":"device"`, true, recordingwire.TranscriptionDevice, "", recordingwire.TranscriptionDevice, false},
+		{"hub not ready", `"kind":"meeting","transcription":"hub"`, false, recordingwire.TranscriptionDevice, recordingwire.TranscriptionUnavailable, recordingwire.TranscriptionDevice, true},
+		{"another string", `"kind":"meeting","transcription":"cloud"`, true, recordingwire.TranscriptionDevice, "", "", false},
+		{"a number", `"kind":"meeting","transcription":1`, true, recordingwire.TranscriptionDevice, "", "", false},
+		{"null", `"kind":"meeting","transcription":null`, true, recordingwire.TranscriptionDevice, "", "", false},
+		{"absent", `"kind":"meeting"`, true, recordingwire.TranscriptionDevice, "", "", false},
+		{"a note", `"kind":"note","transcription":"hub","timeline":{"roles":[{"at":0,"attendance":"listener"}]}`, true, recordingwire.TranscriptionDevice, recordingwire.TranscriptionNotMeeting, "", false},
+		{"a note asking device", `"kind":"note","transcription":"device"`, true, recordingwire.TranscriptionDevice, "", "", false},
+		{"a day", `"kind":"day","day":"2026-11-10","tz":"Asia/Shanghai","transcription":"hub","timeline":{"speaking":[{"start":1,"end":2}]}`, true, recordingwire.TranscriptionDevice, recordingwire.TranscriptionNotMeeting, "", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := goldenEngine(t, nil)
@@ -73,7 +72,7 @@ func TestTranscriptionUploadModes(t *testing.T) {
 			e.TranscriptionReady = func() bool { asked++; return c.ready }
 			u := roomUploadJSON(t, `{"revision":1,"started_at":"`+start+`","device":"phone","segments":[],`+c.extra+`}`)
 			put, err := e.PutRecording(recID, u, now)
-			if err != nil || put.Status != kb.RecordingStored || put.Transcription != c.mode || put.TranscriptionProblem != c.problem {
+			if err != nil || put.Status != recordingwire.RecordingStored || put.Transcription != c.mode || put.TranscriptionProblem != c.problem {
 				t.Fatalf("put %+v %v", put, err)
 			}
 			got := ""
@@ -102,18 +101,18 @@ func TestTranscriptionModeLocked(t *testing.T) {
 	e := goldenEngine(t, nil)
 	e.TranscriptionReady = func() bool { return ready }
 	u := hubUpload(1, start, false, nil)
-	if put, _ := e.PutRecording(recID, u, now); put.Transcription != kb.TranscriptionDevice || put.TranscriptionProblem != kb.TranscriptionUnavailable {
+	if put, _ := e.PutRecording(recID, u, now); put.Transcription != recordingwire.TranscriptionDevice || put.TranscriptionProblem != recordingwire.TranscriptionUnavailable {
 		t.Fatalf("not ready %+v", put)
 	}
 	ready = true
-	if put, _ := e.PutRecording(recID, hubUpload(2, start, false, nil), now); put.Transcription != kb.TranscriptionDevice || put.TranscriptionProblem != kb.TranscriptionUnavailable {
+	if put, _ := e.PutRecording(recID, hubUpload(2, start, false, nil), now); put.Transcription != recordingwire.TranscriptionDevice || put.TranscriptionProblem != recordingwire.TranscriptionUnavailable {
 		t.Fatalf("ready later %+v", put)
 	}
 	// A stale upload asking hub hears the mode in effect too.
-	if put, _ := e.PutRecording(recID, hubUpload(1, start, false, nil), now); put.Status != kb.RecordingStale || put.Transcription != kb.TranscriptionDevice {
+	if put, _ := e.PutRecording(recID, hubUpload(1, start, false, nil), now); put.Status != recordingwire.RecordingStale || put.Transcription != recordingwire.TranscriptionDevice {
 		t.Fatalf("stale %+v", put)
 	}
-	if tr := transcriptionNow(t, e, recID); tr.Mode != kb.TranscriptionDevice || tr.State != "" {
+	if tr := transcriptionNow(t, e, recID); tr.Mode != recordingwire.TranscriptionDevice || tr.State != "" {
 		t.Fatalf("stored %+v", tr)
 	}
 
@@ -122,11 +121,11 @@ func TestTranscriptionModeLocked(t *testing.T) {
 	putRecording(t, e, other, hubUpload(1, start, false, nil), now)
 	dev := recUpload(2, start, false)
 	dev.Kind = RecordingMeeting
-	dev.SetTranscription(kb.TranscriptionDevice, nil)
+	dev.SetTranscription(recordingwire.TranscriptionDevice, nil)
 	if put, _ := e.PutRecording(other, dev, now); put.Transcription != TranscriptionHub || put.TranscriptionProblem != "" {
 		t.Fatalf("device after hub %+v", put)
 	}
-	if tr := transcriptionNow(t, e, other); tr.Mode != TranscriptionHub || tr.State != kb.TranscriptionLive {
+	if tr := transcriptionNow(t, e, other); tr.Mode != TranscriptionHub || tr.State != recordingwire.TranscriptionLive {
 		t.Fatalf("hub stored %+v", tr)
 	}
 }
@@ -135,7 +134,7 @@ func TestTranscriptionModeLocked(t *testing.T) {
 func TestTranscriptionNeverInMeta(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	e, _ := hubEngine(t, nil)
-	tl := &kb.Timeline{Roles: []kb.TimelineRole{{At: 0, Attendance: kb.AttendanceListener}}, Speaking: spk(3, 4)}
+	tl := &recordingwire.Timeline{Roles: []recordingwire.TimelineRole{{At: 0, Attendance: recordingwire.AttendanceListener}}, Speaking: spk(3, 4)}
 	noMeta := func(step string) {
 		t.Helper()
 		for _, k := range []string{"transcription", "timeline", "mode", "gaps"} {
@@ -147,7 +146,7 @@ func TestTranscriptionNeverInMeta(t *testing.T) {
 	putRecording(t, e, recID, hubUpload(1, now.Add(-time.Hour), true, tl, "第一句"), now)
 	noMeta("upload")
 	if _, err := e.TranscriptionUpdate(recID, func(t *MeetingTranscription, _ Recording) error {
-		t.State, t.Problem = kb.TranscriptionFinal, "upstream_failed"
+		t.State, t.Problem = recordingwire.TranscriptionFinal, "upstream_failed"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -164,16 +163,16 @@ func TestTranscriptionUploadTimeline(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	start := now.Add(-time.Hour)
 	e, changed := hubEngine(t, nil)
-	putRecording(t, e, recID, hubUpload(1, start, false, &kb.Timeline{Roles: []kb.TimelineRole{{At: 0, Attendance: kb.AttendanceListener}}}), now)
-	if len(*changed) != 1 || !slices.Contains((*changed)[0], kb.PartTranscription) {
+	putRecording(t, e, recID, hubUpload(1, start, false, &recordingwire.Timeline{Roles: []recordingwire.TimelineRole{{At: 0, Attendance: recordingwire.AttendanceListener}}}), now)
+	if len(*changed) != 1 || !slices.Contains((*changed)[0], recordingwire.PartTranscription) {
 		t.Fatalf("first upload told %v", *changed)
 	}
-	putRecording(t, e, recID, hubUpload(3, start, false, &kb.Timeline{Speaking: spk(5, 6)}), now)
-	if put, _ := e.PutRecording(recID, hubUpload(2, start, false, &kb.Timeline{Speaking: spk(50, 60)}), now); put.Status != kb.RecordingStale {
+	putRecording(t, e, recID, hubUpload(3, start, false, &recordingwire.Timeline{Speaking: spk(5, 6)}), now)
+	if put, _ := e.PutRecording(recID, hubUpload(2, start, false, &recordingwire.Timeline{Speaking: spk(50, 60)}), now); put.Status != recordingwire.RecordingStale {
 		t.Fatalf("stale %+v", put)
 	}
 	tr := transcriptionNow(t, e, recID)
-	if !timelineEqual(*tr.Timeline, kb.Timeline{Roles: []kb.TimelineRole{{At: 0, Attendance: kb.AttendanceListener}}, Speaking: spk(5, 6)}) {
+	if !timelineEqual(*tr.Timeline, recordingwire.Timeline{Roles: []recordingwire.TimelineRole{{At: 0, Attendance: recordingwire.AttendanceListener}}, Speaking: spk(5, 6)}) {
 		t.Fatalf("union %+v", tr.Timeline)
 	}
 	if len(*changed) != 1 {
@@ -182,7 +181,7 @@ func TestTranscriptionUploadTimeline(t *testing.T) {
 	if !tr.CompleteAt.IsZero() || tr.End != 0 {
 		t.Fatalf("not complete yet %+v", tr)
 	}
-	u := hubUpload(4, start, true, &kb.Timeline{Speaking: spk(6, 7)}, "一句")
+	u := hubUpload(4, start, true, &recordingwire.Timeline{Speaking: spk(6, 7)}, "一句")
 	u.Duration = 3733.5
 	putRecording(t, e, recID, u, now)
 	tr = transcriptionNow(t, e, recID)
@@ -204,9 +203,9 @@ func TestTranscriptionUploadTimeline(t *testing.T) {
 	const other = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b"
 	dev := recUpload(1, start, true)
 	dev.Kind = RecordingMeeting
-	dev.SetTranscription(kb.TranscriptionDevice, &kb.Timeline{Speaking: spk(1, 2)})
+	dev.SetTranscription(recordingwire.TranscriptionDevice, &recordingwire.Timeline{Speaking: spk(1, 2)})
 	putRecording(t, e, other, dev, now)
-	if tr := transcriptionNow(t, e, other); tr.Mode != kb.TranscriptionDevice || tr.Timeline != nil || !tr.CompleteAt.IsZero() {
+	if tr := transcriptionNow(t, e, other); tr.Mode != recordingwire.TranscriptionDevice || tr.Timeline != nil || !tr.CompleteAt.IsZero() {
 		t.Fatalf("device %+v", tr)
 	}
 }
@@ -240,32 +239,36 @@ func TestTranscriptionUpdate(t *testing.T) {
 		}
 		return tr
 	}
-	upd(func(t *MeetingTranscription) { t.Mode = kb.TranscriptionDevice; t.UsageSeconds = 12; t.FinalTries = 1 })
+	upd(func(t *MeetingTranscription) {
+		t.Mode = recordingwire.TranscriptionDevice
+		t.UsageSeconds = 12
+		t.FinalTries = 1
+	})
 	if tr := transcriptionNow(t, e, recID); tr.Mode != TranscriptionHub || tr.UsageSeconds != 12 {
 		t.Fatalf("mode changed or bookkeeping lost: %+v", tr)
 	}
 	if p := parts(); len(p) != 0 {
 		t.Fatalf("bookkeeping moved %v", p)
 	}
-	upd(func(t *MeetingTranscription) { t.Timeline = &kb.Timeline{Speaking: spk(1, 2)} })
+	upd(func(t *MeetingTranscription) { t.Timeline = &recordingwire.Timeline{Speaking: spk(1, 2)} })
 	if p := parts(); len(p) != 0 {
 		t.Fatalf("the timeline moved %v", p)
 	}
 	for _, fn := range []func(t *MeetingTranscription){
 		func(t *MeetingTranscription) { t.Problem = "upstream_failed" },
 		func(t *MeetingTranscription) { t.Fallback = true },
-		func(t *MeetingTranscription) { t.State = kb.TranscriptionFinishing },
+		func(t *MeetingTranscription) { t.State = recordingwire.TranscriptionFinishing },
 	} {
 		upd(fn)
-		if p := parts(); !slices.Equal(p, []string{kb.PartTranscription}) {
+		if p := parts(); !slices.Equal(p, []string{recordingwire.PartTranscription}) {
 			t.Fatalf("told %v", p)
 		}
 	}
 	m, _, _ := e.MeetingRead(recID)
-	if m.Revs[kb.PartTranscription] != 4 {
+	if m.Revs[recordingwire.PartTranscription] != 4 {
 		t.Fatalf("revs %v", m.Revs)
 	}
-	tr := upd(func(t *MeetingTranscription) { t.State = kb.TranscriptionFinal })
+	tr := upd(func(t *MeetingTranscription) { t.State = recordingwire.TranscriptionFinal })
 	if !tr.FinalAt.Equal(now) || !tr.FinalFrom.Equal(now) {
 		t.Fatalf("final %+v", tr)
 	}
@@ -273,7 +276,7 @@ func TestTranscriptionUpdate(t *testing.T) {
 	const other = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b"
 	dev := recUpload(1, now.Add(-time.Hour), false)
 	dev.Kind = RecordingMeeting
-	dev.SetTranscription(kb.TranscriptionDevice, nil)
+	dev.SetTranscription(recordingwire.TranscriptionDevice, nil)
 	putRecording(t, e, other, dev, now)
 	if _, err := e.TranscriptionUpdate(other, func(*MeetingTranscription, Recording) error { return nil }); !errors.Is(err, ErrNotHub) {
 		t.Fatalf("device: %v", err)
@@ -294,7 +297,7 @@ func TestTranscriptionDetailAndHubRecordings(t *testing.T) {
 	const dev, none = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b", "6c7d4e5b-2e3f-4a91-8b2c-3d4e5f6a7b8c"
 	putRecording(t, e, recID, hubUpload(1, now.Add(-time.Hour), false, nil, "一句"), now)
 	u := meetingUpload(1, now.Add(-2*time.Hour), "一句")
-	u.SetTranscription(kb.TranscriptionDevice, nil)
+	u.SetTranscription(recordingwire.TranscriptionDevice, nil)
 	putRecording(t, e, dev, u, now)
 	putRecording(t, e, none, meetingUpload(1, now.Add(-3*time.Hour), "一句"), now)
 	meta := func(id string) map[string]json.RawMessage {
@@ -323,7 +326,7 @@ func TestTranscriptionDetailAndHubRecordings(t *testing.T) {
 	}
 	// Final with its audio gone: the manager is done with it.
 	if _, err := e.TranscriptionUpdate(recID, func(t *MeetingTranscription, _ Recording) error {
-		t.State, t.Gaps, t.Problem = kb.TranscriptionFinal, [][2]float64{{0, 4.2}}, "upstream_failed"
+		t.State, t.Gaps, t.Problem = recordingwire.TranscriptionFinal, [][2]float64{{0, 4.2}}, "upstream_failed"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -348,7 +351,7 @@ func TestTranscriptionDetailAndHubRecordings(t *testing.T) {
 	if v := (Meeting{}).TranscriptionView(nil); v != nil {
 		t.Fatalf("no mode: %+v", v)
 	}
-	if v := (Meeting{Transcription: &MeetingTranscription{Mode: TranscriptionHub}}).TranscriptionView([][2]float64{{1, 2}}); v.State != kb.TranscriptionLive || !sameSpans(*v.Gaps, [][2]float64{{1, 2}}) {
+	if v := (Meeting{Transcription: &MeetingTranscription{Mode: TranscriptionHub}}).TranscriptionView([][2]float64{{1, 2}}); v.State != recordingwire.TranscriptionLive || !sameSpans(*v.Gaps, [][2]float64{{1, 2}}) {
 		t.Fatalf("live view %+v", v)
 	}
 	if _, err := os.Stat(e.Store.Path(KindRecording, recID, meetingFile)); err != nil {
@@ -363,22 +366,22 @@ func TestLiveInHubMode(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	e, changed := hubEngine(t, nil)
 	kicked := 0
-	e.LiveChanged = func(string) { kicked++ }
+	e.OnLive(func(string) { kicked++ })
 	if _, err := e.LiveAppendHub(recID, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no upload: %v", err)
 	}
 	putRecording(t, e, recID, hubUpload(1, now.Add(-time.Hour), false, nil), now)
-	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Text: "x"}}); !errors.Is(err, kb.ErrNotAttending) {
+	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Text: "x"}}); !errors.Is(err, recordingwire.ErrNotAttending) {
 		t.Fatalf("not attended: %v", err)
 	}
 	u := hubUpload(2, now.Add(-time.Hour), false, nil)
-	u.SetRoom(kb.AttendanceParticipant)
+	u.SetRoom(recordingwire.AttendanceParticipant)
 	putRecording(t, e, recID, u, now)
-	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Text: "x"}}); !errors.Is(err, kb.ErrHubTranscribes) {
+	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Text: "x"}}); !errors.Is(err, recordingwire.ErrHubTranscribes) {
 		t.Fatalf("attended, hub mode: %v", err)
 	}
 	*changed, kicked = nil, 0
-	first, err := e.LiveAppendHub(recID, []LiveSegment{{Start: 1, End: 3, Text: "我们先把\nexport cap 保持在 4 MB。"}, {Start: 4, End: 5, Text: "Bo", Source: kb.SourceDevice}})
+	first, err := e.LiveAppendHub(recID, []LiveSegment{{Start: 1, End: 3, Text: "我们先把\nexport cap 保持在 4 MB。"}, {Start: 4, End: 5, Text: "Bo", Source: recordingwire.SourceDevice}})
 	if err != nil || first != 0 {
 		t.Fatalf("append %d %v", first, err)
 	}
@@ -390,14 +393,14 @@ func TestLiveInHubMode(t *testing.T) {
 	}
 	l, _, _ := e.LiveRead(recID)
 	if len(l.Segments) != 3 || l.Segments[0].Text != "我们先把 export cap 保持在 4 MB。" || l.Segments[0].Source != SourceHub ||
-		l.Segments[1].Source != kb.SourceDevice || l.Segments[2].Source != SourceHub {
+		l.Segments[1].Source != recordingwire.SourceDevice || l.Segments[2].Source != SourceHub {
 		t.Fatalf("live log %+v", l.Segments)
 	}
-	if kicked != 2 || len(*changed) != 2 || !slices.Equal((*changed)[0], []string{kb.PartLines}) {
+	if kicked != 2 || len(*changed) != 2 || !slices.Equal((*changed)[0], []string{recordingwire.PartLines}) {
 		t.Fatalf("kicked %d, told %v", kicked, *changed)
 	}
 	big := make([]LiveSegment, maxLivePositions)
-	if _, err := e.LiveAppendHub(recID, big); !errors.Is(err, kb.ErrLiveFull) {
+	if _, err := e.LiveAppendHub(recID, big); !errors.Is(err, recordingwire.ErrLiveFull) {
 		t.Fatalf("full: %v", err)
 	}
 	if l, _, _ := e.LiveRead(recID); len(l.Segments) != 3 || !l.Full {
@@ -406,8 +409,8 @@ func TestLiveInHubMode(t *testing.T) {
 
 	// Not hub, trimmed, deleted.
 	const dev = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b"
-	du := attendedUpload(1, now.Add(-time.Hour), kb.AttendanceListener)
-	du.SetTranscription(kb.TranscriptionDevice, nil)
+	du := attendedUpload(1, now.Add(-time.Hour), recordingwire.AttendanceListener)
+	du.SetTranscription(recordingwire.TranscriptionDevice, nil)
 	putRecording(t, e, dev, du, now)
 	if _, err := e.LiveAppendHub(dev, []LiveSegment{{Text: "x"}}); !errors.Is(err, ErrNotHub) {
 		t.Fatalf("device: %v", err)
@@ -438,7 +441,7 @@ func TestPutRecordingLeavesTheUploadAlone(t *testing.T) {
 		{Start: 9, End: 10, Text: "   "}, {Start: 10, End: 12, Text: "Three."}}
 	sent := slices.Clone(u.Segments)
 	put, err := e.PutRecording(recID, u, now)
-	if err != nil || put.Status != kb.RecordingStored {
+	if err != nil || put.Status != recordingwire.RecordingStored {
 		t.Fatalf("put %v %v", put, err)
 	}
 	if !slices.Equal(u.Segments, sent) {
@@ -504,7 +507,7 @@ func TestHubMeetingEndsNoEarlierThanItsAudio(t *testing.T) {
 		e, _ := hubEngine(t, nil)
 		u := recUpload(1, start, true, "一句", "两句")
 		u.Kind = RecordingMeeting
-		u.SetTranscription(kb.TranscriptionDevice, nil)
+		u.SetTranscription(recordingwire.TranscriptionDevice, nil)
 		u.Duration = 24
 		end := at(24)
 		u.EndedAt = &end
@@ -528,7 +531,7 @@ func TestUploadIgnoresATimelineOverTheLimits(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	e, _ := hubEngine(t, nil)
 	u := roomUploadJSON(t, `{"revision":1,"started_at":"`+now.Add(-time.Hour).UTC().Format(time.RFC3339)+`","device":"phone","segments":[],"kind":"meeting","transcription":"hub","timeline":`+roles(101)+`}`)
-	if put, err := e.PutRecording(recID, u, now); err != nil || put.Status != kb.RecordingStored || put.Transcription != TranscriptionHub {
+	if put, err := e.PutRecording(recID, u, now); err != nil || put.Status != recordingwire.RecordingStored || put.Transcription != TranscriptionHub {
 		t.Fatalf("put %+v %v", put, err)
 	}
 	if tr := transcriptionNow(t, e, recID); tr.Timeline != nil {
@@ -536,15 +539,15 @@ func TestUploadIgnoresATimelineOverTheLimits(t *testing.T) {
 	}
 }
 
-func timelineEqual(a, b kb.Timeline) bool {
+func timelineEqual(a, b recordingwire.Timeline) bool {
 	return slices.Equal(a.Roles, b.Roles) && len(a.Speaking) == len(b.Speaking) && (len(a.Speaking) == 0 || slices.Equal(a.Speaking, b.Speaking))
 }
 
 // spk is the speaking spans of pairs of numbers (start, end), without text.
-func spk(pairs ...float64) []kb.SpokenSpan {
-	var out []kb.SpokenSpan
+func spk(pairs ...float64) []recordingwire.SpokenSpan {
+	var out []recordingwire.SpokenSpan
 	for i := 0; i+1 < len(pairs); i += 2 {
-		out = append(out, kb.SpokenSpan{Start: pairs[i], End: pairs[i+1]})
+		out = append(out, recordingwire.SpokenSpan{Start: pairs[i], End: pairs[i+1]})
 	}
 	return out
 }
