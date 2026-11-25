@@ -251,6 +251,9 @@ type PlanTask struct {
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string
+	// deferredStart is a Companion session whose real id exists but whose MCP and first prompt wait for the role link.
+	// The original first message is kept only for this start attempt; never serialized.
+	deferredStart *deferredTaskStart
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).

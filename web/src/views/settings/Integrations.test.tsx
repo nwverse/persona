@@ -1007,10 +1007,13 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       });
       await flush();
 
-      // Sidebar still keeps Settings › Inbox Sources in this PR (sidebar collapse deferred to #15424).
+      // Sidebar folds channels/connectors/extensions/sources 4-in-1 into Integrations & Extensions (#15424).
       const navButtons = [...host.querySelectorAll<HTMLButtonElement>("nav button")].map((b) => b.textContent ?? "");
       expect(navButtons).toContain(t("settings-nav.tab_integrations"));
-      expect(navButtons).toContain(t("settings-nav.tab_sources"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_channels"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_connectors"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_extensions"));
+      expect(navButtons).not.toContain(t("settings-nav.tab_sources"));
 
       // Top view switch ("Integrations / Data flow") and persistent Market button both visible.
       const viewSwitch = host.querySelector<HTMLElement>("[data-integrations-view-switch]")!;
@@ -1127,7 +1130,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     await flush();
     expect(host.querySelector("[data-integrations-view-switch]")).toBeNull();
 
-    // Flip integrations_v2 off while at -sources: redirects cleanly to legacy ?tab=sources.
+    // Flip integrations_v2 off while at -sources: redirects cleanly to legacy ?tab=sources and restores standalone nav.
     state.integrationsV2 = false;
     state.features = ["channels", "extension_manager", "connectors", "lark", "inbox_sources"];
     history.replaceState(null, "", "/settings?tab=integrations&integration=-sources");
@@ -1137,5 +1140,40 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     });
     await flush();
     expect(location.pathname + location.search).toBe("/settings?tab=sources");
+    const restoredNav = [...host.querySelectorAll<HTMLButtonElement>("nav button")].map((b) => b.textContent ?? "");
+    expect(restoredNav).toContain(t("settings-nav.tab_sources"));
+    expect(restoredNav).not.toContain(t("settings-nav.tab_integrations"));
+
+    // Flip back to integrations_v2=true from /settings?tab=sources: redirects straight into Data Flow view.
+    state.integrationsV2 = true;
+    state.features = ["channels", "extension_manager", "connectors", "lark", "source_subscriptions", "inbox_sources", "inbox_sources_graph"];
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS, inboxTodoForward: false });
+    history.replaceState(null, "", "/settings?tab=sources");
+    await act(async () => root.render(null));
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(location.pathname + location.search).toBe("/settings?tab=integrations&integration=-sources");
+    expect(host.querySelector("[data-integrations-sources-view]")).not.toBeNull();
+    const foldedNav = [...host.querySelectorAll<HTMLButtonElement>("nav button")].map((b) => b.textContent ?? "");
+    expect(foldedNav).toContain(t("settings-nav.tab_integrations"));
+    expect(foldedNav).not.toContain(t("settings-nav.tab_sources"));
+
+    // Deep link /settings/sources/<encodedState> redirects into push-source detail inside Integrations.
+    const pushState = subscriptionSourceState("sub_push_iphone");
+    const encodedPushState = encodeURIComponent(pushState);
+    history.replaceState(null, "", `/settings/sources/${encodedPushState}`);
+    await act(async () => root.render(null));
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(location.pathname + location.search).toBe(
+      `/settings?tab=integrations&integration=${encodeURIComponent(`-sources/${encodedPushState}`)}`,
+    );
+    const pushExtUI = host.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
+    expect(pushExtUI).not.toBeNull();
+    expect(pushExtUI.dataset.state).toBe(pushState);
   });
 });

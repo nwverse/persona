@@ -361,7 +361,7 @@ func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, 
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 		if v.assigned() {
 			supervisor = v.Supervisor // a transfer that won before this write stays authoritative
-		} else if s.isLeader(ctx, supervisor) {
+		} else if s.isLeader(ctx, supervisor) || s.liveSideSupervisor(ctx, supervisor) {
 			v.SupervisorSource = "plan"
 		}
 		if t.Continues == "" {
@@ -716,6 +716,36 @@ func (s *Service) startPlanTaskAsync(planID, conversation string, i int, t PlanT
 	}()
 }
 
+// activateDeferredTaskStart attaches the Companion's MCP servers and starts its first turn through the same ordinary
+// send path a later message uses. Its client_msg_id is the id session.start carried, so an uncertain answer is never
+// retried into a second first turn.
+func (s *Service) activateDeferredTaskStart(ctx context.Context, t *PlanTask, mid, sid string) error {
+	d := t.deferredStart
+	if d == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskStartTimeout)
+	defer cancel()
+	params := map[string]any{"session_id": sid, "text": d.text, "client_msg_id": d.clientMsgID}
+	if len(d.images) > 0 {
+		params["images"] = d.images
+	}
+	return s.call(ctx, mid, DeviceSessionSend, params, nil)
+}
+
+// closeDeferredTaskStart discards a newly created ACP session that provably never got its first prompt. It is not used
+// for an uncertain activation: that session may already be running and remains linked for recovery instead.
+func (s *Service) closeDeferredTaskStart(ctx context.Context, t *PlanTask, mid, sid string) {
+	if t.deferredStart == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+	defer cancel()
+	if err := s.call(ctx, mid, "session.close", map[string]any{"session_id": sid}, nil); err != nil {
+		s.logf("task %s: close deferred Companion session %s/%s: %v", t.TodoID, mid, sid, err)
+	}
+}
+
 // runPlanTaskStart is the shared start body; its caller owns the idle reservation through every return path.
 func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTask, retry bool) {
 	t.planID, t.planIndex = planID, i
@@ -836,6 +866,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		stop()
 	}
 	launched := err == nil
+	linkedDone := false
 	if !launched && t.Dispatch != nil {
 		// A failed start keeps its dispatch, with the candidate's failed starts in a row, for the next try to read
 		// (candidate_keep.go: three re-pick).
@@ -878,10 +909,29 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 			retryCtx, retryCancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 			err = s.linkPlanAgent(retryCtx, t, mid, sid, true)
 			retryCancel()
+			linkedDone = err == nil
 			if err != nil {
 				s.logf("task %s: link to the finished task: %v", t.TodoID, err)
 			}
 		}
+	}
+	if err == nil && t.deferredStart != nil {
+		if linkedDone {
+			// The owner finished the task while its ACP identity was being created. No first prompt is needed now.
+			s.closeDeferredTaskStart(ctx, &t, mid, sid)
+		} else {
+			err = s.activateDeferredTaskStart(ctx, &t, mid, sid)
+			if err != nil && sendUnknown(err) {
+				// The role link is durable and the send may already be running. Keep it exactly as an adopted unknown start:
+				// no close, failure receipt or blind second Agent; a later send uses the now-linked identity.
+				s.logf("task %s: deferred Companion activation has an unknown result; keeping the linked session: %v", t.TodoID, err)
+				err = nil
+			}
+		}
+	}
+	if err != nil && t.deferredStart != nil {
+		// Linking failed before any prompt, or activation definitely refused it: this new ACP session is safe to reclaim.
+		s.closeDeferredTaskStart(ctx, &t, mid, sid)
 	}
 	if err == nil {
 		if t.Queue != nil { // a queued retry made it through the gate and linked: its waiting record is done

@@ -154,6 +154,7 @@
     <string name="chat_request_secret_run_commands">依次运行的命令</string>
     <string name="chat_request_secret_run_password">密码</string>
     <string name="chat_request_secret_run_note">只用这一次，不会保存，助手也看不到。</string>
+    <string name="chat_request_secret_run_env_warning">警告：上面列出的每个命令都会通过 PERSONA_SECRET 直接收到你输入的密码。编码后的输出可能绕过脱敏。</string>
     <string name="chat_request_secret_run_run">运行</string>
     <string name="chat_request_secret_run_decline">拒绝</string>
     <string name="chat_secret_handoff_always">总是允许</string>

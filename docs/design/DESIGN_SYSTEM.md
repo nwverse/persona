@@ -774,6 +774,8 @@ failure keeps the notice and shows the reason in the shared error toast. No card
 
 Machine cards use one adaptive row grid on iOS and Android. Measure the actual pane's available content width after page and reading insets, never the physical display or a device-model bucket. With minimum column `cardColumn` 330 and gap `Space.m`, the column count is `floor((contentWidth + gap) / (cardColumn + gap))`, clamped to at least one; insufficient space stays one column instead of squeezing a card. Android inserts one weighted row at a time into the page's existing lazy list, keyed by that row's stable machine ids, rather than nesting a second scrolling grid. Empty slots in a short last row keep their weights. Cards in a row have equal height and their charts align at the bottom. Reordering is a separate concern projection: equal ranks retain source order, so heartbeat and sample changes at the same severity do not move rows or reset reading position.
 
+The web Overview's **Computers** section offers the shared `Segmented` **Cards / Rows** switch on its heading, with the browser's `persona.overview.machines.view` preference and Cards as the default; unavailable storage falls back to Cards on read and to an in-memory choice on write. **Rows** is the original hub-ordered responsive compact-row grid and starts no metrics work. **Cards** keeps the row header and adds the exact `MachineMetricsSummary` drawn on Machines: current CPU / load, memory, network, optional Tokens and their one-hour SVG plots, with identical values, formatting and colors. Live cards in a row have equal height; offline, pending and never-reporting computers stay self-sized compact rows, never empty gauges. The whole card opens the same machine as the row did. One section-level visible metrics loader is shared with Machines (no per-card effects, requests or reordering), is unmounted in Rows mode, and does not redraw the Overview's other sections. A total metrics failure uses Machines' alert: without numbers it reports the load failure; retained numbers are explicitly stale and retried every 10 seconds. Battery, thermal and token-only reports are monitorable, but disk-only and empty samples never create gauges. A local error boundary contains a failed summary chunk to its card and retries on the next sample. This reuses the existing control, surface, spacing, type, severity, chart and network-role tokens; it adds no style, theme or color.
+
 An extension's dashboard page (web, #9158; UI version 8's `columns` layout, `web/src/views/extensions/ViewBody8.tsx`) is the same kind of grid on the web: the cards are an overview card's surface (`rounded-card`, `bg-surface`, `shadow-card`) with its head inside (the `text-meta` medium title, an optional 14 px icon in its named color before it, the section's link in `text-label` accent with › at its end), `gap-3` between them, and every card in a row as tall as the tallest. The columns follow the page content's width with container queries: one column, two once each card keeps 24rem, three once three do, so 1440 × 900 with the sidebar open has two. 24rem rather than `cardColumn` (21rem): these cards hold lists whose rows carry a value or a badge at their end, and at 21rem a third column cuts their titles short at desktop widths. A card that spans the row takes all columns. Inside a card that asks for it, rows go two a line from 36rem of card (three from 54rem) without hairlines between them, and stack with hairlines below that. Why a grid and not masonry: the reading order stays the narrow screen's order, left to right then down. Android (#9158) draws the same page with the native rule above (`cardColumn` and `Space.m`, at most three columns, a phone one, drawn as the stack): the page measures its pane, a columns view takes the pane's whole width (`JListPage` `fullWidth`), and each row of cards is one item of the page's lazy list, every card the section's group panel (`JGroupItem`) with its head inside (an icon in its named color, the `headline` title, the link a quiet `JButton`) as tall as the row's tallest. A section's rows go side by side where each keeps `cardColumn`.
 
 On iOS (#9158, `apple/Persona/Views/Settings/ExtensionColumns.swift`) the same page follows this section's rule for machine cards: the page's own width inside its margins (`Space.page`), never the device, with minimum column `cardColumn` and gap `Space.m`, at most three columns. Unlike the Machines grid the minimum grows with the text (`Theme.sizeScale`, as `scaledFrame` does; about 446 pt at the interface's largest size, xxxLarge), so a window that just holds two columns at the default size holds one at larger sizes instead of squeezing cards of large text; a 13-inch iPad's detail column on its side keeps two. One column is the page's list exactly as a stack draws it, so an iPhone upright looks as before. Two or more: a lazy stack of lines, each line a layout that offers every card the line's tallest height (`ExtensionColumnsLayout`), the cards `.card()` with the head inside (icon in its named color, the title in `Font.heading` as the Machines cards', the link in the accent at the end, at least `tapTarget` square). `cardColumn` rather than the web's 24rem: iOS rows are drawn for a phone's width, and 330 pt is about an iPhone's card, so a column never holds less than a phone shows. A section's rows go side by side by the same rule (`cardColumn` each, in the width the rows are given) and stay one to a line below it.
@@ -853,14 +855,14 @@ Set to Full page, the Agent's page opened from a card shows cindy's way-back str
 
 No new token. The two icons are added to `ui/icons.tsx` in the existing stroke grammar. iOS and Android draw these cards in the chat, one per Agent, and a card with an Agent opens that Agent's page (#5110).
 
-**Changed-files card** (web, #5157, `web/src/views/chat/TurnChanges.tsx`; cindy's `TurnChangesCard`, at the owner's request, 2026-11-12), Agents only (super rules 0 and 4): the last thing in a finished Agent exchange that edited files.
-- **Frame:** a `rounded-xl` `bg-surface` section with a 1 px `--line` border and 4 px above and below.
-- **Head** (at least 64 px, 16 px across, 12 px down, 12 px gaps): a 36 px `--field` tile (`rounded-control`) with the 18 px `fileDiff` mark in `--ink-2`; **Changed N files** (14 px medium `--ink`, one line) with `+N -N` under it (12 px mono, `--diff-add-fg` / `--diff-del-fg`, ASCII minus); **Review**, the standard secondary `Button`, on the right.
-- **Files** (under a `--line` hairline, 12 px across, 8 px down): 36 px rows (44 on a touch screen), `rounded-control`, `hover:bg-hover`: the 15 px `file` mark in `--ink-2`, the path relative to the session's folder (13 px `--ink`, truncated, the full path as its title) and its own `+N -N` (each only above zero). Three rows, then **Show N more files** ⌄ / **Show less** ⌃ (13 px `--ink-2`, 32 px, hover `--ink`).
+**Changed-files card** (web, #5157, `web/src/views/chat/TurnChanges.tsx`; iOS/iPadOS, #12016, `apple/Persona/Views/Chat/TurnChangesCard.swift`; cindy's `TurnChangesCard`, at the owner's request, 2026-11-12), Agents only (super rules 0 and 4): the last thing in a finished Agent exchange that edited files.
+- **Frame:** a `rounded-xl` `bg-surface` section with a 1 px `--line` border and 4 px above and below (on iOS/iPadOS: `Theme.card` with `Theme.Radius.card` and hairline `Theme.cardStroke`).
+- **Head** (at least 64 px, 16 px across, 12 px down, 12 px gaps): a 36 px `--field` tile (`rounded-control`) with the 18 px `fileDiff` mark in `--ink-2` (on iOS/iPadOS: `Theme.Size.wellL` `Theme.Fill.well` tile with `Theme.Icon.reviewChanges`); **Changed N files** (14 px medium `--ink`, one line; `Theme.Font.secondaryMedium` on iOS) with `+N -N` under it (`CodeChangeCounts` on iOS, omitted when uncountable); **Review**, the standard secondary `Button` (`.themedButton()` on iOS, stacked under the header at accessibility text sizes), on the right.
+- **Files** (under a `--line` hairline, 12 px across, 8 px down): 36 px rows (44 on a touch screen; `Theme.Size.tapTarget` on iOS), `rounded-control`, `hover:bg-hover`: the file mark (`FileViewer.symbol(for:)` on iOS), the path relative to the session's folder (`Theme.Font.caption`, middle-truncated on iOS, full path copyable from the context menu) and its own `+N -N` (each only above zero, omitted when clipped). Three rows, then **Show N more files** ⌄ / **Show less** ⌃ (`FoldToggle` pinned in place with `chatPinned` on iOS).
 - **Counts** are the exchange's own successful edits, the numbers each edit's row shows, counted without drawing a diff; folded work counts by the changes its fold carries, so a reload keeps the card. A fold from an older node carries none, and an exchange whose start is not on the page is missing edits: neither has a card (principle 5: no count that cannot be known).
-- **Review** opens the branch's review (commits and uncommitted work); a file row goes to its file there, or opens the file itself when the review does not list it or the file is outside the session's folder.
+- **Review** opens the branch's review (commits and uncommitted work); a file row goes to its file there (unfolded and scrolled into view on iOS `ReviewPage`), or opens the file itself (`FileViewer` on iOS) when the hub lacks review, the review fails to load or does not list that file, or the file is outside the session's folder.
 
-Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark instead of file-type icons, rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). The `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); no new token.
+Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark on web (`FileViewer.symbol(for:)` on iOS), rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). On web, `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); on iOS/iPadOS, zero new tokens or symbols.
 
 #### Connected Inbox message cards (#856)
 
@@ -1138,7 +1140,7 @@ reply's) have it; Apple and HarmonyOS follow in their own issues and show these 
 
 #### Rows read during a visit
 
-Reading a queue of finished Agents is open, read, back, the next one (#12514). On iPhone and iPad every row the Agents
+Reading a queue of finished Agents is open, read, back, the next one (#12514; web #12585). On iPhone, iPad and the web every row the Agents
 list showed as Unread or Just finished during the visit keeps that place once it is seen, opened or marked there or
 seen elsewhere (`docs/protocol/agent-states.md` ("Seen")), in every grouping and under a quick filter, so the next one
 is still right below and nothing slides from under the finger. A chat that finished while it was open was never in that
@@ -1150,12 +1152,13 @@ place on the list: it is held while open only, as every opened row was before.
   badge and the Live Activity, which only know the hub's state.
 - **Clear Seen (N)**: a By Status section holding such rows has a text button between its title and its chevron
   (`FoldButton`'s `accessory`: a button of its own, the fold keeps the rest of the header), N the rows it lets go.
-- **When they go**: pull to refresh, Clear Seen, a quick filter chosen (again), another computer, hub or assistant, a
+- **When they go**: pull to refresh (on the web, reload), Clear Seen, a quick filter chosen (again), another computer, hub or assistant, a
   new launch. Going to the background is none of these: the visit lasts however long the app was away, until one of
   them. Mark All as Seen (a section's, a space's or a repository's) takes its rows at once, those already read there
   too: a batch says the user is done with them. A row that works, needs the user or finishes unseen again goes where
   its state puts it.
-- **The choice**: Settings › Appearance & Display › Agents List Layout › Seen Agents, **Stay Until Refresh** (the
+- **The choice**: Settings › Appearance & Display › Agents List Layout › Seen Agents (on the web, Settings › General ›
+  Agent preferences › Seen Agents), **Stay Until Refresh** (the
   default) or **Leave When the Chat Closes**, the behavior before #12514 (only the open row holds, #2213). It is this
   device's: a list behavior, not the assistant's (4.1.1). The first time a read row stays, a neutral `NoticeBanner` at
   the list's foot says so once, with **Change in Settings** (the page opens at the choice) and its ✕ (Principle 1: the
@@ -1166,9 +1169,9 @@ place on the list: it is held while open only, as every opened row was before.
 Why: one concept had two rules. The Unread filter kept a read row (`kept`) and the Assistant tray's Finished entry keeps
 a read task (#10922), but By Status moved it to the folded Seen section as soon as the chat was left, also on a tapped
 notification or a switch of tab (Principle 4). Rejected: a new filter chip (the bar is an approved layout, "List
-controls"); dimming the row (a new look); marking seen only after a delay (it still moves when the chat is left). The
-web (#12585), Android (#12584) and HarmonyOS with the shared core (#12583) keep the behavior before #12514 until then;
-the shared cases are in `spec/fixtures/sort/next/held_set.json`.
+controls"); dimming the row (a new look); marking seen only after a delay (it still moves when the chat is left).
+Android (#12584) and HarmonyOS with the shared core (#12583) keep the behavior before #12514 until then;
+the shared cases are in `spec/fixtures/sort/next/held_set.json` (replayed by iOS and the web).
 
 #### The work-item row
 
@@ -1800,14 +1803,28 @@ The hub's link while it is down (Waiting for network, Connecting…, Updating…
 ### Web skill mentions (#5357)
 
 Reuse the composer's existing `ComposerPanel` surface for `@` and `SlashPalette` surface for `/`, their neutral sliding
-highlight, icon set, keyboard/IME/Escape behavior and context chips. A skill row has a readable name, source and
+highlight, icon set and keyboard/IME/Escape behavior. A skill row has a readable name, source and
 description; `@` uses two lines, while `/` puts them in its own 36 px row (44 px on touch). The source
-distinguishes equal names. Selecting either row adds the same removable skill chip and opaque reference rather than hiding an invocation in display text.
-Skill rows and the skill chip's remove target meet the Web 44 px touch size. The menu's loading, partial-inventory and
+distinguishes equal names. Both pickers insert the same inline skill reference with its opaque ID. Skill rows meet
+the Web 44 px touch size. The menu's loading, partial-inventory and
 failure status stays secondary and never disables ordinary chat. No new primary screen, setting, model choice or
 native client pattern is introduced. Use the existing surface/hover/ink/accent tokens in light/dark and narrow layouts.
-Ordinary Claude Code and Codex Agent chats use this same picker and chip. The catalog belongs to the actual session;
+Ordinary Claude Code and Codex Agent chats use this same picker. The catalog belongs to the actual session;
 unsupported or unavailable environments show the existing quiet failure status while text and other references remain usable.
+
+#### Inline references in the web composer (#15409)
+
+This serves people who refer to a file, folder, skill, workspace, repository or previous Agent chat while writing.
+Picking from `@` or `+` inserts the reference at the caret so it stays with the sentence it belongs to. Use the
+existing 14 px semantic icon and accent text ink on the text baseline. Hover reveals the source or full path.
+Arrow keys step past the reference in one move, and Backspace, Delete or a range selection can remove it.
+The folder row selects the folder. Its chevron or Right Arrow opens it for browsing. The scheduled prompt picker
+browses folders to choose a file in the task's execution directory.
+
+`InlineMentionInput` loads when references are used. The native field handles ordinary drafts immediately. Their
+shared document keeps the text, references and caret through local edits and the full-screen editor. Quotes, forwards,
+uploads, pasted blocks and selections brought in from a reader continue to use their existing space above the field.
+The wire format is in `docs/protocol/protocol.md` under "Tags in messages (parsed by clients)".
 
 ### 3.11 Code blocks, inline code and quotes in replies
 
@@ -2541,6 +2558,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   card is the terminal's question as before); the rules in `apple/Shared/CommandAsk.swift`, `web/src/lib/command-ask.ts`
   and `web/src/lib/command-ask-lines.ts`.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
+- **Password-card environment delivery (#11945)**: the default password card stays unchanged and delivers only to `sudo -S` stdin. An explicit `delivery: "env"` card adds the existing caution notice after its verbatim commands, saying every listed command receives the typed password as `PERSONA_SECRET` and encoded output may evade redaction. Apple uses `NoticeBanner`, Android `JNotice`, and the web the terminal command card's warning line; Watch and generic fallback views carry the same warning in the hub summary. The card's own Run declares `secret_run_env` on that request only. Older specialized clients that suppress the summary cannot show the warning and get 403 instead of running it; quick approvals and Watch never get the feature, so every env run needs a freshly typed password and Run on this card, and Watch still offers only Decline.
 - **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
   approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the
   item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
@@ -2884,6 +2902,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
+| Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## HarmonyOS native structure
