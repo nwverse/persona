@@ -202,6 +202,25 @@ func TestModuleRouteConflictWithCoreDropsWholeModule(t *testing.T) {
 	}
 }
 
+func TestModuleRouteFallbackConflictDropsModuleWithoutPanic(t *testing.T) {
+	const id = "route-fallback-conflict"
+	const pattern = "/api/v1/recordings/{id}/photos"
+	m := testSlotModule{info: moduleTestInfo(id)}
+	m.info.HubRoutes = []string{pattern}
+	m.register = func(h modapi.Host) error {
+		return h.AddHubRoute(pattern, func(http.ResponseWriter, *http.Request) {})
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("fallback route conflict panicked Service construction: %v", r)
+		}
+	}()
+	s := New(Options{Hub: newFakeHub().withMachine(), Store: func() Store { return &memStore{} }, Logf: testLogf(t), Modules: []modapi.Module{m}})
+	if s.modules.Loaded(id) || !strings.Contains(s.modules.Skipped(id), "conflicts with a core or loaded module route") {
+		t.Fatalf("fallback-conflicting module loaded %v, skipped %q", s.modules.Loaded(id), s.modules.Skipped(id))
+	}
+}
+
 func TestModuleRouteSemanticConflictDropsLaterModule(t *testing.T) {
 	newModule := func(id, variable string) testSlotModule {
 		m := testSlotModule{info: moduleTestInfo(id)}

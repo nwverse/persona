@@ -210,8 +210,9 @@ type Service struct {
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
 
-	mux    *http.ServeMux
-	routes []string
+	mux            *http.ServeMux
+	routes         []string
+	routeFallbacks []string // internal path-only fallbacks: not relayed, but included in module conflict checks
 
 	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
 	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
@@ -532,6 +533,13 @@ func (s *Service) handle(pattern string, fn http.HandlerFunc) {
 	if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/api/v1/todos/{id}") {
 		fn = s.todoScoped(fn) // what an extension is not shown of a to-do, at every route of one (todo_scope.go)
 	}
+	s.mux.HandleFunc(pattern, fn)
+}
+
+// handleFallback adds an internal path-only fallback. It is not a relayed route, but loadModules still checks its
+// registration against proposed module routes so a conflict is rejected before ServeMux can panic.
+func (s *Service) handleFallback(pattern string, fn http.HandlerFunc) {
+	s.routeFallbacks = append(s.routeFallbacks, pattern)
 	s.mux.HandleFunc(pattern, fn)
 }
 
