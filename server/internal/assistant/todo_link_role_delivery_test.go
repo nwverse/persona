@@ -68,12 +68,18 @@ func TestReferenceRolePRDoesNotBlockAcceptance(t *testing.T) {
 func TestReferenceReportPRDoesNotBlockThroughStage(t *testing.T) {
 	s, todo, _ := linkRoleTask(t)
 	reply := "Related work: " + foreignPR
-	s.advanceTaskReply(context.Background(), todo, "box", todo.Agents[0].SessionID, reply)
+	ctx := context.Background()
+	s.advanceTaskReply(ctx, todo, "box", todo.Agents[0].SessionID, reply)
 	if got := linkRoles(t, s, todo.ID)[foreignPR]; got != repository.LinkRoleReference {
 		t.Fatalf("related-work PR role = %q, want reference", got)
 	}
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("a reference PR became the delivery-stage PR: %q", got)
+	}
+	// Older tasks can still carry a reference in the legacy delivery-stage slot.
+	s.setTaskStage(ctx, todo.ID, "review", foreignPR)
 	if got := todoNow(s, todo.ID).PRURL; got != foreignPR {
-		t.Fatalf("stage PR = %q, want reported reference PR %q", got, foreignPR)
+		t.Fatalf("legacy stage PR = %q, want %q", got, foreignPR)
 	}
 	if _, err := acceptReview(s, todo.ID, nil); err != nil {
 		t.Fatalf("a reference PR tracked by the stage blocked acceptance: %v", err)
