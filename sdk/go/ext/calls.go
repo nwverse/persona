@@ -257,7 +257,7 @@ func (h *Hub) BrowserRun(ctx context.Context, p wire.BrowserRunParams) (wire.Bro
 // AssistantEvent tells the assistant's main conversation what the extension observed (permission assistant.events,
 // docs/extensions/extensions.md "Assistant events"). The assistant gets it as an extension's report, never as the
 // user's words, and decides what to tell the user. An event with the same Key as one of this extension's still waiting
-// behind a running turn replaces it, unless Replace is false. Errors carry wire.AssistantErrorCode* or
+// behind a running turn replaces it, unless Replace is wire.AssistantEventReplaceFalse. Errors carry wire.AssistantErrorCode* or
 // permission_denied: no_main_conversation (nothing was started: do not retry until the user has one), rate_limited
 // (data {retry_after}), queue_full and invalid_params; assistant_offline and machine_offline are worth trying again.
 func (h *Hub) AssistantEvent(ctx context.Context, p wire.AssistantEventParams) (wire.AssistantEventResult, error) {
