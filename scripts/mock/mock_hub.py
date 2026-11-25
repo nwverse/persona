@@ -10492,6 +10492,27 @@ if os.environ.get("MOCK_SECRET_RUN") in ("pending", "ran", "withheld", "long"):
             ensure_ascii=False), 1) + [
             it("assistant", "text", 0.5, text="第二条命令失败了（退出码 5）：launchd 没能加载这个任务。我先看看 plist 的权限再告诉你。")]
 
+# MOCK_SECRET_RUN=env: the explicit one-off non-sudo mode. Every command receives PERSONA_SECRET; the card warns
+# about it after showing the commands. It is separate so the original stdin fixtures stay byte for byte unchanged.
+if os.environ.get("MOCK_SECRET_RUN") == "env":
+    _env_input = {"machine": "studio", "machine_name": "Mac Studio", "delivery": "env",
+                  "purpose": "登录一次局域网设备，查看已连接客户端",
+                  "commands": ["/usr/bin/env sh -c 'test -n \"$PERSONA_SECRET\"'",
+                               "/usr/bin/curl -H \"Authorization: Bearer $PERSONA_SECRET\" https://example.test"]}
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2, text="帮我登录一次局域网设备，看看现在连着哪些客户端，用一次就行"),
+        it("assistant", "text", 1.5, text="这次不用 sudo。每条命令都会通过 PERSONA_SECRET 拿到密码，请逐条核对后再运行。")]
+    ITEMS[ASK1].append(it("assistant", "tool_use", 1, tool_use_id="toolu_secret_run", tool_name="mcp__persona__secret_run",
+                          tool_input=_env_input))
+    INTERACTIONS.append(
+        {"id": "ix_secret_run", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+         "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=9),
+         "tool_name": "secret_run", "tool_use_id": "toolu_secret_run", "tool_input": _env_input,
+         "summary": "在 Mac Studio 上运行（%s）：\n" % _env_input["purpose"]
+                    + "\n".join("$ " + c for c in _env_input["commands"])
+                    + "\n警告：你输入的密码会通过 PERSONA_SECRET 直接传给上面列出的每一条命令。编码后的输出可能绕过脱敏。",
+         "fields": [{"key": "password", "label": "密码", "placeholder": "只用这一次，不会保存", "secret": True}]})
+
 # MOCK_SECRET_HANDOFF=1: the hand-off card (secret_handoff, #3962) in Persona's main conversation: the assistant asked to
 # start an Agent on the MacBook with two values from a made-up provider; nothing has been handed over. Its approval is
 # taken from the card alone (the app sends X-Persona-Features: secret_handoff with it).
@@ -29201,7 +29222,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "the hub could not take this answer"}, 400)
             if RESOLVE_MODE[0] == "slow":
                 time.sleep(6)
-            RESOLVED.append({"id": p.split("/")[4], "resolution": json.loads(self.last_body or b"{}")})
+            _resolution = json.loads(self.last_body or b"{}")
+            if os.environ.get("MOCK_SECRET_RUN") == "env" and p.split("/")[4] == "ix_secret_run" and \
+                    _resolution.get("allow") is True and \
+                    "secret_run_env" not in [feature.strip() for feature in self.headers.get("X-Persona-Features", "").split(",")]:
+                return self.send_json({"error": "update the app to approve environment delivery", "code": "secret_run_env_elsewhere"}, 403)
+            RESOLVED.append({"id": p.split("/")[4], "resolution": _resolution})
             if os.environ.get("MOCK_CODEX") and p.split("/")[4] == "cxa_orders_curl" and \
                     sum(r["id"] == "cxa_orders_curl" for r in RESOLVED) == 1:
                 return self.send_json({"error": "电脑上 Codex 的输入框里有没发出去的内容：「先看下慢查询日志」。这次什么都没输入，免得和它拼在一起：在电脑上发出去或清空后再答。",

@@ -321,7 +321,6 @@ type Service struct {
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll         bool
 	later                    laterBook    // later.go: questions that can wait for a briefing
-	brief                    briefBook    // briefing.go
 	reporters                reporterBook // reporters.go
 	sched                    schedule     // schedule.go
 	delayedMu                sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
@@ -651,6 +650,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if id != "" {
 			if _, trusted := p["model_source"].(modelhttp.Source); !trusted {
 				p["model_source"] = s.conversationModelSource(ctx, device, id)
+			}
+			if method == DeviceAssistantSend || method == assistantwire.DeviceAssistantAnswerAgain {
+				s.putConversationCategories(ctx, id, p)
 			}
 		} else if method == DeviceAssistantWarm {
 			p["model_source"] = modelhttp.Source{Role: "main"}

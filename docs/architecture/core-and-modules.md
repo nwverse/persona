@@ -112,7 +112,7 @@ missing quietly.
 | `hub_routes` | Yes | `Host.AddHubRoute(pattern, handler)`: the assistant serves the declared `METHOD /api/v1/…` route only while the module is loaded |
 | `mcp_tools` | Yes | `Host.AddMCPTool(...)`: the assistant lists and dispatches the declared tool only while the module is loaded |
 | `background_jobs` | Yes | `Host.AddBackgroundJob(name, run)`: `Service.Run` starts the declared loop under its context; an absent module starts none |
-| `schedules`: `facts` | Yes | `Host.AddScheduleFacts(modapi.ScheduleFacts)`: the wait rules of the facts a scheduled routine with facts on opens with |
+| `schedules`: `facts` | Yes | `Host.AddScheduleFacts(modapi.ScheduleFacts)`: the wait rules and `ScheduleFactsRunner` for scheduled routines with facts or reports, using narrow `Host` ports (`Tasks`, `Todos`, `Inbox`, `Later`, `Schedule`, `Feed`, `Delivery`, `DayRecap`, `Prompts`) |
 | `schedules` (others), `prompt_sections`, `db_migrations`, `i18n_namespaces`, `node_programs`, `channel_kinds`, `frame_handlers`, `push_categories`, `shell_places`, `chat_card_kinds`, `composer_actions`, `chat_accessories` | Not yet | Declared but not served: each gets a `Host` method when its first module moves (#13408 remaining work, #13400 to #13403) |
 
 Route validation uses the real `http.ServeMux` conflict rules, including equivalent wildcard patterns, against the core
@@ -433,15 +433,19 @@ platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` prove
 
 ### The briefing pilot
 
-The daily briefing (`internal/assistant/briefing*.go`) is a module (#13430, decision 3). This first step moves the
-part that is self-contained behind the contract; the facts' gathering, the Lark card and delivery stay in package
-assistant and move as the host learns to serve them.
+The daily briefing (`internal/assistant/briefing*.go`) is a module (#13430, decision 3; #13845). Fact gathering, the
+evening all-day recording summary, the `brief` chat feed item, the model-failure fallback, the wait-row setting and the
+wait rules live in `server/internal/modules/briefing` behind narrow `modapi.Host` ports; the Lark card renderer
+(`briefing_card.go`) and HTTP routes (`briefRoutes` in `briefing_feed.go`) stay in package assistant until a neutral
+`Card` model and the `hub_routes` slot land.
 
 - **The module owns** (`server/internal/modules/briefing`): the `assistant.briefing_waits` setting (its type, defaults,
-  validation and card text) and the wait rules of the briefing's per-direction rows (when stopped work counts as waiting,
-  how rows are ordered, how many are shown).
+  validation and card text), the wait rules of the briefing's per-direction rows, routine fact gathering (`FactsAt`,
+  Inbox follow-up filtering, in-progress sorting, per-run retention and schedule lifecycle hooks), the evening day
+  recording summary (`Day`, `BoundDay`), the `brief` feed item body and writer, and the model-failure fallback lifecycle.
 - **The core keeps** the stored value (the `briefing_waits` field of the assistant's settings, byte for byte as before),
-  the setting's description in `persona_settings`, and the gathering of the rows from the ledgers it owns.
+  the setting's description in `persona_settings`, the ledgers behind the narrow `modapi.Ports` adapters
+  (`server/internal/assistant/modules_ports.go`), the Lark card renderer (`briefing_card.go`) and `briefRoutes`.
 - **With the module absent** a routine with facts on opens with no facts and keeps no briefing run, so its answer goes
   out as a routine with facts off does (no brief item, no briefing rows on the Lark card); a daily report gets the north
   star's lines alone; the acceptance reminders wait for no briefing; `assistant.briefing_waits` is hidden from

@@ -95,8 +95,9 @@ export function SpaceMenu(props: SpaceMenuProps) {
   return <Suspense fallback={null}><LazySpaceMenu {...props} /></Suspense>;
 }
 
-/** "Mark all as seen", asked first: it changes what the other devices show too. */
-export function MarkSeenDialog({ list, onClose, onDone }: { list: Session[] | null; onClose: () => void; onDone?: () => void }) {
+/** "Mark all as seen", asked first: it changes what the other devices show too. `release`: every row in the scope
+ *  whose held-seen place also leaves when confirmed (defaults to `list`). */
+export function MarkSeenDialog({ list, release, onClose, onDone }: { list: Session[] | null; release?: Session[]; onClose: () => void; onDone?: () => void }) {
   const n = list?.length ?? 0;
   return (
     <Dialog
@@ -113,7 +114,7 @@ export function MarkSeenDialog({ list, onClose, onDone }: { list: Session[] | nu
             tone="primary"
             icon="check"
             onClick={() => {
-              if (list) markSeen(list);
+              if (list) markSeen(release ?? list);
               onDone?.();
               onClose();
             }}

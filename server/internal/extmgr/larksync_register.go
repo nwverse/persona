@@ -205,27 +205,36 @@ func (h *Manager) larkSyncPollRegistration(ctx context.Context, botID string) (c
 	}
 	appID := ""
 	if _, err := h.larkSyncChange(ctx, func(st *larkSyncState) error {
+		prevTier := st.tierOf(botID)
 		if botID == larksyncwire.PrimaryBot {
 			// The chat bot's credentials stay as they are: only the scopes were added to its app.
 			st.prefs.PrimaryTier, st.prefs.PrimaryApproval = reg.Tier, larksyncwire.ApprovalReady
 			st.prefs.PrimaryRedirect = "" // configured again with the new scopes on the next authorization
-			return larkSyncPutReg(st, botID, nil, "")
+		} else {
+			b := st.bot(botID)
+			if b == nil {
+				return errLarkSyncNoBot
+			}
+			if t.AppID != "" && (b.AppID == "" || b.AppID == t.AppID || reg.AddTo == "") {
+				b.AppID = t.AppID
+			}
+			if secret != "" {
+				b.SecretEnc = secret
+			}
+			if b.Domain == "" || reg.AddTo == "" {
+				b.Domain = h.registeredDomain(region)
+			}
+			b.Tier, b.Approval, b.Redirect = reg.Tier, larksyncwire.ApprovalReady, ""
+			appID = b.AppID
 		}
-		b := st.bot(botID)
-		if b == nil {
-			return errLarkSyncNoBot
+		// Existing bindings keep their already-authorized tier until the owner authorizes again with the new scopes.
+		if reg.AddTo != "" && prevTier != reg.Tier {
+			for i := range st.bindings {
+				if bd := &st.bindings[i]; bd.BotID == botID && !bd.pending() && bd.Tier == "" {
+					bd.Tier = prevTier
+				}
+			}
 		}
-		if t.AppID != "" && (b.AppID == "" || b.AppID == t.AppID || reg.AddTo == "") {
-			b.AppID = t.AppID
-		}
-		if secret != "" {
-			b.SecretEnc = secret
-		}
-		if b.Domain == "" || reg.AddTo == "" {
-			b.Domain = h.registeredDomain(region)
-		}
-		b.Tier, b.Approval, b.Redirect = reg.Tier, larksyncwire.ApprovalReady, ""
-		appID = b.AppID
 		return larkSyncPutReg(st, botID, nil, "")
 	}); err != nil {
 		return connector.Prompt{}, err
