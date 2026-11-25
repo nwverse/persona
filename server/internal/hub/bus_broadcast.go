@@ -44,7 +44,7 @@ var managerMessageTypes = map[string]bool{
 	"assistant_view_block": true, "agents.triage": true, "direction_offer": true, "directions": true, "interaction_reanswered": true, "kb_selection": true, "launcher_health": true,
 	"model_profile": true, "navigation": true, "task_plan": true, "todos": true, "workspace_board": true, "workspace_board_settings": true,
 	"resources": true, "meeting_live": true, "urgent_call": true, "health_intake": true, "health_strength": true,
-	"health_items": true, "assistant_pages": true,
+	"health_items": true, "assistant_pages": true, "assistant_labs_seen": true,
 	// its extensions' manager
 	"agents": true, "agents.prefs": true, "inbox": true, "mail_accounts": true, "messaging": true,
 	"extension_auth": true, "extension_operation": true, "extension_ui": true, "plugin_ui": true,

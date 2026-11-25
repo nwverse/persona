@@ -1,7 +1,7 @@
 // The socket's side of #1574: a drop is invisible inside the grace, a restart retries at once, and a resumed hello
 // refetches nothing while an ordinary one refreshes everything as before.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getState, onAppSocket, onHello, onPrivateUIStream, onHubEvent, reconnectNow, refresh, reset } from "./store";
+import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getState, onAppSocket, onHello, onPrivateUIStream, onHubEvent, reconnectNow, refresh, refreshAssistant, refreshTodos, reset } from "./store";
 import { offlineNow } from "./feedback";
 import { liveEntry, resetLive } from "./live";
 import { messageFeedback } from "./message-send";
@@ -381,7 +381,12 @@ describe("a slow refresh() does not put back an older snapshot", () => {
     connect();
     last().open();
     await vi.advanceTimersByTimeAsync(300);
+    expect(turns["/assistant"]).toHaveLength(1);
+    expect(turns["/todos"]).toHaveLength(1);
+    // Data changes before non-resumed hello: hello must issue fresh post-hello reads, not join pre-hello snapshots.
     last().push({ type: "hello" });
+    expect(turns["/assistant"]).toHaveLength(2);
+    expect(turns["/todos"]).toHaveLength(2);
     turns["/assistant"][1]({ main: "current" });
     turns["/todos"][1]({ todos: [{ id: "current" }] });
     await settle();
@@ -390,6 +395,38 @@ describe("a slow refresh() does not put back an older snapshot", () => {
     await settle();
     expect(getState().assistant?.main).toBe("current");
     expect(getState().todos.map((todo) => todo.id)).toEqual(["current"]);
+    expect(getState().loaded).toBe(true);
+  });
+
+  it("coalesces passive pre-hello reads with the cold timer, but detaches them at non-resumed hello", async () => {
+    const turns = holdFetch(["/assistant", "/todos"]);
+    connect();
+    last().open();
+    await vi.advanceTimersByTimeAsync(300);
+    // Passive mounts in the same pre-hello boundary coalesce with the 250ms fallback timer.
+    void refreshAssistant({ coalesce: true }).catch(() => {});
+    void refreshTodos({ coalesce: true });
+    expect(turns["/assistant"]).toHaveLength(1);
+    expect(turns["/todos"]).toHaveLength(1);
+
+    // Non-resumed hello crosses the freshness boundary: issues fresh reads and detaches pre-hello GETs.
+    last().push({ type: "hello" });
+    expect(turns["/assistant"]).toHaveLength(2);
+    expect(turns["/todos"]).toHaveLength(2);
+
+    // A passive read mounted after hello must not join the still-in-flight pre-hello GET and overwrite newer state.
+    const postHelloPassive = refreshTodos({ coalesce: true });
+    expect(turns["/todos"]).toHaveLength(3);
+    turns["/assistant"][1]({ main: "post-hello" });
+    turns["/todos"][1]({ todos: [{ id: "post-hello" }] });
+    turns["/todos"][2]({ todos: [{ id: "post-hello" }] });
+    await postHelloPassive;
+    await settle();
+    turns["/assistant"][0]({ main: "pre-hello-stale" });
+    turns["/todos"][0]({ todos: [{ id: "pre-hello-stale" }] });
+    await settle();
+    expect(getState().assistant?.main).toBe("post-hello");
+    expect(getState().todos.map((todo) => todo.id)).toEqual(["post-hello"]);
   });
 
   it("retries failed cold sidebar reads on hello", async () => {
