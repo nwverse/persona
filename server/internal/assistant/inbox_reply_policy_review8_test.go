@@ -130,6 +130,7 @@ func replyPolicyReview8OrdinaryItem(h *inboxHub, it *InboxItem) {
 }
 
 func TestInboxReplyPolicyWorkbenchDraftCardBindsGeneratedTextAndVersion(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	h, lark, it := handledHub(t)
 	replyPolicyReview8OrdinaryItem(h, it)
 	_ = replyPolicyEnableWorkbench(h)
@@ -288,6 +289,7 @@ func TestInboxReplyPolicyFailedPublicationMarkerSurvivesConcurrentMetadataReload
 }
 
 func TestInboxReplyPolicyUnversionedWorkbenchRedraftFailsClosed(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
@@ -440,6 +442,7 @@ func TestInboxReplyPolicyOmittedSourcesNonLarkCoverAllStages(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchPublishedCardSend(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()

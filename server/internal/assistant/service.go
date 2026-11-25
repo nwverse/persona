@@ -168,6 +168,7 @@ type Service struct {
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent      humanSends
 	storeApprovals storeApprovals
+	ownerWaits     ownerActionWaits
 
 	hub         Hub
 	store       func() Store
@@ -1096,6 +1097,7 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
+	go s.ownerAppeared(context.WithoutCancel(ctx), "user_spoke", r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	s.progressMade(r.MachineID, r.SessionID, time.Now()) // told something: a new stretch (supervise_progress.go)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
