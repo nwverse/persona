@@ -40,7 +40,9 @@ const (
 	larkSyncAuthLasts   = 365 * 24 * time.Hour // how long an authorization lasts, at most (the platform's limit)
 	larkSyncRefreshAt   = 15 * time.Minute     // an access token closer than this to its end is refreshed first
 	larkSyncBackfill    = 30 * 24 * time.Hour  // how far back a binding's first run reads
-	larkSyncBudget      = 20 * time.Minute     // one run's budget: what is left is read next time
+	larkSyncBudget      = 20 * time.Minute     // one full run's budget: what is left is read next time
+	larkSyncIMBudget    = 5 * time.Minute      // one lightweight IM incremental run's budget
+	larkSyncIMEvery     = 15 * time.Minute     // how often chat-enabled bindings run a lightweight IM incremental sync
 	larkSyncPendingTail = "~pending"           // the key suffix of a bot's authorization under way
 	larkSyncDocsWindow  = 7 * 24 * time.Hour   // how far back the connector's Items reach
 	larkSyncOutboxKeep  = 30 * 24 * time.Hour  // how long outbox rows are kept
@@ -52,6 +54,8 @@ const (
 	larkSyncBodyMost    = int64(1 << 20)       // request bodies of the sync's routes
 	larkSyncChangesMost = 100                  // chat batches one Changes call hands over by default
 	larkSyncStaleAuth   = larkSyncAuthFor + time.Minute
+	// larkSyncBackfillVersion triggers the one-time idempotent sender-name backfill for pre-#15486 outbox messages.
+	larkSyncBackfillVersion = 1
 )
 
 // larkSyncBackoff is the wait after the third, fourth and later consecutive failed runs (a binding's circuit).
@@ -64,6 +68,9 @@ var larkSyncReminders = []int{14, 7, 1}
 // top-level (db.sealedSettings).
 type larkSyncPrefs struct {
 	ScheduleHour *int `json:"schedule_hour,omitempty"`
+	// IMPoll enables the 15-minute lightweight IM incremental sync for chat-enabled (full_with_im) bindings;
+	// nil reads as on by default so existing and new bindings get timely chat updates and can turn it off in Settings.
+	IMPoll *bool `json:"im_poll,omitempty"`
 	// PrimaryTier is the scope tier the primary app asks for as the owner (a first registration included); "" is
 	// TierDocs.
 	PrimaryTier     string `json:"primary_tier,omitempty"`
@@ -125,11 +132,15 @@ type larkSyncBinding struct {
 	LastError        string    `json:"last_error,omitempty"`
 	LastRunAt        time.Time `json:"last_run_at,omitzero"`
 	NextRunAt        time.Time `json:"next_run_at,omitzero"`
+	LastIMRunAt      time.Time `json:"last_im_run_at,omitzero"`
+	NextIMRunAt      time.Time `json:"next_im_run_at,omitzero"`
 	LastMessages     int       `json:"last_messages,omitempty"`
 	LastDocs         int       `json:"last_docs,omitempty"`
 	RemindedDays     []int     `json:"reminded_days,omitempty"`
 	// Failures counts the consecutive failed runs (the circuit, larkSyncBackoff).
 	Failures int `json:"failures,omitempty"`
+	// BackfillVersion records the highest completed one-time data repair version for this binding (larkSyncBackfillVersion).
+	BackfillVersion int `json:"backfill_version,omitempty"`
 	// An authorization under way: browser (State, the PKCE verifier and the redirect), or device (the device code).
 	AuthState       string    `json:"auth_state,omitempty"`
 	AuthVerifierEnc string    `json:"auth_verifier_enc,omitempty"`
@@ -218,6 +229,11 @@ func (st *larkSyncState) scheduleHour() int {
 		return *h
 	}
 	return larkSyncDefaultHour
+}
+
+// imPollEnabled says whether high-frequency (15-minute) IM incremental polling is on (default true when unset).
+func (st *larkSyncState) imPollEnabled() bool {
+	return st.prefs.IMPoll == nil || *st.prefs.IMPoll
 }
 
 // larkSync is the manager's sync: the bindings' runtimes, the settings' lock and the seams tests replace.
@@ -405,6 +421,10 @@ func (st larkSyncState) clone() larkSyncState {
 	if h := st.prefs.ScheduleHour; h != nil {
 		v := *h
 		out.prefs.ScheduleHour = &v
+	}
+	if p := st.prefs.IMPoll; p != nil {
+		v := *p
+		out.prefs.IMPoll = &v
 	}
 	return out
 }

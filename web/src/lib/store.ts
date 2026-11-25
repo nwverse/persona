@@ -35,7 +35,7 @@ import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
 import { nextLaunchExpiry, registerLaunchRowObserver, settledLaunches } from "./launch-handoff";
 import type { AgentLaunch } from "./new-agent";
-import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo } from "./todos";
+import { isSpacesSupported, makeSessionLookup, type SessionLookup, type Todo, type TodoBoardProjection } from "./todos";
 import { releaseAttachments } from "./attachments";
 import { dropElicitationDraft } from "./elicitation";
 import type { OutboxEntry } from "./outbox";
@@ -109,6 +109,8 @@ export interface State {
   todos: Todo[];
   /** Optional `shared_blockers` summary from GET /todos under todos_v2 (#14728); parsed lazily by the To-dos view. */
   sharedBlockers: unknown[];
+  /** Optional server-computed `board` projection tree from GET /todos under todos_v2 (#15800). */
+  todoBoard: TodoBoardProjection | null;
   todosSupported: boolean;
   todosLoaded: boolean;
   todosError: string | null;
@@ -156,6 +158,7 @@ let state: State = {
   outbox: {},
   todos: [],
   sharedBlockers: [],
+  todoBoard: null,
   todosSupported: true,
   todosLoaded: false,
   todosError: null,
@@ -808,6 +811,19 @@ let graceTimer: number | undefined;
 // The hub said hub_restarting on this socket: its close is a restart whatever the close code.
 let restartNotice = false;
 let cursor: EventCursor = NO_CURSOR;
+// Tracks the active failed-upgrade HTTP probe episode so stale probe results settling after hello, disconnect, or a
+// credential change cannot poison state.link.lastError or block later disconnect probes.
+let probeEpoch = 0;
+let probeAbort: AbortController | null = null;
+let probeOwner = "";
+
+function cancelLinkProbe() {
+  const prev = probeAbort;
+  probeEpoch++;
+  probeAbort = null;
+  probeOwner = "";
+  prev?.abort();
+}
 
 export function send(msg: Record<string, unknown>) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -843,12 +859,13 @@ export function connect() {
   socketChanged(false);
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   socketToken = getToken();
+  const sockOwner = credentialOwner();
+  if (probeAbort && probeOwner !== sockOwner) cancelLinkProbe();
   if (cold && socketToken) {
-    const owner = credentialOwner();
     // Give a fast hello the only read. If it takes longer, show the REST snapshots while waiting for the socket.
     // The normal hello refresh still covers changes between these snapshots and the start of the event stream.
     sidebarTimer = setTimeout(() => {
-      if (owner !== credentialOwner()) return;
+      if (sockOwner !== credentialOwner()) return;
       void refreshAssistant().catch(() => {});
       void refreshTodos();
     }, 250);
@@ -880,7 +897,10 @@ export function connect() {
       if (appSocketReady()) privateStreamListeners.forEach((listener) => listener(ev.data));
       return; // Private trees never enter the global replay cursor or store.
     }
-    if (msg.type === "hello") authenticatedSocket = sock;
+    if (msg.type === "hello") {
+      authenticatedSocket = sock;
+      cancelLinkProbe();
+    }
     pushing = true;
     try {
       onMessage(msg);
@@ -899,9 +919,30 @@ export function connect() {
     if (stopped) return;
     // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
     // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
-    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential, setLinkError);
-    const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
+    if (restart || (probeAbort && probeOwner !== credentialOwner())) cancelLinkProbe();
+    if (!wasLive && !restart && !probeAbort && sockOwner === credentialOwner()) {
+      const controller = new AbortController();
+      const epoch = probeEpoch;
+      const probeCurrent = () => epoch === probeEpoch && !stopped && authenticatedSocket === null && sockOwner === credentialOwner();
+      probeAbort = controller;
+      probeOwner = sockOwner;
+      void probeEdge(
+        undefined,
+        () => (probeCurrent() ? probeCredential(probeCurrent, controller.signal) : Promise.resolve()),
+        (reason) => {
+          if (probeCurrent()) setLinkError(reason);
+        },
+        controller.signal,
+        probeCurrent,
+      ).finally(() => {
+        if (probeAbort === controller) {
+          probeAbort = null;
+          probeOwner = "";
+        }
+      });
+    }
+    const now = Date.now();
     // the drop starts while online; a restart announced on a later attempt stretches its grace
     const next = !drop && state.conn === "online" ? { at: now, restart } : drop && restart && !drop.restart ? { ...drop, restart } : null;
     if (next) {
@@ -932,13 +973,13 @@ const setLinkError = (reason: string) => {
 // read asks. A credential it no longer takes (removed in Settings › Devices, or the hub forgot it) answers 401, which
 // api() hands to the sign-in page with "signed out" (App.tsx handleUnauthorized) instead of retrying as if the hub were
 // out of reach. Other HTTP/API rejections surface their error detail in ConnectionDetails; network errors change nothing.
-const probeCredential = () =>
-  api("/machines", { timeout: 15_000 }).then(
+const probeCredential = (isCurrent: () => boolean, signal: AbortSignal) =>
+  api("/machines", { timeout: 15_000, signal, isAuthContextCurrent: isCurrent }).then(
     () => {
-      if (state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
+      if (isCurrent() && state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
     },
     (e: unknown) => {
-      if (e instanceof ApiError && e.status >= 400 && e.message) setLinkError(e.message);
+      if (isCurrent() && e instanceof ApiError && e.status >= 400 && e.message) setLinkError(e.message);
     },
   );
 
@@ -956,6 +997,7 @@ function back() {
 /** "Retry now" (the pill's details): try now instead of waiting for the backoff. */
 export function reconnectNow() {
   if (stopped) return;
+  cancelLinkProbe();
   connect();
 }
 
@@ -969,12 +1011,16 @@ setOfflineProbe(() => (!networkUp() ? "network" : state.conn !== "online" || dro
 export function disconnect() {
   setCompatibilityFeatures([]);
   stopped = true;
+  cancelLinkProbe();
+  retry = 0;
+  fastTries = 0;
   // a reconnect scheduled after a drop would otherwise fire connect(), which clears stopped (signed out: an empty token)
   clearTimeout(retryTimer);
   clearTimeout(sidebarTimer);
   back();
   ws?.close();
   ws = null;
+  if (state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
   socketChanged(false);
 }
 
@@ -1010,7 +1056,10 @@ if (typeof document !== "undefined") {
 if (typeof window !== "undefined") {
   window.addEventListener("online", () => {
     set({ link: { ...state.link, networkUp: true } });
-    if (!stopped) connect();
+    if (!stopped) {
+      cancelLinkProbe();
+      connect();
+    }
   });
   window.addEventListener("offline", () => set({ link: { ...state.link, networkUp: false } }));
 }
@@ -1621,14 +1670,25 @@ function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) 
 // no body. Most {"type":"todos"} pushes change nothing the list holds, and the whole list is hundreds of KB on a busy
 // hub, so a read sends the tag and a 304 applies the kept answer again, as a 200 with those same bytes would. Memory
 // only, one login's: reset() drops it, and a tag kept under another login is not sent.
-let keptTodos: { owner: string; etag: string; revision: string; answer: { todos: Todo[]; shared_blockers?: unknown[] } } | null = null;
+type TodosListAnswer = { todos: Todo[]; shared_blockers?: unknown[]; board?: TodoBoardProjection };
 
-async function readTodos(): Promise<{ todos: Todo[]; shared_blockers?: unknown[] }> {
+function validTodoBoard(raw: unknown): TodoBoardProjection | null {
+  if (!raw || typeof raw !== "object") return null;
+  const b = raw as Partial<TodoBoardProjection>;
+  if (!Array.isArray(b.status_groups) || !Array.isArray(b.direction_groups) || !Array.isArray(b.sidebar_tree) || !b.counts || typeof b.counts !== "object") {
+    return null;
+  }
+  return b as TodoBoardProjection;
+}
+
+let keptTodos: { owner: string; etag: string; revision: string; answer: TodosListAnswer } | null = null;
+
+async function readTodos(): Promise<TodosListAnswer> {
   const owner = credentialOwner();
   const kept = keptTodos?.owner === owner ? keptTodos : null;
   let status = 0;
   let reply: Headers | undefined;
-  const answer = await api<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", {
+  const answer = await api<TodosListAnswer>("/todos", {
     headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
     onResponse: (headers, code) => { status = code; reply = headers; },
   });
@@ -1643,7 +1703,7 @@ async function readTodos(): Promise<{ todos: Todo[]; shared_blockers?: unknown[]
   return answer;
 }
 
-const todosAsked = numbered<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", readTodos);
+const todosAsked = numbered<TodosListAnswer>("/todos", readTodos);
 const assistantAsked = numbered<AssistantInfo>("/assistant");
 
 // refresh() calls, numbered the same way: one that started before the last one applied, or before reset(), is older
@@ -1709,21 +1769,22 @@ export async function refresh() {
 }
 
 /** Both refresh paths share the list, error and unsupported-hub (404) handling; only a fresh answer finishes loading. */
-function applyTodos(todos: PromiseSettledResult<{ todos: Todo[]; shared_blockers?: unknown[] }>, fresh: () => boolean) {
+function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => boolean) {
   if (!fresh()) return; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
     const list = todos.value.todos ?? [];
     const sharedBlockers = Array.isArray(todos.value.shared_blockers) ? todos.value.shared_blockers : [];
+    const todoBoard = validTodoBoard(todos.value.board);
     for (const t of list) {
       if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
     }
-    set({ todos: list, sharedBlockers, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    set({ todos: list, sharedBlockers, todoBoard, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
     keepTaskRows([]);
     void lookUpTaskAgents();
     return;
   }
   const reason = todos.reason;
-  if (reason instanceof ApiError && reason.status === 404) return set({ sharedBlockers: [], todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+  if (reason instanceof ApiError && reason.status === 404) return set({ sharedBlockers: [], todoBoard: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
   set({ todosLoaded: true, todosError: errorText(reason) });
 }
 
@@ -2078,6 +2139,7 @@ export function reset() {
     pins: NO_PINS,
     todos: [],
     sharedBlockers: [],
+    todoBoard: null,
     todosSupported: true,
     todosLoaded: false,
     todosError: null,

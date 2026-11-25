@@ -34,10 +34,9 @@ type Reader interface {
 	// RecordingName is r's name in lists as it stands now (a day recording's from the day).
 	RecordingName(r *Recording) string
 	// RecordingSnapshot is recording id's committed files; RecordSnapshot the same with its meeting.json and the
-	// hub's transcript; TranscriptOfRecord the transcript the minutes are made from.
+	// hub's transcript (the transcript the minutes are made from is the rule TranscriptOfRecord of the two).
 	RecordingSnapshot(id ID) (Files, error)
 	RecordSnapshot(id ID) (Files, *Meeting, HubTranscript, error)
-	TranscriptOfRecord(hubMode bool, device, hub []kbwire.RecordingSegment) []kbwire.RecordingSegment
 	// ReadMinutes is recording id's minutes.json; ReadRecap its recap.json.
 	ReadMinutes(id ID) (*Minutes, error)
 	ReadRecap(id ID) (*DayRecap, error)
@@ -45,8 +44,24 @@ type Reader interface {
 	// an empty book without one).
 	PhotoWords(p PhotoText, clipped bool) string
 	PhotoBook(id ID) (PhotoBook, error)
-	// Tombstoned: recording id was deleted (its tombstone is there).
+	// Tombstoned: recording id was deleted (its tombstone is there). Deleted is every recording deleted on purpose
+	// (the phone is told of them and drops its copies).
 	Tombstoned(id ID) bool
+	Deleted() []ID
+	// RecordingFile is file f of recording id as committed (read through a pending undo journal, like every read);
+	// nil when it has none. A day's append reads the stored segments with it, not the whole snapshot.
+	RecordingFile(id ID, f File) ([]byte, error)
+	// RecordingDays is how many days recordings are kept (the owner's setting, the default without one): an upload
+	// or an append of a recording that started before them is answered as expired.
+	RecordingDays() int
+	// TranscriptionReady: the hub can transcribe a meeting now (asked when the first upload of a meeting names the
+	// hub, under Locks().Meeting). EarlierMeetings: the material of an answer may hold earlier meetings (the owner's
+	// setting).
+	TranscriptionReady() bool
+	EarlierMeetings() bool
+	// Project is the project slug names as an earlier meeting's material lists it (name and status); false when the
+	// knowledge base has none.
+	Project(slug ProjectSlug) (EarlierProject, bool)
 	// HubTranscriptLocked is recording id's hub_segments.json (an empty one when there is none); the caller holds
 	// Locks().Files. RenderTranscript is transcript.md of r with segs its transcript of record.
 	HubTranscriptLocked(id ID) (HubTranscript, error)
@@ -61,9 +76,8 @@ type Reader interface {
 // writers took from the engine (clock, log, models, the owner's language, the change feed).
 type Writer interface {
 	// Locks is the store's locks the writers take themselves. Transitional: the order is the store's and must not
-	// change (Recordings, then Meeting, then Files, then Meta; the live lock sits between Meeting and Files and is
-	// not these writers' to take; the audio writers' own per-recording mutex, the module's, comes after it and
-	// before Files).
+	// change (Recordings, then Meeting, then Files, then Meta; the live log's lock and then the audio writers'
+	// per-recording mutex, both the module's own, sit between Meeting and Files).
 	Locks() Locks
 	// RecoverRecording finishes or undoes an interrupted commit of recording id; the caller holds Locks().Files.
 	RecoverRecording(id ID) error
@@ -73,6 +87,10 @@ type Writer interface {
 	// Locks().Files or its read side.
 	WriteFile(path string, data []byte) error
 	WriteDurable(path string, data []byte) error
+	// CommitRecording writes upload r with its segments segs (meta.json, segments.json, transcript.md) under the undo
+	// journal, so that a reader sees the old upload or the new one and a crash between leaves either; the caller holds
+	// Locks().Recordings. It takes Locks().Files and Locks().Meta itself.
+	CommitRecording(r *Recording, segs []kbwire.RecordingSegment) error
 	// PutMeta writes r's meta.json as the knowledge base writes every entry's (its tagging rules, the commit
 	// recovery, the change feed). PutSummary writes recording id's summary.md unless the user wrote it.
 	PutMeta(r *Recording) error
@@ -111,8 +129,8 @@ type Writer interface {
 	// set up for it, or ctx ended), so the round stops and asks again later.
 	Deferred(ctx context.Context, err error) bool
 	// Provider is the write side this store was given before (NoProvider: none). A second engine over the same
-	// store gets its own writers, which share what the first ones hold in memory through it: the audio writers'
-	// state is one per store.
+	// store gets its own writers, which share what the first ones hold in memory through it: the live log's lock and
+	// the audio writers' state are one per store.
 	Provider() Provider
 }
 
@@ -140,6 +158,10 @@ const (
 	FileRecapNotes      File = RecapNotesFile
 	FileTranscript      File = "transcript.md"
 	FileHubSegments     File = "hub_segments.json"
+	// FileMeeting is meeting.json (the room, the private mark, the follow-up, the transcription); FileLive the live
+	// log of a meeting Persona attends or the hub transcribes.
+	FileMeeting File = "meeting.json"
+	FileLive    File = "live.json"
 	// DirAttachments is the directory of a recording's photos (p<n>.jpg, p<n>.png) and, in its audio/, of a
 	// hub-mode meeting's audio: the writers name the files in it themselves.
 	DirAttachments File = "attachments"
@@ -149,7 +171,7 @@ const (
 func (f File) Known() bool {
 	switch f {
 	case FileMeta, FileSegments, FileSummary, FileMinutes, FileMinutesMarkdown, FileRecap, FileRecapMarkdown, FileRecapNotes,
-		FileTranscript, FileHubSegments, DirAttachments:
+		FileTranscript, FileHubSegments, FileMeeting, FileLive, DirAttachments:
 		return true
 	}
 	return false
@@ -208,6 +230,9 @@ const (
 
 // Known: k is one of the kinds above.
 func (k CalendarKind) Known() bool { return k == CalendarEvents || k == CalendarMeetings }
+
+// ProjectSlug is a project's slug in the knowledge base, as a recording's Projects lists it.
+type ProjectSlug string
 
 // ItemID is a calendar entry's id in the knowledge base.
 type ItemID string

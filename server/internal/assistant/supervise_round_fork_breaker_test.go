@@ -51,11 +51,6 @@ func TestBackgroundForkedRoundInheritsAuthAndSupervisionTools(t *testing.T) {
 	s.todos.mu.Lock()
 	s.todos.todos[todo.ID] = &todo
 	s.todos.mu.Unlock()
-	s.supervise.mu.Lock()
-	s.supervise.init()
-	s.supervise.hold["bg1"] = time.Now()
-	s.supervise.mu.Unlock()
-
 	// Manager-attested forked round id returned by the node on deliverRelay (claude --fork-session / round branch).
 	const forkFromRelay = "bg1-round-fork-1"
 	f.setSessions("other")

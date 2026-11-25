@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { toAgyId } from '../lib/map.js'
+import { legacyEnvName } from '../../runtime-sdk/lib/compat.js'
 import { createAgyRuntime } from '../lib/runtime.js'
 
 const FAKE_ACP = fileURLToPath(new URL('./fake-acp-policy.mjs', import.meta.url))
@@ -46,7 +47,7 @@ function assertMcpIdentity(load, session) {
   assert.ok(server, 'the activation load carries the primary Persona MCP server')
   const env = new Map(server.env.map(({ name, value }) => [name, value]))
   assert.equal(env.get('PERSONA_SESSION_ID'), session)
-  assert.equal(env.get('JARVIS_SESSION_ID'), session)
+  assert.equal(env.get(legacyEnvName('PERSONA_SESSION_ID')), session)
   assert.equal(env.has('PERSONA_ASSISTANT'), false)
 }
 

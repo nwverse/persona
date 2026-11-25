@@ -111,12 +111,16 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 		}
 		return nil, true, logicalRefusal(ctx, "message_id_required")
 	}
-	if method == DeviceSessionItems || method == "session.item" || method == "session.image" || method == DeviceAssistantHandoff {
+	navigation := method == proto.MethodSessionInputPreviews || method == proto.MethodSessionItemsWindow
+	if method == DeviceSessionItems || method == "session.item" || method == "session.image" || method == DeviceAssistantHandoff || navigation {
 		var out json.RawMessage
 		for attempt := 0; attempt < 3; attempt++ {
 			out, err = s.logicalHistoryCall(ctx, st, c, method, raw)
 			if !errors.Is(err, db.ErrConversationHistoryChanged) {
 				break
+			}
+			if navigation {
+				return nil, true, &rpc.Error{Code: proto.CodeNavigationChanged, Message: i18n.T(i18n.From(ctx), "chat-navigation.history_changed")}
 			}
 			if attempt == 2 {
 				break
