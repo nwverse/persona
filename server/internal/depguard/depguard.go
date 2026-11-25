@@ -20,7 +20,7 @@ var Platforms = []string{"linux/amd64", "linux/arm64", "darwin/arm64", "darwin/a
 // its own (relayproto with the push relay, shareproof with the sharing ingress, passwordpake with the web app's
 // password WASM) is the hub's too, as is a push to a browser (webpush, the hub's Web Push).
 var HubOwn = []string{"cmd/persona-hub", "internal/hub", "internal/hubcli", "internal/hubedge", "internal/apns",
-	"internal/mdns", "internal/passwordpake", "internal/proxyproto", "internal/pushcrypto", "internal/relay",
+	"internal/lookmedia", "internal/mdns", "internal/passwordpake", "internal/proxyproto", "internal/pushcrypto", "internal/relay",
 	"internal/relayproto", "internal/shareproof", "internal/webasset", "internal/webpush"}
 
 // Shared are the packages both programs link (the wire types, the database, the configuration, identity, the update

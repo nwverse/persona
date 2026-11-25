@@ -1408,6 +1408,17 @@ so the sidebar entry, the full page (`/extension/-pages/<id>`), the deep link, t
   three), after the extensions' places; `assistant_pages` (a page kept, pinned, unpinned, renamed, removed or restored, or
   the switch turned) asks for the list again (`lib/extension-slots.ts`). A page's content change is the ordinary
   `extension_ui {extension: "-pages", id, invalidate: true}`.
+- **Phase 2 watch pages and Overview cards (#13020)**: `uiPlaces` adds `?pages_overview=1` when asking for all slots or
+  `overview_card` (`lib/extension-ui.ts`), so kept watch pages marked **Show on Overview** are listed as ordinary
+  `overview_card` places (`id: g_<16 hex>`, `opens: pg_<16 hex>`). They render, arrange, resize and hide on Overview like
+  any other Overview card, reload on `assistant_pages` (places list) and `extension_ui {extension: "-pages", id: "g_…",
+  invalidate: true}` (card content), open `/extension/-pages/<pg id>` when tapped, and never appear in the sidebar or
+  Settings › Extensions. `uiContext` reports `context.platform` as `desktop` inside the Electron desktop app
+  (`window.personaDesktop`) and `web` in a browser so the watch page footer includes **Show on Overview**. In
+  `views/extensions/ViewBody.tsx`, a lone `metric` allows long watch questions and details to wrap instead of truncating,
+  a `row`'s `value` caps at `max-w-[45%]` so long status texts truncate instead of squeezing out the row's title, and
+  `views/settings/ExtensionView.tsx` reconciles view-returning row switch actions (`persona.alert`, `persona.overview`)
+  against concurrent `extension_ui` redraws so the switch never snaps back.
 - **Sidebar**: the index and pinned pages are extension pages in `useNavPages`. The hub puts their keys in the navigation
   record's `shown` on the first Keep and on a pin, so `EXTENSION_CAP` never sends them under More: they count toward the
   cap first, and with three extension nav pages installed the extensions' pages past it wait there instead (two of the
@@ -1422,11 +1433,14 @@ so the sidebar entry, the full page (`/extension/-pages/<id>`), the deep link, t
   the value the hub confirmed.
 - With the switch off, or on with nothing kept, nothing on the sidebar, the phone's page grid or Overview changes.
 
-To see it: the mock hub with `MOCK_DASHBOARDS=1` (`scripts/mock/dashboards_mock.py`; `off`, `empty`, `removed` and `pinned`
-for the other states) and `npx vite`. `node web/e2e/dashboards.mjs` (its header says how to start both) checks all of the
-above in light and dark at 1280 and 390 wide in each language, compares the sidebar with the switch off and on with
+To see it: the mock hub with `MOCK_DASHBOARDS=1` (`scripts/mock/dashboards_mock.py`; `off`, `empty`, `removed`, `pinned`
+and `watch` for the other states) and `npx vite`. `node web/e2e/dashboards.mjs` (its header says how to start both) checks
+phase 1 in light and dark at 1280 and 390 wide in each language, compares the sidebar with the switch off and on with
 nothing kept against a build of `origin/main` pixel by pixel (`--before`), and, with `--extensions`, that Dashboards stays
-in the list beside three extension nav pages.
+in the list beside three extension nav pages. `node web/e2e/dashboards-watch.mjs` checks phase 2 against
+`MOCK_DASHBOARDS=watch`: the four displays (empty, normal, alert), index rows, footer states, Overview watch cards,
+`zh-Hans` / `ja`, desktop platform context, and pixel-identical sidebar and Overview against `origin/main` in `off` and
+phase-1 (`1`) modes.
 
 ### Message sources (#2125)
 
