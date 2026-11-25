@@ -163,6 +163,16 @@ describe("opening an archived Inbox handling conversation", () => {
     expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
   });
 
+  it.each(["处理对话", "助手处理"])("opens %s in its space when the session is only in session summaries", async (button) => {
+    getState().sessionSummaries = [
+      { machine_id: link.machine_id, session_id: link.session_id, assistant: true, space: "notes", title: "Handling", cwd: "", status: "idle" },
+    ];
+    act(() => root.render(<EventBody item={item} onSource={() => {}} />));
+    await press(button);
+    expect(location.pathname + location.search).toBe("/tracks/notes/inbox-chat");
+    expect(inboxReturnTo(history.state)).toEqual({ id: item.id });
+  });
+
   it.each(["处理对话", "助手处理"])("opens %s on the conversation's computer for another manager", async (button) => {
     setRoster({ default: "assistant", managers: [{ id: "assistant", name: "Persona", online: true }, { id: "work", name: "Work", online: true }] });
     history.replaceState(null, "", `${itemPath}?manager=work`);

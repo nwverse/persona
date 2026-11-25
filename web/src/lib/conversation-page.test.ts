@@ -22,6 +22,10 @@ describe("a conversation route with a known session row", () => {
     expect(conversationRoute("m1", "c1", {}, assistant, { ...inbox, space: "notes" })).toEqual({ name: "track", slug: "notes", sid: "c1" });
   });
 
+  it("names the computer of an archived Inbox summary on another computer", () => {
+    expect(conversationRoute("m2", "c1", {}, assistant, { ...inbox, machine_id: "m2" })).toEqual({ name: "persona", sid: "c1", mid: "m2" });
+  });
+
   it("names a separate handling computer without waiting for a roster or session row", () => {
     expect(inboxConversationPage("c1", "m2", undefined, "m1")).toEqual({ name: "persona", sid: "c1", mid: "m2" });
     expect(inboxConversationPage("c1", "m1", "work", "m1")).toEqual({ name: "persona", sid: "c1", mid: "m1", manager: "work" });

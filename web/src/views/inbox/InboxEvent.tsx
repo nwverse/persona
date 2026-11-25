@@ -11,7 +11,7 @@ import { getInbox, isDone, itemKey, itemPath, itemRequest, itemRoute, reloadInbo
 import { conversationRoute, inboxConversationPage } from "../../lib/conversation-page";
 import { api, ApiError, errorText } from "../../lib/api";
 import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
-import { docChangeLine } from "../../lib/inbox-page";
+import { docChangeLine, openInboxConversation } from "../../lib/inbox-page";
 import { otherManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
 import { connectorBrand } from "../../lib/connectors";
@@ -208,11 +208,12 @@ function EventSummary({ text, marked = false }: { text: string; marked?: boolean
 }
 
 function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
-  const assistantMachine = useStore((s) => s.assistant?.machine_id);
   const [sayOpen, setSayOpen] = useState(false);
   const [say, setSay] = useState("");
   const [acting, setActing] = useState(false);
   const h = item.handling;
+  const mid = h?.machine_id;
+  const sid = h?.session_id;
   const done = isDone(item);
   const canSay = !done && !item.suggestion;
   const failed = canSay && (h ? handlingFailed(item) : item.now === "failed" || item.agent?.state === "failed");
@@ -220,7 +221,6 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
   if (!h && !canSay && now === undefined) return null;
   const word = now ?? (done ? (item.done_by === "manager" ? t("inbox-inboxevent.manager_done") : undefined) : handlingWord(item));
   const working = h?.state === "looking" || h?.state === "agent";
-  const to = h?.machine_id && h.session_id ? inboxConversationPage(h.session_id, h.machine_id, item.manager, assistantMachine) : undefined;
   const instruct = async (words: string) => {
     const text = words.trim();
     if (!text || acting) return;
@@ -267,8 +267,8 @@ function HandlingLine({ item, now }: { item: InboxItem; now?: string }) {
       setActing(false);
     }
   };
-  const open = to && (
-    <button type="button" onClick={() => openFromInbox(to)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-label font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
+  const open = mid && sid && (
+    <button type="button" onClick={() => openInboxConversation(mid, sid, item.manager)} className="-mx-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-[6px] px-1 text-label font-medium whitespace-nowrap text-accent-ink transition-colors hover:bg-hover">
       {t("inbox-inboxevent.open_conversation")}
       <Icon name="chevronRight" size={11} stroke={2.4} />
     </button>

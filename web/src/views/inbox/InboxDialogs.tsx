@@ -10,12 +10,11 @@ import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { baseName, sessionTitle, stateOf, uuid } from "../../lib/format";
 import { agentDraft, connectorReference, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
-import { openFromInbox } from "../../lib/inbox-nav";
-import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, recordHandOff } from "../../lib/inbox-page";
+import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, openInboxConversation, recordHandOff } from "../../lib/inbox-page";
 import { isTransient } from "../../lib/ops";
 import { hasFinePointer } from "../../lib/viewport";
 import { machineWithHub } from "../../lib/mesh";
-import { conversationPage, inboxConversationPage } from "../../lib/conversation-page";
+import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
 import { openNewAgent } from "../../lib/new-agent";
 import { refreshAssistant, useStore } from "../../lib/store";
@@ -58,7 +57,6 @@ export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
 
 function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const readOnly = useItemReadOnly(item);
-  const assistantMachine = useStore((s) => s.assistant?.machine_id);
   const key = itemKey(item);
   const agentText = agentDraft(item);
   const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
@@ -72,6 +70,8 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   const kept = keptChanges(item, dropped);
   const generation = useRef(0);
   const agent = item.agent;
+  const mid = agent?.machine_id;
+  const sid = agent?.session_id;
   const box = useRef<HTMLTextAreaElement>(null);
   const focused = useRef(false);
 
@@ -149,12 +149,12 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       {agentText && agent && (agent.note || agent.session_id) && (
         <div className="mb-3 rounded-[10px] bg-accent-tint px-3 py-2.5">
           {agent.note && <p className="text-[12px] leading-relaxed text-ink-2"><Spark />{agent.note}</p>}
-          {agent.machine_id && agent.session_id && (
+          {mid && sid && (
             <button
               type="button"
               onClick={() => {
                 onClose();
-                openFromInbox(inboxConversationPage(agent.session_id!, agent.machine_id!, item.manager, assistantMachine));
+                openInboxConversation(mid, sid, item.manager);
               }}
               className="mt-1.5 flex items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline"
             >
