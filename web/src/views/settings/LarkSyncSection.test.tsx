@@ -101,6 +101,7 @@ describe("Lark daily sync section", () => {
     await draw(view({ bindings: [binding({ health: "scope_missing", reauth_due_days: 300, tier: "full_with_im" })] }));
     const row = rowOf("primary~a1");
     expect(row.textContent).toContain(t("settings-larksync.health_scope_missing"));
+    expect(row.querySelector<HTMLButtonElement>('[role="switch"]')!.disabled).toBe(false);
     expect(row.textContent).not.toContain(t("settings-larksync.run_now"));
     const authorize = [...row.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === t("settings-larksync.authorize_again"));
     expect(authorize).toBeDefined();
