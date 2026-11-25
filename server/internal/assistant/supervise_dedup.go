@@ -53,7 +53,13 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	}
 	if g.externalPRReview() {
 		// Keep the latest source wake per task, independent of its Agent's answer or a manager restart.
-		key, _ := json.Marshal([]string{g.Todo, g.Kind, "external_pr"})
+		parts := []string{g.Todo, g.Kind, "external_pr"}
+		if g.Recipient != "" {
+			parts = append(parts, g.Recipient)
+		} else if g.To != "" {
+			parts = append(parts, g.To)
+		}
+		key, _ := json.Marshal(parts)
 		sum := sha256.Sum256([]byte(g.Key))
 		return string(key), hex.EncodeToString(sum[:])
 	}

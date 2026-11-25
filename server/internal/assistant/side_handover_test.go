@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -197,5 +198,365 @@ func TestReviewLeftWaitingByALeaderStaysWithIt(t *testing.T) {
 	}
 	if n := reviewsTold(f, "conv1", todo.ID); n != 0 {
 		t.Fatalf("main got %d supervision messages for the lead's review", n)
+	}
+}
+
+func flushSuperviseDigest(ctx context.Context, s *Service) {
+	setSuperviseTimingsForTest(s, superviseTimings{gather: 1, every: 1, urgent: 1})
+	s.sendDigest(ctx)
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+}
+
+// reviewSignalsTold counts sigReview supervision notices sent to conv for task id, ignoring non-review wakes
+// such as cardless-wait reminders.
+func reviewSignalsTold(f *fakeHub, conv, id string) int {
+	n := 0
+	for _, text := range f.noticesTo(conv) {
+		if strings.Contains(text, "📋 督办") && strings.Contains(text, id) && strings.Contains(text, "待逐项复核，不代表完成") {
+			n++
+		}
+	}
+	return n
+}
+
+func handoverNoticeDelivered(f *fakeHub, conv, id string) bool {
+	for _, text := range f.noticesTo(conv) {
+		if strings.Contains(text, "📋 督办") && strings.Contains(text, id) &&
+			strings.Contains(text, "待逐项复核，不代表完成") && strings.Contains(text, "转给你") {
+			return true
+		}
+	}
+	return false
+}
+
+// sideReviewProductionFixture sets up a side-supervised task matching the real production delivery shape:
+// the worker agent has a non-empty last reply (so e.Last drives the deduplication hash) and the initial sigReview
+// is delivered to side1 without an explicit To or Recipient field.
+func sideReviewProductionFixture(t *testing.T) (*Service, *fakeHub, Todo, superviseSignal) {
+	t.Helper()
+	st := &memStore{}
+	s, f := newQuietServiceOn(t, st)
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+	ctx := context.Background()
+	f.known["side1"] = true
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{
+			SessionID:    "side1",
+			MachineID:    "server",
+			Assistant:    true,
+			Status:       proto.StatusIdle,
+			SourceKind:   proto.SourceRuntime,
+			Capabilities: &proto.SessionCapabilities{SupervisionPolicy: true},
+		},
+	)
+	todo, err := s.createTodo(ctx, "Fix login crash", "Fix iPad landscape login crash", "side1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(ctx, todo.ID, "side1", []string{"PR merged to main"}, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(ctx, todo.ID, "box", "worker1", "Fix login crash", "/code/app", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("box", proto.Session{
+		SessionID: "worker1",
+		MachineID: "box",
+		Cwd:       "/code/app",
+		Agent:     "claude",
+		Status:    proto.StatusDone,
+		State:     proto.StateUnread,
+		LastText:  "Fixed the login crash and added unit tests.",
+		UpdatedAt: time.Now(),
+	})
+	v, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.State = reviewPending
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "All checks passed."}
+	s.signal(initial)
+	flushSuperviseDigest(ctx, s)
+	if n := reviewsTold(f, "side1", todo.ID); n != 1 {
+		t.Fatalf("side1 received %d initial review notice(s), want 1", n)
+	}
+	if n := reviewsTold(f, "conv1", todo.ID); n != 0 {
+		t.Fatalf("conv1 received %d initial review notice(s), want 0", n)
+	}
+	return s, f, todoNow(s, todo.ID), initial
+}
+
+func TestSideHandoverReviewDeliversToMainAfterSideDedup(t *testing.T) {
+	for _, mode := range []string{"archived", "gone", "timeout"} {
+		t.Run(mode, func(t *testing.T) {
+			s, f, todo, initial := sideReviewProductionFixture(t)
+			ctx := context.Background()
+
+			initialEntry, ok := s.digestEntry(ctx, initial, s.webBase(ctx))
+			if !ok || initialEntry.Last == "" {
+				t.Fatalf("initial digestEntry = %+v, ok=%v; want non-empty Last", initialEntry, ok)
+			}
+			sideDedupKey, _ := digestFingerprint(initialEntry, initial)
+			s.supervise.dedupMu.Lock()
+			_, hadSideReceipt := s.supervise.dedup[sideDedupKey]
+			s.supervise.dedupMu.Unlock()
+			if !hadSideReceipt {
+				t.Fatalf("initial side1 delivery did not record deduplication fingerprint %q", sideDedupKey)
+			}
+
+			switch mode {
+			case "archived":
+				if _, err := s.setArchived(ctx, "server", "side1", true, titleByUser); err != nil {
+					t.Fatal(err)
+				}
+				// A watch pass before the digest flushes must not strip Recipient from the pending handover signal.
+				s.superviseWatch(ctx, time.Now())
+			case "gone":
+				f.setSessions("server",
+					proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+				)
+				s.superviseWatch(ctx, time.Now())
+			case "timeout":
+				s.superviseWatch(ctx, time.Now().Add(time.Hour))
+			}
+
+			cur := todoNow(s, todo.ID)
+			if cur.Supervision == nil || cur.Supervision.Supervisor != "conv1" {
+				t.Fatalf("after %s handover, supervisor = %+v, want conv1", mode, cur.Supervision)
+			}
+
+			s.supervise.mu.Lock()
+			pendingReview, hasPending := s.supervise.pending[todo.ID+"|"+sigReview]
+			s.supervise.mu.Unlock()
+			if !hasPending || pendingReview.Recipient != "conv1" {
+				t.Fatalf("after %s handover, pending sigReview = (%+v, ok=%v), want Recipient=conv1", mode, pendingReview, hasPending)
+			}
+
+			flushSuperviseDigest(ctx, s)
+			if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 || !handoverNoticeDelivered(f, "conv1", todo.ID) {
+				t.Fatalf("after %s handover, main conversation received %d sigReview notice(s) (handover=%v), want 1:\n%s",
+					mode, n, handoverNoticeDelivered(f, "conv1", todo.ID), strings.Join(f.noticesTo("conv1"), "\n---\n"))
+			}
+
+			// The previous supervisor's deduplication receipt stays intact, and a stale signal addressed to side1 is rejected.
+			s.supervise.dedupMu.Lock()
+			_, sideReceiptKept := s.supervise.dedup[sideDedupKey]
+			s.supervise.dedupMu.Unlock()
+			if !sideReceiptKept {
+				t.Fatalf("handover deleted previous supervisor receipt %q", sideDedupKey)
+			}
+			if _, valid := s.digestEntry(ctx, superviseSignal{Todo: todo.ID, Kind: sigReview, Recipient: "side1"}, s.webBase(ctx)); valid {
+				t.Fatal("stale sigReview addressed to side1 was still admitted after handover")
+			}
+
+			// Duplicate delivery to the same recipient (conv1) is still deduplicated.
+			s.superviseWatch(ctx, time.Now().Add(2*time.Hour))
+			flushSuperviseDigest(ctx, s)
+			dup := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "review@duplicate-same-recipient", Recipient: "conv1", Detail: "duplicate"}
+			s.signal(dup)
+			flushSuperviseDigest(ctx, s)
+			if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
+				t.Fatalf("duplicate delivery sent %d sigReview notice(s) to conv1, want 1", n)
+			}
+			dupEntry, ok := s.digestEntry(ctx, dup, s.webBase(ctx))
+			if !ok {
+				t.Fatal("digestEntry rejected current supervisor conv1")
+			}
+			if out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{dupEntry}, []superviseSignal{dup}, time.Now()); err != nil || len(out) != 0 {
+				t.Fatalf("reserveSupervision did not deduplicate repeat sigReview for conv1: len=%d err=%v", len(out), err)
+			}
+		})
+	}
+}
+
+func TestSideHandoverExternalPRSameKeyDeliversOnceToMain(t *testing.T) {
+	for _, mode := range []string{"archived", "timeout"} {
+		t.Run(mode, func(t *testing.T) {
+			st := &memStore{}
+			s, f := newQuietServiceOn(t, st)
+			setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+			ctx := context.Background()
+			f.known["side1"] = true
+			f.setSessions("server",
+				proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+				proto.Session{
+					SessionID:    "side1",
+					MachineID:    "server",
+					Assistant:    true,
+					Status:       proto.StatusIdle,
+					SourceKind:   proto.SourceRuntime,
+					Capabilities: &proto.SessionCapabilities{SupervisionPolicy: true},
+				},
+			)
+			todo, err := s.createTodo(ctx, "Wait on upstream PR", "Wait for PR #12", "side1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.superviseTodo(ctx, todo.ID, "side1", []string{"PR merged"}, 30, "plan"); err != nil {
+				t.Fatal(err)
+			}
+			args := externalPRParkArgs(externalPRSource)
+			args["todo_id"] = todo.ID
+			if _, err := runJSON(t, s, "side1", "task_review", args); err != nil {
+				t.Fatal(err)
+			}
+			s.deploy.forge = &externalPRForge{terminal: "merged"}
+			now := time.Now()
+			s.sweepPRStatuses(ctx, now)
+			flushSuperviseDigest(ctx, s)
+			if n := reviewSignalsTold(f, "side1", todo.ID); n != 1 {
+				t.Fatalf("side1 received %d external-PR review notice(s), want 1", n)
+			}
+			origKey := reviewKey(todoNow(s, todo.ID).Supervision)
+			if !strings.HasPrefix(origKey, externalPRReviewPrefix) {
+				t.Fatalf("reviewKey = %q, want prefix %q", origKey, externalPRReviewPrefix)
+			}
+
+			switch mode {
+			case "archived":
+				if _, err := s.setArchived(ctx, "server", "side1", true, titleByUser); err != nil {
+					t.Fatal(err)
+				}
+			case "timeout":
+				s.superviseWatch(ctx, now.Add(time.Hour))
+			}
+
+			if gotKey := reviewKey(todoNow(s, todo.ID).Supervision); gotKey != origKey {
+				t.Fatalf("external-PR reviewKey changed across handover: got %q, want %q", gotKey, origKey)
+			}
+			flushSuperviseDigest(ctx, s)
+			if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
+				t.Fatalf("after %s external-PR handover, main received %d sigReview notice(s), want 1", mode, n)
+			}
+
+			// Repeat delivery to conv1 with the same key must stay deduplicated.
+			s.superviseWatch(ctx, now.Add(2*time.Hour))
+			flushSuperviseDigest(ctx, s)
+			dup := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: origKey, Recipient: "conv1"}
+			dupEntry, ok := s.digestEntry(ctx, dup, s.webBase(ctx))
+			if !ok {
+				t.Fatal("digestEntry rejected conv1 external-PR review")
+			}
+			if out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{dupEntry}, []superviseSignal{dup}, now.Add(2*time.Hour)); err != nil || len(out) != 0 {
+				t.Fatalf("repeat external-PR sigReview for conv1 was not deduplicated: len=%d err=%v", len(out), err)
+			}
+			if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
+				t.Fatalf("repeat watches sent %d external-PR sigReview notice(s) to conv1, want 1", n)
+			}
+		})
+	}
+}
+
+func TestRehomeWorkerReviewDeliversAfterLeaderDedup(t *testing.T) {
+	ctx := context.Background()
+	s, f := newQuietService(t)
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+	leaderTodo := startTaskLeader(t, s, f)
+	worker := planWorker(t, s, f, nil)
+	workerAgent := worker.Agents[0]
+	f.setSessions(workerAgent.MachineID,
+		proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: proto.StateIdle, UpdatedAt: time.Now()},
+		proto.Session{
+			SessionID: workerAgent.SessionID,
+			MachineID: workerAgent.MachineID,
+			Cwd:       "/code/app",
+			Agent:     "claude",
+			Status:    proto.StatusDone,
+			State:     proto.StateUnread,
+			LastText:  "Completed worker task and verified tests.",
+			UpdatedAt: time.Now(),
+		},
+	)
+	v, _, err := s.updateSupervision(ctx, worker.ID, func(v *Supervision) bool {
+		v.State = reviewPending
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.signal(superviseSignal{Todo: worker.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "Worker done."})
+	flushSuperviseDigest(ctx, s)
+	if len(deliveredTo(f, "s1")) == 0 {
+		t.Fatal("task leader did not receive initial worker sigReview")
+	}
+
+	if ok, err := s.autoDoneTodo(ctx, leaderTodo.ID, "leader finished", time.Now().Add(-time.Minute)); err != nil || !ok {
+		t.Fatalf("close leader task: ok=%v err=%v", ok, err)
+	}
+	s.rehomeLeaderlessWorkers(ctx)
+	flushSuperviseDigest(ctx, s)
+	if n := reviewSignalsTold(f, "conv1", worker.ID); n != 1 {
+		t.Fatalf("after rehoming leaderless worker, conv1 received %d sigReview notice(s), want 1", n)
+	}
+
+	dup := superviseSignal{Todo: worker.ID, Kind: sigReview, Key: "review@duplicate-rehome", Recipient: "conv1"}
+	s.signal(dup)
+	flushSuperviseDigest(ctx, s)
+	if n := reviewSignalsTold(f, "conv1", worker.ID); n != 1 {
+		t.Fatalf("duplicate rehomed review sent %d sigReview notice(s) to conv1, want 1", n)
+	}
+}
+
+func TestSideHandoverSameMicrosecondTurnReceiptDeliversToMain(t *testing.T) {
+	s, f, todo, initial := sideReviewProductionFixture(t)
+	ctx := context.Background()
+	origAt := todo.Supervision.UpdatedAt
+	origKey := initial.Key
+
+	// Record a told turn-ledger receipt for the exact same reviewKey, matching a same-microsecond handover after
+	// superviseJudged already delivered to side1.
+	toldAt := origAt
+	s.tasks.turns.mu.Lock()
+	s.tasks.turns.loaded = true
+	if s.tasks.turns.doc.Turns == nil {
+		s.tasks.turns.doc.Turns = map[string]taskTurn{}
+	}
+	s.tasks.turns.doc.Turns[todo.ID] = taskTurn{
+		Machine: "box",
+		Session: "worker1",
+		Key:     "turn-1",
+		State:   turnDone,
+		Signal:  &turnSignal{Kind: sigReview, Key: origKey, Told: &toldAt},
+	}
+	s.tasks.turns.mu.Unlock()
+
+	s.supervise.mu.Lock()
+	sentKey := s.supervise.sent[initial.id()]
+	s.supervise.mu.Unlock()
+	if sentKey != origKey {
+		t.Fatalf("supervise.sent[%q] = %q, want %q", initial.id(), sentKey, origKey)
+	}
+
+	// Hand supervision over to conv1 at the exact same timestamp so reviewKey(&v) equals origKey.
+	v, changed, err := s.updateSupervisionGuardedAt(ctx, todo.ID, origAt, func(cur Todo) bool {
+		return cur.DoneAt == nil
+	}, func(v *Supervision) bool {
+		v.Supervisor = "conv1"
+		return true
+	})
+	if err != nil || !changed {
+		t.Fatalf("updateSupervisionGuardedAt: changed=%v err=%v", changed, err)
+	}
+	if reviewKey(&v) != origKey {
+		t.Fatalf("same-microsecond reviewKey = %q, want %q", reviewKey(&v), origKey)
+	}
+
+	s.signalHandedOverReview(todo.ID, "conv1", reviewKey(&v), "派出它的对话已归档，转给你跟进验收")
+	// A watch pass before the digest flushes must keep Recipient=conv1 on both the pending signal and the turn ledger.
+	s.superviseWatch(ctx, origAt)
+	flushSuperviseDigest(ctx, s)
+	if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
+		t.Fatalf("same-microsecond handover delivered %d sigReview notice(s) to conv1, want 1", n)
+	}
+
+	// Repeat admission for conv1 and watchSignals with empty Recipient must stay deduplicated.
+	s.signalHandedOverReview(todo.ID, "conv1", origKey, "duplicate")
+	s.superviseWatch(ctx, origAt)
+	flushSuperviseDigest(ctx, s)
+	if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
+		t.Fatalf("repeat same-microsecond handover delivered %d sigReview notice(s) to conv1, want 1", n)
 	}
 }

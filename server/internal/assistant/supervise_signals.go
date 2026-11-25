@@ -1056,6 +1056,9 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
 		}
+		if g.Recipient == "" && cur.Key == g.Key {
+			g.Recipient = cur.Recipient
+		}
 		g = preserveIdleHandoff(cur, g)
 		if g.Kind == sigReport && cur.Key != g.Key {
 			g = joinReports(cur, g) // two questions before the message went: both are asked
