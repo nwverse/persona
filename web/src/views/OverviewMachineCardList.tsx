@@ -23,7 +23,7 @@ export function OverviewMachineCardList({ machines, agentCounts, metricsByMachin
   return (
     <>
       {error && (
-        <p role="alert" className="col-span-full flex items-start gap-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12.5px] text-red">
+        <p role="alert" className="col-span-full flex items-start gap-2 rounded-[8px] bg-red-tint px-3 py-2 text-meta text-red">
           <Icon name="warning" size={14} className="mt-px shrink-0" />
           <span className="min-w-0 break-words">{hasMonitorable ? t("machines.refresh_failed_stale", { error, seconds: 10 }) : t("machines.load_failed", { error })}</span>
         </p>
@@ -60,10 +60,10 @@ const OverviewMachineCard = memo(function OverviewMachineCard({ m, count, hub, m
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-[13px] font-medium text-ink">{m.name}</span>
-            {hub && <span className="shrink-0 truncate text-[11.5px] text-ink-3">{hub}</span>}
+            <span className="truncate text-meta font-medium text-ink">{m.name}</span>
+            {hub && <span className="shrink-0 truncate text-submeta text-ink-3">{hub}</span>}
           </span>
-          <span className="block truncate text-[11.5px] text-ink-3" title={!m.online && m.error && line !== m.error ? m.error : undefined} data-machine-line>{line}</span>
+          <span className="block truncate text-submeta text-ink-3" title={!m.online && m.error && line !== m.error ? m.error : undefined} data-machine-line>{line}</span>
         </span>
         <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
       </span>

@@ -6325,6 +6325,11 @@ the trailer available separately. `readInlineBody` in `web/src/lib/inline-messag
 against its matching context. Quote prefixes and description enrichment leave this lookup intact. A missing or
 unmatched anchor keeps its ordinary text, and unreferenced blocks keep their context display.
 
+In sent Web bubbles (#15410), the matching anchors become inline buttons and open the existing context details.
+Only anchors drawn in the prose consume a context from the collapsed Context row. The parser and bubble controls
+load when a rendered bubble has both a trailer and contexts. Copy, Forward, search and navigation previews use
+the prose. Editing the last sent message still reads the original trailer to restore the selections.
+
 ### Quote and comment blocks at the start of messages (web and iOS, #2427, #2437, #151)
 
 Web "Quote" and "Comment" use no tags or structured fields: on send they become `> ` blocks at the start of the message (`withQuoteBlock` in `web/src/lib/drafts.ts`, `web/src/lib/comments.ts`); the assistant and Agents on computers read them as text, and other clients that don't recognize them simply see `>` lines.
@@ -6383,6 +6388,7 @@ On reading back, web only recognizes blocks after the first block whose first li
 | `notice` | A notification relayed by Persona, such as a delivery PR update, task closeout, relay refusal, spawned conversation result, or incoming chat update | `title` labels the source. Persona supplies its own name |
 | `scheduled_task` | An automatic input from an external scheduler, such as a Codex heartbeat | `text` is the visible task instructions, not the runtime envelope; no Persona `injected` follow-up or patrol is implied |
 | `meeting` | A batch from a recorded meeting this session attends: live sentences, questions and answers since the last batch, the end of the meeting (#2981, [meeting-minutes.md](../assistant/meeting-minutes.md) "Feeding the attending session") | `title` is the meeting's name; no `conversation_id` |
+| `extension` | An event an extension reported to the main conversation (`assistant.event`, [extensions.md](../extensions/extensions.md) "Assistant events") | `title` is the extension's name from its manifest |
 
 The manager persists explicit provenance in the native transcript with a leading context block, rendered by `shared/message_source.md`:
 

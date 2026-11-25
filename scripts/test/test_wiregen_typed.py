@@ -10,6 +10,7 @@ test_wire_schema.py) is what proves their outputs did not change."""
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -373,7 +374,8 @@ class Compiles(unittest.TestCase):
             (Path(tmp) / "src").mkdir()
             (Path(tmp) / "src/typed.rs").write_text(generate("rust"))
             (Path(tmp) / "src/lib.rs").write_text("#[rustfmt::skip]\npub mod typed;\n" + RUST_TEST)
-            env = {**os.environ, "RUSTFLAGS": "-D warnings"}
+            channel = re.search(r'^channel = "([^"]+)"$', (ROOT / "native/app-core/rust-toolchain.toml").read_text(), re.M)[1]
+            env = {**os.environ, "RUSTFLAGS": "-D warnings", "RUSTUP_TOOLCHAIN": channel}
             code, out = run([cargo, "test", "--offline", "--quiet"], tmp, env)
             if code != 0 and ("offline" in out and ("failed to" in out or "no matching package" in out)):
                 self.skipTest("serde and serde_json are not in this machine's cargo cache (--offline)")

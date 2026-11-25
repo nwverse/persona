@@ -257,8 +257,9 @@ func (a startAgent) allowAllOver(mode string) bool {
 // one m has (launcherInstead), with that launcher's own default model unless the caller named a model, and with the
 // caller's effort; note says so in the
 // user's language, for the task's why and the tool's answer. A list that can't be read (m offline, a timeout) counts
-// as having it, as mainChatFit does: nothing is refused or replaced on a guess. What the launcher runs comes from the
-// same list, so a caller changing permissions by it does not have to ask for it again.
+// as having it, as mainChatFit does: nothing is refused or replaced on a guess. A default of Claude's desktop app gives
+// way the same on every start but a person's New Agent, list or not (models_desktop.go). What the launcher runs comes
+// from the same list, so a caller changing permissions by it does not have to ask for it again.
 func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (note string, agent startAgent, err error) {
 	name, _ := params["launcher"].(string)
 	if proto.IsExternalLauncher(name) {
@@ -282,8 +283,11 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		}
 		return "", startAgent{}, nil
 	}
+	// The desktop app's launcher as a default opens only a person's New Agent start in the app: any other start gives
+	// way as on a computer without it, whatever its list says (models_desktop.go).
+	appDefault := !own.explicitLauncher() && !personStart(ctx) && s.desktopAppProvider(ctx, launcherProvider(name))
 	list, known := s.launchersHere(withUnhidden(ctx, name), m.ID) // a hidden default still runs (#4659)
-	if !known {
+	if !known && !appDefault {
 		return "", s.lastSeenAgent(ctx, m.ID, name), nil
 	}
 	discovered := make([]ConfiguredLauncher, 0, len(list))
@@ -292,10 +296,13 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	}
 	overrides := s.hello(ctx).Models.Launchers[m.ID]
 	agentOf := configuredStartAgentLookup(discovered, overrides)
-	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
+	here := slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
+	if here && !appDefault {
 		return "", agentOf(name), nil
 	}
-	placementOf(ctx).hit(m.ID, "launcher_missing", i18n.Args{"launcher": name})
+	if known && !here {
+		placementOf(ctx).hit(m.ID, "launcher_missing", i18n.Args{"launcher": name})
+	}
 	if own.explicitLauncher() {
 		return "", startAgent{}, i18n.Err("assistant-tasks.launcher_not_on_machine", i18n.Args{
 			"machine": firstNonEmpty(m.Name, m.ID), "launcher": name, "launchers": strings.Join(launcherNamesOn(m, list), ", "),
@@ -321,12 +328,23 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	if err := s.applyModel(ctx, "agent.new", params); err != nil {
 		return "", startAgent{}, err
 	}
-	s.logf("start on %s: launcher %s is not there, using %s", m.ID, name, to)
-	key := "assistant-tasks.launcher_swapped"
 	args := i18n.Args{"launcher": name, "machine": firstNonEmpty(m.Name, m.ID), "to": to}
 	if own.model != "" {
-		key = "assistant-tasks.launcher_swapped_model"
 		args["model"] = own.model
+	}
+	key := "assistant-tasks.launcher_swapped"
+	switch {
+	case appDefault && own.model != "":
+		key = "assistant-tasks.launcher_desktop_default_model"
+	case appDefault:
+		key = "assistant-tasks.launcher_desktop_default"
+	case own.model != "":
+		key = "assistant-tasks.launcher_swapped_model"
+	}
+	if appDefault {
+		s.logf("start on %s: launcher %s opens only a person's New Agent start, using %s", m.ID, name, to)
+	} else {
+		s.logf("start on %s: launcher %s is not there, using %s", m.ID, name, to)
 	}
 	note = i18n.T(s.lang(ctx), key, args)
 	current, _ := params["launcher"].(string)
