@@ -100,20 +100,27 @@ func (s *heldMem) HoldOperation(_ context.Context, op db.HeldOperation) (db.Held
 // heldShownOf is op with what its row shows of its call (as db.DB reads it in the database).
 func heldShownOf(op db.HeldOperation) db.HeldOperation {
 	var c struct {
-		Caller *devicewire.Caller `json:"caller"`
-		Params struct {
+		Caller    *devicewire.Caller             `json:"caller"`
+		Principal *devicewire.HeldStartPrincipal `json:"principal"`
+		Meta      json.RawMessage                `json:"meta"`
+		Params    struct {
 			Text   string `json:"text"`
+			Prompt string `json:"prompt"`
 			Images any    `json:"images"`
 		} `json:"params"`
 	}
 	_ = json.Unmarshal(op.Call, &c)
-	if c.Caller != nil {
+	if c.Caller != nil && c.Caller.CredentialID != "" {
 		op.CredentialID = c.Caller.CredentialID
+	} else if c.Principal != nil {
+		op.CredentialID = c.Principal.ID
 	}
-	op.Text, op.Images = c.Params.Text, 0
+	op.Text = cmp.Or(c.Params.Text, c.Params.Prompt)
+	op.Images = 0
 	if list, ok := c.Params.Images.([]any); ok {
 		op.Images = len(list)
 	}
+	op.Meta = slices.Clone(c.Meta)
 	return op
 }
 
@@ -1977,7 +1984,8 @@ func TestHeldRepairHoldsOffTheOwner(t *testing.T) {
 	if r := st.all()[0]; r.State != db.HeldFailed || r.Failure != db.HeldRefused {
 		t.Fatalf("repaired %+v", r)
 	}
-	eventually(t, 5*time.Second, "b sent", func() bool { return slices.Equal(n.sent(), []string{"a", "b"}) })
+	// The node has b before the manager hears back and deletes its row: wait for that too, so only a is left.
+	eventually(t, 5*time.Second, "b sent and settled", func() bool { return slices.Equal(n.sent(), []string{"a", "b"}) && len(st.all()) == 1 })
 	if code, body := personCall(t, mux, "DELETE", "/api/v1/sessions/mac/s1/held/a"); code != http.StatusOK || len(st.all()) != 0 {
 		t.Fatalf("delete after: %d %v, %d left", code, body, len(st.all()))
 	}

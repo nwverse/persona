@@ -141,9 +141,9 @@ var (
 // charts and sparks, a row's extra actions, grids and carousels, date, time, multiple choice and multi-line fields,
 // title styles, named colors and more icons (#5464); 7 a section's key for the native stream (#5956), which needs no
 // downgrade; 8 the columns layout, a section's span, icon, link and columns (#9158); 9 a tile's gauge (#9337); 10 a
-// graph (#9727); 11 a scene (#12544). An app says which it draws (context.ui_version, 1 when it says nothing); the hub leaves out of a View
-// what the app does not know, or draws it with what it knows (Fit).
-const UIVersion = 11
+// graph (#9727); 11 a scene (#12544); 12 a map (#14730). An app says which it draws (context.ui_version, 1 when it
+// says nothing); the hub leaves out of a View what the app does not know, or draws it with what it knows (Fit).
+const UIVersion = 12
 
 // PageSlot says whether placement is the extension's own page: extension_page, or plugin_page as it was called.
 func PageSlot(placement string) bool {
@@ -257,26 +257,28 @@ var (
 	// EventTopics are the events by topic; how the install screen says each is extension-permissions.event_<topic with
 	// _ for .> (Explain). No text here: the catalogs are read on first use, not when the package starts (#1308).
 	EventTopics = map[string]bool{
-		"kb.changed":      true,
-		"kb.forgotten":    true,
-		"inbox.changed":   true,
-		"agent.needs_you": true,
-		"agent.finished":  true,
-		"todo.changed":    true,
-		"todo.decision":   true,
-		"leader.changed":  true,
-		"leader.report":   true,
+		"assistant.entries.changed": true,
+		"kb.changed":                true,
+		"kb.forgotten":              true,
+		"inbox.changed":             true,
+		"agent.needs_you":           true,
+		"agent.finished":            true,
+		"todo.changed":              true,
+		"todo.decision":             true,
+		"leader.changed":            true,
+		"leader.report":             true,
 	}
 
 	// EventScopes are the hub scopes an event needs besides the subscription: only an extension granted the scope
 	// (or the legacy full-hub grant) is told. A topic not listed needs none.
 	EventScopes = map[string]string{
-		"kb.changed":     ScopeKBRead,
-		"kb.forgotten":   ScopeKBRead,
-		"todo.changed":   ScopeTodosRead,
-		"todo.decision":  ScopeTodosRead,
-		"leader.changed": ScopeLeadersRead,
-		"leader.report":  ScopeLeadersRead,
+		"assistant.entries.changed": ScopeAssistantEntriesRead,
+		"kb.changed":                ScopeKBRead,
+		"kb.forgotten":              ScopeKBRead,
+		"todo.changed":              ScopeTodosRead,
+		"todo.decision":             ScopeTodosRead,
+		"leader.changed":            ScopeLeadersRead,
+		"leader.report":             ScopeLeadersRead,
 	}
 )
 

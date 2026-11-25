@@ -50,13 +50,16 @@ func (e *workspaceBusyQueueError) Error() string {
 }
 
 // shouldQueueExistingWorkspace reports whether task t should enter the serial workspace queue rather than failing
-// immediately when its explicit existing workspace is occupied by owner.
+// immediately when its existing workspace is occupied by owner.
 func (s *Service) shouldQueueExistingWorkspace(ctx context.Context, t PlanTask, owner *Todo) bool {
-	if owner == nil || t.RequestGate != "" || t.Workspace == nil || t.Workspace.Mode != workspaceExisting || t.WorkspaceInferred {
+	if owner == nil || t.RequestGate != "" || t.Workspace == nil || t.Workspace.Mode != workspaceExisting {
 		return false
 	}
 	if t.Workspace.Queue {
 		return true
+	}
+	if t.WorkspaceInferred {
+		return false
 	}
 	return s.taskWaitsAfter(t, owner.ID)
 }
@@ -107,6 +110,15 @@ func (s *Service) nextWorkspaceQueueTime() time.Time {
 	return now
 }
 
+func (s *Service) workspaceWaitReason(ctx context.Context, machine, cwd, ownerID, ownerTitle string) string {
+	return i18n.T(s.lang(ctx), "assistant-tasks_workspace.queued", i18n.Args{
+		"id":      ownerID,
+		"title":   ownerTitle,
+		"machine": machine,
+		"path":    cwd,
+	})
+}
+
 // workspaceQueueEntry builds a durable TaskQueue entry for a task waiting behind owner on (machine, cwd).
 // If before is already a workspace queue entry, its original QueuedAt is preserved so FIFO order never resets.
 func (s *Service) workspaceQueueEntry(ctx context.Context, machine, cwd, ownerID, ownerTitle string, retry bool, before *TaskQueue) TaskQueue {
@@ -117,15 +129,10 @@ func (s *Service) workspaceQueueEntry(ctx context.Context, machine, cwd, ownerID
 		attempt = before.Attempt + 1
 		retry = before.Retry
 	}
-	reason := i18n.T(s.lang(ctx), "assistant-tasks_workspace.queued", i18n.Args{
-		"id":      ownerID,
-		"title":   ownerTitle,
-		"machine": machine,
-		"path":    cwd,
-	})
+
 	return TaskQueue{
 		Key:      workspaceQueueKey,
-		Reason:   reason,
+		Reason:   s.workspaceWaitReason(ctx, machine, cwd, ownerID, ownerTitle),
 		Attempt:  attempt,
 		QueuedAt: queuedAt,
 		NextAt:   now,
@@ -225,6 +232,7 @@ func (s *Service) queueWorkspaceBusy(planID string, i int, t PlanTask, busy *wor
 		}
 		q := s.workspaceQueueEntry(ctx, busy.machine, busy.path, busy.ownerID, busy.ownerTitle, retry, pt.Queue)
 		pt.Queue = &q
+		pt.Placement = queuedPlacement(t, &q)
 		pt.Error, pt.ErrorCode, pt.ErrorArgs = "", "", nil
 	}); err != nil {
 		s.logf("task %s: workspace queue: persist: %v", t.TodoID, err)

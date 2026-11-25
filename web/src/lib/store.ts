@@ -16,7 +16,7 @@ import { onRuntimeChanges, runtimeAgents, runtimeIdentity, runtimeRemoval, runti
 import { isHeldLevel } from "./attention";
 import { sameValue } from "./stable-lines";
 import { SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
-import { SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
+import { SESSIONS_CROSS_MACHINE_HIERARCHY_FEATURE, SESSIONS_HIERARCHY_FEATURE } from "./child-sessions";
 import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, newMark, nextDue, seenCopy, settleMarks, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
@@ -25,8 +25,11 @@ import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, C
 import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
+import { justFinished } from "./agent-groups";
+import { stateOf } from "./format";
 import { timeMs } from "./times";
-import { NO_PINS, pinsOf, type AgentPins } from "./pins";
+import { agentKey, NO_PINS, pinsOf, type AgentPins } from "./pins";
+import { holdNotedSeen, recordMarkedSeen, releaseOpenSeen, releaseSeen, resetSeenVisit } from "./seen-rows";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
 import type { Resolution } from "./answered";
 import { answersIn, type DelegatedAnswer, type Reanswer } from "./delegate";
@@ -39,7 +42,7 @@ import type { OutboxEntry } from "./outbox";
 import { NO_LINK, RESTARTING_MS, type ConnLink } from "./connection";
 import { unreachable } from "./shell";
 import { setOfflineProbe } from "./feedback";
-import { readDirectionTree } from "./direction-names";
+import { isExternalDirection, readDirectionTree } from "./direction-names";
 import { unlistedConversations } from "./conversation-origins";
 import { directionTreeAwaitsHello } from "./direction-tree";
 import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
@@ -104,6 +107,8 @@ export interface State {
   /** Messages other pages sent for a conversation (`mid/sid`), shown there until the transcript has them (lib/outbox.ts). */
   outbox: Record<string, OutboxEntry[]>;
   todos: Todo[];
+  /** Optional `shared_blockers` summary from GET /todos under todos_v2 (#14728); parsed lazily by the To-dos view. */
+  sharedBlockers: unknown[];
   todosSupported: boolean;
   todosLoaded: boolean;
   todosError: string | null;
@@ -150,6 +155,7 @@ let state: State = {
   launches: {},
   outbox: {},
   todos: [],
+  sharedBlockers: [],
   todosSupported: true,
   todosLoaded: false,
   todosError: null,
@@ -194,6 +200,12 @@ function set(patch: Partial<State>) {
   state = holdSeen(next, patch);
   state = settleLaunchState(state, patch);
   if (viewed.size && ("sessions" in patch || "sessionSummaries" in patch || "assistant" in patch)) seeViewed(false);
+  if ("sessions" in patch || "sessionSummaries" in patch) {
+    const updated: Session[] = [];
+    if ("sessions" in patch) for (const rows of Object.values(state.sessions)) updated.push(...rows);
+    if ("sessionSummaries" in patch) updated.push(...state.sessionSummaries);
+    if (updated.length) holdNotedSeen(updated);
+  }
   if (pushing) notifySoon();
   else notify();
 }
@@ -269,6 +281,10 @@ runtimeSessions.subscribe(() => {
   }
   if (rows !== state.sessionSummaries || counts !== state.sessionCounts) set({ sessionSummaries: rows, sessionCounts: counts });
 });
+runtimeAgents.subscribe(() => {
+  const { rows } = runtimeAgents.getSnapshot();
+  if (rows.length) holdNotedSeen(rows);
+});
 onRuntimeChanges((upsert, remove) => {
   for (const row of upsert) if (rowHints.has(runtimeIdentity(row))) rowHints.set(runtimeIdentity(row), row);
   // Older paged hubs return complete rows. Update only details already retained; never materialize the delta backlog.
@@ -288,7 +304,7 @@ const SUMMARY_FLAGS = ["quiet", "awaits_reply", "starting", "awaiting_first_mess
  *  carries (state, last words, markers), and the details it never carries (items' arrays, queued) stay. */
 function listedOver(row: Session, listed: Session): Session {
   if (typeof listed.waiting !== "boolean") return sameValue(listed, row) ? row : listed;
-  const next: Session = { ...row, ...listed, background_working: listed.background_working, background_waiting: listed.background_waiting };
+  const next: Session = { ...row, ...listed, background_working: listed.background_working, background_waiting: listed.background_waiting, background_stalled_since: listed.background_stalled_since };
   for (const key of SUMMARY_FLAGS) if (!(key in listed)) delete next[key];
   return sameValue(next, row) ? row : next;
 }
@@ -883,7 +899,7 @@ export function connect() {
     if (stopped) return;
     // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
     // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
-    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential);
+    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential, setLinkError);
     const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
     // the drop starts while online; a restart announced on a later attempt stretches its grace
@@ -907,11 +923,24 @@ export function connect() {
   };
 }
 
+const setLinkError = (reason: string) => {
+  const msg = reason.trim();
+  if (msg && msg !== state.link.lastError) set({ link: { ...state.link, lastError: msg } });
+};
+
 // The hub answered while it refused the socket: a browser can't read why a WebSocket handshake failed, so one ordinary
 // read asks. A credential it no longer takes (removed in Settings › Devices, or the hub forgot it) answers 401, which
 // api() hands to the sign-in page with "signed out" (App.tsx handleUnauthorized) instead of retrying as if the hub were
-// out of reach. The read's own failures change nothing: the socket keeps retrying.
-const probeCredential = () => api("/machines", { timeout: 15_000 }).catch(() => {});
+// out of reach. Other HTTP/API rejections surface their error detail in ConnectionDetails; network errors change nothing.
+const probeCredential = () =>
+  api("/machines", { timeout: 15_000 }).then(
+    () => {
+      if (state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
+    },
+    (e: unknown) => {
+      if (e instanceof ApiError && e.status >= 400 && e.message) setLinkError(e.message);
+    },
+  );
 
 // The grace is over and the socket is still not back: show it as before.
 function showDrop() {
@@ -973,7 +1002,9 @@ export function checkSocket() {
 setInterval(() => checkSocket(), 5_000);
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && !stopped && (!ws || Date.now() - lastMessage > 40_000)) connect();
+    if (!pageInFront()) return;
+    if (pushedHidden) todosPushed();
+    if (!stopped && (!ws || Date.now() - lastMessage > 40_000)) connect();
   });
 }
 if (typeof window !== "undefined") {
@@ -994,7 +1025,7 @@ async function followDirections(changed = false) {
   const a = state.assistant;
   if (!ids || !a) return;
   const known = new Set(a.conversations.map((c) => c.session_id));
-  if (ids.some((id) => !known.has(id))) void refreshAssistant().catch(() => {});
+  if (ids.some((id) => !known.has(id) && !isExternalDirection(id))) void refreshAssistant().catch(() => {});
   else if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) set({ assistant: { ...a, leaders: ids } });
 }
 
@@ -1021,7 +1052,7 @@ function onMessage(msg: Record<string, unknown>) {
       setSideFold(Array.isArray(msg.features) && (msg.features as unknown[]).includes(SESSIONS_SIDE_FOLD_FEATURE));
       set({
         conn: "online",
-        link: { ...state.link, nextTry: 0, restarting: false, networkUp: true },
+        link: { ...state.link, nextTry: 0, restarting: false, networkUp: true, lastError: undefined },
         version: String(msg.server_version ?? ""),
         features: Array.isArray(msg.features) ? (msg.features as string[]) : [],
         pushGrading: msg.push_grading === true,
@@ -1037,6 +1068,7 @@ function onMessage(msg: Record<string, unknown>) {
       back();
       const summaryMode = state.features.includes(SESSIONS_LOOKUP_FEATURE);
       const rootsMode = state.features.includes(SESSIONS_HIERARCHY_FEATURE);
+      const crossMachineMode = rootsMode && state.features.includes(SESSIONS_CROSS_MACHINE_HIERARCHY_FEATURE);
       const agentsMode = supportsPagedAgents(state.features);
       const { loaded: agentsLoaded, loading: agentsLoading, error: agentsError } = runtimeAgents.getSnapshot();
       const usedAgentsList = agentsLoaded || agentsLoading || agentsError !== null;
@@ -1044,9 +1076,11 @@ function onMessage(msg: Record<string, unknown>) {
       runtimeSessions.setSummary(summaryMode);
       // a hub that folds child sessions (#5120): the Agents list and its counts leave them out, each parent counted once
       runtimeSessions.setRoots(rootsMode);
+      runtimeSessions.setCrossMachineHierarchy(crossMachineMode);
       if (agentsMode) {
         runtimeAgents.setSummary(summaryMode);
         runtimeAgents.setRoots(rootsMode);
+        runtimeAgents.setCrossMachineHierarchy(crossMachineMode);
       } else if (usedAgentsList) {
         runtimeAgents.reset();
       }
@@ -1244,6 +1278,8 @@ export function savePins(pins: AgentPins): Promise<void> {
 /** "Mark all as seen": every finished one of these nobody has seen (Unread, Just finished) is seen now, in one update of the list (iOS AppModel.markSeen). The
  * hub pushes the sessions back as seen; the list does not wait for it, and each waits in the seen outbox until it does. */
 export function markSeen(list: Session[]) {
+  // Mark all as seen lets every row in its scope go at once, including ones already read and held in place (#12585).
+  releaseSeen(list.map(agentKey));
   const keys = new Set<string>();
   const retained = new Map(Object.values(state.sessions).flat().map((s) => [runtimeIdentity(s), s]));
   const changedAt = (s: Session) => Math.max(timeMs(s.updated_at), timeMs(s.state_since), timeMs(s.seen_at));
@@ -1321,6 +1357,7 @@ export function upsertSession(s: Session, opts: { undelivered?: boolean } = {}) 
     else if (!x.assistant) merged.undelivered = opts.undelivered ? s.undelivered : x.undelivered; // an Agent's (#10661)
     merged.background_working = s.background_working;
     merged.background_waiting = s.background_waiting;
+    merged.background_stalled_since = s.background_stalled_since;
     // An optimistic action can start from getSession's summary fallback. A later complete info response must
     // drop its scalar summary markers, or they keep overriding the complete task arrays indefinitely.
     if (typeof s.waiting !== "boolean") {
@@ -1556,14 +1593,14 @@ export function dropDelegated(id: string) {
 // Every request for a list the page keeps whole (/todos, /assistant), numbered: an answer to a request sent before the
 // one already applied is older than what the page shows (refresh() waits for /sessions too, seconds on a busy hub) and
 // must not put the old list back.
-function numbered<T>(path: string) {
+function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) {
   let asked = 0;
   let applied = 0;
   return {
     ask() {
       const n = ++asked;
       const owner = credentialOwner();
-      const answer = api<T>(path);
+      const answer = read();
       /** Whether this answer may be applied (no later request's answer is in place); if so it is the one in place now. */
       const fresh = () => {
         if (n < applied || owner !== credentialOwner()) return false;
@@ -1579,7 +1616,34 @@ function numbered<T>(path: string) {
   };
 }
 
-const todosAsked = numbered<{ todos: Todo[] }>("/todos");
+// The last to-do list the hub answered and its validator (#9590; the `GET /api/v1/todos` row in docs/assistant/todos.md):
+// the hub tags its merged list with `ETag: W/"t1-<hash of its bytes>"` and answers a read naming that tag with a 304 and
+// no body. Most {"type":"todos"} pushes change nothing the list holds, and the whole list is hundreds of KB on a busy
+// hub, so a read sends the tag and a 304 applies the kept answer again, as a 200 with those same bytes would. Memory
+// only, one login's: reset() drops it, and a tag kept under another login is not sent.
+let keptTodos: { owner: string; etag: string; revision: string; answer: { todos: Todo[]; shared_blockers?: unknown[] } } | null = null;
+
+async function readTodos(): Promise<{ todos: Todo[]; shared_blockers?: unknown[] }> {
+  const owner = credentialOwner();
+  const kept = keptTodos?.owner === owner ? keptTodos : null;
+  let status = 0;
+  let reply: Headers | undefined;
+  const answer = await api<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", {
+    headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
+    onResponse: (headers, code) => { status = code; reply = headers; },
+  });
+  const etag = reply?.get("ETag") ?? "";
+  const revision = reply?.get("X-Persona-Todos-Revision") ?? "";
+  if (status === 304 && kept) {
+    if (revision) kept.revision = revision;
+    return kept.answer;
+  }
+  // a hub without either validator keeps nothing, and the next read is whole as before
+  if (owner === credentialOwner()) keptTodos = etag || revision ? { owner, etag, revision, answer } : null;
+  return answer;
+}
+
+const todosAsked = numbered<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", readTodos);
 const assistantAsked = numbered<AssistantInfo>("/assistant");
 
 // refresh() calls, numbered the same way: one that started before the last one applied, or before reset(), is older
@@ -1645,20 +1709,21 @@ export async function refresh() {
 }
 
 /** Both refresh paths share the list, error and unsupported-hub (404) handling; only a fresh answer finishes loading. */
-function applyTodos(todos: PromiseSettledResult<{ todos: Todo[] }>, fresh: () => boolean) {
+function applyTodos(todos: PromiseSettledResult<{ todos: Todo[]; shared_blockers?: unknown[] }>, fresh: () => boolean) {
   if (!fresh()) return; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
     const list = todos.value.todos ?? [];
+    const sharedBlockers = Array.isArray(todos.value.shared_blockers) ? todos.value.shared_blockers : [];
     for (const t of list) {
       if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
     }
-    set({ todos: list, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    set({ todos: list, sharedBlockers, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
     keepTaskRows([]);
     void lookUpTaskAgents();
     return;
   }
   const reason = todos.reason;
-  if (reason instanceof ApiError && reason.status === 404) return set({ todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+  if (reason instanceof ApiError && reason.status === 404) return set({ sharedBlockers: [], todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
   set({ todosLoaded: true, todosError: errorText(reason) });
 }
 
@@ -1686,24 +1751,33 @@ export function dropTodo(id: string) {
   set({ todos: state.todos.filter((t) => t.id !== id) });
 }
 
-// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts: the hub sends one per write,
-// and a supervised task's report, stage and links land within the same second. Every GET /todos is the whole list (tens
-// of KB on a busy hub), so pushes read it one at a time: one that lands while such a read is out asks for one more read
-// after it, however many land meanwhile. What this page itself just changed still reads at once (refreshTodos).
-let pushedRead = false;
-let pushedAgain = false;
+// A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts. Settle 200 ms, then ask
+// the hub's cheap merged revision when every manager supports it (#13804). Only a changed revision reads the complete
+// list. Hidden pages leave the pending push until they become visible; old hubs keep the original full-read path.
+// What this page itself just changed still reads at once (refreshTodos).
+// The loop itself loads on the first push, not with the first screen. The epoch drops a load that reset beat.
+let pushedEpoch = 0;
+let pushedHidden = false; // only a failed hidden import; the loaded loop owns its own pending push
+let resetPushedTodos: () => void = () => {};
 
 export function todosPushed() {
-  if (pushedRead) {
-    pushedAgain = true;
-    return;
-  }
-  pushedRead = true;
-  void refreshTodos().finally(() => {
-    pushedRead = false;
-    if (!pushedAgain) return;
-    pushedAgain = false;
-    todosPushed();
+  const epoch = pushedEpoch;
+  void import("./todo-pushes").catch(() => null).then((m) => {
+    if (epoch !== pushedEpoch) return;
+    pushedHidden = false;
+    if (!m) {
+      if (pageInFront()) void refreshTodos();
+      else pushedHidden = true;
+      return;
+    }
+    resetPushedTodos = m.reset;
+    // Positional hooks keep their property names out of the first-screen chunk; the lazy module names the tuple.
+    m.push([
+      () => hubHas(state.features, "todo_revision") && keptTodos?.owner === credentialOwner() ? keptTodos.revision : "",
+      refreshTodos,
+      pageInFront,
+      api,
+    ]);
   });
 }
 
@@ -1843,6 +1917,9 @@ export function markSeenLocally(mid: string, sid: string) {
     send({ type: "seen", machine_id: mid, session_id: sid });
     return;
   }
+  if (s && (stateOf(s) === "unread" || justFinished(s, state.mutes))) {
+    recordMarkedSeen(s, stateOf(s) === "idle" ? "just_finished" : "unread", viewed.has(runtimeIdentity(s)));
+  }
   set({ seen: { ...state.seen, [runtimeIdentity(s!)]: deliverSeen(mid, sid, mark) } });
   scheduleSeenCheck();
 }
@@ -1879,7 +1956,10 @@ export function viewSession(mid: string, sid: string): () => void {
   return () => {
     const n = (viewed.get(id) ?? 1) - 1;
     if (n > 0) viewed.set(id, n);
-    else viewed.delete(id);
+    else {
+      viewed.delete(id);
+      releaseOpenSeen(`${mid}/${sid}`);
+    }
   };
 }
 
@@ -1941,6 +2021,7 @@ function resendSeen() {
 
 export function reset() {
   resetAgentsDisplay();
+  resetSeenVisit();
   disconnect();
   clearConversationDeletions();
   resetMessageFeedback();
@@ -1951,7 +2032,10 @@ export function reset() {
   endedHere.clear();
   // a /todos or /assistant answer still on its way belongs to the old login
   todosAsked.forget();
-  pushedAgain = false; // the next login reads its own list
+  keptTodos = null; // and its list's validators
+  pushedEpoch++;
+  pushedHidden = false;
+  resetPushedTodos();
   assistantAsked.forget();
   assistantByManager.clear();
   restoredAssistant = null;
@@ -1993,6 +2077,7 @@ export function reset() {
     mutes: { spaces: [], sessions: [], allowed: [] },
     pins: NO_PINS,
     todos: [],
+    sharedBlockers: [],
     todosSupported: true,
     todosLoaded: false,
     todosError: null,

@@ -501,7 +501,8 @@ private fun SettingsPageContent(
                 manager = extensionManager,
                 machines = services.sessions.machines,
                 launchers = services.providers.takeUnless { services.demo }?.let { p -> { p.launchers() } },
-                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext, manager = extensionManager)) } }) }
+                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext, manager = extensionManager)) } },
+                trust = services.extensionTrust.takeUnless { services.demo }) }
             ?: ExtensionsPage(mine.extensions.takeUnless { services.demo }, back,
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
                 onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } },
@@ -534,6 +535,10 @@ private fun SettingsPageContent(
             itemsIndexed(entries) { index, (destination, title) -> JGroupItem(GroupPosition.of(index, entries.size)) {
                 JRow(stringResource(title), onClick = { open(destination) })
             } }
+            val displaySettings = services.agentsDisplay.takeUnless { services.demo }
+            if (displaySettings != null) item("herdr-tab-name") {
+                AgentHerdrTabNameSetting(displaySettings)
+            }
         }
         "desktops" -> DesktopsPage(deviceController, services.desktops.takeUnless { services.demo }, paired && services.deviceSettings != null, back)
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)

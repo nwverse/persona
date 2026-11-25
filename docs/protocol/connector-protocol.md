@@ -60,8 +60,8 @@ Manifest fields:
 | `catalog.list` | `{}` → `{sources: [...]}` | Optional `catalog`: source/tool metadata and recipes; validated without executing tools ("Source catalog" below) |
 | `catalog.call` | `{source, tool, args?}` → `{text}` | Current catalog only; non-read-only or missing tools answer `not_read_only`; args is an object, default `{}` |
 | `tools.list` | `{}` → `{tools: [{name, description, input_schema}]}` | Read-only tools, names prefixed `<id>_` |
-| `tools.call` | `{name, args}` → `{text, images?}` | `images` (optional, #8484): pictures for the model after the text, `[{mime, data, caption?}]`; only on a hub whose `initialize` lists `tool_images`. See "Pictures in a tool's answer" below |
-| `thread.page` | `{thread, before?, limit}` → `{chat, messages, before?}` | One Inbox thread page, oldest first; empty before means latest, earlier pages use returned cursor; limit max 50. Fields `connector/threads.go`: `ThreadChat` / `ThreadMessage` / `ThreadMedia`… `chat.reply` is reply action with `{chat, text, reply_to}` |
+| `tools.call` | `{name, args}` → `{text, images?, views?}` | `images` (optional, #8484): pictures for the model after the text, `[{mime, data, caption?}]`; only on a hub whose `initialize` lists `tool_images`. `views` (optional, #14730): out-of-band declarative `View`s rendered inline in conversation UIs (`ToolViews`); only on a hub whose `initialize` lists `tool_views`. See below |
+| `thread.page` | `{thread, before?, limit}` → `{chat, messages, before?}` | One Inbox thread page, oldest first; empty before means latest, earlier pages use returned cursor; limit max 50. Fields `connectorwire/threads.go`: `ThreadChat` / `ThreadMessage` / `ThreadMedia`… `chat.reply` is reply action with `{chat, text, reply_to}` |
 | `thread.media` | `{ref}` → `{mime, data}` | Base64 avatar / media bytes, max 4 MB. Ref immutable; hub persists, app caches forever. Changing avatars include version in ref |
 | `actions.list` | `{}` → `{tools: [{name, description, input_schema}]}` | Writes, `<id>_` prefix |
 | `actions.describe` | `{name, args}` → `{action: {name, visible}, summary}` | Phone card action / full content; visible = audience. No network. Error means invalid args, returned to caller without card |
@@ -127,6 +127,16 @@ Group-capable connectors submit each thread's new messages as a **batch awaiting
 - **Old hubs**: before #1680, unknown group rejects **entire connector registration**, unknown capability, and `meta_description` prevents manifest load. Extension `engines.persona` must require hub build containing #1680 (`">=YYYYMMDDHHMM"`, build UTC time at merge), so old hubs reject install / upgrade rather than lose connector afterward. Development build 0 skips check.
 - **Future capabilities**: since #1680, unknown **extension-provided** connector capabilities log once per extension / capability, remove that capability, keep running. Built-in connectors remain strict. Future capability additions no longer drop entire connector on old hubs with #1680, but already deployed pre-#1680 hubs still do.
 
+### Call context (#13246)
+
+`tools.call`, `actions.describe` and `actions.do` also say where the call comes from, so a connector can apply limits of its own:
+
+- `track`: the calling conversation's track, its slug (`main` for the main track); absent when the hub cannot tell.
+- `track_kind`: the track's kind; absent when not known (the main track).
+- `categories`: the conversation's information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`; `docs/assistant/health.md` "Information categories"), `[]` for general. **Absent means not known** (an older hub, a turn not tagged yet): take it for sensitive.
+
+All three are optional and additive (no version change): a program that ignores them works as before. Whether the phone confirms a write stays the hub's decision, never the connector's. A connector built on `server/internal/connector/serve` reads them with `connector.CallContextOf(ctx)` inside `Call`, `Describe` and `Write`; an SDK program reads them from the params (`ConnectorCallParams`, `ConnectorDoParams`).
+
 ### Pictures in a tool's answer (#8484)
 
 A read tool can hand the model pictures to look at (frames of a video, the pictures of a post): `tools.call` answers `{text, images: [{mime, data, caption?}]}` (`ConnectorToolImage` in the schema; the Go SDK's `ext.ToolImage(data, caption)`).
@@ -140,6 +150,14 @@ A read tool can hand the model pictures to look at (frames of a video, the pictu
 - **Where they don't**: `catalog.call` (subscriptions), `actions.do` and `personad tool` carry the text only.
 - **In the apps**: the pictures are image items on the tool call's card, loaded when shown (`lazy_images`), from the Claude transcript and from Codex's (`McpToolCall` image content).
 - **Privacy**: they stay in the conversation's transcript on the computer that runs it, like computer use's screenshots, and never in the hub's log, the extension's audit or its stats. An extension whose pictures are other people's content says so in its own description.
+
+### Tool views in a tool's answer (#14730)
+
+A connector read tool (`tools.call`) can return declarative UI views (`views: [View]`, in `connectorwire.ConnectorCallResult`; Go SDK `ext.ToolResult{Text, Views}`) for Persona's conversation views to draw beside the turn's answer without sending geometry or layout data into the model's context.
+
+- **Who takes them**: a hub whose `initialize` lists `tool_views` in `hub.capabilities` (`docs/extensions/extensions.md` "Process extension protocol"). Older hubs ignore `views` and still pass `text` to the model, so `text` must remain complete and self-contained. The connector protocol version does not change.
+- **Sanitization and bounds** (`connector.SanitizeToolViews`): at most **4 views** (`connector.ToolViewsMost`) and **128 KiB** of JSON per call (`connector.ToolViewsBytesMost`). Every view is deep-cloned, assistant-only fields and inline `html` components are stripped (`wire.StripAssistantFields`), extension-local image `ref`s are rejected (`wire.HasImageRef`, since inline tool views are not routed through an extension's HTTP signing surface), empty sections are dropped, and each view must pass `wire.CheckView`.
+- **Separation from LLM context**: `ToolResult.tool_views` travels from connector -> hub -> node (`mcp.call` / `cli.call`), where the node strips `tool_views` before returning `ToolResult` to Claude Code, Codex, DSH, or `personad tool`, and attaches the stripped views to the recorded `tool_result` item (`Item.tool_views`) and folded run summary (`Fold.tool_views`). Like `images`, `tool_views` never appear in hub audit logs or extension stats, and `catalog.call` / `actions.do` ignore them.
 
 ## Program calls hub
 

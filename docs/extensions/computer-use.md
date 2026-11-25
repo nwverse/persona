@@ -275,9 +275,9 @@ Only through the hub tunnel, no new externally exposed port:
   - The page asks each time, sends them only to that Mac, not the hub or repository, and doesn't store them.
   - Account name prefilled from the machine's home directory (`/Users/<name>`).
 
-### Page: `/screen/<machine id>` (web, `web/src/screen/`)
+### Page: `/screen/<machine id>` (web, `web/src/modules/screen-share/`)
 
-- **Loading**: on `/screen/…`, the web entry bypasses login and sidebar and dynamically loads only this page. noVNC ([noVNC](https://github.com/novnc/noVNC) 1.7, MPL-2.0, `@novnc/novnc`) lives in a separate chunk, not the main bundle.
+- **Loading**: on `/screen/…`, the web entry bypasses login and sidebar and dynamically loads only this page: the screen-share module's page of its own (`standalonePages`, `docs/web/web.md` "Modules"). With the module off (Settings › Labs › Features, or a hub that publishes module flags without `module.screen-share`, read from one hello before anything of the page loads) the machine page has no **View screen** and the address is an unknown one. noVNC ([noVNC](https://github.com/novnc/noVNC) 1.7, MPL-2.0, `@novnc/novnc`) lives in a separate chunk, not the main bundle.
 - **Token**:
   - The App opens it with its device token in `#token=…&embed=1`: URL fragments aren't sent to the server; the page removes it from the address bar immediately on load, keeping it only in memory.
     - Includes the machine's display name in `name=` (Mac Studio), used before the hub responds instead of displaying its id.
@@ -305,7 +305,7 @@ Only through the hub tunnel, no new externally exposed port:
 - **Toggle**: the top bar's **Connection stats**, on any live Mac as the App's ⋯ › Connection Stats, off by default and
   kept per Mac in this browser (`video.ts` `statsShown`). It shows a small panel at the top right of the picture, which
   drags anywhere inside it and has a close button. A page an app embeds has no bar and no panel. The toggle and the panel
-  are a chunk of their own (`StatsOverlay.tsx`, words in `screen-video`), loaded once the screen is live.
+  are a chunk of their own (`StatsOverlay.tsx`, words in `screen-share-video`), loaded once the screen is live.
 - **What it shows**, once a second (`meter.ts`): `VNC · Via hub`, then bitrate and frame rate, then on a line of its own
   **Round trip to the hub N ms**. Only what was measured: a number with nothing behind it is left out, never guessed. A
   still screen sends nothing, so it says 0 fps.
@@ -332,7 +332,7 @@ Only through the hub tunnel, no new externally exposed port:
   moving box (`MOCK_COMPUTER=ready MOCK_SCREEN=fake MOCK_SCREEN_ANIMATE=1`) `node web/e2e/screen-stats.mjs <web URL>`:
   off by default, measured numbers in light and dark, kept per Mac, no round-trip line while the hub's health is refused.
 
-### Native client in the App (#1343, `apple/Persona/Screen/`)
+### Native client in the App (#1343, `apple/Modules/ScreenShare/`, the `screen-share` module)
 
 Picture in Picture (`AVSampleBufferDisplayLayer`) needs access to each frame, which noVNC in a WebView can't provide, so the App speaks RFB itself. The web still uses noVNC.
 
@@ -383,7 +383,7 @@ Picture in Picture (`AVSampleBufferDisplayLayer`) needs access to each frame, wh
 
 ### Measuring (#3067)
 
-`server/cmd/vncbench` measures a VNC server the way the app uses it, from the computer the server runs on (straight to
+`server/internal/modules/screen-share/vncbench` measures a VNC server the way the app uses it, from the computer the server runs on (straight to
 `127.0.0.1:5900`) or through a hub's relay (`-hub <hub address> -machine <id>`, a device token in `VNCBENCH_TOKEN`).
 It signs in with the login keychain's generic password `persona-vnc-bench` (added once with
 `security add-generic-password -s persona-vnc-bench -a "$(id -un)" -w`) or `VNCBENCH_ACCOUNT` / `VNCBENCH_PASSWORD`, never printing it.
@@ -435,7 +435,7 @@ Known gaps: the aspect check cannot catch an arrangement whose bounding box happ
 sends something else (four equal displays in a 2 × 2 grid, of which the server sends one); such a crop would be wrong. The menu numbers
 displays left to right, then top to bottom, by their top-left corners.
 
-**On the web** (#5685, `web/src/screen/displays.ts`): the top bar's Displays menu (All Displays / Display N, shown only with two or more
+**On the web** (#5685, `web/src/modules/screen-share/displays.ts`): the top bar's Displays menu (All Displays / Display N, shown only with two or more
 displays to offer; on a narrow screen the button keeps only its icon). The rules are the app's, with these differences:
 
 - **Layout from the node only**: noVNC reads ExtendedDesktopSize but keeps only the first screen's id, so the page uses the `displays`
@@ -450,12 +450,12 @@ displays to offer; on a narrow screen the button keeps only its icon). The rules
   framebuffer changes size (a display plugged in or out, another resolution), so a chosen display that comes back is shown again
   without a reload, and as the menu opens, so its list is the Mac's as the choice is made. Two displays of one size swapped while the
   menu stays closed keep the old crop until it opens.
-- **Loading**: the menu (`screen/DisplayMenu.tsx`) is a chunk of its own, so its words (`screen-displays`) stay out of the first
+- **Loading**: the menu (`DisplayMenu.tsx`) is a chunk of its own, so its words (`screen-share-displays`) stay out of the first
   screen's catalog. It is fetched while a Mac whose status lists several displays connects, and the page crops to a kept display only
   once it is in, so a cropped picture always has the menu to go back. One that would not load (offline, the hub redeployed) leaves
   every display shown and is asked for again as the connection moves on.
 - Pages an app embeds (`embed=1`) have no top bar: they show every display and ignore a choice this browser kept.
-- **Tests**: `web/src/screen/displays.test.ts`, `ScreenView.displays.test.tsx`, and in a real browser against the mock hub
+- **Tests**: `web/src/modules/screen-share/displays.test.ts`, `ScreenView.displays.test.tsx`, and in a real browser against the mock hub
   (`MOCK_COMPUTER=ready MOCK_SCREEN=fake MOCK_SCREEN_DISPLAYS=2:node`) `node web/e2e/screen-displays.mjs <web URL> <mock hub URL>`: the
   chosen display fills its box, a click lands on it, drags out over a fractional edge and the top edge stay on it, a new page reopens it.
 
@@ -667,7 +667,7 @@ Android don't decode video yet: they keep RFB and show no switcher.
     of the typical mix, so the cards' figures hold for both.
   - **Shared with the browser** (#6558): `spec/fixtures/screen-tiers` holds the ladder's and the signals' scenarios
     (input and expected output, one per file), which `TierFixtureTests` writes from these Swift types
-    (`PERSONA_WRITE_TIER_FIXTURES=1`) and otherwise checks unchanged. The browser's port (`web/src/screen/tiers/`)
+    (`PERSONA_WRITE_TIER_FIXTURES=1`) and otherwise checks unchanged. The browser's port (`web/src/modules/screen-share/tiers/`)
     replays them, so a change on either side fails both until they agree; so do the policy's timelines (route starts, every way down and up, a route change, a new bias, Data Saver and a warm device).
   - **Signals** (the phone's, from the frames): queueing above the 10 s floor of the one-way delay (p50 / p95 over
     0.5 s, rising or falling over 1 s), the rate the link carried while busy (frames queued behind one another: their
@@ -723,7 +723,7 @@ Android don't decode video yet: they keep RFB and show no switcher.
   closes, no frame or heartbeat for 3 s, a decoding error, or the Mac locks (`paused`), then retries video after 30 s
   doubling to 5 min, and at once when the helper reports the Mac unlocked (`resumed`). While capture is paused the
   helper sends no heartbeat, so the 3 s rule waits for `resumed`.
-- **iPhone** (`apple/Persona/Screen/ScreenVideoStream.swift`, `ScreenVideoLink.swift`): the iOS app links
+- **iPhone** (`apple/Modules/ScreenShare/ScreenVideoStream.swift`, `ScreenVideoLink.swift`): the iOS app links
   `PersonaScreenKit` (Mac and Vision compile the same sources and leave video out). `ScreenVideoStream` sends `start`,
   decodes each frame with VideoToolbox as it comes (the helper never reorders), sends a `report` for every frame, and
   shows only the newest picture of a burst. `ScreenVideoLink`, one per RFB session, opens the stream once RFB is
@@ -756,7 +756,7 @@ Android don't decode video yet: they keep RFB and show no switcher.
   decoder. Each showed video in at least 39 of 41 two-second samples, about 15 ms end to end, 2–3 ms to decode, and
   the tier's frame rate. `video.ts` `webVideo.plays` false turns the web's video off for everyone: the page keeps RFB
   and offers no Picture switcher):
-  - **Wire and decoding**: `web/src/screen/video-wire.ts` frames the wire as `PersonaScreenKit` does (both replay
+  - **Wire and decoding**: `web/src/modules/screen-share/video-wire.ts` frames the wire as `PersonaScreenKit` does (both replay
     `spec/fixtures/screen-video`, written from Swift's own messages by `ScreenVideoFixtureTests`); `video-bitstream.ts`
     turns `format` into WebCodecs' codec string (`hvc1.1.6.L93.B0`, `avc1.64001F`) and decoder configuration record.
   - **What the browser offers** (`video-probe.ts`, once a page): WebCodecs exists only on a secure address (https or
@@ -822,8 +822,10 @@ Android don't decode video yet: they keep RFB and show no switcher.
 
 The live screen, picture and input together, takes the fastest route the phone can reach: the same local network,
 Tailscale, or the hub relay ([#6398](https://github.com/nwverse/persona/issues/6398) has the design). The node's end is
-`internal/screenlink`. What is in place: the screen session over the hub's relays and the node's direct routes; the
-iPhone's side comes next.
+`internal/modules/screen-share/screenlink`, part of the `screen-share` module, which the node reaches through
+`internal/node/screenport` (`docs/architecture/core-and-modules.md` "The node's modules"); a node built without the
+module offers no session and the phone keeps the plain relayed stream. What is in place: the screen session over the
+hub's relays and the node's direct routes; the iPhone's side comes next.
 
 - **Screen session**: a phone that asks for one gets its RFB stream and its video stream as channels of one session at
   the node, keyed by `pair`: channel 1 is the connection to Screen Sharing (still followed for the login, so video binds
@@ -903,7 +905,7 @@ iPhone's side comes next.
   another VPN or a proxy); `PathPolicy` picks the route: by minimum round trip, a direct route winning a tie with the
   relay; at the stream's start at once, later only after 10 s healthy, a clear gain and 20 s since the last move; a lost
   route left at once and a degraded one (loss ≥ 5 %, or 50 ms over its own floor for 5 s) when another is healthy.
-- **The iPhone** (`apple/Persona/Screen/ScreenLinkRoutes.swift`): on since the acceptance before real devices passed
+- **The iPhone** (`apple/Modules/ScreenShare/ScreenLinkRoutes.swift`): on since the acceptance before real devices passed
   (a simulator on a real hub and a Mac on the same LAN: the direct route within a second, back on the relay 2.6 s after
   it went silent and 1.1 s after it broke, direct again 39 s after it recovered, every typed byte once). Still to check
   on a real iPhone: the Tailscale route, the local network question, and Wi-Fi to cellular. `ScreenRoutes.releaseEnabled`
@@ -963,7 +965,7 @@ iPhone's side comes next.
 On a direct route (same network or Tailscale), the live screen's video can ride a UDP flow instead of the route's TLS
 connection, so a lost packet delays only the frame it belongs to, usually by no round trip, and never slows the stream
 by itself ([#7873](https://github.com/nwverse/persona/issues/7873) has the design and the shaped-link numbers it rests
-on). The node's end is `internal/screenlink` (`udp.go`, `udp_wire.go`, `rs.go`); the shared cases are
+on). The node's end is `internal/modules/screen-share/screenlink` (`udp.go`, `udp_wire.go`, `rs.go`); the shared cases are
 `spec/fixtures/screen-udp`. In place: the node's side, offered in `paths` as `"udp": 1`, and the iPhone's, on in
 release builds since the live check against a real Mac (`ScreenRoutes.udpReleaseEnabled` turns it off again; a DEBUG
 build launched with -showScreenUDP has it either way). No setting of its own: the Settings switch for direct routes
@@ -1505,7 +1507,7 @@ Follow the order above, one PR per area. Item 6 can go with b, or a separate sma
   - Enable with `PERSONA_CUA_E2E=1`, optionally `PERSONA_CUA_SHOT=<image path>`; compile the test binary with `GOOS=darwin go test -c` and copy it over.
   - Uses `run_steps` to calculate 6×7 in Calculator, then reads the window, asserts 42, and writes a screenshot.
   - Verified 2026-11-04: ready, 42, 230×408 JPEG. It operates Calculator on that Mac.
-- **Web**: `web/src/screen/aes.test.ts` (AES substitute vs FIPS-197 and WebCrypto), `screen.test.ts` (path, token in fragment, WebSocket URL, prefilled account).
+- **Web**: `web/src/modules/screen-share/aes.test.ts` (AES substitute vs FIPS-197 and WebCrypto), `screen.test.ts` (path, token in fragment, WebSocket URL, prefilled account).
 - **VNC end-to-end** (App native client → hub 5900 forwarding → mock Screen Sharing, `MOCK_SCREEN=fake`, [testing.md](../operations/testing.md)):
   - `ComputerSectionTests.testTheLiveScreenAsksForTheMacsSignIn` taps VNC through to login required (ARD).
   - `ScreenDrawerTests` (mock with `MOCK_COMPUTER_OPERATING=1 MOCK_SCREEN=fake`; without `MOCK_SCREEN=fake`, it uses this Mac's real Screen Sharing, showing "hub doesn't allow this machine's screen" and failing if off; assistant and Agent chats each have a running operation): open the full page from the operating bar and ··· menu in assistant and Agent chats, close with ×.

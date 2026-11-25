@@ -76,12 +76,17 @@ class ManagerPackageScopeTests(unittest.TestCase):
 
         def output(args, cwd, **kwargs):
             if args[:3] == ['go', 'test', '-list']:
+                calls.append((args, kwargs.get('env')))
                 return 'TestA\nTestB\nTestC\nBenchmarkD\nok  \texample/server/internal/node\t0.1s\n'
             if args[:2] == ['go', 'list']:
-                return ('example/server/internal/assistant\nexample/server/internal/hub\nexample/server/internal/node\n'
+                return ('example/server/internal/assistant\nexample/server/internal/kb\nexample/server/internal/node\n'
                         'example/server/internal/node/sub\n')
             if args[:2] == ['go', 'env']:
-                return b'{"GOCACHE":"/example/cache","GOMODCACHE":"/example/mod","GOPATH":"/example/go"}'
+                goflags = (parent_environment or {}).get('GOFLAGS', '')
+                return json.dumps({
+                    'GOCACHE': '/example/cache', 'GOMODCACHE': '/example/mod',
+                    'GOPATH': '/example/go', 'GOFLAGS': goflags,
+                }).encode()
             return 'a' * 40 if args[1] == 'rev-parse' else b''
 
         environment = types.ModuleType('server_test_env')
@@ -90,6 +95,7 @@ class ManagerPackageScopeTests(unittest.TestCase):
         isolation = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(isolation)
         environment.clean_environment = isolation.clean_environment
+        environment.with_trimpath = isolation.with_trimpath
         partitions_spec = importlib.util.spec_from_file_location(
             'go_partitions', Path(__file__).resolve().parents[1] / 'test/go_partitions.py')
         partitions = importlib.util.module_from_spec(partitions_spec)
@@ -117,7 +123,7 @@ class ManagerPackageScopeTests(unittest.TestCase):
             'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
             'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')}
         _, calls, _ = self.build(parent_environment=proxies)
-        tests = [env for args, env in calls if args[:2] == ['go', 'test']]
+        tests = [env for args, env in calls if args[:2] == ['go', 'test'] and args[2:3] != ['-list']]
         self.assertEqual(len(tests), 8)  # the other packages, three assistant and three node partitions, the race run
         for environment in tests:
             self.assertFalse(set(proxies) & set(environment))
@@ -135,7 +141,7 @@ class ManagerPackageScopeTests(unittest.TestCase):
     def test_node_and_assistant_tests_run_in_partitions_beside_the_other_packages(self):
         _, calls, _ = self.build()
         tests = [args for args, _ in calls if args[:3] == ['go', 'test', '-count=1']]
-        self.assertEqual(tests[0], ['go', 'test', '-count=1', 'example/server/internal/hub',
+        self.assertEqual(tests[0], ['go', 'test', '-count=1', 'example/server/internal/kb',
                                     'example/server/internal/node/sub'])
         self.assertEqual(tests[1:7], [['go', 'test', '-count=1', '-run', '^(TestA)$', './internal/assistant'],
                                       ['go', 'test', '-count=1', '-run', '^(TestB)$', './internal/assistant'],
@@ -145,6 +151,19 @@ class ManagerPackageScopeTests(unittest.TestCase):
                                       ['go', 'test', '-count=1', '-run', '^(TestC)$', './internal/node']])
         environments = [env for args, env in calls if args[:2] == ['go', 'test']]
         self.assertTrue(all(env is environments[0] for env in environments))  # one clean test environment
+        listings = [args for args, _ in calls if args[:3] == ['go', 'test', '-list']]
+        self.assertEqual(len(listings), 2)
+        self.assertEqual(environments[0]['GOFLAGS'], '-trimpath')
+
+    def test_partition_listing_and_runs_share_trimpath_and_existing_goflags(self):
+        _, calls, _ = self.build(parent_environment={'GOFLAGS': '-mod=readonly'})
+        listings = [env for args, env in calls if args[:3] == ['go', 'test', '-list']]
+        runs = [env for args, env in calls if args[:3] == ['go', 'test', '-count=1']]
+        self.assertTrue(listings)
+        self.assertTrue(runs)
+        for env in listings + runs:
+            self.assertIs(env, listings[0])
+            self.assertEqual(env['GOFLAGS'], '-mod=readonly -trimpath')
 
     def test_manager_build_has_two_platforms_and_no_node_manifest(self):
         out, calls, platforms = self.build(manager=True)
@@ -161,6 +180,13 @@ class ManagerPackageScopeTests(unittest.TestCase):
         self.assertTrue(any(args[:2] == ['go', 'vet'] for args, _ in calls))
         self.assertTrue(any(args[:3] == ['go', 'test', '-count=1'] for args, _ in calls))
         self.assertTrue(any('scripts/release/check_bundle_privacy.py' in args for args, _ in calls))
+
+    def test_runtime_packages_are_generated_before_any_test(self):
+        _, calls, _ = self.build()
+        args = [args for args, _ in calls]
+        generate = args.index(['go', 'generate', './internal/runtimepkg'])
+        self.assertEqual(args.count(['go', 'generate', './internal/runtimepkg']), 1)
+        self.assertLess(generate, next(i for i, a in enumerate(args) if a[:2] == ['go', 'test']))
 
     def test_web_client_is_scanned_as_built_then_precompressed_before_go_build(self):
         out, calls, _ = self.build()

@@ -6,6 +6,7 @@ vi.hoisted(() => { window.matchMedia ??= ((query: string) => ({ matches: false, 
 import { initI18n } from "../i18n";
 import { credentialOwner, setToken } from "../lib/api";
 import { createTodoWithRepositories, repositoryRequestContext, type RepositoryCatalog, type TaskRepositorySet } from "../lib/task-repositories";
+import type { PRFacts } from "../lib/todos";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings } from "./TaskRepositoryBindingsEditor";
 import { Toasts } from "./atoms";
 
@@ -54,6 +55,13 @@ const answerEditor = async (catalogBody: unknown, setBody: unknown) => {
 };
 const legacy = (url: string) => ({ url, text: url.endsWith("/3211") ? "PR #3211" : "PR" });
 const render = async (manager = "assistant", todoId = "todo_example", prURL?: string, version?: unknown) => act(async () => root.render(<><TodoRepositoryBindings manager={manager} todoId={todoId} owner={credentialOwner()} legacyPRs={prURL ? [legacy(prURL)] : []} version={version} /><Toasts /></>));
+const showPRs = (prStatus?: PRFacts, otherPRs?: PRFacts[]) => act(async () => root.render(
+  <TodoRepositoryBindings manager="assistant" owner={credentialOwner()} todoId="todo_example" prStatus={prStatus} otherPRs={otherPRs} />));
+const observedPR: PRFacts = { url: identity.canonical_url + "/pull/7", title: "Original title", state: "open", draft: false,
+  conflicts: false, review: "pending", checks: "none", checked_at: "2026-01-01T00:00:00Z" };
+const savedWithTitle = (title: string, revision: number): TaskRepositorySet => ({ ...set, revision, repositories: [{
+  ...set.repositories[0], links: [{ ...set.repositories[0].links[0], title }],
+}] });
 const settle = async () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
 /** The editor's add-link field: named by its own label, not by a repository's link count. */
 const linkInput = () => document.querySelector<HTMLInputElement>('input[type="url"]')!;
@@ -90,6 +98,81 @@ it("shows the Agent's saved links without an editor, and the load rides on the d
   const dialog = document.querySelector('[role="dialog"]')!;
   expect(dialog.textContent).toContain("#7");
   expect(dialog.textContent).toContain("Pull request");
+});
+
+it("matches current and earlier PR facts to their own rows as observations change", async () => {
+  const base = identity.canonical_url + "/pull/";
+  const current: PRFacts = { url: base.toUpperCase() + "7/?view=1", state: "open", draft: false, conflicts: true,
+    title: "Observed title", review: "pending", checks: "none", checked_at: "2026-01-01T00:00:00Z" };
+  const earlier: PRFacts = { ...current, url: base + "8", title: "Earlier title", state: "merged", draft: true };
+  await showPRs(current, [earlier]);
+  const [first, second] = twoLinks.repositories[0].links;
+  await answer(calls[0], { ...twoLinks, repositories: [{ ...twoLinks.repositories[0], links: [
+    { ...first, title: "Saved title" }, second, { ...second, kind: "issue", canonical_url: identity.canonical_url + "/issues/8" },
+  ] }] });
+  const [one, two, issue] = host.querySelectorAll("[data-repository-link]");
+  expect(one.querySelector("a")?.textContent).toContain("Saved title");
+  expect(one.textContent).not.toContain("Observed title");
+  expect(one.textContent).toContain("Open");
+  expect(one.textContent).toContain("Conflict");
+  expect(two.querySelector("a")?.textContent).toContain("Earlier title");
+  expect(two.textContent).toContain("Merged");
+  expect(two.textContent).not.toMatch(/Conflict|Draft/);
+  expect(issue.textContent).not.toMatch(/Earlier title|Merged/);
+
+  await showPRs({ ...current, draft: true, conflicts: false }, [{ ...earlier, state: "closed", title: undefined }]);
+  expect(one.textContent).toContain("Draft");
+  expect(one.textContent).not.toMatch(/Conflict|Open/);
+  expect(two.querySelector("a")?.getAttribute("aria-label")).toContain("Pull request #8");
+  expect(two.textContent).toContain("Closed");
+  expect(two.textContent).not.toContain("Conflict");
+  await showPRs(current, [{ ...earlier, url: other.canonical_url + "/pull/8" }]);
+  expect(two.textContent).not.toMatch(/Merged|Earlier title|Closed/);
+  expect(calls).toHaveLength(1);
+});
+
+it.each(["current", "earlier"])("refreshes a renamed %s PR in an open detail without a to-do version change", async (which) => {
+  const show = (pr: PRFacts) => which === "current" ? showPRs(pr) : showPRs(undefined, [pr]);
+  await show(observedPR);
+  await answer(calls[0], savedWithTitle("Original title", 1));
+  const link = host.querySelector("[data-repository-link] a")!;
+  expect(link.textContent).toContain("Original title");
+
+  const renamed = { ...observedPR, title: "Renamed while reading", url: observedPR.url + "#discussion" };
+  await show(renamed);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].path).toBe("/todos/todo_example/repositories");
+  await answer(calls[1], savedWithTitle("Renamed while reading", 2));
+  expect(link.textContent).toContain("Renamed while reading");
+  expect(link.getAttribute("aria-label")).not.toContain("Original title");
+
+  await show({ ...renamed, state: "merged", checked_at: "2026-01-01T00:05:00Z" });
+  expect(host.querySelector("[data-repository-link]")?.textContent).toContain("Merged");
+  expect(calls).toHaveLength(2);
+});
+
+it("keeps a late repository response from reverting a newer PR title", async () => {
+  await showPRs(observedPR);
+  await showPRs({ ...observedPR, title: "Renamed before the first read returned" });
+  expect(calls).toHaveLength(2);
+  await answer(calls[1], savedWithTitle("Renamed before the first read returned", 2));
+  await answer(calls[0], savedWithTitle("Original title", 1));
+  expect(host.querySelector("[data-repository-link] a")?.textContent).toContain("Renamed before the first read returned");
+});
+
+it("uses the newest earlier observation across URL variants and gives the current PR precedence", async () => {
+  const newest: PRFacts = { ...observedPR, url: observedPR.url.toUpperCase() + "/?view=all", title: "Ready", state: "merged" };
+  const oldest: PRFacts = { ...observedPR, url: observedPR.url + "#details", title: "In progress", conflicts: true };
+  await showPRs(undefined, [newest, oldest]);
+  await answer(calls[0], set);
+  const row = host.querySelector("[data-repository-link]")!;
+  expect(row.querySelector("a")?.textContent).toContain("Ready");
+  expect(row.textContent).toContain("Merged");
+  expect(row.textContent).not.toMatch(/In progress|Open|Conflict/);
+
+  await showPRs({ ...newest, state: "closed" }, [oldest, newest]);
+  expect(row.textContent).toContain("Closed");
+  expect(row.textContent).not.toMatch(/Merged|In progress|Conflict/);
 });
 
 it("adds a link by its URL, refuses another repository's, and saves the whole set with both revisions", async () => {
@@ -724,4 +807,128 @@ it("offers an extension's saved repository in the picker with the generic mark a
   await press(linkInput(), "Enter");
   expect(document.querySelector("[data-task-repository-editor] [data-link-pending]")).toBeTruthy();
   expect(calls).toHaveLength(1);
+});
+
+it("keeps repository detail DOM 100% pixel-identical when todosV2 is false or omitted", async () => {
+  const multiRepoSet: TaskRepositorySet = {
+    schema_version: 1,
+    manager: "assistant",
+    todo_id: "todo_example",
+    revision: 1,
+    repositories: [
+      {
+        repo_id: "docs",
+        requested_ref: { kind: "branch", value: "docs/guide" },
+        source_snapshot: { identity: other, clone_url: other.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" },
+        links: [{ kind: "issue", number: "3", canonical_url: other.canonical_url + "/issues/3", title: "Spec", role: "reference" }],
+        catalog_state: "current",
+      },
+      {
+        repo_id: "web",
+        requested_ref: { kind: "tag", value: "v2.0" },
+        source_snapshot: { identity, clone_url: identity.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" },
+        links: [{ kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7", title: "Ship feature", role: "delivery" }],
+        catalog_state: "current",
+      },
+    ],
+  };
+
+  await act(async () => root.render(<TodoRepositoryBindings manager="assistant" owner={credentialOwner()} todoId="todo_example" />));
+  await answer(calls[0], multiRepoSet);
+  const legacyHtml = host.querySelector("[data-todo-repositories]")!.innerHTML;
+  expect(host.querySelector("[data-repo-matrix]")).toBeNull();
+  expect(host.querySelector("[data-repo-role-badge]")).toBeNull();
+  expect(host.querySelector("[data-repo-ref]")).toBeNull();
+  // Original order preserved when todosV2 is omitted
+  expect([...host.querySelectorAll("[data-repository-row] a")].map((a) => a.getAttribute("href"))).toEqual([other.canonical_url, identity.canonical_url]);
+
+  await act(async () => root.render(<TodoRepositoryBindings manager="assistant" owner={credentialOwner()} todoId="todo_example" todosV2={false} />));
+  expect(host.querySelector("[data-todo-repositories]")!.innerHTML).toBe(legacyHtml);
+});
+
+it("renders Target Repo and Reference Repo matrix under todosV2, marks mixed reference links, keeps editing, and reverts immediately when turned off", async () => {
+  const apiIdentity = { provider: "github" as const, instance_url: "https://github.com", path: "example/api", canonical_url: "https://github.com/example/api" };
+  const multiRepoSet: TaskRepositorySet = {
+    schema_version: 1,
+    manager: "assistant",
+    todo_id: "todo_example",
+    revision: 2,
+    repositories: [
+      {
+        repo_id: "docs",
+        requested_ref: { kind: "branch", value: "docs/spec" },
+        source_snapshot: { identity: other, clone_url: other.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" },
+        links: [{ kind: "issue", number: "3", canonical_url: other.canonical_url + "/issues/3", title: "Architecture spec", role: "reference" }],
+        catalog_state: "current",
+      },
+      {
+        repo_id: "web",
+        requested_ref: { kind: "tag", value: "v2.0" },
+        source_snapshot: { identity, clone_url: identity.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" },
+        links: [
+          { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7", title: "Ship UI", role: "delivery" },
+          { kind: "issue", number: "11", canonical_url: identity.canonical_url + "/issues/11", title: "Background note", role: "reference" },
+        ],
+        catalog_state: "current",
+      },
+      {
+        repo_id: "api",
+        requested_ref: { kind: "default" },
+        source_snapshot: { identity: apiIdentity, clone_url: apiIdentity.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" },
+        links: [],
+        catalog_state: "current",
+      },
+    ],
+  };
+
+  await act(async () => root.render(<><TodoRepositoryBindings manager="assistant" owner={credentialOwner()} todoId="todo_example" todosV2={true} /><Toasts /></>));
+  await answer(calls[0], multiRepoSet);
+
+  const matrix = host.querySelector("[data-repo-matrix]")!;
+  expect(matrix).toBeTruthy();
+
+  // Target Repos (web, api) appear before Reference Repos (docs), keeping intra-group order stable
+  const rows = [...matrix.querySelectorAll<HTMLElement>("[data-repository-row]")];
+  expect(rows.map((r) => `${r.dataset.repoRole}:${r.querySelector("a")?.getAttribute("href")}`)).toEqual([
+    `target:${identity.canonical_url}`,
+    `target:${apiIdentity.canonical_url}`,
+    `reference:${other.canonical_url}`,
+  ]);
+
+  // Role badges and non-blocking Reference Repo hint are shown, never colliding with "Delivered"
+  expect(matrix.querySelector('[data-repo-matrix-group="target"]')?.textContent).toContain("Target Repo (2)");
+  expect(matrix.querySelector('[data-repo-matrix-group="reference"]')?.textContent).toContain("Reference Repo (1)");
+  expect(matrix.querySelector('[data-repo-matrix-group="reference"]')?.textContent).toContain("Read-only context, does not block closure");
+  expect(rows[0].querySelector('[data-repo-role-badge="target"]')?.textContent).toBe("Target Repo");
+  expect(rows[2].querySelector('[data-repo-role-badge="reference"]')?.textContent).toBe("Reference Repo");
+  expect(matrix.textContent).not.toContain("Delivered");
+
+  // Non-default requested_ref is displayed compactly; default branch stays clean
+  expect(rows[0].querySelector('[data-repo-ref="v2.0"]')?.textContent).toContain("v2.0");
+  expect(rows[1].querySelector("[data-repo-ref]")).toBeNull();
+  expect(rows[2].querySelector('[data-repo-ref="docs/spec"]')?.textContent).toContain("docs/spec");
+
+  // Mixed links in Target Repo keep reference badge on the reference link only
+  const links = [...matrix.querySelectorAll("[data-repository-link]")];
+  expect(links).toHaveLength(3);
+  expect(links[0].querySelector('[data-link-role="reference"]')).toBeNull();
+  expect(links[1].querySelector('[data-link-role="reference"]')?.textContent).toBe("Reference");
+  expect(links[2].querySelector('[data-link-role="reference"]')).toBeNull();
+
+  // Existing "Manage links" edit flow still opens cleanly
+  await click("Manage links");
+  await answerEditor(twoCatalog, multiRepoSet);
+  await settle();
+  expect(document.querySelector('[role="dialog"]')).toBeTruthy();
+  await click("Cancel");
+
+  // Switching todosV2 off reverts immediately to legacy DOM
+  await act(async () => root.render(<><TodoRepositoryBindings manager="assistant" owner={credentialOwner()} todoId="todo_example" todosV2={false} /><Toasts /></>));
+  expect(host.querySelector("[data-repo-matrix]")).toBeNull();
+  expect(host.querySelector("[data-repo-role-badge]")).toBeNull();
+  expect([...host.querySelectorAll("[data-repository-row] a")].map((a) => a.getAttribute("href"))).toEqual([
+    other.canonical_url,
+    identity.canonical_url,
+    apiIdentity.canonical_url,
+  ]);
 });
