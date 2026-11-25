@@ -88,6 +88,7 @@
   "direction_details": "方向详情",
   "direction_unavailable": "此方向不可用。",
   "channel_defaults": "渠道默认策略",
+  "channel_choice": "渠道",
   "channel_hint": "当没有更具体的设置时，此策略适用于该渠道的更新。",
   "edit_defaults": "编辑默认策略",
   "reset_defaults": "恢复默认策略",

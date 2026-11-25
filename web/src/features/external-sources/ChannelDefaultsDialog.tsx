@@ -64,7 +64,7 @@ export function ChannelDefaultsDialog({ manager, provider: fixedProvider, channe
           ? <p className="text-meta font-medium text-ink">{externalRefLabel(ref)}</p>
           : <fieldset disabled={busy} className="min-w-0 space-y-3">
               {channels.length > 0 && (
-                <ExternalField label={t("external-sources.channel_defaults")}>
+                <ExternalField label={t("external-sources.channel_choice")}>
                   <select className={externalFieldClass} value={channels.some((entry) => refKey(entry.ref) === scope) ? scope : ""}
                     onChange={(e) => {
                       const next = channels.find((choice) => refKey(choice.ref) === e.target.value)?.ref;

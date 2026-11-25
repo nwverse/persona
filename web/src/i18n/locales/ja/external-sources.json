@@ -88,6 +88,7 @@
   "direction_details": "方向の詳細",
   "direction_unavailable": "この方向は利用できません。",
   "channel_defaults": "チャネルの既定値",
+  "channel_choice": "チャネル",
   "channel_hint": "より具体的な設定がない場合、このチャネルの更新に適用されます。",
   "edit_defaults": "既定値を編集",
   "reset_defaults": "既定値に戻す",

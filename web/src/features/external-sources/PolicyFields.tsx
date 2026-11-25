@@ -59,7 +59,7 @@ function PolicyChoice<T extends string>({ label, value, options, inherited, orig
 function InheritedFilter({ filter }: { filter?: PreFilter }) {
   if (!filter) return null;
   const fields = FILTER_FIELDS.filter((field) => filter[field]?.length);
-  if (!fields.length) return <span>{t("external-sources.no_filter")}</span>;
+  if (!fields.length) return <p>{t("external-sources.no_filter")}</p>;
   return (
     <dl className="space-y-1">
       {fields.map((field) => (

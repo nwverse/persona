@@ -88,6 +88,7 @@
   "direction_details": "Direction details",
   "direction_unavailable": "This direction is unavailable.",
   "channel_defaults": "Channel defaults",
+  "channel_choice": "Channel",
   "channel_hint": "These settings apply to updates from this channel unless a more specific setting overrides them.",
   "edit_defaults": "Edit defaults",
   "reset_defaults": "Restore defaults",
