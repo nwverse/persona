@@ -6905,6 +6905,10 @@ type MemoryEntriesResult struct {
 	HasMore bool `json:"has_more"`
 	// Opaque: what to send as after for the next page; required in practice whenever has_more is true.
 	After string `json:"after,omitempty"`
+	// The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+	// keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+	// out or 0: 4096. Entries past it are left out, the most important kept.
+	StandingBytes int `json:"standing_bytes,omitempty"`
 }
 
 // MemoryEntry: one entry as the program keeps it. Only an active entry is carried; the others may be answered (so a

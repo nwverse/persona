@@ -30,13 +30,12 @@ const (
 	moduleOffPending = "55555555-5555-4555-8555-555555555555" // a meeting whose minutes were not written yet
 )
 
-// moduleOffMinutes is the model's answer the fixture's minutes are written from.
-type moduleOffMinutes struct{}
-
-func (moduleOffMinutes) JSONMax(_ context.Context, _, _ string, _ int, out any) error {
-	return json.Unmarshal([]byte(`{"title": "Export review", "points": [{"text": "Entries over 4 MB are dropped by the export", "line": 2}],
-		"decisions": [{"text": "This version keeps the quota", "line": 3}]}`), out)
-}
+// moduleOffMinutes is the minutes the fixture's first recording has, as the recording module's minutes round leaves
+// them (the round is the module's own; a Core test writes the files it leaves).
+var moduleOffMinutes = kb.Minutes{Version: 1, Revision: 1, Title: "Export review", When: "today",
+	Points:    []kb.MinutesPoint{{Text: "Entries over 4 MB are dropped by the export", At: 10}},
+	Decisions: []kb.MinutesItem{{Text: "This version keeps the quota", At: 20}},
+	Markdown:  "# Export review\n\n## Points\n\n- [00:00:10] Entries over 4 MB are dropped by the export\n\n## Decisions\n\n- [00:00:20] This version keeps the quota"}
 
 // seedModuleOffRecordings writes the two recordings into dir the way a hub with the module does.
 func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
@@ -45,8 +44,7 @@ func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &kb.Engine{Store: st, Model: moduleOffMinutes{}, Owner: "Owner", Logf: func(string, ...any) {}}
-	e.SetRecordingProvider(kb.RecordingWriters(e))
+	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
 	put := func(id string, start time.Time, texts ...string) {
 		u := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: float64(10 * len(texts)), Language: "en-US", Device: "phone", Complete: true, Kind: kb.RecordingMeeting}
 		for i, text := range texts {
@@ -60,8 +58,23 @@ func seedModuleOffRecordings(t *testing.T, dir string, now time.Time) {
 	if _, created, err := e.PhotoAdd(moduleOffRec, moduleOffPhoto, false); err != nil || !created {
 		t.Fatalf("seed photo: %v (created %v)", err, created)
 	}
-	if n := e.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
-		t.Fatalf("seed: wrote %d minutes, want 1", n)
+	// The minutes, as the module's round leaves them: minutes.json and minutes.md, and meta.json saying they are ready.
+	raw, err := json.MarshalIndent(moduleOffMinutes, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	metaPath := st.Path(kb.KindRecording, moduleOffRec, "meta.json")
+	if b, err := os.ReadFile(metaPath); err != nil || json.Unmarshal(b, &meta) != nil {
+		t.Fatalf("seed: meta.json: %v", err)
+	}
+	meta["minutes_version"], meta["minutes_rev"], meta["minutes_state"] = 1, 1, kb.MinutesReady
+	metaRaw, _ := json.MarshalIndent(meta, "", "  ")
+	for name, data := range map[string][]byte{"minutes.json": append(raw, '\n'), "minutes.md": []byte(moduleOffMinutes.Markdown + "\n"),
+		"meta.json": append(metaRaw, '\n')} {
+		if err := os.WriteFile(st.Path(kb.KindRecording, moduleOffRec, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	put(moduleOffPending, now.Add(-time.Hour), "The second meeting is about the schedule", "A proposal is due next Wednesday")
 }
@@ -313,7 +326,7 @@ func TestStoredAudioStaysUntouchedWithoutTheModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &kb.Engine{Store: st, Model: moduleOffMinutes{}, Owner: "Owner", Logf: func(string, ...any) {}}
+	e := &kb.Engine{Store: st, Owner: "Owner", Logf: func(string, ...any) {}}
 	e.SetRecordingProvider(kb.RecordingWriters(e))
 	e.TranscriptionReady = func() bool { return true }
 	const id = "88888888-8888-4888-8888-888888888888"

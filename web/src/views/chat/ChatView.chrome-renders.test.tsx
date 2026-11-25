@@ -428,6 +428,36 @@ it("toggles the session overview and leaves it open while using the chat", async
   expect(host.querySelector("textarea")).toBe(composer);
 });
 
+it("shows the native Antigravity Swarm status in the session overview", async () => {
+  const { SessionOverview } = await import("./SessionOverview");
+  const { emptyTaskIndex } = await import("../../lib/tasks");
+  let info = {};
+  fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(info), { status: 200, headers: { "Content-Type": "application/json" } })));
+  vi.useFakeTimers();
+  await act(async () => root.render(<SessionOverview id="test-overview" session={row({ agent: "agy" })}
+    machineName="Example computer" items={[]} tasks={emptyTaskIndex()} children={[]} />));
+  const overview = host.querySelector("[data-session-overview]")!;
+  expect(overview.querySelector("[data-swarm-roster]")).toBeNull();
+  info = { swarm_workers: [
+    { name: "Build", state: "working" },
+    { name: "Review", state: "waiting" },
+  ] };
+  await act(() => vi.advanceTimersByTimeAsync(3000));
+  const roster = overview.querySelector<HTMLDetailsElement>("[data-swarm-roster]")!;
+  expect(roster.open).toBe(false);
+  expect(roster.querySelector("summary")?.textContent).toContain(t("chat-sessionoverview.swarm_workers", { count: 2 }));
+  act(() => roster.querySelector("summary")!.click());
+  expect(roster.open).toBe(true);
+  expect([...roster.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+    "Build" + t("lib-state-labels.working"),
+    "Review" + t("chat-sessionoverview.swarm_waiting"),
+  ]);
+  info = { swarm_workers: [{ name: "Review", state: "stopped" }] };
+  await act(() => vi.advanceTimersByTimeAsync(3000));
+  expect(roster.open).toBe(true);
+  expect(roster.querySelector("li")?.textContent).toContain(t("chat-sessionoverview.swarm_stopped"));
+});
+
 function ShortcutChat({ chat = true }: { chat?: boolean }) {
   const pane = chat ? { mid: "mac", sid: "s1" } : undefined;
   useShortcuts({ route: chat ? { name: "session", mid: "mac", sid: "s1" } : { name: "home" }, pane, narrow: false, toggleDrawer: () => {} });

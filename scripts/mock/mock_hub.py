@@ -478,9 +478,7 @@ for _mid in filter(None, os.environ.get("MOCK_OFFLINE_MACHINES", "").split(","))
     for _m in MACHINES:
         if _m["id"] == _mid:
             _m.update(online=False, error="ssh: connect to host %s port 22: Operation timed out" % _mid, last_seen=ago(hours=1))
-# MOCK_LOAD_QUEUE=<id>[,<id>…]: those machines' threads queue on some of their cores (#12519, docs/server/machines.md
-# "What load counts"): about 1.4 per core of load while CPU stays near 40 %, the case where load reads as a wrong number.
-LOAD_QUEUE = set(filter(None, os.environ.get("MOCK_LOAD_QUEUE", "").split(",")))
+# Load-queue selection and its help text live in machine_load_mock (a registered mock domain, #12519).
 # MOCK_LONG_OS=1: the server's OS has a long name, so its card's chips (OS, herdr, claude) do not fit on one line.
 if os.environ.get("MOCK_LONG_OS"):
     SYSTEMS["server"]["name"] = "Example GNU/Linux 2 (codename)"
@@ -549,9 +547,7 @@ def metric_at(mid, t):
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
-    if mid in LOAD_QUEUE:  # threads wait on some cores while the others idle: load per core over 1, CPU moderate
-        cpu = 38 + 6 * h
-        load = sys_["cores"] * (1.36 + 0.08 * h)
+    cpu, load = machine_alerts.queued(mid, cpu, load, sys_["cores"], h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
     if concern_level == "critical":
         disk_frac = 0.95
@@ -4268,7 +4264,7 @@ def recording_minutes_next(rid):
 
 
 def minutes_span(body):
-    """`when`, `start` and `end` as the hub writes them (server/internal/kb/minutes.go `minutesWhen`, #4713): the recording's
+    """`when`, `start` and `end` as the hub writes them (server/internal/modules/recording/writers/minutes.go `minutesWhen`, #4713): the recording's
     own start to its end (`duration`, or `ended_at` when later; at least a minute) in the local zone. `when` adds the end's
     date when it is another day; `start` / `end` are RFC 3339 with the offset, whole seconds, for the apps to format."""
     def at(v):
@@ -4500,7 +4496,7 @@ def minutes_overview(m, segs, lang):
 
 
 def minutes_markdown(m, body, lang, ov=None):
-    """minutes.md as the hub writes it (kb/minutes.go renderMinutes): with clock times in the local zone, sections with
+    """minutes.md as the hub writes it (modules/recording/writers/minutes.go renderMinutes): with clock times in the local zone, sections with
     nothing left out, the fixed words from the hub's kb-minutes.json in the minutes' language. With the overview ov (the
     overview shape's; a malformed one is never laid out) it follows the contract's "Markdown" (#6563): the headline, the
     core conclusions, the topics under their group headings (or as the sections with one untitled group) with decisions

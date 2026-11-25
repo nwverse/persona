@@ -268,6 +268,28 @@ func cloneLauncherModels(m LauncherModels) LauncherModels {
 	return out
 }
 
+// cloneModelProfile detaches every mutable map, pointer and slice before a managed edit or an exact before/after check.
+func cloneModelProfile(p ModelProfile) ModelProfile {
+	p.Purposes = maps.Clone(p.Purposes)
+	if p.Launchers != nil {
+		launchers := make(map[string]LauncherModels, len(p.Launchers))
+		for name, fields := range p.Launchers {
+			launchers[name] = cloneLauncherModels(fields)
+		}
+		p.Launchers = launchers
+	}
+	if p.Tiers != nil {
+		tiers := make(map[string]ModelTier, len(p.Tiers))
+		for name, tier := range p.Tiers {
+			tier.Candidates = slices.Clone(tier.Candidates)
+			tier.Aliases = slices.Clone(tier.Aliases)
+			tiers[name] = tier
+		}
+		p.Tiers = tiers
+	}
+	return p
+}
+
 func cloneProfileImage(img modelProfileImage) modelProfileImage {
 	out := img
 	if img.Purposes != nil {

@@ -3288,6 +3288,7 @@ final class AppModel {
             // page open on the current hub reads again (`hubHellos`).
             DirectionFilings.shared.hello(group)
             if isHub { hubHellos += 1 }
+            ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
             // `assistant_pages` sent while the socket was down is gone: a hub with Dashboards has its places read again.
             if isHub, hubHellos > 1, hello.features.contains(DashboardsUI.feature) { extensionPlacesChanged() }
             #if os(iOS)
@@ -3422,7 +3423,10 @@ final class AppModel {
             // The kept Dashboards pages changed (#15017): the drawer's and the sidebar's places are read again. Only the
             // default manager of the hub shown has them (`ExtensionSlots.shared` names none).
             if isHub { extensionPlacesChanged() }
-        case .healthIntake:
+        case .healthStrength:
+            if isHub { healthIntakeRevision += 1 }
+            ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
+        case .healthIntake, .healthItems:
             if isHub { healthIntakeRevision += 1 }
             #if os(iOS)
             if isHub { HomeWidgetData.shared.intakeChanged() }
@@ -3588,6 +3592,8 @@ final class AppModel {
         case .look: "look"
         case .managers: "managers"
         case .directions: "directions"
+        case .healthStrength: "health_strength"
+        case .healthItems: "health_items"
         case .healthIntake: "health_intake"
         case .assistantPages: "assistant_pages"
         case .assistantFeed: "assistant_feed"
