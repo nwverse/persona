@@ -156,6 +156,7 @@ export function Palette({ open, onClose, onNewAgent, pane, route = HOME, listSho
   const { mode, text } = parseQuery(q);
   // The node the user is on adds its menu as `>` commands (lib/node-palette.ts registers them when imported). They load
   // the first time the palette is open, off the first screen and the idle tier; the list is drawn again once they have.
+  // A failed load is not kept: the next opening asks again (Palette.node-commands-retry.test.tsx).
   const [nodeCommands, setNodeCommands] = useState(false);
   useEffect(() => {
     if (!open || nodeCommands) return;
