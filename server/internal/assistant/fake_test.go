@@ -785,6 +785,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.retired = append(f.retired, a["session_id"].(string))
 		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
+	case deviceSessionRetireGuarded:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
+		return json.RawMessage(`{"closed":true,"guard_verified":true}`), nil
 	case deviceSessionStop:
 		if f.retireErr != nil {
 			return nil, f.retireErr

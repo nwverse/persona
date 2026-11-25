@@ -209,6 +209,8 @@ type Service struct {
 	todoAskAfter time.Duration
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
+	// machineNow is the clock collectMachineSnapshots checks sample freshness and silent-node age against (nil: time.Now, tests set it).
+	machineNow func() time.Time
 
 	mux            *http.ServeMux
 	routes         []string
@@ -417,7 +419,8 @@ type Service struct {
 	sockets   sync.Once
 	socketMux *http.ServeMux
 	// navMu: one change of the user's navigation choices at a time, each read and written whole (navigation.go)
-	navMu sync.Mutex
+	navMu            sync.Mutex
+	idleArchiveAudit idleArchiveAuditBook // agent_archive_idle.go: audited guarded idle archive-and-close records
 }
 
 var _ Handler = (*Service)(nil)
@@ -446,6 +449,7 @@ func New(o Options) *Service {
 	s.conversationSwitchRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
+	s.idleArchiveRoutes()
 	s.agentNamingRoutes()  // agent_naming_request.go
 	s.questionReadRoutes() // question_reads.go
 	s.alwaysRoutes()
