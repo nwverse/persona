@@ -135,10 +135,12 @@ function SidebarUsageInner({ accounts }: { accounts: UsageAccount[] }) {
   const [unconnected, setUnconnected] = useState(EMPTY_UNCONNECTED);
   useEffect(() => {
     if (LoadedUnconnected) return;
+    let active = true;
     void import("./UsageUnconnected").then((m) => {
       LoadedUnconnected = m.UsageUnconnected;
-      setLoaded(true);
+      if (active) setLoaded(true);
     });
+    return () => { active = false; };
   }, []);
   return (
     <>
