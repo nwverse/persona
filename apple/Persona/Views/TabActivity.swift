@@ -214,6 +214,38 @@ extension View {
                         prompt: String) -> some View {
         modifier(PageSearchable(text: text, isPresented: isPresented, placement: placement, prompt: prompt))
     }
+
+    /// The same with search tokens before the text, which the user can delete as in any search field (the Agents
+    /// list's scope, #7443).
+    func pageSearchable<Token: Identifiable, TokenLabel: View>(text: Binding<String>, tokens: Binding<[Token]>,
+                                                                isPresented: Binding<Bool>, placement: SearchFieldPlacement = .automatic,
+                                                                prompt: String,
+                                                                @ViewBuilder token: @escaping (Token) -> TokenLabel) -> some View {
+        modifier(PageSearchableTokens(text: text, tokens: tokens, isPresented: isPresented, placement: placement,
+                                      prompt: prompt, token: token))
+    }
+}
+
+private struct PageSearchableTokens<Token: Identifiable, TokenLabel: View>: ViewModifier {
+    let text: Binding<String>
+    let tokens: Binding<[Token]>
+    let isPresented: Binding<Bool>
+    let placement: SearchFieldPlacement
+    let prompt: String
+    let token: (Token) -> TokenLabel
+    @Environment(\.tabIsActive) private var active
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        content.background { if active { field(Color.clear) } } // as `PageSearchable`
+        #else
+        field(content)
+        #endif
+    }
+
+    private func field<V: View>(_ v: V) -> some View {
+        v.searchable(text: text, tokens: tokens, isPresented: isPresented, placement: placement, prompt: Text(prompt), token: token)
+    }
 }
 
 private struct PageSearchable: ViewModifier {
