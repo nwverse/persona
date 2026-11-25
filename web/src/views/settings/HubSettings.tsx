@@ -1,7 +1,7 @@
 // Settings › hub (docs/operations/hub-update.md "In the app", the app's HubSettingsPage): the hub's version and channel, checking for
 // and installing a release (waiting for the assistant and the agents to be idle, or now after a confirmation), a Docker
 // hub's commands, auto-update, the personad on each computer, and the history. Follows the hub's `hub_update` pushes.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ApiError, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { formatDate, t } from "../../i18n";
@@ -452,54 +452,90 @@ function UpdateVersionRow({ latest, backups, activeBackup, selectedID, disabled,
  *  folder and a count — the hub pauses its own writers; no command is accepted. */
 function DevelopmentBackup({ s, onSaved }: { s: HubUpdateStatus; onSaved: (s: HubUpdateStatus) => void }) {
   const d = s.development!;
+  const fieldId = useId();
+  const folderInput = useRef<HTMLInputElement>(null);
   const recommended = d.backup_default_directory ?? "";
-  const effective = d.backup_directory ?? recommended;
-  const isDefault = d.backup_directory_is_default ?? (!effective || effective === recommended);
-  const initialDir = isDefault ? "" : effective;
-  const [dir, setDir] = useState(initialDir);
-  const [retain, setRetain] = useState(String(d.backup_retain ?? 3));
+  const savedDir = savedBackupFolder(d);
+  const savedRetain = d.backup_retain ?? 3;
+  const [dir, setDir] = useState(savedDir);
+  const [retain, setRetain] = useState(savedRetain);
   const [saving, setSaving] = useState(false);
+  const trimmedDir = dir.trim();
+  const customDir = trimmedDir !== "" && trimmedDir !== recommended;
+  const nextDir = customDir ? trimmedDir : "";
+  const dirty = nextDir !== savedDir || retain !== savedRetain;
+
   useEffect(() => {
-    setDir(initialDir);
-    setRetain(String(d.backup_retain ?? 3));
-  }, [initialDir, d.backup_retain]);
+    setDir(savedDir);
+    setRetain(savedRetain);
+  }, [savedDir, savedRetain]);
+
   const save = async () => {
+    if (!dirty || saving) return;
     setSaving(true);
     try {
-      const trimmed = dir.trim();
-      const payload: { development_backup_directory?: string; development_backup_retain: number } = {
-        development_backup_retain: Number(retain),
-      };
-      if (trimmed !== initialDir) {
-        payload.development_backup_directory = trimmed;
+      const payload: Parameters<typeof setHubUpdateSettings>[0] = { development_backup_retain: retain };
+      if (nextDir !== savedDir) payload.development_backup_directory = nextDir;
+      const updated = await setHubUpdateSettings(payload);
+      if (updated.development) {
+        setDir(savedBackupFolder(updated.development));
+        setRetain(updated.development.backup_retain ?? 3);
       }
-      onSaved(await setHubUpdateSettings(payload));
+      onSaved(updated);
       toast(t("settings-hubsettings.backup_saved"), "ok");
     } catch (e) {
       toast(t("settings-hubsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setSaving(false); }
   };
   return (
-    <Group title={t("settings-hubsettings.dev_backup")} anchor="hub-dev-backup" footer={t("settings-hubsettings.dev_backup_footer")}>
-      <Row label={t("settings-hubsettings.backup_folder")} stackOnNarrow>
-        <input aria-label={t("settings-hubsettings.backup_folder")} spellCheck={false}
-          className={cx(settingsInputClass, "w-[320px] max-w-full font-mono text-xs")}
-          placeholder={recommended} value={dir} onChange={(e) => setDir(e.target.value)} />
-      </Row>
-      <SettingsHint>{t("settings-hubsettings.backup_folder_hint", { path: recommended })}</SettingsHint>
-      <Row label={t("settings-hubsettings.backup_retain")} wrapHint>
-        <select aria-label={t("settings-hubsettings.backup_retain")} className={settingsInputClass} value={retain} disabled={saving}
-          onChange={(e) => setRetain(e.target.value)}>
-          {[...new Set([1, 2, 3, 5, 10, 20, 50, Number(retain)])].sort((a, b) => a - b).map((n) => <option key={n} value={String(n)}>{n}</option>)}
-        </select>
-      </Row>
-      <SettingsHint>{t(d.builtin_quiesce ? "settings-hubsettings.backup_builtin" : "settings-hubsettings.backup_external")}</SettingsHint>
-      <div className="flex justify-end gap-2 px-4 py-2.5">
-        <Button tone="quiet" disabled={saving || dir === ""} onClick={() => setDir("")}>{t("settings-hubsettings.use_recommended")}</Button>
-        <Button busy={saving} disabled={saving} onClick={() => void save()}>{t("settings-hubsettings.save_backup")}</Button>
-      </div>
-    </Group>
+    <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <Group title={t("settings-hubsettings.dev_backup")} anchor="hub-dev-backup" footer={t("settings-hubsettings.dev_backup_footer")}>
+        <div className="space-y-2 px-4 py-2.5">
+          <div>
+            <label htmlFor={fieldId} className="text-meta text-ink">{t("settings-hubsettings.backup_folder")}</label>
+            <p id={`${fieldId}-folder-hint`} className="mt-0.5 text-submeta leading-snug text-ink-3">
+              {t("settings-hubsettings.backup_folder_hint")}
+            </p>
+          </div>
+          <div className="relative grid min-h-8 pointer-coarse:min-h-11">
+            <input ref={folderInput} id={fieldId} aria-describedby={`${fieldId}-folder-hint`}
+              spellCheck={false} autoCapitalize="none" autoComplete="off" disabled={saving}
+              className={cx(settingsInputClass, "absolute inset-0 h-full! font-mono placeholder:text-transparent!")}
+              placeholder={recommended} value={dir} onChange={(e) => setDir(e.target.value)} />
+            {/* Give the empty field room to show the whole recommended path. */}
+            {dir === "" && (
+              <span aria-hidden="true" className="pointer-events-none relative self-center px-2.5 py-1.5 font-mono text-label leading-snug text-ink-3 wrap-anywhere">
+                {recommended}
+              </span>
+            )}
+          </div>
+        </div>
+        <div>
+          <Row label={t("settings-hubsettings.backup_retain")} wrapHint
+            hint={<span id={`${fieldId}-retain-hint`}>{t(d.builtin_quiesce ? "settings-hubsettings.backup_builtin" : "settings-hubsettings.backup_external")}</span>}>
+            <select aria-label={t("settings-hubsettings.backup_retain")} aria-describedby={`${fieldId}-retain-hint`}
+              className={cx(settingsInputClass, "min-w-11 pointer-coarse:min-h-11")} value={retain} disabled={saving}
+              onChange={(e) => setRetain(Number(e.target.value))}>
+              {[...new Set([1, 2, 3, 5, 10, 20, 50, savedRetain])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </Row>
+          <div className="flex flex-wrap justify-end gap-1.5 px-4 pb-2.5">
+            {customDir && <Button tone="quiet" size="sm" className="pointer-coarse:min-h-11" disabled={saving}
+              onClick={() => { setDir(""); folderInput.current?.focus(); }}>{t("settings-hubsettings.use_recommended")}</Button>}
+            <Button type="submit" tone="accent" size="sm" className="pointer-coarse:min-h-11"
+              busy={saving} disabled={!dirty || saving}>{t("settings-hubsettings.save_backup")}</Button>
+          </div>
+        </div>
+      </Group>
+    </form>
   );
+}
+
+function savedBackupFolder(d: NonNullable<HubUpdateStatus["development"]>): string {
+  const recommended = d.backup_default_directory ?? "";
+  const effective = d.backup_directory ?? recommended;
+  const isDefault = d.backup_directory_is_default ?? (effective === recommended);
+  return isDefault ? "" : effective;
 }
 
 function DockerRows({ s }: { s: HubUpdateStatus }) {
