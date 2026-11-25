@@ -72,6 +72,8 @@ export interface IntegrationDetailProps {
   onSettings?: (url: string) => void;
   /** Open a related connector integration (for example larkcli from Feishu Bot). */
   onOpenConnector?: (id: string, manager?: string) => void;
+  /** Open scoped source subscriptions inside unified Integrations instead of leaving Settings. */
+  onOpenSources?: (state?: string, manager?: string) => void;
   /**
    * Optional gate override; when omitted, follows the active assistant's `integrations_v2` flag.
    * Always fails closed when `integrations_v2` is false or absent.
@@ -168,6 +170,7 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
         onPage={props.onPage}
         onUpgrade={props.onUpgrade}
         onSettings={props.onSettings}
+        onOpenSources={props.onOpenSources}
       />
     );
   }
@@ -181,6 +184,7 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
         onBack={props.onBack}
         onSettings={props.onSettings}
         onOpenConnector={props.onOpenConnector}
+        onOpenSources={props.onOpenSources}
       />
     );
   }
@@ -192,6 +196,7 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
       manager={effectiveManager}
       onBack={props.onBack}
       onSettings={props.onSettings}
+      onOpenSources={props.onOpenSources}
     />
   );
 }
@@ -224,12 +229,14 @@ function FeishuBotBuiltinDetail({
   onBack,
   onSettings,
   onOpenConnector,
+  onOpenSources,
 }: {
   target: Extract<IntegrationTarget, { kind: "builtin" }>;
   manager?: string;
   onBack?: () => void;
   onSettings?: (url: string) => void;
   onOpenConnector?: (id: string, manager?: string) => void;
+  onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const channelId = resolveBuiltinChannelId(target) ?? "feishu";
   useLayoutEffect(() => pinManagerAt(["/bots", "/connectors/larkcli"], otherManager(manager)), [manager]);
@@ -327,7 +334,13 @@ function FeishuBotBuiltinDetail({
       {showInboxSection && larkcli && (
         <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
           <ConnectorInboxBlock connector={larkcli} reload={loadLarkcli} onSaved={setLarkcli} />
-          {!manager && <SubscriptionsEntry pick={(l) => l.connector === "larkcli"} scope={{ c: "larkcli" }} />}
+          {!manager && (
+            <SubscriptionsEntry
+              pick={(l) => l.connector === "larkcli"}
+              scope={{ c: "larkcli" }}
+              onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
+            />
+          )}
         </SectionBlock>
       )}
     </div>
@@ -339,11 +352,13 @@ function BuiltinIntegrationDetail({
   manager,
   onBack,
   onSettings,
+  onOpenSources,
 }: {
   target: Extract<IntegrationTarget, { kind: "builtin" }>;
   manager?: string;
   onBack?: () => void;
   onSettings?: (url: string) => void;
+  onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const isMail = target.id === "mail";
   const isLarkGateway = target.id === "lark";
@@ -507,7 +522,11 @@ function BuiltinIntegrationDetail({
             <ConnectorInboxBlock connector={connector} reload={loadConnector} onSaved={setConnector} />
           )}
           {subscriptionConnectorId && !manager && (
-            <SubscriptionsEntry pick={(l) => l.connector === subscriptionConnectorId} scope={{ c: subscriptionConnectorId }} />
+            <SubscriptionsEntry
+              pick={(l) => l.connector === subscriptionConnectorId}
+              scope={{ c: subscriptionConnectorId }}
+              onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
+            />
           )}
         </SectionBlock>
       )}
@@ -525,6 +544,7 @@ function ExtensionIntegrationDetail({
   onPage,
   onUpgrade,
   onSettings,
+  onOpenSources,
 }: {
   target: Extract<IntegrationTarget, { kind: "extension" }>;
   manager?: string;
@@ -533,6 +553,7 @@ function ExtensionIntegrationDetail({
   onPage?: (extensionId: string, uiId: string, manager?: string) => void;
   onUpgrade?: (market: string, id: string, manager?: string) => void;
   onSettings?: (url: string) => void;
+  onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const id = target.id;
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
@@ -994,7 +1015,11 @@ function ExtensionIntegrationDetail({
                 />
               ))}
               {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && (
-                <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} />
+                <SubscriptionsEntry
+                  pick={(l) => l.extension === p.id}
+                  scope={{ ext: p.id }}
+                  onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
+                />
               )}
               {editable && sections.inbox.length > 0 && (
                 <SectionFieldGroups
