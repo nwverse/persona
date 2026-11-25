@@ -298,6 +298,27 @@ its adapter pass their domain-rules hooks; the whole round's benchmark holds the
 internal/assistant failures on main are unchanged. *Revised 2026-11-22 in #10613:* a core and its adapter, gated on
 the domain rules and agentref rather than a domain-package list, with an allocation gate on the whole round.
 
+*Landed (#15250):* `server/internal/assistant/fleetcount` (core) decides every surface's rows in `AgentsNeedsYou`,
+`fleetcount/fleetcountadapt` (adapter) builds its agents and cards from proto and fills `FleetState`'s and Persona
+Link's needs-you rows, `fleetcount/fleetcounttest` (testkit) writes a tally down for tests, and
+`assistant/fleetview` (library) writes the text the needs-you and working rows share. The needs-you fixture replays in
+`fleetcountadapt` (`TestAgentsNeedsYouFollowsTheSharedFixtures`, every case), and TestFleetMatchesOracle's 1500
+random fleets keep FleetState and Persona Link's bytes. What differs from section 6.2, and why:
+`fleetInputsInto`'s quiet line asks `fleetcountadapt.Visibility(sess).LeftOut()`, since the four repair PRs were still
+closed when this landed; Persona Link's summary types moved to a contract (`internal/linkwire`, aliased in `link`),
+because an adapter returns only contracts; `i18n`, `textfmt`, `compat`, `lazyre` and `deeplink` declare the `library`
+layer the adapter and `fleetview` import them as; `transcript` stays undeclared (it imports the legacy core
+`tokenuse`), so package assistant hands the renderers an agent's title before it is clipped; `Holding` has a third
+value, `HoldingHeldBySupervisor`, for the cards D11's 2026-11-23 confirmation keeps out of every row; the badge's rows
+tell their further cards (`VisitCardUnder`), which the fixture's rows list; an unknown update time is not refused
+(the kit's zero Instant is unknown, and an agent sent without one still waits); `Agent` has no `Turn` stage, since
+`workingSince` stays here until step 11; and `agentKey` and `keyOf` stay with `foldSidesIn`, which reads the Live
+Activity's rule through `liveCounted`. The gate (`BenchmarkRound`, 60 agents, 12 cards, a kept round as `liveLoop`
+runs it): 284 to 255 allocs/op and 56,512 to 30,008 B/op, the latter including the core's own copies (12,800 B/op:
+per surface 60 agents in a 5,376-byte block and 12 cards in a 1,024-byte one). `BenchmarkLiveRound` (500 agents, no
+card): 134 to 136 allocs/op and 62.8 to 161.8 KB/op, the two surfaces' copies of the agents (two 49,152-byte blocks)
+and nothing else.
+
 **6. The schema and generated types.** *Change:* schema/wire/counts.schema.json (`x-out` ts, swift, go, kotlin;
 `x-guard` arkts, rust), its four outputs, `.gitattributes` rows and a `schema/wire/README.md` row; samples from step 5's
 Go output. The schema has no `surfaces` map (D5) and an optional `totals` (D12); `held` has the muted and held reasons

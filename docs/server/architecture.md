@@ -135,8 +135,10 @@ Domain code on the server is strict, and the rules are code: each one below is a
 section is copied from a compliant twin there, and archguard's `TestDomainModelExamples` keeps them the same. New
 domain code follows the rules from its first line. Code that predates them is held by shrink-only counts and frozen
 names in `server/internal/archguard/testdata/domain_layers`, which only fall: copy the domain kit
-(`server/internal/domainkit`), the first shared kernel (`server/internal/agentref` and its adapter) and the planted
-twins, never the packages those lists hold. A new domain package starts from the scaffold,
+(`server/internal/domainkit`), the first shared kernel (`server/internal/agentref` and its adapter), the first core
+(`server/internal/assistant/fleetcount`: the agents' and cards' Needs you, with its adapter `fleetcountadapt`, which
+fills the Live Activity's state and Persona Link's summary, and its testkit `fleetcounttest`) and the planted twins,
+never the packages those lists hold. A new domain package starts from the scaffold,
 `python3 scripts/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
 its black-box tests and its hook; its output with every flag but `--shared` is the golden
 `server/internal/archguard/testdata/scaffold`, which archguard's `TestScaffoldGoldenPasses` holds to the rules and
@@ -144,11 +146,13 @@ its black-box tests and its hook; its output with every flag but `--shared` is t
 temporary module together with the flag combinations its `COMBINATIONS` table lists (the package's own types and the
 shared kernel's as parts and payloads among them), each through its own rules hook.
 
-Each sentence below states a rule, and the rule holds whether or not a check sees a breach. The checks read syntax
+Each sentence below states a rule, and the rule holds whether or not a check sees a breach. Most checks read syntax
 only (`go/ast`, no type information) and enforce each rule where the source shows it: in names, declarations,
-signatures, literals, imports and the calls they can resolve. The routes they do not see yet are listed in #15088, and
-the type-aware check #10613 plans with the fleetcount core (its item 5.2) closes more of them. A route found later is
-a bug in the check, never permission to take it.
+signatures, literals, imports and the calls they can resolve. archguard's `TestDomainTyped`
+(`server/internal/archguard/domain_typed_test.go`) reads what takes a value's type to see, with `go/types` over the
+gc export data of what the packages import (`go list -export -deps`): it checks the cores the baseline does not hold
+and the packages that import them (the `typed-*` rows below). The routes neither sees yet are listed in #15088. A
+route found later is a bug in the check, never permission to take it.
 
 Why the rules exist, in this repository's own code:
 
@@ -747,9 +751,17 @@ stated above; #15088 lists the ones known.
 | `app-named-primitive` | named basic types, in undeclared, application and library packages and adapters | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |
 | `app-bridge-call` | uses of an adapter's `Wire` function, called or passed on, in undeclared, application and library packages' production code | the package |
+| `typed-visitor-impl` | a type that implements a core's `*Visitor` interface, whatever its methods' parameters are spelled, only in adapters, testkit and cores | fails at once |
+| `typed-discard` | no `outcome.Of` or failure dropped, by a call written as a statement or an assignment to `_`, outside cores | fails at once |
+| `typed-codec` | no core value, nor a value that holds one, passed to `fmt`, `log`, `slog`, `json.Marshal`, `MarshalIndent` or `Encode`, or a template's `Execute` | fails at once |
+| `typed-map-range` | no range over a value whose type is a map in a core, a field or a named map type included | fails at once |
+| `typed-fail-compare` | no `==` or `!=` between two failures (a failure's code cannot be compared, so it panics); comparing with `nil` is fine | fails at once |
 
 The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and, given a
-base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.
+base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`. The `typed-*` rules
+run only in `TestDomainTyped`, over production files, with a planted case and a compliant twin each under
+`server/internal/archguard/testdata/domaintyped` (`TestDomainTypedPlanted`); it fails when it inspected nothing and
+logs its time.
 
 ### The domain kit
 
