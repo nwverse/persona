@@ -420,7 +420,7 @@ struct ExtensionDetailView: View {
         let ui = auth?.page.map { page in d.ui.filter { $0.id != page } } ?? d.ui
         if !ui.isEmpty {
             Section {
-                ForEach(ui) { place in
+                ForEach(ui, id: \.scopedID) { place in
                     NavigationLink(value: SettingsPage.pluginPage(plugin: d.plugin.id, ui: place.id, title: place.title, manager: page.manager)) {
                         Label { Text(place.title).lineLimit(1) } icon: { ThemedIcon(Theme.Icon.pluginPage) }
                     }
