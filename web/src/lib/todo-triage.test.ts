@@ -167,6 +167,11 @@ describe("triage (docs/assistant/todo-status-sop.md, decision table)", () => {
     expect(at(todo("t", { done_at: hoursAgo(30), updated_at: hoursAgo(30) })).section).toBe("done");
   });
 
+  it("keeps an ordinarily closed to-do Done while its linked session has background work", () => {
+    const td = todo("closed-background", { done_at: hoursAgo(3), agents: [agent("background")] });
+    expect(at(td)).toMatchObject({ section: "done", rule: "closed" });
+  });
+
   it("an accepted task reopened by more work is finished, not Follow up", () => {
     const td = todo("t", { agents: [agent("idle")], reopened_at: hoursAgo(4), supervision: acceptedReopened() });
     expect(at(td)).toMatchObject({ section: "done", rule: "accepted" });

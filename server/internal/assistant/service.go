@@ -168,6 +168,8 @@ type Service struct {
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent      humanSends
 	storeApprovals storeApprovals
+	ownerWaits     ownerActionWaits
+	routineChecks  routineCheckApprovalBook
 
 	hub         Hub
 	store       func() Store
@@ -274,9 +276,11 @@ type Service struct {
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
 	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
-	spaceFill            spaceBackfill          // conversation_space_backfill.go
-	outcomeLines         outcomeLines           // todo_outcome.go
-	workerOutcomes       workerOutcomes         // worker_memory.go
+	healthTells          captureWork            // health_tell.go: wakes ordered Health delivery
+	trainingChatMu       sync.Mutex
+	spaceFill            spaceBackfill  // conversation_space_backfill.go
+	outcomeLines         outcomeLines   // todo_outcome.go
+	workerOutcomes       workerOutcomes // worker_memory.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -340,7 +344,6 @@ type Service struct {
 	work             workBook          // agents_work.go: the Agents business
 	reply            replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans            channelsBook      // channels.go
-	fdetached        detachedCards     // the Feishu cards closed when their node went away (lark_chat.go)
 	tposts           threadPoster      // the lark module's thread_posts.go: what a todo tells its chat thread
 	lark             larkLayer         // lark.go: the lark module's layer, the outbound channel port (s.chat())
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
@@ -352,9 +355,7 @@ type Service struct {
 	tview            todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
 	trevision        todoRevisionBook  // todo_revision.go: the pushed read's cheap validator
 	offers           routeBook         // route.go: the directions offered for New chats
-	standing         standingBoard     // feishu_board.go: the standing "waiting for you" card
-	workbench        workbenchState    // feishu_workbench_pin.go: the pinned workbench
-	companions       companionState    // feishu_companions.go: the notices for a companion bot
+	fleetUp          atomic.Bool       // the fleet has been brought up since this process started (FleetUp): the pending cards are the real ones (lark_board.go)
 	kb               kbState           // kb.go
 	inbox            inboxBook         // inbox_book.go
 	board            boardBook         // workspace_board.go: the workspace board
@@ -449,6 +450,7 @@ func New(o Options) *Service {
 	s.infoAccessRoutes()
 	s.trackRoutes()
 	s.captureRoutes() // captures.go: quick capture
+	s.healthTellRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -496,7 +498,6 @@ func New(o Options) *Service {
 	s.workspaceBoardRoutes()
 	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
-	s.companionRoutes()
 	s.kbInit(o.KB)
 	// The recording module's layer, before its routes (kbRoutes) and its hello capabilities (recording.go).
 	s.recOpts.timings, s.recOpts.lists = maps.Clone(o.RecordingTimings), maps.Clone(o.RecordingTimingLists)
@@ -1096,6 +1097,7 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
+	go s.ownerAppeared(context.WithoutCancel(ctx), "user_spoke", r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	s.progressMade(r.MachineID, r.SessionID, time.Now()) // told something: a new stretch (supervise_progress.go)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).

@@ -2,6 +2,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const directory = process.argv[2]
+if (process.argv.includes('--warm')) process.exit(0)
 const settings = () => JSON.parse(readFileSync(`${directory}/catalog.json`, 'utf8'))
 const nativeSettings = () => {
   try { return JSON.parse(readFileSync(`${directory}/settings/settings.json`, 'utf8')) } catch { return {} }

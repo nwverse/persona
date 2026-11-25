@@ -110,6 +110,28 @@ type Cards interface {
 	MissingPiecesNote(l i18n.Lang, missing []int) string
 }
 
+// Asks is the interaction port: what the core tells the chat of what Persona and the agents ask (a question, a
+// permission, a plan, a terminal dialog), each of which the chat shows as a card (the module's, #13404). What a card
+// says of the core the module asks for as one value (Host.AskView). With no module nothing is shown and no card is
+// wanted.
+type Asks interface {
+	// AskAnnounced: a new interaction (interaction.announced): its card is posted when the bot's switches want one
+	// (AskWanted). AskPost posts it whatever the switches say (a report's decision, a card brought to the bottom).
+	AskAnnounced(ix proto.Interaction)
+	AskPost(ctx context.Context, ix proto.Interaction)
+	AskWanted(ctx context.Context, ix proto.Interaction) bool
+	// AskEnded: ix is over (answered anywhere, withdrawn, expired) and how says how; inChat: it was taken back
+	// because the user wrote in the conversation, so their next words are no late answer to it.
+	AskEnded(ix proto.Interaction, how string, inChat bool)
+	// AskDetached: the interactions ids are about to end because their node went away; AskBack: ix is back after its
+	// node reconnected. grace is how long a card outlives its node (the core's resumeGrace).
+	AskDetached(ids []string, grace time.Duration)
+	AskBack(ix proto.Interaction, grace time.Duration)
+	// AsksCatchUp closes the cards whose interaction is over for good, as the hub's history says; pending are the
+	// interactions up now (after a reconnection).
+	AsksCatchUp(ctx context.Context, pending map[string]bool)
+}
+
 // Workbench is the Lark workbench (/home, /today, /inbox and their buttons, the home card).
 type Workbench interface {
 	WorkbenchCommand(ctx context.Context, f assistantwire.FeishuFeatures, cmd string) bool
@@ -119,19 +141,37 @@ type Workbench interface {
 	HomeCard(ctx context.Context, f assistantwire.FeishuFeatures) (card *botcard.Card, fallback, said string)
 }
 
-// Layer is what the core asks of the lark module: the outbound port, the Feishu turns, the workbench and the chat. It
+// Board is the standing "waiting for you" card, the pinned workbench and the companion bots (the module's, #13404): what
+// the core tells them, and the notices it hands the notifications companion. With no module nothing is edited, no
+// card carries the workbench button and no companion takes a notice.
+type Board interface {
+	// BoardChanged says something the board shows changed (a card opened or ended, a to-do entered or left "Please
+	// verify", the assistant connected): the board is edited a moment later, once for all that came meanwhile.
+	BoardChanged()
+	// WorkbenchOn notes the workbench switch as just read; WorkbenchStamp adds its button to a card the bot posts or
+	// redraws while it is on.
+	WorkbenchOn(f assistantwire.FeishuFeatures, ready bool)
+	WorkbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card
+	// DivertNotices hands cards to the notifications companion when it takes them; false: they go to the chat.
+	DivertNotices(ctx context.Context, kind string, cards []*botcard.Card, fallbacks []string) bool
+}
+
+// Layer is what the core asks of the lark module: the outbound port, the Feishu turns, the cards of what is asked, the
+// workbench, the board and the chat. It
 // grows as the assistant's Feishu files move into the module (#13404).
 type Layer interface {
 	Outbound
 	Turns
 	Cards
+	Asks
 	Workbench
+	Board
 	Chat
 }
 
 // Chat is the bot's chat: the hub's events it takes (the owner's messages and presses, pairing, recalls, what the
-// apps show of it), what the core asks of it, and its records (Book), which the core's cards, standing board and
-// companion bots still write while they are the core's.
+// apps show of it), what the core asks of it, and its records (Book), which the core's cards and the briefing's
+// waits still read.
 type Chat interface {
 	// Message takes the owner's message (feishu.message); Action answers a press of one of the bot's cards
 	// (feishu.card_action, or a companion's), action being the owner's action for it; Owner is feishu.owner,
@@ -198,7 +238,6 @@ type Host interface {
 	Call(ctx context.Context, method string, params, out any) error
 	CallApp(ctx context.Context, app, method string, params, out any) error
 	PostContent(ctx context.Context, to assistantwire.ChannelTarget, replyTo, content, fallback, key string) (string, error)
-	WorkbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card
 	LinkNamer(ctx context.Context) func(*url.URL) string
 	OpenButton(ctx context.Context, machine, session string) botcard.Button
 	// Unreachable: the call did not reach the hub or did not come back; Offline: the hub is not connected.
@@ -229,8 +268,6 @@ type Host interface {
 	// What the workbench (workbench.go) reads of the core and asks it to do.
 	WebBase(ctx context.Context) string
 	Location(ctx context.Context) *time.Location
-	// StandingNow is the standing board's clock (the home card's "updated at").
-	StandingNow() time.Time
 	ClipFallback(text string) string
 	WorkbenchAgents(ctx context.Context, now time.Time) (assistantwire.WorkbenchCounts, []assistantwire.WorkbenchAgent)
 	WorkbenchInbox() []assistantwire.WorkbenchItem
@@ -238,12 +275,12 @@ type Host interface {
 	WorkbenchBoard(ctx context.Context, l i18n.Lang, web string, now time.Time) []assistantwire.WorkbenchBoardRow
 	SessionNames(ctx context.Context, sess proto.Session) (primary, secondary string)
 	NextMeeting(ctx context.Context, now time.Time) *assistantwire.WorkbenchMeeting
-	Companions(ctx context.Context) []assistantwire.WorkbenchCompanion
 	TodayBody(ctx context.Context) json.RawMessage
-	SummonWorkbench(ctx context.Context)
-	WorkbenchRefresh(ctx context.Context)
-	WorkbenchBringCard(ctx context.Context, id string)
 	TasksOverview(ctx context.Context) (cards []*botcard.Card, fallbacks []string)
+	// BoardCard is the waiting list as a card (the core's board_rows.go), drawn as of now; said is the card without its
+	// "updated at" note. FleetReady: the pending cards are read (before it a board would say nothing is waiting).
+	BoardCard(ctx context.Context, now time.Time) (card *botcard.Card, fallback, said string)
+	FleetReady() bool
 	// InboxDone files an item (dismissed: muted along with it); InboxMute mutes what is tagged tag = value in source.
 	InboxDone(ctx context.Context, id string, dismissed bool) error
 	InboxMute(ctx context.Context, source, tag, value, name string) error
@@ -260,8 +297,6 @@ type Host interface {
 	ChatNow() time.Time
 	ForgetTurns()
 	RecallRun(messageID string)
-	WorkbenchOn(f assistantwire.FeishuFeatures, ready bool)
-	WorkbenchActive() bool
 
 	// Where a message of the chat goes (the core's feishu_route.go): a target as it is now and what to call it,
 	// whether the bot's switches allow it, and the run that answers a message sent to it (StartRun: rt, t and the
@@ -288,7 +323,8 @@ type Host interface {
 	// The commands (commands.go, models.go): stopping a conversation's turn (kind is the toast's), the lists to pick
 	// a conversation or an agent from, what a /status card shows, the standing board, and the main conversation's
 	// model.
-	StopConversation(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) (kind, message string)
+	InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (kind, message string)
+	TurnPending(machine, session string) bool
 	StopProgressCard(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget, messageID string) (kind, message string)
 	Conversations(ctx context.Context) (list []proto.Session, main string)
 	ConversationName(sess proto.Session, main string) string
@@ -301,9 +337,7 @@ type Host interface {
 	SessionLink(web, machine, session string, assistant bool) string
 	FeishuRuns() int
 	VisiblePending() []proto.Interaction
-	IxKindTag(kind string) string
 	PendingQuestion(ix proto.Interaction) string
-	StandingBoardCommand(ctx context.Context) bool
 	// MainChat is the main conversation and the machine it runs on ("" without one); MainModel what it runs on now.
 	MainChat(ctx context.Context) (main, machine string)
 	MainModel(ctx context.Context, machine, main string, l i18n.Lang) (launcher, model, effort string, err error)
@@ -314,11 +348,8 @@ type Host interface {
 	// The cards' presses and typed answers (card_actions.go, text_answer.go): an interaction answered, closed or
 	// asked about, a card's words, a decision or acceptance pressed (kind is the toast's), a later question handled,
 	// an agent started.
-	FinalStatus(status string) bool
 	EndedText(l i18n.Lang, status, fallback string) string
 	ResolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) string
-	AnsweredCard(ctx context.Context, ix proto.Interaction, how string) *botcard.Card
-	CardDone(ctx context.Context, messageID string, ix proto.Interaction, how string)
 	ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error)
 	ValidateClarifyQuestion(text string) error
 	ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error)
@@ -331,15 +362,20 @@ type Host interface {
 	StartAgent(ctx context.Context, machine string, params map[string]any) (proto.Session, error)
 	StartChannelRun(r *channel.Run)
 
-	// The nudges (nudge.go): a card still waiting (waiting false: it ended, or that is not known), its agent gone, a
-	// prepared card's deadline, the standing board told a card was nudged, a send refused outright.
-	CardLook(ctx context.Context, id string) (ix proto.Interaction, waiting bool)
+	// The agents' cards (asks.go, ask_cards.go): what a card says of the core as one value (who asks, the task, the
+	// conversation's page, the core's wording of the interaction), where it goes as the channels' runs say now, whether
+	// its words are sensitive (asked only for a card the chat does not drive, with "all cards" on: it may wait for
+	// the text to be tagged), and the core's live record of it (ended: interaction.ended came; pending: it is up).
+	AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView
+	AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute
+	AskSensitive(ctx context.Context, ix proto.Interaction) bool
+	AskState(id string) (ended, pending bool)
+
+	// The nudges (nudge.go): a card's agent gone, a prepared card's deadline, the standing board told a card was
+	// nudged, the tool a permission asks about.
 	AgentGone(ix proto.Interaction) bool
 	ApprovalNudgeDeadline(ix proto.Interaction) (time.Time, bool)
-	BoardChanged()
-	ChatRefused(err error) bool
 	IxToolName(ix proto.Interaction) string
-	FirstQuestion(ix proto.Interaction) string
 
 	// The to-dos of topics and of requests from elsewhere (thread.go, thread_open.go, elsewhere.go): the core's
 	// to-do, decision and question ledgers.
@@ -384,6 +420,21 @@ func (None) AnswerCards(i18n.Lang, func(*url.URL) string, string, bool, []string
 }
 func (None) MissingPiecesNote(i18n.Lang, []int) string { return "" }
 
+// No board without a channel: nothing is edited, no card carries the workbench button, no companion takes a notice.
+func (None) BoardChanged()                                                         {}
+func (None) WorkbenchOn(assistantwire.FeishuFeatures, bool)                        {}
+func (None) WorkbenchStamp(_ context.Context, c *botcard.Card) *botcard.Card       { return c }
+func (None) DivertNotices(context.Context, string, []*botcard.Card, []string) bool { return false }
+
+// No cards for what is asked without a channel: none is wanted, none is posted.
+func (None) AskAnnounced(proto.Interaction)                    {}
+func (None) AskPost(context.Context, proto.Interaction)        {}
+func (None) AskWanted(context.Context, proto.Interaction) bool { return false }
+func (None) AskEnded(proto.Interaction, string, bool)          {}
+func (None) AskDetached([]string, time.Duration)               {}
+func (None) AskBack(proto.Interaction, time.Duration)          {}
+func (None) AsksCatchUp(context.Context, map[string]bool)      {}
+
 // The chat without a channel: a bot switched off. Nothing is taken or answered, nothing waits, no target is set, and
 // its records are empty: what is kept in them is dropped.
 func (None) Message(context.Context, assistantwire.FeishuMessage) error { return nil }
@@ -417,19 +468,16 @@ func (None) Book(_ context.Context, f func(assistantwire.ChatBook)) { f(noBook{}
 type noBook struct{}
 
 func (noBook) Loaded() bool                               { return false }
-func (noBook) Now() time.Time                             { return time.Now() }
 func (noBook) Card(string) (assistantwire.ChatCard, bool) { return assistantwire.ChatCard{}, false }
 func (noBook) KeepCard(string, *assistantwire.ChatCard)   {}
 func (noBook) Cards() map[string]assistantwire.ChatCard   { return nil }
 func (noBook) CardRef(string) (assistantwire.ChatCardRef, bool) {
 	return assistantwire.ChatCardRef{}, false
 }
-func (noBook) ProposalFor(string) string        { return "" }
-func (noBook) NoteEnded(assistantwire.ChatCard) {}
+func (noBook) ProposalFor(string) string { return "" }
 func (noBook) Current() assistantwire.ChatTarget {
 	return assistantwire.ChatTarget{Kind: assistantwire.ChatMain}
 }
-func (noBook) Bound(string, string, time.Duration) bool   { return false }
 func (noBook) Board() *assistantwire.ChatBoardRef         { return nil }
 func (noBook) SetBoard(*assistantwire.ChatBoardRef)       {}
 func (noBook) Pairing() *string                           { return nil }
@@ -467,4 +515,21 @@ func New(s moduleswitch.Set, h Host) (Layer, bool) {
 		return nil, false
 	}
 	return newLayer(h), true
+}
+
+type layerKey struct{}
+
+// WithLayer puts the manager's layer on ctx, for the module's hub routes: a route of a module is served by a handler
+// the kernel holds for every manager in the process, so the request tells which manager's layer it is for. layer is
+// asked when a handler wants it.
+func WithLayer(ctx context.Context, layer func() Layer) context.Context {
+	return context.WithValue(ctx, layerKey{}, layer)
+}
+
+// LayerFrom is the layer WithLayer put on ctx; None when there is none.
+func LayerFrom(ctx context.Context) Layer {
+	if f, ok := ctx.Value(layerKey{}).(func() Layer); ok {
+		return f()
+	}
+	return None{}
 }

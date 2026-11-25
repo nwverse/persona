@@ -467,10 +467,8 @@ func TestFeishuCatchUpClosesOnlyCardsThatEnded(t *testing.T) {
 	}
 	_ = st.PutSetting(context.Background(), botStateKey, botState{Current: botTarget{Kind: targetMain}, Cards: cards})
 	s := newServiceOn(t, f, st)
-	old := botCardRecheck
-	botCardRecheck = time.Hour // not again within the test
-	defer func() { botCardRecheck = old }()
-	s.channelsCatchUp(context.Background()) // the hub lists no card up (the manager has not restored them)
+	s.setLarkTiming("card_recheck", time.Hour) // not again within the test
+	s.channelsCatchUp(context.Background())    // the hub lists no card up (the manager has not restored them)
 	waitUntil(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -795,6 +793,7 @@ func TestBotTextInLanguages(t *testing.T) {
 // A permission card with no summary shows the call's input with every credential's value masked, as the summaries
 // and the channels' approval text do (#4734, #4762): the card goes to a Feishu chat.
 func TestFeishuPermissionCardWithoutSummaryMasksCredentials(t *testing.T) {
+	needsLarkLayer(t) // the cards are the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	s := newTestService(t, f)
 	ix := proto.Interaction{ID: "p1", MachineID: "server", SessionID: "a1", Kind: proto.IxPermission, ToolName: "mcp__x__call",
@@ -808,6 +807,7 @@ func TestFeishuPermissionCardWithoutSummaryMasksCredentials(t *testing.T) {
 // An MCP server asking to authorize or to fill in a form says on the card what it asks: its message, the link as a
 // button; a form's fields by name only (filled in the app), no inputs in Feishu.
 func TestFeishuElicitationCardSaysWhatItAsks(t *testing.T) {
+	needsLarkLayer(t) // the cards are the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	s := newTestService(t, f)
 	ctx := context.Background()
@@ -832,8 +832,11 @@ func TestFeishuElicitationCardSaysWhatItAsks(t *testing.T) {
 		}
 	}
 	// The button opens the link exactly as given.
-	if lk, host := elicitationTarget(" https://example.com/a?b=c%20d "); lk != "https://example.com/a?b=c%20d" || host != "example.com" {
-		t.Fatalf("target %q %q", lk, host)
+	exact := link
+	exact.Elicitation = &proto.Elicitation{Mode: "url", Message: "登录 GitHub 授权", URL: " https://example.com/a?b=c%20d "}
+	b, _ = json.Marshal(s.interactionCard(ctx, exact))
+	if c := string(b); !strings.Contains(c, `"https://example.com/a?b=c%20d"`) || !strings.Contains(c, "`example.com`") {
+		t.Fatalf("target: %s", c)
 	}
 	form := proto.Interaction{ID: "e2", MachineID: "server", SessionID: "a1", Kind: proto.IxElicitation,
 		Elicitation: &proto.Elicitation{Mode: "form", Message: "填写连接信息", URL: "javascript:alert(1)",

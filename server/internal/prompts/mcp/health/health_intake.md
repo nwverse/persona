@@ -16,7 +16,7 @@ Health only: log water ml/protein g; list records/IDs, daily totals/goals (defau
         "add_item"
       ]
     },
-    "item": {"type":"string","enum":["water","protein","activity","trends"]},
+    "item": {"type":"string","enum":["water","protein","activity","trends","strength"]},
     "kind": {
       "type": "string",
       "enum": [

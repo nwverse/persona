@@ -174,10 +174,47 @@ What the user jots down in passing (the share sheet, the watch, Siri, the web; #
 
 ## API
 
+### Tell Health
+
+Tell Health (#14714) is for people who want to speak or send a sentence to Health from their phone or watch.
+`POST /api/v1/assistant/health/tell` stores `{client_id,text}` and immediately returns a receipt, before model work.
+A retry with the same client ID keeps the first sentence. The receipt means received; delivery and the answer follow.
+
+The first Tell Health message or strength workout report starts the local day's **training chat**. Later sentences,
+the strength workout report and its plan stay in that chat. Saying that strength training has started asks Health
+to review the last session and prepare a plan draft for confirmation. Only these two entry points select the
+training chat; an ordinary Health conversation does not become it. The target is always Health, even if extra
+request fields name a different space or chat. A gone, deleted or invalid chat is replaced. An offline computer waits
+in receipt order; the original sentence stays in storage until delivery is confirmed. Each sentence's failed attempts
+are at least 30 seconds apart, even when a new receipt wakes the worker; later sentences wait behind it.
+
+Before continuing a chat, the sentence's destination is saved. An uncertain continuation retries only that original
+computer and chat with the same once-only key, even if the training-chat pointer changes, a lookup fails or the
+manager restarts. Only a definite refusal before delivery, including a deleted chat, permits a new Health chat.
+The hub's lookup does not expose whether the current connection's session list is complete. A transient lookup
+failure before a sentence is bound to a chat can therefore replace the pointer and split one day's training across
+chats; it does not redirect a sentence already bound for continuation.
+
+The day uses the owner's time zone. Sentences use receipt time; reports use workout start time. A workout begun
+at 23:30 and reported at 00:40 continues the previous day's chat unless a sentence after midnight has already opened
+the new day's chat. A sentence received at 00:10 starts the new day; if it has done so, the late previous-day report
+opens a separate chat.
+Only the latest day's chat pointer is retained; late older reports cannot take it over. Simultaneous first
+sentences and reports can start separate chats. Shortcuts actions and automation setup are client features.
+
+Replies use the Health space's fixed notification text, even when answered quickly. After 24 hours or five failed
+attempts, a fixed notification says delivery could not be confirmed; at most one notice is sent per worker round for
+newly failed sentences. It includes no sentence content and the stored originals are retained. Claude Code starts
+can reuse a reserved conversation ID after a restart. Other launchers may choose their own IDs: a reported uncertain
+start is abandoned, but a manager restart after the chat starts and before delivery is recorded can repeat the sentence
+once. Tell Health remains available when the Health data module is absent or off, including the
+`health_tell` capability; the strength report and plan guidance require the module and an added strength item.
+
 For the exact protocol, see the "Assistant" table in `docs/protocol/protocol.md`.
 
 | Endpoint | How the Health space uses it |
 | --- | --- |
+| `POST /api/v1/assistant/health/tell` | `{client_id,text}` → stored receipt, then today's training chat. Full or watch answer role; Health only. See "Tell Health" and `docs/protocol/protocol.md` for states and limits. |
 | `POST /api/v1/assistant/conversations` | With `"space":"health"`, starts a new chat in the health directory (writing the health CLAUDE.md first). Combined with `"main":true` it returns 400 (the Health space has no main chat); an unknown `space` returns 400 |
 | `GET /api/v1/assistant?space=health` | Lists the Health space's chats; `cwd` is the health directory. Without `space` it lists only the assistant's own chats, and health chats no longer appear. `?archived=1` works the same; an unknown `space` returns 400 |
 | `GET /api/v1/assistant/memory?space=health` | The Health space's memory `{"files":[…],"dir"}` |
@@ -196,7 +233,7 @@ The `conversation*` tools in a chat only see chats in the same space (`server/in
 - Calls not made from a chat (no caller session id) count as the assistant's own space.
 
 - `kb_update` from a health chat fails outright: health information does not go into the knowledge base (`assistant/tools.go` `runTool`). Knowledge base reads (`kb_search` etc.) work as usual.
-- `health_intake` logs, lists and deletes only in a known Health conversation. `runTool` checks `agentCallerSpace` using the caller's machine and session, including Health subdirectories; main-space and unknown callers are refused before storage access. Health chats on another computer work too. The tool appears in both spaces' discovery lists, but discovery grants no access.
+- `health_intake` logs, lists and deletes only in a known Health conversation. `runTool` checks `agentCallerSpace` using the caller's machine and session, including Health subdirectories; main-space and unknown callers are refused before storage access. Health chats on another computer work too. `health_intake` and `health_strength` are listed only in Health conversations by both node `mcp.tools` and targeted hub `ToolsFor`, while the Health module is available. Discovery grants no access by itself. The first list before a session snapshot requires the node's attested `caller_cwd` (#14855); without directory evidence (older nodes, Windows or runtime-hosted sessions), the next discovery heartbeat, within 30 seconds after the snapshot arrives, adds the tools. The cursor includes the effective space, so an earlier list without Health tools cannot stay cached.
 - Scheduled follow-ups and scheduled tasks created in a health chat (`schedule_followup`, `schedule_routine`) record their space (`Task.space`); when one fires and needs a new chat, it opens in the Health space.
   The space owns the task's working directory: a nonempty task `cwd` is rejected when saving and before dispatch,
   including an older stored override. Clear it to restore the canonical Health directory. Launcher, model, effort
@@ -220,7 +257,7 @@ In the health space the decision always depends on the chat's space (the trusted
 | Push: turn ended, `notify_user`, plan waiting for you to start, scheduled task failed | Only says "New in your health space. Open Persona to see it.", without the body, chat title or task name | `hub/machine.go` `doneAlert`, `assistant/tools.go`, `tasks.go`, `schedule.go` |
 | Phone local notification: `phone_notify` | The hub replaces the title and body with the same localized notice as `notify_user` before forwarding to the phone; no health content reaches the notification | `assistant/fleet_tools.go` `mcpCall`, `assistant/health.go` `spaceNotice` |
 | Push for question / authorization cards | The lock screen likewise only says **Health**; the card content is viewed in the App. A card is judged by its chat's directory: the node and then the manager place a card of an assistant chat in the chat's directory, not the hook's after a `cd` (`identity.CardCwd`, the manager's `placeCard` covers older nodes), and any directory inside a health space counts as health (`identity.InHealthSpace`, #2368) | `hub/push_payload.go` `interactionPayloadIn` (looks at `ix.Cwd`), `assistant/fleet_machines.go` `placeCard` |
-| Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; health to-do reminders keep the generic notice without a specific to-do URL or ID in the card or a to-do reply binding (ordinary reminders retain their detail button, notes and reply context); answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/feishu_cards.go`, `feishu_push.go`, `channels_plugin.go` |
+| Lark bot, plugin channels | Forwarded `notify_user` only says there is a new message; health to-do reminders keep the generic notice without a specific to-do URL or ID in the card or a to-do reply binding (ordinary reminders retain their detail button, notes and reply context); answers in a scheduled task's chat are not mirrored; "all cards" and "all questions" exclude health chat cards (the chat the channel itself is driving works as usual) | `assistant/ask_view.go` (`ixSensitive`), `modules/lark/asks.go`, `feishu_push.go`, `channels_plugin.go` |
 | `agent_send` / `agent_start` | Confirmed on the phone every time. `agent_send` accepts targets in the conversation’s own space. The card explains that the Agent keeps its copy after the health chat is deleted | `assistant/health.go` `confirmOutbound` |
 | `task_plan` | Never starts automatically; always waits for the user to tap start on the plan card | `assistant/tasks.go` |
 | `mail_send` and connector write operations | Confirmed on the phone every time; gate allow rules do not let it through (deny still rejects) | `connector.ConfirmEach`, `callConnector` in `extmgr/connectors.go` |
@@ -246,6 +283,77 @@ The original rule from #4329 (implemented in #4385) resumed the latest health ch
 | Web | `/health` stays on the home; `/health/new` remains an alias for it. `HealthPage` / `Health` and the header buttons `HealthChatActions` are in `modules/health/Health.tsx`. Tests: `entry.test.ts`, `Health.conversation.test.tsx` |
 | iOS (iPhone and iPad) | the sidebar's **Health** opens the home, with all open health conversations listed newest first. `AssistantView.enterHealth()` synchronously returns to the root and presents the home; the embedded Sidebar layout selects Health as its page root. Entry does not wait for the conversation list. **New Chat** in a health conversation still returns to the home (`HealthModel.newOpensHealth`); the first message in its composer starts a new health conversation. `-openAssistantPage health` / `-openShellPage health` still open the home. Tests: `HealthModelTests`, `HealthEntryUITests`, the Health upload case in `TreeSwapFoldTests` |
 | Android | the assistant sidebar's **Health** opens the home immediately (`AssistantScreen.openHealth`); `HealthEntry.history` keeps its chat list ordered. See "Android entry point" below |
+
+## Strength training
+
+Who this serves: people keeping gym sets, including people who recognize a machine without knowing its name.
+Adding **Strength training** enables writing through `health_strength`; it adds no setup to other Health items.
+The model matches exercise names and aliases before creating an exercise, asks once how a new machine's weight is
+counted, and never invents weights or reps. A machine photo is conversation input, not an exercise photo archive.
+Both Health tools are listed only in known Health conversations, including a new conversation's first list when
+the node supplies attested directory evidence (#14855). Execution independently enforces the same caller boundary.
+
+`health_strength history` groups sets by owner-local day over `days` (default 30, range 1–366). With an exercise `id`,
+it retains that exercise's full history in the range. Without `id`, it returns up to the 500 most recent sets across
+all exercises. Use `history` to check an uncertain log before retrying it.
+
+The manager stores four tables in Postgres:
+
+| Table | Meaning |
+| --- | --- |
+| `health_strength_exercises` | Name, aliases, primary/secondary muscles, equipment, weight rule and seat/settings note. Another machine is another exercise. Deleted exercises retain a tombstone. |
+| `health_strength_sets` | Confirmed exercise, kg, reps, warm-up flag, time and optional workout/draft. Idempotent IDs, undo tombstones and commit-ordered sequence numbers follow intake's rules. |
+| `health_strength_drafts` | Unconfirmed sets or a day's plan, revision, status and the current conversation/card/version. Drafts never count as sets. |
+| `health_strength_workouts` | Uploaded strength workout UUID, start/end and aggregate measurements. Other activities never enter this table. |
+
+When a strength workout arrives, unassigned sets from 30 minutes before its start to three hours after its end join
+it; existing assignments remain. Sets logged later use the latest matching strength window, so locker-room logging
+can still count. Upload and logging both use the same inclusive boundaries and serialized transaction. Duplicate
+uploads use the persisted window. Confirming a plan uses the latest-starting strength workout on its `plan_day`
+in the owner's time zone, even if confirmation arrives hours later or the next day. Its sets use that workout's start
+time and the usual window matching; with no workout on that day they use the confirmation time. Undo advances the
+set's sequence; a repeated undo does not.
+
+A multi-set interpretation or plan creates a managed conversation card: **Save**, **Don't save**, **Adjust**, or
+**Done as planned** for a plan. Only Save confirms the sets, in one transaction with the card. A repeated click adds
+nothing twice. These buttons are handled by Health without a model round or notification. Models cannot rewrite
+the reserved `health-strength-` cards. Adjust opens the working copy; saving that page updates the draft and card,
+not the set table. A stale edit reloads the newer draft; Cancel keeps the stored draft. If a card settles while its
+editor is open, Save, stepper and add/remove actions redraw a read-only page and explain whether it was saved or
+discarded. Below UI version 6 these edit actions retain the existing 400 response. Other invalid strength page
+actions use strength-specific copy. A duplicate exercise name shows a toast and keeps the entered name for correction.
+If an exercise on an open card was deleted, Save returns a definite 400 with guidance to discard or edit the draft;
+no sets are written and Don't save remains available.
+Deleting an exercise confirms its name and active set count, then tombstones it and undoes all its sets atomically.
+
+The server draws the following pages with existing declarative components, under Health's shared reserved
+`-health-intake` page id (`docs/protocol/protocol.md`, "Strength training"):
+
+- Overview puts pending drafts first, followed by exercises with last/best, this week's sets per primary muscle
+  (excluding warm-ups), the latest session and the latest open plan. Management exposes name, settings and weight rule.
+- An exercise shows its seat note, weight rule, daily best weight or estimated one-rep max, and each set with its own
+  weight and reps, including warm-up and drop sets. History ranges are 30/90/365 days; Undo only accepts a listed set.
+- Adjust has kg steppers (2.5 per tap), reps steppers, an exercise choice, warm-up switch and add/remove controls for
+  up to 40 sets. Below UI version 6 it displays a read-only list and an update hint.
+- Home shows today's or the latest session, a bar chart of working sets over the last seven owner-local days
+  including today (excluding warm-ups and undone sets, with zero bars on empty days), and up to three records in the last 30 days.
+  A record requires an earlier non-warm-up set and exceeds its best weight or estimated one-rep max
+  (`weight × (1 + reps / 30)`).
+
+`health_strength` broadcasts contain no health data and make open pages refresh. Removing the item retains its data
+and pages and permits existing cards to settle; new tool writes ask to add the item again. Workout reports fall back
+to their existing behavior when strength is not added. Building or switching out Health removes the capability,
+pages and tool handler, disables card buttons, and leaves stored data intact.
+
+Strength reports assemble **when the task runs**, including sets logged after upload: this workout's sets grouped by
+exercise, the previous day's sets before the workout, previous non-warm-up best weight/estimated max, explicit record
+flags, the latest open plan for the workout's local day, measurements and the owner's language. A report record
+requires a non-warm-up baseline before this workout. Plan sets carry exercise names (including deleted exercises),
+weight, reps and warm-up flags, without draft timestamps or exercise UUIDs. They do not request
+other Health data. With sets, the report lists and compares them; with a plan but no sets it asks `health_strength show`
+to place the Done as planned card in the report's actual conversation. With neither it gives one line about logging
+with a sentence or a machine photo. A failed assembly uses the stored prompt. Other activities retain the exact
+existing report prompt. Three scenarios in English, Simplified Chinese and Japanese have caller-level goldens.
 
 ## Water and protein
 
@@ -640,6 +748,9 @@ Since #2526's second step, a report also carries:
 - the elevation gain;
 - the heart rate's average and maximum;
 - per-kilometre splits for runs, walks, hikes and rides, with pauses left out.
+
+Strength training instead uses the execution-time assembly described in "Strength training" above, when that item
+is added and its uploaded window is stored. Other activities retain the following comparison behavior.
 
 The report then draws a pace chart from the splits, and compares the workout with the
 user's recent ones of the same activity through `phone_workouts_recent`. When the tool

@@ -15,6 +15,7 @@ import (
 func hubEngine(t *testing.T, m Model) (*Engine, *[][]string) {
 	t.Helper()
 	e := goldenEngine(t, m)
+	e.SetRecordingProvider(RecordingWriters(e)) // hub transcription is the recording module's: retention reaches its audio and its sweep
 	e.TranscriptionReady = func() bool { return true }
 	var changed [][]string
 	e.MeetingChanged = func(_ string, parts []string) { changed = append(changed, parts) }
