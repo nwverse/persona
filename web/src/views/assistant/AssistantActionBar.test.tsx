@@ -1198,7 +1198,11 @@ describe("Assistant Needs you / In progress trays", () => {
       const group = host.querySelector('[data-needs-supervisor="another-chat"]')!;
       expect(group).not.toBeNull();
       expect(group.getAttribute("aria-label")).toBe(t("assistant-tasks.needs_group_another"));
-      expect(group.querySelector("[data-open-task=held-elsewhere]")).not.toBeNull();
+      // WaitingTaskRow is a lazy chunk: its supervisor group can commit before its action buttons do.
+      await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(group.querySelector("[data-open-task=held-elsewhere]")).not.toBeNull();
+      });
       const close = group.querySelector<HTMLButtonElement>("[data-close-task=held-elsewhere]")!;
       expect(close).not.toBeNull();
       act(() => close.click());

@@ -1277,6 +1277,44 @@ for a pairing and keeps them in `ShellSession.modules` (by id), with the hub's h
 A module that is off is absent: no page registered, no menu action, no Settings row, nothing left over. The voice module
 declares `module.voice`; its "Voice chat" item still appears only while the hub runs a voice extension, as before.
 
+**A hub module the app carries no module for** (`HubModule`, #15214). Some of the hub's modules have no `:module:<id>`
+project here: what they produced is shown by pages another module or the core draws. The app follows their flag by the
+same rule (`ModuleRegistry.isActive(HubModule, features)`) without listing them in `Modules.kt`, so
+`-Ppersona.modules` is unaffected. Off takes away the module's new activity and entry points and nothing else: what it
+produced earlier stays listed, readable and searchable (#13430). Today those are `HubModule.Recording`
+(`module.recording`) and `HubModule.Lark` (`module.lark`, below). For recordings:
+
+- The Knowledge list, search, deep links and a recording's page (transcript, stored minutes, facts, copy, share) are
+  as they are with the module on; they read the core's `kb` routes, which the hub keeps.
+- A recording's page hides the controls that write through the recording module's routes: Make / Regenerate minutes,
+  Add to to-dos / Add all, Hand to Agent. Tagging (`PUT /api/v1/kb/recordings/{id}`, a core route) and Ask Persona (a
+  chat message) stay.
+- The hub's `paused` on a recording's detail and list entry is decoded into the closed `RecordingPaused`
+  (`ModuleOff`, and `Unknown` for a reason a newer hub names). Paused for `module_off`, the minutes section shows
+  "Minutes are paused" where "Writing the minutes…" or "Updating…" stood, and the page stops reading the recording
+  again every five seconds; an unknown reason changes nothing.
+- The flag is read once, where the page is registered (`knowledgeEntries`), and becomes a `RecordingAccess` with the
+  recording's `paused` mark; `minutesView`, the hand-off entry and the poll take that and read neither again.
+  Tests: `ModuleRegistryTest`, `RecordingPausedContractTest`, `KnowledgeMinutesTest`, `RecordingModuleOffScreenTest`.
+
+`HubModule.Lark` (#15995) is the Lark bot: the hub connects it only while its Lark module is on, and with the module off
+the bot's settings write nothing useful or are refused. Settings reads the flag once (`rememberLarkBotEntry`, in
+`SettingsContent` and where a channel's page is registered) into the closed `LarkBotEntry` (`Offered`, `ModuleOff`) and
+hands that down:
+
+- Off, the bot's channel (`feishu`) is not listed in Settings › Channels and is left out of the Channels row's count on
+  the settings list; its page (the switch, linking, where its messages go, the test message, "More settings") and the
+  Lark bot page (the app's credentials, the daily sync) are not offered. A link, a saved page or the debug launch that
+  lands on either shows the page's title, its way back and one line (`settings_lark_bot_module_off`) and asks the hub
+  nothing.
+- It is not `LarkFeatures` (the hello's `lark`, announced by the Lark extension). That one decides what the extension's
+  surfaces can do: Settings › Connectors › Lark, Messages, the Inbox's Lark chats, documents and company-feed posts and
+  their replies. They read the extension's own `/api/v1/lark/…` routes, which the hub keeps serving, and are what the
+  user already has, so none of them reads the module's flag (`LarkBotModuleOffTest` pins that only `LarkBotEntry` does)
+  and all stay with the module off. `/agent` in Lark (`lark_agent`) is the extension's channel and stays listed too.
+- On, or a hello without `modules`: unchanged; `LarkBotEntry.listing` hands back the same `ChannelManagement`.
+  Tests: `ModuleRegistryTest`, `LarkBotModuleOffTest`, `LarkBotModuleOffShotsTest`.
+
 ```sh
 cd android
 ./gradlew -Ppersona.modules= :app:testDebugUnitTest :app:lintDebug :app:assembleDebug   # Persona Core alone
