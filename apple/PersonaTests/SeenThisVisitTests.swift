@@ -132,7 +132,7 @@ import PersonaWire
         model.markSeen([key("a"), key("b")])
         #expect(model.seenThisVisit.isEmpty, "the one read before goes with the batch")
         #expect(model.shownThisVisit == [key("c"): .unread], "and the batch's unread one is not held once seen")
-        #expect(model.session(key("b"))?.needsSeen() == false)
+        #expect(model.seenMark(key("b")) != nil, "sent; the row is the hub's until its next list (no optimistic state)")
     }
 
     /// A space's Mark All as Seen (its ⋯, and a repository's) passes all of its rows: a row read there before and held
@@ -147,7 +147,7 @@ import PersonaWire
         #expect(space.sessions.count == 2, "both in one space")
         model.markSeen(space.sessions.map(\.key))
         #expect(model.seenThisVisit.isEmpty && model.shownThisVisit.isEmpty, "both leave")
-        #expect(model.session(key("unread"))?.needsSeen() == false)
+        #expect(model.seenMark(key("unread")) != nil, "sent; the row is the hub's until its next list (no optimistic state)")
     }
 
     /// The counts know only the hub's state: rows read and held in place leave them at once, as any read row does. The
@@ -167,6 +167,9 @@ import PersonaWire
         #expect(finished() == 6)
         for id in ids.prefix(5) { model.markSeen(key(id)) }
         #expect(model.seenThisVisit.count == 5, "the five read rows are held in Unread")
+        #expect(finished() == 6, "no optimistic state: the counts wait for the hub")
+        // The hub's next list says the five are seen.
+        model.applySessions([machine: ids.map { session($0, state: ids.prefix(5).contains($0) ? "idle" : "unread") }])
         #expect(finished() == 1, "the widget's finished rows drop by the five read")
         var settings = AgentListProjection.Settings(grouping: "state")
         settings.heldSeen = model.seenThisVisit

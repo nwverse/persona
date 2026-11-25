@@ -3,8 +3,9 @@ import Testing
 @testable import Persona
 import PersonaWire
 
-/// Mark All as Read over a socket that is gone (#1588): a mark waits until a list from the hub shows it recorded, the
-/// session stays seen meanwhile, and the mark goes again over HTTP or the next socket.
+/// Mark All as Read over a socket that is gone (#1588): a mark waits until a list from the hub shows it recorded and goes
+/// again over HTTP or the next socket. Meanwhile the row stays as the hub sent it: an optimistic update never invents a
+/// state (docs/plans/plan-typed-core.md 2.4, #15397 P5b); only the list's held places keep it where it was.
 @MainActor struct SeenOutboxTests {
     private let machine = MachineRef(group: "", id: "m")
     private var key: SessionKey { SessionKey(machineID: "m", sessionID: "s1") }
@@ -33,15 +34,16 @@ import PersonaWire
         lists[machine]?.first { $0.sessionID == id }?.state
     }
 
-    @Test func aMarkTheHubHasNotTakenStaysSeen() {
+    @Test func aMarkTheHubHasNotTakenWaitsAndTheRowStaysAsSent() {
         var o = marked()
         // The hub never got it: its next list still says unread, from the same turn.
         let out = o.land([machine: [session(state: "unread"), session("s2", state: "unread")]], at: t0 + 1)
-        #expect(state(out) == .idle)
+        #expect(state(out) == .unread)
         #expect(state(out, "s2") == .unread) // not marked here
         #expect(o.marks[key] != nil)
         // The machine touching the transcript within the same turn is not a new one.
-        #expect(state(o.land([machine: [session(state: "unread", updated: 101)]], at: t0 + 2)) == .idle)
+        #expect(state(o.land([machine: [session(state: "unread", updated: 101)]], at: t0 + 2)) == .unread)
+        #expect(o.marks[key] != nil)
     }
 
     @Test func aRecordedMarkSettlesForFifteenSecondsFromItsFirstConfirmation() {
@@ -49,14 +51,14 @@ import PersonaWire
         let recorded = session(state: "idle", seen: 500)
         _ = o.land([machine: [recorded]], at: t0 + 1)
         #expect(o.marks[key] != nil)
-        // Another list can still carry the pre-open row. It stays seen, and the recorded mark is never sent again.
-        #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 2)) == .idle)
+        // Another list can still carry the pre-open row. It stays as sent, and the recorded mark is never sent again.
+        #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 2)) == .unread)
         #expect(o.due(at: t0 + SeenOutbox.confirmWithin + 1).isEmpty)
         #expect(o.nextDue(at: t0 + SeenOutbox.confirmWithin + 1) == nil)
         #expect(o.unanswered(group: "", at: t0 + SeenOutbox.confirmWithin + 1).isEmpty)
         // A repeated confirmation does not move the first confirmation's deadline.
         _ = o.land([machine: [recorded]], at: t0 + 5)
-        #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 15.999)) == .idle)
+        #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 15.999)) == .unread)
         #expect(o.marks[key] != nil)
         #expect(state(o.land([machine: [session(state: "unread")]], at: t0 + 16.001)) == .unread)
         #expect(o.marks.isEmpty)
@@ -66,7 +68,7 @@ import PersonaWire
         var o = marked()
         let recorded = session(state: "idle", seen: 500)
         _ = o.land([machine: [recorded]], at: t0 + 1)
-        #expect(state(o.land([machine: [session(state: "unread", seen: 0)]], at: t0 + 2)) == .idle)
+        #expect(state(o.land([machine: [session(state: "unread", seen: 0)]], at: t0 + 2)) == .unread)
         // A list that already carries the authoritative seen_at is not overwritten by the settling hold.
         #expect(state(o.land([machine: [session(state: "unread", seen: 500)]], at: t0 + 2)) == .unread)
         #expect(o.marks[key] != nil)
@@ -79,7 +81,7 @@ import PersonaWire
         for (activity, expected) in activities {
             var outbox = marked()
             _ = outbox.land([machine: [recorded]], at: t0 + 1)
-            #expect(state(outbox.land([machine: [session(state: "unread")]], at: t0 + 2)) == .idle)
+            #expect(state(outbox.land([machine: [session(state: "unread")]], at: t0 + 2)) == .unread)
             #expect(state(outbox.land([machine: [activity]], at: t0 + 3)) == expected)
             #expect(outbox.marks.isEmpty)
         }
@@ -111,13 +113,14 @@ import PersonaWire
         #expect(o.marks[key] != nil)
     }
 
-    @Test func aStaleJustFinishedFrameStaysSeenThroughSettlingOrUntilANewTurn() throws {
+    @Test func aStaleJustFinishedFrameKeepsItsMarkThroughSettlingOrUntilANewTurn() throws {
         var row = session(state: "idle")
         row.work = try JSON.decoder.decode(WorkState.self, from: Data(#"{"phase":"done","line":"Merged","just_finished":true}"#.utf8))
         var outbox = SeenOutbox()
         outbox.mark(key, row, at: t0)
         let stale = try #require(outbox.land([machine: [row]], at: t0 + 1)[machine]?.first)
-        #expect(stale.state == .idle && !stale.needsSeen() && stale.work?.line == "Merged")
+        #expect(stale.state == .idle && stale.needsSeen() && stale.work?.line == "Merged", "as the hub sent it")
+        #expect(outbox.marks[key] != nil)
         #expect(outbox.due(at: t0 + SeenOutbox.confirmWithin) == [key])
         var newTurn = row
         newTurn.updatedAt = row.updatedAt?.addingTimeInterval(10)
@@ -131,7 +134,7 @@ import PersonaWire
         #expect(outbox.due(at: t0 + SeenOutbox.confirmWithin + 1).isEmpty)
     }
 
-    @Test func openingAndMarkingAllClearJustFinishedBeforeTheHubAnswers() throws {
+    @Test func openingAndMarkingAllHoldTheirPlaceUntilTheHubAnswers() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let model = AppModel(stateFolder: folder)
@@ -142,11 +145,11 @@ import PersonaWire
         model.applySessions([machine: [first, second, unread]])
         model.visibleSession = key
         model.markSeen(key)
-        #expect(model.session(key)?.needsSeen() == false)
+        #expect(model.session(key)?.needsSeen() == true, "the row is the hub's until its next list")
         #expect(model.heldInList == key && model.heldJustFinished)
         model.markSeen([second.key, unread.key])
         model.applySessions([machine: [first, second, unread]])
-        #expect([first.key, second.key, unread.key].allSatisfy { model.session($0)?.needsSeen() == false })
+        #expect([first.key, second.key, unread.key].allSatisfy { model.seenMark($0) != nil }, "each mark waits for the hub")
         #expect(model.heldInList == key && model.heldJustFinished)
         model.visibleSession = nil
         #expect(model.heldInList == nil && !model.heldJustFinished)
@@ -165,12 +168,11 @@ import PersonaWire
         model.applySessions(snapshot)
         model.markSeen([forgotten.key, kept.key])
         model.applySessions(snapshot)
-        #expect(model.session(forgotten.key)?.needsSeen() == false)
-        #expect(model.session(kept.key)?.needsSeen() == false)
+        #expect(model.seenMark(forgotten.key) != nil && model.seenMark(kept.key) != nil)
         model.forgetGroups([forgotten.group])
         model.applySessions(snapshot)
-        #expect(model.session(forgotten.key)?.needsSeen() == true)
-        #expect(model.session(kept.key)?.needsSeen() == false)
+        #expect(model.seenMark(forgotten.key) == nil)
+        #expect(model.seenMark(kept.key) != nil)
     }
 
     @Test func aLateAnswerBelongsOnlyToTheMarkThatSentIt() throws {
@@ -333,7 +335,7 @@ import PersonaWire
         let otherKey = SessionKey(machineID: "m", sessionID: "other")
         o.mark(otherKey, session("other", state: "unread", updated: 100), at: t0)
         let landed = o.landRows([side], at: t0 + 2)
-        #expect(landed.first?.state == .idle)
+        #expect(landed.first?.state == .unread, "as the hub sent it")
         #expect(o.marks[sideKey] != nil && o.marks[otherKey] != nil)
     }
 }
