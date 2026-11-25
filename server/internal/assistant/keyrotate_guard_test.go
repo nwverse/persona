@@ -69,7 +69,7 @@ func sealedJSONFields(typ reflect.Type) []string {
 func TestPlacesThatSealAreKnown(t *testing.T) {
 	want := map[string]int{
 		// the manager's secret.key
-		"internal/assistant/service.go":                1, // its box
+		"internal/assistant/service.go":                2, // its box; and reg.Seal(), which closes the kernel's registry and holds no key
 		"internal/assistant/models_launchers.go":       2, // sealKey: launchers.managed
 		"internal/assistant/models_launchers_save.go":  3, // its calls: launchers.managed
 		"internal/assistant/models_import.go":          1, // launchers.managed: key, headers and env
