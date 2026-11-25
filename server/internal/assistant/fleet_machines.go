@@ -115,8 +115,9 @@ func (s *Service) nodeSessionsWhere(machine string, keep func(*proto.Session) bo
 
 // assistantSessions are this manager's assistant's conversations on machine m, copied out of its node's
 // list without the rest: a machine can list thousands of coding sessions beside them. Keep logical
-// placeholders and background-supervisor matches in parity with decorateInventory so GET /api/v1/assistant
-// lists every unarchived conversation that conversations_list sees.
+// placeholders whose authoritative space is known and background-supervisor matches in parity with
+// decorateInventory so GET /api/v1/assistant lists every unarchived conversation that belongs in the
+// requested space while failing closed when a placeholder's space cannot be determined.
 func (s *Service) assistantSessions(ctx context.Context, m fleetMachine) []proto.Session {
 	if s.devs == nil {
 		return nil
@@ -126,7 +127,18 @@ func (s *Service) assistantSessions(ctx context.Context, m fleetMachine) []proto
 	list, _ := s.devs.SessionsWhere(m.ID, func(sess *proto.Session) bool {
 		return (sess.LogicalPlaceholder && sess.Assistant) || isAssistantSession(sess, dir, m.manager) || bgMatch.matches(sess)
 	})
-	return list
+	out := list[:0]
+	for i := range list {
+		if list[i].LogicalPlaceholder {
+			sp, known := s.logicalRowSpace(ctx, list[i])
+			if !known {
+				continue
+			}
+			list[i].Space = sp
+		}
+		out = append(out, list[i])
+	}
+	return out
 }
 
 // placeCard places a card of one of this manager's headless conversations in the conversation's directory, where

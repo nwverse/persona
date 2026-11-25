@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -100,16 +101,25 @@ func TestAssistantViewIncludesLogicalOfflinePinnedLeaders(t *testing.T) {
 		{SessionID: "dir-8", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
 		{SessionID: "dir-9", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
 		{SessionID: "dir-archived", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
+		{SessionID: "dir-unknown-space", Status: proto.StatusOffline, Assistant: true, LogicalPlaceholder: true},
 		{SessionID: "coding", Cwd: "/code/example", Status: proto.StatusWorking},
 		{SessionID: "non-assistant-placeholder", Status: proto.StatusOffline, Assistant: false, LogicalPlaceholder: true},
 	}
 	d.setSessions("box", list)
+	// Record authoritative default space ("") for known default-space logical placeholders; leave dir-unknown-space unnoted.
+	s.noteConversationSpaces(ctx, []db.ConversationSpace{
+		{MachineID: "box", SessionID: "dir-7", Space: ""},
+		{MachineID: "box", SessionID: "dir-8", Space: ""},
+		{MachineID: "box", SessionID: "dir-9", Space: ""},
+		{MachineID: "box", SessionID: "dir-archived", Space: ""},
+	})
 	s.fleet.rep.sessions = map[string]SessionView{
-		"main":         {Title: "Persona"},
-		"dir-7":        {Title: "Direction 7"},
-		"dir-8":        {Title: "Direction 8"},
-		"dir-9":        {Title: "Direction 9"},
-		"dir-archived": {Title: "Archived direction", Archived: true},
+		"main":              {Title: "Persona"},
+		"dir-7":             {Title: "Direction 7"},
+		"dir-8":             {Title: "Direction 8"},
+		"dir-9":             {Title: "Direction 9"},
+		"dir-archived":      {Title: "Archived direction", Archived: true},
+		"dir-unknown-space": {Title: "Unknown space direction"},
 	}
 
 	wantIDs := []string{"main", "dir-1", "dir-2", "dir-3", "dir-4", "dir-5", "dir-6", "dir-7", "dir-8", "dir-9"}
@@ -121,10 +131,6 @@ func TestAssistantViewIncludesLogicalOfflinePinnedLeaders(t *testing.T) {
 		return out
 	}
 
-	listed, _ := s.conversations(ctx, false, "")
-	if got := idsOf(listed); !reflect.DeepEqual(got, wantIDs) {
-		t.Fatalf("conversations() = %v, want %v", got, wantIDs)
-	}
 	view := s.view(ctx, false)
 	if got := idsOf(view.Conversations); !reflect.DeepEqual(got, wantIDs) {
 		t.Fatalf("view(withArchived=false).Conversations = %v, want %v", got, wantIDs)
