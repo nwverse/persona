@@ -37,6 +37,13 @@ export interface ChannelTarget {
   title?: string;
 }
 
+export type ChannelThreadMode = "channel_default" | "per_group_and_topic" | "per_topic";
+
+export const CHANNEL_THREAD_MODES: readonly ChannelThreadMode[] = ["channel_default", "per_group_and_topic", "per_topic"];
+
+/** Matches channel.MaxThreadIdleHours on the hub (10 years). 0 means the default 30-day timeout. */
+export const MAX_THREAD_IDLE_HOURS = 3650 * 24;
+
 export interface ChannelFeature {
   id: string;
   title: string;
@@ -60,11 +67,19 @@ export interface Channel {
   description?: string;
   capabilities: ChannelCapabilities;
   target?: ChannelTarget;
+  /** Group/topic routing mode when integrations_v2 is enabled; omitted on older hubs. */
+  thread_mode?: ChannelThreadMode;
+  /** Inactivity timeout in hours before a routed group/topic starts a new conversation (0 = default 30 days). */
+  thread_idle_hours?: number;
   features?: ChannelFeature[];
   bind: "none" | "qr" | "code" | "fields" | "config";
   surfaces?: string[];
   last_event_at?: string;
   read_only?: boolean;
+}
+
+export interface ChannelTargetOverride {
+  mode: "topics" | "threads" | (string & {});
 }
 
 /** GET /api/v1/channels/{id} (channel.Detail). */
@@ -73,6 +88,8 @@ export interface ChannelDetail extends Channel {
   conversations?: { machine_id: string; session_id: string; title?: string; at: string }[];
   /** The channel's own full page in the app ("settings/connectors/feishu-bot", "settings/plugins/<id>"). */
   settings_url?: string;
+  /** Set when topic or thread routing currently takes precedence over the channel's default target. */
+  target_override?: ChannelTargetOverride;
 }
 
 /** A bind step (connector.Prompt); a channel adds pair_code, a code to send to the bot, to the kinds a connector has. */
@@ -90,8 +107,32 @@ export function channelDetail(id: string): Promise<ChannelDetail> {
   return api<ChannelDetail>(`/channels/${enc(id)}`);
 }
 
-export function updateChannel(id: string, body: { enabled?: boolean; target?: ChannelTarget; features?: Record<string, boolean> }): Promise<ChannelDetail> {
+export interface ChannelUpdateBody {
+  enabled?: boolean;
+  target?: ChannelTarget;
+  features?: Record<string, boolean>;
+  thread_mode?: ChannelThreadMode;
+  thread_idle_hours?: number;
+}
+
+export function updateChannel(id: string, body: ChannelUpdateBody): Promise<ChannelDetail> {
   return api<ChannelDetail>(`/channels/${enc(id)}`, { method: "PUT", json: body });
+}
+
+/** Normalizes a channel's thread_mode, falling back to channel_default when absent or unknown. */
+export function normalizeThreadMode(mode?: string): ChannelThreadMode {
+  if (mode === "per_group_and_topic" || mode === "per_topic" || mode === "channel_default") return mode;
+  return "channel_default";
+}
+
+/** Whether the hub advertised thread_mode support on this channel (older hubs omit it). */
+export function supportsThreadRouting(c: Pick<Channel, "thread_mode">): boolean {
+  return typeof c.thread_mode === "string" && c.thread_mode.length > 0;
+}
+
+/** Whether hours is a valid thread_idle_hours value (0 = default 30 days, up to MAX_THREAD_IDLE_HOURS). */
+export function isValidThreadIdleHours(hours: number): boolean {
+  return Number.isInteger(hours) && hours >= 0 && hours <= MAX_THREAD_IDLE_HOURS;
 }
 
 export function bindChannel(id: string, step: string, values: Record<string, string>): Promise<ChannelPrompt> {

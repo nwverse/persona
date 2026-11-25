@@ -6,6 +6,7 @@ import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
 import persona.core.designsystem.icons.PhIcon
 import persona.core.navigation.Navigator
+import kotlin.reflect.KClass
 
 /**
  * One module of the app (#13430 "Persona Core and modules", docs/android/android.md "Modules"): a feature the owner can
@@ -16,8 +17,8 @@ import persona.core.navigation.Navigator
  *
  * Names follow the shared module contract (#13430 section 4): [id] is `id`, [feature] is `feature`, [navEntries] serves
  * `shell_places`, [menuActions] serves `composer_actions` and the other action slots ([MenuSlot]), [settingsPages] is
- * `settings`, [services] is the client half of `hub_routes`. Declared but not yet served by the Android shell:
- * [audioUses] (the audio broker, #13431).
+ * `settings`, [services] is the client half of `hub_routes`, [audioUses] is what the module may ask the shell's audio
+ * broker for ([ModuleNavContext.audioFocus]).
  */
 interface PersonaModule {
     /** `id`: lower case and hyphenated, the same on every platform (`voice`, `knowledge-ui`). */
@@ -44,6 +45,12 @@ interface PersonaModule {
     fun navEntries(entries: EntryProviderScope<NavKey>, context: ModuleNavContext) {}
 
     /**
+     * `shell_places`, as a list: the routes [navEntries] registers. The shell reads it to show its own way into a module's
+     * place (a sidebar or menu item it keeps) only while some active module serves that place ([LocalModulePlaces]).
+     */
+    val places: Set<KClass<out NavKey>> get() = emptySet()
+
+    /**
      * The module's actions in [slot], read while that surface is composed; none by default. [ModuleUiContext.target] says
      * what a composer, session or message action is about.
      */
@@ -56,7 +63,7 @@ interface PersonaModule {
      */
     fun settingsPages(): List<ModuleSettingsPage> = emptyList()
 
-    /** What the module plays or records ([AudioFocus]). Declared; the Android shell has no broker yet. */
+    /** What the module plays or records: the uses its [ModuleNavContext.audioFocus] grants; any other is refused. */
     val audioUses: Set<AudioUse> get() = emptySet()
 
     /** Debug builds: pages `debug.openPage` can open by name, for captures. */
@@ -99,6 +106,10 @@ class ModuleNavContext(
     val services: ModuleServices?,
     /** The shell's page for a place that cannot work here (demo mode): the [message] and a way back. */
     val unavailable: @Composable (message: String) -> Unit,
+    /** The core's audio broker as this module sees it ([AudioBroker.forModule]): ask before the microphone or playback. */
+    val audioFocus: AudioFocus,
+    /** The core's repositories for the paired hub; null in demo mode. */
+    val shell: ModuleShell? = null,
 )
 
 /** What [PersonaModule.menuActions] gets from the shell. */

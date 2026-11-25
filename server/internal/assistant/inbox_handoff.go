@@ -488,9 +488,10 @@ func (s *Service) confirmHandedReply(ctx context.Context, it *InboxItem, g *Inbo
 // sub-session.
 func (s *Service) confirmHandedAgent(ctx context.Context, it *InboxItem, g *InboxSuggestion, text string, edited bool, to SessionRef,
 	title string) (InboxItem, error) {
+	hubMachine := s.settings(ctx).MachineID
 	machine := g.MachineID
 	if machine == "" {
-		machine = s.settings(ctx).MachineID
+		machine = hubMachine
 	}
 	cwd := g.Cwd
 	if cwd == "" {
@@ -498,8 +499,20 @@ func (s *Service) confirmHandedAgent(ctx context.Context, it *InboxItem, g *Inbo
 	}
 	args, _ := json.Marshal(map[string]string{"machine": machine, "cwd": cwd, "prompt": text})
 	hs := &handoffStart{item: it.ID}
-	_, err := s.runTool(ownerConfirmed(context.WithValue(ctx, handoffStartKey{}, hs)), s.settings(ctx).MachineID, to.SessionID, "agent_start", args)
+	freshCfg, err := s.inboxConfigFresh(ctx)
 	b := &s.inbox
+	if err != nil {
+		err = errReplyPolicyBlocked
+	} else {
+		b.mu.Lock()
+		if verifyReplyPolicySuggestionLocked(it, g, nil, compileReplyPolicy(freshCfg.ReplyPolicy)) != nil {
+			err = errReplyPolicyBlocked
+		}
+		b.mu.Unlock()
+	}
+	if err == nil {
+		_, err = s.runTool(ownerConfirmed(context.WithValue(ctx, handoffStartKey{}, hs)), hubMachine, to.SessionID, "agent_start", args)
+	}
 	b.mu.Lock()
 	l, now := b.userLang(), time.Now().UTC()
 	switch {

@@ -6,22 +6,24 @@
 package nodecmd
 
 import (
+	_ "github.com/nwverse/persona/server/internal/modules/all/node" // the modules that run on the node (Provider seams)
+
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
-	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/machineops"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
+	"github.com/nwverse/persona/server/internal/nodecmd/commandport"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
-	"github.com/nwverse/persona/server/internal/office"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/procs"
 	"github.com/nwverse/persona/server/internal/scriptcli"
@@ -34,8 +36,11 @@ type Build struct {
 	Program string // nodeproto.ProgramPersonad or ProgramPersonaNode: what node.info says the node runs as
 }
 
-// Usage is the device commands' part of the usage text (the node part is NodeUsage).
-const Usage = `  personad resource status [resource]  shared runner status as JSON
+// Usage is the device commands' part of the usage text (the node part is NodeUsage), with the lines of the commands
+// the node-side modules of this build add (internal/nodecmd/commandport).
+func Usage() string { return strings.TrimSuffix(deviceUsage+"\n"+commandport.CommandUsage(), "\n") }
+
+const deviceUsage = `  personad resource status [resource]  shared runner status as JSON
   personad gate <project> <ref> [groups...]  join or reuse identical gate work
   personad hook             Claude Code hook entry (reads hook JSON on stdin)
   personad mcp              Claude Code MCP server (stdio)
@@ -49,9 +54,6 @@ const Usage = `  personad resource status [resource]  shared runner status as JS
   personad tool <tool> [<json args> | -] | --cli <connector> [--format json|text] <words…>
                            a connector's tools from the assistant's shell, or an Agent's own tools from its pane
                            (docs/protocol/connector-protocol.md "Command line"; personad tool --help)
-  personad office docx|pptx|xlsx|check …
-                           write a Word document or a deck from Markdown, a workbook from JSON / CSV, or say what is in
-                           one (the office skill): personad office --help
   personad ops storage|hotspots|toolchain|network|ports|processes|services|service-logs|mcp|skill …
                            on-demand read-only machine diagnostics CLI, stdio MCP server, and opt-in skill manager: personad ops --help
   personad claude-plugin status|install|uninstall|on|off
@@ -59,8 +61,7 @@ const Usage = `  personad resource status [resource]  shared runner status as JS
                            words; docs/operations/link.md "Claude Code plugin")
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")
-` + iphone.Usage
+                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")`
 
 // SysmonUsage is `sysmon`'s line in the usage text.
 const SysmonUsage = `  personad sysmon [n]       print this machine's system info and 1 + n metric samples (n default 3, at most 8640,
@@ -103,7 +104,7 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)
-		return true, node.CodexStart(rest)
+		return true, node.TabStart(rest)
 	case "mcp":
 		return true, mcpserver.Serve(ctx, b.Version, os.Stdin, os.Stdout)
 	case "tool": // a connector's tools and command line from the assistant's shell (internal/toolcli)
@@ -118,14 +119,10 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(scriptcli.WriteProgress(ctx, rest, os.Stdout, os.Stderr))
 	case "decision":
 		os.Exit(scriptcli.Decision(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
-	case "office":
-		os.Exit(office.Main(rest, os.Stdout, os.Stderr))
 	case "ops":
 		os.Exit(machineops.Main(ctx, b.Version, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
 		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
-	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
-		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":
 		n, err := sysmonCount(rest)
 		if err != nil {
@@ -140,7 +137,11 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	case "node-update-watch":
 		return true, runNodeUpdateWatch(ctx, rest)
 	default:
-		return false, nil
+		run, ok := commandport.LookupCommand(args[0]) // a module's command (internal/modules/all/node)
+		if !ok {
+			return false, nil
+		}
+		os.Exit(run(ctx, rest, os.Stdin, os.Stdout, os.Stderr))
 	}
 	return true, nil
 }

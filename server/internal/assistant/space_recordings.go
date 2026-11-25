@@ -153,7 +153,7 @@ func (s *Service) putSpaceRecording(ctx context.Context, rawID string, u kb.Reco
 	if strings.EqualFold(strings.TrimSpace(u.Kind), kb.RecordingDay) {
 		return "", "", errSpaceRecordingDay // an all-day recording has its own recap in the knowledge base
 	}
-	if err := u.Clean(); err != nil {
+	if err := kb.CleanRecordingUpload(&u); err != nil {
 		return "", "", err
 	}
 	// One the knowledge base holds stays there (a later upload naming a track would make a second copy of it).
@@ -307,6 +307,9 @@ func (s *Service) spaceRecordingsSweep(ctx context.Context) {
 		s.logf("space recordings: forgot %d tombstone(s) past recording_days", n)
 	}
 }
+
+// codeRecordingDeleted: the recording was deleted here; the phone drops it instead of uploading it again.
+const codeRecordingDeleted = "recording_deleted"
 
 // writeSpaceRecordingError answers an error of putSpaceRecording or deleteSpaceRecording.
 func writeSpaceRecordingError(w http.ResponseWriter, err error) {

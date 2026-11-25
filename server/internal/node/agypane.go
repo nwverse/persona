@@ -62,7 +62,7 @@ var agyEmbeddedUUIDRe = lazyre.New(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 // hooks report too (agyhooks.go): agyReportedLocked is the two together.
 func reportedAgyConversation(a host.Agent) string {
 	s := a.AgentSession
-	if a.Agent == agyAgent && s != nil && s.Source == "herdr:antigravity_cli" &&
+	if a.Agent == agyAgent && s != nil && (s.Source == "herdr:antigravity_cli" || s.Source == agyPresenceSource) &&
 		s.Agent == agyAgent && s.Kind == "id" && uuidRe.MatchString(s.Value) {
 		return s.Value
 	}
@@ -501,7 +501,7 @@ func sameAgyFile(a, b os.FileInfo) bool {
 }
 
 func agyStepsHistory(conversation string) agyHistory {
-	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v1:lazy-media:checkpoints:wakes:file-links:full-text"}
+	return agyHistory{token: "agy-pane:" + conversation + ":steps:context-resources-v1:lazy-media:checkpoints:wakes:file-links:full-text:tool-headers"}
 }
 
 // agyRead projects the compact export when present, filling in verified text
@@ -542,7 +542,7 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous *agyPan
 		return empty, nil, err
 	}
 	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
-	steps, rev := parseAgySteps(raw, conversation)
+	steps, rev := n.agyParse(key, conversation, info, raw)
 	if !slices.ContainsFunc(steps, func(step agyStep) bool { return step.Type != "" }) && len(bytes.TrimSpace(raw)) != 0 {
 		return empty, nil, errors.New("unrecognized Antigravity transcript format")
 	}
@@ -590,6 +590,63 @@ func (n *Node) agyRead(root *os.Root, key, conversation string, previous *agyPan
 		h.token += ":wake:" + h.observedWakeRevision
 	}
 	return h, files, nil
+}
+
+// agyParsesKept is how many conversations' parses agyParse keeps to go on from: the panes being watched.
+const agyParsesKept = 8
+
+// agyParsed is how far agyParse read a conversation's transcript: the file, the length and SHA-256 of the complete
+// lines it parsed, and the fold after them.
+type agyParsed struct {
+	file   os.FileInfo
+	length int
+	hash   [32]byte
+	fold   agyFold
+}
+
+// agyParse is parseAgySteps(raw, conversation) for transcript file info at key. When the file is the one it parsed last
+// time, only grew, and the bytes parsed then hash the same, only the lines after them are parsed, going on from that
+// fold: a watched pane re-parsed the whole transcript four times a second while agy wrote to it (#13470). A truncated,
+// rewritten or replaced file is parsed whole, as before.
+func (n *Node) agyParse(key, conversation string, info os.FileInfo, raw []byte) ([]agyStep, agyRevision) {
+	n.mu.Lock()
+	if n.agyParses == nil {
+		n.agyParses = newLRU[string, *agyParsed](agyParsesKept)
+	}
+	last, _ := n.agyParses.get(key)
+	n.agyParses.put(key, nil) // taken: a reader meanwhile parses on its own
+	n.mu.Unlock()
+
+	h := sha256.New()
+	fold, from := agyFold{conversation: conversation}, 0
+	if last != nil && last.fold.conversation == conversation && os.SameFile(info, last.file) && len(raw) >= last.length {
+		h.Write(raw[:last.length])
+		if [32]byte(h.Sum(nil)) == last.hash {
+			fold, from = last.fold, last.length
+		} else {
+			h.Reset()
+		}
+	}
+	fold.add(raw[from:])
+	h.Write(raw[from:])
+	sum := [32]byte(h.Sum(nil))
+
+	n.mu.Lock()
+	n.agyParses.put(key, &agyParsed{file: info, length: len(raw), hash: sum, fold: fold})
+	n.mu.Unlock()
+	return agyOwnSteps(fold.steps), fold.revision(len(raw), sum)
+}
+
+// agyOwnSteps copies a fold's steps for the caller to keep and change: the fold stays the transcript's parse, for the
+// next read to go on from, which can replace steps in place (a late arrival, a rewind, a running step that finished).
+// agyRead restores a truncated reply's full text into its copy (restoreAgyFullText), dropping restored fields from
+// TruncatedFields in place, so each step's list is copied too.
+func agyOwnSteps(steps []agyStep) []agyStep {
+	own := slices.Clone(steps)
+	for i := range own {
+		own[i].TruncatedFields = slices.Clone(own[i].TruncatedFields)
+	}
+	return own
 }
 
 type agyPageParams struct {
@@ -640,7 +697,24 @@ func agyUserInput(it proto.Item) bool {
 	return it.Role == "user" && (it.Kind == proto.KindText || (it.Kind == proto.KindImage && it.ToolUseID == ""))
 }
 
+func (h agyHistory) toolUses() map[string]proto.Item {
+	var uses map[string]proto.Item
+	for _, it := range h.items {
+		if it.Kind == proto.KindToolUse && it.ToolUseID != "" {
+			if uses == nil {
+				uses = map[string]proto.Item{}
+			}
+			uses[it.ToolUseID] = it
+		}
+	}
+	return uses
+}
+
 func (h agyHistory) page(p agyPageParams) any {
+	return h.pageWith(p, "", nil)
+}
+
+func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) any {
 	if p.UserInputs {
 		index := proto.UserInputIndex{History: h.token, Inputs: []proto.UserInputPosition{}}
 		for _, it := range h.items {
@@ -651,18 +725,24 @@ func (h agyHistory) page(p agyPageParams) any {
 		index.Total = len(index.Inputs)
 		return index
 	}
+	uses := h.toolUses()
 	items := h.items
 	if p.ThroughSeq > 0 {
 		from, to := agyIndex(items, p.FromSeq), agyAfter(items, p.ThroughSeq)
 		items = items[min(from, to):to]
 		if len(items) > 1000 {
 			end := agyAfter(items, items[999].Seq)
-			return map[string]any{"items": agyLightItems(items[:end]), "more": end < len(items)}
+			light := agyLightItems(items[:end])
+			tv.attachWithUses(id, light, false, uses)
+			return map[string]any{"items": light, "more": end < len(items)}
 		}
-		return map[string]any{"items": agyLightItems(items), "more": false}
+		light := agyLightItems(items)
+		tv.attachWithUses(id, light, false, uses)
+		return map[string]any{"items": light, "more": false}
 	}
 	if p.AfterSeq != nil {
 		page, span, more := h.after(*p.AfterSeq)
+		tv.attachWithUses(id, page, true, uses)
 		return withSpan(map[string]any{"items": page, "has_more": false, "more_after": more}, span, true)
 	}
 	span := transcript.Span{History: h.token, To: h.seq}
@@ -697,6 +777,7 @@ func (h agyHistory) page(p agyPageParams) any {
 		start = agyIndex(items, items[start].Seq)
 	}
 	items = agyLightItems(items[start:])
+	tv.attachWithUses(id, items, p.BeforeSeq == 0, uses)
 	if p.FoldWork && p.BeforeSeq == 0 {
 		items = transcript.FoldWorkLatest(items)
 	} else if p.FoldWork {
@@ -762,7 +843,9 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 					}
 				}
 				if n.agyConversation(id, pane) == conversation {
-					return it, nil, true
+					one := []proto.Item{it}
+					n.toolViews.attachWithUses(id, one, false, h.toolUses())
+					return one[0], nil, true
 				}
 				break
 			}
@@ -772,12 +855,12 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 		}
 	}
 	if method == "session.item" {
-		return nil, fmt.Errorf("no item"), true
+		return nil, &rpc.Error{Code: codeNotFound, Message: "no item"}, true // 404, not a gateway failure (#13470)
 	}
 	if method == "session.image" {
-		return nil, fmt.Errorf("no image"), true
+		return nil, &rpc.Error{Code: codeNotFound, Message: "no image"}, true
 	}
-	return h.page(p), nil, true
+	return h.pageWith(p, id, &n.toolViews), nil, true
 }
 
 func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
@@ -798,6 +881,7 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
+		var breakdown *proto.ContextBreakdown
 		if runtimeRow, _, ok := n.runtimes.rowOf(agyAgent + "-" + conversation); ok {
 			if runtimeRow.Model != "" {
 				info["model"] = runtimeRow.Model
@@ -813,6 +897,8 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 				info["output_tokens"] = runtimeRow.OutputTokens
 				delete(info, "usage_unknown")
 			}
+			n.resolveAgyContext(&runtimeRow, conversation)
+			breakdown = runtimeRow.ContextBreakdown()
 		} else if u, ok := n.agyTranscriptMeta(conversation); ok {
 			if u.model != "" {
 				info["model"] = u.model
@@ -824,6 +910,12 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 				info["output_tokens"] = u.outputTokens
 				delete(info, "usage_unknown")
 			}
+			row := proto.Session{SessionID: id, Model: u.model}
+			n.setAgyTranscriptContext(&row, u)
+			breakdown = row.ContextBreakdown()
+		}
+		if breakdown != nil {
+			info["context_breakdown"] = breakdown
 		}
 	}
 	return info
@@ -910,7 +1002,9 @@ func (n *Node) pollAgyPane(w *watch) {
 			}
 			if n.peer != nil {
 				span := transcript.Span{History: h.token, From: since, To: since}
-				err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": agyLightItems(updated)}, span, true))
+				light := agyLightItems(updated)
+				n.toolViews.attachWithUses(w.id, light, true, h.toolUses())
+				err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": light}, span, true))
 				if err != nil {
 					return
 				}
@@ -923,6 +1017,7 @@ func (n *Node) pollAgyPane(w *watch) {
 			return
 		}
 		if n.peer != nil {
+			n.toolViews.attachWithUses(w.id, items, true, h.toolUses())
 			err := n.peer.NotifyContext(w.ctx, "session.items", withSpan(map[string]any{"session_id": w.id, "items": items}, span, true))
 			if err != nil {
 				return

@@ -59,6 +59,15 @@ type InboxSuggestion struct {
 	// Owner and SourceOf bind an unsent reply to its author and source snapshot; persisted, not listed.
 	Owner    *SessionRef `json:"owner,omitempty"`
 	SourceOf string      `json:"source_of,omitempty"`
+	// ReplyPolicy binds an accepted reply suggestion to its server-side category, route, content version, and policy
+	// revision (inbox_reply_policy.go); persisted, not listed.
+	ReplyPolicy *InboxReplyPolicySnapshot `json:"reply_policy,omitempty"`
+	// ReplyInstruction binds a generated replacement to its owner rewrite. Publication markers fail closed when
+	// an on-demand draft has not reached its committed mirror.
+	ReplyInstruction        string `json:"reply_instruction,omitempty"`
+	ReplyPublicationFailed  bool   `json:"reply_publication_failed,omitempty"`
+	OnDemand                bool   `json:"on_demand,omitempty"`
+	ReplyPublicationPending bool   `json:"reply_publication_pending,omitempty"`
 }
 
 // InboxHandoff is one hand-off of the event to Persona's main conversation (POST /api/v1/inbox/{id}/handoff): that

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 )
 
 // ---- the suggestion tool (inbox_suggest; inbox_draft is its older name for a reply) ----
@@ -52,6 +53,7 @@ var errStaleInboxTurn = errSuggestion{"this Inbox processing turn has been super
 
 var errSuggestFiled = errSuggestion{"this inbox item is already filed, so the suggestion was not submitted and the user cannot see it; end this turn"}
 var errReportedFiled = errSuggestion{"this inbox item is already filed, so the reported step was not recorded; end this turn"}
+var errTodoFromHandoff = errSuggestion{"a to-do is suggested by the conversation that processes the item, not one it was handed to"}
 
 // check holds a suggestion to the rules before anything is kept.
 func (in *suggestIn) check() error {
@@ -94,9 +96,6 @@ func (in *suggestIn) check() error {
 	}
 	in.Due = strings.TrimSpace(in.Due)
 	if in.Kind == SuggestTodo {
-		if in.Item != "" {
-			return errSuggestion{"a to-do is suggested by the conversation that processes the item, not one it was handed to"}
-		}
 		if err := checkSuggestedDue(in.Due); err != nil {
 			return err
 		}
@@ -144,34 +143,94 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	if s.inboxReady(ctx) != nil {
 		return "", nil, nil, false, errInboxUnavailable
 	}
+	var policy replyPolicySpec
+	policyAuthorization := in.Kind == SuggestReply || in.Kind == SuggestAgent
+	if policyAuthorization {
+		cfg, err := s.inboxConfigFresh(ctx)
+		if err != nil {
+			return "", nil, nil, false, errReplyPolicyBlocked
+		}
+		policy = compileReplyPolicy(cfg.ReplyPolicy)
+	}
 	b := &s.inbox
 	b.mu.Lock()
 	var it *InboxItem
 	var from *SessionRef
-	if item := strings.TrimSpace(in.Item); item != "" {
-		var err error
-		if it, from, err = b.handedItem(item, sessionID); err != nil {
-			b.mu.Unlock()
-			return "", nil, nil, false, err
+	item := strings.TrimSpace(in.Item)
+	lookup := func() (*InboxItem, *SessionRef, bool, error) {
+		if item != "" {
+			got, ref, err := b.handedItem(item, sessionID)
+			// While the item's own agent is still starting (SessionID not yet recorded), both a lookup error and a
+			// hand-off match are provisional: once Agent.SessionID is populated, handedItem gives the item's own
+			// processing conversation precedence over any recorded hand-off to the same session.
+			return got, ref, sessionID != "" && (err != nil || ref != nil) && b.itemAgentStarting(item), err
 		}
-	} else {
-		it = b.itemOfAgent(sessionID)
-		// A conversation that answers before its start returned (an agent runtime already running starts a turn at
-		// once): its item learns the conversation's id a moment later.
-		for wait := time.Now().Add(inboxDraftWait); it == nil && b.agentStarting() && time.Now().Before(wait); {
-			b.mu.Unlock()
+		got := b.itemOfAgent(sessionID)
+		if got == nil {
+			return nil, nil, sessionID != "" && b.agentStarting(), errNotProcessing
+		}
+		return got, nil, false, nil
+	}
+	var waitMore bool
+	var err error
+	it, from, waitMore, err = lookup()
+	// A conversation that answers before its start returned (an agent runtime already running starts a turn at
+	// once): its item learns the conversation's id a moment later.
+	waited := false
+	for wait := time.Now().Add(inboxDraftWait); waitMore && time.Now().Before(wait); {
+		waited = true
+		hook := b.waitHook
+		b.mu.Unlock()
+		if hook != nil {
+			hook()
+		} else {
 			time.Sleep(100 * time.Millisecond)
-			b.mu.Lock()
-			it = b.itemOfAgent(sessionID)
 		}
-		if it == nil {
+		b.mu.Lock()
+		it, from, waitMore, err = lookup()
+	}
+	if err != nil {
+		b.mu.Unlock()
+		return "", nil, nil, false, err
+	}
+	if waited && policyAuthorization {
+		// The association wait can outlive both the policy and the session binding used at admission. Refresh after
+		// the wait, then prove that the same live item is still bound to this conversation before publishing anything.
+		waitingItem, waitingFrom := it, from
+		b.mu.Unlock()
+		freshCfg, freshErr := s.inboxConfigFresh(ctx)
+		b.mu.Lock()
+		if freshErr != nil {
+			b.mu.Unlock()
+			return "", nil, nil, false, errReplyPolicyBlocked
+		}
+		liveItem, liveFrom, _, bindErr := lookup()
+		sameFrom := waitingFrom == nil && liveFrom == nil ||
+			waitingFrom != nil && liveFrom != nil && *waitingFrom == *liveFrom
+		if bindErr != nil || liveItem != waitingItem || b.items[waitingItem.ID] != waitingItem || !sameFrom {
 			b.mu.Unlock()
 			return "", nil, nil, false, errNotProcessing
 		}
+		it, from = liveItem, liveFrom
+		policy = compileReplyPolicy(freshCfg.ReplyPolicy)
+	}
+	if from != nil && in.Kind == SuggestTodo {
+		b.mu.Unlock()
+		return "", nil, nil, false, errTodoFromHandoff
 	}
 	if from == nil && in.ProcessingTurn != it.Agent.ProcessingTurn {
 		b.mu.Unlock()
 		return "", nil, nil, false, errStaleInboxTurn
+	}
+	if from == nil && (in.Kind == SuggestReply || in.Kind == SuggestAgent) && policy.appliesToItem(it) && it.Agent != nil {
+		for _, note := range it.Agent.Pending {
+			if note.Name == prompts.NoteNewMessages {
+				// Collection has newer content that this turn has not seen. Classification may already have advanced while
+				// delivery still waits; publishing now would stamp old text with the new target and authorization.
+				b.mu.Unlock()
+				return "", nil, nil, false, errStaleInboxTurn
+			}
+		}
 	}
 	if from == nil && (in.Kind != "" || in.Follow != nil) && !it.open() {
 		b.mu.Unlock()
@@ -185,6 +244,47 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 		if it.Doc == nil || !docOffers(*it.Doc, ch) {
 			b.mu.Unlock()
 			return it.ID, &ch, nil, false, nil
+		}
+	}
+	var policySnap *InboxReplyPolicySnapshot
+	instructionID := ""
+	if policy.appliesToItem(it) && (in.Kind == SuggestReply || in.Kind == SuggestAgent) && it.open() {
+		instruction, needsInstructionReview := replyInstructionForSuggestion(it, in.Text, policy)
+		if instruction != nil {
+			instructionID = instruction.ID
+		}
+		// Every policy-applicable reply, Agent instruction, and handback needs a snapshot bound to its exact text.
+		// An active rewrite adds its instruction to the classifier input; it never substitutes for that snapshot.
+		reviewGenerated := in.Kind == SuggestReply || in.Kind == SuggestAgent
+		if reviewGenerated {
+			itemData := snapshotItemForReplyPolicyLocked(it)
+			classifierItem := itemData
+			if needsInstructionReview {
+				classifierItem = replyPolicyItemWithInstruction(classifierItem, instruction)
+			}
+			existingSnap := cloneReplyPolicySnapshot(it.ReplyPolicy)
+			b.mu.Unlock()
+			snap, gateErr := s.gateReplyPolicySuggestion(ctx, policy, classifierItem, existingSnap, in.Text)
+			livePolicy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy)
+			b.mu.Lock()
+			if gateErr != nil {
+				b.mu.Unlock()
+				return "", nil, nil, false, replyPolicySuggestionErr(snap, gateErr)
+			}
+			if b.items[itemData.id] != it || !it.open() {
+				b.mu.Unlock()
+				return "", nil, nil, false, errSuggestFiled
+			}
+			if from == nil && (it.Agent == nil || in.ProcessingTurn != it.Agent.ProcessingTurn) {
+				b.mu.Unlock()
+				return "", nil, nil, false, errStaleInboxTurn
+			}
+			if !livePolicy.appliesToItem(it) || livePolicy.revision != policy.revision || replyPolicyContentVersion(it) != itemData.contentVersion ||
+				livePolicy.allowsOwnerDraft(snap, itemData.contentVersion) != nil {
+				b.mu.Unlock()
+				return "", nil, nil, false, replyPolicySuggestionErr(snap, errReplyPolicyStaleSnapshot)
+			}
+			policySnap = snap
 		}
 	}
 	now := time.Now().UTC()
@@ -254,7 +354,11 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 			it.SuggestSeq = max(it.SuggestSeq, 1)
 		}
 		g := &InboxSuggestion{Version: it.SuggestSeq + 1, Kind: in.Kind, Text: in.Text, Note: clip(strings.TrimSpace(in.Note), 600),
-			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from}
+			Handback: in.Handback, Due: in.Due, Changes: in.Changes, At: now, Cwd: strings.TrimSpace(in.Cwd), Conversation: from,
+			ReplyPolicy: cloneReplyPolicySnapshot(policySnap), ReplyInstruction: instructionID}
+		if policySnap != nil {
+			it.ReplyPolicy = cloneReplyPolicySnapshot(policySnap)
+		}
 		if from != nil {
 			owner := *from
 			g.Owner = &owner
@@ -360,7 +464,8 @@ func suggestWritesTitle(it *InboxItem) bool {
 // inboxDraft keeps the reply drafted in conversation sessionID (inbox_draft, the older name): suggest with kind reply.
 func (s *Service) inboxDraft(ctx context.Context, sessionID, text, note string, proposed []DocChange, processingTurn string) (string, *DocChange, error) {
 	id, refused, err := s.suggest(ctx, sessionID, suggestIn{Kind: SuggestReply, Text: text, Note: note, Changes: proposed, ProcessingTurn: processingTurn})
-	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) {
+	var se errSuggestion
+	if err != nil && !errors.Is(err, errInboxNotPersisted) && !errors.Is(err, errSuggestFiled) && !errors.Is(err, errStaleInboxTurn) && !errors.As(err, &se) {
 		return "", nil, nil
 	}
 	return id, refused, err
@@ -415,6 +520,18 @@ func legacySuggestion(it *InboxItem) *InboxSuggestion {
 	g.At = it.UpdatedAt.UTC()
 	if a.DraftedAt != nil {
 		g.At = a.DraftedAt.UTC()
+	}
+	return g
+}
+
+// mirroredLegacyReply identifies an AI draft exposed through the old agent.draft API without treating direct owner text as a suggestion.
+func mirroredLegacyReply(it *InboxItem) *InboxSuggestion {
+	if it == nil || it.Agent == nil || it.Agent.State != AgentDrafted {
+		return nil
+	}
+	g := currentSuggestion(it)
+	if g == nil || g.Kind != SuggestReply || g.Handback || it.Agent.Draft == "" || it.Agent.Draft != g.Text || suggestionAttempt(it, g.Version) != nil {
+		return nil
 	}
 	return g
 }

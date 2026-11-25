@@ -2708,7 +2708,7 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
-`server/cmd/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
+`server/internal/modules/screen-share/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
 (client, hub, manager, its own node) a small message's round trip is 1.6 ms, 0.8 ms more than a WebSocket ping to the
 hub, and a download runs at 88 MB/s: the hub, the bus, the manager and the stream mux are not where a live screen's
 latency goes. The hub → node leg (`ssh -T` over Tailscale on the LAN) is where it varies; plain `ssh host cat` shows the
@@ -2915,7 +2915,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 `internal/assistant`'s `TestPlacesThatSealAreKnown` (`keyrotate_guard_test.go`) counts every `.Seal(`, `sealKey(`,
 `.encrypt(`, `SealWith(` and `secretkey.New` per file under `internal/` and `cmd/`, so nothing new seals with the
 manager's `secret.key` without the key rotation re-sealing it. It counts AEADs with keys of their own too, in packages
-that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/screenlink`, its
+that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/modules/screen-share/screenlink`, its
 tests and its importers passed, and the hub deploy failed on this guard. When code under `internal/` or `cmd/` seals,
 run `go test -run TestPlacesThatSealAreKnown ./internal/assistant` (no database needed) and record the file there:
 with `secret.key`, after putting where it keeps the sealed value into `db.sealedTables` or `db.sealedSettings`; with
@@ -3220,3 +3220,11 @@ is not evidence of isolation.
 - The hub’s MCP golden harness reconstructs the Agent tool list separately from the manager’s live discovery path. Add new manager-owned Agent tools to that helper as well as the per-tool goldens; otherwise production discovery can match its language snapshots while the hub’s legacy golden test still offers the old list. Full runner logs identify this as an index/leftover-file mismatch.
 
 - Register non-session runner RPCs through `nodeRPC` in the resource domain file. Adding a case to `Node.handleMethod` bypasses the domain registration rule and fails the central-list freeze even when the node package tests pass. Include the architecture-guard shard when adding a node RPC.
+
+## A switch outcome does not mean its sweep released every row lock (#15138)
+
+`logicalSweep` starts background reconciliation; a batch reaching `switched` does not join that goroutine.
+A fixture's next `SetConversationPick` can collide with its final `ClaimConversationInput` transaction even when no
+input remains. `FOR UPDATE NOWAIT` maps PostgreSQL lock contention to `ErrConversationSwitchBusy`. Use the existing
+bounded wait for that specific error, keep the original expected epoch, and fail immediately on other errors.
+Do not treat the error text as proof of an unfinished operation or wait for an unrelated batch state.

@@ -562,7 +562,9 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 	for i := range list {
 		list[i].MachineID = machine
 		list[i].PendingInteractions = counts[list[i].SessionID]
-		list[i].Assistant = isAssistantSession(&list[i], dir, m.manager)
+		if !list[i].LogicalPlaceholder {
+			list[i].Assistant = isAssistantSession(&list[i], dir, m.manager)
+		}
 		if !list[i].Assistant && bgMatch.matches(&list[i]) {
 			list[i].Assistant = true
 		}
@@ -633,6 +635,7 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 		}
 		decorateSuggestion(&list[i], suggested)
 	}
+	s.decorateSubagents(context.Background(), machine, list)
 	s.decorateTodos(machine, list)
 	for i := range list {
 		// The todos' alone, stripped before push to client (#762).
@@ -665,6 +668,7 @@ func (s *Service) decoratedSession(machine, sid string) (proto.Session, bool) {
 	}
 	row.SetHiddenByDirectory(s.hiddenByDirectory(machine, row))
 	one := []proto.Session{row}
+	s.decorateSubagents(context.Background(), machine, one)
 	s.foldSubset(machine, one) // what the last complete list folded it as, as for a row the node lists
 	return one[0], true
 }
