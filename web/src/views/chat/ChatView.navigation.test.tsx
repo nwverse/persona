@@ -19,8 +19,10 @@ const pointer = vi.hoisted(() => {
 });
 const rail = vi.hoisted(() => ({
   props: undefined as { ticks: NavRailTick[]; onJump: (id: string) => Promise<void> } | undefined,
+  toast: vi.fn(),
 }));
 vi.mock("./NavRail", () => ({ NavRail: (props: NonNullable<typeof rail.props>) => { rail.props = props; return null; } }));
+vi.mock("../../ui/atoms", async (importOriginal) => ({ ...await importOriginal<typeof import("../../ui/atoms")>(), toast: rail.toast }));
 const transcript = vi.hoisted(() => ({
   items: [] as Item[], loading: false, hasMore: false, streaming: "", error: "",
   history: "" as string, replaceEpoch: 0,
@@ -52,6 +54,7 @@ beforeEach(() => {
   transcript.loadEarlier.mockReset();
   transcript.reload.mockReset();
   rail.props = undefined;
+  rail.toast.mockReset();
   pointer.fine = false;
   vi.stubGlobal("CSS", { escape: (s: string) => s });
   vi.stubGlobal("fetch", vi.fn(async (input) => Response.json(String(input).includes("from_seq=") ? { items: [hidden] } : {})));
@@ -282,7 +285,7 @@ it("keeps the current view on a failed target read without a compatibility refus
   expect(transcript.loadEarlier).not.toHaveBeenCalled();
   expect(scroller().hasAttribute("data-chat-context-window")).toBe(false);
   expect(scroller().textContent).toContain(live.text);
-  expect(document.body.textContent).toContain(t("chat-navrail.target_failed"));
+  expect(rail.toast).toHaveBeenCalledWith(t("chat-navrail.target_failed"), "error");
 });
 
 it("discards a late target window when the reader scrolls the chat first", async () => {
