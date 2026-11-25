@@ -75,7 +75,8 @@ func (s AgentPlaceStep) Place(visibility Visibility, placement Placement) AgentB
 func (b AgentBuilder) Build() (out outcome.Of[Agent, Fail]) {
 	a := b.agentBuilder
 	var parts []fail.Invalid
-	parts = wrong(parts, a.ref != (agentref.Ref{}), "fleetcount.agent.no_session", "agent")
+	var noSession agentref.Ref
+	parts = wrong(parts, a.ref != noSession, "fleetcount.agent.no_session", "agent")
 	parts = wrong(parts, a.state != (State{}), "fleetcount.agent.no_state", "state")
 	parts = wrong(parts, a.role != (Role{}), "fleetcount.agent.no_role", "role")
 	parts = wrong(parts, a.lineage != (Lineage{}), "fleetcount.agent.no_lineage", "lineage")
@@ -127,7 +128,8 @@ func (a Agent) waitingSince() instant.Instant {
 
 // known raises a defect when a is the zero Agent, which no function takes; op names the function it was handed to.
 func (a Agent) known(op string) {
-	if a.ref == (agentref.Ref{}) {
+	var noSession agentref.Ref
+	if a.ref == noSession {
 		defect.Raise(op, "the zero Agent")
 	}
 }
@@ -181,7 +183,8 @@ func (s CardStandingStep) Standing(standing CardStanding, holding Holding, telli
 func (b CardBuilder) Build() (out outcome.Of[Card, Fail]) {
 	c := b.cardBuilder
 	var parts []fail.Invalid
-	parts = wrong(parts, c.id != (agentref.InteractionID{}), "fleetcount.card.no_id", "card")
+	var noCard agentref.InteractionID
+	parts = wrong(parts, c.id != noCard, "fleetcount.card.no_id", "card")
 	parts = wrong(parts, c.standing != (CardStanding{}), "fleetcount.card.no_standing", "standing")
 	parts = wrong(parts, c.holding != (Holding{}), "fleetcount.card.no_holding", "holding")
 	parts = wrong(parts, c.telling != (Telling{}), "fleetcount.card.no_telling", "telling")
@@ -212,8 +215,9 @@ type Cards struct{ cards []Card }
 // NewCards is the cards in list, oldest first. It copies list, so the core owns its array and the caller may reuse
 // its slice; a zero Card in it is a defect.
 func NewCards(list []Card) Cards {
+	var noCard agentref.InteractionID
 	for i := range list {
-		if list[i].id == (agentref.InteractionID{}) {
+		if list[i].id == noCard {
 			defect.Raise("fleetcount.NewCards", "the zero Card")
 		}
 	}

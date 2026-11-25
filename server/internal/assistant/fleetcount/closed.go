@@ -88,7 +88,8 @@ func PlacementOwnRow() Placement { return placementOwnRow{} }
 // PlacementUnder is an agent the hub folds under another one's row (a child of a task, or a side session): its cards
 // sit under that row, which waits for it. The zero Ref is a defect.
 func PlacementUnder(under agentref.Ref) Placement {
-	if under == (agentref.Ref{}) {
+	var noSession agentref.Ref
+	if under == noSession {
 		defect.Raise("fleetcount.PlacementUnder", "the zero Ref")
 	}
 	return placementUnder{under: under}

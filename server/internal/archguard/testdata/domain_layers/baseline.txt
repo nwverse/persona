@@ -184,7 +184,7 @@ internal/larkperson app-exported-record SentBinding #13145
 internal/larkperson app-exported-record Topic #13145
 internal/larkperson app-named-primitive DeliveryState #13145
 internal/lcuconfirm app-named-primitive 1
-internal/link app-exported-record 20
+internal/link app-exported-record 18
 internal/link app-exported-record CloudflareAccess #12022
 internal/link app-named-primitive 1
 internal/linktray app-exported-record 14

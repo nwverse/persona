@@ -223,11 +223,12 @@ func badgeRows(agents []Agent, cards []Card) Tally {
 		own, waits     []bool
 		waiting        []instant.Instant
 	)
+	var unknown instant.Instant
 	rowOf := make([]int, len(agents)) // each row agent's place among the rows, plus one; 0 for none yet
 	join := func(h int) int {
 		if rowOf[h] == 0 {
 			agentOf, first, more = append(agentOf, h), append(first, -1), append(more, nil)
-			own, waits, waiting = append(own, false), append(waits, false), append(waiting, instant.Instant{})
+			own, waits, waiting = append(own, false), append(waits, false), append(waiting, unknown)
 			rowOf[h] = len(agentOf)
 		}
 		return rowOf[h] - 1
@@ -236,7 +237,7 @@ func badgeRows(agents []Agent, cards []Card) Tally {
 		switch h := badgeHost(agents, host, &cards[ci], carded, supervised); {
 		case h == -1:
 			agentOf, first, more = append(agentOf, -1), append(first, ci), append(more, nil)
-			own, waits, waiting = append(own, cards[ci].holding == HoldingForTheOwner()), append(waits, false), append(waiting, instant.Instant{})
+			own, waits, waiting = append(own, cards[ci].holding == HoldingForTheOwner()), append(waits, false), append(waiting, unknown)
 		case h >= 0:
 			g := join(h)
 			if first[g] < 0 {

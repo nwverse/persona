@@ -93,7 +93,8 @@ func coreValues(tb testing.TB, agents []fleetInput, ixs []proto.Interaction) ([]
 	for i := range agents {
 		a, failed := kitoutcome.Unpack(fleetcountadapt.Agent(agents[i].Session, agents[i].Muted, i))
 		if failed != nil {
-			tb.Fatalf("agent %d: %s", i, fleetcountadapt.Log(failed))
+			tb.Logf("agent %d: %s", i, fleetcountadapt.Log(failed))
+			tb.FailNow()
 		}
 		list = append(list, a)
 	}
@@ -101,7 +102,8 @@ func coreValues(tb testing.TB, agents []fleetInput, ixs []proto.Interaction) ([]
 	for i := range ixs {
 		c, failed := kitoutcome.Unpack(fleetcountadapt.Card(&ixs[i], false, i))
 		if failed != nil {
-			tb.Fatalf("card %d: %s", i, fleetcountadapt.Log(failed))
+			tb.Logf("card %d: %s", i, fleetcountadapt.Log(failed))
+			tb.FailNow()
 		}
 		cards = append(cards, c)
 	}

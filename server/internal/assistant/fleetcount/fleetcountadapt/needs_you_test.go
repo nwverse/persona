@@ -105,12 +105,14 @@ func TestAgentsNeedsYouFollowsTheSharedFixtures(t *testing.T) {
 				s := &c.Input.Sessions[i]
 				s.Quiet = slices.Contains(c.Input.Quiet, s.MachineID+"/"+s.SessionID)
 				if _, failed := outcome.Unpack(f.Agent("Mac", s, c.muted(s))); failed != nil {
-					t.Fatalf("session %s: %s", s.SessionID, Log(failed))
+					t.Logf("session %s: %s", s.SessionID, Log(failed))
+					t.FailNow()
 				}
 			}
 			for i := range c.Input.Interactions {
 				if _, failed := outcome.Unpack(f.Card(&c.Input.Interactions[i], false)); failed != nil {
-					t.Fatalf("card %s: %s", c.Input.Interactions[i].ID, Log(failed))
+					t.Logf("card %s: %s", c.Input.Interactions[i].ID, Log(failed))
+					t.FailNow()
 				}
 			}
 			got := badgeRows{f: &f}
