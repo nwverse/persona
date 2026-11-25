@@ -330,7 +330,7 @@ export const CORE_CARD_KINDS: ReadonlySet<string> = new Set(["question", "plan",
 export const CORE_PATHS: ReadonlySet<string> = new Set([
   "s", "t", "persona", "j", "workspace-board", "requests", "overview", "history", "tracks", "assistant", "inbox",
   "starred", "routines", "kb", "space", "machines", "terminal", "a", "agents", "compare", "settings", "subscriptions",
-  "extension", "plugin", "todos", "api", "login", "share", "admin", "assets",
+  "extension", "plugin", "todos", "lark-oauth", "api", "login", "share", "admin", "assets",
 ]);
 /** Core addresses whose deeper paths a module may take as an alias: `/tracks/<slug>` of a space it has its own page for. */
 const ALIASABLE: ReadonlySet<string> = new Set(["tracks"]);

@@ -6,7 +6,7 @@ import "strings"
 const domainDoc = `see docs/server/architecture.md "Domain model"`
 
 // planted is where the compliant twins live (testdata/domainrules/planted), which GOOD names until the exemplars
-// they mirror land in the server.
+// they mirror land in the server; agentref has, so its rules name server/internal/agentref.
 const planted = "server/internal/archguard/testdata/domainrules/planted/"
 
 // A ruleText is what a rule's finding says besides what was found: why the rule holds, the production change
@@ -18,13 +18,13 @@ type ruleText struct{ why, fix, good string }
 var rules = map[string]ruleText{
 	"layer-declared": {
 		"every package states whether it is domain code, so new code is checked from its first line",
-		"add `//persona:layer <kit|core|core shared|adapter|application|application seam|library|contract|testkit>` to the package comment",
-		planted + "internal/agentref/doc.go",
+		"add `//persona:layer <kit|core|core shared|adapter|application|application seam|library|contract|testkit>` to the package comment; start a domain package with python3 scripts/gen/new_domain_slice.py",
+		"server/internal/agentref/doc.go",
 	},
 	"layer-one": {
 		"a package has one set of rules",
 		"keep one //persona:layer line, in doc.go",
-		planted + "internal/agentref/doc.go",
+		"server/internal/agentref/doc.go",
 	},
 	"layer-kit": {
 		"the kit is the one shared vocabulary",
@@ -39,11 +39,11 @@ var rules = map[string]ruleText{
 	"layer-shared": {
 		"a shared kernel is importable by every core, so it may hold only values",
 		"declare core and keep it in its context, or split the values into a shared kernel",
-		planted + "internal/agentref",
+		"server/internal/agentref",
 	},
 	"layer-application": {
 		"domain logic declared application escapes every core rule",
-		"declare core, or library if it holds no domain concept",
+		"declare core (python3 scripts/gen/new_domain_slice.py starts one), or library if it holds no domain concept",
 		planted + "internal/assistant/fleetcount",
 	},
 	"layer-library": {
@@ -109,7 +109,7 @@ var rules = map[string]ruleText{
 	"core-any": {
 		"an untyped value is a hole in the model",
 		"name the concept as a value object",
-		planted + "internal/agentref/ref.go",
+		"server/internal/agentref/ref.go",
 	},
 	"core-exported-field": {
 		"a caller that reads a field decides outside the domain",
@@ -124,12 +124,12 @@ var rules = map[string]ruleText{
 	"core-bare-type": {
 		"any package converts into a named primitive and string(x) unwraps it",
 		"make it a struct with one field named for the type",
-		planted + "internal/agentref/ref.go (MachineID)",
+		"server/internal/agentref/ref.go (MachineID)",
 	},
 	"core-alias": {
 		"an alias is the other type under a new name",
 		"declare a value object",
-		planted + "internal/agentref/ref.go",
+		"server/internal/agentref/ref.go",
 	},
 	"core-field-name": {
 		"sibling types with the same field convert into each other from any package",
@@ -149,7 +149,7 @@ var rules = map[string]ruleText{
 	"core-primitive-signature": {
 		"raw input enters once, through Parse, from an adapter",
 		"take a value object; parse in the adapter",
-		planted + "internal/agentref/ref.go (ParseRef)",
+		"server/internal/agentref/ref.go (ParseRef)",
 	},
 	"core-collection": {
 		"a slice handed out is a view into the core's state",
@@ -179,12 +179,12 @@ var rules = map[string]ruleText{
 	"core-codec-method": {
 		"a codec reads state out without an adapter",
 		"write the conversion in the adapter (Wire, Log)",
-		planted + "internal/agentref/agentrefadapt",
+		"server/internal/agentref/agentrefadapt",
 	},
 	"core-wire-method": {
 		"Wire is the one way out of a single value",
 		"return the field; composites leave through Accept",
-		planted + "internal/agentref/ref.go (SessionID.Wire)",
+		"server/internal/agentref/ref.go (SessionID.Wire)",
 	},
 	"core-constructor": {
 		"one way in per meaning keeps every object valid",
@@ -193,7 +193,7 @@ var rules = map[string]ruleText{
 	},
 	"core-params": {
 		"long parameter lists hide which inputs belong together",
-		"use a staged builder",
+		"use a staged builder (python3 scripts/gen/new_domain_slice.py --builder writes one)",
 		planted + "internal/assistant/fleetcount/agent.go (NewAgentBuilder)",
 	},
 	"core-outcome-return": {
@@ -209,7 +209,7 @@ var rules = map[string]ruleText{
 	"core-part-name": {
 		"wire field names belong to the adapter that fed the input",
 		"name the input in the core's own words; map it in the adapter",
-		planted + "internal/agentref/ref.go",
+		"server/internal/agentref/ref.go",
 	},
 	"core-visitor-name": {
 		"bare names collide with unrelated methods across the server",
@@ -284,12 +284,12 @@ var rules = map[string]ruleText{
 	"out-wire-ref": {
 		"only adapters convert domain values to wire values",
 		"move the conversion into the adapter and return a contract",
-		planted + "internal/agentref/agentrefadapt",
+		"server/internal/agentref/agentrefadapt",
 	},
 	"out-parse-call": {
 		"raw input enters the domain only through adapters",
 		"call the adapter (agentrefadapt.FromWire)",
-		planted + "internal/agentref/agentrefadapt",
+		"server/internal/agentref/agentrefadapt",
 	},
 	"out-visitor-impl": {
 		"application code that reads a core decides outside it",
@@ -309,7 +309,7 @@ var rules = map[string]ruleText{
 	"out-code-mint": {
 		"failure codes belong to the core that fails",
 		"return the core's own failure",
-		planted + "internal/agentref/ref.go",
+		"server/internal/agentref/ref.go",
 	},
 	"out-unsafe": {
 		"unsafe and reflect read and forge private state",
@@ -324,7 +324,7 @@ var rules = map[string]ruleText{
 	"out-log-use": {
 		"Log text is for log lines, not for decisions",
 		"pass it straight to the log call",
-		planted + "internal/agentref/agentrefadapt",
+		"server/internal/agentref/agentrefadapt",
 	},
 	"adapter-name": {
 		"two types with one name blur the boundary",
@@ -338,18 +338,18 @@ var rules = map[string]ruleText{
 	},
 	"app-exported-record": {
 		"new concepts in application and library packages keep the habit the domain model replaces",
-		"put the concept in a core or a wire shape in a contract",
+		"put the concept in a core (python3 scripts/gen/new_domain_slice.py starts one) or a wire shape in a contract",
 		planted + "internal/assistant/fleetcount",
 	},
 	"app-named-primitive": {
 		"a named primitive is only a name",
-		"declare a value object in a core",
-		planted + "internal/agentref/ref.go",
+		"declare a value object in a core (python3 scripts/gen/new_domain_slice.py --value)",
+		"server/internal/agentref/ref.go",
 	},
 	"app-bridge-call": {
 		"legacy callers shrink as their code moves behind adapters",
 		"pass the domain value on, or move the conversion into the adapter",
-		planted + "internal/agentref/agentrefadapt",
+		"server/internal/agentref/agentrefadapt",
 	},
 	"app-lifecycle-write": {
 		"a done state written field by field takes its own meaning at every writer",

@@ -196,6 +196,8 @@ type botHub struct {
 	// bindGate serializes Feishu binding, including registration network calls, independently of mu.
 	// A channel lets a waiting client's context cancel without waiting for the current bind.
 	bindGate chan struct{}
+	// sync is the user sync: the bots' apps reading as the owner every day (larksync.go).
+	sync larkSync
 }
 
 func (b *botHub) clock() time.Time {
@@ -713,6 +715,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
+	h.larkSyncRoutes(api) // the user sync: /api/v1/bots/feishu/sync…
 }
 
 // botPairCode is a new six-digit pairing code.

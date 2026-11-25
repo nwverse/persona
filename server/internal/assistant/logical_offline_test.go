@@ -63,3 +63,50 @@ func TestLogicalOfflinePlaceholderSurvivesDecorationAndTools(t *testing.T) {
 		t.Fatalf("send implicitly created a replacement segment: %+v %v", conversation, err)
 	}
 }
+
+func TestLogicalOfflinePlaceholderSessionGetKeepsAssistantForRestore(t *testing.T) {
+	s, _, d, _ := logicalPair(t, "codex")
+	ctx := t.Context()
+	activated := activatePair(t, d)
+
+	physical := newFleetDevs()
+	physical.add("server", "Computer")
+	physical.setSessions("server", []proto.Session{
+		{SessionID: "main-chat", Cwd: "/home/u/.persona/assistant", Rev: 100},
+		{SessionID: "ordinary", Cwd: "/home/u/project", Assistant: true, Rev: 100},
+	})
+	s.devs = &logicalDevices{Devices: physical, s: s}
+	s.logicalChanged()
+
+	placeholder, known := s.nodeSession("server", "side-chat")
+	if !known || !placeholder.LogicalPlaceholder || !placeholder.Assistant {
+		t.Fatalf("logical placeholder before session.get: %+v, known=%v", placeholder, known)
+	}
+	got, known := s.session(ctx, "server", "side-chat")
+	if !known || !got.Assistant {
+		t.Errorf("session.get cleared the placeholder's Assistant identity: %+v, known=%v", got, known)
+	}
+	for _, tc := range []struct {
+		id            string
+		wantAssistant bool
+	}{
+		{id: "main-chat", wantAssistant: true},
+		{id: "ordinary", wantAssistant: false},
+	} {
+		row, known := s.session(ctx, "server", tc.id)
+		if !known || row.Assistant != tc.wantAssistant {
+			t.Errorf("ordinary session.get recomputation for %s: %+v, known=%v, want Assistant=%v", tc.id, row, known, tc.wantAssistant)
+		}
+	}
+
+	// Stop at the next, independent epoch fence: reaching it proves restore did not reject the placeholder as unavailable.
+	item := conversationSwitchItem{
+		Machine: "server", ConversationID: "side-chat", ExpectedEpoch: activated.Epoch + 1,
+		OperationID: "restore-availability-check", Outcome: conversationSwitchReady,
+	}
+	batch := conversationSwitchBatch{RestoreOf: "earlier-fallback", FirstTurn: true}
+	if changed := s.runConversationSwitchItem(ctx, d, &conversationSwitchState{}, &batch, &item); !changed ||
+		item.Outcome != conversationSwitchRefused || item.Reason != "the conversation changed independently; its newer settings were left untouched" {
+		t.Errorf("restore did not reach the epoch fence after the availability check: %+v, changed=%v", item, changed)
+	}
+}

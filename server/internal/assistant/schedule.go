@@ -1298,10 +1298,12 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		renames := a.Title != "" && title != t.Title // the title is part of the rendered prompt
 		return t.PromptSelections && a.Prompt == "" && (changesRun || enables || renames)
 	}
+	unchangedRunIf := false
 	if a.ID != "" && (changesRun || a.Enabled != nil || a.Title != "") {
 		// Refuse before model validation or pre-run command approval. Recheck
 		// under the schedule lock in case the owner edits the task meanwhile.
 		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
+			unchangedRunIf = runIf != nil && sameRoutineCheck(prev.RunIf, runIf)
 			if requiresOwner(prev) {
 				return "", errTaskSelectionsOwner
 			}
@@ -1315,7 +1317,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			}
 		}
 	}
-	if runIf != nil {
+	if runIf != nil && !unchangedRunIf {
 		approved, err := s.approveRoutineCheck(ctx, machine, self, runIf)
 		if err != nil {
 			return "", err
@@ -1340,6 +1342,10 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		if requiresOwner(t) {
 			sc.mu.Unlock()
 			return "", errTaskSelectionsOwner
+		}
+		if unchangedRunIf && !sameRoutineCheck(t.RunIf, runIf) {
+			sc.mu.Unlock()
+			return "", errors.New("run_if changed while the routine was being updated; retry the update")
 		}
 		old = t
 	} else {
@@ -1609,6 +1615,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.historyLoop(ctx)        // durable assistant history, on by default
 	go s.undeliveredLoop(ctx)    // the owner's messages that could not go in (undelivered.go)
 	go s.captureLoop(ctx)        // sorting and filing quick captures (capture_sort.go)
+	go s.healthTellLoop(ctx)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
 }
@@ -2078,6 +2085,12 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		t.kbDir = s.kb.dir // the hint names where the knowledge base is, not the default
 	}
 	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
+	t, trainingDay := s.workoutPromptNow(ctx, t)
+	if trainingDay != "" {
+		if ref, ok := s.trainingChat(ctx, trainingDay); ok {
+			t.MachineID, t.SessionID = ref.MachineID, ref.SessionID
+		}
+	}
 	if prefix, body := t.promptParts(); prefix != "" && strings.TrimSpace(body) == "" {
 		// Identical titles and references can occur in consecutive runs in the same chat.
 		run.ID = "run_" + randomHex(12)
@@ -2220,6 +2233,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	s.noteRound(sess.MachineID, sess.SessionID, t.ID, t.runGrantBasis, time.Now().Add(-roundEarly)) // sent already: its prompt is older
 	s.logf("task %s ran %s after its time (new conversation %s, kept for the next runs)", t.ID, lateness(due, time.Now()), short(sess.SessionID))
 	s.adoptConversation(t.ID, sess.MachineID, sess.SessionID, sess.Launcher, ex)
+	if trainingDay != "" {
+		s.keepTrainingChat(ctx, trainingDay, SessionRef{MachineID: sess.MachineID, SessionID: sess.SessionID}, run.ConversationReason == "source_unavailable")
+	}
 	s.titleFixed(sess.MachineID, sess.SessionID, time.Now(), titleTask, t.label()) // "MMDD | scheduled | task name", the same for every run in it
 	var m *Device
 	if d, ok := s.device(ctx, sess.MachineID); ok {

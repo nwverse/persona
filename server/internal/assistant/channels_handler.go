@@ -6,7 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -63,7 +62,7 @@ func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced
 	}
 	c.announced[p.Interaction.ID] = true
 	c.mu.Unlock()
-	go s.feishuInteraction(p.Interaction)
+	go s.larkModule().AskAnnounced(p.Interaction)
 	go s.channelInteraction(p.Interaction)
 	go s.taskAsks(p.Interaction)
 	s.boardChanged()
@@ -106,7 +105,7 @@ func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	}
 	// Taken back because the user wrote in the conversation: what they write next is not a late answer to it.
 	inChat := p.Resolution != nil && p.Resolution.Dismiss && p.Resolution.Reason == proto.DismissedInChat && p.Resolution.AnsweredBy == ""
-	s.feishuInteractionEnded(p.Interaction, how, inChat)
+	s.larkModule().AskEnded(p.Interaction, how, inChat)
 	s.channelInteractionEnded(p.Interaction, inChat)
 	s.boardChanged()
 }
@@ -238,36 +237,5 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 	for _, a := range gone {
 		s.channelInteractionDone(proto.Interaction{ID: a.ID})
 	}
-	s.closeEndedBotCards(ctx, pending, true)
-}
-
-// closeEndedBotCards closes the bot's cards whose interaction is over. Not being in pending is not enough: right
-// after a restart the manager's table is empty or partial (interactions are restored, screen and Codex cards rebuilt,
-// after this runs), so each is closed only once the history says it ended for good (botCardOver). One that may still
-// be waiting is looked at again a little later, once (again).
-func (s *Service) closeEndedBotCards(ctx context.Context, pending map[string]bool, again bool) {
-	var maybe []botCard
-	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { // cards posted before a restart are in the chat's state
-		for id, card := range b.Cards() {
-			if !pending[id] && card.MessageID != "" {
-				maybe = append(maybe, card)
-			}
-		}
-	})
-	var unsure []botCard
-	for _, card := range maybe {
-		switch s.botCardOver(ctx, card.Ix.ID) {
-		case cardOver:
-			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
-		case cardUnsure:
-			unsure = append(unsure, card)
-		}
-	}
-	if again && len(unsure) > 0 {
-		time.AfterFunc(botCardRecheck, func() {
-			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			s.closeEndedBotCards(cctx, nil, false)
-		})
-	}
+	s.larkModule().AsksCatchUp(ctx, pending)
 }
