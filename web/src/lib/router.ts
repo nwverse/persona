@@ -129,8 +129,9 @@ export function parse(path: string, search = ""): Route {
   }
   if (p[0] === "starred" && p.length === 1) return { name: "starred" };
   if (p[0] === "routines") return { name: "routines" };
-  // an entry of a kind a feature module draws (a recording) is unknown while the module is off (core/module-host.ts)
-  if (p[0] === "kb") return p[1] && p[2] && moduleKBKindAt(p[1]) === "absent" ? notFound(path, search) : { name: "kb", kind: p[1], id: p[2] };
+  // An entry of a kind only a feature module draws is unknown while that module is off. Existing recordings are the
+  // exception: their data and Core read-only detail stay available.
+  if (p[0] === "kb") return p[1] && p[1] !== "recordings" && p[2] && moduleKBKindAt(p[1]) === "absent" ? notFound(path, search) : { name: "kb", kind: p[1], id: p[2] };
   if (p[0] === "space" && p[1] && p[2]) return { name: "space", mid: p[1], space: p[2] };
   if (p[0] === "machines") return p[1] ? { name: "machine", mid: p[1] } : { name: "machines" };
   if (p[0] === "terminal") {

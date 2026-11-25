@@ -1,35 +1,14 @@
-package kb
+package writers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/kb"
 	"os"
 	"slices"
 	"testing"
 	"time"
 )
-
-// trimModel fails the test when called: nothing is summarized or made of a trimmed recording.
-type trimModel struct{ t *testing.T }
-
-func (m trimModel) JSONMax(context.Context, string, string, int, any) error {
-	m.t.Error("a model call for a trimmed recording")
-	return errors.New("no call expected")
-}
-
-func recordingFileNames(t *testing.T, e *Engine, id string) []string {
-	t.Helper()
-	files, err := os.ReadDir(e.Store.Path(KindRecording, id))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, f := range files {
-		names = append(names, f.Name())
-	}
-	return names
-}
 
 // Past recording_days a recording with minutes keeps only its metadata and minutes until minutes_days; one without
 // minutes, or past minutes_days, goes as before. Later passes change nothing more.
@@ -60,7 +39,7 @@ func TestRecordingTrimAtRecordingDays(t *testing.T) {
 	if err := os.WriteFile(e.Store.Path(KindRecording, kept, "segments.json.tmp"), []byte("debris"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := e.Store.recordingDiskSnapshot(kept)
+	snapshot, err := ws(e.Store).recordingSnapshot(kept)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +101,7 @@ func TestRecordingTrimAtRecordingDays(t *testing.T) {
 // minutes_days is forever (0) by default, otherwise never below recording_days.
 func TestMinutesDaysEffective(t *testing.T) {
 	e := goldenEngine(t, nil)
-	if got := e.MinutesDays(); got != DefaultMinutesDays {
+	if got := e.MinutesDays(); got != kb.DefaultMinutesDays {
 		t.Fatalf("default %d", got)
 	}
 	days, minutes := 30, 7
@@ -139,8 +118,8 @@ func TestMinutesDaysEffective(t *testing.T) {
 	if got := e.MinutesDays(); got != 3650 {
 		t.Fatalf("%d, want 3650", got)
 	}
-	if got := MinutesDaysFor(0, 0); got != DefaultMinutesDays {
-		t.Fatalf("MinutesDaysFor(0, 0) = %d", got)
+	if got := kb.MinutesDaysFor(0, 0); got != kb.DefaultMinutesDays {
+		t.Fatalf("kb.MinutesDaysFor(0, 0) = %d", got)
 	}
 }
 
@@ -204,7 +183,7 @@ func TestRecordingTrimKeepsNoLiveLog(t *testing.T) {
 	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Start: 3, End: 4, Text: "another line"}}); !errors.Is(err, ErrNotAttending) {
 		t.Fatalf("an append after the trim: %v", err)
 	}
-	if err := e.Store.goneError(recID); !errors.Is(err, ErrNotAttending) {
+	if err := ws(e.Store).goneError(recID); !errors.Is(err, ErrNotAttending) {
 		t.Fatalf("why a trimmed recording takes no live log: %v", err)
 	}
 	kept("after the trim")
@@ -233,12 +212,7 @@ func TestRecordingTrimFinishedWithinWindow(t *testing.T) {
 
 	// The crash: the trim wrote meta.json and nothing more.
 	r := recordingNow(t, e, recID)
-	e.Store.recFilesMu.Lock()
-	err := e.Store.putTrimmedMeta(r, now)
-	e.Store.recFilesMu.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
+	markTrimmed(t, e, r.ID, now)
 	if names := recordingFileNames(t, e, recID); !slices.Contains(names, "transcript.md") {
 		t.Fatalf("set up: %v", names)
 	}

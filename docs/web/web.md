@@ -1467,7 +1467,8 @@ and receives its ordinary finished notification. Settings › Assistant › **Fo
 (`fold_routine_relay_replies`, #11899) keeps those replies in the expandable record and quiets that notification when
 **Fold background rounds** is also on. A hub that omits the opt-in keeps the default and hides the new switch. Changing
 either setting preserves the other. Explicit user promotions (including P0, requested results and decisions) remain visible
-and notify. Leader conversations keep their completed replies visible. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
+and notify. On Web, an explicitly promoted main-conversation relay keeps its incoming handoff behind a collapsed source
+row; expanding that row reveals the original while the answer and interaction cards stay visible. Leader conversations keep their completed replies visible. Needs you groups rows by the task's supervising conversation (`needsYouBySupervisor`,
 `lib/assistant-entries.ts`) when more than one has rows. `e2e/background-rounds.mjs` checks it in a real browser with
 synthetic data and takes the screenshots; with the switch off the chat is pixel-identical to a build without the feature.
 
@@ -2553,9 +2554,10 @@ to the page of every entry of that kind (`views/knowledge/KBDetail.tsx`): button
 in the body, sections after the entry's facts, sections after the code directories, dialogs, and whether the page leaves
 its profile out. The page lays itself out as a function of those parts (`ModuleKBDetailParts`); the module's component
 (`ModuleCode.KBDetail`) calls its hooks and hands the page its parts. Its code loads when an entry of that kind opens;
-until it is in, or with no module on for the kind, the page draws with none. One module per kind. While the module is
+until it is in, or with no module on for the kind, the page draws with none. One module per kind. While a module is
 off, an entry of its kind is absent: its address routes as an unknown one, an open one says it is not there, and the
-lists and searches that would show it leave it out.
+lists and searches that would show it leave it out. Existing recordings are the exception: their data stays in Core,
+so the default Knowledge panel keeps their routes, rows and search results and renders a read-only detail.
 
 **Pages of their own** (#14404, `standalonePages`). A module may draw a page with no app shell (no sign-in flow, no
 sidebar), named by its address' first segment: the screen-share module's `/screen/<machine>`. The modules that have
@@ -2606,9 +2608,12 @@ Agent, the latest hand-off, its facts, the private mark, the minutes or an all-d
 conversation, the questions, the photos and the transcript, with their strings (`recording.json`,
 `recording-handoff.json`) and the recording's view of its entry (`recording-view.ts`: its transcript lines, an all-day
 recording's parts of the day, its meeting's room, follow-up and photos). Its switch's name and description come from
-`sidebar.json`. It names the `recordings` kind. When switched off, the Meetings list reads only the imported meetings. Its hub flag is `module.recording`: off on a hub that publishes module flags
-without it, or where a browser switches it off. The
-recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
+`sidebar.json`. It names the `recordings` kind. When switched off, the Meetings list and search keep existing
+recordings, and `views/knowledge/RecordingReadOnlyDetail.tsx` renders their stored minutes, recaps, transcripts and
+photos read-only, without importing the module or showing its write and live controls. A photo list that is
+unavailable (including a 404 from a hub before the list read moved into Core) hides only the photo section. Its hub
+flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
+The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved

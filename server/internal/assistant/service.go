@@ -487,6 +487,7 @@ func New(o Options) *Service {
 	defer reg.Seal()       // New returns it sealed: registering later is a defect
 	// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
 	reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
+	reg.Register(externalSourceRoutes{service: s})
 	s.resourceRoutes()
 	s.repositoryRoutes()
 	s.repoMirrorRoutes()

@@ -1,9 +1,10 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/kb"
 	"math"
 	"os"
 	"slices"
@@ -11,13 +12,6 @@ import (
 	"testing"
 	"time"
 )
-
-// attendedUpload is the upload an attending phone sends when the meeting starts: a meeting, no text yet.
-func attendedUpload(rev int64, start time.Time, role string) RecordingUpload {
-	u := recUpload(rev, start, false)
-	u.Kind, u.Attendance = RecordingMeeting, role
-	return u
-}
 
 // The attendance fields never fail an upload: a bad value is stored as off and the result says why; off is "" on
 // disk, the main chat nil; like kind, every upload replaces them.
@@ -130,7 +124,7 @@ func TestRecordingAttendanceJSON(t *testing.T) {
 func TestRecordingAttendanceReplaced(t *testing.T) {
 	e := goldenEngine(t, nil)
 	var changed []string
-	e.LiveChanged = func(id string) { changed = append(changed, id) }
+	e.OnLive(func(id string) { changed = append(changed, id) })
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	note := "11111111-1111-4111-8111-111111111111"
 	putRecording(t, e, note, recUpload(1, now, false, "a note"), now)
@@ -168,7 +162,7 @@ func TestRecordingAttendanceReplaced(t *testing.T) {
 func TestLiveAppend(t *testing.T) {
 	e := goldenEngine(t, nil)
 	var changed int
-	e.LiveChanged = func(string) { changed++ }
+	e.OnLive(func(string) { changed++ })
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	segs := func(texts ...string) []LiveSegment {
 		var out []LiveSegment
@@ -275,7 +269,7 @@ func TestLiveFull(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	putRecording(t, e, recID, attendedUpload(1, now, AttendanceParticipant), now)
 	seed := Live{Segments: make([]LiveSegment, maxLivePositions-1)}
-	if ok, err := e.Store.putLive(recID, &seed); !ok || err != nil {
+	if ok, err := ws(e.Store).putLive(recID, &seed); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
 	two := []LiveSegment{{Text: "one"}, {Text: "two"}}
@@ -295,7 +289,7 @@ func TestLiveFull(t *testing.T) {
 	other := "11111111-1111-4111-8111-111111111111"
 	putRecording(t, e, other, attendedUpload(1, now, AttendanceListener), now)
 	bytes := Live{Segments: []LiveSegment{{Text: "x"}}, Bytes: maxLiveBytes - 3}
-	if ok, err := e.Store.putLive(other, &bytes); !ok || err != nil {
+	if ok, err := ws(e.Store).putLive(other, &bytes); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
 	if _, _, err := e.LiveAppend(other, 1, []LiveSegment{{Text: "four"}}); !errors.Is(err, ErrLiveFull) {
@@ -314,11 +308,11 @@ func TestLiveReadOnly(t *testing.T) {
 	if _, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Text: "Hello"}}); err != nil {
 		t.Fatal(err)
 	}
-	ro, err := OpenReadOnly(e.Store.Dir)
+	ro, err := kb.OpenReadOnly(e.Store.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := &Engine{Store: ro}
+	re := readOnlyEngine(&kb.Engine{Store: ro})
 	if l, r, err := re.LiveRead(recID); err != nil || len(l.Segments) != 1 || r.Attendance != AttendanceListener {
 		t.Fatalf("read: %+v %v", l, err)
 	}
@@ -457,11 +451,8 @@ func TestLiveNeverSearchedOrShown(t *testing.T) {
 	if l, _, _ := e.LiveRead(recID); len(l.Segments) != 1 || len(l.Asks) != 1 {
 		t.Fatalf("an upload changed the live log: %+v", l)
 	}
-	for _, rel := range []string{"recordings/" + recID + "/live.json", "recordings/" + recID + "/live.json.tmp"} {
-		if searchable(rel) {
-			t.Errorf("%s is searchable", rel)
-		}
-	}
+	// That live.json is not searched is the knowledge base's own rule and test (internal/kb,
+	// TestRecordingBookkeepingIsNotSearched).
 	if res := e.Find("orchard", 10); len(res) != 1 {
 		t.Fatalf("the transcript is not found: %+v", res)
 	}

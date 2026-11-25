@@ -2,6 +2,8 @@ package writers
 
 import (
 	"context"
+	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"testing"
 	"time"
 
@@ -49,7 +51,7 @@ func TestHubTextCountsForAskingMinutes(t *testing.T) {
 	if err := e.AskMinutes(recID); err != ErrRecordingIncomplete {
 		t.Fatalf("no text yet: %v", err)
 	}
-	if _, err := e.HubTranscriptPut(recID, kb.HubPassLive, []kb.RecordingSegment{hseg(0, 4, "Bo owns the vendor follow-up.")}); err != nil {
+	if _, err := e.HubTranscriptPut(recID, recordingwire.HubPassLive, []kbwire.RecordingSegment{hseg(0, 4, "Bo owns the vendor follow-up.")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.AskMinutes(recID); err != nil {
