@@ -23,8 +23,11 @@ import {
 } from '../models/InteractionDecision';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
 import { ButtonStyles } from '../design/Controls';
 import { tr } from '../design/Strings';
+import { Haptics } from '../platform/Haptics';
 
 @ComponentV2
 export struct InteractionDecisionForm {
@@ -113,6 +116,7 @@ export struct InteractionDecisionForm {
   @Local openedUrl: string = '';
   @Local busy: boolean = false;
   @Local deferred: boolean = false;
+  @Local private pressedButton: string = '';
   @Local textValues: Record<string, string> = Wire.payload([], []) as Record<string, string>;
   @Local questionOptions: Record<string, InteractionChoice[]> = {};
   @Local questionPicks: Record<string, string[]> = Wire.payload([], []) as Record<string, string[]>;
@@ -362,8 +366,13 @@ export struct InteractionDecisionForm {
     const request=this.request, raw=request.raw, agent=this.taskAgent, card=this.taskCard;
     const answer=this.taskQueue && agent && card ? this.taskQueue.answerForm(this.model,agent,card,option,values,util.generateRandomUUID(),this.admission) :
       this.model.answer(option,values,request,this.admission);
-    answer.then(() => { if (request===this.request && request.raw===raw && request.status==='resolved') this.onResolved(); })
-      .catch(() => { if (request===this.request && request.raw===raw && this.admission()) this.model.error='failed'; })
+    answer.then(() => {
+      if (request===this.request && request.raw===raw && request.status==='resolved') {
+        Haptics.success();
+        this.onResolved();
+      }
+    })
+      .catch(() => { if (request===this.request && request.raw===raw && this.admission()) { Haptics.error(); this.model.error='failed'; } })
       .finally(() => { if (request===this.request && request.raw===raw) this.busy=false; });
   }
 
@@ -617,8 +626,9 @@ export struct InteractionDecisionForm {
 
   private toggleCard():void {
     if (!this.admission()) return;
+    Haptics.tap();
     if (this.docked) this.onDockFold();
-    else this.cardFolded=!this.cardFolded;
+    else Motion.run(this.getUIContext(), Motion.state(this.headerEnvironment.reduceMotion), () => { this.cardFolded=!this.cardFolded; });
   }
 
   @Builder planReader() {
@@ -734,9 +744,11 @@ export struct InteractionDecisionForm {
       Button({type:ButtonType.Circle}) {
         if (this.docked) {
           PhoneOutlineIcon({name:'decisionChevron',color:this.systemDockHeader ? $r('app.color.decision_header_secondary') : Colors.secondary})
-            .rotate({angle:this.cardFolded ? 180 : 0}).scale({x:this.dockGlyphScale(13),y:this.dockGlyphScale(13)})
+            .rotate({angle:this.cardFolded ? 180 : 0}).animation(Motion.state(this.headerEnvironment.reduceMotion))
+            .scale({x:this.dockGlyphScale(13),y:this.dockGlyphScale(13)})
         } else {
-          SymbolGlyph(this.cardFolded ? Symbols.up : Symbols.down).fontSize('13vp').fontColor([Colors.secondary])
+          SymbolGlyph(Symbols.down).fontSize('13vp').fontColor([Colors.secondary])
+            .rotate({angle:this.cardFolded ? 180 : 0}).animation(Motion.state(this.headerEnvironment.reduceMotion))
         }
       }.width(this.agentCard || this.docked ? this.headerControlSide() : 27).height(this.agentCard || this.docked ? this.headerControlSide() : 27).padding(0)
         .backgroundColor(this.systemDockHeader ? $r('app.color.decision_header_chip') : Colors.control)
@@ -750,6 +762,7 @@ export struct InteractionDecisionForm {
 
   private approveTaskPlan(mode:string):void {
     if (!this.canRespond()) return;
+    Haptics.tap();
     this.selected='approve'; this.setText('mode',mode); this.submit('approve');
   }
 
@@ -901,7 +914,12 @@ export struct InteractionDecisionForm {
         .maxLines(this.commandExpanded || !this.longPermissionCommand() ? undefined : 5).textOverflow({overflow:TextOverflow.Ellipsis})
         .width('100%').padding(12).backgroundColor(Colors.subtle).borderRadius(10).id('interaction.permission.command')
       if (this.longPermissionCommand()) Button(tr(this.commandExpanded ? 'agent_collapse' : 'agent_expand'),{buttonStyle:ButtonStyleMode.TEXTUAL})
-        .fontSize(13).fontColor(Colors.link).onClick(() => this.commandExpanded=!this.commandExpanded).id('interaction.permission.expand')
+        .fontSize(13).fontColor(Colors.link).onClick(() => {
+          Haptics.tap();
+          Motion.run(this.getUIContext(), Motion.state(this.headerEnvironment.reduceMotion), () => {
+            this.commandExpanded=!this.commandExpanded;
+          });
+        }).id('interaction.permission.expand')
       ForEach(this.request.fields,(field:DecisionField) => this.permissionField(field),(field:DecisionField) => field.key)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -910,10 +928,22 @@ export struct InteractionDecisionForm {
       Row({space:8}) {
         Button(tr('deny'),{type:ButtonType.Capsule}).layoutWeight(1).height(this.agentActionHeight()).constraintSize({minHeight:this.agentActionHeight()}).fontSize(17)
           .maxFontScale(Tokens.interfaceScaleFor(17)).backgroundColor(Colors.control).fontColor(Colors.link).enabled(this.canRespond())
-          .onClick(() => this.sendPermission('deny')).id('interaction.permission.deny')
+          .scale({x:this.pressedButton==='deny'?MotionTokens.pressScale:1,y:this.pressedButton==='deny'?MotionTokens.pressScale:1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='deny';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='deny') this.pressedButton=''; }
+          })
+          .onClick(() => { Haptics.tap(); this.sendPermission('deny'); }).id('interaction.permission.deny')
         Button(tr('allow'),{type:ButtonType.Capsule}).layoutWeight(1).height(this.agentActionHeight()).constraintSize({minHeight:this.agentActionHeight()}).fontSize(17)
           .maxFontScale(Tokens.interfaceScaleFor(17)).backgroundColor(Colors.action).fontColor(Colors.onAction).enabled(this.permissionAllowed())
-          .onClick(() => this.sendPermission('allow')).id('interaction.permission.allow')
+          .scale({x:this.pressedButton==='allow'?MotionTokens.pressScale:1,y:this.pressedButton==='allow'?MotionTokens.pressScale:1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='allow';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='allow') this.pressedButton=''; }
+          })
+          .onClick(() => { Haptics.tap(); this.sendPermission('allow'); }).id('interaction.permission.allow')
       }.width('100%')
       if (interactionSessionAllowance(this.request)) {
         Row() {
@@ -947,7 +977,12 @@ export struct InteractionDecisionForm {
             if (this.pickedQuestion(field,choice.label)) SymbolGlyph(Symbols.check).fontSize('16vp').fontColor([Colors.link])
           }.width('100%').padding(12).constraintSize({minHeight:choice.detail ? 64 : 48}).enabled(this.canRespond())
             .accessibilityGroup(true).accessibilitySelected(this.pickedQuestion(field,choice.label)).accessibilityText(choice.label)
-            .onClick(() => this.chooseAgentAnswer(field,choice)).id('interaction.question.'+field.key+'.'+choice.label)
+            .onClick(() => {
+              Haptics.selection();
+              Motion.run(this.getUIContext(), Motion.state(this.headerEnvironment.reduceMotion), () => {
+                this.chooseAgentAnswer(field,choice);
+              });
+            }).id('interaction.question.'+field.key+'.'+choice.label)
           Divider().color(Colors.divider).strokeWidth(0.5).margin({left:52})
         },(choice:InteractionChoice) => choice.label)
         if (!this.questionChoices(field).length || this.otherQuestion===field.key || this.textValues[field.key+':other']) {
@@ -1107,13 +1142,13 @@ export struct InteractionDecisionForm {
     if (event.type===TouchType.Move && touch) {
       const dy=touch.windowY-this.gripWindowY;
       if (!this.gripMoved && Math.abs(dy)>=4 && Math.abs(dy)>Math.abs(touch.windowX-this.gripWindowX)) {
-        this.gripMoved=true;this.onDockResize('begin',0);
+        this.gripMoved=true;Haptics.selection();this.onDockResize('begin',0);
       }
       if (this.gripMoved) { this.gripDistance=dy;this.onDockResize('move',dy); }
     } else if (event.type===TouchType.Up || event.type===TouchType.Cancel) {
       this.gripDown=false;this.gripEnded=Date.now();
-      if (this.gripMoved) this.onDockResize(event.type===TouchType.Up ? 'end' : 'cancel',this.gripDistance);
-      else if (event.type===TouchType.Up) this.onDockResize('toggle',0);
+      if (this.gripMoved) { Haptics.tap(); this.onDockResize(event.type===TouchType.Up ? 'end' : 'cancel',this.gripDistance); }
+      else if (event.type===TouchType.Up) { Haptics.tap(); this.onDockResize('toggle',0); }
     }
     event.stopPropagation();
   }

@@ -9,6 +9,7 @@ import { window } from '@kit.ArkUI';
 import { Strings } from '../design/Strings';
 import { client } from '../models/ClientModel';
 import { nativeNotifications, NOTIFICATION_ACTION } from '../platform/NativeNotifications';
+import { LIVE_VIEW_ACTION, nativeLiveView } from '../platform/NativeLiveView';
 import { Wire } from '../models/Wire';
 import { KnowledgeRecording } from '../models/KnowledgeRecording';
 import { deviceLook } from '../models/DeviceLook';
@@ -25,7 +26,7 @@ export default class EntryAbility extends UIAbility {
     Strings.bind(this.context.resourceManager);
     deviceLook.initialize(this.context).catch(() => { deviceLook.error = 'device_look_storage_failed'; });
     this.receiveWant(want);
-    if (want.action === NOTIFICATION_ACTION) this.pendingNotification = Wire.record(want.parameters);
+    if (want.action === NOTIFICATION_ACTION || want.action === LIVE_VIEW_ACTION) this.pendingNotification = Wire.record(want.parameters);
     client.initialize(this.context).then(() => {
       if (!this.visible) return;
       this.context.getApplicationContext().setColorMode(client.appearance === 1 ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT :
@@ -43,7 +44,7 @@ export default class EntryAbility extends UIAbility {
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     nativeEnvironment.update(this.context.config);
     this.receiveWant(want);
-    if (want.action === NOTIFICATION_ACTION) { this.pendingNotification = Wire.record(want.parameters); this.dispatchNotification(); }
+    if (want.action === NOTIFICATION_ACTION || want.action === LIVE_VIEW_ACTION) { this.pendingNotification = Wire.record(want.parameters); this.dispatchNotification(); }
   }
   onConfigurationUpdate(_configuration: Configuration): void {
     phoneTextSize.refresh(_configuration.fontSizeScale || 0);
@@ -75,5 +76,5 @@ export default class EntryAbility extends UIAbility {
     }).catch(() => { if (this.visible && epoch === this.lifecycle) client.error = 'failed'; });
     deviceFeatures.foreground().catch(() => {});
   }
-  onDestroy(): void { phoneTextSize.detach(); nativeEnvironment.foreground = false; NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
+  onDestroy(): void { phoneTextSize.detach(); nativeEnvironment.foreground = false; nativeLiveView.stopNow().catch(() => {}); NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
 }

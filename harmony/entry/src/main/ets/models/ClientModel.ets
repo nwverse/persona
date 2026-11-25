@@ -27,6 +27,8 @@ import { ChatAttachments } from './ChatAttachments';
 import { AgentAttentionCard, agentAttentionCards, waitingAgentBadge } from './AgentAttention';
 import type { PreparedAttachmentSend } from './ChatAttachments';
 import { nativeNotifications } from '../platform/NativeNotifications';
+import { nativeLiveView } from '../platform/NativeLiveView';
+import type { LiveViewPrefsStorage } from '../platform/NativeLiveView';
 import { resolveManagerScope } from '../core/ScopePolicy';
 import { SessionWorkspace } from './SessionWorkspace';
 import { common } from '@kit.AbilityKit';
@@ -57,6 +59,13 @@ export interface ClientViewLease {
   read: () => Promise<string>;
   write: (value: string) => Promise<void>;
   clearIfUnchanged: (expected: string) => Promise<void>;
+}
+
+class LocalLiveViewPrefsStorage implements LiveViewPrefsStorage {
+  private readonly store: LocalStore;
+  constructor(store: LocalStore) { this.store = store; }
+  get(key: string): Promise<string | undefined> { return this.store.get(key); }
+  put(key: string, value: string): Promise<void> { return this.store.put(key, value); }
 }
 
 class PhoneListRead {
@@ -482,6 +491,9 @@ export class ClientModel {
     this.ssh.initialize(context);
     this.vault = new CredentialVault(context);
     await this.local.open(context);
+    if (!this.detached) {
+      nativeLiveView.initialize(context, new LocalLiveViewPrefsStorage(this.local)).catch(() => {});
+    }
     const storedCardHeight = await this.local.get('ui.questionCardHeight');
     const share = Number(storedCardHeight);
     if (storedCardHeight && Number.isFinite(share)) this.questionCardHeightShare = Math.max(0,Math.min(1,share));
@@ -731,6 +743,7 @@ export class ClientModel {
         else this.refreshDecisions().catch((error: Error) => this.failure(error));
       }
       this.publishDirectory();
+      if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
     }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
     if (this.owns(generation, scope)) await this.flushNotification();
   }
@@ -817,6 +830,7 @@ export class ClientModel {
     if (this.context) { try { await ChatAttachments.forgetHub(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     if (this.context) { try { clearImagePreviews(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     try { await nativeNotifications.clear(id); } catch (_) { cleanupFailed = true; }
+    if (!this.detached) { nativeLiveView.stopNow(id).catch(() => {}); }
     try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id); }); } catch (_) { cleanupFailed = true; }
     this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.publishDirectory();
     try { await this.saveProfiles(); } catch (_) { cleanupFailed = true; }
@@ -848,6 +862,7 @@ export class ClientModel {
         const generation = this.generation, scope = this.scope();
         this.reconcileWrites().then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.refresh(); }).then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.flushNotification(); }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
       } else if (type === 'notify') { if (!this.detached) nativeNotifications.receive(this, data); }
+      else if (type === 'fleet') { if (!this.detached) nativeLiveView.receiveFleetEvent(this, data).catch(() => {}); }
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
@@ -905,6 +920,7 @@ export class ClientModel {
         return !!this.matchingHeldInstruction(receipt.expected, row);
       });
       this.publishDirectory();
+      if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
       if (this.selected.kind === 'session') {
         const selected = sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
         if (selected) this.selected = selected;
@@ -2003,6 +2019,7 @@ export class ClientModel {
     this.managers = [new ResourceRow('demo', tr('local_demo'), 'manager')];
     if (this.selected.kind === 'session') { const current = this.sessions.find((row: ResourceRow) => row.id === this.selected.id && row.machine === this.selected.machine); if (current) this.selected = current; }
     this.directoryReady = true; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory();
+    if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
   }
   useDemo(): void {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
@@ -2015,13 +2032,13 @@ export class ClientModel {
   }
   releaseTerminal(): void { this.workspace?.hide(); this.terminalControl = false; }
   async background(): Promise<void> {
-    this.foreground = false; this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
+    this.foreground = false; if (!this.detached) nativeLiveView.setForeground(false); this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.clearPendingDecisions(); this.releaseTerminal();
     this.feedbackChanged();
     const repository = this.repository; repository?.close();
     const children = Array.from(this.views.values()).map((view: ClientModel): Promise<void> => view.background());
     await this.persistDraft(); await Promise.all(children);
   }
-  activateForeground(): void { this.foreground = true; this.feedbackChanged(); for (const view of this.views.values()) view.activateForeground(); }
+  activateForeground(): void { this.foreground = true; if (!this.detached) nativeLiveView.setForeground(true); this.feedbackChanged(); for (const view of this.views.values()) view.activateForeground(); }
   async foregrounded(): Promise<void> { if (this.retired) return; this.activateForeground(); await this.retryCleanup(); if (this.retired || !this.foreground) return; if (this.profile.id && !this.demo) await this.selectProfile(this.profile, true); await this.flushNotification(); }
   async shutdown(): Promise<void> { await this.background(); this.retireViews(); if (!this.detached) await this.local.close(); }
 }

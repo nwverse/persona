@@ -48,6 +48,7 @@ registerHooks({
         export function parseMessageContent(text){return {text,images:[],files:[]};}
         export class ChatAttachments { static allowHub(){} static async forgetHub(){} }
         export const nativeNotifications={async initialize(){},async clear(){},features(){return [];},receive(){}};
+        export const nativeLiveView={async initialize(){},async receiveFleetEvent(){},async syncFromModel(){},async stopNow(){},setForeground(){}};
         export function resolveManagerScope(value){return value;}
         export class SessionWorkspace {}
         export class HubTransport { async request(){return '{}';} close(){} }

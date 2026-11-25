@@ -56,6 +56,9 @@ import type { ClientViewLease } from '../models/ClientModel';
 import { measuredReadingBoundary, parseReadingAnchor, readingAnchorIndex, readingSizeClassChanges } from '../core/ConversationReading';
 import type { ReadingAnchor, ReadingBoundary } from '../core/ConversationReading';
 import { workingTurnLabel } from '../core/PhoneDate';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
+import { Haptics } from '../platform/Haptics';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -737,6 +740,7 @@ export struct Conversation {
   }
   @Local atEnd: boolean = true;
   @Local jumpAvailable: boolean = false;
+  @Local private latestPressed: boolean = false;
   private transcriptHeight: number = 0;
   private transcriptViewportChanged(height:number):void {
     if (!Number.isFinite(height) || height <= 0 || Math.abs(height-this.transcriptHeight) < 0.1) return;
@@ -769,6 +773,23 @@ export struct Conversation {
     this.anchor.atEnd = true;
     this.jumpAvailable = false;
     this.scroller.scrollEdge(Edge.Bottom);
+  }
+  private smoothJumpToLatest(): void {
+    Haptics.tap();
+    if (!this.environment.reduceMotion && this.lines.length > 0) {
+      if (this.readingHeader && this.headerOwner && this.admission()) this.readingHeader.jumped(this.headerOwner);
+      this.manuallyReading = false;
+      this.tailPosition = undefined;
+      this.readingMotion++; this.scrollingByHand = false; this.lastManualAnchor = undefined;
+      this.atEnd = true;
+      this.anchor.atEnd = true;
+      this.jumpAvailable = false;
+      try {
+        this.scroller.scrollToIndex(this.readingPrefix() + this.lines.length - 1, true, ScrollAlign.END);
+        return;
+      } catch (_) {}
+    }
+    this.jumpToLatest();
   }
   @Monitor('questions.shown','attachmentSheet','draftEditorOpen','modeMenuOpen','searchPresented','fieldFocused','headerOwner')
   readingOverlayChanged():void {
@@ -1556,6 +1577,7 @@ export struct Conversation {
       this.liftOpen=false; this.liftMessage=undefined; this.liftFrame=undefined; this.ownedLift=undefined;
     }};
     this.liftHost.present(presentation); this.ownedLift=presentation; this.liftOpen=true;
+    Haptics.tap();
   }
   private closeOwnedLift(): void {
     if (this.ownedLift && this.liftHost.current===this.ownedLift) this.liftHost.dismiss();
@@ -1630,6 +1652,17 @@ export struct Conversation {
           onDisappear:() => { if (this.readingMenuLine===entry.item.id) this.readingMenuLine=''; }})
     }
   }
+  private isStreamingMessage(message: ChatMessage): boolean {
+    if (!this.active || message.role !== 'assistant' || !this.lines.length) return false;
+    const working = this.model.assistantReplyWorking() || this.model.canStop();
+    if (!working) return false;
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const candidate = this.lines[i].message;
+      if (candidate && candidate.role === 'assistant') return candidate.id === message.id;
+    }
+    return false;
+  }
+
   @Builder messageBody(entry: RepeatItem<ConversationLine>) {
     Column({ space: Tokens.gap }) {
       if (entry.item.message!.role === 'work' && entry.item.message!.running && !entry.item.message!.work) {
@@ -1680,8 +1713,9 @@ export struct Conversation {
         WithTheme({ colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT, theme: nativeMessageTheme(this.look, this.model.style, entry.item.message!.role === 'user', this.environment.dark) }) {
         MessageSurface({ sourceId: 'chat.lift.source.'+entry.item.id, own: entry.item.message!.role === 'user', agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
           personaReply: this.model.selected.kind === 'conversation' && entry.item.message!.role === 'assistant', maximum: entry.item.message!.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
-          if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: entry.item.message!, active: this.active, onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
+          if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: entry.item.message!, active: this.active, streaming: this.isStreamingMessage(entry.item.message!), onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
           else MarkdownText({ text: entry.item.message!.text, chatReply: entry.item.message!.role === 'assistant',
+            streaming: this.isStreamingMessage(entry.item.message!),
             agentReply: this.model.selected.kind === 'session' && entry.item.message!.role === 'assistant',
             agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
             agentFontScale: this.environment.fontScale, nativeTextSelection: !this.canLiftMessage(entry.item.message!), fitContent: entry.item.message!.role === 'user',
@@ -1771,8 +1805,15 @@ export struct Conversation {
               .backgroundBlurStyle(Colors.styleID==='glass' ? BlurStyle.COMPONENT_THIN : BlurStyle.NONE)
           }.width(this.latestDiameter+10).height(this.latestDiameter).padding(0).backgroundColor(Color.Transparent)
             .margin({ right: Tokens.page, bottom: 14 })
+            .scale({ x: this.latestPressed ? MotionTokens.pressScale : 1, y: this.latestPressed ? MotionTokens.pressScale : 1 })
+            .animation(Motion.release(this.environment.reduceMotion))
+            .transition(Motion.fadeScale(this.environment.reduceMotion, 0.85))
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) this.latestPressed = true;
+              else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.latestPressed = false;
+            })
             .accessibilityText(tr('latest')).bindTips(tr('latest')).id('chat.latest')
-            .onClick(() => this.jumpToLatest())
+            .onClick(() => this.smoothJumpToLatest())
         }
       }.width('100%').layoutWeight(1)
     }.width('100%').constraintSize({ maxWidth: Tokens.readingMax }).height('100%')

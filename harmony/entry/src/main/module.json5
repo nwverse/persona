@@ -62,6 +62,9 @@
         "name": "ohos.permission.GET_NETWORK_INFO"
       },
       {
+        "name": "ohos.permission.VIBRATE"
+      },
+      {
         "name": "ohos.permission.CAMERA",
         "reason": "$string:phone_pair_camera_reason",
         "usedScene": {

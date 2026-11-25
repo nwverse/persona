@@ -8587,6 +8587,122 @@
     {
       "name": "session_models_empty",
       "value": "このランチャーには切り替え可能なモデルがありません。"
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "すべて既読にする"
+    },
+    {
+      "name": "agent_mark_all_seen_confirm",
+      "value": "未読の {count} 件をすべて既読にしますか？"
+    },
+    {
+      "name": "live_view_section_title",
+      "value": "ライブビュー"
+    },
+    {
+      "name": "live_view_enable",
+      "value": "ライブビューを表示"
+    },
+    {
+      "name": "live_view_enable_detail",
+      "value": "待機中・作業中・未読のエージェントをステータスバーとロック画面に表示します。"
+    },
+    {
+      "name": "live_view_lock_details",
+      "value": "ロック画面に詳細を表示"
+    },
+    {
+      "name": "live_view_lock_details_detail",
+      "value": "件数だけでなくエージェント名と概要を表示します。"
+    },
+    {
+      "name": "live_view_test_publish",
+      "value": "システムでプレビュー"
+    },
+    {
+      "name": "live_view_test_stop",
+      "value": "終了"
+    },
+    {
+      "name": "live_view_needs_count",
+      "value": "{count} 件対応待ち"
+    },
+    {
+      "name": "live_view_working_count",
+      "value": "{count} 件作業中"
+    },
+    {
+      "name": "live_view_unread_count",
+      "value": "{count} 件未読"
+    },
+    {
+      "name": "live_view_all_caught_up",
+      "value": "すべて確認済み"
+    },
+    {
+      "name": "live_view_assistant_replying",
+      "value": "アシスタントが返信中"
+    },
+    {
+      "name": "live_view_background_tag",
+      "value": "バックグラウンド"
+    },
+    {
+      "name": "live_view_anon_permission",
+      "value": "権限のリクエストが待機中"
+    },
+    {
+      "name": "live_view_anon_plan",
+      "value": "承認待ちのプランがあります"
+    },
+    {
+      "name": "live_view_anon_question",
+      "value": "回答待ちの質問があります"
+    },
+    {
+      "name": "live_view_anon_screen",
+      "value": "対応待ちのターミナルがあります"
+    },
+    {
+      "name": "live_view_anon_working",
+      "value": "作業中"
+    },
+    {
+      "name": "live_view_anon_unread",
+      "value": "完了・未読"
+    },
+    {
+      "name": "live_view_capsule_needs",
+      "value": "待ち {count}"
+    },
+    {
+      "name": "live_view_capsule_working",
+      "value": "作業 {count}"
+    },
+    {
+      "name": "live_view_capsule_unread",
+      "value": "未読 {count}"
+    },
+    {
+      "name": "live_view_capsule_done",
+      "value": "完了"
+    },
+    {
+      "name": "live_view_more_count",
+      "value": "+{count}"
+    },
+    {
+      "name": "live_view_system_disabled",
+      "value": "ステータスバーやロック画面に表示するには、システム設定でライブビューを有効にしてください。"
+    },
+    {
+      "name": "live_view_entitlement_required",
+      "value": "システムライブビューには権限付き署名ビルドが必要です。アプリ内プレビューで確認できます。"
+    },
+    {
+      "name": "live_view_unavailable",
+      "value": "このデバイスではシステムライブビューを利用できません。"
     }
   ]
 }

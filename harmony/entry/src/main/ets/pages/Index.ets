@@ -102,6 +102,8 @@ import { nativeSheetInset } from '../platform/NativeInsets';
 import { mainConversationData } from '../core/DefaultConversation';
 import { AssistantDetailPage } from '../components/AssistantDetailPage';
 import { tr, trError } from '../design/Strings';
+import { Motion } from '../design/Motion';
+import { Haptics } from '../platform/Haptics';
 import { isHubStateKey } from '../core/StorageOwnership';
 
 interface ChatActionEntry extends SheetInfo {
@@ -172,6 +174,7 @@ struct Index {
   private gesturePlace: number = -1;
   private drawerFrom: number = 0;
   private drawerAnimation: number = 0;
+  private drawerVelocity: number = 0;
   private drawerTapBlockedUntil: number = 0;
   @Local query: string = '';
   @Local filter: number = 0;
@@ -511,10 +514,12 @@ struct Index {
   private drawerWidth(): number { return Math.min(380, Math.max(1,this.phoneWidth * 0.82)); }
   @Monitor('spacesShown') drawerStateChanged(): void {
     if (!this.spacesShown && !this.wide()) this.assistantMenuScope = '';
-    if (this.wide()) { this.drawerFraction = 0; this.drawerMounted = false; return; }
-    this.settlePhoneDrawer(this.spacesShown);
+    if (this.wide()) { this.drawerFraction = 0; this.drawerMounted = false; this.drawerVelocity = 0; return; }
+    const velocity = this.drawerVelocity;
+    this.drawerVelocity = 0;
+    this.settlePhoneDrawer(this.spacesShown, velocity);
   }
-  private settlePhoneDrawer(open:boolean): void {
+  private settlePhoneDrawer(open:boolean, velocity:number = 0): void {
     const revision = ++this.drawerAnimation;
     if (this.environment.reduceMotion) {
       this.drawerFraction = open ? 1 : 0;
@@ -522,9 +527,10 @@ struct Index {
       return;
     }
     if (open) this.drawerMounted = true;
-    this.getUIContext().animateTo({duration:230,curve:Curve.EaseOut,onFinish:() => {
+    const param = Motion.drawer(this.environment.reduceMotion, velocity, this.drawerWidth(), () => {
       if (revision === this.drawerAnimation && !this.spacesShown) this.drawerMounted = false;
-    }},() => this.drawerFraction = open ? 1 : 0);
+    });
+    this.getUIContext().animateTo(param, () => this.drawerFraction = open ? 1 : 0);
   }
   private startPhonePan(event:GestureEvent): void {
     this.gestureKind = '';
@@ -563,9 +569,10 @@ struct Index {
     if (kind === 'close') this.drawerTapBlockedUntil = Date.now() + 200;
     if (kind === 'open' || kind === 'close') {
       const open = done ? kind === 'open' && dx > 0 || kind === 'close' && dx >= 0 : this.spacesShown;
-      if (open !== this.spacesShown) { this.drawerSearching = false; this.spacesShown = open; }
-      else this.settlePhoneDrawer(open);
+      if (open !== this.spacesShown) { Haptics.selection(); this.drawerSearching = false; this.drawerVelocity = vx; this.spacesShown = open; }
+      else this.settlePhoneDrawer(open, vx);
     } else if (done && this.phonePeer() && (kind === 'agents' && dx < 0 || kind === 'persona' && dx > 0)) {
+      Haptics.selection();
       this.browsePeer(kind === 'agents' ? 1 : 0);
     }
   }

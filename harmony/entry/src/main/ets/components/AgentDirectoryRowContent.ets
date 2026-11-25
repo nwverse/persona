@@ -6,6 +6,7 @@ import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { ProjectAgentPlaceLine } from './ProjectAgentPlaceLine';
+import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
 
 @ComponentV2
 export struct AgentDirectoryRowContent {
@@ -37,12 +38,12 @@ export struct AgentDirectoryRowContent {
         else if (agent.runtime) Text(agent.runtime.slice(0,1).toUpperCase()).fontSize('16vp').fontWeight(FontWeight.Medium).fontColor(Colors.ink)
         else SymbolGlyph(Symbols.agent).fontSize('17vp').fontColor([Colors.secondary])
       }.width(36*this.controlScale).height(36*this.controlScale).backgroundColor(Colors.subtle).borderRadius(18*this.controlScale)
-      if (this.activityList && agent.state==='working' && agent.rank!==4) Stack() {
-        Circle().width(17).height(17).fill(Color.Transparent).stroke(this.tint).strokeWidth(2.55).opacity(0.45)
-        Circle().width(10).height(10).fill(this.tint)
-      }.width(19.5).height(19.5).backgroundColor(Colors.surface).borderRadius(10).offset({x:4.75,y:4.75})
+      if (this.activityList && agent.state==='working' && agent.rank!==4)
+        WorkingArcSpinner({diameter:17,tint:this.tint,surface:Colors.surface,showCoreDot:true}).offset({x:4.75,y:4.75})
       else if (this.activityList && agent.state==='working' && agent.rank===4)
         SymbolGlyph($r('sys.symbol.clock')).fontSize('17vp').fontColor([this.tint]).backgroundColor(Colors.surface).borderRadius(9)
+      else if (agent.state==='needs_you' && !this.muted)
+        NeedsYouPulseDot({dotSize:10,tint:this.tint,surface:Colors.surface,bordered:true}).offset({x:3,y:3})
       else if (agent.state && agent.state !== 'unknown') Circle().width(12).height(12).fill(this.tint)
         .stroke(Colors.surface).strokeWidth(2)
     }.width(36*this.controlScale).height(36*this.controlScale)
@@ -137,14 +138,15 @@ export struct AgentDirectoryRowContent {
     if(!this.hideState && !this.muted && this.agent.state!=='unknown')
       Stack(){
         if(this.agent.state==='working' && this.agent.rank!==4){
-          Circle().width(14*this.controlScale).height(14*this.controlScale).fill(Color.Transparent).stroke(this.tint).strokeWidth(2).opacity(0.5)
-          Circle().width(8*this.controlScale).height(8*this.controlScale).fill(this.tint)
+          WorkingArcSpinner({diameter:14*this.controlScale,tint:this.tint,surface:Color.Transparent,showCoreDot:true})
         }else if(this.agent.rank===4){
           SymbolGlyph($r('sys.symbol.clock')).fontSize(String(14*this.controlScale)+'vp').fontColor([this.tint])
+        }else if(this.agent.state==='needs_you'){
+          NeedsYouPulseDot({dotSize:8*this.controlScale,tint:this.tint,surface:Color.Transparent,bordered:false})
         }else{
           Circle().width(8*this.controlScale).height(8*this.controlScale).fill(this.tint)
         }
-      }.width(8*this.controlScale).height(8*this.controlScale)
+      }.width(14*this.controlScale).height(14*this.controlScale)
   }
   @Builder stamp() {
     if(this.age)Text(this.age).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(1)

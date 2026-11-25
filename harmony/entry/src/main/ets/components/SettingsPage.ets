@@ -20,6 +20,7 @@ import { Colors } from '../design/Colors';
 import { PhoneAppearanceSettings } from './PhoneAppearanceSettings';
 import { DeviceLookPicker } from './DeviceLookPicker';
 import { LicenseNotices } from './LicenseNotices';
+import { LiveViewSettingsCard } from './LiveViewSettingsCard';
 import { common } from '@kit.AbilityKit';
 
 @ComponentV2
@@ -1419,6 +1420,7 @@ export struct SettingsPage {
         }
       }
       if (this.notifications.error) ListItem() { Text(trError(this.notifications.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.page) }
+      ListItem() { LiveViewSettingsCard() }
     }.width('100%').height('100%')
   }
 

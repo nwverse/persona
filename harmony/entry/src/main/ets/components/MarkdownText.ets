@@ -2,14 +2,18 @@ import { LengthMetrics, Theme } from '@kit.ArkUI';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { tr } from '../design/Strings';
 import { IconActions } from '../design/IconActions';
-import { MarkdownBlock, MarkdownInline, MarkdownProseRun, MarkdownTableRow, agentReplyBodySize, hasHanProse, markdownProseRuns, parseMarkdown, recapGlyphSize } from '../core/Markdown';
+import { MarkdownBlock, MarkdownInline, MarkdownProseRun, MarkdownTableRow, agentReplyBodySize, hasHanProse, markdownProseRuns, recapGlyphSize } from '../core/Markdown';
+import { IncrementalMarkdownCache, KeyedMarkdownBlock } from '../core/StreamMarkdown';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
+import { Haptics } from '../platform/Haptics';
+import { StreamTailCaret } from './StatusMotionMarks';
 
 @ComponentV2
 export struct MarkdownText {
   @Require @Param text: string;
+  @Param streaming: boolean = false;
   @Param fitContent: boolean = false;
   @Param nativeTextSelection: boolean = true;
   @Param fixedType: boolean = false;
@@ -23,7 +27,8 @@ export struct MarkdownText {
   @Param paragraphLineSpacingEm: number = 0.26;
   @Event onLink: (url: string) => void = (_url: string) => {};
   @Event onSelectionChange: (selected: boolean) => void = (_selected: boolean) => {};
-  @Local blocks: MarkdownBlock[] = [];
+  @Local entries: KeyedMarkdownBlock[] = [];
+  private cache: IncrementalMarkdownCache = new IncrementalMarkdownCache();
   @Local foreground: ResourceColor = $r('sys.color.font_primary');
   @Local secondary: ResourceColor = $r('sys.color.font_secondary');
   @Local emphasize: ResourceColor = $r('sys.color.font_emphasize');
@@ -33,8 +38,8 @@ export struct MarkdownText {
     this.emphasize = theme.colors.fontEmphasize; this.codeFill = theme.colors.compBackgroundTertiary;
   }
 
-  aboutToAppear(): void { this.blocks = parseMarkdown(this.text); }
-  @Monitor('text') textChanged(): void { this.blocks = parseMarkdown(this.text); }
+  aboutToAppear(): void { this.entries = this.cache.update(this.text); }
+  @Monitor('text') textChanged(): void { this.entries = this.cache.update(this.text); }
 
   @Computed get scaleAgentProse(): boolean { return Math.abs(this.agentFontScale - 1) > 0.001; }
   @Computed get recapProse(): boolean { return this.recapReading && this.chatReply && !this.dockPlan; }
@@ -112,8 +117,10 @@ export struct MarkdownText {
   private async copyCode(text: string): Promise<void> {
     try {
       await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text));
+      Haptics.success();
       this.getUIContext().getPromptAction().showToast({ message: tr('done') });
     } catch (_) {
+      Haptics.error();
       this.getUIContext().getPromptAction().showToast({ message: tr('failed') });
     }
   }
@@ -264,21 +271,22 @@ export struct MarkdownText {
 
   build() {
     Column({ space: this.dockPlan ? 6 : Tokens.gap }) {
-      ForEach(this.blocks, (block: MarkdownBlock, index: number) => {
-        if (this.agentReply && block.kind === 'paragraph') {
+      ForEach(this.entries, (entry: KeyedMarkdownBlock, index: number) => {
+        if (this.agentReply && entry.block.kind === 'paragraph') {
           Column() {
-            this.inlineText(block.inlines, this.paragraphLineSpacingEm, Tokens.body, FontWeight.Normal,
+            this.inlineText(entry.block.inlines, this.paragraphLineSpacingEm, Tokens.body, FontWeight.Normal,
               TextAlign.Start, false, false, true)
           }.width('100%').alignItems(HorizontalAlign.Start)
-            .padding({ top: index > 0 && this.blocks[index - 1]?.kind === 'paragraph' ? 10 - Tokens.gap : 0 })
-        } else if (this.agentPrompt && block.kind === 'paragraph') {
-          this.inlineText(block.inlines, this.paragraphLineSpacingEm, Tokens.body, FontWeight.Normal,
+            .padding({ top: index > 0 && this.entries[index - 1]?.block.kind === 'paragraph' ? 10 - Tokens.gap : 0 })
+        } else if (this.agentPrompt && entry.block.kind === 'paragraph') {
+          this.inlineText(entry.block.inlines, this.paragraphLineSpacingEm, Tokens.body, FontWeight.Normal,
             TextAlign.Start, false, false, false, true)
         } else {
-          this.blockView(block, index === 0)
+          this.blockView(entry.block, index === 0)
         }
       },
-        (block: MarkdownBlock, index: number) => 'block.' + String(index) + ':' + JSON.stringify(block))
+        (entry: KeyedMarkdownBlock) => entry.key)
+      if (this.streaming) StreamTailCaret()
     }.width(this.fitContent ? undefined : '100%').alignItems(HorizontalAlign.Start)
       .padding({ top: this.recapProse ? this.recapTopInset() : 0 })
   }

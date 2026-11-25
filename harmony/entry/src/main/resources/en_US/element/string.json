@@ -8583,6 +8583,122 @@
     {
       "name": "session_models_empty",
       "value": "This launcher has no models available to switch to."
+    },
+    {
+      "name": "agent_mark_all_seen",
+      "value": "Mark all as seen"
+    },
+    {
+      "name": "agent_mark_all_seen_confirm",
+      "value": "Mark {count} unread agents as seen?"
+    },
+    {
+      "name": "live_view_section_title",
+      "value": "Live View"
+    },
+    {
+      "name": "live_view_enable",
+      "value": "Show Live View"
+    },
+    {
+      "name": "live_view_enable_detail",
+      "value": "Keep waiting, working, and unread agents visible on the status bar and lock screen."
+    },
+    {
+      "name": "live_view_lock_details",
+      "value": "Show Details on Lock Screen"
+    },
+    {
+      "name": "live_view_lock_details_detail",
+      "value": "Display agent names and summaries instead of counts only."
+    },
+    {
+      "name": "live_view_test_publish",
+      "value": "Preview in System Live View"
+    },
+    {
+      "name": "live_view_test_stop",
+      "value": "End"
+    },
+    {
+      "name": "live_view_needs_count",
+      "value": "{count} need you"
+    },
+    {
+      "name": "live_view_working_count",
+      "value": "{count} working"
+    },
+    {
+      "name": "live_view_unread_count",
+      "value": "{count} unread"
+    },
+    {
+      "name": "live_view_all_caught_up",
+      "value": "All Caught Up"
+    },
+    {
+      "name": "live_view_assistant_replying",
+      "value": "Assistant replying"
+    },
+    {
+      "name": "live_view_background_tag",
+      "value": "Background"
+    },
+    {
+      "name": "live_view_anon_permission",
+      "value": "A permission request is waiting"
+    },
+    {
+      "name": "live_view_anon_plan",
+      "value": "A plan needs your approval"
+    },
+    {
+      "name": "live_view_anon_question",
+      "value": "A question needs your answer"
+    },
+    {
+      "name": "live_view_anon_screen",
+      "value": "A terminal needs you"
+    },
+    {
+      "name": "live_view_anon_working",
+      "value": "Working"
+    },
+    {
+      "name": "live_view_anon_unread",
+      "value": "Finished · unread"
+    },
+    {
+      "name": "live_view_capsule_needs",
+      "value": "Needs {count}"
+    },
+    {
+      "name": "live_view_capsule_working",
+      "value": "Working {count}"
+    },
+    {
+      "name": "live_view_capsule_unread",
+      "value": "Unread {count}"
+    },
+    {
+      "name": "live_view_capsule_done",
+      "value": "Done"
+    },
+    {
+      "name": "live_view_more_count",
+      "value": "+{count}"
+    },
+    {
+      "name": "live_view_system_disabled",
+      "value": "Enable Live View for Persona in system settings to display it on the status bar and lock screen."
+    },
+    {
+      "name": "live_view_entitlement_required",
+      "value": "System Live View requires a signed build with Live View capability enabled."
+    },
+    {
+      "name": "live_view_unavailable",
+      "value": "System Live View is unavailable on this device."
     }
   ]
 }

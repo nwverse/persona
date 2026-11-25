@@ -26,6 +26,9 @@ import { tr } from '../design/Strings';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
+import { Haptics } from '../platform/Haptics';
 
 const QUICK_FILTERS: string[] = ['all', 'needsYou', 'unread', 'working', 'backgroundWaiting', 'feishu', 'terminal'];
 const QUICK_LABELS: Record<string,string> = { 'all':'all', 'needsYou':'needs_you', 'unread':'agent_group_unread', 'working':'working', 'backgroundWaiting':'agent_group_background', 'feishu':'agent_source_lark_group', 'terminal':'terminal' };
@@ -145,7 +148,9 @@ export struct AgentListPage {
   @Local searchOpen: boolean = false;
   @Local searchEditing: boolean = false;
   @Local pageOriginY: number = -1;
+  @Local private pressedChoiceKey: string = '';
   private searchField: SearchController = new SearchController();
+  private quickScroller: Scroller = new Scroller();
   private agentScroller: Scroller = new Scroller();
   private pullY: number = -1;
   private pullX: number = 0;
@@ -502,7 +507,8 @@ export struct AgentListPage {
             }.accessibilityGroup(true).accessibilityText(this.appCountLabel(binding.value,key)).id('agents.app.count.'+key)
           },(key:string)=>key)
           this.activityTotal(binding.value.totalRowCount)
-          SymbolGlyph(binding.value.folded ? Symbols.expand : Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
+          SymbolGlyph(Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
+            .rotate({angle:binding.value.folded ? -90 : 0}).animation(Motion.state(this.environment.reduceMotion))
         }.width('100%')
       }.width('100%').constraintSize({minHeight:binding.value.presentation==='app-project' ?
         PhoneStyle.formSize(56.3,64,this.environment.fontScale) : PhoneStyle.formSize(64,78,this.environment.fontScale)})
@@ -528,7 +534,8 @@ export struct AgentListPage {
             .fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).flexShrink(1).maxLines(this.narrowRow() ? 4 : 2)
           Text(String(binding.value.totalRowCount)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
           Blank().layoutWeight(1)
-          SymbolGlyph(binding.value.folded ? Symbols.expand : Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
+          SymbolGlyph(Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
+            .rotate({ angle: binding.value.folded ? -90 : 0 }).animation(Motion.state(this.environment.reduceMotion))
         }.width('100%').constraintSize({ minHeight: 44 })
       }.width('100%').padding({ left: 4, right: 5 }).backgroundColor(Color.Transparent)
         .accessibilityText(this.groupTitle(binding.value) + ' · ' +
@@ -669,8 +676,23 @@ export struct AgentListPage {
             .responseRegion({x:0,y:(this.choiceHeight(card,choice)-44)/2,width:'100%',height:44})
             .accessibilityText(this.choiceRecommended(card,choice) ?
               tr('phone_agent_recommended_accessible').replace('{value}',() => this.choiceLabel(card,choice)) : this.choiceLabel(card,choice))
+            .scale({x:this.pressedChoiceKey === card.request.id+':'+choice ? MotionTokens.pressScale : 1,
+              y:this.pressedChoiceKey === card.request.id+':'+choice ? MotionTokens.pressScale : 1})
+            .animation(Motion.release(this.environment.reduceMotion))
+            .onTouch((event:TouchEvent) => {
+              const tag = card.request.id+':'+choice;
+              if (event.type === TouchType.Down) this.pressedChoiceKey = tag;
+              else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+                if (this.pressedChoiceKey === tag) this.pressedChoiceKey = '';
+              }
+            })
             .enabled(this.active && this.decisions.enabled(this.model,binding.bound.value,card))
-            .onClick(() => this.decisions.answer(this.model,binding.bound.value,card,choice,util.generateRandomUUID(),this.workspace.actionTicket(binding.bound.value)))
+            .onClick(() => {
+              Haptics.tap();
+              this.decisions.answer(this.model,binding.bound.value,card,choice,util.generateRandomUUID(),this.workspace.actionTicket(binding.bound.value))
+                .then(() => { if (!this.decisions.error) Haptics.success(); else Haptics.error(); })
+                .catch(() => { Haptics.error(); });
+            })
             .id('agents.answer.'+card.request.id+'.'+choice)
         },(choice:string)=>choice)
       }
@@ -889,6 +911,7 @@ export struct AgentListPage {
   }
   private refreshAgents(): void {
     if (this.revealedDuringPull) { this.revealedDuringPull = false; this.refreshing = false; return; }
+    this.workspace.clearFilterKept?.();
     this.reloadDecisions(); this.workspace.setReadingDetail(false);
     const refreshes:Promise<void>[] = [this.workspace.refresh(this.model)];
     if (this.workspace.groupingMode === 'repo') refreshes.push(this.projectCatalog.refresh(this.model));
@@ -981,6 +1004,72 @@ export struct AgentListPage {
         .onClick(() => this.filterSheetOpen = true).id('agents.filter')
     }
   }
+  private revealQuickFilter(key: string): void {
+    const index = this.shownQuickFilters.indexOf(key);
+    if (index < 0) return;
+    try {
+      const targetX = Math.max(0, index * 72 - 48);
+      this.quickScroller.scrollTo({
+        xOffset: targetX,
+        yOffset: 0,
+        animation: this.environment.reduceMotion ? false : { duration: MotionTokens.stateMs, curve: Curve.EaseOut }
+      });
+    } catch (_) {}
+  }
+
+  private confirmMarkAllSeen(): void {
+    const count = this.workspace.unreadShownRows.length;
+    if (!count || this.workspace.busy) return;
+    Haptics.tap();
+    this.getUIContext().showAlertDialog({
+      title: tr('agent_mark_all_seen'),
+      message: tr('agent_mark_all_seen_confirm').replace('{count}', String(count)),
+      primaryButton: { value: tr('cancel'), action: () => {} },
+      secondaryButton: {
+        value: tr('agent_mark_all_seen'),
+        action: () => {
+          this.workspace.markAllSeen().then((marked: number) => {
+            if (marked > 0) Haptics.success();
+          }).catch(() => { Haptics.error(); });
+        }
+      }
+    });
+  }
+
+  @Builder markAllSeenRow() {
+    ListItem() {
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: 10 }) {
+          SymbolGlyph(Symbols.check)
+            .fontSize(Tokens.interfaceFontVp(16, this.environment.fontScale))
+            .fontColor([Colors.link])
+          Text(tr('agent_mark_all_seen'))
+            .fontSize(15)
+            .maxFontScale(Tokens.interfaceScaleFor(15))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.link)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+          Text(String(this.workspace.unreadShownRows.length))
+            .fontSize(13)
+            .maxFontScale(Tokens.interfaceScaleFor(13))
+            .fontColor(Colors.secondary)
+            .maxLines(1)
+        }.width('100%').padding({ left: 16, right: 16 }).constraintSize({ minHeight: 44 })
+      }
+      .width('100%')
+      .padding(0)
+      .backgroundColor(Colors.surface)
+      .borderRadius(this.compactRoot && !this.rail ? 22 : 13)
+      .enabled(!this.workspace.busy)
+      .accessibilityText(tr('agent_mark_all_seen') + ' · ' + String(this.workspace.unreadShownRows.length))
+      .onClick(() => this.confirmMarkAllSeen())
+      .id('agents.unread.mark_all_seen')
+    }.margin({ left: this.floatingStatusCards ? 16 : 4, right: this.floatingStatusCards ? 16 : 4, top: 8, bottom: 4 })
+      .transition(Motion.fadeScale(this.environment.reduceMotion, 0.96))
+  }
+
   @Builder filters() {
     if (!this.rail) Column({ space: this.compactRoot && this.searchVisible() ? 20 : 6 }) {
       if (this.searchVisible()) {
@@ -989,13 +1078,13 @@ export struct AgentListPage {
           if (this.searchEditing) {
             Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.xmark')).fontSize('16vp').fontColor([Colors.ink]) }
               .width(44).height(44).padding(0).backgroundColor(Colors.control).accessibilityText(tr('cancel'))
-              .onClick(() => { this.searchField.stopEditing(); this.workspace.setSearch(''); this.resetSearchReveal(); }).id('agents.search_cancel')
+              .onClick(() => { Haptics.tap(); this.searchField.stopEditing(); this.workspace.setSearch(''); this.resetSearchReveal(); }).id('agents.search_cancel')
           }
-        }.width('100%')
+        }.width('100%').transition(Motion.slideFade(this.environment.reduceMotion, -8))
         else this.searchControl()
       }
       Row({ space: this.compactRoot ? 0 : 6 }) {
-        Scroll() {
+        Scroll(this.quickScroller) {
           Row({ space: 4 }) {
             ForEach(this.shownQuickFilters, (key: string) => {
               Button({ type: ButtonType.Capsule }) {
@@ -1009,14 +1098,22 @@ export struct AgentListPage {
                     .fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
                 }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(40)
                   .backgroundColor(this.compactRoot && this.workspace.quickFilter === key ? Colors.selection : Color.Transparent)
+                  .animation(Motion.state(this.environment.reduceMotion))
               }
                 .height(this.quickHeight()).constraintSize({minWidth:this.quickHeight()}).padding(0)
                 .backgroundColor(this.compactRoot ? Color.Transparent : this.workspace.quickFilter === key ? Colors.selection : Colors.control)
+                .animation(Motion.state(this.environment.reduceMotion))
                 .accessibilityText(tr(QUICK_LABELS[key]))
                 .accessibilityDescription(key !== 'all' && this.workspace.filterCounts[key] !== undefined ? String(Wire.number(this.workspace.filterCounts,key)) : '')
                 .accessibilitySelected(this.workspace.quickFilter === key)
                 .responseRegion({x:0,y:0,width:'100%',height:this.quickHeight()})
-                .onClick(() => { if (this.workspace.quickFilter !== key) this.workspace.setQuickFilter(key); }).id('agents.quick.' + key)
+                .onClick(() => {
+                  Haptics.tap();
+                  Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+                    this.workspace.setQuickFilter(key);
+                  });
+                  this.revealQuickFilter(key);
+                }).id('agents.quick.' + key)
             }, (key: string) => key)
           }.padding({left:4,right:4})
         }.layoutWeight(1).height(this.quickHeight()).align(Alignment.Start).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
@@ -1056,6 +1153,7 @@ export struct AgentListPage {
   @Builder resultList() {
       List({scroller:this.agentScroller}) {
         if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
+        if (!this.rail && this.workspace.quickFilter === 'unread' && this.workspace.unreadShownRows.length > 0) this.markAllSeenRow()
         ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
             ListItemGroup({ header: () => this.groupHeader(binding) }) {
               ForEach(this.displayRows(binding), (rowBinding: BoundAgentRow) => this.groupRow(rowBinding, binding.value.id,

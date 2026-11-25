@@ -1,4 +1,6 @@
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
 import { tr } from '../design/Strings';
 import { Tokens } from '../design/Tokens';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
@@ -35,7 +37,17 @@ export struct AgentPendingCards {
     const ids = this.cards.map((request: Decision) => request.id);
     this.drafts.bind(this.owner);
     this.drafts.retain(ids);
-    if (this.previousIds.length && ids.some((id: string) => !this.previousIds.includes(id))) this.list.scrollEdge(Edge.Top);
+    if (this.previousIds.length && ids.some((id: string) => !this.previousIds.includes(id))) {
+      try {
+        this.list.scrollTo({
+          xOffset: 0,
+          yOffset: 0,
+          animation: nativeEnvironment.reduceMotion ? false : { duration: MotionTokens.stateMs, curve: Curve.EaseOut }
+        });
+      } catch (_) {
+        this.list.scrollEdge(Edge.Top);
+      }
+    }
     this.previousIds = ids;
   }
 
@@ -54,24 +66,33 @@ export struct AgentPendingCards {
         .onAreaChange((_old:Area,area:Area) => {
           const h=Number(area.height); if (h>0) this.onCountHeight(h);
         })
-      Scroll(this.list) {
-        Column() {
-          Column({ space: 12 }) {
-            ForEach(this.cards, (request: Decision) => {
-              Column() {
-                InteractionDecisionForm({ model: this.model, request: request, agentCard: true,
-                  heightLimit: this.cards.length === 1 ? this.room : 0, draft: this.drafts.draft(request), draftSession: this.owner,
-                  admission: this.ticket(request), onLink: this.onLink })
-              }.width('100%').id('chat.pending.card.' + request.id)
-            }, (request: Decision) => this.owner + '/' + request.id + '/' + request.raw)
-          }.width('100%')
-          .onAreaChange((_old: Area, area: Area) => {
-            const height = Number(area.height);
-            if (Number.isFinite(height) && Math.abs(height - this.contentHeight) > 0.5) this.contentHeight = height;
-          })
-        }.width('100%').padding({top:this.overRoom ? 16 : 0,bottom:this.overRoom ? 8 : 0})
-      }.width('100%').height(this.stackHeight()).align(Alignment.TopStart).scrollBar(BarState.Auto)
-        .constraintSize({ maxHeight: this.room }).id('chat.pending.cards')
+      Stack({ alignContent: Alignment.Top }) {
+        Scroll(this.list) {
+          Column() {
+            Column({ space: 12 }) {
+              ForEach(this.cards, (request: Decision) => {
+                Column() {
+                  InteractionDecisionForm({ model: this.model, request: request, agentCard: true,
+                    heightLimit: this.cards.length === 1 ? this.room : 0, draft: this.drafts.draft(request), draftSession: this.owner,
+                    admission: this.ticket(request), onLink: this.onLink })
+                }.width('100%')
+                  .transition(Motion.fadeScale(nativeEnvironment.reduceMotion, 0.97))
+                  .id('chat.pending.card.' + request.id)
+              }, (request: Decision) => this.owner + '/' + request.id + '/' + request.raw)
+            }.width('100%')
+            .onAreaChange((_old: Area, area: Area) => {
+              const height = Number(area.height);
+              if (Number.isFinite(height) && Math.abs(height - this.contentHeight) > 0.5) this.contentHeight = height;
+            })
+          }.width('100%').padding({top:this.overRoom ? 16 : 0,bottom:this.overRoom ? 8 : 0})
+        }.width('100%').height(this.stackHeight()).align(Alignment.TopStart).scrollBar(BarState.Auto)
+          .constraintSize({ maxHeight: this.room }).id('chat.pending.cards')
+        if (this.overRoom) {
+          Row().width('100%').height(16)
+            .linearGradient({ direction: GradientDirection.Bottom, colors: [[Colors.canvas, 0], [Color.Transparent, 1]] })
+            .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+        }
+      }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start).padding({bottom:this.keyboard ? 0 : 2})
   }
 }
