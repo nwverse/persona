@@ -6,8 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -257,19 +262,76 @@ func TestInboxBusAnswersKeepTheirBytes(t *testing.T) {
 	}
 }
 
-// BusHub.request answers none of the kernel's bus methods itself: with a kernel that has no module, each is an
-// unknown method, so a case for one in the central switch (which would answer it first) fails here.
+// wireMethodNames are the values of assistantwire's Method* constants: every bus method name the wire declares.
+func wireMethodNames(t *testing.T) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	paths, err := filepath.Glob(filepath.Join("..", "assistantwire", "*.go"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("no assistantwire sources: %v", err)
+	}
+	var names []string
+	for _, p := range paths {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range f.Decls {
+			g, ok := d.(*ast.GenDecl)
+			if !ok || g.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range g.Specs {
+				v := spec.(*ast.ValueSpec)
+				for i, id := range v.Names {
+					if !strings.HasPrefix(id.Name, "Method") || i >= len(v.Values) {
+						continue
+					}
+					if lit, ok := v.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						name, err := strconv.Unquote(lit.Value)
+						if err != nil {
+							t.Fatal(err)
+						}
+						names = append(names, name)
+					}
+				}
+			}
+		}
+	}
+	return names
+}
+
+// BusHub.request answers none of the kernel's bus methods itself: with a kernel that has no module, each wire method
+// the full kernel answers is an unknown method, so a case for one in the central switch, which would answer it first,
+// fails here.
 func TestTheCentralSwitchLeavesTheKernelsBusMethods(t *testing.T) {
-	s := New(Options{Hub: newFakeHub(), Logf: testLogf(t)})
-	s.newRegistry().Seal() // a kernel of its own, with no module
+	ctx := context.Background()
+	full := New(Options{Hub: newFakeHub(), Logf: testLogf(t)})
+	var kernels []string
+	for _, m := range wireMethodNames(t) {
+		// Params that decode into no method's P: a registered method answers invalid_params and does nothing.
+		if _, ok, _ := full.kernel.Answer(ctx, m, json.RawMessage(`[]`)); ok {
+			kernels = append(kernels, m)
+		}
+	}
+	for _, m := range inboxBusMethods {
+		if !slices.Contains(kernels, m) {
+			t.Errorf("the kernel does not answer %s", m)
+		}
+	}
+	empty := New(Options{Hub: newFakeHub(), Logf: testLogf(t)})
+	empty.newRegistry().Seal() // a kernel of its own, with no module
 	helloed := make(chan struct{})
 	close(helloed)
-	b := &BusHub{svc: s, helloed: helloed}
-	for _, m := range inboxBusMethods {
-		_, err := b.request(context.Background(), m, json.RawMessage(`{}`))
+	b := &BusHub{svc: empty, helloed: helloed}
+	for _, m := range kernels {
+		_, err := b.request(ctx, m, json.RawMessage(`[]`))
 		var unknown *rpc.Error
 		if !errors.As(err, &unknown) || unknown.Code != bus.CodeUnknownMethod {
-			t.Errorf("%s without the kernel: %v, want unknown_method", m, err)
+			t.Errorf("%s without the kernel: %v, want unknown_method: the central switch answers it before the kernel", m, err)
 		}
 	}
 }
