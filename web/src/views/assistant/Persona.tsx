@@ -12,7 +12,10 @@ import {
 } from "../../lib/persona";
 import { isResumed } from "../../lib/reconnect";
 import { hubHas, onHubEvent, useStore } from "../../lib/store";
-import { deleteUploadedLook, LOOK_UPLOADS_FEATURE, LOOK_UPLOADS_STATES_FEATURE, refusalText, type UploadAnswer } from "../../lib/look-upload";
+import type { UploadAnswer } from "../../lib/look-upload";
+
+const LOOK_UPLOADS_FEATURE = "look_uploads";
+const LOOK_UPLOADS_STATES_FEATURE = "look_uploads_states";
 import { Button, cx, Dialog, IconButton } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { lazyDialog } from "../LazyOverlay";
@@ -609,13 +612,16 @@ function DeleteLookDialog({ look, onClose, onDeleted }: { look: { id: string; na
     setBusy(true);
     setError("");
     const since = choiceMark();
+    let formatError: (e: unknown) => string = errorText;
     try {
+      const { deleteUploadedLook, refusalText } = await import("../../lib/look-upload");
+      formatError = refusalText;
       uploadedLookDeleted(look.id, await deleteUploadedLook(look.id), since);
       setBusy(false);
       onDeleted();
     } catch (e) {
       setBusy(false);
-      setError(refusalText(e));
+      setError(formatError(e));
       // gone already (another device deleted it): a list read after this says so (one on its way may be older)
       if (e instanceof ApiError && e.code === "not_found") readPersonasAgain();
     }
