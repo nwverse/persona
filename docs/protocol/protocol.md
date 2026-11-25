@@ -6307,6 +6307,22 @@ every device of theirs follows it.
 | `<persona-context kind="forward" title="…" url="persona://session/…?at=…" msg="…" role="…" author="…" chat="…" project="…" machine="…" time="…">` | iOS (Forward on a message, #3807; several at once, #3838), web (#3899), Android (#3901) | the user forwarded a message (or several, one block each) from another chat: a card at the top of the user's bubble that opens the original; see "Forwarded messages" below |
 | `<cross-session-message from-name="…">…</cross-session-message>` | Claude Code (cross-session messages) | a left-side "From name" card, body rendered as Markdown |
 
+### Inline reference anchors (web, #15409)
+
+The web composer writes the reference's display name at its position in the prose. Files and folders keep the native
+`@path` spelling. Workspace, repository, session and skill selections use the existing leading context blocks.
+Scheduled file selections also lead the prompt, with `path`, `machine`, `cwd`, `launcher` and `runtime` as before.
+A live chat places each picked file's `kind="file"` display block after the prose. The server only executes scoped
+file selections from the leading envelope of a scheduled prompt.
+
+The prose can end with a blank line followed by `<!-- persona-inline-v1 […] -->`. The JSON entries give the distance
+from the end of the prose to the anchor's start, its length in UTF-16 units, and its reference key. The key uses the
+context kind and the selected identity (skill `ref`, scoped file path, workspace `machine` and `cwd`, `repo_id`, or
+canonical session URL). Equal names can therefore point to different contexts. The Web parser keeps the prose and
+the trailer available separately. `readInlineBody` in `web/src/lib/inline-mentions.ts` verifies each anchor's text
+against its matching context. Quote prefixes and description enrichment leave this lookup intact. A missing or
+unmatched anchor keeps its ordinary text, and unreferenced blocks keep their context display.
+
 ### Quote and comment blocks at the start of messages (web and iOS, #2427, #2437, #151)
 
 Web "Quote" and "Comment" use no tags or structured fields: on send they become `> ` blocks at the start of the message (`withQuoteBlock` in `web/src/lib/drafts.ts`, `web/src/lib/comments.ts`); the assistant and Agents on computers read them as text, and other clients that don't recognize them simply see `>` lines.
