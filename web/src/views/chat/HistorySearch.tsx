@@ -11,10 +11,11 @@ import { useComposition } from "../../lib/ime";
 import { moveActive, readAllHistory, searchAction, searchSent } from "../../lib/send-history-search";
 import { cx, EASE } from "../../ui/atoms";
 import { splitSkillDraft } from "../../lib/skill-mentions";
+import { draftText } from "../../lib/inline-mentions";
 
 function historyLabel(text: string): string {
   const split = splitSkillDraft(text);
-  return [...split.skills.map((s) => `${s.title} · ${s.text.split("\n")[0]}`), split.text].filter(Boolean).join("\n");
+  return [...split.skills.map((s) => `${s.title} · ${s.text.split("\n")[0]}`), draftText(split.text)].filter(Boolean).join("\n");
 }
 
 export function HistorySearch({ onPick, onClose }: { onPick: (text: string) => void; onClose: () => void }) {
@@ -32,6 +33,7 @@ export function HistorySearch({ onPick, onClose }: { onPick: (text: string) => v
   useEffect(() => { if (!current) onClose(); }, [current, onClose]);
   const results = useMemo(() => searchSent(candidates, query), [candidates, query]);
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
+  const pointer = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
     setActive(0);
   }, [query, revision, owner]);
@@ -95,7 +97,12 @@ export function HistorySearch({ onPick, onClose }: { onPick: (text: string) => v
               aria-selected={i === active}
               title={historyLabel(text)}
               onMouseDown={(e) => e.preventDefault()}
-              onMouseEnter={() => setActive(i)}
+              onMouseMove={(e) => {
+                const prev = pointer.current;
+                if (prev && prev.x === e.screenX && prev.y === e.screenY) return;
+                pointer.current = { x: e.screenX, y: e.screenY };
+                setActive(i);
+              }}
               onClick={() => pickAt(i)}
               className={cx("flex h-9 w-full items-center rounded-[6px] px-2 text-left text-[12.5px] text-ink", i === active && "bg-hover")}
             >

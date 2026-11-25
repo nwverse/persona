@@ -21,7 +21,10 @@ import PersonaWire
 
     /// nav_page entries, in the hub's order.
     private(set) var pages: [ExtensionUIPlace] = []
-    /// overview_card entries, in the hub's order.
+    /// The entries Settings › Extensions lists: the extensions' own. Dashboards (#15017) are the assistant's, kept in the
+    /// sidebar and the drawer only.
+    var extensionPages: [ExtensionUIPlace] { pages.filter { !DashboardsUI.owns($0.owner) } }
+    /// overview_card entries, in the hub's order: the extensions' own (not a reserved "-" id's, see `reload`).
     private(set) var cards: [ExtensionUIPlace] = []
     /// The cards' models, made when the cards are listed (the page pushes what they ask for, `extensionPushes`).
     private var cardModels: [String: ExtensionViewModel] = [:]
@@ -70,7 +73,9 @@ import PersonaWire
             if next != pages { pages = next }
         }
         do {
-            let next = all.filter { $0.placement == "overview_card" }
+            // Settings draws the extensions' own cards only: an id that starts with "-" is a manager's (Dashboards' watch
+            // cards, #13020, which a hub lists only to the web's Overview), never asked for or drawn here.
+            let next = all.filter { $0.placement == "overview_card" && !ReservedExtensionUI.reserved($0.owner) }
             if next != cards { cards = next }
             var models = cardModels.filter { k, _ in next.contains { Self.key($0) == k } }
             for c in next where models[Self.key(c)] == nil {
@@ -203,10 +208,11 @@ struct ExtensionSlotsSettingsSection: View {
     var body: some View {
         if slots.available {
             ExtensionCardsSection(link: $link, slots: slots)
-            if !slots.pages.isEmpty {
+            let pages = slots.extensionPages
+            if !pages.isEmpty {
                 Section {
                     Group {
-                        ForEach(slots.pages, id: \.scopedID) { page in
+                        ForEach(pages, id: \.scopedID) { page in
                             NavigationLink(value: SettingsPage.pluginPage(plugin: page.owner, ui: page.id, title: page.title, manager: slots.manager)) {
                                 ExtensionNavRow(place: page)
                             }

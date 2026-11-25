@@ -81,10 +81,14 @@ type codexHistoryMark struct {
 
 // codexHistoryDBPath is the newest history database in home (thread_history_1.sqlite in 2026-11).
 func codexHistoryDBPath(home string) string {
-	paths, _ := filepath.Glob(filepath.Join(home, "thread_history_*.sqlite"))
+	return codexNumberedDB(home, "thread_history_")
+}
+
+func codexNumberedDB(home, prefix string) string {
+	paths, _ := filepath.Glob(filepath.Join(home, prefix+"*.sqlite"))
 	best, bestN := "", -1
 	for _, p := range paths {
-		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "thread_history_"), ".sqlite"))
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), prefix), ".sqlite"))
 		if err == nil && n > bestN {
 			best, bestN = p, n
 		}

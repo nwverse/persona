@@ -23,27 +23,6 @@ import (
 // The channels' pipeline end to end (the hub's transport, the bus, the assistant) is the hub's channels_test.go and
 // bots_test.go; these are the assistant's own parts.
 
-func TestResolutionText(t *testing.T) {
-	yes, no := true, false
-	q := proto.Interaction{Kind: proto.IxQuestion, Questions: []proto.Question{{Question: "a"}, {Question: "b"}}}
-	for _, c := range []struct {
-		ix   proto.Interaction
-		r    proto.Resolution
-		want string
-	}{
-		{q, proto.Resolution{Answers: map[string]string{"a": "1", "b": "2"}}, "已回答：1；2"},
-		{proto.Interaction{Kind: proto.IxPlan}, proto.Resolution{Approve: &yes, Mode: "acceptEdits"}, "已批准，自动接受编辑"},
-		{proto.Interaction{Kind: proto.IxPlan}, proto.Resolution{Approve: &no, Feedback: "拆小点"}, "已打回：拆小点"},
-		{proto.Interaction{Kind: proto.IxPermission}, proto.Resolution{Allow: &yes, Always: true}, "已允许（本会话不再问）"},
-		{proto.Interaction{Kind: proto.IxPermission}, proto.Resolution{Allow: &no}, "已拒绝"},
-		{proto.Interaction{}, proto.Resolution{Dismiss: true}, "已忽略"},
-	} {
-		if got := resolutionText("", c.ix, c.r); got != c.want {
-			t.Errorf("%+v: %q, want %q", c.r, got, c.want)
-		}
-	}
-}
-
 // Each tool call reads as one line: a verb and what it works on.
 func TestBotStepLines(t *testing.T) {
 	for _, c := range []struct{ tool, in, want string }{
@@ -488,10 +467,8 @@ func TestFeishuCatchUpClosesOnlyCardsThatEnded(t *testing.T) {
 	}
 	_ = st.PutSetting(context.Background(), botStateKey, botState{Current: botTarget{Kind: targetMain}, Cards: cards})
 	s := newServiceOn(t, f, st)
-	old := botCardRecheck
-	botCardRecheck = time.Hour // not again within the test
-	defer func() { botCardRecheck = old }()
-	s.channelsCatchUp(context.Background()) // the hub lists no card up (the manager has not restored them)
+	s.setLarkTiming("card_recheck", time.Hour) // not again within the test
+	s.channelsCatchUp(context.Background())    // the hub lists no card up (the manager has not restored them)
 	waitUntil(t, func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -816,6 +793,7 @@ func TestBotTextInLanguages(t *testing.T) {
 // A permission card with no summary shows the call's input with every credential's value masked, as the summaries
 // and the channels' approval text do (#4734, #4762): the card goes to a Feishu chat.
 func TestFeishuPermissionCardWithoutSummaryMasksCredentials(t *testing.T) {
+	needsLarkLayer(t) // the cards are the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	s := newTestService(t, f)
 	ix := proto.Interaction{ID: "p1", MachineID: "server", SessionID: "a1", Kind: proto.IxPermission, ToolName: "mcp__x__call",
@@ -829,6 +807,7 @@ func TestFeishuPermissionCardWithoutSummaryMasksCredentials(t *testing.T) {
 // An MCP server asking to authorize or to fill in a form says on the card what it asks: its message, the link as a
 // button; a form's fields by name only (filled in the app), no inputs in Feishu.
 func TestFeishuElicitationCardSaysWhatItAsks(t *testing.T) {
+	needsLarkLayer(t) // the cards are the lark module's
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	s := newTestService(t, f)
 	ctx := context.Background()
@@ -853,8 +832,11 @@ func TestFeishuElicitationCardSaysWhatItAsks(t *testing.T) {
 		}
 	}
 	// The button opens the link exactly as given.
-	if lk, host := elicitationTarget(" https://example.com/a?b=c%20d "); lk != "https://example.com/a?b=c%20d" || host != "example.com" {
-		t.Fatalf("target %q %q", lk, host)
+	exact := link
+	exact.Elicitation = &proto.Elicitation{Mode: "url", Message: "登录 GitHub 授权", URL: " https://example.com/a?b=c%20d "}
+	b, _ = json.Marshal(s.interactionCard(ctx, exact))
+	if c := string(b); !strings.Contains(c, `"https://example.com/a?b=c%20d"`) || !strings.Contains(c, "`example.com`") {
+		t.Fatalf("target: %s", c)
 	}
 	form := proto.Interaction{ID: "e2", MachineID: "server", SessionID: "a1", Kind: proto.IxElicitation,
 		Elicitation: &proto.Elicitation{Mode: "form", Message: "填写连接信息", URL: "javascript:alert(1)",
@@ -981,79 +963,43 @@ func TestFeishuPushIsLaidOutAndWhole(t *testing.T) {
 	}
 }
 
-// The progress card's lines: the newest call still running and its age, the last steps, the subagents; counters in a
-// note. Noted from the items as they come (liveNote).
-func TestProgressCardLines(t *testing.T) {
+// What the progress card is drawn from (the lark module draws it): the open calls and their age, the counters, the
+// subagents' tasks, each as noted from the items as they come (liveNote) and within its bounds.
+func TestRunProgressViewsTheLiveNotes(t *testing.T) {
 	t0 := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
 	use := func(id, name, in string, ts time.Time) proto.Item {
 		return proto.Item{Kind: proto.KindToolUse, ToolUseID: id, ToolName: name, ToolInput: json.RawMessage(in), TS: ts}
 	}
 	res := func(id string) proto.Item { return proto.Item{Kind: proto.KindToolResult, ToolUseID: id} }
-	for _, c := range []struct {
-		name  string
-		items []proto.Item
-		steps []string
-		want  []string // each must be in the card
-		not   []string
-	}{
-		{"open call and its age", []proto.Item{use("1", "Bash", `{"command":"go test ./..."}`, t0.Add(-40*time.Second))},
-			[]string{"运行 `go test ./...`"}, []string{"正在：运行 `go test ./...`（已 40 秒）", "调用了 1 次工具"}, []string{"等 ", "读了", "子任务"}},
-		{"no time on the item: when it was seen", []proto.Item{use("1", "Bash", `{"command":"ls"}`, time.Time{})},
-			nil, []string{"正在：运行 `ls`（已 0 秒）"}, nil},
-		{"several open: the newest", []proto.Item{
-			use("1", "Bash", `{"command":"a"}`, t0.Add(-time.Minute)), use("2", "Bash", `{"command":"b"}`, t0.Add(-time.Minute)),
-			use("3", "Read", `{"file_path":"/x/c.go"}`, t0.Add(-5*time.Second)), res("2")},
-			nil, []string{"正在：读 `c.go`（已 5 秒） 等 1 个"}, []string{"`a`（"}},
-		{"none open: no now line", []proto.Item{use("1", "Bash", `{"command":"a"}`, t0), res("1")},
-			[]string{"运行 `a`"}, []string{"- 运行 `a`"}, []string{"正在："}},
-		{"counters: distinct files", []proto.Item{
-			use("1", "Read", `{"file_path":"/a.go"}`, t0), res("1"), use("2", "Read", `{"file_path":"/a.go"}`, t0), res("2"),
-			use("3", "Read", `{"file_path":"/b.go"}`, t0), res("3"), use("4", "Edit", `{"file_path":"/a.go"}`, t0), res("4"),
-			use("5", "NotebookEdit", `{"notebook_path":"/n.ipynb"}`, t0), res("5")},
-			nil, []string{"调用了 5 次工具 · 读了 2 个文件 · 改了 2 个文件"}, nil},
-		{"subtasks running and done", []proto.Item{
-			use("1", "Task", `{"description":"查 *日志*","subagent_type":"Explore"}`, t0), use("2", "Agent", `{"description":"写测试"}`, t0), res("1")},
-			nil, []string{"子任务", "- 查 &#42;日志&#42; `Explore` · 完成", "- 写测试 · 进行中"}, nil},
-		{"no steps at all", nil, nil, []string{"工作中 · 已用 3 分 12 秒"}, []string{"正在：", "调用了", "子任务", "前面还有"}},
-	} {
-		p := &chanLive{}
-		for _, it := range c.items {
-			p.liveNote("", it, t0)
-		}
-		v := liveView{open: p.open, calls: p.calls, read: len(p.read), edited: len(p.edited), subs: p.subs, subsMore: p.subsMore, now: t0}
-		b, _ := json.Marshal(progressCard("", "Persona", 192*time.Second, c.steps, "", "", v, botTarget{}))
-		var s string
-		for _, md := range progressLines("", c.steps, v) {
-			s += md + "\n"
-		}
-		all := string(b) + "\n" + s
-		for _, w := range c.want {
-			if !strings.Contains(all, w) {
-				t.Errorf("%s: no %q in\n%s\n%s", c.name, w, s, b)
-			}
-		}
-		for _, w := range c.not {
-			if strings.Contains(all, w) {
-				t.Errorf("%s: %q should not be in\n%s", c.name, w, all)
-			}
-		}
-	}
-}
-
-// Many subtasks: the last six, then "and N more"; the "N earlier steps" of more than five steps stays.
-func TestProgressCardManySubtasks(t *testing.T) {
 	p := &chanLive{}
+	for _, it := range []proto.Item{
+		use("1", "Bash", `{"command":"a"}`, t0.Add(-time.Minute)), use("2", "Bash", `{"command":"b"}`, t0.Add(-time.Minute)),
+		use("3", "Read", `{"file_path":"/x/c.go"}`, t0.Add(-5*time.Second)), res("2"), use("4", "Read", `{"file_path":"/x/c.go"}`, t0), res("4"),
+		use("5", "Edit", `{"file_path":"/a.go"}`, t0), res("5"), use("6", "Task", `{"description":"查 *日志*","subagent_type":"Explore"}`, t0),
+		use("7", "Agent", `{"description":"写测试"}`, t0), res("6"),
+		use("8", "Bash", `{"command":"ls"}`, time.Time{}),
+	} {
+		p.liveNote("", it, t0)
+	}
+	v := p.progress(t0)
+	if v.Now != t0 || v.Calls != 8 || v.Read != 1 || v.Edited != 1 || v.SubsMore != 0 {
+		t.Fatalf("view %+v", v)
+	}
+	if n := len(v.Open); n != 4 || v.Open[0].Step != "运行 `a`" || !v.Open[0].Since.Equal(t0.Add(-time.Minute)) || v.Open[1].Step != "读 `c.go`" ||
+		!v.Open[1].Since.Equal(t0.Add(-5*time.Second)) || v.Open[3].Step != "运行 `ls`" || !v.Open[3].Since.Equal(t0) {
+		t.Fatalf("open %+v", v.Open)
+	}
+	if len(v.Subs) != 2 || v.Subs[0] != (assistantwire.RunSubtask{Desc: "查 *日志*", Kind: "Explore", Done: true}) || v.Subs[1].Desc != "写测试" || v.Subs[1].Done {
+		t.Fatalf("subs %+v", v.Subs)
+	}
+	if empty := (*chanLive)(nil).progress(t0); empty.Calls != 0 || len(empty.Open) != 0 || empty.Now != t0 {
+		t.Fatalf("a run with no notes: %+v", empty)
+	}
 	for i := range 60 {
-		p.liveNote("", proto.Item{Kind: proto.KindToolUse, ToolUseID: fmt.Sprint(i), ToolName: "Task", ToolInput: json.RawMessage(fmt.Sprintf(`{"description":"t%d"}`, i))}, time.Now())
+		p.liveNote("", proto.Item{Kind: proto.KindToolUse, ToolUseID: fmt.Sprint("t", i), ToolName: "Task", ToolInput: json.RawMessage(fmt.Sprintf(`{"description":"t%d"}`, i))}, t0)
 	}
-	if len(p.subs) != liveSubsMost || p.subsMore != 10 || len(p.open) != liveOpenMost {
-		t.Fatalf("bounds: %d subs, %d more, %d open", len(p.subs), p.subsMore, len(p.open))
-	}
-	steps := []string{"1", "2", "3", "4", "5", "6", "7"}
-	s := strings.Join(progressLines("", steps, liveView{subs: p.subs, subsMore: p.subsMore}), "\n")
-	if !strings.Contains(s, "- t59 · 进行中") || strings.Contains(s, "- t53 ") || !strings.Contains(s, "等 54 个") ||
-		!strings.Contains(s, "前面还有 2 步") || strings.Contains(s, "- 2\n") {
-		t.Fatalf("%s", s)
+	if v := p.progress(t0); len(v.Subs) != liveSubsMost || v.SubsMore != 12 || len(v.Open) != liveOpenMost || v.Subs[len(v.Subs)-1].Desc != "t59" {
+		t.Fatalf("bounds: %d subs, %d more, %d open", len(v.Subs), v.SubsMore, len(v.Open))
 	}
 }
 
@@ -1068,24 +1014,12 @@ func TestHeldRunsNextTurnStartsItsCountsAgain(t *testing.T) {
 		{Seq: 3, Kind: proto.KindToolUse, ToolUseID: "b", ToolName: "Task", ToolInput: json.RawMessage(`{"description":"查"}`)},
 	}, time.Now())
 	s.chans.mu.Unlock()
-	if v := s.runLiveView(r.ID); v.calls != 2 || v.read != 1 || len(v.open) != 2 || len(v.subs) != 1 {
+	if v := s.runLiveView(r.ID); v.Calls != 2 || v.Read != 1 || len(v.Open) != 2 || len(v.Subs) != 1 {
 		t.Fatalf("first turn: %+v", v)
 	}
 	s.finishChannelRun(r, &channel.Result{Answer: "先答一部分", Held: true})
-	if v := s.runLiveView(r.ID); v.calls != 0 || v.read != 0 || v.edited != 0 || len(v.open) != 0 || len(v.subs) != 0 || v.subsMore != 0 {
+	if v := s.runLiveView(r.ID); v.Calls != 0 || v.Read != 0 || v.Edited != 0 || len(v.Open) != 0 || len(v.Subs) != 0 || v.SubsMore != 0 {
 		t.Fatalf("second turn starts with %+v", v)
-	}
-}
-
-// A file counter at its cap says so: "1000+".
-func TestProgressCardFileCountAtItsCap(t *testing.T) {
-	b, _ := json.Marshal(progressCard("", "Persona", time.Second, nil, "", "", liveView{calls: 1, read: liveFilesMost, edited: 3}, botTarget{}))
-	if !strings.Contains(string(b), "读了 1000+ 个文件 · 改了 3 个文件") {
-		t.Fatalf("%s", b)
-	}
-	b, _ = json.Marshal(progressCard(i18n.En, "Persona", time.Second, nil, "", "", liveView{calls: 1, edited: 1}, botTarget{}))
-	if !strings.Contains(string(b), "1 tool call · changed 1 file") {
-		t.Fatalf("%s", b)
 	}
 }
 

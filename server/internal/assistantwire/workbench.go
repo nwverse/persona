@@ -16,12 +16,18 @@ type WorkbenchItem struct {
 	Urgent                                 bool
 	UpdatedAt                              time.Time
 	Done                                   bool // filed (done or dismissed)
+	// ReplyVersion binds a rendered draft card to the exact current AI reply mirror; zero is a transient legacy draft.
+	ReplyVersion int
 	// Mail, Lark and Connector say where it came from; a connector's thread has its label, whether the owner can reply
 	// to it, and where a reply goes.
 	Mail, Lark, Connector bool
 	ConnectorLabel        string
 	ConnectorCanReply     bool
 	ConnectorReplyTo      string
+	// ReplySuggestionVersion and ReplySuggestionText bind a rendered draft card to the exact current reply suggestion.
+	// They contain display data only; authorization snapshots stay inside the assistant.
+	ReplySuggestionVersion int
+	ReplySuggestionText    string
 	// Mutes are what it can be muted by.
 	Mutes []WorkbenchMute
 }

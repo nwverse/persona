@@ -27,6 +27,12 @@ private final class TodoPendingWrites {
     var value: [String: TodoCountsSource.Pending] = [:]
 }
 
+/// The answers still on the device, as `TodoOutbox.answering` gives them: watched, as the outbox's entries are.
+@MainActor @Observable
+private final class TodoHeldAnswers {
+    var value: [String: Set<String>] = [:]
+}
+
 /// One number per place (#10465, docs/apple/ios.md "Filing and counts"): with one manager the hub's counts and places as
 /// sent, each project's part counted from the rows as its place counts them; with several, counted from the current
 /// assistant's rows, with only its own project places; less the answers given on this device that the hub's view does
@@ -120,6 +126,31 @@ struct TodoCountsSourceTests {
         ], counts: TodoViewJSON.counts(needsYou: 1, inProgress: 1, open: 2)))
         await store.refresh(api: hub.client)
         #expect(source.needsYou == 1, "the hub's number, nothing taken off twice")
+    }
+
+    /// An answer held on this device (`TodoOutbox.answering`) moves every reader in one update: N (the drawer and
+    /// sidebar row, the folded Pages tally, the guard line), the Needs you header's count and All's place change in the
+    /// same recount, at the tap, before the hub has it; undone or refused, all of them are back together.
+    @Test func anAnswerHeldHereMovesEveryReaderInOneUpdate() async throws {
+        let held = TodoHeldAnswers()
+        var v1 = TodoStore.V1.on()
+        v1.answering = { held.value }
+        let store = TodoStore(cachedTodos: [], cacheWriter: nil, hubListChanged: {}, v1: v1)
+        defer { store.forget() }
+        await store.refresh(api: Self.hub().client)
+        let source = store.countsSource
+        #expect(source.needsYou == 3 && source.counts.sections[TodoListSection.needsYou] == 3)
+        let seen = Flag()
+        withObservationTracking { _ = source.counts } onChange: { MainActor.assumeIsolated { seen.on = true } }
+        held.value = ["w1": ["todo:decision@1"]]
+        try await waitForCount { seen.on }
+        // The recount that told the readers set every number: none of them waits for another update.
+        #expect(source.needsYou == 2 && source.counts.sections[TodoListSection.needsYou] == 2)
+        #expect(source.places.first?.needsYou == 2 && source.places.last?.needsYou == 1, "All and the project with it")
+        held.value = ["w1": ["another ask"]]
+        try await waitForCount { source.needsYou == 3 }
+        held.value = [:]
+        try await waitForCount { source.needsYou == 3 && source.places.first?.needsYou == 3 }
     }
 
     /// Each number is set only when it changes: a read that moves none draws nothing that reads them.

@@ -576,3 +576,80 @@ func TestAgyPresenceFallbackAllowsCompanionOwnWork(t *testing.T) {
 		t.Fatalf("unexpected companion calls (%d): %v", len(gotMethods), gotMethods)
 	}
 }
+
+// A classic herdr agy pane without herdr:antigravity_cli (or whose agent_session was replaced by custom:persona's
+// resume report) resolves its conversation from its foreground process's open presence/<uuid>.lock on Linux, so the
+// pane merges with the companion row instead of listing a duplicate placeholder beside agy-<conversation>.
+func TestHerdrAgyPanePresenceMergesCompanionRow(t *testing.T) {
+	n, f, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	acpRow := "agy-" + agyTestID
+	n.runtimes = newRuntimeRegistry()
+	companion := n.runtimes.add(nil)
+	companion.ready, companion.hello.Runtime = true, agyAgent
+	n.runtimes.setSessions(companion, []proto.Session{
+		{SessionID: acpRow, Agent: agyAgent, Cwd: home, Status: proto.StatusDone, Title: "Real agy task", LastText: "All fixed."},
+	})
+	agyTestFile(t, n.agyDataRoot(), agyTestID, `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"Fix the auth bug"}
+{"step_index":1,"type":"PLANNER_RESPONSE","status":"DONE","content":"All fixed."}
+`)
+
+	oldPresence := agyPresenceOf
+	presencePIDs := map[int]string{4242: agyTestID}
+	agyPresenceOf = func(pid int) string { return presencePIDs[pid] }
+	t.Cleanup(func() { agyPresenceOf = oldPresence })
+
+	f.reply("pane.process_info", map[string]any{
+		"process_info": map[string]any{
+			"foreground_processes": []any{map[string]any{"pid": 4242, "name": "agy", "argv0": "agy"}},
+		},
+	})
+
+	// Case 1: classic herdr pane with no agent_session at all (herdr:antigravity_cli missing).
+	paneAgent := agyTestAgent(agyTestPane, home, "")
+	f.reply("session.snapshot", snapshot(nil, nil, []any{paneAgent}, nil))
+	list := listSessions(t, n)
+	var agyRows []proto.Session
+	for _, s := range list {
+		if s.Agent == agyAgent {
+			agyRows = append(agyRows, s)
+		}
+	}
+	if len(agyRows) != 1 || agyRows[0].SessionID != agyTestRow || agyRows[0].Title != "Real agy task" || agyRows[0].LastText != "All fixed." {
+		t.Fatalf("without herdr integration: got %d agy rows %+v, want single merged row %s", len(agyRows), agyRows, agyTestRow)
+	}
+	items, _ := agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 2 || items[1].Text != "All fixed." {
+		t.Fatalf("items from presence-bound herdr pane = %+v, want transcript reply", items)
+	}
+
+	// Case 2: herdr pane whose agent_session came from custom:persona (resume_argv report) still merges via presence lock.
+	paneAgent["agent_session"] = map[string]any{"kind": "id", "value": agyTestRow, "source": resumeSource, "agent": agyAgent}
+	f.reply("session.snapshot", snapshot(nil, nil, []any{paneAgent}, nil))
+	list = listSessions(t, n)
+	agyRows = nil
+	for _, s := range list {
+		if s.Agent == agyAgent {
+			agyRows = append(agyRows, s)
+		}
+	}
+	if len(agyRows) != 1 || agyRows[0].SessionID != agyTestRow {
+		t.Fatalf("with custom:persona agent_session: got %d agy rows %+v, want single merged row %s", len(agyRows), agyRows, agyTestRow)
+	}
+
+	// Case 3: ambiguous foreground processes holding two different presence locks fail closed (do not guess).
+	presencePIDs[4243] = agyOtherTestID
+	f.reply("pane.process_info", map[string]any{
+		"process_info": map[string]any{
+			"foreground_processes": []any{
+				map[string]any{"pid": 4242, "name": "agy", "argv0": "agy"},
+				map[string]any{"pid": 4243, "name": "agy", "argv0": "agy"},
+			},
+		},
+	})
+	f.reply("session.snapshot", snapshot(nil, nil, []any{agyTestAgent(agyTestPane, home, "")}, nil))
+	_ = n.refreshHosts(t.Context())
+	if got := n.agyConversation(agyTestRow, agyTestPane); got != "" {
+		t.Fatalf("ambiguous presence locks bound to %q, want empty", got)
+	}
+}

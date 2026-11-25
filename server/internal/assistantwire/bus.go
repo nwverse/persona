@@ -81,6 +81,12 @@ const (
 	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
 	// the default manager names it; the apps keep filtering titles and last messages without it.
 	CapabilityAssistantSearch = "assistant_search"
+	// CapabilityAssistantPages: the manager keeps the assistant's pages (Dashboards, #15017,
+	// docs/assistant/dashboards.md): the reserved extension -pages in GET /api/v1/extensions/-/ui and its pages, the
+	// dashboards switch in GET/PUT /api/v1/assistant and the assistant_pages event. Only the built-in manager names
+	// it, the switch on or off; the hub lists the assistant_pages feature only while the default manager names it, and
+	// the apps show the switch only then.
+	CapabilityAssistantPages = "assistant_pages"
 	// CapabilityTaskInput: the manager validates and saves structured scheduled prompts.
 	CapabilityTaskInput = "task_input"
 	// CapabilityAssistantSegments promises persistent logical routing and explicit switches.
@@ -405,6 +411,8 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"GET /api/v1/todos/{id}/handoffs",
+	"POST /api/v1/todos/{id}/handoff",
 	"POST /api/v1/decisions",
 	"GET /api/v1/decisions/{id}",
 	"POST /api/v1/decisions/{id}/withdraw",
@@ -512,10 +520,8 @@ var Routes = []string{
 	"POST /api/v1/recordings/{id}/followup",
 	// A meeting handed to an Agent after it (meeting_handoff.go there, #8852).
 	"POST /api/v1/recordings/{id}/handoff",
-	// Its photos (meeting_photos.go there, "Phase 3: photos").
+	// Its photo writes (the read-only GETs are the knowledge base's own, kb_recordings.go).
 	"POST /api/v1/recordings/{id}/photos",
-	"GET /api/v1/recordings/{id}/photos",
-	"GET /api/v1/recordings/{id}/photos/{n}",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
 	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
 	// one of SocketRoutes.

@@ -100,6 +100,9 @@ type escalatedCard struct {
 	at   time.Time
 }
 
+// maxDialogChoices is how many of a terminal dialog's choices its text names (the bot's card shows as many buttons).
+const maxDialogChoices = 8
+
 // escalatedKeep bounds how long an escalated card is remembered unanswered (it expired, was cancelled or its node went).
 const escalatedKeep = 48 * time.Hour
 
@@ -166,7 +169,7 @@ func terminalQuestionText(ix proto.Interaction) string {
 	for _, o := range d.Options {
 		if o.Kind == "" && o.Label != "" {
 			choices = append(choices, clip(oneLine(o.Label), 60))
-			if len(choices) == maxDialogOptions {
+			if len(choices) == maxDialogChoices {
 				break
 			}
 		}
@@ -201,10 +204,18 @@ func routable(ix proto.Interaction) bool {
 	return false
 }
 
+// supervisorConversation: session is one of the assistant's supervising conversations, the main conversation, the
+// background supervisor or a leader. Their own cards stay the user's: no conversation above them is woken for a card
+// and can hand it up (ask_escalate takes a task), and the main conversation's would wait on itself. Neither askLadder
+// nor handNonOwnerCard routes them (#15360).
+func (v Settings) supervisorConversation(session string) bool {
+	return session != "" && (session == v.Main || session == v.BackgroundSupervisor || slices.Contains(v.Leaders, session))
+}
+
 // askLadder is where a card of machine/sid's goes first: the conversations supervising its task, nearest first, the
 // task, and the machine those conversations are on (the assistant's: its leaders and its main conversation). None when
-// the agent is no supervised task's, the task already waits for the user, or the agent is a supervising conversation.
-// Only parsed terminal questions go to a supervisor even when no leader is configured.
+// the agent is no supervised task's, the task already waits for the user, or the agent is a supervising conversation
+// (supervisorConversation). Only parsed terminal questions go to a supervisor even when no leader is configured.
 //
 // A task no leader supervises has one rung: the background supervisor, then the user, as a leader's card goes to the
 // leader, then the main conversation; the main conversation while the background supervisor is off or not made yet
@@ -212,7 +223,7 @@ func routable(ix proto.Interaction) bool {
 func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder []string, todo, home string, ok bool) {
 	machine, sid := ix.MachineID, ix.SessionID
 	cfg := s.settings(ctx)
-	if (len(cfg.Leaders) == 0 && ix.Kind != proto.IxScreen) || cfg.Main == "" || sid == cfg.Main || sid == cfg.BackgroundSupervisor || slices.Contains(cfg.Leaders, sid) {
+	if (len(cfg.Leaders) == 0 && ix.Kind != proto.IxScreen) || cfg.Main == "" || sid == "" || cfg.supervisorConversation(sid) {
 		return nil, "", "", false
 	}
 	home = cfg.MachineID
@@ -688,7 +699,7 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 // task's decision: the agent's call, not the user's, made by conversation self.
 func (s *Service) askAnswered(ctx context.Context, todo, self string, ix proto.Interaction, answers map[string]string, reason string) {
 	st := s.todoDB()
-	if st == nil {
+	if st == nil || todo == "" {
 		return
 	}
 	at := decisionNow()
@@ -721,6 +732,40 @@ var userApprovalWords = []string{"发消息", "回复", "评论", "comment", "se
 // payload has no risk word. Outward verbs use the connector gate's existing list (outboundVerbs in card_layers.go).
 var userApprovalActionVerbs = []string{"delete", "remove", "destroy", "erase", "purge", "trash", "buy", "purchase", "pay", "charge"}
 
+// localFileEditPermission reports whether ix's payload is local file data. Antigravity's ACP permission
+// callback passes the display title to mapToolCall, so a local write arrives as "File <path>" with the
+// original raw input instead of map.js's canonical Write/Edit name. Recognize that display shape only
+// with a known string write/edit field; a path-like title alone never suppresses action classification.
+func localFileEditPermission(ix proto.Interaction) bool {
+	switch ix.ToolName {
+	case "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch":
+		return true
+	}
+	path, ok := strings.CutPrefix(ix.ToolName, "File ")
+	if !ok || strings.TrimSpace(path) == "" {
+		return false
+	}
+	var input map[string]json.RawMessage
+	if json.Unmarshal(ix.ToolInput, &input) != nil {
+		return false
+	}
+	for _, key := range [...]string{
+		"CodeContent", "Content", "content",
+		"TargetContent", "Target", "old_string",
+		"ReplacementContent", "Replacement", "new_string",
+	} {
+		raw, exists := input[key]
+		if !exists {
+			continue
+		}
+		var content string
+		if json.Unmarshal(raw, &content) == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // userApproval says why permission or plan card ix is the user's to allow, not its supervisor's ("" when the
 // supervisor may allow it; either may always deny it): it asks for a form or a secret, it is an owner-action proposal
 // or a secret hand-off, or its actual action goes out in the user's name, spends money or deletes. A local file edit's
@@ -733,11 +778,9 @@ func userApproval(ix proto.Interaction) string {
 	case ix.OwnerProposal, ix.ApprovalBatchID != "", ix.ToolName == proto.SecretHandoffTool:
 		return "is an owner action"
 	}
-	if ix.Kind == proto.IxPermission {
-		switch ix.ToolName {
-		case "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch":
-			return ""
-		}
+	if ix.Kind == proto.IxPermission && (ix.ToolName == "Skill" || localFileEditPermission(ix)) {
+		// Skill only loads instructions; later tool calls are classified on their own.
+		return ""
 	}
 	if verb := connector.WriteVerb(ix.ToolName); slices.Contains(outboundVerbs, verb) || slices.Contains(userApprovalActionVerbs, verb) {
 		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (tool action %s)", verb)
@@ -779,7 +822,7 @@ func (s *Service) answeredApproval(ctx context.Context, todo, self string, ix pr
 	}
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "todo": todo, "card": ix.ID, "kind": ix.Kind, "allow": allow})
 	st := s.todoDB()
-	if st == nil {
+	if st == nil || todo == "" {
 		return nil
 	}
 	l := s.lang(ctx)
@@ -811,7 +854,7 @@ func (s *Service) answeredScreen(ctx context.Context, todo, self string, ix prot
 	}
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "todo": todo, "card": ix.ID, "kind": ix.Kind, "option": o.Key})
 	st := s.todoDB()
-	if st == nil {
+	if st == nil || todo == "" {
 		return nil
 	}
 	l := s.lang(ctx)

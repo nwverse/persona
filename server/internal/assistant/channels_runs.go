@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -100,7 +101,7 @@ type subtask struct {
 // Bounds of chanLive's notes: a turn of thousands of calls stays small.
 const (
 	liveOpenMost  = 50
-	liveFilesMost = 1000
+	liveFilesMost = assistantwire.RunFilesMost
 	liveSubsMost  = 50
 )
 

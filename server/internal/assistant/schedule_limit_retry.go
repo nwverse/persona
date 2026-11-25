@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -23,7 +24,7 @@ func (s *Service) runScheduledLimitRetry(ctx context.Context, w delayedWait, per
 	if w.Retry == nil || !waitForDelayedWait(ctx, w.At) {
 		return
 	}
-	durable := persisted || s.store != nil && s.store() != nil
+	durable := persisted || s.store() != nil
 	if durable && !persisted {
 		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := s.persistScheduledRetry(pctx, w)
@@ -97,6 +98,10 @@ func (s *Service) scheduledLimitRetryDue(ctx context.Context, w delayedWait) (Ta
 		s.logf("task %s run %s: its conversation went on before retry: not retried", failed.RefID, failed.ID)
 		return Task{}, false, nil
 	}
+	// An overdue wait can be restored before the first work tick has loaded the conversation's pending wake.
+	if !s.loadWork(rctx) {
+		return Task{}, false, errors.New("session work unavailable")
+	}
 	if s.hasPendingTransientWake(failed.MachineID, failed.SessionID) {
 		s.logf("task %s run %s: transient recovery is pending on its conversation: not retried", failed.RefID, failed.ID)
 		return Task{}, false, nil
@@ -138,7 +143,7 @@ func (s *Service) rearmScheduledLimitRetry(ctx context.Context, w delayedWait, p
 	}
 	s.logf("scheduled retry %s: %v", w.ID, why)
 	nextAt := delayedWaitRetryAt()
-	if persisted || s.store != nil && s.store() != nil {
+	if persisted || s.store() != nil {
 		rescheduled, err := s.rescheduleDelayedWait(ctx, w, nextAt, !persisted)
 		if err != nil {
 			s.logf("rearm scheduled retry %s: %v", w.ID, err)

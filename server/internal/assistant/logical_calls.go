@@ -245,7 +245,7 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 				}
 			}
 		}
-		if logicalSendMethod(method) && current.Epoch > 1 {
+		if logicalSendMethod(method) && logicalSourceMayBeRetired(current) {
 			if _, err := s.logicalPhysical(ctx, active.MachineID, "assistant.segment.restore", map[string]any{"session_id": active.SessionID}); err != nil {
 				return err
 			}

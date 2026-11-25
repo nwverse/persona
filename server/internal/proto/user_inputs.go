@@ -1,9 +1,12 @@
 package proto
 
-// UserInputPosition is a genuine input's stable transcript identity, not its body or a model turn count.
+// UserInputPosition identifies one genuine input and carries optional excerpts for navigation.
 type UserInputPosition struct {
-	ID  string `json:"id"`
-	Seq int    `json:"seq"`
+	ID          string `json:"id"`
+	Seq         int    `json:"seq"`
+	Preview     string `json:"preview,omitempty"`
+	Answer      string `json:"answer,omitempty"`
+	Attachments int    `json:"attachments,omitempty"`
 }
 
 // UserInputIndex is the temporary web count/position contract. The richer #2071 API supersedes it when merged.

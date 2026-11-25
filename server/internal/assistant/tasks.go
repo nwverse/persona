@@ -143,11 +143,13 @@ type PlanTask struct {
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
-	Goal          string   `json:"goal,omitempty"`
-	OutOfBounds   []string `json:"out_of_bounds,omitempty"`
-	Continues     string   `json:"continues,omitempty"`
-	ContinuesWhy  string   `json:"continues_why,omitempty"`
-	ScopeRevision string   `json:"scope_revision,omitempty"`
+	Goal               string   `json:"goal,omitempty"`
+	OutOfBounds        []string `json:"out_of_bounds,omitempty"`
+	Continues          string   `json:"continues,omitempty"`
+	ContinuesWhy       string   `json:"continues_why,omitempty"`
+	HandoffID          string   `json:"handoff_id,omitempty"`
+	HandoffOperationID string   `json:"handoff_operation_id,omitempty"`
+	ScopeRevision      string   `json:"scope_revision,omitempty"`
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
@@ -251,6 +253,9 @@ type PlanTask struct {
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string
+	// deferredStart is a Companion session whose real id exists but whose MCP and first prompt wait for the role link.
+	// The original first message is kept only for this start attempt; never serialized.
+	deferredStart *deferredTaskStart
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).

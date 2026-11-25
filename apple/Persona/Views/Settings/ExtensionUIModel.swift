@@ -142,6 +142,14 @@ nonisolated enum ExtensionSettingsLink {
 /// Manager-owned pages use HTTP rather than negotiating an extension stream.
 nonisolated enum ReservedExtensionUI {
     static let paths = [SubscriptionsUI.id: SubscriptionsUI.path, HealthIntakeUI.id: HealthIntakeUI.path]
+
+    /// Whether `ext`'s pages are drawn over HTTP only, never the native page stream: the reserved pages above, and every
+    /// id that starts with "-", which no installed extension can have and a manager answers for (Dashboards' `-pages`,
+    /// #15017). The hub refuses the stream for them.
+    static func httpOnly(_ ext: String) -> Bool { paths[ext] != nil || reserved(ext) }
+
+    /// Whether `ext` is a reserved id: one that starts with "-", which no installed extension can have.
+    static func reserved(_ ext: String) -> Bool { ext.hasPrefix("-") }
 }
 
 extension APIClient {
@@ -352,7 +360,7 @@ extension APIClient {
         ExtensionUIRegistry.shared.add(self)
         #if os(iOS)
         // Reserved pages belong to the manager and are drawn over HTTP only.
-        if isPage, ReservedExtensionUI.paths[plugin] == nil, let connection = deps.connection() {
+        if isPage, !ReservedExtensionUI.httpOnly(plugin), let connection = deps.connection() {
             let stream = ExtensionPageStream(connection: connection, owner: plugin, contribution: ui,
                                              context: context, state: state ?? "", manager: manager)
             self.stream = stream
@@ -891,7 +899,7 @@ extension APIClient {
     struct Entry: Identifiable {
         var place: ExtensionUIPlace
         var model: ExtensionViewModel
-        var id: String { place.owner + "/" + place.id }
+        var id: String { place.scopedID }
     }
 
     /// The sections to draw: a plugin that said 404 unsupported is left out.
@@ -899,5 +907,5 @@ extension APIClient {
         places.compactMap { p in models[key(p)].flatMap { $0.unsupported ? nil : Entry(place: p, model: $0) } }
     }
 
-    private func key(_ p: ExtensionUIPlace) -> String { p.owner + "/" + p.id }
+    private func key(_ p: ExtensionUIPlace) -> String { p.scopedID }
 }

@@ -1,5 +1,10 @@
 # Lessons: web UI and interactions
 
+## A text shimmer needs an opaque source color (#15367)
+
+Setting `color: transparent` also clears any gradient stop that reads `currentColor`.
+Use a transparent glyph fill for the animated gradient and check the painted text in a browser.
+
 ## A folder of trees names its repository, it is not one (#13453)
 
 Path inference keys a tree in a folder kept apart from its repository (herdr's `~/.herdr/worktrees/<repository>/<tree>`)
@@ -1557,4 +1562,5 @@ without one read `notes › Agents`; every Agent row under it then ended with `<
 the headings' names. Give both projections the same rule: a level that only repeats its heading's name is left out, and
 the heading takes the row's marks and menu. A host that does not say which workspace is the main checkout (herdr has no
 `is_main`) leaves it to the folder, the workspace at the repository's own folder, and that guess may only mark and
-order the tree: actions keep reading what the host said.
+order the tree: actions keep reading what the host said. Guess only for a host that names no project: a desktop app's
+project lists each of its folders as its own `project_path`, so the section's first folder wore the home mark (#14497).
