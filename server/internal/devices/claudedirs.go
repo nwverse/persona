@@ -129,7 +129,7 @@ func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *device
 	params := map[string]any{"machine_id": m.cfg.ID, "claude_dirs": m.claudeDirs(ctx),
 		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "agent_dirs_blocked": m.blockedAgentDirsParam(ctx),
 		"herdr_sessions_blocked": m.blockedHerdrSessionsParam(ctx),
-		"botmux": m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
+		"botmux":                 m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
 		"herdr_autostart": m.herdrAutostart(ctx), "herdr_autoinstall": m.cfg.HerdrAutoinstall, "claude_global_hooks": m.cfg.ClaudeGlobalHooks,
 		"usage_windows": m.usageWindows(), "claude_live_replies": m.liveReplies(ctx), "extra_path": m.extraPath()}
 	if m.d.config().PrivateNetwork {
@@ -306,7 +306,7 @@ func (m *Machine) reconfigureClaudeDirs(ctx context.Context) {
 	if err := m.call(ctx, "node.configure", map[string]any{"claude_dirs": m.claudeDirs(ctx),
 		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "agent_dirs_blocked": m.blockedAgentDirsParam(ctx),
 		"herdr_sessions_blocked": m.blockedHerdrSessionsParam(ctx),
-		"botmux": m.botmux(ctx)}, nil); err != nil {
+		"botmux":                 m.botmux(ctx)}, nil); err != nil {
 		m.d.logf("[%s] configure claude dirs: %v", m.cfg.ID, err)
 		return
 	}

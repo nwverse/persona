@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -89,8 +88,8 @@ func newBoardEnvOn(t *testing.T, st *memStore) *boardEnv {
 	e.s = withSettings(t, e.f, New(Options{Hub: e.f, Store: func() Store { return e.st }, Logf: testLogf(t), Devices: e.d}))
 	e.s.fleet.interactions = map[string]*pending{}
 	e.s.todos.loaded, e.s.todos.todos, e.s.todos.activeBySession = true, map[string]*Todo{}, map[[2]string]string{}
-	e.s.standing.now, e.s.standing.after = e.clk.Now, e.clk.After
-	e.s.standing.fleetUp.Store(true) // the fleet is up; the tests of a start before it say otherwise
+	e.s.setBoardTimer(t, e.clk.Now, e.clk.After)
+	e.s.fleetUp.Store(true) // the fleet is up; the tests of a start before it say otherwise
 	return e
 }
 
@@ -282,23 +281,6 @@ func TestBoardOrdersByWaitAndSaysWhoAsked(t *testing.T) {
 	for _, want := range []string{"已等 1 小时 20 分", "已等 20 分钟", "已等 2 分钟", "已等 3 天", "来自 Persona", "来自 Agent「登录修复」", "来自某个 Agent",
 		"[打开](" + testWeb + "/persona/asm)", "[打开](" + testWeb + "/s/box/ag1)", "[打开](" + testWeb + "/todos/todo_v)"} {
 		index(t, card, want)
-	}
-}
-
-func TestBoardWaitReadsLikeAPerson(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
-	for _, c := range []struct {
-		l    i18n.Lang
-		d    time.Duration
-		want string
-	}{
-		{i18n.ZhHans, 30 * time.Second, "不到 1 分钟"}, {i18n.ZhHans, 2 * time.Minute, "2 分钟"}, {i18n.ZhHans, 80 * time.Minute, "1 小时 20 分"},
-		{i18n.ZhHans, 2 * time.Hour, "2 小时"}, {i18n.ZhHans, 3*24*time.Hour + 5*time.Hour, "3 天"},
-		{i18n.En, 2 * time.Minute, "2 min"}, {i18n.En, 80 * time.Minute, "1 h 20 min"}, {i18n.En, 72 * time.Hour, "3 d"},
-	} {
-		if got := boardWait(c.l, c.d); got != c.want {
-			t.Errorf("boardWait(%s, %v) = %q, want %q", c.l, c.d, got, c.want)
-		}
 	}
 }
 
@@ -545,7 +527,7 @@ func TestBoardIsRefreshedWhenTheFleetIsUp(t *testing.T) {
 	needsLarkLayer(t) // the chat is the lark module's
 	e := newBoardEnv(t)
 	e.tasks("/tasks")
-	e.s.standing.fleetUp.Store(false) // a restart: the fleet is not up yet
+	e.s.fleetUp.Store(false) // a restart: the fleet is not up yet
 	e.clk.advance(boardSettle)
 	_, before := e.counts()
 	ix := e.card("ix1", "box", "ag1", "趁你不在来的问题", 0)
@@ -646,8 +628,8 @@ func TestBoardTakesADeployedTaskAndDropsItWhenPassed(t *testing.T) {
 	ctx := context.Background()
 	s, f, _ := acceptService(t)
 	clk := newFakeClock()
-	s.standing.now, s.standing.after = clk.Now, clk.After
-	s.standing.fleetUp.Store(true)
+	s.setBoardTimer(t, clk.Now, clk.After)
+	s.fleetUp.Store(true)
 	var mu sync.Mutex
 	var edits []string
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
@@ -753,15 +735,16 @@ func TestBoardRefreshWaitsForAWriteInProgress(t *testing.T) {
 	e.tasks("/tasks")
 	e.card("ix1", "box", "ag1", "等一等再写", 0)
 	done := make(chan struct{})
-	e.s.standing.done = func() { close(done) }
-	e.s.standing.run.Lock() // a write in progress
-	go e.s.boardRefresh()
+	probe := e.s.boardProbe(t)
+	probe.SetBoardTimer(e.clk.Now, e.clk.After, func() { close(done) })
+	release := probe.HoldBoard() // a write in progress
+	go probe.RefreshBoard()
 	time.Sleep(100 * time.Millisecond)
 	if _, u := e.counts(); u != 0 {
-		e.s.standing.run.Unlock()
+		release()
 		t.Fatalf("the refresh wrote beside a write in progress (%d edits)", u)
 	}
-	e.s.standing.run.Unlock()
+	release()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

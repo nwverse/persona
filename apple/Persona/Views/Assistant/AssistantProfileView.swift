@@ -214,6 +214,17 @@ struct AssistantProfileView: View {
                 }
             }
             #endif
+            if let dashboards {
+                Section {
+                    // Wraps rather than truncates: the Japanese and English names are long, and this is a label, not a button.
+                    Toggle(isOn: dashboards) {
+                        Label(DashboardsUI.switchTitle, systemImage: Theme.Icon.pluginChart)
+                    }
+                    .accessibilityIdentifier("assistant-dashboards")
+                } footer: {
+                    Text(DashboardsUI.switchFooter)
+                }
+            }
             Section {
                 NavigationLink { SkillsPage() } label: { row("Skills", Theme.Icon.skills, detail: nil) }
                 LabeledContent("Runs On", value: machineName)
@@ -345,6 +356,14 @@ struct AssistantProfileView: View {
                     }
                 }
                 #endif
+                if let dashboards {
+                    BUIListSection(footer: DashboardsUI.switchFooter) {
+                        BUIListRow(DashboardsUI.switchTitle) { IconTile(Theme.Icon.pluginChart, tint: Theme.accent) } trailing: {
+                            Toggle(DashboardsUI.switchTitle, isOn: dashboards).labelsHidden()
+                                .accessibilityIdentifier("assistant-dashboards")
+                        }
+                    }
+                }
                 BUIListSection(String(localized: "Settings"), footer: String(localized: "Each chat runs Claude in the background in this directory on \(machineName), outside herdr. Choose the model in Settings › Models › Main Chat; change it for a single chat from that chat's menu.")) {
                     NavigationLink { SkillsPage() } label: { buiRow("Skills", Theme.Icon.skills, detail: nil) }
                     BUIListRow(String(localized: "Runs On"), value: machineName)
@@ -480,6 +499,13 @@ struct AssistantProfileView: View {
     private var nextSuggestions: Binding<Bool>? {
         guard let on = nextSuggestionsModel.value else { return nil }
         return Binding(get: { nextSuggestionsModel.value ?? on }, set: { v in Task { await nextSuggestionsModel.set(v) } })
+    }
+    /// Let Persona make dashboards (#15017); nil (no switch) without the hub's `assistant_pages`, with another assistant
+    /// shown (only the default one has Dashboards), or before the settings are read. An absent value is off.
+    private var dashboards: Binding<Bool>? {
+        guard model.dashboardsOffered, let config = model.assistantConfig else { return nil }
+        let on = config.dashboards ?? false
+        return Binding(get: { on }, set: { v in Task { await model.setDashboards(v) } })
     }
     private static let nextSuggestionsTitle = String(localized: "Suggest the Next Message")
     private static let nextSuggestionsFooter = String(localized: "After a reply in a chat you have open, a small model suggests what you might send next, above the empty message box. Claude Code in a terminal keeps its own suggestions. Uses one extra model call per reply; the model is set under Model configuration › Next-message suggestions.")

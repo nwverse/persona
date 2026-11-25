@@ -77,6 +77,8 @@ type ModelProfileView struct {
 	Active bool `json:"active,omitempty"`
 	// Changes: what switching to it would change now (for the one in use: where the configuration moved away from it).
 	Changes []string `json:"changes"`
+	// Trial: the last 7 days' dry-run counts for a profile not in use (#14702); omitted on the active profile.
+	Trial *ModelProfileTrial `json:"trial,omitempty"`
 }
 
 // ModelProfilesView is GET /api/v1/model-profiles.
@@ -160,12 +162,19 @@ func (s *Service) modelProfilesView(ctx context.Context) (ModelProfilesView, err
 		at, by := state.At, state.By
 		v.At, v.By = &at, &by
 	}
+	trials, trialsKnown := s.modelProfileTrialSummaries(ctx, time.Now().UTC())
 	for _, p := range ps.Profiles {
 		p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, records, stored)
 		if err != nil {
 			return ModelProfilesView{}, err
 		}
-		v.Profiles = append(v.Profiles, ModelProfileView{ModelProfile: p, Active: p.ID == state.Active, Changes: modelProfileChanges(p, normalizedRecords, stored)})
+		active := p.ID == state.Active
+		pv := ModelProfileView{ModelProfile: p, Active: active, Changes: modelProfileChanges(p, normalizedRecords, stored)}
+		if !active && trialsKnown {
+			t := trials[p.ID]
+			pv.Trial = &ModelProfileTrial{Days: modelProfileTrialDays, Dispatches: t.Dispatches, WouldSwitch: t.WouldSwitch}
+		}
+		v.Profiles = append(v.Profiles, pv)
 	}
 	if stack := state.rollbackStack(); len(stack) > 0 {
 		v.Rollbacks = make([]ModelProfileUndo, 0, len(stack))
@@ -317,27 +326,99 @@ func decodeSingleJSONObject(w http.ResponseWriter, r *http.Request, dst any, lim
 
 // mergeTierInput is the tiers a PUT stores, given the profile's own (was). A tier the body sends without candidates
 // is in an older client's shape, which knows only the flat fields: they replace its first candidate, and the other
-// candidates and the aliases stay as they were. A tier with candidates, or with aliases, says them itself (an empty
-// list clears them). A tier the body leaves out is removed, as it always was.
+// candidates and the aliases stay as they were, also when that client renamed the tier (renamedTiers). A tier with
+// candidates, or with aliases, says them itself (an empty list clears them). A tier the body leaves out is removed, as
+// it always was. An alias kept for a client that did not send it gives way to a tier name or an alias the body did
+// send, and to one another tier kept first (in name order): that client cannot see it, so it could not fix the
+// refusal. An alias the body sends itself is checked as it is (checkModelTiers).
 func mergeTierInput(was, in map[string]ModelTier) map[string]ModelTier {
 	if in == nil {
 		return nil
 	}
+	from := renamedTiers(was, in)
 	out := make(map[string]ModelTier, len(in))
+	var kept []string // tiers whose aliases came from was, not from the body
+	taken := map[string]bool{}
 	for name, t := range in {
+		taken[name] = true
 		old, ok := was[name]
+		if f, renamed := from[name]; renamed {
+			old, ok = was[f], true
+		}
 		if ok && t.Candidates == nil {
 			first := t.first()
 			t.Candidates = slices.Clone(old.Candidates)
 			t.setFirst(first)
 		}
-		if ok && t.Aliases == nil {
-			t.Aliases = slices.Clone(old.Aliases)
+		if t.Aliases == nil {
+			if ok {
+				t.Aliases = slices.Clone(old.Aliases)
+			}
+			kept = append(kept, name)
+		} else {
+			for _, a := range t.Aliases {
+				taken[strings.TrimSpace(a)] = true
+			}
 		}
 		t.normalize()
 		out[name] = t
 	}
+	slices.Sort(kept)
+	for _, name := range kept {
+		t := out[name]
+		var aliases []string
+		for _, a := range t.Aliases {
+			if !taken[a] {
+				aliases, taken[a] = append(aliases, a), true
+			}
+		}
+		t.Aliases = aliases
+		out[name] = t
+	}
 	return out
+}
+
+// renamedTiers is the stored name of each tier an older client renamed, by its new name. The older shape carries no
+// earlier name, so a tier the body adds in it (a name was does not have, no candidates, no aliases) pairs with a
+// stored tier the body no longer sends: the one whose first candidate and description it repeats unchanged, else,
+// when exactly one tier went and one came, that one if both say the same non-empty description. Anything else stays
+// unpaired, a new tier as before: deleting a tier and adding an unrelated one on the same launcher in one save must
+// not hand the new one the old one's hidden candidates and aliases.
+func renamedTiers(was, in map[string]ModelTier) map[string]string {
+	var gone, added []string
+	for _, name := range slices.Sorted(maps.Keys(was)) {
+		if _, ok := in[name]; !ok {
+			gone = append(gone, name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(in)) {
+		if t := in[name]; t.Candidates == nil && t.Aliases == nil {
+			if _, ok := was[name]; !ok {
+				added = append(added, name)
+			}
+		}
+	}
+	about := func(t ModelTier) string { return strings.TrimSpace(t.Description) }
+	pairs, used := map[string]string{}, map[string]bool{}
+	for _, a := range added {
+		var match []string
+		for _, g := range gone {
+			if !used[g] && was[g].first() == in[a].first() && about(was[g]) == about(in[a]) {
+				match = append(match, g)
+			}
+		}
+		if len(match) == 1 {
+			pairs[a], used[match[0]] = match[0], true
+		}
+	}
+	gone = slices.DeleteFunc(gone, func(g string) bool { return used[g] })
+	added = slices.DeleteFunc(added, func(a string) bool { _, ok := pairs[a]; return ok })
+	if len(gone) == 1 && len(added) == 1 {
+		if d := about(in[added[0]]); d != "" && d == about(was[gone[0]]) {
+			pairs[added[0]] = gone[0]
+		}
+	}
+	return pairs
 }
 
 func (s *Service) modelProfileRoutes() {
@@ -359,6 +440,14 @@ func (s *Service) modelProfileRoutes() {
 		}
 	}
 	s.handle("GET /api/v1/model-profiles", view)
+	s.handle("GET /api/v1/model-profiles/{id}/candidates", func(w http.ResponseWriter, r *http.Request) {
+		v, err := s.modelProfileCandidates(r.Context(), r.PathValue("id"))
+		if err != nil {
+			apierr.Write(w, modelProfileStatus(err), err)
+			return
+		}
+		apierr.WriteJSON(w, v)
+	})
 	s.handle("PUT /api/v1/model-profiles/{id}", full(func(w http.ResponseWriter, r *http.Request) {
 		var in modelProfileInput
 		if err := decodeSingleJSONObject(w, r, &in, 64<<10, false, checkForbiddenProfilePayload); err != nil {

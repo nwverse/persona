@@ -161,7 +161,7 @@ func (s core) answerFromCard(ctx context.Context, a *botcard.CardAction, action 
 	if err := s.appCallTo(ctx, assistantwire.AppInteractions, InteractionsGet, map[string]any{"interaction_id": id}, &got); err != nil {
 		return toast("error", clip(oneLine(err.Error()), 80))
 	}
-	if !got.OK && !s.h.FinalStatus(got.Status) {
+	if !got.OK && !finalStatus(got.Status) {
 		// Not up now, but not known to be over either (in the history, not restored yet; or the history could not
 		// say): the card stays as it is.
 		return toast("info", s.h.EndedText(l, got.Status, "assistant-feishu_cards.already_handled"))
@@ -181,7 +181,7 @@ func (s core) answerFromCard(ctx context.Context, a *botcard.CardAction, action 
 		}
 		ended := s.h.EndedText(l, got.Status, "assistant-channels.ended")
 		return &botcard.CardResponse{Toast: &botcard.Toast{Type: "info", Content: s.h.EndedText(l, got.Status, "assistant-feishu_cards.already_handled")},
-			Card: s.h.AnsweredCard(ctx, ix, ended).Raw()}
+			Card: s.answeredCard(ctx, ix, ended).Raw()}
 	}
 	ix := got.Interaction
 	type outcome struct {
@@ -330,7 +330,7 @@ func (s core) answerFromCard(ctx context.Context, a *botcard.CardAction, action 
 		case !o.ok:
 			return toast("info", i18n.T(l, "assistant-feishu_cards.already_handled"))
 		}
-		return &botcard.CardResponse{Toast: &botcard.Toast{Type: "success", Content: how}, Card: s.h.AnsweredCard(ctx, ix, how).Raw()}
+		return &botcard.CardResponse{Toast: &botcard.Toast{Type: "success", Content: how}, Card: s.answeredCard(ctx, ix, how).Raw()}
 	case <-time.After(s.timing("card_answer_wait")):
 		msg := a.Context.MessageID
 		go func() {

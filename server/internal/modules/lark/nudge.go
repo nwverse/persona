@@ -202,7 +202,7 @@ func (s core) nudgeQuiet(ctx context.Context) (bool, error) {
 // kind of nudge has not settled. Every send re-reads the live card, so an answer,
 // withdrawal, pause, replacement or extended deadline during the sweep wins.
 func (s core) nudgeCard(ctx context.Context, id, owner string, kind nudgeKind) {
-	ix, waiting := s.h.CardLook(ctx, id)
+	ix, waiting, _ := s.botCardLook(ctx, id)
 	if !waiting || ix.Private || s.h.AgentGone(ix) { // ended, private, or its agent went away
 		return
 	}
@@ -248,13 +248,13 @@ func (s core) nudgeCard(ctx context.Context, id, owner string, kind nudgeKind) {
 	b.mu.Unlock()
 	err := s.botNudge(ctx, c, ix, owner, kind)
 	if err == nil {
-		s.h.BoardChanged() // its line on the waiting-for-you board says it was nudged
+		s.boardChanged() // its line on the waiting-for-you board says it was nudged
 		return
 	}
 	s.logf("bots: nudge under card %s: %v", id, err)
 	// Refused (the card or its chat is gone): nothing to nudge under. Otherwise it may not have gone out, and the next
 	// sweep tries again under the same key, so one that did go out lands once, up to nudgeMaxTries and nudgeRetryWindow.
-	giveUp := s.h.ChatRefused(err) || botcard.MessageGone(err) || p.Tries >= nudgeMaxTries
+	giveUp := chatRefused(err) || botcard.MessageGone(err) || p.Tries >= nudgeMaxTries
 	b.mu.Lock()
 	if cur, still := b.cards[id]; still && cur.MessageID == c.MessageID {
 		p := cardProgress(cur, kind)
@@ -310,7 +310,7 @@ func (s core) nudgeText(ctx context.Context, ix proto.Interaction) string {
 			return i18n.T(l, "assistant-feishu_cards.nudge_permission", i18n.Args{"tool": s.h.IxToolName(ix)})
 		}
 	case proto.IxQuestion:
-		what = s.h.FirstQuestion(ix)
+		what = firstQuestion(ix)
 	case proto.IxPlan:
 		what = ix.Plan
 	case proto.IxScreen:

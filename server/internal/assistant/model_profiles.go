@@ -268,6 +268,36 @@ func cloneLauncherModels(m LauncherModels) LauncherModels {
 	return out
 }
 
+func cloneModelProfiles(ps modelProfiles) modelProfiles {
+	out := modelProfiles{Revision: ps.Revision, Profiles: make([]ModelProfile, len(ps.Profiles))}
+	for i, profile := range ps.Profiles {
+		out.Profiles[i] = cloneModelProfile(profile)
+	}
+	return out
+}
+
+// cloneModelProfile detaches every mutable map, pointer and slice before a managed edit or an exact before/after check.
+func cloneModelProfile(p ModelProfile) ModelProfile {
+	p.Purposes = maps.Clone(p.Purposes)
+	if p.Launchers != nil {
+		launchers := make(map[string]LauncherModels, len(p.Launchers))
+		for name, fields := range p.Launchers {
+			launchers[name] = cloneLauncherModels(fields)
+		}
+		p.Launchers = launchers
+	}
+	if p.Tiers != nil {
+		tiers := make(map[string]ModelTier, len(p.Tiers))
+		for name, tier := range p.Tiers {
+			tier.Candidates = slices.Clone(tier.Candidates)
+			tier.Aliases = slices.Clone(tier.Aliases)
+			tiers[name] = tier
+		}
+		p.Tiers = tiers
+	}
+	return p
+}
+
 func cloneProfileImage(img modelProfileImage) modelProfileImage {
 	out := img
 	if img.Purposes != nil {
@@ -561,6 +591,19 @@ func (s *Service) readModelProfiles(ctx context.Context) (modelProfiles, bool, e
 // (#14700), with the names they have now.
 var seededTierNames = [][2]string{{"strong", "core"}, {"standard", "dev"}}
 
+// seededTierAliases are the older names the seeded tier name answers to (strong for core, standard for dev), in a
+// fresh slice. The templates and a capture give them to the tiers they make, as migrateSeededTiers gives them to a
+// migrated tier, so a stored plan task, a start-defaults preset or an older client naming the old one resolves on
+// every profile, whichever is in use.
+func seededTierAliases(name string) []string {
+	for _, names := range seededTierNames {
+		if names[1] == name {
+			return []string{names[0]}
+		}
+	}
+	return nil
+}
+
 // migrateSeededTiers renames the two seeded tiers as p is read: strong to core, standard to dev, with the old name kept
 // as an alias and nothing else changed, so a plan task, a start-defaults preset or an older client naming the old one
 // resolves to the same launcher and model. The next write stores it. A tier the user made keeps its name, and so does
@@ -632,6 +675,19 @@ func (s *Service) putModelProfileSettings(ctx context.Context, values map[string
 // modelProfilesLocked reads profiles or builds two templates from the current configuration (models.mu held).
 // The caller persists templates only after its operation has passed all checks, with the state seed() marks.
 func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, bool, error) {
+	if plan := ownerProfilePlanFrom(ctx); plan != nil {
+		if !plan.loaded {
+			ps, _, err := s.modelProfilesLocked(withoutOwnerProfilePlan(ctx))
+			if err != nil {
+				return modelProfiles{}, false, err
+			}
+			plan.profiles = cloneModelProfiles(ps)
+			plan.loaded = true
+		}
+		// Every preparation receives its own deep copy. Only an explicit planned
+		// catalog write advances the shared batch snapshot.
+		return cloneModelProfiles(plan.profiles), false, nil
+	}
 	ps, ok, err := s.readModelProfiles(ctx)
 	if err != nil || ok {
 		return ps, false, err
@@ -652,7 +708,8 @@ func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, bool,
 
 // captureModels is the configuration as a profile would set it: every category's own choice, the model fields of the
 // providers added in Persona those categories run on, and two tiers named by the kind of work (core: the main chat's
-// choice, for core design and implementation; dev: the Agents', for development, debugging and research).
+// choice, for core design and implementation; dev: the Agents', for development, debugging and research), each
+// answering to its older name too (strong, standard), as a migrated one does.
 func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, map[string]LauncherModels, map[string]ModelTier, error) {
 	stored, err := s.readStoredLaunchers(ctx)
 	if err != nil {
@@ -692,7 +749,7 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 				model = "" // configured before #1644 held models to the rule: the launcher's default, as applyModel runs it
 			}
 			tiers[tier] = ModelTier{Launcher: name, Model: model, Effort: effective.Effort,
-				Description: i18n.T(l, "assistant-model_profiles.tier_"+tier)}
+				Description: i18n.T(l, "assistant-model_profiles.tier_"+tier), Aliases: seededTierAliases(tier)}
 		}
 	}
 	launchers := map[string]LauncherModels{}
