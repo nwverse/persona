@@ -350,6 +350,8 @@ func (h larkHost) AskSensitive(ctx context.Context, ix proto.Interaction) bool {
 
 func (h larkHost) AskState(id string) (ended, pending bool) { return h.s.ixState(id) }
 
+func (h larkHost) AskPending(id string) (proto.Interaction, bool) { return h.s.pendingIx(id) }
+
 func (h larkHost) ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error) {
 	return h.s.resolveInteraction(ctx, channel.Feishu, id, r, action)
 }

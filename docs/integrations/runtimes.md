@@ -576,6 +576,12 @@ in agy's global `hooks.json` (group `persona`, `PreInvocation` and `Stop`, #1372
 engine, and reads its transcript itself; see `docs/integrations/engines.md`. The ACP companion is for sessions without a
 terminal.
 
+The web Agent session overview requests `session.info` while open for a terminal pane or a local Antigravity runtime session.
+The node reads the conversation's `.system_generated/swarm/members.json` and adds the optional `swarm_workers`
+roster to that response. A running worker in `working` or `mentions` wake mode shows as Working or Waiting,
+respectively. Stopped and killed workers show as Stopped. The overview shows the worker count and an expandable
+roster. The coordinator and board messages are outside that count.
+
 Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
 Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
 inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource

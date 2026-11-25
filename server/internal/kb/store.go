@@ -33,8 +33,8 @@ const (
 	KindPerson  = "people"
 	KindProject = "projects"
 	KindDoc     = "docs"
-	KindMeeting = "meetings"
-	KindEvent   = "events"
+	KindMeeting = recordingwire.KindMeeting
+	KindEvent   = recordingwire.KindEvent
 )
 
 // Tagging ranks anything in the knowledge base. The AI fills it in; Locked ones were set by hand (the app or a

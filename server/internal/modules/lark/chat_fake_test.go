@@ -45,6 +45,7 @@ type chatData struct {
 	route       func(ix proto.Interaction) assistantwire.AskRoute
 	sensitive   func(ix proto.Interaction) bool
 	state       func(id string) (ended, pending bool)
+	pendingIx   func(id string) (proto.Interaction, bool)
 	deadline    func(ix proto.Interaction) (time.Time, bool)
 	gone        func(ix proto.Interaction) bool
 	todoOf      func(chat, thread string) (assistantwire.ChatTodo, bool)
@@ -366,6 +367,14 @@ func (s *Service) AskState(id string) (ended, pending bool) {
 		return f(id)
 	}
 	return false, true
+}
+
+// AskPending is the interaction up under id: the test's (pendingIx), else none.
+func (s *Service) AskPending(id string) (proto.Interaction, bool) {
+	if f := s.ch().pendingIx; f != nil {
+		return f(id)
+	}
+	return proto.Interaction{}, false
 }
 
 func (s *Service) ResolveInteraction(_ context.Context, id string, r proto.Resolution, action string) (bool, error) {

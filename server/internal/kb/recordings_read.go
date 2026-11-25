@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
@@ -30,7 +30,7 @@ import (
 // recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept recordingDays.
 
 // KindRecording is the recordings' kind and directory.
-const KindRecording = "recordings"
+const KindRecording = recordingwire.KindRecording
 
 // DefaultRecordingDays is how long recordings are kept unless the user says otherwise (assistant.recording_days).
 const DefaultRecordingDays = 14
@@ -61,10 +61,7 @@ var (
 )
 
 // RecordingID is id as stored (lowercase), false when it is not a UUID.
-func RecordingID(id string) (string, bool) {
-	id = strings.ToLower(strings.TrimSpace(id))
-	return id, uuidRe.MatchString(id)
-}
+func RecordingID(id string) (string, bool) { return recordingwire.RecordingID(id) }
 
 func badRecording(f string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrBadRecording, fmt.Sprintf(f, a...))
