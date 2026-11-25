@@ -43,6 +43,7 @@ type InboxSuggestionAttempt struct {
 	Route          string           `json:"route,omitempty"`
 	ContentVersion string           `json:"content_version,omitempty"`
 	PolicyRevision string           `json:"policy_revision,omitempty"`
+	Reviewed       bool             `json:"reviewed,omitempty"`
 	active         bool
 }
 
@@ -58,6 +59,7 @@ func listedSuggestionAttempts(attempts []*InboxSuggestionAttempt) []*InboxSugges
 		c := *a
 		c.ClientID, c.Target, c.Proposal, c.active = "", "", nil, false
 		c.Category, c.Route, c.ContentVersion, c.PolicyRevision = "", "", "", ""
+		c.Reviewed = false
 		if c.Status == suggestionSending && !a.active {
 			c.Status, c.Retryable = suggestionUnknown, false
 		}
@@ -120,7 +122,7 @@ func sameReplyOperation(a, b *InboxSuggestionAttempt) bool {
 	return a != nil && b != nil && a.ClientID != "" && a.ClientID == b.ClientID && a.Target == b.Target && sameReplySuggestion(actualReply(a), actualReply(b))
 }
 
-func uncertainReplyOperation(it *InboxItem, g *InboxSuggestion, text string) *InboxSuggestionAttempt {
+func uncertainReplyOperation(it *InboxItem, g *InboxSuggestion, text string, ignoreDraftingProvenance bool) *InboxSuggestionAttempt {
 	if g == nil {
 		return nil
 	}
@@ -128,7 +130,7 @@ func uncertainReplyOperation(it *InboxItem, g *InboxSuggestion, text string) *In
 	actual.Text = text
 	target := suggestionReplyTarget(it)
 	for _, a := range it.SuggestionAttempts {
-		if a != nil && (a.Status == suggestionUnknown || a.Status == suggestionSending) && a.Target == target && sameReplySuggestion(actualReply(a), &actual) {
+		if a != nil && (a.Status == suggestionUnknown || a.Status == suggestionSending) && a.Target == target && sameReplySuggestionMode(actualReply(a), &actual, ignoreDraftingProvenance) {
 			return a
 		}
 	}
@@ -138,7 +140,7 @@ func uncertainReplyOperation(it *InboxItem, g *InboxSuggestion, text string) *In
 // A newer card is not a new delivery intent for the exact same still-uncertain action. Project that operation's
 // receipt onto its version, keeping its send identity and outcome time without inventing another active sender.
 func inheritReplyUncertainty(it *InboxItem, g *InboxSuggestion, text string) *InboxSuggestionAttempt {
-	proof := uncertainReplyOperation(it, g, text)
+	proof := uncertainReplyOperation(it, g, text, false)
 	if proof == nil {
 		return nil
 	}
@@ -188,6 +190,10 @@ func copySuggestion(g *InboxSuggestion) *InboxSuggestion {
 }
 
 func sameReplySuggestion(a, b *InboxSuggestion) bool {
+	return sameReplySuggestionMode(a, b, false)
+}
+
+func sameReplySuggestionMode(a, b *InboxSuggestion, ignoreDraftingProvenance bool) bool {
 	if a == nil || b == nil || a.Kind != SuggestReply || b.Kind != SuggestReply || a.Handback || b.Handback {
 		return false
 	}
@@ -195,10 +201,21 @@ func sameReplySuggestion(a, b *InboxSuggestion) bool {
 	// Notes only explain the card; due dates, directories and machines do not execute on a reply. Changing one
 	// cannot turn the same actual uncertain send into a new version with another send identity.
 	x.Note, y.Note, x.Due, y.Due, x.Cwd, y.Cwd, x.MachineID, y.MachineID = "", "", "", "", "", "", "", ""
-	if !slices.Equal(x.Changes, y.Changes) {
-		return false
+	if ignoreDraftingProvenance {
+		// Only an on-demand draft may project an earlier uncertain physical send onto its own card. Ordinary new
+		// suggestions keep Conversation and Owner as distinct explicit intents and must never inherit that outcome.
+		x.Conversation, y.Conversation, x.Owner, y.Owner = nil, nil, nil, nil
 	}
-	if !sameReplyPolicyBinding(x.ReplyPolicy, y.ReplyPolicy) {
+	// Classification snapshots authorize a card; they do not identify the physical reply. A policy revision must not
+	// turn the same recipient, text and send ID into a new operation after an uncertain outcome.
+	x.ReplyCategory, y.ReplyCategory, x.ReplyMode, y.ReplyMode = "", "", "", ""
+	x.ReplyClassifiedOf, y.ReplyClassifiedOf, x.ReplyPolicyRev, y.ReplyPolicyRev = "", "", "", ""
+	x.ReplyReviewed, y.ReplyReviewed = false, false
+	x.ReplyInstruction, y.ReplyInstruction = "", ""
+	x.ReplyPublicationFailed, y.ReplyPublicationFailed = false, false
+	x.OnDemand, y.OnDemand = false, false
+	x.ReplyPublicationPending, y.ReplyPublicationPending = false, false
+	if !slices.Equal(x.Changes, y.Changes) {
 		return false
 	}
 	x.Changes, y.Changes = nil, nil
@@ -229,16 +246,36 @@ func restoreSuggestionAttempts(previous, current []*InboxSuggestionAttempt) []*I
 	return previous
 }
 
+func sameReplyAuthorization(a, b *InboxSuggestion) bool {
+	return a != nil && b != nil && a.ReplyCategory == b.ReplyCategory && a.ReplyMode == b.ReplyMode &&
+		a.ReplyClassifiedOf == b.ReplyClassifiedOf && a.ReplyPolicyRev == b.ReplyPolicyRev && a.ReplyReviewed == b.ReplyReviewed &&
+		a.ReplyInstruction == b.ReplyInstruction && a.ReplyPublicationFailed == b.ReplyPublicationFailed &&
+		a.OnDemand == b.OnDemand && a.ReplyPublicationPending == b.ReplyPublicationPending &&
+		sameReplyPolicyBinding(a.ReplyPolicy, b.ReplyPolicy)
+}
+
+func sameReplyCard(a, b *InboxSuggestion) bool {
+	return sameReplySuggestion(a, b) && sameReplyAuthorization(a, b)
+}
+
 func samePendingReply(it *InboxItem, proposed *InboxSuggestion) bool {
 	current := currentSuggestion(it)
 	if current != nil {
 		if a := suggestionAttempt(it, current.Version); a != nil && a.Proposal != nil {
 			actual := *a.Proposal
 			actual.Text = a.Text
-			return sameReplySuggestion(&actual, proposed)
+			if !sameReplySuggestion(&actual, proposed) {
+				return false
+			}
+			// An uncertain physical operation keeps its card and send identity even across reclassification. A known-none
+			// failed attempt, like a card never attempted, may be replaced by a freshly authorized snapshot.
+			if a.Status == suggestionUnknown || a.Status == suggestionSending {
+				return true
+			}
+			return sameReplyAuthorization(&actual, proposed)
 		}
 	}
-	return sameReplySuggestion(current, proposed)
+	return sameReplyCard(current, proposed)
 }
 
 // A reply's recipient and source position must not change while a confirmation is saved or sent. This does not
@@ -308,6 +345,31 @@ func (s *Service) persistReplyReservation(ctx context.Context, it *InboxItem, a 
 // than the direct /reply helper, commits its local effects. This marker is internal, never supplied by a client.
 type suggestionReplyOnly struct{}
 
+// suggestionReplyPolicyBeforeSend carries the exact authorization under which this durable attempt was reserved.
+// It is internal context only: the per-item send mutex may wait while the live manager configuration changes.
+type suggestionReplyPolicyBeforeSend struct{}
+
+func cloneReplyPolicyForSend(cfg *assistantwire.InboxReplyPolicyConfig) *assistantwire.InboxReplyPolicyConfig {
+	if cfg == nil {
+		return nil
+	}
+	out := *cfg
+	out.Sources = slices.Clone(cfg.Sources)
+	if cfg.Categories != nil {
+		out.Categories = make(map[string]string, len(cfg.Categories))
+		for category, route := range cfg.Categories {
+			out.Categories[category] = route
+		}
+	}
+	if cfg.Routes != nil {
+		out.Routes = make(map[string]string, len(cfg.Routes))
+		for category, route := range cfg.Routes {
+			out.Routes[category] = route
+		}
+	}
+	return &out
+}
+
 func suggestionSendOnly(ctx context.Context) bool {
 	_, only := ctx.Value(suggestionReplyOnly{}).(*InboxSuggestionAttempt)
 	return only
@@ -315,9 +377,50 @@ func suggestionSendOnly(ctx context.Context) bool {
 
 // confirmSuggestionReplyLocked starts with inbox.mu held and returns without it. Known-none retryable failures
 // retain one current action; uncertain sends remain visible but cannot be reissued with a new caller UUID.
-func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, in suggestionReq, policy replyPolicySpec) (InboxItem, error) {
+func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, in suggestionReq,
+	policyInput any, policy replyPolicySpec, preVeto *InboxReplyPolicySnapshot, preVetoErr error) (InboxItem, error) {
 	b := &s.inbox
+	var replyPolicy *assistantwire.InboxReplyPolicyConfig
+	switch value := policyInput.(type) {
+	case *assistantwire.InboxReplyPolicyConfig:
+		replyPolicy = value
+	case assistantwire.InboxReplyPolicyConfig:
+		replyPolicy = &value
+	}
+	if g.ReplyPublicationFailed || g.ReplyPublicationPending {
+		out := it.listed()
+		b.mu.Unlock()
+		return out, errInboxNotPersisted
+	}
+	// Let the dedicated target check below report a changed recipient after unresolved durable outcomes take precedence.
+	if g.SourceOf == "" || g.SourceOf == suggestionReplyTarget(it) {
+		if err := replyPolicySendGate(it, g, replyPolicy); err != nil {
+			out := it.listed()
+			b.mu.Unlock()
+			return out, err
+		}
+	}
 	a := suggestionAttempt(it, g.Version)
+	if in.Changes != nil {
+		selected := slices.Clone(*in.Changes)
+		if a != nil {
+			var frozen []DocChange
+			if a.Proposal != nil {
+				frozen = a.Proposal.Changes
+			}
+			if !slices.Equal(selected, frozen) {
+				// The first confirmation's explicit selection is part of the physical action. A retry cannot add back a
+				// deselected move (or drop one that may already have executed) under the same durable attempt.
+				out := it.listed()
+				b.mu.Unlock()
+				return out, errSuggestionStale
+			}
+		} else {
+			// Freeze what the old client actually selected into both the current card and its first attempt. In particular,
+			// an omitted /reply changes array is an explicit empty selection, not permission to execute the stored moves.
+			g.Changes = selected
+		}
+	}
 	if a != nil && (a.Status == suggestionSending || a.Status == suggestionUnknown) {
 		out := it.listed()
 		b.mu.Unlock()
@@ -359,12 +462,15 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 	if a != nil {
 		text = a.Text
 	}
-	if in.Text != nil && strings.TrimSpace(*in.Text) != "" {
-		text = strings.TrimSpace(*in.Text)
-		if a != nil && text != a.Text {
-			out := it.listed()
-			b.mu.Unlock()
-			return out, errSuggestionStale
+	if in.Text != nil {
+		proposed := strings.TrimSpace(*in.Text)
+		if proposed != "" || in.Changes != nil {
+			text = proposed
+			if a != nil && text != a.Text {
+				out := it.listed()
+				b.mu.Unlock()
+				return out, errSuggestionStale
+			}
 		}
 	}
 	if inherited := inheritReplyUncertainty(it, g, text); inherited != nil {
@@ -415,7 +521,7 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		}
 	}
 	var policySnap *InboxReplyPolicySnapshot
-	if policy.enabled {
+	if policy.appliesToItem(it) {
 		// Gate 3a: verify the suggestion's reply-policy snapshot is present, fresh for the live content version
 		// and policy revision, and still resolves to owner_draft.
 		if err := verifyReplyPolicySuggestionLocked(it, g, a, policy); err != nil {
@@ -430,8 +536,13 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		expectedVersion := g.Version
 		expectedTarget := suggestionReplyTarget(it)
 		b.mu.Unlock()
-		finalSnap, vetoErr := s.gateReplyPolicySend(ctx, policy, itemData, text)
-		livePolicy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy)
+		finalSnap := preVeto
+		vetoErr := preVetoErr
+		if finalSnap == nil && vetoErr == nil {
+			finalSnap, vetoErr = s.gateReplyPolicySend(ctx, policy, itemData, text)
+		}
+		freshCfg, freshErr := s.inboxConfigFresh(ctx)
+		livePolicy := compileReplyPolicy(freshCfg.ReplyPolicy)
 		b.mu.Lock()
 		if b.items[itemData.id] != it {
 			b.mu.Unlock()
@@ -440,6 +551,11 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		if !it.open() {
 			b.mu.Unlock()
 			return InboxItem{}, errInboxItemDone
+		}
+		if inboxVisibilityWithMembersExcludedLocked(b, it, freshCfg.Visibility) {
+			out := it.listed()
+			b.mu.Unlock()
+			return out, errCannotReply
 		}
 		g = currentSuggestion(it)
 		if g == nil || g.Version != expectedVersion || g.Kind != SuggestReply || g.Handback {
@@ -495,14 +611,17 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 			}
 			return out, targetErr
 		}
+		rev := policy.revision
+		if livePolicy.enabled {
+			rev = livePolicy.revision
+		}
+		if freshErr != nil {
+			return s.failReplyPolicyConfigReadLocked(ctx, it, g, a, in.ClientID, text, finalSnap, replyPolicyContentVersion(it), rev)
+		}
 		if vetoErr != nil || !livePolicy.enabled || livePolicy.revision != policy.revision ||
 			replyPolicyContentVersion(it) != itemData.contentVersion ||
 			verifyReplyPolicySuggestionLocked(it, g, a, livePolicy) != nil ||
 			livePolicy.allowsOwnerDraft(finalSnap, itemData.contentVersion) != nil {
-			rev := policy.revision
-			if livePolicy.enabled {
-				rev = livePolicy.revision
-			}
 			return s.rejectReplyPolicySendLocked(ctx, it, g, a, in.ClientID, text, finalSnap, replyPolicyContentVersion(it), rev)
 		}
 		policySnap = finalSnap
@@ -521,6 +640,7 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		a.Route = policySnap.Route
 		a.ContentVersion = policySnap.ContentVersion
 		a.PolicyRevision = policySnap.PolicyRevision
+		a.Reviewed = policySnap.Reviewed
 	}
 	mail := it.Mail != nil
 	a.Status, a.Retryable, a.Code, a.RetryAfter, a.At, a.active = suggestionSending, false, "", 0, time.Now().UTC(), true
@@ -547,10 +667,16 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		s.saveInbox(context.WithoutCancel(ctx), []*InboxItem{it})
 		return out, unrecordedSuggestionReply()
 	}
-	// The save may have waited behind another write; recheck before any outward action.
-	livePolicy := compileReplyPolicy(s.inboxConfig(ctx).ReplyPolicy)
+	// The save may have waited behind another write. Recheck the reservation, both reply-policy schemas and visibility
+	// against one fresh configuration before any outward action; neither display-cache policy nor a pre-save snapshot is sufficient.
+	freshCfg, configErr := s.inboxConfigFresh(ctx)
+	if configErr != nil {
+		return s.finishSuggestionReply(ctx, it, a, &rpc.Error{Code: assistantwire.CodeInboxSendFailed, Message: "inbox configuration unavailable"})
+	}
+	livePolicy := compileReplyPolicy(freshCfg.ReplyPolicy)
 	b.mu.Lock()
-	current := b.currentReplyAttempt(it, a)
+	current := b.currentReplyAttempt(it, a) && replyPolicySendGate(it, g, freshCfg.ReplyPolicy) == nil &&
+		!inboxVisibilityWithMembersExcludedLocked(b, it, freshCfg.Visibility)
 	policyErr := verifyReplyPolicySendAttemptLocked(it, a, livePolicy)
 	b.mu.Unlock()
 	if !current {
@@ -560,6 +686,7 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		return s.finishSuggestionReply(ctx, it, a, errReplyPolicyBlocked)
 	}
 	sendCtx := context.WithValue(ctx, suggestionReplyOnly{}, a)
+	sendCtx = context.WithValue(sendCtx, suggestionReplyPolicyBeforeSend{}, cloneReplyPolicyForSend(freshCfg.ReplyPolicy))
 	var err error
 	if target := a.Proposal.MailTarget; target != nil {
 		_, err = s.replyInboxCheckedDo(sendCtx, it.ID, a.Text, a.ClientID, false, false, &target.UID, &target.Version, a.Proposal.Changes...)
@@ -575,6 +702,23 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 // zero sender calls. Called with b.mu held; returns without it.
 func (s *Service) rejectReplyPolicySendLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, a *InboxSuggestionAttempt,
 	clientID, text string, snap *InboxReplyPolicySnapshot, contentVersion, policyRevision string) (InboxItem, error) {
+	out := s.recordReplyPolicySendFailureLocked(ctx, it, g, a, clientID, text, snap, contentVersion, policyRevision,
+		assistantwire.CodeInboxReplyPolicyBlocked, false, "assistant-inbox.reply_policy_blocked")
+	return out, errReplyPolicyBlocked
+}
+
+// failReplyPolicyConfigReadLocked records a retryable known-none failure when authorization could not be refreshed.
+// No reservation or sender call exists yet, so this is distinct from a definitive policy veto.
+func (s *Service) failReplyPolicyConfigReadLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, a *InboxSuggestionAttempt,
+	clientID, text string, snap *InboxReplyPolicySnapshot, contentVersion, policyRevision string) (InboxItem, error) {
+	out := s.recordReplyPolicySendFailureLocked(ctx, it, g, a, clientID, text, snap, contentVersion, policyRevision,
+		assistantwire.CodeInboxSendFailed, true, "assistant-inbox_chain.failed_send")
+	return out, &rpc.Error{Code: assistantwire.CodeInboxSendFailed, Message: "reply policy configuration unavailable"}
+}
+
+// recordReplyPolicySendFailureLocked persists the common known-none attempt and proposal state for policy and config failures.
+func (s *Service) recordReplyPolicySendFailureLocked(ctx context.Context, it *InboxItem, g *InboxSuggestion, a *InboxSuggestionAttempt,
+	clientID, text string, snap *InboxReplyPolicySnapshot, contentVersion, policyRevision, code string, retryable bool, reasonKey string) InboxItem {
 	b := &s.inbox
 	now := time.Now().UTC()
 	if a == nil {
@@ -601,10 +745,11 @@ func (s *Service) rejectReplyPolicySendLocked(ctx context.Context, it *InboxItem
 	}
 	a.ContentVersion = contentVersion
 	a.PolicyRevision = policyRevision
-	a.Status, a.Retryable, a.Code, a.RetryAfter, a.At, a.active = suggestionFailed, false, assistantwire.CodeInboxReplyPolicyBlocked, 0, now, false
+	a.Reviewed = snap != nil && snap.Reviewed
+	a.Status, a.Retryable, a.Code, a.RetryAfter, a.At, a.active = suggestionFailed, retryable, code, 0, now, false
 	hideReplyDraft(it)
 	b.settleReplyAliases(it, a)
-	reason := i18n.T(b.userLang(), "assistant-inbox.reply_policy_blocked")
+	reason := i18n.T(b.userLang(), reasonKey)
 	if a.Conversation == nil {
 		if it.Agent != nil {
 			it.Agent.Wake = false
@@ -617,7 +762,7 @@ func (s *Service) rejectReplyPolicySendLocked(ctx context.Context, it *InboxItem
 	out := it.listed()
 	b.mu.Unlock()
 	s.saveInbox(context.WithoutCancel(ctx), []*InboxItem{it})
-	return out, errReplyPolicyBlocked
+	return out
 }
 
 func (s *Service) finishSuggestionReply(ctx context.Context, it *InboxItem, a *InboxSuggestionAttempt, err error) (InboxItem, error) {
@@ -688,6 +833,7 @@ func (s *Service) finishSuggestionReply(ctx context.Context, it *InboxItem, a *I
 		} else {
 			resetInboxFollowChecks(it)
 			it.Suggestion = nil
+			it.ReplyInstruction = nil
 			b.chainAdd(it, confirmedEntry(b.userLang(), a.Text, a.Text != a.Proposal.Text, now))
 			b.noteSent(it, now)
 			if a.Conversation == nil {
