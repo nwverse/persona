@@ -117,6 +117,9 @@ type Todo struct {
 	// DirectionID: optional organizational direction membership, decoupled from runtime supervision.supervisor and
 	// origin; omitted when unset (#14660).
 	DirectionID string `json:"direction_id,omitempty"`
+	// ItemType: stored explicit 2-type classification ("personal" or "task"), or "" when unset (#15758).
+	// Emitted only on listedTodo when todos_v2=true so legacy/mobile wire payloads remain byte-identical when off.
+	ItemType string `json:"-"`
 	// When it is due (DueAt a moment, DueDate a day "2006-01-02" in the user's time zone; at most one), when the phone
 	// is reminded of it and whether it was, and its priority ("" normal, high, low): #1683, todo_plan.go. Clients that do
 	// not know them show the todo as ever.
@@ -666,6 +669,9 @@ func (s *Service) putNewTodo(ctx context.Context, row db.TodoRow, bindings ...*r
 	if err := db.ValidateTodoAudience(row.Audience); err != nil {
 		return Todo{}, err
 	}
+	if err := db.ValidateTodoItemType(row.ItemType); err != nil {
+		return Todo{}, err
+	}
 	row.DirectionID = strings.TrimSpace(row.DirectionID)
 	if len(bindings) > 0 && bindings[0] != nil {
 		st, ok := s.store().(todoRepositoryStore)
@@ -1011,6 +1017,7 @@ func (s *Service) todoRoutes() {
 	s.todoMarkRoutes()
 	s.todoRetitleRoute()
 	s.todoReorganizeRoute()
+	s.todoDecisionsBatchRoute()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
 	s.todoHandoffRoutes()
@@ -1044,14 +1051,18 @@ func (s *Service) todoRoutes() {
 			s.tagTodoRevision(w, writes, p)
 		}
 		var sharedBlockers []projection.SharedBlocker
+		var board *todoBoardProjection
 		if !isExtension {
 			sharedBlockers = p.sharedBlockers()
+			if s.settings(r.Context()).todosV2On() {
+				board = buildTodoBoardProjection(list, s.todoBoardDirectionLabels(r.Context()))
+			}
 		}
 		if paged {
 			writeTodoPage(w, list, p, sharedBlockers, limit, after)
 			return
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers})
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers, Board: board})
 	})
 	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
@@ -1118,6 +1129,14 @@ func (s *Service) todoRoutes() {
 		if err := in.todoPlanIn.edit(&plan); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
+		}
+		if s.settings(r.Context()).todosV2On() && in.ItemType != nil {
+			it, err := todoItemType(*in.ItemType)
+			if err != nil {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+			plan.ItemType = &it
 		}
 		if err := s.setTodoProject(r.Context(), in.Project, &plan); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -1209,6 +1228,14 @@ func (s *Service) todoRoutes() {
 		if err := in.todoPlanIn.edit(&e); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
+		}
+		if s.settings(r.Context()).todosV2On() && in.ItemType != nil {
+			it, err := todoItemType(*in.ItemType)
+			if err != nil {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+			e.ItemType = &it
 		}
 		if err := s.setTodoProject(r.Context(), in.Project, &e); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)

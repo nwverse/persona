@@ -19,7 +19,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 
 A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
-List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
+List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running. `Session.view.rank` ("Five phases" below) replaces these as each client moves to it.
 
 Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
@@ -292,6 +292,82 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
 
 - The list is grouped by state, newest first within a group. Normally that's `updated_at`, but a working agent's `updated_at` changes with every step and would jump around within the group,
   so "Working" uses `state_since`: the hub records when each agent entered its current state (in memory; after a hub restart it counts from the restart).
+
+## Five phases
+
+`Session.view` (`schema/wire/agent-view.schema.json`, #15397, the typed core plan's 2.1, step P5) is the one view of
+an Agent every client draws: `{phase, reason, counted, rank}`. The manager computes it on every list it publishes
+(`server/internal/assistant/agentview`, through `fleetcountadapt.Views` in `fleet_views.go`), the archived rows a hub
+takes apart included; the hub relays it and
+advertises the feature `agent_view` (`proto.FeatureAgentView`). `state` and `status` above stay frozen and are still
+sent, for older clients. A new client draws `view` and sorts by `rank`; it never derives a phase, a count or an order
+of its own. `spec/fixtures/agent-view` pins every case.
+
+| Phase | Absorbs | Reasons (`reason.kind`, with its fields) |
+| --- | --- | --- |
+| `needs_you` | `state=needs_you`, and a row the hub folds a waiting child or side under | `cards` (`n`: the cards in its row, its folded ones' included; `held`: none is the owner's yet, D11) · `terminal_dialog` (a dialog its terminal shows that no card stands for) |
+| `error` | `turn_error*`, `start_error*` and `interrupted`, on a session that is not working | `model` (`code`: `turn_error_code`) · `usage_limit` (`resets_at`, `resumes`) · `start_refused` (`code`: `start_error_code`, `args`: `start_error_args`) · `restart_interrupted` (`resumable`, D-C) |
+| `working` | `working`, background work, background waiting; a session whose task's supervisor holds every card it asked | `turn` · `background` (`waiting`: that work only waits, #6045) |
+| `done` | `unread`, Just finished (`work.just_finished`) and Awaiting your reply (`awaits_reply`, D-A) | `unseen` · `just_finished` · `asks` (`question`: `asks`; `unseen`: the owner has not seen the reply) |
+| `idle` | `idle` (Seen), `offline`, `unknown` | `seen` · `not_running` · `host_unknown` (D-B: a screen may say "status unknown") |
+
+Decided by the owner on 2026-11-25 (#15397): **D-A** Awaiting your reply is `done`, reason `asks`, never counted in
+Needs you; **D-B** `unknown` (and a state this hub does not know) is `idle`, reason `host_unknown`; **D-C**
+`interrupted` is `error`, reason `restart_interrupted{resumable}`, which carries the "Continue" remedy. Before this,
+`agentState` had no interrupted branch, so an interrupted session read as `unknown`.
+
+- **Needs you first, from fleetcount.** The phase is `needs_you` when fleetcount's Agents list
+  (`fleetcount.AgentsNeedsYou` on the badge surface, `spec/fixtures/needs-you`) has a row for the session, by its cards
+  or by its dialog; `counted` is that row's `Why.Counted()`, never computed again (muted, quiet and held rows are
+  listed, not counted). A session with cards and no row of its own (a folded child, a directory-hidden one, one of the
+  assistant's conversations) is `needs_you`, `cards`, not counted; one whose every card its task's supervisor holds is
+  in no row and reads `working`, `turn` (D11). A session the hub says waits with no card and no row is `needs_you`,
+  `terminal_dialog`, not counted.
+- **Then its own turn**: working (with its background), then `interrupted`, then an error (a start error first, then a
+  turn error; Persona's own Stop is none), then a finished turn: `asks`, `unseen`, `just_finished`, `seen`; then not
+  running; anything else is `host_unknown`.
+- **Per computer.** Each machine's list is told on its own, so a row is decided with its own computer's rows and every
+  pending card: a child folded under a parent on another computer is decided as a row of its own (`counted` on the
+  child, not on the parent), where the Agents list counts it under the parent. Cross-computer folds are rare (A2A
+  subagents); deciding the whole fleet at once is a follow-up.
+
+### Rank
+
+`rank` is one total order for every list, lower first: the phase, then the reason within it, then a muted session
+last in its phase. Equal ranks go by the shared tie-break: newest first by `state_since` for `working`, else
+`updated_at`; then session id, then machine id (the web's `byAttention`, iOS `AgentListOrder.ordered`).
+
+| Rank | Phase | Reason |
+| --- | --- | --- |
+| 0 | `needs_you` | counted |
+| 1 | `needs_you` | not counted (muted, quiet, held, no row of its own) |
+| 10 | `error` | `model`, `start_refused`, `restart_interrupted`, `usage_limit` that does not resume by itself |
+| 11 | `error` | `usage_limit` whose CLI goes on by itself once it resets |
+| 19 | `error` | muted |
+| 20 | `working` | `turn` |
+| 21 | `working` | `background` |
+| 22 | `working` | `background`, only waiting |
+| 29 | `working` | muted |
+| 30 | `done` | `unseen`, and `asks` the owner has not seen |
+| 31 | `done` | `asks`, seen |
+| 32 | `done` | `just_finished` |
+| 39 | `done` | muted |
+| 40 | `idle` | `seen` (muted or not) |
+| 41 | `idle` | `host_unknown` |
+| 42 | `idle` | `not_running` |
+
+Why this order: the phases go by how soon the owner has to act. A counted Needs you row waits for them now; an error
+stopped the work until they fix it or say Continue; working is moving on its own; done has a result to read but asks
+nothing more (D-A); idle has nothing. Within a phase the reasons keep the order the three clients' lists have today
+(Unread → Awaiting reply → Just finished; Working → Waiting in the background; Seen → Unknown → Not running), and
+muted rows go last in their phase, as each client's Muted section does today. Each phase starts at a multiple of ten,
+so a reason added later takes a place without renumbering the others. Two changes against today's lists, which each
+client takes with its own change and screenshots (P5a–d): errors move up out of Unread and Seen, and Working now sorts
+ahead of Unread and Awaiting reply, since done asks nothing of the owner that Needs you does not already show.
+
+Older hubs send no `view` (no `agent_view` in the features) and a hub's older manager may send rows without one. The
+fallback, inferring a view from `state`, `status` and the fields above, is written once, in the Rust core
+(`native/app-core`, `state.rs`) with its TypeScript output for the web, never per client (the plan's 2.4).
 
 ## Spaces / slots (multi-tab collaboration)
 

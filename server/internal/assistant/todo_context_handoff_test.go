@@ -154,6 +154,7 @@ func TestTodoContextHandoffClaudeToCodexAndProfileSwitch(t *testing.T) {
 				State:     proto.StateIdle,
 			})
 			ctx := context.Background()
+			setSettings(t, e.s, func(v *Settings) { enabled := true; v.AgentTasks = &enabled })
 
 			// Even with user_requested=true and readonly=false, a cross-launcher continuation must wait
 			// for explicit owner approval on the plan card rather than auto-starting.
@@ -196,6 +197,9 @@ func TestTodoContextHandoffClaudeToCodexAndProfileSwitch(t *testing.T) {
 
 			// Same to-do retains brief, workspace, and historical link.
 			gotTodo := todoNow(e.s, todo.ID)
+			if gotTodo.Supervision == nil || gotTodo.Supervision.Supervisor != "m1" {
+				t.Fatalf("handoff started an unsupervised replacement: %+v", gotTodo.Supervision)
+			}
 			if todoCount(e.s) != 1 {
 				t.Fatalf("created duplicate to-do: count=%d", todoCount(e.s))
 			}

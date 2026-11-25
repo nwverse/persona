@@ -91,6 +91,26 @@ WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/
 
 The lists are edited by hand, with no auto-rewrite switch: the changed line shows up in the PR diff, so a reviewer can see whether it really belongs to the hub.
 
+### External source bindings
+
+The assistant manager owns external source bindings and forwarding policies for people who want to connect incoming
+updates to their work. The hub relays the full-credential routes through `assistantwire`. The manager's
+`externalbinding` core validates canonical paths and resolves policy inheritance. Its adapter uses the existing
+repository identity contract to normalize GitHub references. [External source bindings](../protocol/protocol.md#external-source-bindings)
+
+The manager migration stores canonical reference keys and sparse policies in PostgreSQL. Each reference can have
+multiple target bindings, and each target can have multiple references. A GIN index on the existing
+`todo_repository_sets.repositories` data supplies the GitHub issue and pull request projection. This indexes existing
+rows and follows committed edits, including role changes, without maintaining a second copy of repository links.
+The lookup reads explicit bindings and projected links from one snapshot. The repository write paths and delivery
+gate keep their own existing contracts.
+
+For opted-in sources, the manager commits Inbox writes and routing receipts together. The receipt uses the
+canonical object and provider event identity. The worker resolves a policy from the store snapshot, reserves a
+single action owner, and uses the existing conversation relay or task activity feed for delivery. Each routed
+source version bypasses the automatic legacy task routes. The worker owns its Postgres journal and schedules
+digest work independently of the hub's source collections.
+
 ## Contract packages
 
 The parts (the hub, the managers, the node on each computer, extensions) talk only through contracts, and the Go packages that define them hold only types, constants and trivial pure helpers:

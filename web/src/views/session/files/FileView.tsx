@@ -9,13 +9,10 @@ import {
   base64Bytes,
   columns,
   dirName,
-  extendStates,
   extOf,
   fileName,
   isMachineRef,
   joinPath,
-  languageOf,
-  lexLine,
   markdownChunks,
   prettyJSON,
   resolveRef,
@@ -23,10 +20,8 @@ import {
   splitLines,
   viewKind,
   type FileContent,
-  type Lang,
-  type LexState,
-  type Token,
 } from "../../../lib/files";
+import { extendStates, languageOf, lexLine, type Lang, type LexState, type Token } from "../../../lib/files-syntax";
 import { addCodeComment, commentKey, markedLines } from "../../../lib/comment-target";
 import { codeQuote, rangeLabel, relativeTo } from "../../../lib/comments";
 import { useQuotes } from "../../../lib/drafts";

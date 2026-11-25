@@ -35,9 +35,8 @@ import { firstAndCurrent } from "../lib/persona-nav";
 import { recentConversations } from "../lib/conversation-origins";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
 import { setRecentMore, useRecentCount, useRecentMore } from "../lib/sidebar-recent";
-import { countsLabel, directionExternal, directionLabel, totalCounts, useDirectionNames, useLeaderCounts } from "../lib/direction-names";
-import type { ExternalDirection } from "../lib/direction-tree";
-import { SidebarDirectionRow } from "./SidebarDirections";
+import { countsLabel, directionExternal, directionLabel, useDirectionNames, useLeaderCounts, visibleSectionCounts } from "../lib/direction-names";
+import { resolveSidebarDirections, sidebarConversations, SidebarDirectionsSection, type SidebarDirectionEntry } from "./SidebarDirections";
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
@@ -46,13 +45,15 @@ import { heldAsWorking, rowCards } from "../lib/supervisor-held";
 import { isInFlightLaunch } from "../lib/launch-handoff";
 import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
 import { SESSIONS_SIDE_FOLD_FEATURE } from "../lib/side-fold";
-import { conversationTitle, mergeConversations } from "./assistant/conversations";
+import { conversationTitle } from "./assistant/conversations";
 import { sameManager, useShownManager } from "../lib/manager-choice";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
+import { consumeBoardSidebarTree } from "../features/todos/board-consumer";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
+import { NoticeDot } from "../ui/NoticeDot";
 import { Icon } from "../ui/icons";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
@@ -342,22 +343,21 @@ function GlideHighlight({ box }: { box: ReturnType<typeof glideStore> }) {
 const MORE_BUTTON = "whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-[12px] text-ink-3 hover:text-ink-2 [@media(pointer:coarse)]:min-h-11";
 
 const NO_CONVERSATIONS: Session[] = [];
-type DirectionEntry = { id: string; conversation?: Session; external?: ExternalDirection };
 
-export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions }) {
+export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions, active = true }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions; active?: boolean }) {
   const bindings = useBindings();
   const searchHint = jumpHint(bindings);
   const assistant = useStore((s) => s.assistant);
   const manager = useShownManager();
   const assistantMachine = assistant?.machine_id;
   const liveChats = useStore((s) => (assistantMachine ? s.sessions[assistantMachine] ?? NO_CONVERSATIONS : NO_CONVERSATIONS));
-  const unarchived = useMemo(
-    () => mergeConversations([], assistant?.conversations ?? NO_CONVERSATIONS, liveChats, manager)
-      .filter((c) => !c.archived).length,
+  const allConversations = useMemo(
+    () => sidebarConversations(assistant?.conversations ?? NO_CONVERSATIONS, liveChats, manager),
     [assistant?.conversations, liveChats, manager],
   );
+  const unarchived = allConversations.length;
   const { phase, online, total, main: mainConversation, sections, more } = useNavPages();
-  const mainWaiting = useMainWaiting(mainConversation);
+  const mainWaiting = useMainWaiting(active ? mainConversation : undefined);
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
@@ -367,33 +367,44 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // you, and an open sidebar follows the hub's `directions` (lib/store.ts). Then "最近", the newest of the user's other
   // chats (#4873): as many as the setting says, more after each Show more (#5146); every chat is under 全部对话.
   // The background supervisor is neither: it is built in, listed with the scheduled tasks' chats under 全部对话 (#5082).
-  const leaders = (assistant?.leaders ?? []).filter((id) => id !== assistant?.main && !isBackgroundSupervisor(assistant, id));
+  const leaders = useMemo(
+    () => (assistant?.leaders ?? []).filter((id) => id !== assistant?.main && !isBackgroundSupervisor(assistant, id)),
+    [assistant],
+  );
   const isLeader = (id: string) => leaders.includes(id);
-  const conversationOf = (id: string) => assistant?.conversations.find((c) => c.session_id === id);
-  const directions = leaders.map((id): DirectionEntry | null => {
-    const conversation = conversationOf(id);
-    if (conversation) return { id, conversation };
-    const external = directionExternal(id);
-    return external ? { id, external } : null;
-  }).filter((d): d is DirectionEntry => !!d);
+  const conversationById = useMemo(
+    () => new Map(allConversations.map((c) => [c.session_id, c])),
+    [allConversations],
+  );
+  const conversationOf = (id: string) => conversationById.get(id);
+  // Every direction id belongs in the key: with only conversationless directions there is still a `/leaders` fallback ask.
+  const directionNames = useDirectionNames(leaders.map((id) => `${id}\u0000${conversationOf(id)?.title ?? ""}`).join("\u0001"));
+  const baseCounts = useLeaderCounts();
+  const directions = useMemo(
+    () => resolveSidebarDirections({
+      leaders,
+      main: assistant?.main,
+      backgroundSupervisor: assistant?.background_supervisor,
+      conversations: allConversations,
+      externalOf: directionExternal,
+    }),
+    // directionNames and baseCounts re-run when direction tree / leaders metadata refreshes directionExternal.
+    [leaders, assistant?.main, assistant?.background_supervisor, allConversations, directionNames, baseCounts],
+  );
   const recentCount = useRecentCount();
   const recentMore = useRecentMore();
-  const ownChats = recentConversations(assistant?.conversations ?? [], assistant?.main, leaders, assistant?.background_supervisor, assistant?.recent_task_chats === true, assistant?.conversation_order);
+  const ownChats = recentConversations(allConversations, assistant?.main, leaders, assistant?.background_supervisor, assistant?.recent_task_chats === true, assistant?.conversation_order);
   const [arranging, setArranging] = useState(false);
   const recent = ownChats.slice(0, recentCount * (1 + recentMore));
   const recentLeft = ownChats.length - recent.length;
   const recentLess = recentMore > 0 && ownChats.length > recentCount;
-  // Every direction id belongs in the key: with only conversationless directions there is still a `/leaders` fallback ask.
-  const directionNames = useDirectionNames(leaders.map((id) => `${id}\u0000${conversationOf(id)?.title ?? ""}`).join("\u0001"));
-  const baseCounts = useLeaderCounts();
   const plans = useFeed((s) => s.plans);
-  useEffect(() => { if (assistant?.main) void loadFeed(assistant.main); }, [assistant?.main, manager]);
+  useEffect(() => { if (active && assistant?.main) void loadFeed(assistant.main); }, [active, assistant?.main, manager]);
   const counts = useMemo(() => {
-    const owned = new Set((assistant?.conversations ?? []).map((c) => c.session_id));
+    const owned = new Set(allConversations.map((c) => c.session_id));
     if (assistant?.main) owned.add(assistant.main);
     return pendingPlanCounts(baseCounts, plans, manager, owned);
-  }, [baseCounts, plans, assistant, manager]);
-  const leaderTotal = totalCounts(counts, [...counts.keys()]);
+  }, [baseCounts, plans, allConversations, assistant?.main, manager]);
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
   // a conversation row's ⋯ / right click (iOS: its long press)
@@ -404,6 +415,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
+  const leaderTotal = visibleSectionCounts(counts, directions.map((d) => d.id), recentFolded ? [] : recent.map((c) => c.session_id));
   const { nav, reg, hover, highlight } = useGlide(activeKey);
   useStickyTop(nav);
   const go = useGo(onNavigate);
@@ -411,8 +423,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
   // A conversation-backed lead's row is unchanged. An external one reuses that row, but opens only its actual outside
   // Agent (never a fabricated `/persona/<direction-id>`), has no conversation menu, and is a plain row without a pair.
-  const directionName = (d: DirectionEntry) => directionLabel(directionNames, d.id, d.conversation ? conversationTitle(d.conversation) : t("lib-format.untitled_session"));
-  const directionRow = (d: DirectionEntry) => {
+  const directionName = (d: SidebarDirectionEntry) => directionLabel(directionNames, d.id, d.conversation ? conversationTitle(d.conversation) : t("lib-format.untitled_session"));
+  const directionRow = (d: SidebarDirectionEntry) => {
     if (d.conversation) {
       const c = d.conversation;
       return <SessionRow key={c.session_id} s={c} k={`j:${c.session_id}`} reg={reg} hover={hover} active={activeKey === `j:${c.session_id}`} to={conversationPage(c.session_id, c.machine_id, c.manager)} go={go} label={directionName(d)} hint={countsLabel(counts.get(c.session_id), t) || undefined} hintFull showState={false} workingMark={counts.get(c.session_id)?.running ?? false} keepTrailing onMenu={onConvMenu} menuLabel={t("conversation-menu.actions")} />;
@@ -493,14 +505,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
             }
           >
             <div className="sidebar-indent">
-              {directions.length > 0 && (
-                <>
-                  <SubHeading label={t("sidebar.directions")} />
-                  <div className="sidebar-indent">
-                    {directions.map((d) => <SidebarDirectionRow key={d.id} id={d.id} name={directionName(d)} row={directionRow(d)} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />)}
-                  </div>
-                </>
-              )}
+              <SidebarDirectionsSection directions={directions} nameOf={directionName} renderRow={directionRow} reg={reg} hover={hover} go={go} onNavigate={onNavigate} />
               {arranging ? ownChats.length > 0 && (
                 <Suspense fallback={null}>
                   <SidebarConversationArrange rows={ownChats} row={recentRow} onClose={() => setArranging(false)} />
@@ -543,8 +548,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
         <PersonalAgents reg={reg} hover={hover} activeKey={activeKey} go={go} />
 
-        {workBrowserReady ? <PendingAgents route={route} reg={reg} hover={hover} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} />
-          : !(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} workspaceActions={workspaceActions} foldable onHoldsSeen={setHoldsSeen} />}
+        {active && (workBrowserReady ? <PendingAgents route={route} reg={reg} hover={hover} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} />
+          : !(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} workspaceActions={workspaceActions} foldable onHoldsSeen={setHoldsSeen} />)}
         {!workBrowserReady && <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon="clock" />}
       </div>
       <SeenRowsNoticeHost shown={holdsSeen} onNavigate={onNavigate} />
@@ -651,6 +656,7 @@ export function NavGrid({ pages, more = [], activeKey, go, onNavigate }: { pages
           >
             <span className={cx("relative", active ? "text-ink" : "text-ink-3")} style={pageIconStyle(p.color, active)}>
               <Icon name={p.icon} size={17} stroke={1.8} />
+              {p.notice && <NoticeDot className="absolute -top-0.5 -right-1 ring-2 ring-canvas" />}
               {p.badge !== undefined && (
                 <span className={cx("absolute -top-1.5 left-2.5 flex h-4 min-w-4 items-center justify-center whitespace-nowrap rounded-full px-1 text-[10px] font-semibold tabular-nums", BADGE_CLASS[p.badgeTone ?? "accent"])}>{p.badge}</span>
               )}
@@ -1125,9 +1131,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     return sidebarMachines.filter((m) => own.has(m.id));
   }, [ownIds, sidebarMachines]);
   const structuralOrder = useMemo(() => machineSessionOrder(machines), [machines]);
-  const { sessions: every, loaded, error: listError } = useFullAgentSessions();
-  const summaryAgents = useAgentSessions();
   const pagedTransport = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  // the whole block folds under its title in the sidebar (#2524); the phone's Agents page is the block, it doesn't
+  // and opens by itself when ⌘K puts words on the list, so what was asked for is in view (#6589)
+  const [blockFolded, toggleBlock] = useFolded("agents", false, { all: false, holds: dimFilters.query.trim() !== "" });
+  const folded = foldable && blockFolded;
+  const { sessions: every, loaded, error: listError } = useFullAgentSessions(!folded || !pagedTransport);
+  const summaryAgents = useAgentSessions();
   const allLaunches = useStore((s) => s.launches);
   const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
   // A session whose launch is still actively starting/sending is already listed under "Starting": keep it out of the
@@ -1141,8 +1151,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [launches]);
   const [agents, previewAgents] = useMemo(() => {
     const visible = (rows: Session[]) => rows.filter((s) => isSidebarAgent(s) && (!inFlightLaunchKeys.size || !inFlightLaunchKeys.has(`${s.machine_id}\u0000${s.session_id}`)));
-    return [visible(every), pagedTransport ? visible(summaryAgents) : []];
-  }, [every, summaryAgents, pagedTransport, inFlightLaunchKeys]);
+    const primary = folded && pagedTransport && !every.length ? summaryAgents : every;
+    return [visible(primary), pagedTransport ? visible(summaryAgents) : []];
+  }, [every, summaryAgents, pagedTransport, folded, inFlightLaunchKeys]);
   const all = useScoped(agents);
   const previewAll = useScoped(previewAgents);
   const mutes = useStore((s) => s.mutes);
@@ -1154,6 +1165,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todosUnread = useTodosUnread();
   const shownManagerName = useShownManager();
   const todosV2 = useStore((s) => Boolean(s.assistant && sameManager(s.assistant.manager ?? shownManagerName, shownManagerName) && s.assistant.todos_v2 === true));
+  const rawTodoBoard = useStore((s) => s.todoBoard);
+  const serverBoard = todosV2 ? rawTodoBoard : null;
   // the Filter menu's choices and the words ⌘K's "Filter Agents list" put on it (#6589): the list has no field of its own
   // (both come from AgentsBlock: off in Settings › Agents, the Filter is not drawn and holds nothing)
   const setDimFilters = setAgentListFilters;
@@ -1276,9 +1289,11 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const keepEmptyGroups = !filtered && live.length + offline.length > 0;
   const todoTree = useMemo(() => {
     if (shownGrouping !== "todo" || !todosLoaded) return undefined;
-    const built = buildTodoTree(unpinned, machines, todos, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder, todosV2 });
+    const built = serverBoard
+      ? consumeBoardSidebarTree(unpinned, machines, todos, serverBoard, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder })
+      : buildTodoTree(unpinned, machines, todos, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder, todosV2 });
     return shareTree(lastTodoTree.current, byUpdate ? activity.todoTreeByUpdate(built) : built);
-  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, todosV2]);
+  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, todosV2, serverBoard]);
   lastTodoTree.current = todoTree;
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo" || !agentRepos.mod) return [];
@@ -1336,10 +1351,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const [idleFolded, toggleIdle] = useFolded("idle-spaces", true, { scope: AGENTS_FOLD });
   const [pinnedFolded, togglePinned] = useFolded("agents-pinned", false, { holds: holdsRow(pinnedAgents, activeKey), scope: AGENTS_FOLD });
   const [launchesFolded, toggleLaunches] = useFolded("agents-launching", false, { holds: launches.some((l) => activeKey === `s:${l.machineId}/${l.id}`), scope: AGENTS_FOLD });
-  // the whole block folds under its title in the sidebar (#2524); the phone's Agents page is the block, it doesn't
-  // and opens by itself when ⌘K puts words on the list, so what was asked for is in view (#6589)
-  const [blockFolded, toggleBlock] = useFolded("agents", false, { all: false, holds: dimFilters.query.trim() !== "" });
-  const folded = foldable && blockFolded;
   const [showAllRecent, setShowAllRecent] = useState(false);
   const recentShown = showAllRecent ? recent : firstAndCurrent(recent, 8, (s) => rowKey(s) === activeKey);
   const recentState = worstTreeState(recent.map(agentTreeState));
