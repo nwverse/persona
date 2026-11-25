@@ -250,26 +250,20 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 		return i
 	}
 	type key struct {
-		provider  string
-		scope     string
-		minutes   int
-		resets    int64
-		local     bool
-		modelOnly bool
+		provider string
+		scope    string
+		minutes  int
+		resets   int64
+		local    bool
 	}
 	seen := map[key]int{}
 	codexAccounts := map[string]int{}
 	// A component can grow through several samples. Checking only the first-seen sample lets a local sample bridge two
-	// different accounts of one gateway (#7324), or a remote sample bridge two distinct model-only sources on one
-	// machine (#1904), so carry every component's refs and local origins and reject any conflict before joining it.
+	// different accounts of one gateway (#7324), so carry every component's refs and reject any conflict before joining it.
 	refs := make(map[int][]string, len(live))
-	origins := make(map[int][]string, len(live))
 	for i, a := range live {
 		if a.Ref != "" {
 			refs[i] = []string{a.Ref}
-		}
-		if a.Local && a.Origin != "" {
-			origins[i] = []string{a.Origin}
 		}
 	}
 	// One launcher's balance samples are one row, whatever their amounts and sample times (#11825).
@@ -284,6 +278,7 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			balanceRefs[a.Ref] = i
 		}
 	}
+	var modelOnlyInfos []modelOnlyInfo
 	for i, a := range live {
 		if a.Provider == "codex" {
 			if account := a.CodexAccountKey; account != "" {
@@ -296,15 +291,18 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			continue
 		}
 		provider := canonicalUsageProvider(a.Provider)
-		hasPlan := slices.ContainsFunc(a.Windows, func(w proto.UsageWindow) bool { return w.Model == "" })
+		hasPlan := slices.ContainsFunc(a.Windows, func(w proto.UsageWindow) bool { return strings.TrimSpace(w.Model) == "" })
+		if !hasPlan {
+			if info, ok := buildModelOnlyInfo(i, provider, a); ok {
+				modelOnlyInfos = append(modelOnlyInfos, info)
+			}
+			continue
+		}
 		for _, w := range a.Windows {
-			if w.ResetsAt == nil || (hasPlan && w.Model != "") {
+			if w.ResetsAt == nil || strings.TrimSpace(w.Model) != "" {
 				continue
 			}
-			k := key{provider: provider, minutes: w.WindowMinutes, resets: w.ResetsAt.Unix(), modelOnly: !hasPlan}
-			if !hasPlan {
-				k.scope = usageWindowModelKey(provider, w.Model)
-			}
+			k := key{provider: provider, minutes: w.WindowMinutes, resets: w.ResetsAt.Unix()}
 			if provider == antigravityUsageProvider {
 				// Reconcile local and external Antigravity windows individually in the display response.
 				k.scope, k.local = antigravityQuotaScope(a, w), a.Local
@@ -326,25 +324,15 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 					}
 				}
 			}
-			if k.modelOnly && !conflict {
-				for _, a := range origins[left] {
-					for _, b := range origins[right] {
-						if sameMachineOtherOrigin(a, b) {
-							conflict = true
-						}
-					}
-				}
-			}
 			if conflict {
 				continue
 			}
 			parent[left] = right
 			refs[right] = append(refs[right], refs[left]...)
 			delete(refs, left)
-			origins[right] = append(origins[right], origins[left]...)
-			delete(origins, left)
 		}
 	}
+	mergeModelOnlyAccounts(modelOnlyInfos, parent, find)
 	groups := map[int][]proto.UsageAccount{}
 	var order []int
 	for i, a := range live {
@@ -525,13 +513,190 @@ func sameMachineOtherOrigin(a, b string) bool {
 
 // usageWindowModelKey normalizes a per-model window's scope for cross-machine deduplication and slot merging.
 func usageWindowModelKey(provider, model string) string {
+	model = strings.TrimSpace(model)
 	if model == "" {
 		return ""
 	}
 	if provider == antigravityUsageProvider {
 		return antigravityModelScope(model)
 	}
-	return strings.ToLower(strings.TrimSpace(model))
+	return strings.ToLower(model)
+}
+
+type modelOnlySlot struct {
+	scope   string
+	minutes int
+}
+
+type modelOnlyInfo struct {
+	index    int
+	provider string
+	local    bool
+	ref      string
+	origin   string
+	resets   map[modelOnlySlot]int64
+	multi    map[modelOnlySlot]bool
+}
+
+func buildModelOnlyInfo(index int, provider string, a proto.UsageAccount) (modelOnlyInfo, bool) {
+	info := modelOnlyInfo{
+		index:    index,
+		provider: provider,
+		local:    a.Local,
+		ref:      a.Ref,
+		origin:   a.Origin,
+		resets:   make(map[modelOnlySlot]int64, len(a.Windows)),
+	}
+	for _, w := range a.Windows {
+		if w.ResetsAt == nil {
+			continue
+		}
+		scope := usageWindowModelKey(provider, w.Model)
+		if provider == antigravityUsageProvider {
+			scope = antigravityQuotaScope(a, w)
+		}
+		slot := modelOnlySlot{scope: scope, minutes: w.WindowMinutes}
+		ts := w.ResetsAt.Unix()
+		if prev, exists := info.resets[slot]; exists && prev != ts {
+			if info.multi == nil {
+				info.multi = map[modelOnlySlot]bool{}
+			}
+			info.multi[slot] = true
+		} else {
+			info.resets[slot] = ts
+		}
+	}
+	return info, len(info.resets) > 0
+}
+
+func modelOnlyConflict(a, b modelOnlyInfo) bool {
+	if a.ref != "" && b.ref != "" && sameSourceOtherAccount(a.ref, b.ref) {
+		return true
+	}
+	if a.local && b.local && a.origin != "" && b.origin != "" && sameMachineOtherOrigin(a.origin, b.origin) {
+		return true
+	}
+	for slot, ra := range a.resets {
+		rb, ok := b.resets[slot]
+		if !ok {
+			continue
+		}
+		if ra != rb || a.multi[slot] || b.multi[slot] {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeModelOnlyAccounts groups model-only accounts (samples with no plan window) across distinct sources only when
+// matches are unambiguous and every shared model-pool reset signature agrees. Any sample matching mutually conflicting
+// candidates, or any component containing an internal conflict, conservatively stays separate instead of performing a
+// first-hit union that could overwrite another account's healthy model pool.
+func mergeModelOnlyAccounts(infos []modelOnlyInfo, parent []int, find func(int) int) {
+	if len(infos) < 2 {
+		return
+	}
+	type winKey struct {
+		provider string
+		local    bool
+		scope    string
+		minutes  int
+		resets   int64
+	}
+	byWindow := map[winKey][]int{}
+	for idx, info := range infos {
+		// Reconcile local and external Antigravity windows individually in the display response.
+		localBucket := info.provider == antigravityUsageProvider && info.local
+		for slot, resets := range info.resets {
+			if info.multi[slot] {
+				continue
+			}
+			k := winKey{provider: info.provider, local: localBucket, scope: slot.scope, minutes: slot.minutes, resets: resets}
+			byWindow[k] = append(byWindow[k], idx)
+		}
+	}
+	adj := make([]map[int]struct{}, len(infos))
+	addEdge := func(u, v int) {
+		if adj[u] == nil {
+			adj[u] = map[int]struct{}{}
+		}
+		if adj[v] == nil {
+			adj[v] = map[int]struct{}{}
+		}
+		adj[u][v] = struct{}{}
+		adj[v][u] = struct{}{}
+	}
+	for _, group := range byWindow {
+		if len(group) < 2 {
+			continue
+		}
+		for a := 0; a < len(group); a++ {
+			for b := a + 1; b < len(group); b++ {
+				u, v := group[a], group[b]
+				if _, exists := adj[u][v]; exists {
+					continue
+				}
+				if !modelOnlyConflict(infos[u], infos[v]) {
+					addEdge(u, v)
+				}
+			}
+		}
+	}
+	ambiguous := make([]bool, len(infos))
+	for u, neighbors := range adj {
+		if len(neighbors) < 2 {
+			continue
+		}
+		list := make([]int, 0, len(neighbors))
+		for v := range neighbors {
+			list = append(list, v)
+		}
+		for i := 0; i < len(list) && !ambiguous[u]; i++ {
+			for j := i + 1; j < len(list); j++ {
+				if modelOnlyConflict(infos[list[i]], infos[list[j]]) {
+					ambiguous[u] = true
+					break
+				}
+			}
+		}
+	}
+	visited := make([]bool, len(infos))
+	for start := range infos {
+		if visited[start] || ambiguous[start] || len(adj[start]) == 0 {
+			continue
+		}
+		visited[start] = true
+		comp := []int{start}
+		for head := 0; head < len(comp); head++ {
+			u := comp[head]
+			for v := range adj[u] {
+				if visited[v] || ambiguous[v] {
+					continue
+				}
+				visited[v] = true
+				comp = append(comp, v)
+			}
+		}
+		if len(comp) < 2 {
+			continue
+		}
+		conflict := false
+		for i := 0; i < len(comp) && !conflict; i++ {
+			for j := i + 1; j < len(comp); j++ {
+				if modelOnlyConflict(infos[comp[i]], infos[comp[j]]) {
+					conflict = true
+					break
+				}
+			}
+		}
+		if conflict {
+			continue
+		}
+		root := find(infos[comp[0]].index)
+		for _, member := range comp[1:] {
+			parent[find(infos[member].index)] = root
+		}
+	}
 }
 
 // mostUsed is the used percentage of the account's fullest plan window: a per-model allowance that ran out is not the

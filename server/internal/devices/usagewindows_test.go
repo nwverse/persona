@@ -638,14 +638,17 @@ func TestMergeUsageAccountsKeepsDistinctModelOnlyAccountsApart(t *testing.T) {
 		t.Fatalf("accounts with different model scopes must stay separate: %+v", diffModels)
 	}
 
-	// A remote machine must not bridge two distinct model-only local sources on one machine.
-	noLocalBridge := mergeUsageAccounts([]proto.UsageAccount{
+	// An ambiguous remote sample matching two distinct model-only local sources on one machine must conservatively stay separate.
+	ambiguousLocal := []proto.UsageAccount{
 		{Provider: "acct-alpha", Name: "Seat", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now, Windows: []proto.UsageWindow{mw(10, week, "model-a")}},
-		{Provider: "acct-alpha", Name: "Seat", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now, Windows: []proto.UsageWindow{mw(15, week, "model-a")}},
+		{Provider: "acct-alpha", Name: "Seat", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now.Add(time.Minute), Windows: []proto.UsageWindow{mw(15, week, "model-a")}},
 		{Provider: "acct-alpha", Name: "Seat", Local: true, Origin: "node-a/1", Machines: []string{"node-a"}, SampledAt: now, Windows: []proto.UsageWindow{mw(20, week, "model-a")}},
-	}, now)
-	if len(noLocalBridge) != 2 {
-		t.Fatalf("remote sample must not bridge two sources on the same machine: %+v", noLocalBridge)
+	}
+	for _, perm := range [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		got := mergeUsageAccounts([]proto.UsageAccount{ambiguousLocal[perm[0]], ambiguousLocal[perm[1]], ambiguousLocal[perm[2]]}, now)
+		if len(got) != 3 {
+			t.Fatalf("ambiguous remote sample must stay separate across permutation %v: got %d: %+v", perm, len(got), got)
+		}
 	}
 
 	// Distinct gateway seats with only per-model windows and matching resets stay separate.
@@ -692,5 +695,118 @@ func TestMergeUsageAccountsKeepsDistinctModelOnlyAccountsApart(t *testing.T) {
 	}
 	if gotLocal.Name != "Antigravity" || len(gotLocal.Windows) != 1 || gotLocal.Windows[0].Model != "Claude and GPT models" || !slices.Equal(gotLocal.Machines, []string{"node-a", "node-b"}) {
 		t.Fatalf("remaining local pool should be one merged row: %+v", gotLocal)
+	}
+}
+
+func TestMergeUsageAccountsDoesNotClobberHealthyPoolOnSharedModelReset(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	tG := now.Add(3 * 24 * time.Hour)
+	tC0 := now.Add(4 * 24 * time.Hour)
+	tC1 := now.Add(5 * 24 * time.Hour)
+	mw := func(used float64, resets time.Time, model string) proto.UsageWindow {
+		w := uw("7d", 10080, used, resets)
+		w.Model = model
+		return w
+	}
+
+	// A0 and A1 are distinct local accounts on node-a sharing Gemini 7d reset tG but with different Claude 7d resets.
+	// B on node-b is a newer reading of A1 (Claude exhausted 100% at tC1). Across all input permutations, B must merge
+	// with A1 and never first-hit union into A0 or overwrite A0's healthy Claude 0% pool.
+	a0 := proto.UsageAccount{
+		Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-a/0", Machines: []string{"node-a"},
+		SampledAt: now.Add(-5 * time.Minute),
+		Windows:   []proto.UsageWindow{mw(20, tG, "Gemini Models"), mw(0, tC0, "Claude and GPT models")},
+	}
+	a1 := proto.UsageAccount{
+		Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-a/1", Machines: []string{"node-a"},
+		SampledAt: now.Add(-3 * time.Minute),
+		Windows:   []proto.UsageWindow{mw(20, tG, "Gemini Models"), mw(100, tC1, "Claude and GPT models")},
+	}
+	b := proto.UsageAccount{
+		Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-b/0", Machines: []string{"node-b"},
+		SampledAt: now.Add(-time.Minute),
+		Windows:   []proto.UsageWindow{mw(25, tG, "Gemini Models"), mw(100, tC1, "Claude and GPT models")},
+	}
+	base := []proto.UsageAccount{a0, a1, b}
+	perms := [][]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}
+
+	var wantSummary map[string]string
+	for _, perm := range perms {
+		in := []proto.UsageAccount{base[perm[0]], base[perm[1]], base[perm[2]]}
+		got := mergeUsageAccounts(in, now)
+		if len(got) != 2 {
+			t.Fatalf("perm %v: want 2 accounts (healthy A0 and merged A1+B), got %d: %+v", perm, len(got), got)
+		}
+		summary := map[string]string{}
+		var healthy, exhausted *proto.UsageAccount
+		for i := range got {
+			summary[got[i].Origin] = got[i].ID + "|" + got[i].Name
+			switch got[i].Origin {
+			case "node-a/0":
+				healthy = &got[i]
+			case "node-a/1":
+				exhausted = &got[i]
+			}
+		}
+		if healthy == nil || exhausted == nil {
+			t.Fatalf("perm %v: expected origins node-a/0 and node-a/1, got %+v", perm, got)
+		}
+		if !slices.Equal(healthy.Machines, []string{"node-a"}) {
+			t.Fatalf("perm %v: healthy A0 merged with remote node: %+v", perm, healthy)
+		}
+		if !slices.Equal(exhausted.Machines, []string{"node-a", "node-b"}) {
+			t.Fatalf("perm %v: A1 and B did not merge: %+v", perm, exhausted)
+		}
+		windowOf := func(acct *proto.UsageAccount, model string) proto.UsageWindow {
+			for _, w := range acct.Windows {
+				if w.Model == model {
+					return w
+				}
+			}
+			t.Fatalf("perm %v: missing %q window in %+v", perm, model, acct)
+			return proto.UsageWindow{}
+		}
+		healthyClaude := windowOf(healthy, "Claude and GPT models")
+		if healthyClaude.UsedPercent != 0 || healthyClaude.ResetsAt == nil || !healthyClaude.ResetsAt.Equal(tC0) {
+			t.Fatalf("perm %v: healthy A0 Claude pool was clobbered: %+v", perm, healthyClaude)
+		}
+		healthyGemini := windowOf(healthy, "Gemini Models")
+		if healthyGemini.UsedPercent != 20 {
+			t.Fatalf("perm %v: healthy A0 Gemini pool changed: %+v", perm, healthyGemini)
+		}
+		mergedClaude := windowOf(exhausted, "Claude and GPT models")
+		mergedGemini := windowOf(exhausted, "Gemini Models")
+		if mergedClaude.UsedPercent != 100 || !mergedClaude.ResetsAt.Equal(tC1) || mergedGemini.UsedPercent != 25 {
+			t.Fatalf("perm %v: merged A1+B windows unexpected: claude=%+v gemini=%+v", perm, mergedClaude, mergedGemini)
+		}
+		if wantSummary == nil {
+			wantSummary = summary
+		} else if !maps.Equal(summary, wantSummary) {
+			t.Fatalf("perm %v: order changed IDs or names: got %v, want %v", perm, summary, wantSummary)
+		}
+	}
+
+	// Two accounts on different machines sharing one model reset (tG) but disagreeing on another pool (tC0 vs tC1)
+	// must stay separate regardless of order so the newer reading cannot overwrite the healthy pool.
+	for _, pair := range [][]proto.UsageAccount{{a0, b}, {b, a0}} {
+		got := mergeUsageAccounts(pair, now)
+		if len(got) != 2 {
+			t.Fatalf("conflicting sibling pool resets must stay separate: %+v", got)
+		}
+	}
+
+	// A partial remote sample (Gemini only) matching two conflicting accounts must stay conservatively separate
+	// across every permutation and must not bridge them either.
+	partial := proto.UsageAccount{
+		Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-c/0", Machines: []string{"node-c"},
+		SampledAt: now,
+		Windows:   []proto.UsageWindow{mw(50, tG, "Gemini Models")},
+	}
+	ambig := []proto.UsageAccount{a0, b, partial}
+	for _, perm := range perms {
+		got := mergeUsageAccounts([]proto.UsageAccount{ambig[perm[0]], ambig[perm[1]], ambig[perm[2]]}, now)
+		if len(got) != 3 {
+			t.Fatalf("perm %v: partial sample matching conflicting accounts must stay separate: got %d: %+v", perm, len(got), got)
+		}
 	}
 }
