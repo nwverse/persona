@@ -172,7 +172,7 @@ type Service struct {
 	routineChecks  routineCheckApprovalBook
 
 	hub         Hub
-	store       func() Store
+	storeFn     atomic.Pointer[func() Store]
 	entriesDial func(context.Context, any) ([]byte, error)
 	// memoryEntries is where the memory assembler reads the ledger in tests; nil reads the manager database
 	// (memory_assemble_entry.go).
@@ -244,30 +244,31 @@ type Service struct {
 	// interrupts: the interrupted receipts re-sent when their tasks change (interruptions.go).
 	interrupts interruptBook
 
-	titles           titleBook             // titles.go
-	phoneKept        keptPhoneTools        // fleet_tools.go: the phone's tools as the hub last listed them
-	agentNames       agentNamingBook       // agent_naming.go
-	prefs            settingsBook          // profile.go
-	guard            dispatchGuardBook     // dispatch_guard.go
-	main             mainBook              // start.go
-	archived         archiveBook           // conversations.go
-	tags             conversationTagsBook  // conversation_tags.go
-	directionFilings directionSessionsBook // direction_sessions.go
-	origins          originBook            // origins.go
-	guests           guestBook             // guest.go
-	relays           relayBook             // conversations.go
-	chatReplies      chatReplyBook         // chat_reply.go: what conversations that wrote as the user were told of the chats
-	undelivered      undeliveredBook       // undelivered.go: the owner's messages that could not go in
-	quotes           quoteBook             // relay_quote.go: the owner's messages relays carried, verified
-	handovers        handoverBook          // relay_handover.go: the owner's words handed to and from a direction's lead
-	avail            availBook             // availability.go
-	quiet            quietBook             // quiet.go
-	taskFileBook     taskFileBook          // task_files.go: the files tasks handed over, by todo id
-	supervise        superviseBook         // supervise_signals.go
-	progress         progressBook          // supervise_progress.go
-	preempt          preemptBook           // owner_preempt.go
-	tbriefs          taskBriefBook         // task_brief.go
-	search           searchIndex           // search_index.go
+	titles           titleBook              // titles.go
+	phoneKept        keptPhoneTools         // fleet_tools.go: the phone's tools as the hub last listed them
+	agentNames       agentNamingBook        // agent_naming.go
+	prefs            settingsBook           // profile.go
+	guard            dispatchGuardBook      // dispatch_guard.go
+	main             mainBook               // start.go
+	archived         archiveBook            // conversations.go
+	tags             conversationTagsBook   // conversation_tags.go
+	directionFilings directionSessionsBook  // direction_sessions.go
+	origins          originBook             // origins.go
+	guests           guestBook              // guest.go
+	relays           relayBook              // conversations.go
+	chatReplies      chatReplyBook          // chat_reply.go: what conversations that wrote as the user were told of the chats
+	undelivered      undeliveredBook        // undelivered.go: the owner's messages that could not go in
+	quotes           quoteBook              // relay_quote.go: the owner's messages relays carried, verified
+	handovers        handoverBook           // relay_handover.go: the owner's words handed to and from a direction's lead
+	avail            availBook              // availability.go
+	quiet            quietBook              // quiet.go
+	taskFileBook     taskFileBook           // task_files.go: the files tasks handed over, by todo id
+	supervise        superviseBook          // supervise_signals.go
+	progress         progressBook           // supervise_progress.go
+	preempt          preemptBook            // owner_preempt.go
+	tbriefs          taskBriefBook          // task_brief.go
+	handoffs         todoContextHandoffBook // todo_context_handoff.go
+	search           searchIndex            // search_index.go
 
 	deletedConversations conversationDeleteBook // conversation_delete.go
 	convSpaces           convSpaceBook          // conversation_space.go
@@ -321,7 +322,6 @@ type Service struct {
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll         bool
 	later                    laterBook    // later.go: questions that can wait for a briefing
-	brief                    briefBook    // briefing.go
 	reporters                reporterBook // reporters.go
 	sched                    schedule     // schedule.go
 	delayedMu                sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
@@ -421,14 +421,12 @@ var _ Handler = (*Service)(nil)
 
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
-	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
+	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
+	s.setStore(o.Store)
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
-	if s.store == nil {
-		s.store = func() Store { return nil }
-	}
 	if _, ok := s.store().(logicalConversationStore); ok && s.devs != nil {
 		s.devs = &logicalDevices{Devices: s.devs, s: s}
 	}
@@ -484,7 +482,10 @@ func New(o Options) *Service {
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()
-	saved.Register(saved.Host{Store: func() any { return s.store() }, Event: s.event, Handle: s.handle, Full: fullRole, BodyErr: writeBodyErr})
+	reg := s.newRegistry() // the typed seam the modules register through (seam_ports.go)
+	defer reg.Seal()       // New returns it sealed: registering later is a defect
+	// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
+	reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
 	s.resourceRoutes()
 	s.repositoryRoutes()
 	s.repoMirrorRoutes()
@@ -557,6 +558,31 @@ func todoWriter(r *http.Request) bool {
 	return fullRole(r) || r.Header.Get(RoleHeader) == roleExtension
 }
 
+// store returns the assistant's current Store (nil when running without a database).
+func (s *Service) store() Store {
+	if fn := s.storeFn.Load(); fn != nil && *fn != nil {
+		return (*fn)()
+	}
+	return nil
+}
+
+// storeAccessor returns the installed store accessor (nil on a bare Service created without New).
+func (s *Service) storeAccessor() func() Store {
+	if fn := s.storeFn.Load(); fn != nil {
+		return *fn
+	}
+	return nil
+}
+
+// setStore installs fn as the store accessor. Production sets it once in New; tests swap it through setStore so
+// background readers calling s.store() synchronize with the swap.
+func (s *Service) setStore(fn func() Store) {
+	if fn == nil {
+		fn = func() Store { return nil }
+	}
+	s.storeFn.Store(&fn)
+}
+
 // runCtx ends when the service stops: Run's context; background before Run (tests).
 func (s *Service) runCtx() context.Context {
 	if p := s.running.Load(); p != nil {
@@ -625,6 +651,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		if id != "" {
 			if _, trusted := p["model_source"].(modelhttp.Source); !trusted {
 				p["model_source"] = s.conversationModelSource(ctx, device, id)
+			}
+			if method == DeviceAssistantSend || method == assistantwire.DeviceAssistantAnswerAgain {
+				s.putConversationCategories(ctx, id, p)
 			}
 		} else if method == DeviceAssistantWarm {
 			p["model_source"] = modelhttp.Source{Role: "main"}

@@ -176,7 +176,7 @@ export function QueuePanel({ session, draftKey, canEdit, persona, pending = [], 
   const toBox = (always: boolean) => {
     const at = document.activeElement;
     if (!hasFinePointer() || !(always || !at || at === document.body || region.current?.contains(at))) return;
-    region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
   const editQueue = (keep: number[]) =>
     inSendOrder(outboxKey(session.machine_id, session.session_id), async () => {
