@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetcount/fleetcountadapt"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -94,6 +95,9 @@ type fleetBook struct {
 	enc    bytes.Buffer
 	// archived is what was told of each machine's archived rows (fleet.archived, tellArchived), under sentMu.
 	archived map[string]archivedSent
+	// views and archViews: the arrays the views of each list and of its archived rows told apart are decided in
+	// (fleet_views.go), under sentMu.
+	views, archViews fleetcountadapt.Views
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex

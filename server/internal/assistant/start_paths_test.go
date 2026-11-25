@@ -46,7 +46,7 @@ var supervisedStarts = map[string]string{
 	// agent_send's resume of a stopped agent: on an open task of the caller's, or the task the send made (#8099)
 	"resumeAndSend": "resumeAndSend",
 	// a timed-out task's original session: the user's Resume keeps its existing supervision ledger
-	"continueTimedOut": "continueTimedOut",
+	"continueTimedOut": "clearTimedOut",
 	// the owner's cross-provider handoff keeps the to-do's ledger, or adopts its ordinary owner first
 	"executeOwnerTodoHandoff": "executeOwnerTodoHandoff",
 }

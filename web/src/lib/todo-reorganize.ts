@@ -1,5 +1,5 @@
 import { api } from "./api";
-import { directionTitle, leaderDirections, type DirectionTree } from "./direction-tree";
+import { directionTitle, leaderDirections, type Direction, type DirectionTree } from "./direction-tree";
 import { currentHeaders } from "./manager-choice";
 import type { Todo } from "./todos";
 import type { Session } from "./types";
@@ -177,4 +177,116 @@ export async function reorganizeTodos(req: TodoReorganizeRequest): Promise<TodoR
     headers: currentHeaders(),
     json: req,
   });
+}
+
+export interface ResolvedDirectionSection {
+  d: Direction;
+  todos: Todo[];
+  title: string;
+}
+
+/**
+ * Resolves "By direction" sections for the Web To-dos list (#15653).
+ *
+ * - When `todosV2 === false`: preserves 100% of the legacy `directionTree` runtime grouping.
+ * - When `todosV2 === true`: prioritizes each open to-do's explicit `direction_id` when non-empty
+ *   so batch reorganize and single-item direction changes take effect immediately without
+ *   interrupting running Agents. To-dos without `direction_id` fall back to the existing
+ *   runtime `directionTree` membership. If a `direction_id` is not present in `tree.directions`,
+ *   a synthetic direction section is added before the secretary group so no task is lost.
+ */
+export function resolveDirectionSections({
+  tree,
+  openTodos,
+  todosV2,
+  resolveDirectionName,
+  resolveFallbackName,
+}: {
+  tree: DirectionTree;
+  openTodos: readonly Todo[];
+  todosV2: boolean;
+  resolveDirectionName: (d: Direction) => string;
+  resolveFallbackName?: (id: string) => string | undefined;
+}): ResolvedDirectionSection[] {
+  const openById = new Map(openTodos.map((td) => [td.id, td]));
+
+  if (!todosV2) {
+    return tree.directions
+      .map((d) => ({
+        d,
+        todos: (d.tasks ?? []).map((task) => openById.get(task.id)).filter((td): td is Todo => !!td),
+      }))
+      .filter((g) => g.todos.length > 0)
+      .map(({ d, todos }) => ({ d, todos, title: resolveDirectionName(d) }));
+  }
+
+  const explicitDirByTodo = new Map<string, string>();
+  for (const td of openTodos) {
+    const dirId = td.direction_id?.trim();
+    if (dirId) explicitDirByTodo.set(td.id, dirId);
+  }
+
+  const placed = new Set<string>();
+  const sections: ResolvedDirectionSection[] = [];
+  const sectionsById = new Map<string, ResolvedDirectionSection>();
+
+  for (const d of tree.directions) {
+    const todos: Todo[] = [];
+    for (const task of d.tasks ?? []) {
+      const td = openById.get(task.id);
+      if (!td || placed.has(td.id)) continue;
+      const explicit = explicitDirByTodo.get(td.id);
+      if (explicit && explicit !== d.id) continue;
+      todos.push(td);
+      placed.add(td.id);
+    }
+    const section: ResolvedDirectionSection = { d, todos, title: resolveDirectionName(d) };
+    sections.push(section);
+    if (!sectionsById.has(d.id)) sectionsById.set(d.id, section);
+  }
+
+  // Place open to-dos whose explicit `direction_id` was not listed in that direction's `tasks`
+  // (for example after reorganizing with `transfer_supervision=false` or into an unknown direction).
+  const syntheticSections: ResolvedDirectionSection[] = [];
+  const syntheticById = new Map<string, ResolvedDirectionSection>();
+
+  for (const td of openTodos) {
+    if (placed.has(td.id)) continue;
+    const explicit = explicitDirByTodo.get(td.id);
+    if (!explicit) continue;
+
+    const existing = sectionsById.get(explicit);
+    if (existing) {
+      existing.todos.push(td);
+      placed.add(td.id);
+      continue;
+    }
+
+    let synth = syntheticById.get(explicit);
+    if (!synth) {
+      const label = resolveFallbackName?.(explicit)?.trim() || explicit;
+      const d: Direction = {
+        id: explicit,
+        name: label,
+        counts: { working: 0, needs_you: 0, stuck: 0, review: 0 },
+        running: false,
+      };
+      synth = { d, todos: [], title: label };
+      syntheticById.set(explicit, synth);
+      syntheticSections.push(synth);
+    }
+    synth.todos.push(td);
+    placed.add(td.id);
+  }
+
+  if (syntheticSections.length > 0) {
+    const secretaryIndex = sections.findIndex((s) => s.d.secretary);
+    if (secretaryIndex >= 0) {
+      sections.splice(secretaryIndex, 0, ...syntheticSections);
+    } else {
+      sections.push(...syntheticSections);
+    }
+  }
+
+  return sections.filter((s) => s.todos.length > 0);
 }

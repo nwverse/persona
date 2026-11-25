@@ -48,10 +48,11 @@ type Hub struct {
 	// tests: replaces os.Hostname
 	hostname func() (string, error)
 
-	cfg     *Config
-	version string
-	build   update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
-	upd     *updater     // updating itself to the publisher's release (selfupdate.go)
+	cfg      *Config
+	version  string
+	build    update.Build    // channel, build number, where updates come from (docs/operations/hub-update.md)
+	upd      *updater        // updating itself to the publisher's release (selfupdate.go)
+	recovery recoveryService // read-only whole-install Recovery inventory (recovery_routes.go)
 	// quiesce and assistantProc pause the hub's own writers for a Web
 	// development snapshot (quiesce.go).
 	quiesce       writeQuiescer
