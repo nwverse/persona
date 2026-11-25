@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // machineFact makes unknown distinct from a measured zero, with a reason the model can relay.
@@ -145,7 +146,7 @@ func (s *Service) collectMachineSnapshots(ctx context.Context, excludeSpaceSessi
 			SampleAgeSeconds: unknown("sample_not_reported"), WorkingAgents: unknown("connection_not_available"),
 			FailingLaunchers: unknown("health_not_available"), NodeOutdated: unknown("connection_not_available")}
 		sum := assistantwire.MachineResourceSummary{
-			ID:    assistantwire.MachineID(d.ID),
+			ID:    wireids.MachineID(d.ID),
 			Name:  d.Name,
 			State: assistantwire.MachineResourceStatePending,
 			IsHub: s.isHubMachine(ctx, d, m),
