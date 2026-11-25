@@ -124,6 +124,20 @@ interface PickerCardItem {
   info?: PersonaInfo;
 }
 
+/** A picker card's face, title (with a check when chosen) and line under it. */
+function CardContent({ card, selected }: { card: PickerCardItem; selected: boolean }) {
+  return (
+    <>
+      <span className="flex h-14 items-center justify-center">{card.face}</span>
+      <span className="flex max-w-full items-center gap-1 text-[12.5px] font-medium whitespace-nowrap text-ink">
+        {selected && <Icon name="check" size={12} stroke={2.6} className="shrink-0 text-accent-ink" />}
+        <span className="truncate">{card.title}</span>
+      </span>
+      {card.sub}
+    </>
+  );
+}
+
 /** An uploaded avatar card with Edit/Delete corner buttons; accepts a dropped image to open Edit when `onDropFile` is given. */
 function UploadedLookCard({
   card,
@@ -160,12 +174,7 @@ function UploadedLookCard({
               : "bg-inset shadow-hairline hover:bg-hover",
         )}
       >
-        <span className="flex h-14 items-center justify-center">{card.face}</span>
-        <span className="flex max-w-full items-center gap-1 text-[12.5px] font-medium whitespace-nowrap text-ink">
-          {selected && <Icon name="check" size={12} stroke={2.6} className="shrink-0 text-accent-ink" />}
-          <span className="truncate">{card.title}</span>
-        </span>
-        {card.sub}
+        <CardContent card={card} selected={selected} />
       </button>
       <span className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/look:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
         {onEdit && (
@@ -262,12 +271,7 @@ export function PersonaPicker({ onExtensions }: { onExtensions?: () => void } = 
                 selected ? "bg-accent-tint shadow-[inset_0_0_0_1.5px_var(--accent)]" : "bg-inset shadow-hairline hover:bg-hover",
               )}
             >
-              <span className="flex h-14 items-center justify-center">{c.face}</span>
-              <span className="flex max-w-full items-center gap-1 text-[12.5px] font-medium whitespace-nowrap text-ink">
-                {selected && <Icon name="check" size={12} stroke={2.6} className="shrink-0 text-accent-ink" />}
-                <span className="truncate">{c.title}</span>
-              </span>
-              {c.sub}
+              <CardContent card={c} selected={selected} />
             </button>
           );
         })}

@@ -521,7 +521,7 @@ export function LookUploadDialog({
               />
             </div>
           )}
-          {error && <p role="alert" className="text-[12px] leading-relaxed break-words text-red">{error}</p>}
+          {error && <p role="alert" className="text-label leading-relaxed break-words text-red">{error}</p>}
         </div>
       </Dialog>
     );
