@@ -60,10 +60,10 @@ export function SourcesUI({
       <ExtensionUI key={first ?? ""} extension={SUBSCRIPTIONS_UI} ui="pages" title={title} bare state={first} context={context} onDepth={setDepth} />
     </ExtensionOwnerScope>
   );
-  if (!offered) return <>{pages(state)}{!state && <InboxForwardSetting />}</>;
+  if (!offered) return <div data-settings-group="inbox-sources">{pages(state)}{!state && <InboxForwardSetting />}</div>;
   if (graph && opened)
     return (
-      <div>
+      <div data-settings-group="inbox-sources">
         <button type="button" onClick={() => show(true)} className="mb-3 inline-flex h-8 items-center gap-1 rounded-control px-1.5 text-[13px] font-medium text-accent hover:bg-hover">
           <Icon name="chevronLeft" size={13} stroke={2.2} />
           {t("subscriptions.view_graph")}
@@ -72,7 +72,7 @@ export function SourcesUI({
       </div>
     );
   return (
-    <div>
+    <div data-settings-group="inbox-sources">
       {(graph || depth <= 1) && (
         <div className="mb-4 flex">
           <Segmented
