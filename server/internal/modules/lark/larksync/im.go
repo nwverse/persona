@@ -158,6 +158,7 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 	end := r.start.Unix()
 	seen := map[string]bool{}
 	var msgs []larksyncwire.Message
+	extraURLs := map[string][]string{}
 	var threads []string
 	var last int64 // the newest create_time read from the chat itself, in ms
 	capped := false
@@ -169,6 +170,9 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 			seen[am.MessageID] = true
 			m := r.message(am, c)
 			msgs = append(msgs, m)
+			if urls := extraMessageURLs(am); len(urls) > 0 {
+				extraURLs[am.MessageID] = urls
+			}
 			if am.ThreadID != "" && !containsString(threads, am.ThreadID) {
 				threads = append(threads, am.ThreadID)
 			}
@@ -248,7 +252,10 @@ func (r *run) readChat(ctx context.Context, c chatInfo) error {
 	}
 	for _, m := range msgs {
 		r.addMessage(resource, m, larksyncwire.EntryChat)
-		r.findLeads(resource, larksyncwire.EntryMessage, m.Text)
+		r.findMessageLeads(resource, larksyncwire.EntryMessage, m.Text)
+		for _, u := range extraURLs[m.ID] {
+			r.findMessageLeads(resource, larksyncwire.EntryMessage, u)
+		}
 	}
 	cursor := max(last, old)
 	if !capped && cursor == 0 {
@@ -308,6 +315,13 @@ func (r *run) message(am apiMessage, c chatInfo) larksyncwire.Message {
 	}
 }
 
+// readP2PDiscovery runs only the p2p chat discovery step (used by ModeIM incremental syncs to pick up newly started
+// single chats without running the broader unfiltered message search).
+func (r *run) readP2PDiscovery(ctx context.Context) error {
+	_, err := r.discoverP2PChats(ctx)
+	return err
+}
+
 // readSearch first discovers single (p2p) chats via chat_type=p2p_chat search and backfills each discovered chat's
 // full history through GET /open-apis/im/v1/messages (so active group chats cannot crowd p2p chats out of the search
 // results), then runs the general message search for anything else the chat list does not reach (such as a chat the
@@ -326,6 +340,7 @@ func (r *run) readSearch(ctx context.Context) error {
 	}
 	end := r.start.Unix()
 	var found []larksyncwire.Message
+	extraURLs := map[string][]string{}
 	var again []string // hits already read through a chat: only the search source is added
 	tok := ""
 	for range searchPagesMost {
@@ -359,12 +374,15 @@ func (r *run) readSearch(ctx context.Context) error {
 			if containsMessage(found, id) {
 				continue
 			}
-			m, ok, err := r.fetchMessage(ctx, id)
+			m, urls, ok, err := r.fetchMessageWithURLs(ctx, id)
 			if err != nil {
 				return r.settle(ctx, searchResource, err)
 			}
 			if ok {
 				found = append(found, m)
+				if len(urls) > 0 {
+					extraURLs[m.ID] = urls
+				}
 			}
 		}
 		if !data.HasMore || data.PageToken == "" {
@@ -381,7 +399,10 @@ func (r *run) readSearch(ctx context.Context) error {
 	r.nameSenders(ctx, found)
 	for _, m := range found {
 		r.addMessage(searchResource, m, larksyncwire.EntrySearch)
-		r.findLeads(searchResource, larksyncwire.EntryMessage, m.Text)
+		r.findMessageLeads(searchResource, larksyncwire.EntryMessage, m.Text)
+		for _, u := range extraURLs[m.ID] {
+			r.findMessageLeads(searchResource, larksyncwire.EntryMessage, u)
+		}
 	}
 	r.moveCursor(searchResource, unixCursor(end))
 	return nil
@@ -492,18 +513,53 @@ func (r *run) fetchRawMessage(ctx context.Context, id string) (apiMessage, bool,
 	return apiMessage{}, false, nil
 }
 
-// fetchMessage reads one message by id. ok is false for one that cannot be read (deleted, or no longer visible to
-// the owner): it is skipped, not a failure.
-func (r *run) fetchMessage(ctx context.Context, id string) (larksyncwire.Message, bool, error) {
+// fetchMessageWithURLs reads one message by id and any URLs embedded in interactive card action fields. ok is false
+// for one that cannot be read (deleted, or no longer visible to the owner): it is skipped, not a failure.
+func (r *run) fetchMessageWithURLs(ctx context.Context, id string) (larksyncwire.Message, []string, bool, error) {
 	am, ok, err := r.fetchRawMessage(ctx, id)
 	if err != nil || !ok || am.Deleted {
-		return larksyncwire.Message{}, false, err
+		return larksyncwire.Message{}, nil, false, err
 	}
 	c := r.chats[am.ChatID]
 	if c.id == "" {
 		c = chatInfo{id: am.ChatID}
 	}
-	return r.message(am, c), true, nil
+	return r.message(am, c), extraMessageURLs(am), true, nil
+}
+
+// extraMessageURLs extracts URLs stored in interactive card action/link fields ("url", "href", "pc_url", "android_url",
+// "ios_url") that cardText omits when flattening plain text.
+func extraMessageURLs(am apiMessage) []string {
+	if am.MsgType != "interactive" || strings.TrimSpace(am.Body.Content) == "" {
+		return nil
+	}
+	var raw any
+	if err := json.Unmarshal([]byte(am.Body.Content), &raw); err != nil {
+		return nil
+	}
+	var out []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for _, k := range sortedKeys(x) {
+				switch k {
+				case "url", "href", "pc_url", "android_url", "ios_url":
+					if s, ok := x[k].(string); ok && strings.HasPrefix(strings.TrimSpace(s), "http") {
+						out = append(out, strings.TrimSpace(s))
+					}
+				default:
+					walk(x[k])
+				}
+			}
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		}
+	}
+	walk(raw)
+	return out
 }
 
 // loadP2PChats loads the remembered single chats (chat_id -> peer name) from cursors. Invalid or empty cursor data is

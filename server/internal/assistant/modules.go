@@ -135,6 +135,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		mods = kernel.Builtin()
 	}
 	coreTools := reservedCoreToolNames()
+	coreRoutes := slices.Concat(s.routes, s.routeFallbacks)
 	var acceptedRoutes []string
 	check := func(routes, tools []string) error {
 		for _, name := range tools {
@@ -142,7 +143,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 				return fmt.Errorf("tool %q is a core tool's", name)
 			}
 		}
-		if err := checkModuleRoutes(s.routes, acceptedRoutes, routes); err != nil {
+		if err := checkModuleRoutes(coreRoutes, acceptedRoutes, routes); err != nil {
 			return err
 		}
 		// The kernel commits this module immediately after a nil result, so these routes belong to the next check's

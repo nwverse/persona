@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LEGACY_SCHEME } from "./compatibility";
 import { contextXML, withContexts } from "./context-xml";
 import {
   draftText, editorText, readInlineDraft, replaceInlineRange, writeInlineDraft,
@@ -74,7 +75,7 @@ describe("inline mention message bodies", () => {
   });
 
   it("rebinds references after session-link spelling changes and the workspace body is enriched", () => {
-    const legacy = { ...session, url: session.url.replace("persona:", "jarvis:") };
+    const legacy = { ...session, url: session.url.replace("persona:", `${LEGACY_SCHEME}:`) };
     const enriched = { ...workspace, attrs: { machine: "fixture", cwd: "/work/design" }, text: "Resolved workspace" };
     expect(readInlineBody(inlineBody([workspace, " and ", session]), [legacy, enriched]).document).toEqual([enriched, " and ", legacy]);
   });

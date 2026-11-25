@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { ApiError } from "../../lib/api";
 import type { PickedImage, UploadAnswer, UploadBody } from "../../lib/look-upload";
+import type { ExtendedUploadBody, PatchAnswer, PatchLookBody, PickedUploadImage } from "../../lib/look-upload-states";
+import type { PersonaInfo } from "../../lib/persona";
 import { LookUploadDialog, type LookUploadDeps } from "./LookUpload";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -227,5 +229,157 @@ describe("the upload dialog", () => {
     const late = image(800, 600);
     await act(async () => decoded(late));
     expect(late.release).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides theme color and state rows on an old hub without look_uploads_states", async () => {
+    setup();
+    expect(dialog().querySelector('[data-testid="look-color-toggle"]')).toBeNull();
+    expect(dialog().querySelector('[data-testid="look-states-toggle"]')).toBeNull();
+  });
+
+  it("offers collapsed Theme color and Pictures for each state when look_uploads_states is enabled, handles animated state previews and respects Reduce Motion", async () => {
+    const sent: ExtendedUploadBody[] = [];
+    const mainImg: PickedUploadImage = { source: {} as CanvasImageSource, size: { w: 800, h: 600 }, release: vi.fn() };
+    const animBytes = new Uint8Array([1, 2, 3, 4]);
+    const animBlob = new Blob([animBytes], { type: "image/gif" });
+    const animImg: PickedUploadImage = { source: {} as CanvasImageSource, size: { w: 400, h: 400 }, release: vi.fn(), animated: true, file: animBlob, bytes: animBytes, url: "blob:anim-working" };
+    let reads = 0;
+    const deps: LookUploadDeps = {
+      read: vi.fn(async () => (++reads === 1 ? mainImg : animImg)),
+      render: vi.fn(() => ({ image: "U1RJTEw=", mime: "image/png", side: 600 })),
+      extractColor: vi.fn(() => "#D4683F"),
+      send: vi.fn(async (body: UploadBody) => {
+        sent.push(body as ExtendedUploadBody);
+        return { look: { id: "u-2", source: "hub", name: "Nova", app_icon: "persona", uploaded: true }, current: { id: "u-2", effective: "u-2" } } as UploadAnswer;
+      }),
+    };
+    const onClose = vi.fn();
+    const onUploaded = vi.fn();
+    act(() => root.render(<LookUploadDialog open supportsStates onClose={onClose} onUploaded={onUploaded} deps={deps} />));
+
+    // Secondary entries start collapsed
+    const colorToggle = dialog().querySelector<HTMLButtonElement>('[data-testid="look-color-toggle"]')!;
+    const statesToggle = dialog().querySelector<HTMLButtonElement>('[data-testid="look-states-toggle"]')!;
+    expect(colorToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(statesToggle.getAttribute("aria-expanded")).toBe("false");
+
+    await pick(png());
+    type(field(t("assistant-lookupload.name")), "Nova");
+    // Automatic swatch estimated from the crop
+    expect(dialog().querySelector('[data-testid="look-color-summary-swatch"]')?.getAttribute("data-color")).toBe("#D4683F");
+
+    // Expand Theme color and switch to Choose color
+    act(() => colorToggle.click());
+    expect(colorToggle.getAttribute("aria-expanded")).toBe("true");
+    const chooseColorRadio = [...dialog().querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent === t("assistant-lookupload.color_custom"))!;
+    act(() => chooseColorRadio.click());
+    const colorInput = dialog().querySelector<HTMLInputElement>('[data-testid="look-color-input"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(colorInput, "#3a7bd5");
+      colorInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    // Expand Pictures for each state and pick an animated file for Working
+    act(() => statesToggle.click());
+    expect(dialog().querySelectorAll("[data-state-row]")).toHaveLength(5);
+    const workingInput = dialog().querySelector<HTMLInputElement>('[data-testid="look-upload-state-file-working"]')!;
+    Object.defineProperty(workingInput, "files", { value: [new File(["gif"], "work.gif", { type: "image/gif" })], configurable: true });
+    await act(async () => workingInput.dispatchEvent(new Event("change", { bubbles: true })));
+
+    // State crop sub-view plays animated preview and shows Status mark switch (on by default)
+    expect(dialog().querySelector('[data-testid="look-upload-animated"]')).not.toBeNull();
+    const markInCrop = dialog().querySelector<HTMLButtonElement>('[role="switch"]')!;
+    expect(markInCrop.getAttribute("aria-checked")).toBe("true");
+    act(() => markInCrop.click()); // turn mark off
+    expect(markInCrop.getAttribute("aria-checked")).toBe("false");
+    act(() => button(t("assistant-lookupload.apply_crop")).click());
+
+    // Back on main form: working state shows playing preview and switch off
+    const workingRow = dialog().querySelector('[data-state-row="working"]')!;
+    expect(workingRow.querySelector('[data-state-preview="working"]')?.getAttribute("data-playing")).toBe("true");
+    expect(workingRow.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+    // Idle never has a Status mark switch even if customized
+    const idleRow = dialog().querySelector('[data-state-row="idle"]')!;
+    expect(idleRow.querySelector('[role="switch"]')).toBeNull();
+
+    // Upload sends original animated bytes + crop + mark: false + chosen color
+    await act(async () => uploadButton().click());
+    await act(async () => vi.advanceTimersByTime(50));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      name: "Nova",
+      image: "U1RJTEw=",
+      color: "#3A7BD5",
+      choose: true,
+      states: {
+        working: { crop: { x: 0, y: 0, side: 400 }, mark: false },
+      },
+    });
+    expect(sent[0].states!.working!.image).toBe(btoa(String.fromCharCode(1, 2, 3, 4)));
+  });
+
+  it("stops animated preview playback under prefers-reduced-motion", async () => {
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce"), media: q, addEventListener() {}, removeEventListener() {} }));
+    const animImg: PickedUploadImage = { source: {} as CanvasImageSource, size: { w: 200, h: 200 }, release: vi.fn(), animated: true, file: new Blob(["x"]), url: "blob:anim" };
+    const deps: LookUploadDeps = { read: vi.fn(async () => animImg), extractColor: vi.fn(() => "#27747F") };
+    act(() => root.render(<LookUploadDialog open supportsStates onClose={vi.fn()} onUploaded={vi.fn()} deps={deps} />));
+    await pick(new File(["x"], "loop.gif", { type: "image/gif" }));
+    expect(dialog().querySelector('[data-testid="look-upload-animated"]')).toBeNull();
+    expect(dialog().querySelector('[data-testid="look-upload-crop"] canvas')).not.toBeNull();
+  });
+
+  it("opens filled from the package in Edit mode and PATCHes only what changed", async () => {
+    const patches: { id: string; body: PatchLookBody }[] = [];
+    const onEdited = vi.fn();
+    const onClose = vi.fn();
+    const editLook: PersonaInfo = {
+      id: "u-demo0001",
+      rev: "r1",
+      manifest: {
+        format: 1,
+        id: "u-demo0001",
+        name: "Doudou",
+        subtitle: "Warm",
+        avatar: { sizes: { "128": "avatar/128.png" } },
+        dot: {
+          size: 144,
+          states: {
+            idle: { file: "dot/idle.png", frames: 1 },
+            thinking: { file: "dot/thinking.png", frames: 1 },
+            working: { file: "dot/working.png", frames: 12 },
+            needs_you: { file: "dot/needs_you.png", frames: 1 },
+            offline: { file: "dot/offline.png", frames: 1 },
+          },
+        },
+        colors: { light: { primary: "#3A7BD5", accent: "#2357A5" }, dark: { primary: "#3A7BD5", accent: "#6BA0E8" } },
+        source: { kind: "upload", color: { auto: false, seed: "#3A7BD5" }, states: { working: { mark: true } } },
+      },
+    };
+    const deps: LookUploadDeps = {
+      patch: vi.fn(async (id: string, body: PatchLookBody) => {
+        patches.push({ id, body });
+        return { look: { id, source: "hub", name: "Doudou", app_icon: "persona", rev: "r2", uploaded: true, manifest: editLook.manifest } } as PatchAnswer;
+      }),
+    };
+    act(() => root.render(<LookUploadDialog open supportsStates edit={editLook} onClose={onClose} onUploaded={vi.fn()} onEdited={onEdited} deps={deps} />));
+
+    const saveBtn = button(t("common.save"));
+    expect(saveBtn.disabled).toBe(true); // nothing changed yet
+    expect(field(t("assistant-lookupload.name")).value).toBe("Doudou");
+    expect(dialog().querySelector('[data-state-preview="working"]')?.getAttribute("data-playing")).toBe("true");
+
+    // Toggle working's status mark off and switch color back to Automatic
+    const workingSwitch = dialog().querySelector<HTMLButtonElement>('[data-state-row="working"] [role="switch"]')!;
+    expect(workingSwitch.getAttribute("aria-checked")).toBe("true");
+    act(() => workingSwitch.click());
+    const autoColorRadio = [...dialog().querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent === t("assistant-lookupload.auto"))!;
+    act(() => autoColorRadio.click());
+    expect(saveBtn.disabled).toBe(false);
+
+    await act(async () => saveBtn.click());
+    await act(async () => vi.advanceTimersByTime(50));
+    expect(patches).toEqual([{ id: "u-demo0001", body: { color: "auto", states: { working: { mark: false } } } }]);
+    expect(onEdited).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

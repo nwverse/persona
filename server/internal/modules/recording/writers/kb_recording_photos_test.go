@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,7 +23,7 @@ func TestPhotoAddErrorsInOrder(t *testing.T) {
 	e.RecordingDaysFunc = func() int { return 14 }
 	start := now.AddDate(0, 0, -3)
 	photoMeeting(t, e, recID, start)
-	add := func(id string, u kb.PhotoUpload) error {
+	add := func(id string, u recordingwire.PhotoUpload) error {
 		_, _, err := e.PhotoAdd(id, u, false)
 		return err
 	}
@@ -42,11 +43,11 @@ func TestPhotoAddErrorsInOrder(t *testing.T) {
 		id   string
 		want error
 	}{
-		{"deleted", gone, kb.ErrRecordingDeleted},
+		{"deleted", gone, recordingwire.ErrRecordingDeleted},
 		{"unknown", "4b8fad5b-d9cb-469f-a165-70867728950e", ErrNotFound},
 		{"not a UUID", "x", ErrNotFound},
-		{"a note", note, kb.ErrNotMeeting},
-		{"minutes asked of a note", asked, kb.ErrNotMeeting},
+		{"a note", note, recordingwire.ErrNotMeeting},
+		{"minutes asked of a note", asked, recordingwire.ErrNotMeeting},
 	} {
 		if err := add(c.id, photoUpload(1, 1, "", "")); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, err, c.want)
@@ -58,7 +59,7 @@ func TestPhotoAddErrorsInOrder(t *testing.T) {
 	if ok, err := e.PhotoDelete(recID, 2); !ok || err != nil {
 		t.Fatalf("delete: %v %v", ok, err)
 	}
-	if err := add(recID, photoUpload(2, 2, "", "deleted")); !errors.Is(err, kb.ErrPhotoDeleted) {
+	if err := add(recID, photoUpload(2, 2, "", "deleted")); !errors.Is(err, recordingwire.ErrPhotoDeleted) {
 		t.Fatalf("a deleted photo sent again: %v", err)
 	}
 
@@ -74,11 +75,11 @@ func TestPhotoAddErrorsInOrder(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		id   string
-		u    kb.PhotoUpload
+		u    recordingwire.PhotoUpload
 		want error
 	}{
-		{"another body", recID, photoUpload(1, 1, "", "other"), kb.ErrOpIDReused},
-		{"deleted", recID, photoUpload(2, 2, "", "deleted"), kb.ErrPhotoDeleted},
+		{"another body", recID, photoUpload(1, 1, "", "other"), recordingwire.ErrOpIDReused},
+		{"deleted", recID, photoUpload(2, 2, "", "deleted"), recordingwire.ErrPhotoDeleted},
 		{"new", recID, photoUpload(3, 3, "", ""), ErrReadOnly},
 		{"a note", note, photoUpload(3, 3, "", ""), ErrReadOnly},
 	} {
@@ -88,16 +89,16 @@ func TestPhotoAddErrorsInOrder(t *testing.T) {
 	}
 
 	// 50 at most; a number is never handed out again.
-	for i := 3; i <= kb.MaxPhotos+1; i++ {
+	for i := 3; i <= recordingwire.MaxPhotos+1; i++ {
 		addPhoto(t, e, recID, photoUpload(i, float64(i), "", ""), false)
 	}
-	if err := add(recID, photoUpload(99, 1, "", "")); !errors.Is(err, kb.ErrPhotosFull) {
+	if err := add(recID, photoUpload(99, 1, "", "")); !errors.Is(err, recordingwire.ErrPhotosFull) {
 		t.Fatalf("51st: %v", err)
 	}
-	if ok, err := e.PhotoDelete(recID, kb.MaxPhotos+1); !ok || err != nil {
+	if ok, err := e.PhotoDelete(recID, recordingwire.MaxPhotos+1); !ok || err != nil {
 		t.Fatalf("delete the newest: %v %v", ok, err)
 	}
-	if p := addPhoto(t, e, recID, photoUpload(99, 1, "", ""), false); p.N != kb.MaxPhotos+2 {
+	if p := addPhoto(t, e, recID, photoUpload(99, 1, "", ""), false); p.N != recordingwire.MaxPhotos+2 {
 		t.Fatalf("after deleting the newest: n %d", p.N)
 	}
 
@@ -113,10 +114,10 @@ func TestPhotoAddErrorsInOrder(t *testing.T) {
 	}
 	for _, c := range []struct {
 		name string
-		u    kb.PhotoUpload
+		u    recordingwire.PhotoUpload
 		want error
 	}{
-		{"deleted", photoUpload(2, 2, "", "deleted"), kb.ErrPhotoDeleted},
+		{"deleted", photoUpload(2, 2, "", "deleted"), recordingwire.ErrPhotoDeleted},
 		{"trimmed away", photoUpload(3, 3, "", ""), ErrTranscriptExpired},
 		{"new", photoUpload(100, 3, "", ""), ErrTranscriptExpired},
 	} {
@@ -249,7 +250,7 @@ func TestMinutesPhotosMadeAgainQuietly(t *testing.T) {
 
 	// Still recording: nothing to make again.
 	const open = "1d8fad5b-d9cb-469f-a165-70867728950e"
-	putRecording(t, e, open, attendedUpload(1, time.Now().Add(-time.Minute), kb.AttendanceListener), time.Now())
+	putRecording(t, e, open, attendedUpload(1, time.Now().Add(-time.Minute), recordingwire.AttendanceListener), time.Now())
 	addPhoto(t, e, open, photoUpload(1, 5, "白板", ""), false)
 	if r := recordingNow(t, e, open); r.MinutesAsks != 0 || r.MinutesState != MinutesPending {
 		t.Fatalf("recording: %+v", r)
