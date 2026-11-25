@@ -299,17 +299,10 @@ func TestPushGradingLayerLifecycleManagerIsolationAndQuiesce(t *testing.T) {
 		flaky.mu.Lock()
 		flaky.failPrune = false
 		flaky.mu.Unlock()
-		deadline := time.Now().Add(2 * time.Second)
-		for {
+		eventually(t, 2*time.Second, "automatic backoff retry prunes layer", func() bool {
 			snap, err := readPushGradingSnapshot(context.Background(), baseStore)
-			if err == nil && snap.Layer == nil {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("automatic backoff retry did not prune layer: %+v err=%v", snap, err)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+			return err == nil && snap.Layer == nil
+		})
 
 		// Verify shutdown cancels any scheduled backoff retry promptly with no goroutine leak.
 		if code, body := gradingLayerHTTP(t, h, extA, http.MethodPut, "/api/v1/push/grading/layer", `{"version":1}`); code != http.StatusOK {
