@@ -7368,6 +7368,12 @@ export interface MemoryEntriesResult {
   has_more: boolean;
   /** Opaque: what to send as after for the next page; required in practice whenever has_more is true. */
   after?: string;
+  /**
+   * The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+   * keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+   * out or 0: 4096. Entries past it are left out, the most important kept.
+   */
+  standing_bytes?: number;
 }
 
 /**
