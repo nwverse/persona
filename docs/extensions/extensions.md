@@ -1297,8 +1297,8 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
 
 - **Who goes through it**: sandboxed extensions ("Sandbox" below) have it as their only way out; when the sandbox is on but this machine has no sandbox, the env vars still point to it (well-behaved programs go through it, misbehaving ones can't be stopped, and the status says so).
   Extensions with the sandbox off, built-in ones, and ones from manager.json are unchanged and don't go through it.
-- **What it lets through**: only hosts in this extension's `permissions.network` (`*.example.com` means subdomains under it; IP addresses only if listed literally). Anything else gets 403 "`<host>` is not in this extension's
-  permissions.network", a log line, and a per-extension count (allowed / denied counts and the last denied host, in `sandbox.egress` of the extension's details; also counted in the health counters `egress.allowed` / `egress.denied`).
+- **What it lets through**: only hosts in this extension's `permissions.network` (`*.example.com` means subdomains under it; IP addresses only if listed literally), the addresses its saved settings name (`config:` entries, below) and the hosts its owner allowed (below). Anything else gets 403 "persona sandbox egress: `<host>:<port>` is not in this extension's
+  permissions.network, its settings addresses or the hosts its owner allowed" (the program sees that text; a CONNECT tunnel is refused with the same status), the log line "extension `<id>`: sandbox egress refused `<host>:<port>` (…)", and a per-extension count (allowed / denied counts and the last denied host, in `sandbox.egress` of the extension's details; also counted in the health counters `egress.allowed` / `egress.denied`).
   Names that resolve to local loopback or link-local addresses (cloud metadata services) are not allowed, unless that exact IP is listed. Any port.
 - **Addresses in entry lists** (#9504): `config:<list>[].<field>` expands to every valid saved entry address, with `:http` carrying the same explicit HTTP opt-in as a fixed `config:<field>`. Indexes, nested paths and extra suffixes are invalid. Each entry gets its own exact host/port check, including the default port and URL-userinfo rejection; changing that normalized target clears the entry's secret atomically with the settings write. Adding an entry needs no new manifest consent because the list declaration already disclosed current and future addresses.
 - **The hub's own API**: extensions holding a hub token (`hub` scopes or legacy `hub_api`) reach the hub from the sandbox at `http://hub.persona.internal` (that is what `PERSONA_HUB_URL` and `initialize`'s `hub.url` are),
@@ -1335,8 +1335,25 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
   The responding address is preferred on the next CONNECT to that host:port, but only if it appears in the freshly checked DNS answer. This in-memory hint cache holds at most 1024 destinations.
   Server-first protocols pass their banner through immediately. Clients get up to 1 s to send a complete hello; idle, incomplete, oversized or unrecognized input falls back to ordinary relay with its bytes preserved, without retries.
   Single-address destinations, tunnels through an upstream proxy, plain HTTP, HTTP upgrades and the source-runtime fetch broker keep their existing behavior and timeouts. There is no new configuration.
-- Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Node (libraries that apply the proxy themselves), Python and curl all honor them;
+- Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Python, curl and Node libraries that apply the proxy themselves honor them;
   old clients that only honor `HTTPS_PROXY` still can't get out from the sandbox, which is the intended effect.
+  `NODE_USE_ENV_PROXY=1` is set as well (#15707): without it Node's own `fetch` and `WebSocket` ignore the proxy variables, dial straight out and fail inside the Linux sandbox with `ENETUNREACH` while the proxy counts nothing.
+  Node reads it from 24.0 / 22.21 (`fetch`, `WebSocket`) and 24.5 (`http` / `https`); older Node ignores it, so a native-fetch extension needs Node 24 or a proxy-aware HTTP library. Strict sandboxes (source runtimes), which have no proxy variables, do not get it.
+
+#### Extension egress rules in short
+
+A sandboxed extension (Linux: no network namespace of its own but loopback; macOS: only the proxy's port) reaches the outside only through the egress proxy, and the proxy lets each connection through only when one of these allows its exact destination:
+
+1. its granted `permissions.network` (a name, `*.suffix`, or an IP written as it is);
+2. `hub.persona.internal` when it holds a hub token, and `host.persona.internal:<port>` when `permissions.network` lists a loopback address;
+3. an address its **saved settings** name through a granted `config:<field>` (or `config:<list>[].<field>`) entry: that host and port only;
+4. a host its **owner allowed** in the admin UI (one host, optionally one port; no wildcard).
+
+Nothing else is reachable: no other host or port, no direct connection, and no private, loopback, link-local or metadata address that a name resolves to unless rule 1 names that IP or rule 4 allows a LAN host. Sandboxes are not switched off to make an extension work, and the extension cannot widen these rules itself.
+
+**A connector whose service address is in its sign-in record** (#15707): some legacy connectors take their service URL in their own sign-in step and keep it in the connector's sealed secret storage, not in a `format: "uri"` setting, and their manifest declares no `permissions.network`. The hub cannot read that record (its format is the extension's), so it cannot derive a grant from it, and it must not trust the program to name its own destination. The narrow grant is rule 4: once the extension runs with a proxy-aware client (Node's native `fetch` / `WebSocket` with `NODE_USE_ENV_PROXY`, above), its refused destination appears under `sandbox.egress.recent_denied` and on the settings page; the owner allows exactly that host (with its port) for that extension in the admin UI, and the next connection goes through. An extension that can be changed should instead move the address into a `format: "uri"` setting with a `config:<field>` permission (rule 3), so that changing the address follows the user's settings.
+
+**Diagnosing "unreachable" from a sandboxed extension**: a 403 or a log line saying "sandbox egress refused `<host>:<port>`" means the destination has no grant (rules above). A client error such as `ENETUNREACH`, `EAI_AGAIN` or `connect: operation not permitted` with the extension's `sandbox.egress` counts unchanged means the program dialled around the proxy: its HTTP client ignores the proxy variables (old Node without `NODE_USE_ENV_PROXY`, a raw socket, a library with its own transport), or it addressed `127.0.0.1` instead of `host.persona.internal`.
 
 ### Sandbox (#1856)
 
@@ -1367,7 +1384,7 @@ The way out is a shorter data directory (`PERSONA_HOME`) or manager directory (`
 - New user, PID, network, IPC and UTS namespaces; system directories (`/usr`, `/bin`, `/lib*`, `/etc`, `/opt`) are read-only, the sandbox's own root is read-only too, `/tmp` is a private empty directory, and **the home directory is invisible** (its path can't be written to either);
   the package directory is read-only, while its own data directory (`PERSONA_EXTENSION_DATA`, also `HOME`) and run directory (`~/.persona/extensions/run/<id>/`: its HTTP socket, the proxy socket, and with `agent_runtimes` the socket that leads to the node's `runtime.sock`) are writable.
 - The network namespace has only loopback: the sandbox's first process is `personad __sandbox-run` (personad mounted read-only at `/run/persona/personad`), which forwards `127.0.0.1:3128` on the sandbox's own loopback to the proxy's
-  unix socket, then runs the extension's program (stdin / stdout / stderr as-is, signals forwarded, exit code passed through). So any language's HTTP client works as long as it honors `HTTP(S)_PROXY`, with no SDK changes; only to reach local services on the hub machine you write `host.persona.internal`, not a loopback address ("Egress" above).
+  unix socket, then runs the extension's program (stdin / stdout / stderr as-is, signals forwarded, exit code passed through). So any language's HTTP client works as long as it honors `HTTP(S)_PROXY` (Node's native `fetch` and `WebSocket` through `NODE_USE_ENV_PROXY`, set by the hub), with no SDK changes; only to reach local services on the hub machine you write `host.persona.internal`, not a loopback address ("Egress" above).
 - `systemd-run --user --scope` sets limits: `MemoryMax` (default 1024 MB), `MemorySwapMax=0`, `CPUQuota` (default 100%, i.e. one core). The manifest can request others:
   `runtime.resources: {"memory_mb": 64–8192, "cpu_percent": 10–800}` (old hubs read manifests strictly, so extensions using it put a build number that includes #1856 in `engines.persona`).
   When `systemd-run --user` isn't available (no user systemd), there is only bwrap, with no limits.

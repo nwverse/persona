@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -614,15 +615,22 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 // sessionItems pages through a session's history. With lazy_images=1 images come without their data (the app
 // fetches each one from sessionImage when it scrolls into view); older apps still get them inline.
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
-	q := r.URL.Query()
+	q, queryErr := url.ParseQuery(r.URL.RawQuery)
+	if h.sessionNavigation(w, r, m, q, queryErr) {
+		return
+	}
 	params := map[string]any{"session_id": r.PathValue("sid")}
 	strict := q.Get("strict") == "1"
 	if strict {
 		params["strict_read"] = true
 	}
 	userInputs := q.Get("user_inputs") == "1"
+	metaOnly := q.Get("meta_only") == "1"
 	if userInputs {
 		params["user_inputs"] = true // the index carries positions and bounded excerpts
+		if metaOnly {
+			params["meta_only"] = true
+		}
 	}
 	// Only the paging the app gave: one it left out or sent empty (iOS's latest page has before_seq=) is not 0 to a
 	// runtime, which may take before_seq 0 as a bad value and refuse every page, and the app's sync then asks again.
@@ -657,6 +665,12 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 		if index.Inputs == nil || index.Total != len(index.Inputs) {
 			writeErr(w, http.StatusBadGateway, errors.New("incomplete user input index"))
 			return
+		}
+		if metaOnly {
+			// An older node may have returned the legacy index with excerpts.
+			for i := range index.Inputs {
+				index.Inputs[i] = index.Inputs[i].WithoutExcerpts()
+			}
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, index)

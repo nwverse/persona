@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { api, ApiError, errorText, sessionPath } from "../../lib/api";
-import { assistantPickKey, assistantSetup, ASSISTANT_START_SERVICE_TIER_FEATURE, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
+import { assistantModelHost, assistantPickKey, assistantSetup, ASSISTANT_START_SERVICE_TIER_FEATURE, canonicalLauncher, findAssistantLauncher, type AssistantChat, type AssistantSetup } from "../../lib/assistant-models";
 import { assistantPanel, assistantPickOf } from "../../lib/assistant-panel";
 import { pickEffort, pickFast, pickLauncher, pickModel } from "../../lib/assistant-chat";
 import { conversationModelPath, dropConversationPick } from "../../lib/assistant-pick";
@@ -195,7 +195,11 @@ function AssistantModelCatalog(props: ResolvedCapabilitiesProps) {
 
 function DefaultModelCatalogPanel(props: ResolvedCapabilitiesProps) {
   const catalogVersion = useModelLists();
-  const defaultListOf = useCallback((name: string) => modelList(props.mid, name, "assistant"), [props.mid]);
+  const session = props.chat.session;
+  const defaultListOf = useCallback((name: string) => {
+    const host = assistantModelHost(session, name);
+    return host ? modelList(props.mid, name, "assistant", host) : modelList(props.mid, name, "assistant");
+  }, [props.mid, session]);
   const info = props.launchersInfo !== undefined ? (props.launchersInfo ?? undefined) : assistantLaunchers(props.mid).info;
   const listOf = props.getModelList ?? defaultListOf;
   return <AssistantModelPanelView {...props} info={info} listOf={listOf} catalogVersion={catalogVersion} />;
@@ -302,7 +306,7 @@ function AssistantModelPanelView({
   const apply = async (pick: ModelPick): Promise<boolean> => {
     const s = latest();
     const provider = providers.find((p) => p.id === pick.launcher);
-    const target = info?.launchers.find((l) => l.name === pick.launcher);
+    const target = findAssistantLauncher(info, pick.launcher);
     if (s && chat.kept && canSwitch && provider && target && assistantSwitchNeeded(s, target, provider.engine)) {
       setSwitchPick(pick);
       switchRequest.current = null;
@@ -378,13 +382,23 @@ function AssistantModelPanelView({
       pickFast(false);
     }
   };
-  const onReload = controlledReload ?? ((provider: string) => void readModels(mid, provider, { purpose: "assistant", again: true, first: provider === setup.provider }));
-  const onForget = controlledForget ?? ((provider: string, model: string) => {
-    void forgetModel(mid, provider, model, "assistant").then((error) => error && notify(error, "error"));
+  const onReload = controlledReload ?? ((provider: string) => {
+    const host = assistantModelHost(chat.session, provider);
+    void readModels(mid, provider, {
+      purpose: "assistant",
+      again: true,
+      first: canonicalLauncher(provider) === canonicalLauncher(setup.provider),
+      ...(host ? { host } : {}),
+    });
   });
-  const launcher = info?.launchers.find((l) => l.name === setup.provider);
-  const row = providers.find((p) => p.id === setup.provider)?.models?.find((m) => m.id === state.current?.model);
-  const named = [launcher ? providerTitle(launcher) : setup.provider, row?.name].filter(Boolean).join(" · ");
+  const onForget = controlledForget ?? ((provider: string, model: string) => {
+    const host = assistantModelHost(chat.session, provider);
+    void (host ? forgetModel(mid, provider, model, "assistant", host) : forgetModel(mid, provider, model, "assistant"))
+      .then((error) => error && notify(error, "error"));
+  });
+  const launcher = findAssistantLauncher(info, setup.provider);
+  const row = providers.find((p) => p.id === (launcher?.name ?? setup.provider))?.models?.find((m) => m.id === state.current?.model);
+  const named = [launcher ? providerTitle(launcher) : canonicalLauncher(setup.provider), row?.name].filter(Boolean).join(" · ");
 
   const confirmSwitch = async () => {
     const session = latest();

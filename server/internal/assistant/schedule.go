@@ -2281,6 +2281,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		t.promptRunID = run.ID
 	}
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
+	s.retargetFormerMainTask(ctx, &t, &run)
 	// A schedule the owner let start some kinds by itself runs each round in a new conversation of its own whose
 	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant. Not a
 	// retry: it goes on in the round's conversation, which has its earlier work, and its plans ask.

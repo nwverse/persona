@@ -857,11 +857,9 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		v.LastCheck = &t
 	}
 	if r := u.release; r != nil {
-		released := r.Manifest.Released
-		v.Latest = &latestView{Version: r.Manifest.Version, Build: r.Manifest.Build, Released: &released, Notes: r.Manifest.Notes,
+		v.Latest = &latestView{Version: r.Manifest.Version, Build: r.Manifest.Build, Notes: r.Manifest.Notes,
 			Newer: u.h.build.Newer(r.Manifest.Build), Bad: slices.Contains(u.settings.Bad, r.Manifest.Build)}
 		if r.Development != nil {
-			v.Latest.Released = nil // checked Git candidates have no publication date
 			v.Latest.Commit, v.Latest.Branch = r.Development.Commit, r.Development.Branch
 			v.Latest.UpdatedAt = r.Development.UpdatedAt
 			v.Latest.BackupID = r.Development.BackupID
@@ -870,6 +868,8 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 			if r.Manifest.Ancestors != "" {
 				v.Latest.Held = u.developmentHold(r.Manifest)
 			}
+		} else if released := r.Manifest.Released; !released.IsZero() {
+			v.Latest.Released = &released
 		}
 		// A deliberately selected saved program version is not evidence that
 		// the development Git source stopped publishing releases.
