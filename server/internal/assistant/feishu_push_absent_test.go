@@ -69,7 +69,7 @@ func TestFeishuPushesAreSkippedWithoutTheLarkModule(t *testing.T) {
 	}
 	s.feishuAgentDone("m1", proto.Session{SessionID: "s2"}, "head", "text", "place", false)
 	s.feishuMirror(ctx, "m1", "s1")
-	time.Sleep(50 * time.Millisecond) // past a retry slot
+	<-time.After(50 * time.Millisecond) // a window past a retry slot (feishuMirrorRetry is 1 ms): nothing may be logged in it
 	for _, l := range logs() {
 		if strings.Contains(l, "bots:") {
 			t.Fatalf("logged %q", l)
