@@ -96,6 +96,11 @@ tags, pinned facts and projects can still be edited, they can still be deleted (
 "App API" below), and retention (`recording_days`, `minutes_days`) keeps its schedule. What stops is everything that
 makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries.
 
+A stored photo's image is read through the same route with or without the module, `GET /api/v1/recordings/{id}/photos/{n}`:
+the knowledge base's own read-only route (`assistant/kb_recording_media.go`, full credentials only), answering as the
+module's did before it moved. Photo upload, list and delete are the module's. No route serves stored audio, with the
+module or without: the chunks of a recording in flight are the module's input and stay on disk untouched.
+
 A recording that was in flight when the module went (an upload not complete, minutes or a recap `pending`, a hub
 transcription `live` or `finishing`) is shown as stored, with `paused: "module_off"` on its list entry and its detail.
 The field is derived when the response is built and never written, so the module continues from the stored state when
@@ -882,6 +887,12 @@ Metadata of all six entity types can include `pinned` (user-confirmed facts) and
 
 - Omitted or `null` `tags` keeps the current value; explicit `[]` clears; a nonempty array replaces. After explicit clearing, metadata retains `tags: []`, allowing clients to replace cached tags with the latest empty value.
 - Only explicit updates change `pinned`; an empty string clears it. Compression and project rewrites receive it as read-only input; the model cannot overwrite stored facts. Person corrections also feed related chat compression.
+
+Recording detail responses advertise `supports_expected_pinned: true` beside `detail` when a correction can be
+conditional. On that manager, send `expected_pinned` with `pinned` to compare the previously displayed facts in
+the same recording transaction. Use `""` for previously empty facts. A mismatch returns HTTP 409 and keeps the
+existing facts. Read the latest facts before applying a retained draft. Omitting the condition preserves the
+original update behavior.
 - People accept `status: active`, `ignored` (an account excluded from automatic person notes, summaries and new chat/project associations), or `self` (the owner, excluded from external participant rosters). Missing or empty metadata status retains normal active-contact behavior. In updates, omitted or empty status keeps the current value; use `active` to restore a contact. Other nonempty person statuses are rejected before changing fields or links.
 - Historical associations and summaries remain on disk; linked-entity rosters and project deduplication member counts omit ignored/self accounts without deleting those records. `kb.list` for people omits ignored accounts before ranking and pagination, so totals and offsets count only listed people; self accounts remain listed. Ignored accounts can still be explicitly read by ID with `kb.get` and corrected with `kb.update`. This does not synchronize `self` into the separate encrypted `kb.owner` record.
 - Manual writes lock fields touched by default, including person `note` and `status`, summaries, project descriptions and associations. Background writes reread current protected fields at write time so corrections made during a model call cannot be overwritten by stale objects.

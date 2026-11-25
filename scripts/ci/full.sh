@@ -65,8 +65,10 @@ while [ "$next" -lt "${#LANES[@]}" ] || [ "${#pid_lane[@]}" -gt 0 ]; do
   while [ "$next" -lt "${#LANES[@]}" ] && [ "${#pid_lane[@]}" -lt "$jobs" ]; do
     lane=${LANES[$next]}
     next=$((next + 1))
+    # Pair the ordinary and core versions in the four portable server jobs.
+    case "$lane" in server-node|server-managers|server-other) pair=1 ;; *) pair=0 ;; esac
     # shellcheck disable=SC2046
-    TMPDIR="$work" bash $(command_for "$lane") > "$work/$lane.log" 2>&1 &
+    PERSONA_CI_PAIRED_SERVER_SHARDS=$pair TMPDIR="$work" bash $(command_for "$lane") > "$work/$lane.log" 2>&1 &
     pid_lane[$!]=$lane
     started[$lane]=$SECONDS
   done

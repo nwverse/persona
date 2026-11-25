@@ -39,11 +39,11 @@ func upstreamCode(err error) string {
 func (c *conversation) connect(woken bool) error {
 	c.mu.Lock()
 	p, w, model, voice := c.p, c.w, c.model, c.voice
-	history := voiceLines(c.history)
-	if !c.started && !c.resumed {
-		history = nil
-	}
 	c.mu.Unlock()
+	history, err := c.historyForConnect()
+	if err != nil {
+		return err
+	}
 
 	began := time.Now()
 	dctx, cancel := context.WithTimeout(c.ctx, startTimeout)
@@ -168,6 +168,27 @@ func (c *conversation) connect(woken bool) error {
 		c.runs.observeTarget(linkKey{c.target.MachineID, c.target.SessionID}) // after the runs handed back
 	}
 	return nil
+}
+
+// historyForConnect includes a line flushed by the old session only when its write succeeded. The socket
+// may already have dropped while its writer still owns the outcome; a failed line goes to the new one as input.
+func (c *conversation) historyForConnect() ([]prompts.VoiceLine, error) {
+	c.mu.Lock()
+	for c.sus.textWrite != nil {
+		done := c.sus.textWrite
+		c.mu.Unlock()
+		select {
+		case <-done:
+		case <-c.ctx.Done():
+			return nil, c.ctx.Err()
+		}
+		c.mu.Lock()
+	}
+	defer c.mu.Unlock()
+	if !c.started && !c.resumed {
+		return nil, nil
+	}
+	return voiceLines(c.history), nil
 }
 
 // startSession starts the upstream session on up, declaring tools (nil: none), and waits for the service to start it:

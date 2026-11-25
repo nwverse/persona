@@ -100,7 +100,7 @@ This is a public open-source repository; everyone and every Agent maintains it t
   a core holds value objects, never primitives; it has no exported fields, getters or setters; it is built only through parse / new /
   restore (a staged builder past four inputs), its data leaves only through `Accept(visitor)` and `Wire()` in its adapter, and it takes the
   clock and ids as arguments and returns failures as `outcome.Of`. Every new server package declares `//persona:layer`. Start one with
-  `python3 scripts/new_domain_slice.py go <dir> --doc "…"`; `go test ./<pkg>/...` names each broken rule and its fix.
+  `python3 scripts/gen/new_domain_slice.py go <dir> --doc "…"`; `go test ./<pkg>/...` names each broken rule and its fix.
 
 ### Server and data
 

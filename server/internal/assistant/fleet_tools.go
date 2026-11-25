@@ -221,6 +221,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
 	}
+	if res, refused := s.inboxVisibilityToolRefusal(ctx, machine, session, origin, name, args); refused {
+		return res
+	}
 	if slices.Contains(resourceToolNames, name) {
 		return s.resourceTool(ctx, machine, session, name, args)
 	}

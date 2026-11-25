@@ -518,6 +518,11 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 	if _, ok := directionPromptSettingID(a.Key); ok {
 		return proto.TextResult(errNoDirection.Error(), true)
 	}
+	// A disabled manager module still owns its stored setting. Its key does
+	// not become a hub or extension setting when the module is unavailable.
+	if moduleSettingKeys[a.Key] {
+		return proto.TextResult(unavailableModuleSetting(a.Key).Error(), true)
+	}
 	return s.appTool(ctx, AppSettings, call, args) // the hub's
 }
 
@@ -529,7 +534,9 @@ func (s *Service) listSettings(ctx context.Context, own []ownSetting) (string, e
 	if err := s.appCall(ctx, AppSettings, SettingsList, map[string]any{}, &res); err != nil {
 		return "", err
 	}
-	all := res.Settings
+	// The manager supplies its module keys when loaded and hides them when
+	// disabled, even if the hub returns an older copy of the catalog.
+	all := slices.DeleteFunc(res.Settings, func(st Setting) bool { return moduleSettingKeys[st.Key] })
 	for _, o := range own {
 		all = append(all, o.Setting)
 	}
