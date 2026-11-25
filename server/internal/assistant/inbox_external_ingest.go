@@ -17,6 +17,7 @@ import (
 type externalInboxStore interface {
 	ConfiguredExternalRefs(context.Context, []assistantwire.ExternalRef) ([]assistantwire.ExternalRef, error)
 	SaveExternalInboxItems(context.Context, []db.InboxRow, []assistantwire.ExternalInboxEvent, time.Time) error
+	ClaimLegacyExternalInbox(context.Context, []assistantwire.ExternalInboxEvent, string, time.Time) (bool, error)
 	ExternalRoutingConfiguration(context.Context, []assistantwire.ExternalRef) (assistantwire.ExternalRoutingConfiguration, error)
 	WithExternalInboxSweep(context.Context, func() error) error
 	ReadyExternalInboxEvents(context.Context, time.Time, int) ([]assistantwire.ExternalInboxWork, error)
@@ -67,10 +68,23 @@ func (b *inboxBook) captureExternalInbox(it *InboxItem, sourceEvent []string) {
 			event.Mentions = append(event.Mentions, "all")
 		}
 	}
-	if len(sourceEvent) == 0 {
-		sourceEvent = inboxExternalEventIDs(it)
+	if captured := externalInboxEvents(it, event, sourceEvent); len(captured) != 0 {
+		it.externalMoves = append(it.externalMoves, captured...)
+		it.externalChecking = true
 	}
-	for _, id := range sourceEvent {
+}
+
+// Both forwarding paths claim the same provider event, even when it arrived in
+// a different Inbox row or was collected at a new cursor.
+func externalInboxEvents(it *InboxItem, event assistantwire.ExternalInboxEvent, ids []string) []assistantwire.ExternalInboxEvent {
+	if len(it.ExternalPath) == 0 {
+		return nil
+	}
+	if len(ids) == 0 {
+		ids = inboxExternalEventIDs(it)
+	}
+	var events []assistantwire.ExternalInboxEvent
+	for _, id := range ids {
 		if id == "" {
 			continue
 		}
@@ -84,9 +98,34 @@ func (b *inboxBook) captureExternalInbox(it *InboxItem, sourceEvent []string) {
 		}
 		ref, _ := json.Marshal(event.Ref)
 		event.Key = namedClientID("external inbox\n" + string(ref) + "\n" + string(event.EventID))
-		it.externalMoves = append(it.externalMoves, event)
-		it.externalChecking = true
+		events = append(events, event)
 	}
+	return events
+}
+
+func (s *Service) claimLegacyExternalInbox(ctx context.Context, snap InboxItem, todo string) (bool, error) {
+	store := s.externalInboxDB()
+	if store == nil {
+		return true, nil
+	}
+	// Old Inbox rows predate external_path. Reconstruct it from the same
+	// connector metadata used on collection, without interpreting message text.
+	if len(snap.ExternalPath) == 0 {
+		var thing connector.InboxThing
+		if conn := snap.Connector; conn != nil {
+			thing = connector.InboxThing{Thread: conn.Thread, URL: conn.URL, OpenURL: conn.OpenURL, Tags: conn.Tags}
+		}
+		if snap.Group != nil {
+			thing.Thread = snap.Group.Thread
+		}
+		s.inbox.setConnectorExternalPath(&snap, thing)
+	}
+	events := externalInboxEvents(&snap, assistantwire.ExternalInboxEvent{}, nil)
+	if len(events) == 0 {
+		return true, nil
+	}
+	owner := namedClientID("legacy Inbox forward\n" + snap.ID + "\n" + snap.Last + "\n" + todo)
+	return store.ClaimLegacyExternalInbox(ctx, events, owner, time.Now().UTC())
 }
 
 func cleanExternalText(text string, limit int) string {
