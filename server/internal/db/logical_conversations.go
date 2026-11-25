@@ -916,6 +916,26 @@ func (d *DB) ConversationInputPending(ctx context.Context, machine, session stri
 	return conversationInputPending(ctx, d.pool, machine, session)
 }
 
+// ConversationSegmentDispatched reports whether any input has been sent, accepted,
+// or left in doubt since segment was activated, or whether no activation switch exists for it.
+func (d *DB) ConversationSegmentDispatched(ctx context.Context, machine, session, segment string) (bool, error) {
+	if d.sets&ManagerSet == 0 {
+		return true, nil
+	}
+	var dispatched bool
+	err := d.pool.QueryRow(ctx, `SELECT
+		NOT EXISTS(SELECT 1 FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND target_segment=$3)
+		OR EXISTS(
+			SELECT 1 FROM conversation_inputs i
+			JOIN conversation_switches s
+				ON s.logical_machine=i.logical_machine AND s.logical_session=i.logical_session
+			WHERE s.logical_machine=$1 AND s.logical_session=$2 AND s.target_segment=$3
+				AND i.epoch >= s.expected_epoch + 1
+				AND i.state IN ('sending', 'in_doubt', 'accepted')
+		)`, machine, session, segment).Scan(&dispatched)
+	return dispatched, err
+}
+
 func conversationInputPending(ctx context.Context, q conversationQuerier, machine, session string) (bool, error) {
 	var pending bool
 	err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND state IN ('queued','sending','in_doubt'))`, machine, session).Scan(&pending)

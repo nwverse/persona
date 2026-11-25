@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devices"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type logicalConversationStore interface {
@@ -577,4 +578,90 @@ func (d *logicalDevices) liveTarget(machine string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+type logicalSegmentInputStore interface {
+	ConversationSegmentDispatched(context.Context, string, string, string) (bool, error)
+}
+
+func isMissingTranscriptErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code == codeSessionNotFound {
+		return true
+	}
+	code, coded := relayErrCode(err)
+	return coded && code == codeSessionNotFound
+}
+
+// isZeroTurnPreparedSegment reports whether seg is an active pre-created segment
+// (Ordinal > 1) with no observed generation, no file growth revision, no durable
+// history row, and no dispatched or accepted input since activation. Any segment
+// with real history evidence fails closed and keeps data-loss protection.
+func (s *Service) isZeroTurnPreparedSegment(ctx context.Context, c *db.LogicalConversation, seg conversationlog.Segment) bool {
+	if c == nil || seg.Ordinal <= 1 || seg.State != "active" || seg.FrozenEnd != nil {
+		return false
+	}
+	if seg.SourceHistory != "" || seg.SourceRevision != 0 {
+		return false
+	}
+	hs, ok := s.store().(conversationHistoryStore)
+	if !ok {
+		return false
+	}
+	h, err := hs.ConversationHistory(ctx, seg.MachineID, seg.SessionID)
+	if err != nil || h != nil {
+		return false
+	}
+	inputs, ok := s.store().(logicalSegmentInputStore)
+	if !ok {
+		return false
+	}
+	dispatched, err := inputs.ConversationSegmentDispatched(ctx, c.MachineID, c.SessionID, seg.ID)
+	return err == nil && !dispatched
+}
+
+func (s *Service) physicalSegmentMissing(ctx context.Context, seg conversationlog.Segment) bool {
+	if physical := s.physicalDevices(); physical != nil {
+		sum, known := physical.Summary(seg.MachineID)
+		if !known || !sum.Online {
+			return false
+		}
+		if shown, ok := physical.Shown(seg.MachineID); !ok || !shown.Listed {
+			return false
+		}
+		_, found := physical.Session(seg.MachineID, seg.SessionID)
+		return !found
+	}
+	var out struct {
+		Sessions []proto.Session `json:"sessions"`
+	}
+	if err := s.call(context.WithValue(ctx, logicalSourceKey{}, true), seg.MachineID, DeviceSessionsList, nil, &out); err != nil {
+		return false
+	}
+	for _, row := range out.Sessions {
+		if row.SessionID == seg.SessionID {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) isVanishedZeroTurnSegment(ctx context.Context, c *db.LogicalConversation, seg conversationlog.Segment) bool {
+	return s.isZeroTurnPreparedSegment(ctx, c, seg) && s.physicalSegmentMissing(ctx, seg)
+}
+
+func (s *Service) isZeroTurnPlaceholderConversation(ctx context.Context, machine, session string) bool {
+	st, ok := s.store().(logicalConversationStore)
+	if !ok {
+		return false
+	}
+	c, err := s.physicalLogicalConversation(ctx, st, machine, session)
+	if err != nil || c == nil || c.Deleted || c.MachineID != machine || c.SessionID != session {
+		return false
+	}
+	a, ok := c.Active()
+	return ok && s.isZeroTurnPreparedSegment(ctx, c, a)
 }
