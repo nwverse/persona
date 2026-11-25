@@ -104969,6 +104969,29 @@
         }
       }
     },
+    "Meeting recording is off on this hub.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording is off on this hub."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このhubでは会議の録音がオフです。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 hub 关闭了会议录音。"
+          }
+        }
+      }
+    },
     "Meeting recording is off on this hub, so new minutes aren't written. What's already here stays.": {
       "extractionState": "manual",
       "localizations": {
