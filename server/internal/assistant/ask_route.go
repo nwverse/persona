@@ -724,6 +724,40 @@ var userApprovalWords = []string{"发消息", "回复", "评论", "comment", "se
 // payload has no risk word. Outward verbs use the connector gate's existing list (outboundVerbs in card_layers.go).
 var userApprovalActionVerbs = []string{"delete", "remove", "destroy", "erase", "purge", "trash", "buy", "purchase", "pay", "charge"}
 
+// localFileEditPermission reports whether ix's payload is local file data. Antigravity's ACP permission
+// callback passes the display title to mapToolCall, so a local write arrives as "File <path>" with the
+// original raw input instead of map.js's canonical Write/Edit name. Recognize that display shape only
+// with a known string write/edit field; a path-like title alone never suppresses action classification.
+func localFileEditPermission(ix proto.Interaction) bool {
+	switch ix.ToolName {
+	case "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch":
+		return true
+	}
+	path, ok := strings.CutPrefix(ix.ToolName, "File ")
+	if !ok || strings.TrimSpace(path) == "" {
+		return false
+	}
+	var input map[string]json.RawMessage
+	if json.Unmarshal(ix.ToolInput, &input) != nil {
+		return false
+	}
+	for _, key := range [...]string{
+		"CodeContent", "Content", "content",
+		"TargetContent", "Target", "old_string",
+		"ReplacementContent", "Replacement", "new_string",
+	} {
+		raw, exists := input[key]
+		if !exists {
+			continue
+		}
+		var content string
+		if json.Unmarshal(raw, &content) == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // userApproval says why permission or plan card ix is the user's to allow, not its supervisor's ("" when the
 // supervisor may allow it; either may always deny it): it asks for a form or a secret, it is an owner-action proposal
 // or a secret hand-off, or its actual action goes out in the user's name, spends money or deletes. A local file edit's
@@ -736,11 +770,9 @@ func userApproval(ix proto.Interaction) string {
 	case ix.OwnerProposal, ix.ApprovalBatchID != "", ix.ToolName == proto.SecretHandoffTool:
 		return "is an owner action"
 	}
-	if ix.Kind == proto.IxPermission {
-		switch ix.ToolName {
-		case "Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch":
-			return ""
-		}
+	if ix.Kind == proto.IxPermission && (ix.ToolName == "Skill" || localFileEditPermission(ix)) {
+		// Skill only loads instructions; later tool calls are classified on their own.
+		return ""
 	}
 	if verb := connector.WriteVerb(ix.ToolName); slices.Contains(outboundVerbs, verb) || slices.Contains(userApprovalActionVerbs, verb) {
 		return fmt.Sprintf("would send, reply or comment in the user's name, spend money or delete (tool action %s)", verb)

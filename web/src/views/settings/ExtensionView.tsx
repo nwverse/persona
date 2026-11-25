@@ -33,7 +33,7 @@ import { defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkMan
 import { keepView, NATIVE_UI_VERSION, readKeptView } from "../../lib/extension-view-cache";
 import type { UIRowControl } from "../../lib/extension-ui-v6";
 import { currentLanguage, t } from "../../i18n";
-import { HEALTH_INTAKE_UI } from "../../lib/health-intake-ui";
+import { HEALTH_INTAKE_UI, STRENGTH_EVENT } from "../../lib/health-intake-ui";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 
@@ -103,8 +103,10 @@ function useInvalidate(extension: string, ui: string, draw: () => void, skipHell
     });
     // the subscription pages (#2041): a subscription saved, run or deleted anywhere draws them again
     const offSubscription = extension === SUBSCRIPTIONS_UI ? onHubEvent("subscription", () => now()) : () => {};
-    // the health pages (#13176): a record logged or undone anywhere, or a goal saved, draws them again
+    // the health pages (#13176): a record logged or undone anywhere, or a goal saved, draws them again; so does any
+    // change to strength training (#14713: its message carries nothing, the pages and the home card read again)
     const offIntake = extension === HEALTH_INTAKE_UI ? onHubEvent("health_intake", () => now()) : () => {};
+    const offStrength = extension === HEALTH_INTAKE_UI ? onHubEvent(STRENGTH_EVENT, () => now()) : () => {};
     // a reconnect the hub could not resume: an invalidate missed meanwhile is not replayed (#4954)
     const offHello = onHubEvent("hello", (msg) => !isResumed(msg) && !skipHelloRef.current?.() && now());
     const shown = () => {
@@ -115,6 +117,7 @@ function useInvalidate(extension: string, ui: string, draw: () => void, skipHell
       off();
       offSubscription();
       offIntake();
+      offStrength();
       offHello();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", shown);
@@ -319,7 +322,7 @@ function KeptView({ view, native, compact, bare, title, onWide, onTitle }: { vie
 }
 export function LegacyExtensionUI({
   extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, onDepth, navigation, active = true, manager,
-  placeholder, onView, onTitle, openPage,
+  placeholder, onView, onTitle, openPage, onClose,
 }: {
   extension: string; ui: string; context?: UIContext; embedded?: boolean; compact?: boolean; bare?: boolean; title?: string;
   /** Whose extension it is (another manager's inbox item or computer, docs/assistant/managers.md "Clients"); none: the default's. */
@@ -342,6 +345,8 @@ export function LegacyExtensionUI({
   onTitle?: (title: string | undefined) => void;
   /** A push the page around opens itself, as a page of its own; true when it did (Dashboards' index opening a page, #15017). */
   openPage?: (page: UIPush) => boolean;
+  /** The first page asked to be taken off (a pop with nothing under it): the page around it closes. Without it, ignored. */
+  onClose?: () => void;
 }) {
   const [stack, setStack] = useState<UIPage[]>(() => [{ ui, ...(firstState ? { state: firstState } : {}) }]);
   const linkManager = useLinkManager();
@@ -491,7 +496,10 @@ export function LegacyExtensionUI({
   };
   const pop = () => {
     if (navigation) { navigation.pop(); return; }
-    if (stack.length <= 1) return;
+    if (stack.length <= 1) {
+      onClose?.();
+      return;
+    }
     if (historied) history.back(); // the popstate above takes the page off
     else setStack((s) => s.slice(0, -1));
   };
