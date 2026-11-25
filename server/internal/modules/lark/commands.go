@@ -246,7 +246,7 @@ func (s core) statusCard(ctx context.Context, t botTarget) (*botcard.Card, strin
 	for _, ix := range shown {
 		q := clip(s.h.PendingQuestion(ix), 120)
 		kind := ""
-		if key := s.h.IxKindTag(ix.Kind); key != "" {
+		if key := ixKindTags[ix.Kind]; key != "" {
 			kind = i18n.T(l, key)
 		}
 		md := "**" + botcard.EscapeMarkdown(q) + "**"

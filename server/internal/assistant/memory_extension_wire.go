@@ -63,7 +63,7 @@ var (
 //     last: the extension's own order (most important first) is kept among entries alike, standing ones and then
 //     higher ranks put first, and the whole reversed.
 //
-// Facet is the extension's own grouping and is not carried: usage never reads it.
+// Facet is retained for explicit recall filtering; categories still go through the hub's visibility checks.
 func memoryExtensionBatchOf(pages []wire.MemoryEntriesResult) memoryExtensionBatch {
 	b := memoryExtensionBatch{Tagged: len(pages) > 0}
 	type ranked struct {
@@ -121,5 +121,5 @@ func memoryExtensionEntryOf(w wire.MemoryEntry) (memoryExtensionEntry, bool) {
 		}
 	}
 	return memoryExtensionEntry{ID: w.ID, Text: text, OriginSpace: w.OriginSpace, Categories: slices.Clone(w.Categories),
-		Tags: tags, Standing: w.Standing}, true
+		Tags: tags, Facet: w.Facet, Standing: w.Standing}, true
 }

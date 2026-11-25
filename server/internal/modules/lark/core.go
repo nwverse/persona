@@ -31,6 +31,8 @@ type turns struct {
 	posts threadPoster
 	// book is the chat's state (chat_state.go).
 	book feishuBook
+	// detached are the cards closed when their node went away (asks.go).
+	detached detachedCards
 }
 
 // wait waits for the workers, or ctx.
