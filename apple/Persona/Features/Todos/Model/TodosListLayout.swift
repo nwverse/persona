@@ -52,9 +52,8 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     /// The row in words, for VoiceOver: the title, the state its mark draws, its line (with how many asks), line 3, then
     /// its time said in full ("Due Saturday", "16 minutes ago").
     var spoken = ""
-    /// What `spoken` says before and after its line, and the row in words without its answer, so a search's result is
-    /// said as it is drawn (the sentence it was found by in the line's place, no answer) without the row's words worked
-    /// out again (`spoken(_:)`).
+    /// What `spoken` says before and after its line, so a search's result found by its notes says the sentence it was
+    /// found by in the line's place without the row's words worked out again (`spoken(_:)`).
     var spokenAround = TodoSpokenAround()
     /// The tick's value: Done or Not done (its label is the title).
     var tickValue = ""
@@ -72,28 +71,26 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     }
 
     /// Its answers as the row draws them and VoiceOver offers them: none on a search's result, as no Mark Done
-    /// (`offersMarkDone`); the line, the card and the answer's mark come back with the list once the field is cleared.
+    /// (`offersMarkDone`), so no OK or Retry, no Options or its card and no Undo; they come back once the field is
+    /// cleared. What this device did with the ask (`answers?.mark`) is not an answer but a fact: line 2 keeps saying it.
     func answers(_ search: TodoSearchHit?) -> TodoRowAnswers? {
         search == nil ? answers : nil
     }
 
-    /// The row in words as it is drawn: outside a search, `spoken`; on a search's result, no answer in its line's place
-    /// (`answers(_:)`), and one found by its notes says the sentence there: the title, the state its mark draws, the
+    /// The row in words as it is drawn: `spoken`, the line or the answer given here kept on a result found by its
+    /// title; one found by its notes says the sentence in the line's place: the title, the state its mark draws, the
     /// sentence, line 3, the time.
     func spoken(_ search: TodoSearchHit?) -> String {
-        guard search != nil else { return spoken }
-        guard let found = found(by: search) else { return spokenAround.unanswered }
+        guard let found = found(by: search) else { return spoken }
         return [spokenAround.head, found.text, spokenAround.tail].filter { !$0.isEmpty }.joined(separator: spokenAround.separator)
     }
 }
 
 /// The words `TodoRowContent.spoken` says around its line: the title, High priority and the state before it; line 3 and
-/// the time after it. And the row in words with its line where an answer took the line's place (`unanswered`), as a
-/// search's result found by its title says it.
+/// the time after it.
 nonisolated struct TodoSpokenAround: Equatable, Sendable {
     var head = ""
     var tail = ""
-    var unanswered = ""
     var separator = ""
 }
 
@@ -535,8 +532,7 @@ nonisolated enum TodoRowContentLogic {
 
     /// The row in words: the title; High priority, where it is; the state its mark draws (its line may already say it);
     /// the line, with how many asks, or the answer given here in its place; line 3; the time. And what it says around the
-    /// line, the state always (a search's sentence does not say it), and the same words with the line kept in place of
-    /// the answer (a search's result offers none).
+    /// line, the state always (a search's sentence does not say it).
     private static func spoken(_ c: TodoRowContent, heard: [String], words: TodoWords) -> (String, TodoSpokenAround) {
         let separator = words.listSeparator
         var head = [c.title]
@@ -551,17 +547,15 @@ nonisolated enum TodoRowContentLogic {
         let tail = [c.caption].compactMap { $0 } + heard
         var parts = head
         if let state, c.said?.lead != state { parts.append(state) }
-        let line = c.said.map { $0.spoken(separator: separator) }
-        let answered: String? = switch c.answers?.mark {
-        case .chosen(let label, _)?: label
-        case .elsewhere?: words("Answered elsewhere [To-dos Answers]")
-        case .unsure?: words("Not sure your answer went through [To-dos Answers]")
-        default: nil
+        switch c.answers?.mark {
+        case .chosen(let label, _)?: parts.append(label)
+        case .elsewhere?: parts.append(words("Answered elsewhere [To-dos Answers]"))
+        case .unsure?: parts.append(words("Not sure your answer went through [To-dos Answers]"))
+        default: if let said = c.said { parts.append(said.spoken(separator: separator)) }
         }
-        let unanswered = (parts + [line].compactMap { $0 } + tail).joined(separator: separator)
-        let spoken = answered.map { (parts + [$0] + tail).joined(separator: separator) } ?? unanswered
-        return (spoken, TodoSpokenAround(head: (head + [state].compactMap { $0 }).joined(separator: separator),
-                                         tail: tail.joined(separator: separator), unanswered: unanswered, separator: separator))
+        return ((parts + tail).joined(separator: separator),
+                TodoSpokenAround(head: (head + [state].compactMap { $0 }).joined(separator: separator),
+                                 tail: tail.joined(separator: separator), separator: separator))
     }
 
     /// The request's title for a run's plan or tool approval (DESIGN_SYSTEM 5.6); nil for any other ask.

@@ -7,8 +7,9 @@ import PersonaWire
 /// The To-dos list's search (#10465; DESIGN_SYSTEM 3.4 "To-dos list", "List controls"): the titles and notes of every
 /// to-do of the current assistant the device holds, open and closed; a title match keeps the row's line 2, a notes match
 /// says the sentence that matched with its words on the accent tint ("List controls"); results offer no Mark Done and no
-/// answers; the model looks off the main actor, a newer key taking over, a cleared field is the list again at once, and
-/// a push while it searches looks through the to-dos it changed.
+/// answers, while one found by its title still says an answer given here; the model looks off the main actor, a newer
+/// key taking over, a cleared field is the list again at once, and a push while it searches looks through the to-dos it
+/// changed.
 struct TodoSearchTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let words = TodoWords(locale: Locale(identifier: "en_US"))
@@ -79,10 +80,11 @@ struct TodoSearchTests {
                 && TodoFoundText.lead(for: .accessibility5) == 10)
     }
 
-    /// A result offers no answers, as it offers no Mark Done: the row draws neither its answers' line nor an answer
-    /// given here, and VoiceOver's actions take them from the same `answers(_:)`; it is said with the hub's line (a
-    /// notes match, the sentence) where outside the search the answer given here is said. The row's words are worked
-    /// out once: only `row.search` tells them apart.
+    /// A result offers no answers, as it offers no Mark Done: the row draws no answers' line, no card and no Undo, and
+    /// VoiceOver's actions take them from the same `answers(_:)`. What this device did with the ask is a fact, not an
+    /// answer: one found by its title still says it in line 2's place ("You chose …", "Not sure your answer went
+    /// through"), never the hub's line that may still ask; one found by its notes says the sentence there, as any row.
+    /// The row's words are worked out once: only `row.search` tells them apart.
     @MainActor @Test func aResultOffersNoAnswers() throws {
         let ask = OwnerAsk(id: "a", kind: OwnerAskKind.decision, home: OwnerAskHome.todo, round: "r", recommend: "Ryokan Hanami",
                            options: [.init(label: "Ryokan Hanami"), .init(label: "Kaede")], risk: OwnerAskRisk.safe)
@@ -99,13 +101,20 @@ struct TodoSearchTests {
         #expect(open.answers(byTitle) == nil && open.answers(byNotes) == nil, "a result: no OK, no Options, no card")
         #expect(open.spoken(byTitle) == open.spoken, "found by its name: said as outside the search, its line kept")
 
-        // An answer given here: line 2 says it, with Undo, outside the search; a result says the hub's line instead.
+        // An answer given here: line 2 says it, with Undo, outside the search; a result found by its title still says
+        // it (`answers?.mark`, which the row's line 2 reads), without Undo or any other answer.
         let chosen = "You chose Kaede"
         let answered = TodoRowContentLogic.content(row, item: item, view: view, now: now, words: words,
                                                    answered: .chosen(chosen, undo: true))
         #expect(answered.answers(nil)?.mark == .chosen(chosen, undo: true) && answered.spoken(nil).contains(chosen))
         #expect(answered.answers(byTitle) == nil && answered.answers(byNotes) == nil, "no answer, no Undo on a result")
-        #expect(answered.spoken(byTitle) == open.spoken && !answered.spoken(byTitle).contains(chosen), "\(answered.spoken(byTitle))")
+        #expect(answered.answers?.mark == .chosen(chosen, undo: true), "line 2's answer, kept for a result's line")
+        #expect(answered.spoken(byTitle) == answered.spoken && answered.spoken(byTitle).contains(chosen)
+                && answered.spoken(byTitle) != open.spoken, "not the hub's line in its place: \(answered.spoken(byTitle))")
+        // Not sure it went through: a result says so too, as the list does, rather than the line that still asks.
+        let unsure = TodoRowContentLogic.content(row, item: item, view: view, now: now, words: words, answered: .unsure)
+        #expect(unsure.answers(byTitle) == nil && unsure.spoken(byTitle) == unsure.spoken
+                && unsure.spoken(byTitle).contains("Not sure your answer went through"), "\(unsure.spoken(byTitle))")
         let sentence = try #require(answered.found(by: byNotes))
         #expect(answered.spoken(byNotes) == [answered.spokenAround.head, sentence.text, answered.spokenAround.tail]
                     .filter { !$0.isEmpty }.joined(separator: words.listSeparator) && !answered.spoken(byNotes).contains(chosen))

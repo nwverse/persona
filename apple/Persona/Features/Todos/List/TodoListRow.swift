@@ -8,7 +8,8 @@ import SwiftUI
 /// line at its foot, its answers (`TodoRowAnswersLine`: OK or Retry, and Options ⌄, which unfolds the ask's `AskCard`
 /// under it). An answer given here says so in line 2's place ("✓ You chose … · Undo"). A search's result found by its
 /// notes says the sentence that matched in line 2's place (`TodoFoundText`), and a result offers no Mark Done and no
-/// answers. No door and no chevron: the row is its own way to its asks. It reads its own cell only
+/// answers: one found by its title still says an answer given here, without its Undo. No door and no chevron: the row
+/// is its own way to its asks. It reads its own cell only
 /// (`TodosListModel.Row`), so a run's new line draws this row alone (P5), and takes the list's model, not closures, so
 /// a list update that leaves it alone does not draw it again (P6). The tick is a button of its own (a 22-pt ring hit as
 /// a finger's square without growing the row, spoken as the title with Done or Not done, HIG-006 and HIG-007); the rest
@@ -24,7 +25,8 @@ struct TodoListRow: View {
     var body: some View {
         let c = row.content
         // A search's result (`row.search`): a notes match says its sentence; no Mark Done (`offersMarkDone`) and no
-        // answers (`answers(_:)`), neither drawn nor among its actions.
+        // answers (`answers(_:)`), neither drawn nor among its actions. What this device did with its ask is a fact, not
+        // an answer: line 2 still says it without its Undo, back if the field is cleared while the hold lasts.
         let found = c.found(by: row.search)
         let answers = c.answers(row.search)
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
@@ -36,9 +38,9 @@ struct TodoListRow: View {
                     if let found {
                         foundLine(found, mark: c.mark)
                     } else {
-                        switch answers?.mark {
+                        switch c.answers?.mark {
                         case .chosen(let label, let undo)?:
-                            AskChosenLine(text: label, undo: undo ? { model.undoAnswer(row.id) } : nil)
+                            AskChosenLine(text: label, undo: undo && answers != nil ? { model.undoAnswer(row.id) } : nil)
                         case .elsewhere?:
                             AskChosenLine(text: String(localized: "Answered elsewhere [To-dos Answers]"), elsewhere: true)
                         case .unsure?:

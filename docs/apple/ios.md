@@ -2341,17 +2341,17 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     `TodoFoundText.lead(for:)`, and marked by `AssistantSearchMerge.marked`, the chat search's cut and clip, the words
     in the primary on `Theme.accentTint`). A result draws no answers and offers none among the row's accessibility
     actions, the row's search state deciding as it does for Mark Done (`TodoRowContent.answers(_:)`: no answers' line,
-    no card, no answer given here in line 2's place, which then says the hub's line and is spoken so,
-    `TodoSpokenAround.unanswered`). A scroll that rests on the results leaves the place's kept position alone
-    (`TodoWorkspace.rested`); clearing the field brings the place and the choice back, not where the place's list had
-    rested. Its last row presents `AssistantFullSearch` (Persona's chats only) with the words, and a chat picked there
-    opens through `AppModel.openAssistantConversation` once the cover is gone; its identifier is `todos.searchChats`
-    once the results drawn are the field's words' (`todos.searchChats.looking` until the look lands), which the UI tests
-    wait for. While it searches the folds are drawn open and do nothing, and the Needs you heading counts its matches in
-    a plain number, so the blue badge only says N. A choice scrolls the list to its top: its first line or row is put at
-    the foot of what is in sight (`anchor: .bottom`), which the list cannot reach, so it stops at its top; a heading's
-    own id put its rows at the top, the heading under the bar. Each view reads only what it draws (the toolbar, the
-    subtitle, the top lines, the headers), so a count or a choice redraws those alone (P5).
+    no card, no Undo), while line 2 still says an answer given here and VoiceOver reads it so (`answers?.mark`,
+    `spoken(_:)`). A scroll that rests on the results leaves the place's kept position alone (`TodoWorkspace.rested`);
+    clearing the field brings the place and the choice back, not where the place's list had rested. Its last row
+    presents `AssistantFullSearch` (Persona's chats only) with the words, and a chat picked there opens through
+    `AppModel.openAssistantConversation` once the cover is gone; its identifier is `todos.searchChats` once the results
+    drawn are the field's words' (`todos.searchChats.looking` until the look lands), which the UI tests wait for. While
+    it searches the folds are drawn open and do nothing, and the Needs you heading counts its matches in a plain number,
+    so the blue badge only says N. A choice scrolls the list to its top: its first line or row is put at the foot of
+    what is in sight (`anchor: .bottom`), which the list cannot reach, so it stops at its top; a heading's own id put
+    its rows at the top, the heading under the bar. Each view reads only what it draws (the toolbar, the subtitle, the
+    top lines, the headers), so a count or a choice redraws those alone (P5).
   - **The container and the row.** `.sectionCards()` (the design system's, `listStyle(.insetGrouped)` today) on
     `themedPage()`; rows and Can wait keep the system's cells (`TodoListCell.insets`: `Space.l` at the sides, none
     above or below, set on the row's outermost view in `TodoListView.row`, after its `.id`: set inside the cell, under

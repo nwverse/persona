@@ -1005,13 +1005,15 @@ existing overview list style.
     tick, the row's one deliberate control, but offers nothing beside its half-read words: it is found to be opened,
     which pushes the to-do as usual (a notes match lights nothing on its page yet), and Back is the results again with
     the words in the field. While the field has words a row draws no "· Mark Done" and no answers (no OK or Retry, no
-    Options ⌄ or its card, no "✓ You chose … · Undo", the hub's line said in its place) and VoiceOver's actions offer
-    none of them, until the field is cleared. Steps a to-do carries are no rows, and are not searched
-    here yet. With nothing found, the search's empty state says what it looked through ("Search looks through the
-    titles and notes of all your to-dos, including done ones."). Its last row, "⌕ Search Chats for “kyoto” ›", takes
-    the words to the app's search over Persona's chats (no Agents scope on an everyday page). It is on the device only:
-    the phone holds every to-do (`GET /api/v1/todos` returns them all), so the hub has nothing to add; a merge of the
-    hub's matches ("List controls") waits for content the phone does not hold (a to-do's rounds, results and recap).
+    Options ⌄ or its card, no Undo) and VoiceOver's actions offer none of them, until the field is cleared; an answer
+    given here still says so in line 2's place ("✓ You chose …", "Not sure your answer went through") without its Undo,
+    which is the row's again if the field is cleared while the hold lasts. Steps a to-do carries are no rows, and are
+    not searched here yet. With nothing found, the search's empty state says what it looked through ("Search looks
+    through the titles and notes of all your to-dos, including done ones."). Its last row,
+    "⌕ Search Chats for “kyoto” ›", takes the words to the app's search over Persona's chats (no Agents scope on an
+    everyday page). It is on the device only: the phone holds every to-do (`GET /api/v1/todos` returns them all), so the
+    hub has nothing to add; a merge of the hub's matches ("List controls") waits for content the phone does not hold (a
+    to-do's rounds, results and recap).
   - **⋯** (on All To-dos, Today and a project; Upcoming's holds Show as Calendar alone) arranges the list, kept on the
     device; what the list shows starts fresh each visit. **Sort By**, a section with the current order checked:
     Suggested (推荐顺序, the hub's order inside each section, the default), Recently Changed (最近更新, the old page's default
