@@ -197,3 +197,125 @@ fill:
 	}
 	t.Fatal("the healthy pane lost its live row when unrelated history scans exhausted the slots")
 }
+
+// A timed-out pane lookup is superseded after codexPaneReadRetry so a recovered filesystem or updated owner can
+// restore the live pane without waiting forever on an earlier wedged syscall, while per-pane inflight capping keeps
+// one permanently wedged mount from starving healthy panes.
+func TestCodexPaneIdentitySupersedesTimedOutReadAfterCooldown(t *testing.T) {
+	oldRetry := codexPaneReadRetry
+	codexPaneReadRetry = 40 * time.Millisecond
+	t.Cleanup(func() { codexPaneReadRetry = oldRetry })
+
+	t.Run("supersedes wedged lookup after cooldown once home switches", func(t *testing.T) {
+		n := remoteTestNode(t)
+		slowRoot, fastRoot := t.TempDir(), t.TempDir()
+		const fastID = "f6000000-0000-4000-8000-000000000002"
+		writeThread(t, slowRoot, remoteRaw, n.home, "slow")
+		writeThread(t, fastRoot, fastID, n.home, "fast")
+		slow := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
+		fast := canonicalCodexHome(filepath.Join(fastRoot, ".codex"), n.home)
+		n.configureCodex(proto.CodexConfig{Homes: []string{slow, fast}})
+		a := host.Agent{Agent: "codex", PaneID: "w1:p1", Cwd: n.home, AgentStatus: proto.StatusIdle,
+			AgentSession: &host.AgentSession{Kind: "id", Value: remoteRaw}}
+		n.codices.byPane = map[string]string{a.PaneID: slow}
+
+		slowLock := rolloutCacheFor(slow)
+		slowLock.mu.Lock()
+		var once sync.Once
+		release := func() { once.Do(slowLock.mu.Unlock) }
+		defer release()
+
+		// 1. First lookup blocks on slow home and times out.
+		if _, ok := n.codexPaneIdentity(a, "", false, nil, time.Now().Add(20*time.Millisecond)); ok {
+			t.Fatal("blocked lookup reported ok")
+		}
+		// 2. Immediate retry before cooldown does not spawn a second worker.
+		if _, ok := n.codexPaneIdentity(a, "", false, nil, time.Now().Add(5*time.Millisecond)); ok {
+			t.Fatal("retry before cooldown reported ok")
+		}
+		n.codices.paneReads.Lock()
+		beforeCooldown := n.codices.paneReads.inflight[a.PaneID]
+		n.codices.paneReads.Unlock()
+		if beforeCooldown != 1 {
+			t.Fatalf("inflight before cooldown = %d, want 1", beforeCooldown)
+		}
+
+		// 3. After cooldown, the pane's owner points to the healthy home while the old syscall is still wedged.
+		waitFor(t, "pane lookup retry cooldown", func() bool {
+			n.codices.paneReads.Lock()
+			defer n.codices.paneReads.Unlock()
+			for _, read := range n.codices.paneReads.pending {
+				return time.Since(read.started) >= codexPaneReadRetry
+			}
+			return false
+		})
+		a.AgentSession = &host.AgentSession{Kind: "id", Value: fastID}
+		n.codices.mu.Lock()
+		n.codices.byPane[a.PaneID] = fast
+		n.codices.mu.Unlock()
+
+		want := codexSourceID(fast, fastID, n.codexInventory().LegacyHome)
+		match, ok := n.codexPaneIdentity(a, "", false, nil, time.Now().Add(time.Second))
+		if !ok || match.id != want {
+			t.Fatalf("after cooldown supersede: match=%+v ok=%v, want id=%s", match, ok, want)
+		}
+
+		// Release the wedged worker and verify inflight count drains cleanly.
+		release()
+		waitFor(t, "wedged pane worker drains", func() bool {
+			n.codices.paneReads.Lock()
+			defer n.codices.paneReads.Unlock()
+			return n.codices.paneReads.inflight[a.PaneID] == 0
+		})
+	})
+
+	t.Run("per-pane cap prevents a permanently wedged mount from starving healthy panes", func(t *testing.T) {
+		n := remoteTestNode(t)
+		slowRoot, fastRoot := t.TempDir(), t.TempDir()
+		const fastID = "f7000000-0000-4000-8000-000000000002"
+		writeThread(t, slowRoot, remoteRaw, n.home, "slow")
+		writeThread(t, fastRoot, fastID, n.home, "fast")
+		slow := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
+		fast := canonicalCodexHome(filepath.Join(fastRoot, ".codex"), n.home)
+		n.configureCodex(proto.CodexConfig{Homes: []string{slow, fast}})
+		a := host.Agent{Agent: "codex", PaneID: "w1:p1", Cwd: n.home, AgentStatus: proto.StatusIdle,
+			AgentSession: &host.AgentSession{Kind: "id", Value: remoteRaw}}
+		b := host.Agent{Agent: "codex", PaneID: "w1:p2", Cwd: n.home, AgentStatus: proto.StatusIdle,
+			AgentSession: &host.AgentSession{Kind: "id", Value: fastID}}
+		n.codices.byPane = map[string]string{a.PaneID: slow, b.PaneID: fast}
+
+		slowLock := rolloutCacheFor(slow)
+		slowLock.mu.Lock()
+		var once sync.Once
+		release := func() { once.Do(slowLock.mu.Unlock) }
+		defer release()
+
+		for range 5 {
+			n.codexPaneIdentity(a, "", false, nil, time.Now().Add(5*time.Millisecond))
+			waitFor(t, "next pane retry", func() bool {
+				n.codices.paneReads.Lock()
+				defer n.codices.paneReads.Unlock()
+				for _, read := range n.codices.paneReads.pending {
+					return time.Since(read.started) >= codexPaneReadRetry
+				}
+				return false
+			})
+		}
+		n.codices.paneReads.Lock()
+		inflight := n.codices.paneReads.inflight[a.PaneID]
+		n.codices.paneReads.Unlock()
+		if inflight > codexPaneMaxInflight {
+			t.Fatalf("wedged pane consumed %d workers, want at most %d", inflight, codexPaneMaxInflight)
+		}
+		want := codexSourceID(fast, fastID, n.codexInventory().LegacyHome)
+		if match, ok := n.codexPaneIdentity(b, "", false, nil, time.Now().Add(time.Second)); !ok || match.id != want {
+			t.Fatalf("healthy pane starved by wedged pane: match=%+v ok=%v", match, ok)
+		}
+		release()
+		waitFor(t, "wedged workers drain", func() bool {
+			n.codices.paneReads.Lock()
+			defer n.codices.paneReads.Unlock()
+			return n.codices.paneReads.inflight[a.PaneID] == 0
+		})
+	})
+}

@@ -105,9 +105,12 @@ describe("ExtensionView push from MapCanvas Full screen overlay", () => {
     });
     await settle();
     expect(hub.draws).toEqual([undefined]);
-
-    const fullBtn = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("extensions-viewbody.map_full_screen")}"]`)!;
-    expect(fullBtn).toBeTruthy();
+    // The map's own lazy chunk can commit after the first extension view, especially in the core-only full suite.
+    const fullBtn = await vi.waitFor(() => {
+      const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("extensions-viewbody.map_full_screen")}"]`);
+      expect(button).toBeTruthy();
+      return button!;
+    });
     await act(async () => fullBtn.click());
     await settle();
 

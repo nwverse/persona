@@ -25,7 +25,8 @@ import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
 import { supervisorHeld } from "./supervisor-held";
 import { inFolderFilter } from "./inbox-folders";
-import { actedText, actOnSuggestion, statusOf, type ChainEntry, type InboxHandling, type InboxRelated, type InboxStatus, type InboxSuggestion, type InboxSuggestionAttempt, type SuggestionAction } from "./inbox-events";
+import type { ChainEntry, InboxHandling, InboxRelated, InboxStatus, InboxSuggestion, InboxSuggestionAttempt, SuggestionAction } from "./inbox-events";
+import { actedText, actOnSuggestion, statusOf } from "./inbox-suggestion"; // not inbox-events.ts: that one is the Inbox page's
 import type { MailAccount } from "./mail";
 
 // Not the Inbox's: re-exported from their own modules until their importers import them from there (#11538).

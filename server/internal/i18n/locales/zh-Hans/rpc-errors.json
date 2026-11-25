@@ -98,6 +98,7 @@
   "agent_speed_model": "这个模型未提供该 Codex 速度：{reason}",
   "agent_speed_invalid": "Agent 速度无效：{reason}",
   "assistant_supervision_busy": "这个对话的任务跟进职责变了。请等它当前的工作结束后再试，这次没有发送。",
+  "assistant_categories_busy": "这个对话的信息分类变了。请等它当前的工作结束后再试，这次没有发送。",
   "assistant_supervision_runtime": "这个 Agent 无法接收独立的任务跟进指令。这台电脑上支持的启动器：{launchers}。本次没有启动或发送任何内容。",
   "assistant_supervision_none": "尚未检测到，请连接或更新支持此能力的运行时",
   "assistant_supervision_account": "这个引擎支持任务跟进，但此账号尚未开通自定义系统指令。请联系引擎服务商为此账号开通。本次没有启动或发送任何内容。",

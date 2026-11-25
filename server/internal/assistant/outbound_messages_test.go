@@ -125,7 +125,7 @@ func outboundTestHub(t *testing.T) (*inboxHub, *outboundMemoryStore, *outboundCo
 	t.Helper()
 	h, _, it := handledHub(t)
 	st := &outboundMemoryStore{inboxMemStore: h.st}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	c := &outboundConnector{}
 	h.in.conns = []connector.Connector{c}
 	it.Source, it.Lark = "larkcli", nil
@@ -537,7 +537,7 @@ func TestOutboundTransportDuplicateIsNotANewDelivery(t *testing.T) {
 	// Reconstruct the assistant without its audit claim; the manager still has
 	// the delivered send ID, which must not certify a different attempted text.
 	st = &outboundMemoryStore{inboxMemStore: st.inboxMemStore}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	payload["text"] = "This different text was never sent."
 	_, err := h.toolMessageSend(context.Background(), "server", "s1", standingJSON(t, payload))
 	var message *i18n.Message

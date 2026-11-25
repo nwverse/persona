@@ -621,11 +621,14 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	userInputs := q.Get("user_inputs") == "1"
 	if userInputs {
-		params["user_inputs"] = true // only a count/position projection, never message bodies
+		params["user_inputs"] = true // the index carries positions and bounded excerpts
 	}
 	// Only the paging the app gave: one it left out or sent empty (iOS's latest page has before_seq=) is not 0 to a
 	// runtime, which may take before_seq 0 as a bad value and refuse every page, and the app's sync then asks again.
 	for _, k := range []string{"before_seq", "limit", "turns"} {
+		if userInputs && k == "before_seq" {
+			continue // the public index spans the conversation independently of page cursors
+		}
 		if v := q.Get(k); v != "" {
 			params[k] = atoi(v)
 		}
@@ -1055,7 +1058,6 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		p.Images = append(p.Images, handoffImages...)
 	}
 	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType) && !desktopStartLauncher(p.Launcher)
-	nameAfterStart := async
 	parent := r.Context()
 	if r.Header.Get("X-Persona-Op-Id") != "" {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
@@ -1074,8 +1076,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	raw, _ := json.Marshal(p)
 	params := map[string]any{}
 	_ = json.Unmarshal(raw, &params)
-	name := "" // a tab named now, before it opens; one started in the background is renamed when its name comes (below)
-	if !async && p.TabName == "" && p.ResumeSessionID == "" {
+	name := "" // a local placeholder now; the manager names the returned session in the background
+	if p.TabName == "" && p.ResumeSessionID == "" {
 		name = nameFrom
 	}
 	// The manager says what it runs on (Models › Agents, a model picked for this start) and names its tab
@@ -1117,24 +1119,9 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	}
 	askedAsync, _ := params["async"].(bool)
 	async = startsAsync(askedAsync, p.ResumeSessionID, resolvedLauncher, resolvedAgent) && !desktopStartLauncher(resolvedLauncher)
-	nameAfterStart = async
 	params["async"] = async
 	ctx, cancel = context.WithDeadline(parent, startedAt.Add(startBudgetForLauncher(async && !p.WorkSession, resolvedLauncher)))
 	defer cancel()
-	if tabName, _ := params["tab_name"].(string); !async && name == "" && nameFrom != "" && strings.TrimSpace(tabName) == "" && p.ResumeSessionID == "" {
-		// An initially async start did not ask the manager for a name. It now waits for creation, so name it first.
-		var named struct {
-			Name string `json:"name"`
-		}
-		nameCtx, nameCancel := context.WithTimeout(ctx, 15*time.Second)
-		err := h.asstOf(h.machineOwner(m.cfg.ID)).call(nameCtx, assistantwire.MethodAgentTabName, map[string]any{"prompt": nameFrom}, &named)
-		nameCancel()
-		if err != nil {
-			h.logf("tab name: %v", err)
-		} else if named.Name != "" {
-			params["tab_name"] = named.Name
-		}
-	}
 	method := "session.start"
 	if p.WorkSession {
 		method = devicewire.MethodStartWorkSession // An old node must refuse, never silently ignore strict start options.
@@ -1208,8 +1195,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		}
 	}
 	res.Session.MachineID = m.cfg.ID
+	namingSession := res.Session
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {
 		res.Session.State = shown.State // as the manager works it out (fleet_link.go)
+		namingSession = shown
 	}
 	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" && len(p.Images) == 0 {
 		cwd := res.Session.Cwd
@@ -1233,17 +1222,13 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	m.mu.Unlock()
 	res.LauncherNote = apierr.JoinNotes(h.requestLang(r), note, apierr.StartInstead(h.requestLang(r), engine, m.name(), res.Instead, res.Session))
 	writeJSON(w, res)
-	if nameAfterStart && p.TabName == "" {
-		// The name takes a model call (seconds): the tab opens as agent-<n> and is renamed when it comes.
-		go func(id string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if name := h.autoTabName(ctx, nameFrom); name != "" {
-				if err := m.call(ctx, "session.rename", map[string]any{"session_id": id, "tab_name": name}, nil); err != nil {
-					h.logf("tab name %s: %v", id, err)
-				}
-			}
-		}(res.Session.SessionID)
+	if p.TabName == "" && p.ResumeSessionID == "" && !desktopStartLauncher(resolvedLauncher) {
+		requested, _ := params["tab_name"].(string)
+		_ = h.notifyBus(h.machineOwner(m.cfg.ID), assistantwire.EventAgentTabNameStarted, assistantwire.AgentTabNameStart{
+			MachineID: assistantwire.AgentMachineID(m.cfg.ID), SessionID: assistantwire.AgentSessionID(res.Session.SessionID),
+			TabID:           assistantwire.AgentTabID(cmp.Or(namingSession.SlotID, namingSession.TabID)),
+			ExpectedTabName: cmp.Or(namingSession.HerdrTabName(), requested), NameFrom: nameFrom,
+		})
 	}
 }
 

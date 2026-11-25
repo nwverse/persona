@@ -180,6 +180,9 @@ type fakeHub struct {
 	delegateAsked []modelCall
 	tabReply      string
 	tabAsked      []string
+	// tabModelEntered / tabModelGate hold one naming-model answer open until the test releases it.
+	tabModelEntered chan struct{}
+	tabModelGate    <-chan struct{}
 	// The todo titles' model (todo.title): its answer, an error instead, and what it was asked.
 	todoTitleReply string
 	todoTitleErr   error
@@ -1744,10 +1747,13 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		}
 		f.mu.Lock()
 		reply, fail, down, delay, stop := "", false, false, time.Duration(0), "end_turn"
+		var tabModelGate <-chan struct{}
+		var tabModelEntered chan struct{}
 		switch {
 		case in.System == tabName:
 			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
 			reply = f.tabReply
+			tabModelGate, tabModelEntered = f.tabModelGate, f.tabModelEntered
 		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
 			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
 			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
@@ -1798,6 +1804,16 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 			down = f.modelDown
 		}
 		f.mu.Unlock()
+		if tabModelEntered != nil {
+			close(tabModelEntered)
+		}
+		if tabModelGate != nil {
+			select {
+			case <-tabModelGate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if fail {
 			http.Error(w, `{"error":{"message":"no model"}}`, http.StatusBadRequest)
 			return

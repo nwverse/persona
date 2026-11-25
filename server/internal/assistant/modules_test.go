@@ -176,10 +176,7 @@ func assertBriefingAbsent(t *testing.T, s *Service) {
 	if got, want := s.runFacts(ctx, Task{ID: "dot", Report: true}, now), s.northStarRunFacts(ctx, now); got != want {
 		t.Errorf("a daily report's facts = %q, want the north star's lines %q", got, want)
 	}
-	s.brief.mu.Lock()
-	runs := len(s.brief.byTask)
-	s.brief.mu.Unlock()
-	if runs != 0 {
+	if runs := s.briefTaskRunCount(); runs != 0 {
 		t.Errorf("%d briefing runs kept without the module", runs)
 	}
 	if dirs, off := s.briefDirections(ctx, now, s.botLang(ctx), testWeb); dirs != nil || off != nil {
