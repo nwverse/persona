@@ -19,13 +19,15 @@ FINISH_BEFORE = 35
 VISUAL_PROCESSES = ("Persona", "debugserver", "launchd_sim")
 
 
-def scoped_processes(udid, runner=None, owned_debuggers=None):
+def scoped_processes(udid, runner=None, owned_debuggers=None, process_identities=None):
     """Return owned host/debugger metadata, never command arguments or environment.
 
     A debugger can precede its Persona target under this simulator's launchd. Keep
     that validated process for this invocation when its short-lived parent exits.
     The process start time distinguishes PID reuse; neither timestamp nor command
-    arguments are exported.
+    arguments are exported. A reappeared debugger with a new non-1 parent needs
+    current owned ancestry even when its one-second start timestamp is unchanged.
+    Private identities can be retained separately for the immediate thread check.
     """
     runner = runner or watch.subprocess.run
     owned_debuggers = {} if owned_debuggers is None else owned_debuggers
@@ -33,6 +35,8 @@ def scoped_processes(udid, runner=None, owned_debuggers=None):
             not all(isinstance(key, int) and isinstance(value, str)
                     for key, value in owned_debuggers.items())):
         raise ValueError("owned debugger identities must map integer PIDs to start timestamps")
+    if process_identities is not None:
+        process_identities.clear()
     try:
         result = runner(["ps", "-axo", "pid=,ppid=,lstart=,stat=,command="],
                         capture_output=True, text=True, timeout=5)
@@ -67,25 +71,44 @@ def scoped_processes(udid, runner=None, owned_debuggers=None):
                  if name == "launchd_sim" and re.match(
                      r"^/Library/Developer/CoreSimulator/Devices/" + re.escape(udid) + r"/(?:\s|$)", command)}
     processes = []
+    unowned = set()
     for pid, ppid, started, state, name, _path, _command in records:
         if name == "Persona" and pid in hosts:
-            processes.append({"pid": pid, "ppid": ppid, "state": state, "name": name})
+            process = {"pid": pid, "ppid": ppid, "state": state, "name": name}
+            processes.append(process)
+            if process_identities is not None:
+                process_identities[(pid, name)] = (started, ppid)
         elif name == "debugserver":
+            retained = owned_debuggers.get(pid) == started
             if ppid in hosts or ppid in launchers:
                 owned_debuggers[pid] = started
-            if owned_debuggers.get(pid) == started:
-                processes.append({"pid": pid, "ppid": ppid, "state": state, "name": name})
+            elif not retained or (ppid != 1 and ppid not in hosts):
+                # Equal-second lstart reuse must not inherit ownership. Parent 1
+                # is the expected reparenting of a still-live debugger; another
+                # non-owned parent requires a fresh owned relationship.
+                owned_debuggers.pop(pid, None)
+                if process_identities is not None:
+                    process_identities[(pid, "debugserver")] = (started, ppid)
+                    unowned.add(pid)
+                continue
+            process = {"pid": pid, "ppid": ppid, "state": state, "name": name}
+            processes.append(process)
+            if process_identities is not None:
+                process_identities[(pid, name)] = (started, ppid)
     present_debuggers = {pid: started for pid, _ppid, started, _state, name, _path, _command in records
                          if name == "debugserver"}
     missing_debuggers = [pid for pid in owned_debuggers
-                         if present_debuggers.get(pid) != owned_debuggers[pid]]
+                         if pid not in unowned and present_debuggers.get(pid) != owned_debuggers[pid]]
     processes.extend({"pid": pid, "state": "not-present", "name": "debugserver"}
                      for pid in missing_debuggers)
     return {"query_status": "completed", "processes": sorted(processes, key=lambda item: (item["name"], item["pid"]))}
 
 
-def sample_processes(udid, destination, index, runner=watch.subprocess.run, owned_debuggers=None):
-    observation = scoped_processes(udid, runner, owned_debuggers)
+def sample_processes(udid, destination, index, runner=watch.subprocess.run, owned_debuggers=None,
+                     process_identities=None):
+    if process_identities is None:
+        process_identities = {}
+    observation = scoped_processes(udid, runner, owned_debuggers, process_identities)
     label = f"process-{index:03d}"
     launch.publish(destination / (label + ".json"), json.dumps({
         "captured_at": datetime.now(timezone.utc).isoformat(), **observation,
@@ -93,8 +116,27 @@ def sample_processes(udid, destination, index, runner=watch.subprocess.run, owne
     for process in observation["processes"]:
         if "pid" not in process or "ppid" not in process:
             continue
-        watch.bounded_file(["ps", "-M", str(process["pid"])],
-                           destination / (label + f"-{process['name']}-{process['pid']}-threads.txt"), timeout=5)
+        identity = process_identities[(process["pid"], process["name"])]
+        path = destination / (label + f"-{process['name']}-{process['pid']}-threads.txt")
+        status = path.with_suffix(path.suffix + ".status.txt")
+        # Revalidate immediately before ps -M rather than relying on the earlier
+        # metadata snapshot. Reject a mismatch after temporary capture, before its
+        # result is published as current evidence. Portable ps offers no atomic
+        # identity-and-thread snapshot; this narrows the remaining kernel race.
+        current = scoped_processes(udid, runner, owned_debuggers, process_identities)
+        if current["query_status"] != "completed" or process_identities.get(
+                (process["pid"], process["name"])) != identity:
+            launch.publish(path, "unavailable: process identity changed before thread capture\n")
+            launch.publish_status(status, "identity-mismatch-before-capture\n")
+            continue
+        code = watch.bounded_file(["ps", "-M", str(process["pid"])], path, timeout=5)
+        if code:
+            continue
+        current = scoped_processes(udid, runner, owned_debuggers, process_identities)
+        if current["query_status"] != "completed" or process_identities.get(
+                (process["pid"], process["name"])) != identity:
+            launch.publish(path, "unavailable: process identity changed during thread capture\n")
+            launch.publish_status(status, "identity-mismatch-after-capture\n")
     return observation
 
 
@@ -207,6 +249,7 @@ def observe(udid, bundle, destination, seconds=VISUAL_SECONDS, scope_root=None,
     index = 0
     system_captured = False
     owned_debuggers = {}
+    process_identities = {}
     try:
         try:
             if not stopped:
@@ -218,7 +261,8 @@ def observe(udid, bundle, destination, seconds=VISUAL_SECONDS, scope_root=None,
                     break
                 now = monotonic()
                 if now - started >= index * SAMPLE_SECONDS:
-                    observation = sample_processes(udid, destination, index, owned_debuggers=owned_debuggers)
+                    observation = sample_processes(udid, destination, index, owned_debuggers=owned_debuggers,
+                                                   process_identities=process_identities)
                     watch.correlate_live(live, {"host_pids": [p["pid"] for p in observation["processes"]
                                                                if p["name"] == "Persona"]})
                     index += 1
