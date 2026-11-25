@@ -34,7 +34,7 @@ type inboxBook struct {
 	passHook              func()         // tests: runs as each pass starts
 	waitHook              func()         // tests: replaces the poll sleep while suggestFrom waits for startup
 	workbenchDraftHook    func()         // tests: runs after Workbench generation and before its card item is reloaded
-	onDemandDraftSaveHook func()         // tests: runs at the on-demand draft publication boundary
+	onDemandDraftSaveHook func()         // tests: runs after an on-demand draft save attempt, before its failure tombstone
 	translating           sync.Mutex     // one translation pass at a time (inbox_translate.go)
 	replies               sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
 	handingOff            sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)

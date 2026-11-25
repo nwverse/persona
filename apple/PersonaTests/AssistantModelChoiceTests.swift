@@ -525,7 +525,12 @@ struct AssistantModelChoiceTests {
         #expect(Launcher(name: "shell-codex", agent: "codex", source: "path").runsAssistant)
         #expect(Launcher(name: "shell-claude", agent: "claude", source: "zshrc").runsAssistant)
         #expect(Launcher(name: "managed-claude", agent: "claude", source: "persona").runsAssistant)
-        #expect(!Launcher(name: "managed-codex", agent: "codex", source: "persona").runsAssistant)
+        // Managed Codex runs the assistant as the hub and the web have it since #12569.
+        #expect(Launcher(name: "managed-codex", agent: "codex", source: "persona").runsAssistant)
+        #expect(Launcher(name: "managed-codex", agent: "codex", source: "jarvis").runsAssistant)
+        // The hub's configured kind wins over the node's agent, as the web's `agent_type || agent`.
+        #expect(!Launcher(name: "provider", agent: "claude", agentType: "unknown", source: "persona").runsAssistant)
+        #expect(Launcher(name: "provider", agentType: "codex", source: "persona").runsAssistant)
         #expect(!Launcher(name: "agy", agent: "agy", source: "zshrc").runsAssistant)
         #expect(Launcher(name: "agy", agent: "agy", assistant: true, source: "agy").runsAssistant)
         #expect(!Launcher(name: "runtime-codex", agent: "codex", source: "paseo").runsAssistant)

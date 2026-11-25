@@ -53,6 +53,19 @@ nothing, and nothing is left greyed out (principle 2). No new component or token
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
 
+### Strength training pages (#14713)
+
+Audience: everyday people keeping their gym sets. Health's reserved declarative page reuses grouped sections, rows,
+choice fields, row steppers and switches, charts, native confirmation and push/pop navigation. Pending drafts appear
+first in the overview. Adjust keeps a working copy until Save updates the draft and its conversation card together;
+Cancel leaves both unchanged, and a conflicting revision reloads the saved draft with an explanation. If the card
+settles while Adjust is open, further edits redraw a read-only page with its saved or discarded status. A duplicate
+exercise name keeps the entered name in the form and shows a toast so the owner can correct it. Clients below
+UI version 6 show the sets read-only with an update hint. Deleting an exercise names it and the number of active sets
+in the confirmation; each saved set has Undo on its exercise page. The home card reuses the intake pages' bar chart
+for working sets over the last seven owner-local days including today, excluding warm-ups and undone sets; empty
+days remain zero bars, with no future days. No new visual token or client component is added.
+
 ## 1. Purpose, scope and sources of truth
 
 This is the project-level design specification. It describes what the code uses today. Apple (iOS first, then watchOS, macOS, visionOS) is the reference implementation. Web and Android are checked against it. Where the code and an older doc disagree, the code wins and the disagreement is listed in section 8.
@@ -1988,11 +2001,19 @@ The web Changes panel's secondary file tree (#10477) reuses the existing `Resize
 
 ### 4.3 Feedback and haptics
 
-Settings › Hub uses the update group's status row for Web development progress. Pair the
-phase title with the localized step. Use a thin accent bar on the inset track when the
-step supplies a percentage, and the shared spinner while its total is unknown. Use
-`text-meta` for the phase and `text-label` for the step and measurements. Announce
-step changes through the live status label and let the measurements wrap at narrow widths.
+Settings › Hub shows a stage strip and an inset step list during updates (#15240). The
+strip borrows the task stage markers so users can see what is running and what remains
+even when a phase has no detailed progress. A development update takes the rollback
+snapshot after the idle wait, so the backup marker stays pending until the Hub reaches
+it. Use a green check for completed work, an accent mark for the current stage and a
+hollow mark for pending work. The inset list pairs the localized step with the shared
+spinner, live status label and an accent bar when the Hub reports a percentage. The
+header shows the short target and elapsed time when the start of the update can be
+observed. With only the phase's start available, label the time as phase elapsed. Let
+stage labels and measurements wrap. Keep the busy sessions and the confirmed restart
+override together in the inset panel while the Hub waits for idle. The native version
+picker wraps its selected label on narrow screens to keep the second-level timestamp
+and short commit visible.
 
 Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait

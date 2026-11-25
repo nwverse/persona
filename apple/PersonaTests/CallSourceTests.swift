@@ -9,22 +9,26 @@ import Testing
 struct CallSourceTests {
     private static let apple = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
 
-    /// Every Swift file under `apple/` but the local packages, with `//` comments taken out.
-    /// Paths relative to `apple/`, both sides with symlinks resolved: a checkout under a symlinked folder (`/var` →
-    /// `/private/var`, where scripts/ci/apple.sh puts its snapshot) is walked under the resolved name.
+    /// Every Swift file in the iOS app, its feature modules and their shared sources; standalone packages and the
+    /// separate Mac connector app are not this live-call audio-session audit's code (the connector's `setMode` is a
+    /// connection command, not AVAudioSession). Paths relative to `apple/`, both sides with symlinks resolved: a checkout
+    /// under a symlinked folder (`/var` → `/private/var`, where scripts/ci/apple.sh puts its snapshot) is walked under
+    /// the resolved name.
     private static func sources(tests: Bool) throws -> [(path: String, lines: [String])] {
         let root = apple.resolvingSymlinksInPath()
-        let walker = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
         var out: [(String, [String])] = []
-        for case let url as URL in walker where url.pathExtension == "swift" {
-            let full = url.resolvingSymlinksInPath().path
-            guard full.hasPrefix(root.path + "/") else { continue }
-            let path = String(full.dropFirst(root.path.count + 1))
-            if path.hasPrefix("Packages/") || path.contains("/.build/") || path.contains("DerivedData") { continue }
-            if !tests, path.hasPrefix("PersonaTests/") || path.hasPrefix("PersonaUITests/") { continue }
-            let lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
-                .map { l in l.range(of: "//").map { String(l[..<$0.lowerBound]) } ?? l }
-            out.append((path, lines))
+        for directory in ["Persona", "Modules", "Shared"] + (tests ? ["PersonaTests", "PersonaUITests"] : []) {
+            let base = root.appending(path: directory)
+            let walker = try #require(FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil), directory)
+            for case let url as URL in walker where url.pathExtension == "swift" {
+                let full = url.resolvingSymlinksInPath().path
+                guard full.hasPrefix(root.path + "/") else { continue }
+                let path = String(full.dropFirst(root.path.count + 1))
+                if path.contains("/.build/") || path.contains("DerivedData") { continue }
+                let lines = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
+                    .map { l in l.range(of: "//").map { String(l[..<$0.lowerBound]) } ?? l }
+                out.append((path, lines))
+            }
         }
         return out
     }

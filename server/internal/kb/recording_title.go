@@ -115,26 +115,6 @@ func putNamed(p *RecordingPut, r *Recording) {
 	}
 }
 
-// metaWithNameSource is a recording's meta.json (detail.meta) with name_source, where its name comes from (#8873);
-// as it is when it is named only by when it started.
-func metaWithNameSource(raw []byte) []byte {
-	var r Recording
-	if json.Unmarshal(raw, &r) != nil {
-		return raw
-	}
-	src := r.NameSource()
-	var meta map[string]json.RawMessage
-	if src == "" || json.Unmarshal(raw, &meta) != nil || meta == nil {
-		return raw
-	}
-	meta["name_source"], _ = json.Marshal(src)
-	out, err := json.Marshal(meta)
-	if err != nil {
-		return raw
-	}
-	return out
-}
-
 // titleLine is a title the model wrote, on one line, without marks or the quotes around it, at most titleRunes.
 func titleLine(s string) string {
 	s = strings.Join(strings.Fields(stripMarks(s)), " ")

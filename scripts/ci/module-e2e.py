@@ -15,6 +15,13 @@ is read or touched. Then, for every module id in --modules:
   and routes are absent (404), its entry is gone, an address of its page answers like a removed page, and none of its
   chunks is requested;
 - back on: the row is deleted and the hub restarted: everything returns;
+- what the user already has stays (#13430: a module that is off must not hide or change it), for a module with a
+  `kept` row in SERVER. Recording: two recordings a hub with the module wrote (one with its transcript and minutes,
+  one whose minutes were still to be written; scripts/ci/core-only-smoke.py seed_recordings) are in the knowledge base
+  before the hub first starts. In every phase they are listed, opened and found by search through the knowledge
+  base's own routes; off, the opened recording's detail equals the on phase's, the one in flight says
+  `paused: module_off` in the response only, and every file under recordings/ is byte for byte what it was when the
+  off phase began;
 - older hub: against the mock hub (scripts/mock/mock_hub.py) without the `modules` marker every module is on, the
   composer's voice button included; with the marker and without the module's flags they are off.
 
@@ -63,6 +70,7 @@ Failed, TimedOut, http, run = smoke.Failed, smoke.TimedOut, smoke.http, smoke.ru
 #   (the module's own module.<id> flag is always checked). The assistant tools a module adds reach the computers'
 #   MCP only through a node, which this hub has none of: their absence is checked by the module's Go tests.
 #   seed: requests made once while the module is first on, so the web app has something of it to show: [method, path, body]
+#   kept: "recordings": the module's stored data stays listed, opened, found and unchanged while it is off (kept_checks)
 # A client-only module (modapi.ClientModules) has an empty row: only its hello flag.
 RECORDING_ID = "6f1c2a3b-0000-4000-8000-00000000e2e1"
 SERVER = {
@@ -82,8 +90,10 @@ SERVER = {
     "knowledge-ui": {},
     "recording": {
         "routes": ["/api/v1/recordings"],
+        "kept": "recordings",
+        # started an hour ago: an upload older than recording_days (14) is refused as expired
         "seed": [["PUT", f"/api/v1/recordings/{RECORDING_ID}", {
-            "revision": 1, "started_at": "2026-11-20T09:00:00Z", "duration": 60, "language": "en", "device": "phone",
+            "revision": 1, "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)), "duration": 60, "language": "en", "device": "phone",
             "title": "Module gate sample recording", "complete": True, "kind": "note",
             "segments": [{"start": 0, "end": 5, "text": "A made-up sample line for the module gate."}]}]],
     },
@@ -341,6 +351,26 @@ def server_checks(rep, phase, hub, ids, on, loaded):
             rep.add(phase, id, f"{method} {path} {'answers' if want else 'is 404'}", (status != 404) == want, f"status {status}")
 
 
+def kept_checks(rep, phase, hub, ids, on, kept):
+    """What a module's users already have stays listed, opened and found in every phase; off, it is unchanged."""
+    if "recording" not in ids or SERVER["recording"].get("kept") != "recordings":
+        return
+    want = on["recording"]
+    deadline = time.monotonic() + remaining(90)  # the knowledge base opens with the manager's first use of it
+    while True:
+        rows, detail = smoke.kept_recordings(hub.base, hub.token, want)
+        if all(ok for _, ok, _ in rows) or time.monotonic() > deadline:
+            break
+        time.sleep(2)
+    for what, ok, text in rows:
+        rep.add(phase, "recording", what, ok, text)
+    if phase == "on":
+        kept["detail"] = detail
+    else:
+        rep.add(phase, "recording", "the stored recording's detail equals the on phase's", detail == kept.get("detail"),
+                json.dumps(detail)[:300])
+
+
 def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes):
     modules = {id: WEB[id] for id in ids if id in WEB}
     for id in ids:
@@ -442,11 +472,22 @@ def main():
         shutil.copytree(dist, home / ".persona/web")  # newer than the build's embedded copy, so the hub serves it
         hub = Hub(bindir, work, home, port, token)
         hub.checkout = checkout
+        kept = {}
+        if "recording" in ids:  # what the user already has, before the hub first starts
+            smoke.seed_recordings(home, checkout / "server")
 
         phases = [("on", None), ("off", ids), ("back-on", [])]
         for phase, disabled in phases:
             if disabled is not None:
                 hub.stop()
+                if "recording" in ids:
+                    files = smoke.recording_files(home)
+                    if phase == "off":
+                        kept["files"] = files  # as the hub with the module left them
+                    else:
+                        changed = smoke.files_changed(kept["files"], files)
+                        rep.add("off", "recording", f"every file under recordings/ is unchanged after the off phase ({len(files)} files)",
+                                not changed, str(changed))
                 if disabled:
                     psql(container, "INSERT INTO settings (key, value) VALUES ('modules', '%s'::jsonb) ON CONFLICT (key) DO UPDATE "
                                     "SET value = EXCLUDED.value, updated_at = now()" % json.dumps({"disabled": disabled}))
@@ -462,6 +503,7 @@ def main():
                         status, text = hub.request(method, path, body)
                         smoke.check(status < 300, f"seeding {id}: {method} {path}: {status} {text[:200]}")
             server_checks(rep, phase, hub, ids, on, loaded)
+            kept_checks(rep, phase, hub, ids, on, kept)
             seen = browser(rep, phase, hub.base, token, "test", ids, on, shots, work, schemes)
             out["phases"][phase] = {"settings_row": row or None, "manager_line": f"modules: loaded {loaded}",
                                     "hello_module_flags": [f for f in hub.features() if f == "modules" or f.startswith("module.")],

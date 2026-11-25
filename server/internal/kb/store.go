@@ -17,12 +17,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Kinds of entities, also the directory names under the data dir.
@@ -217,8 +219,11 @@ type Store struct {
 	meetMu     sync.Mutex   // meeting.json's read-modify-write (meeting.go); after recMu, before liveMu
 	// audioMapMu guards audioRecs, hub-mode recordings' audio state (recording_audio.go); a leaf lock. Each one's own
 	// mutex comes after liveMu and before recFilesMu.
-	audioMapMu        sync.Mutex
-	audioRecs         map[string]*audioRec
+	audioMapMu sync.Mutex
+	audioRecs  map[string]*audioRec
+	// recordings is the recording module's write side once it hooked a knowledge base on this store (recording_port.go:
+	// the audio touch points of delete, retention and the trim); nil without the module.
+	recordings        atomic.Pointer[recordingwire.Provider]
 	recordingWrite    func(string, []byte) error // per-store candidate fault injection
 	recordingReadWait func()                     // per-store read-entry observation for concurrency tests
 	recordingRemove   func(string) error         // per-store commit fault injection
