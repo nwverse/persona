@@ -1223,12 +1223,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	// (retire.go, #4754): session.retire is what a hub before #4754 asks, answered as it expects ("closed").
 	if method == "session.retire" {
 		var a struct {
-			CloseTerminal bool            `json:"close_terminal"` // the user's "Archive and close", or close-on-end (#10355)
-			AfterExit     bool            `json:"after_exit"`     // also the shell an Agent that quit left (#10355)
-			StopCause     proto.StopCause `json:"stop_cause"`
+			CloseTerminal     bool            `json:"close_terminal"` // the user's "Archive and close", or close-on-end (#10355)
+			AfterExit         bool            `json:"after_exit"`     // also the shell an Agent that quit left (#10355)
+			StopCause         proto.StopCause `json:"stop_cause"`
+			GuardActivity     bool            `json:"guard_activity"`
+			ExpectedRev       int64           `json:"expected_rev"`
+			HasExpectedRev    bool            `json:"has_expected_rev"`
+			ExpectedUpdatedAt time.Time       `json:"expected_updated_at"`
+			ExpectedPane      string          `json:"expected_pane_id"`
 		}
 		_ = json.Unmarshal(params, &a)
-		done, err := n.retire(ctx, p.SessionID, a.CloseTerminal, a.AfterExit, a.StopCause)
+		guard := retireActivityGuard{
+			Active:            a.GuardActivity,
+			ExpectedRev:       a.ExpectedRev,
+			HasExpectedRev:    a.HasExpectedRev,
+			ExpectedUpdatedAt: a.ExpectedUpdatedAt,
+			ExpectedPane:      a.ExpectedPane,
+		}
+		done, err := n.retireGuarded(ctx, p.SessionID, a.CloseTerminal, a.AfterExit, a.StopCause, guard)
 		return map[string]any{"closed": done}, err
 	}
 	if method == "session.stop" {
@@ -2979,7 +2991,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "session.close":
 		n.forgetCacheWarm(p.SessionID)
 		var closeParams struct {
-			Force bool `json:"force"`
+			Force             bool      `json:"force"`
+			GuardActivity     bool      `json:"guard_activity"`
+			ExpectedRev       int64     `json:"expected_rev"`
+			HasExpectedRev    bool      `json:"has_expected_rev"`
+			ExpectedUpdatedAt time.Time `json:"expected_updated_at"`
+			ExpectedPane      string    `json:"expected_pane_id"`
 		}
 		_ = json.Unmarshal(params, &closeParams)
 		if closeParams.Force {
@@ -3002,6 +3019,20 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		defer release()
 		unlock := n.typing.lock(p.SessionID)
 		defer unlock()
+		if closeParams.GuardActivity {
+			guard := retireActivityGuard{
+				Active:            true,
+				ExpectedRev:       closeParams.ExpectedRev,
+				HasExpectedRev:    closeParams.HasExpectedRev,
+				ExpectedUpdatedAt: closeParams.ExpectedUpdatedAt,
+				ExpectedPane:      closeParams.ExpectedPane,
+			}
+			if stillRunning, err := n.verifyRetireActivityGuardLocked(ctx, p.SessionID, guard); err != nil {
+				return nil, err
+			} else if !stillRunning {
+				return ok(nil)
+			}
+		}
 		return ok(n.close(ctx, p.SessionID))
 	case "session.archive", "session.unarchive": // the tool's own archive (archive.go); a runtime's answers above
 		if method == "session.archive" {

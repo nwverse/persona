@@ -38,28 +38,33 @@ const (
 	idleArchiveAuditActionSuccess = "session_idle_archive"
 	idleArchiveAuditActionRefused = "session_idle_archive_refused"
 	idleArchiveAuditCorePlugin    = "core.idle_archive"
+
+	idleArchiveAuditRetryBase = 2 * time.Second
+	idleArchiveAuditRetryMax  = 30 * time.Second
 )
 
-// Refusal codes returned with HTTP 409 (or 503/502 for close transport failures) when a guarded idle archive-and-close request is blocked.
+// Refusal codes returned with HTTP 409 (or 503/502 for close/audit failures) when a guarded idle archive-and-close request is blocked.
 const (
-	idleArchiveCodeMainConversation      = "protected_main_conversation"
-	idleArchiveCodeDirectionLead         = "protected_direction_lead"
-	idleArchiveCodeAssistantConversation = "protected_assistant_conversation"
-	idleArchiveCodeUnresolvedInteraction = "unresolved_interaction"
-	idleArchiveCodeSessionBusy           = "session_busy"
-	idleArchiveCodeSessionUnverified     = "session_unverified"
-	idleArchiveCodeOpenTodo              = "open_todo_session"
-	idleArchiveCodeExternalSession       = "external_session"
-	idleArchiveCodeSubagentSession       = "subagent_session"
-	idleArchiveCodeIdleUnverified        = "idle_unverified"
-	idleArchiveCodeNotIdleLongEnough     = "not_idle_long_enough"
-	idleArchiveCodeCloseRefused          = "close_refused"
-	idleArchiveCodeCloseOffline          = "close_offline"
-	idleArchiveCodeCloseFailed           = "close_failed"
+	idleArchiveCodeMainConversation         = "protected_main_conversation"
+	idleArchiveCodeDirectionLead            = "protected_direction_lead"
+	idleArchiveCodeAssistantConversation    = "protected_assistant_conversation"
+	idleArchiveCodeUnresolvedInteraction    = "unresolved_interaction"
+	idleArchiveCodeSessionBusy              = "session_busy"
+	idleArchiveCodeSessionUnverified        = "session_unverified"
+	idleArchiveCodeOpenTodo                 = "open_todo_session"
+	idleArchiveCodeExternalSession          = "external_session"
+	idleArchiveCodeSubagentSession          = "subagent_session"
+	idleArchiveCodeIdleUnverified           = "idle_unverified"
+	idleArchiveCodeNotIdleLongEnough        = "not_idle_long_enough"
+	idleArchiveCodeCloseRefused             = "close_refused"
+	idleArchiveCodeCloseOffline             = "close_offline"
+	idleArchiveCodeCloseFailed              = "close_failed"
+	idleArchiveCodeAuditFinalizationPending = "audit_finalization_pending"
 )
 
 // Audit outcome values persisted in sessions.idle_archive_audit and plugin_audit.
 const (
+	idleArchiveOutcomeCloseAttempted       = "close_attempted"
 	idleArchiveOutcomeArchivedAndClosed    = "archived_and_closed"
 	idleArchiveOutcomeArchivedNotRunning   = "archived_not_running"
 	idleArchiveOutcomeArchivedCloseRefused = "archived_close_refused"
@@ -70,16 +75,77 @@ const (
 	idleArchiveOutcomeRefused              = "refused"
 )
 
+var errIdleCloseFenceActive = errors.New("guarded idle close in flight")
+
 type extensionAuditWriter interface {
 	AddExtensionAudit(ctx context.Context, id, action, actor string, detail json.RawMessage) error
 }
 
+type idleArchivePluginAuditDetail struct {
+	AuditID             assistantwire.IdleArchiveAuditID `json:"audit_id"`
+	MachineID           wireids.MachineID                `json:"machine_id"`
+	SessionID           wireids.SessionID                `json:"session_id"`
+	IdleMinutes         int                              `json:"idle_minutes"`
+	CloseTerminal       bool                             `json:"close_terminal"`
+	Outcome             string                           `json:"outcome"`
+	ObservedIdleSeconds *int64                           `json:"observed_idle_seconds,omitempty"`
+	RefusalCode         string                           `json:"refusal_code,omitempty"`
+	CloseOutcome        string                           `json:"close_outcome,omitempty"`
+	Reason              string                           `json:"reason,omitempty"`
+}
+
+// liveIdleFingerprint captures all live-session attributes whose change indicates activity, state transition, or a new
+// node connection. Any change resets the manager's local monotonic idle observation window for that session.
+type liveIdleFingerprint struct {
+	connNano  int64
+	status    string
+	state     string
+	pane      string
+	host      string
+	rev       int64
+	updatedAt int64
+	lastText  string
+	activity  string
+	actAt     int64
+	pendingIx int
+	queuedLen int
+	bgLen     int
+	subRun    int
+	wfRun     int
+	hasLoop   bool
+	portsLen  int
+	starting  bool
+	woke      bool
+}
+
+type idleArchiveLiveObs struct {
+	fp          liveIdleFingerprint
+	idle        bool
+	since       time.Time
+	fromConnect bool
+}
+
 type idleArchiveAuditBook struct {
-	mu       sync.Mutex
-	loaded   bool
-	entries  []assistantwire.IdleArchiveAuditEntry
-	inFlight map[[2]string]chan struct{}
-	now      func() time.Time
+	mu             sync.Mutex
+	loaded         bool
+	entries        []assistantwire.IdleArchiveAuditEntry
+	pendingUpdates []assistantwire.IdleArchiveAuditEntry
+	inFlight       map[[2]string]chan struct{}
+	now            func() time.Time
+	retryRunning   bool
+	retryWake      chan struct{}
+	retryStop      chan struct{}
+	retryDone      chan struct{}
+	retryInterval  time.Duration
+
+	obsMu   sync.Mutex
+	liveObs map[string]map[string]idleArchiveLiveObs
+	obsConn map[string]int64
+
+	// fenceMu guards closing, holding active irreversible-close fences keyed by (canonicalMachine, sessionID).
+	// Lock order: todos.writing -> fenceMu; directions.mu -> fenceMu. fenceMu is always a leaf lock.
+	fenceMu sync.Mutex
+	closing map[[2]string]chan struct{}
 }
 
 func (svc *Service) idleArchiveNow() time.Time {
@@ -92,6 +158,350 @@ func (svc *Service) idleArchiveNow() time.Time {
 func (svc *Service) idleArchiveRoutes() {
 	svc.handle(assistantwire.RouteAgentIdleArchive, svc.handleAgentIdleArchive)
 	svc.handle(assistantwire.RouteAgentIdleArchiveAudit, svc.handleAgentIdleArchiveAudit)
+}
+
+func liveIdleFingerprintOf(connected time.Time, s proto.Session) liveIdleFingerprint {
+	subRun := 0
+	for _, c := range s.Subagents {
+		if c.Running {
+			subRun++
+		}
+	}
+	wfRun := 0
+	for _, w := range s.Workflows {
+		if w.Running {
+			wfRun++
+		}
+	}
+	var actAt int64
+	if s.ActivityAt != nil {
+		actAt = s.ActivityAt.UnixNano()
+	}
+	return liveIdleFingerprint{
+		connNano:  connected.UTC().UnixNano(),
+		status:    s.Status,
+		state:     s.State,
+		pane:      s.PaneID,
+		host:      s.Host,
+		rev:       s.Rev,
+		updatedAt: s.UpdatedAt.UnixNano(),
+		lastText:  s.LastText,
+		activity:  s.Activity,
+		actAt:     actAt,
+		pendingIx: s.PendingInteractions,
+		queuedLen: len(s.Queued),
+		bgLen:     len(s.Background),
+		subRun:    subRun,
+		wfRun:     wfRun,
+		hasLoop:   s.Loop != nil,
+		portsLen:  len(s.Ports),
+		starting:  s.Starting,
+		woke:      s.WokeByTask,
+	}
+}
+
+// observeIdleSessions updates the manager's local monotonic idle observations for a node's session list on its current
+// connection. Any activity version, status, pane, output, or connection change resets the continuous observation window.
+func (svc *Service) observeIdleSessions(machine string, list []proto.Session, connected time.Time) {
+	mid := svc.canonical(machine)
+	now := svc.idleArchiveNow()
+	b := &svc.idleArchiveAudit
+	b.obsMu.Lock()
+	defer b.obsMu.Unlock()
+	if connected.IsZero() {
+		delete(b.liveObs, mid)
+		delete(b.obsConn, mid)
+		return
+	}
+	if b.liveObs == nil {
+		b.liveObs = map[string]map[string]idleArchiveLiveObs{}
+	}
+	if b.obsConn == nil {
+		b.obsConn = map[string]int64{}
+	}
+	connNano := connected.UTC().UnixNano()
+	sameConn := b.obsConn[mid] == connNano
+	prevMap := b.liveObs[mid]
+	nextMap := make(map[string]idleArchiveLiveObs, len(list))
+	for i := range list {
+		sess := list[i]
+		if sess.Status == proto.StatusOffline && sess.PaneID == "" && sess.Host == "" {
+			continue
+		}
+		fp := liveIdleFingerprintOf(connected, sess)
+		safeIdle := liveSessionStatusSafe(sess) && !sessionBusyForIdleArchive(sess) && !sessionHasUnresolvedCard(sess)
+		if !safeIdle {
+			nextMap[sess.SessionID] = idleArchiveLiveObs{fp: fp, idle: false, since: now}
+			continue
+		}
+		if sameConn {
+			if prev, ok := prevMap[sess.SessionID]; ok && prev.idle && prev.fp == fp {
+				nextMap[sess.SessionID] = prev
+				continue
+			}
+			_, existedOnConn := prevMap[sess.SessionID]
+			nextMap[sess.SessionID] = idleArchiveLiveObs{
+				fp:          fp,
+				idle:        true,
+				since:       now,
+				fromConnect: !existedOnConn,
+			}
+			continue
+		}
+		nextMap[sess.SessionID] = idleArchiveLiveObs{
+			fp:          fp,
+			idle:        true,
+			since:       now,
+			fromConnect: true,
+		}
+	}
+	b.liveObs[mid] = nextMap
+	b.obsConn[mid] = connNano
+}
+
+// resetIdleObservation marks a live session as freshly active on the manager's monotonic clock when a hook event or
+// interaction arrives between session list pushes.
+func (svc *Service) resetIdleObservation(machine, sid string) {
+	if sid == "" {
+		return
+	}
+	mid := svc.canonical(machine)
+	now := svc.idleArchiveNow()
+	b := &svc.idleArchiveAudit
+	b.obsMu.Lock()
+	defer b.obsMu.Unlock()
+	if m := b.liveObs[mid]; m != nil {
+		if obs, ok := m[sid]; ok {
+			obs.idle = false
+			obs.since = now
+			obs.fromConnect = false
+			m[sid] = obs
+		}
+	}
+}
+
+func (svc *Service) verifyLiveIdleObservation(mid string, raw proto.Session, now time.Time) (elapsed time.Duration, fromConnect bool, verified bool) {
+	var connected time.Time
+	if svc.devs != nil {
+		connected = svc.devs.ConnectedAt(mid)
+	}
+	if connected.IsZero() {
+		return 0, true, false
+	}
+	canon := svc.canonical(mid)
+	fp := liveIdleFingerprintOf(connected, raw)
+	b := &svc.idleArchiveAudit
+	b.obsMu.Lock()
+	defer b.obsMu.Unlock()
+	m := b.liveObs[canon]
+	obs, exists := m[raw.SessionID]
+	if !exists || !obs.idle || obs.fp != fp {
+		if b.liveObs == nil {
+			b.liveObs = map[string]map[string]idleArchiveLiveObs{}
+		}
+		if b.obsConn == nil {
+			b.obsConn = map[string]int64{}
+		}
+		if b.liveObs[canon] == nil || b.obsConn[canon] != fp.connNano {
+			b.liveObs[canon] = map[string]idleArchiveLiveObs{}
+			b.obsConn[canon] = fp.connNano
+		}
+		b.liveObs[canon][raw.SessionID] = idleArchiveLiveObs{
+			fp:          fp,
+			idle:        true,
+			since:       now,
+			fromConnect: !exists || obs.fp.connNano != fp.connNano,
+		}
+		return 0, true, false
+	}
+	elapsed = now.Sub(obs.since)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return elapsed, obs.fromConnect, true
+}
+
+func (svc *Service) idleCloseFenceFor(mid string, sessionIDs ...string) chan struct{} {
+	canon := ""
+	if mid != "" {
+		canon = svc.canonical(mid)
+	}
+	b := &svc.idleArchiveAudit
+	b.fenceMu.Lock()
+	defer b.fenceMu.Unlock()
+	if len(b.closing) == 0 {
+		return nil
+	}
+	for _, sid := range sessionIDs {
+		if sid == "" {
+			continue
+		}
+		if canon != "" {
+			if ch := b.closing[[2]string{canon, sid}]; ch != nil {
+				return ch
+			}
+			continue
+		}
+		for k, ch := range b.closing {
+			if k[1] == sid {
+				return ch
+			}
+		}
+	}
+	return nil
+}
+
+func (svc *Service) idleCloseFenceForSessions(sessions [][2]string) chan struct{} {
+	if len(sessions) == 0 {
+		return nil
+	}
+	canonPairs := make([][2]string, 0, len(sessions))
+	for _, ref := range sessions {
+		if ref[1] == "" {
+			continue
+		}
+		mid := ref[0]
+		if mid != "" {
+			mid = svc.canonical(mid)
+		}
+		canonPairs = append(canonPairs, [2]string{mid, ref[1]})
+	}
+	if len(canonPairs) == 0 {
+		return nil
+	}
+	b := &svc.idleArchiveAudit
+	b.fenceMu.Lock()
+	defer b.fenceMu.Unlock()
+	if len(b.closing) == 0 {
+		return nil
+	}
+	for _, ref := range canonPairs {
+		if ref[0] != "" {
+			if ch := b.closing[ref]; ch != nil {
+				return ch
+			}
+			continue
+		}
+		for k, ch := range b.closing {
+			if k[1] == ref[1] {
+				return ch
+			}
+		}
+	}
+	return nil
+}
+
+func (svc *Service) idleCloseFenceActive(mid, sid string) bool {
+	return svc.idleCloseFenceFor(mid, sid) != nil
+}
+
+func (svc *Service) waitIdleCloseFence(ctx context.Context, mid string, sessionIDs ...string) error {
+	for {
+		ch := svc.idleCloseFenceFor(mid, sessionIDs...)
+		if ch == nil {
+			return nil
+		}
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (svc *Service) lockTodoWritingWithIdleFence(ctx context.Context, mid string, sessionIDs ...string) error {
+	for {
+		svc.todos.writing.Lock()
+		if ch := svc.idleCloseFenceFor(mid, sessionIDs...); ch != nil {
+			svc.todos.writing.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+}
+
+func (svc *Service) lockTodoWritingForSessions(ctx context.Context, sessions [][2]string) error {
+	for {
+		svc.todos.writing.Lock()
+		if ch := svc.idleCloseFenceForSessions(sessions); ch != nil {
+			svc.todos.writing.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+}
+
+func todoProtectedSessions(t Todo, nextResp *db.TodoResponsible) [][2]string {
+	var out [][2]string
+	for _, a := range t.Agents {
+		if a.ReleasedAt == nil && a.DismissedAt == nil && a.SessionID != "" {
+			out = append(out, [2]string{a.MachineID, a.SessionID})
+		}
+	}
+	if t.Responsible != nil && t.Responsible.Kind == db.ResponsibleSession && t.Responsible.SessionID != "" {
+		out = append(out, [2]string{t.Responsible.MachineID, t.Responsible.SessionID})
+	}
+	if nextResp != nil && nextResp.Kind == db.ResponsibleSession && nextResp.SessionID != "" {
+		out = append(out, [2]string{nextResp.MachineID, nextResp.SessionID})
+	}
+	return out
+}
+
+// acquireIdleCloseFenceLocked verifies no open to-do (active agent or responsible session) holds any candidate ID while
+// svc.todos.writing is already held, and installs the shared close fence before the caller releases todos.writing.
+func (svc *Service) acquireIdleCloseFenceLocked(mid string, candidates []string) (func(), string, bool) {
+	links := svc.sessionLinks()
+	for _, id := range candidates {
+		open, _, _, _ := links.link(mid, id)
+		if open {
+			return nil, "session is linked to an open to-do", false
+		}
+	}
+	if svc.sessionHasOpenResponsibleTodo(mid, candidates) {
+		return nil, "session is responsible for an open to-do", false
+	}
+	canon := svc.canonical(mid)
+	keys := make([][2]string, 0, len(candidates))
+	for _, id := range candidates {
+		if id != "" {
+			keys = append(keys, [2]string{canon, id})
+		}
+	}
+	done := make(chan struct{})
+	b := &svc.idleArchiveAudit
+	b.fenceMu.Lock()
+	if b.closing == nil {
+		b.closing = map[[2]string]chan struct{}{}
+	}
+	for _, k := range keys {
+		b.closing[k] = done
+	}
+	b.fenceMu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			b.fenceMu.Lock()
+			for _, k := range keys {
+				if b.closing[k] == done {
+					delete(b.closing, k)
+				}
+			}
+			b.fenceMu.Unlock()
+			close(done)
+		})
+	}
+	return release, "", true
 }
 
 // lockIdleArchiveSession serializes guarded idle-archive operations for one (machine, session) pair
@@ -170,6 +580,12 @@ func decodeIdleArchiveRequest(r *http.Request) (assistantwire.IdleArchiveRequest
 		return req, errors.New("reason must not contain control characters")
 	}
 	return req, nil
+}
+
+func writeIdleArchiveStatusJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func sessionCandidateIDs(sid string, row proto.Session, found bool, raw proto.Session, listed bool) []string {
@@ -320,10 +736,70 @@ func (svc *Service) ensureIdleArchiveAuditLoaded(ctx context.Context) error {
 	return nil
 }
 
-// recordIdleArchiveAudit durably appends entry to sessions.idle_archive_audit (bounded to 500
-// newest entries) and mirrors metadata to plugin_audit when supported. On persistence failure
-// it returns ("", false) so callers never expose a dangling audit_id absent from storage.
-func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) (assistantwire.IdleArchiveAuditID, bool) {
+func mergeIdleArchiveAuditEntries(base []assistantwire.IdleArchiveAuditEntry, pending []assistantwire.IdleArchiveAuditEntry, upsert *assistantwire.IdleArchiveAuditEntry) []assistantwire.IdleArchiveAuditEntry {
+	next := make([]assistantwire.IdleArchiveAuditEntry, 0, min(len(base)+len(pending)+1, idleArchiveAuditMaxEntries))
+	next = append(next, base...)
+	apply := func(e assistantwire.IdleArchiveAuditEntry) {
+		for i := range next {
+			if next[i].ID == e.ID {
+				next[i] = e
+				return
+			}
+		}
+		if len(next) >= idleArchiveAuditMaxEntries {
+			next = append([]assistantwire.IdleArchiveAuditEntry{e}, next[:idleArchiveAuditMaxEntries-1]...)
+		} else {
+			next = append([]assistantwire.IdleArchiveAuditEntry{e}, next...)
+		}
+	}
+	for _, p := range pending {
+		apply(p)
+	}
+	if upsert != nil {
+		apply(*upsert)
+	}
+	if len(next) > idleArchiveAuditMaxEntries {
+		next = next[:idleArchiveAuditMaxEntries]
+	}
+	return next
+}
+
+func (svc *Service) mirrorIdleArchivePluginAudit(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) {
+	store := svc.store()
+	extAudit, ok := store.(extensionAuditWriter)
+	if !ok {
+		return
+	}
+	plugin := entry.Extension
+	if plugin == "" {
+		plugin = idleArchiveAuditCorePlugin
+	}
+	action := idleArchiveAuditActionSuccess
+	if entry.Outcome == idleArchiveOutcomeRefused {
+		action = idleArchiveAuditActionRefused
+	}
+	detail := idleArchivePluginAuditDetail{
+		AuditID:             entry.ID,
+		MachineID:           entry.MachineID,
+		SessionID:           entry.SessionID,
+		IdleMinutes:         entry.IdleMinutes,
+		CloseTerminal:       entry.CloseTerminal,
+		Outcome:             entry.Outcome,
+		ObservedIdleSeconds: entry.ObservedIdleSeconds,
+		RefusalCode:         entry.RefusalCode,
+		CloseOutcome:        entry.CloseOutcome,
+		Reason:              entry.Reason,
+	}
+	if raw, err := json.Marshal(detail); err == nil {
+		if err := extAudit.AddExtensionAudit(ctx, plugin, action, entry.Actor, raw); err != nil {
+			svc.logf("idle archive plugin_audit: %v", err)
+		}
+	}
+}
+
+// persistIdleArchiveAuditEntry writes entry (appending new or updating an existing ID) to sessions.idle_archive_audit
+// alongside any queued retry finalizations. When mirrorPlugin is true, entry is also mirrored to plugin_audit on success.
+func (svc *Service) persistIdleArchiveAuditEntry(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry, mirrorPlugin bool) (assistantwire.IdleArchiveAuditID, bool) {
 	if entry.ID == "" {
 		entry.ID = assistantwire.IdleArchiveAuditID("ia_" + randomHex(8))
 	}
@@ -337,6 +813,7 @@ func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantw
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
 	defer cancel()
 
+	var flushed []assistantwire.IdleArchiveAuditEntry
 	persisted := false
 	svc.idleArchiveAudit.mu.Lock()
 	if !svc.idleArchiveAudit.loaded {
@@ -349,18 +826,18 @@ func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantw
 		}
 	}
 	if svc.idleArchiveAudit.loaded {
-		next := make([]assistantwire.IdleArchiveAuditEntry, 0, min(len(svc.idleArchiveAudit.entries)+1, idleArchiveAuditMaxEntries))
-		next = append(next, entry)
-		for _, old := range svc.idleArchiveAudit.entries {
-			if len(next) >= idleArchiveAuditMaxEntries {
-				break
-			}
-			next = append(next, old)
-		}
+		pendingSnap := slices.Clone(svc.idleArchiveAudit.pendingUpdates)
+		next := mergeIdleArchiveAuditEntries(svc.idleArchiveAudit.entries, pendingSnap, &entry)
 		if err := store.PutSetting(writeCtx, idleArchiveAuditKey, next); err != nil {
 			svc.logf("idle archive audit save: %v", err)
 		} else {
 			svc.idleArchiveAudit.entries = next
+			svc.idleArchiveAudit.pendingUpdates = nil
+			for _, p := range pendingSnap {
+				if p.ID != entry.ID {
+					flushed = append(flushed, p)
+				}
+			}
 			persisted = true
 		}
 	}
@@ -369,44 +846,183 @@ func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantw
 	if !persisted {
 		return "", false
 	}
+	for _, p := range flushed {
+		svc.mirrorIdleArchivePluginAudit(writeCtx, p)
+	}
+	if mirrorPlugin {
+		svc.mirrorIdleArchivePluginAudit(writeCtx, entry)
+	}
+	return entry.ID, true
+}
 
-	if extAudit, ok := store.(extensionAuditWriter); ok {
-		plugin := entry.Extension
-		if plugin == "" {
-			plugin = idleArchiveAuditCorePlugin
-		}
-		action := idleArchiveAuditActionSuccess
-		if entry.Outcome == idleArchiveOutcomeRefused {
-			action = idleArchiveAuditActionRefused
-		}
-		detail := map[string]any{
-			"audit_id":       entry.ID,
-			"machine_id":     entry.MachineID,
-			"session_id":     entry.SessionID,
-			"idle_minutes":   entry.IdleMinutes,
-			"close_terminal": entry.CloseTerminal,
-			"outcome":        entry.Outcome,
-		}
-		if entry.ObservedIdleSeconds != nil {
-			detail["observed_idle_seconds"] = *entry.ObservedIdleSeconds
-		}
-		if entry.RefusalCode != "" {
-			detail["refusal_code"] = entry.RefusalCode
-		}
-		if entry.CloseOutcome != "" {
-			detail["close_outcome"] = entry.CloseOutcome
-		}
-		if entry.Reason != "" {
-			detail["reason"] = entry.Reason
-		}
-		if raw, err := json.Marshal(detail); err == nil {
-			if err := extAudit.AddExtensionAudit(writeCtx, plugin, action, entry.Actor, raw); err != nil {
-				svc.logf("idle archive plugin_audit: %v", err)
-			}
+// recordIdleArchiveAudit durably appends entry to sessions.idle_archive_audit (bounded to 500
+// newest entries) and mirrors metadata to plugin_audit when supported. On persistence failure
+// it returns ("", false) so callers never expose a dangling audit_id absent from storage.
+func (svc *Service) recordIdleArchiveAudit(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) (assistantwire.IdleArchiveAuditID, bool) {
+	return svc.persistIdleArchiveAuditEntry(ctx, entry, true)
+}
+
+// recordIdleArchiveAuditAttempt durably writes the pre-close write-ahead attempt record to sessions.idle_archive_audit
+// before any irreversible terminal close. Finalization updates this record in place and writes the plugin_audit row.
+func (svc *Service) recordIdleArchiveAuditAttempt(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) (assistantwire.IdleArchiveAuditID, bool) {
+	return svc.persistIdleArchiveAuditEntry(ctx, entry, false)
+}
+
+// finalizeIdleArchiveAudit updates an already-persisted close attempt record in place with the final outcome and
+// mirrors the finalized record to plugin_audit.
+func (svc *Service) finalizeIdleArchiveAudit(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) bool {
+	_, ok := svc.persistIdleArchiveAuditEntry(ctx, entry, true)
+	return ok
+}
+
+func (svc *Service) enqueueIdleArchiveAuditRetry(entry assistantwire.IdleArchiveAuditEntry) {
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	replaced := false
+	for i := range b.pendingUpdates {
+		if b.pendingUpdates[i].ID == entry.ID {
+			b.pendingUpdates[i] = entry
+			replaced = true
+			break
 		}
 	}
+	if !replaced {
+		if len(b.pendingUpdates) >= idleArchiveAuditMaxEntries {
+			b.pendingUpdates = append(b.pendingUpdates[1:], entry)
+		} else {
+			b.pendingUpdates = append(b.pendingUpdates, entry)
+		}
+	}
+	if b.retryWake == nil {
+		b.retryWake = make(chan struct{}, 1)
+	}
+	select {
+	case b.retryWake <- struct{}{}:
+	default:
+	}
+	if !b.retryRunning {
+		b.retryRunning = true
+		b.retryStop = make(chan struct{})
+		b.retryDone = make(chan struct{})
+		stopCh, doneCh := b.retryStop, b.retryDone
+		b.mu.Unlock()
+		go svc.runIdleArchiveAuditRetry(stopCh, doneCh)
+		return
+	}
+	b.mu.Unlock()
+}
 
-	return entry.ID, true
+func (svc *Service) stopIdleArchiveAuditRetry() {
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	stopCh := b.retryStop
+	doneCh := b.retryDone
+	running := b.retryRunning
+	if running && stopCh != nil {
+		b.retryStop = nil
+		close(stopCh)
+	}
+	b.mu.Unlock()
+	if running && doneCh != nil {
+		<-doneCh
+	}
+}
+
+func (svc *Service) flushIdleArchiveAuditRetries(ctx context.Context) bool {
+	store := svc.store()
+	if store == nil {
+		return false
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
+	defer cancel()
+
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	if len(b.pendingUpdates) == 0 {
+		b.mu.Unlock()
+		return true
+	}
+	if !b.loaded {
+		var saved []assistantwire.IdleArchiveAuditEntry
+		if _, err := store.Setting(writeCtx, idleArchiveAuditKey, &saved); err != nil {
+			b.mu.Unlock()
+			svc.logf("idle archive audit retry load: %v", err)
+			return false
+		}
+		b.entries = saved
+		b.loaded = true
+	}
+	pendingSnap := slices.Clone(b.pendingUpdates)
+	next := mergeIdleArchiveAuditEntries(b.entries, pendingSnap, nil)
+	if err := store.PutSetting(writeCtx, idleArchiveAuditKey, next); err != nil {
+		b.mu.Unlock()
+		svc.logf("idle archive audit retry save: %v", err)
+		return false
+	}
+	b.entries = next
+	b.pendingUpdates = nil
+	b.mu.Unlock()
+
+	for _, p := range pendingSnap {
+		svc.mirrorIdleArchivePluginAudit(writeCtx, p)
+	}
+	return true
+}
+
+func (svc *Service) runIdleArchiveAuditRetry(stopCh, doneCh chan struct{}) {
+	defer close(doneCh)
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	interval := b.retryInterval
+	wake := b.retryWake
+	b.mu.Unlock()
+	if interval <= 0 {
+		interval = idleArchiveAuditRetryBase
+	}
+	wait := interval
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	var runDone <-chan struct{}
+	if ptr := svc.running.Load(); ptr != nil {
+		runDone = (*ptr).Done()
+	}
+	for {
+		select {
+		case <-stopCh:
+			b.mu.Lock()
+			b.retryRunning = false
+			b.mu.Unlock()
+			return
+		case <-runDone:
+			b.mu.Lock()
+			b.retryRunning = false
+			b.mu.Unlock()
+			return
+		case <-wake:
+			wait = interval
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(wait)
+		case <-timer.C:
+			if svc.flushIdleArchiveAuditRetries(context.Background()) {
+				b.mu.Lock()
+				if len(b.pendingUpdates) == 0 {
+					b.retryRunning = false
+					b.mu.Unlock()
+					return
+				}
+				b.mu.Unlock()
+				wait = interval
+			} else if wait < idleArchiveAuditRetryMax {
+				wait = min(wait*2, idleArchiveAuditRetryMax)
+			}
+			timer.Reset(wait)
+		}
+	}
 }
 
 type idleArchiveStage struct {
@@ -459,6 +1075,21 @@ func (svc *Service) stageIdleArchiveRecord(ctx context.Context, row proto.Sessio
 	}, nil
 }
 
+func (svc *Service) idleArchiveStageCurrent(ctx context.Context, st idleArchiveStage) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
+	defer cancel()
+	b := &svc.agentArchives
+	if err := b.lock(ctx); err != nil {
+		return false, err
+	}
+	defer b.unlock()
+	if err := svc.loadAgentArchivesLocked(ctx); err != nil {
+		return false, err
+	}
+	rec, ok := b.records[st.key]
+	return ok && rec.Archived && rec.ChangedAt.Equal(st.changedAt), nil
+}
+
 // rollbackIdleArchiveRecord reverts only the exact generation written by stageIdleArchiveRecord,
 // preserving any newer concurrent archive or restore.
 func (svc *Service) rollbackIdleArchiveRecord(ctx context.Context, st idleArchiveStage) error {
@@ -489,6 +1120,7 @@ func (svc *Service) loadIdleArchiveAudit(ctx context.Context) ([]assistantwire.I
 	if err := svc.ensureIdleArchiveAuditLoaded(ctx); err != nil {
 		return nil, err
 	}
+	svc.flushIdleArchiveAuditRetries(ctx)
 	svc.idleArchiveAudit.mu.Lock()
 	defer svc.idleArchiveAudit.mu.Unlock()
 	out := make([]assistantwire.IdleArchiveAuditEntry, len(svc.idleArchiveAudit.entries))
@@ -606,7 +1238,9 @@ func (svc *Service) evaluateIdleArchiveTarget(ctx context.Context, mid, sid stri
 		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeOpenTodo, refuseMsg: "session is responsible for an open to-do"}
 	}
 
-	// 6. Strictly verify idle duration > idle_minutes (fail closed when UpdatedAt is zero or in the future).
+	// 6. Strictly verify idle duration > idle_minutes.
+	// Live sessions additionally require manager-local monotonic continuous inactivity observation on the current node
+	// connection so cross-machine wall-clock skew or freshly established connections cannot forge long inactivity.
 	lastActivity := row.UpdatedAt
 	if listed && raw.UpdatedAt.After(lastActivity) {
 		lastActivity = raw.UpdatedAt
@@ -614,18 +1248,68 @@ func (svc *Service) evaluateIdleArchiveTarget(ctx context.Context, mid, sid stri
 	if lastActivity.IsZero() {
 		return idleArchiveEvaluation{row: row, refuse: idleArchiveCodeIdleUnverified, refuseMsg: "session idle duration cannot be verified because last activity time is missing"}
 	}
-	if lastDone.After(lastActivity) {
-		lastActivity = lastDone
-	}
+	localReset := lastDone
 	// Only clamp forward by ArchiveChangedAt for restored (!row.Archived) sessions so a freshly
 	// restored session gets a full grace period, while already-archived retries remain idempotent.
-	if !row.Archived && row.ArchiveChangedAt != nil && row.ArchiveChangedAt.After(lastActivity) {
-		lastActivity = *row.ArchiveChangedAt
+	if !row.Archived && row.ArchiveChangedAt != nil && row.ArchiveChangedAt.After(localReset) {
+		localReset = *row.ArchiveChangedAt
 	}
-	observed := svc.idleArchiveNow().UTC().Sub(lastActivity)
-	obsSec := int64(observed.Seconds())
+	if localReset.After(lastActivity) {
+		lastActivity = localReset
+	}
+
+	now := svc.idleArchiveNow()
+	wallObserved := now.UTC().Sub(lastActivity)
 	threshold := time.Duration(idleMinutes) * time.Minute
-	if observed <= threshold {
+
+	if offline {
+		obsSec := int64(wallObserved.Seconds())
+		if wallObserved <= threshold {
+			return idleArchiveEvaluation{
+				row:       row,
+				refuse:    idleArchiveCodeNotIdleLongEnough,
+				refuseMsg: fmt.Sprintf("session has only been idle for %ds; requires strictly more than %d minute(s)", max(obsSec, 0), idleMinutes),
+				refuseObs: &obsSec,
+			}
+		}
+		return idleArchiveEvaluation{row: row, raw: raw, listed: listed, offline: true, obsSec: obsSec}
+	}
+
+	localObs, fromConnect, verified := svc.verifyLiveIdleObservation(mid, raw, now)
+	if !verified {
+		if wallObserved <= threshold {
+			obsSec := int64(wallObserved.Seconds())
+			return idleArchiveEvaluation{
+				row:       row,
+				refuse:    idleArchiveCodeNotIdleLongEnough,
+				refuseMsg: fmt.Sprintf("session has only been idle for %ds; requires strictly more than %d minute(s)", max(obsSec, 0), idleMinutes),
+				refuseObs: &obsSec,
+			}
+		}
+		zero := int64(0)
+		return idleArchiveEvaluation{
+			row:       row,
+			refuse:    idleArchiveCodeIdleUnverified,
+			refuseMsg: fmt.Sprintf("live session inactivity has not been continuously observed on the current computer connection; requires strictly more than %d minute(s) of local observation", idleMinutes),
+			refuseObs: &zero,
+		}
+	}
+	if !localReset.IsZero() {
+		if sinceLocalReset := now.UTC().Sub(localReset); sinceLocalReset < localObs {
+			localObs = sinceLocalReset
+		}
+	}
+	effective := min(localObs, wallObserved)
+	obsSec := int64(effective.Seconds())
+	if effective <= threshold {
+		if localObs <= threshold && wallObserved > threshold && fromConnect {
+			return idleArchiveEvaluation{
+				row:       row,
+				refuse:    idleArchiveCodeIdleUnverified,
+				refuseMsg: fmt.Sprintf("live session has only been observed idle on the current computer connection for %ds; requires strictly more than %d minute(s) of continuous local observation", max(obsSec, 0), idleMinutes),
+				refuseObs: &obsSec,
+			}
+		}
 		return idleArchiveEvaluation{
 			row:       row,
 			refuse:    idleArchiveCodeNotIdleLongEnough,
@@ -634,7 +1318,82 @@ func (svc *Service) evaluateIdleArchiveTarget(ctx context.Context, mid, sid stri
 		}
 	}
 
-	return idleArchiveEvaluation{row: row, raw: raw, listed: listed, offline: offline, obsSec: obsSec}
+	return idleArchiveEvaluation{row: row, raw: raw, listed: listed, offline: false, obsSec: obsSec}
+}
+
+func (svc *Service) reverifyBeforeIrreversibleClose(ctx context.Context, mid, sid string, isExt bool, idleMinutes int, st idleArchiveStage) (idleArchiveEvaluation, func()) {
+	ev := svc.evaluateIdleArchiveTarget(ctx, mid, sid, isExt, idleMinutes)
+	if ev.storage != nil || ev.notFound || ev.refuse != "" {
+		return ev, nil
+	}
+	current, err := svc.idleArchiveStageCurrent(ctx, st)
+	if err != nil {
+		return idleArchiveEvaluation{storage: err}, nil
+	}
+	if !current {
+		return idleArchiveEvaluation{row: ev.row, refuse: idleArchiveCodeSessionUnverified, refuseMsg: "session archive state changed before closing terminal"}, nil
+	}
+	if ev.offline {
+		return ev, nil
+	}
+	candidates := sessionCandidateIDs(sid, ev.row, true, ev.raw, ev.listed)
+	svc.todos.writing.Lock()
+	releaseFence, openMsg, ok := svc.acquireIdleCloseFenceLocked(mid, candidates)
+	svc.todos.writing.Unlock()
+	if !ok {
+		return idleArchiveEvaluation{row: ev.row, refuse: idleArchiveCodeOpenTodo, refuseMsg: openMsg}, nil
+	}
+	// Re-check all protection, direction, interaction, and monotonic idle conditions with the close fence held.
+	ev2 := svc.evaluateIdleArchiveTarget(ctx, mid, sid, isExt, idleMinutes)
+	if ev2.storage != nil || ev2.notFound || ev2.refuse != "" {
+		releaseFence()
+		return ev2, nil
+	}
+	current, err = svc.idleArchiveStageCurrent(ctx, st)
+	if err != nil {
+		releaseFence()
+		return idleArchiveEvaluation{storage: err}, nil
+	}
+	if !current {
+		releaseFence()
+		return idleArchiveEvaluation{row: ev2.row, refuse: idleArchiveCodeSessionUnverified, refuseMsg: "session archive state changed before closing terminal"}, nil
+	}
+	return ev2, releaseFence
+}
+
+func (svc *Service) reverifyBeforeArchiveOnlyCommit(ctx context.Context, mid, sid string, isExt bool, idleMinutes int, st idleArchiveStage) idleArchiveEvaluation {
+	ev := svc.evaluateIdleArchiveTarget(ctx, mid, sid, isExt, idleMinutes)
+	if ev.storage != nil || ev.notFound || ev.refuse != "" {
+		return ev
+	}
+	candidates := sessionCandidateIDs(sid, ev.row, true, ev.raw, ev.listed)
+	svc.todos.writing.Lock()
+	links := svc.sessionLinks()
+	openTodo := false
+	openMsg := ""
+	for _, id := range candidates {
+		if open, _, _, _ := links.link(mid, id); open {
+			openTodo = true
+			openMsg = "session is linked to an open to-do"
+			break
+		}
+	}
+	if !openTodo && svc.sessionHasOpenResponsibleTodo(mid, candidates) {
+		openTodo = true
+		openMsg = "session is responsible for an open to-do"
+	}
+	svc.todos.writing.Unlock()
+	if openTodo {
+		return idleArchiveEvaluation{row: ev.row, refuse: idleArchiveCodeOpenTodo, refuseMsg: openMsg}
+	}
+	current, err := svc.idleArchiveStageCurrent(ctx, st)
+	if err != nil {
+		return idleArchiveEvaluation{storage: err}
+	}
+	if !current {
+		return idleArchiveEvaluation{row: ev.row, refuse: idleArchiveCodeSessionUnverified, refuseMsg: "session archive state changed before committing archive"}
+	}
+	return ev
 }
 
 func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Request) {
@@ -648,10 +1407,7 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		apierr.WriteCode(w, http.StatusBadRequest, "invalid_request", err)
 		return
 	}
-	closeTerminal := true
-	if req.CloseTerminal != nil {
-		closeTerminal = *req.CloseTerminal
-	}
+	closeTerminal := req.CloseTerminal.ShouldClose()
 
 	ctx := r.Context()
 	if isExt {
@@ -700,18 +1456,16 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			CloseOutcome:        closeOutcome,
 			Reason:              req.Reason,
 		})
-		body := map[string]any{
-			"error":           msg,
-			"code":            code,
-			"audit_persisted": persisted,
+		resp := assistantwire.IdleArchiveRefusalResponse{
+			Message:        msg,
+			Code:           code,
+			AuditPersisted: persisted,
+			CloseOutcome:   closeOutcome,
 		}
 		if persisted && auditID != "" {
-			body["audit_id"] = auditID
+			resp.AuditID = auditID
 		}
-		if closeOutcome != "" {
-			body["close_outcome"] = closeOutcome
-		}
-		apierr.WriteBody(w, status, body)
+		writeIdleArchiveStatusJSON(w, status, resp)
 	}
 
 	ev := svc.evaluateIdleArchiveTarget(ctx, mid, sid, isExt, req.IdleMinutes)
@@ -773,6 +1527,21 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 				refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
 				return
 			}
+			reEv := svc.reverifyBeforeArchiveOnlyCommit(ctx, mid, sid, isExt, req.IdleMinutes, st)
+			if reEv.storage != nil || reEv.notFound || reEv.refuse != "" {
+				if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
+					svc.logf("idle archive %s/%s: rollback offline archive after reverify failure: %v", mid, short(row.SessionID), rbErr)
+				}
+				svc.publishList(row.MachineID)
+				if reEv.storage != nil {
+					apierr.WriteCode(w, http.StatusServiceUnavailable, "storage_unavailable", reEv.storage)
+				} else if reEv.notFound {
+					apierr.Write(w, http.StatusNotFound, i18n.Err("hub-deleted_sessions.unknown"))
+				} else {
+					refuse(http.StatusConflict, reEv.refuse, reEv.refuseMsg, reEv.refuseObs, "")
+				}
+				return
+			}
 			row.ArchiveChangedAt = archiveChangedAt(st.changedAt)
 			closeRes := &assistantwire.IdleArchiveCloseResult{Closed: false, Outcome: archiveCloseNotRunning}
 			auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
@@ -808,9 +1577,12 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		// Live session close: always stage a provisional ClosedAt fence before calling the node
-		// (including when the session is already archived so exit-transcript writes cannot unarchive
-		// it mid-close), and roll back exact pre-call state if the node refuses, is offline, or fails.
+		// Live session close:
+		// 1. Stage provisional ClosedAt fence before calling the node (so exit-transcript writes cannot unarchive mid-close).
+		// 2. Re-verify open to-dos and all protection/idle guards under the shared session close fence before any close.
+		// 3. Durably persist the write-ahead attempt audit record BEFORE calling the node; abort & rollback if write fails.
+		// 4. Call node retire with activity version/pane guard so concurrent node activity is refused cleanly.
+		// 5. Finalize the audit entry with the terminal outcome; if post-close update fails, queue durable retry and return 503.
 		wasArchived := row.Archived
 		st, err := svc.stageIdleArchiveRecord(ctx, row, true)
 		if err != nil {
@@ -819,7 +1591,96 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		}
 		row.ArchiveChangedAt = archiveChangedAt(st.changedAt)
 
-		res := svc.retireArchived(ctx, row)
+		reEv, releaseFence := svc.reverifyBeforeIrreversibleClose(ctx, mid, sid, isExt, req.IdleMinutes, st)
+		if reEv.storage != nil || reEv.notFound || reEv.refuse != "" {
+			if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
+				svc.logf("idle archive %s/%s: rollback provisional archive after reverify: %v", mid, short(row.SessionID), rbErr)
+			}
+			svc.publishList(row.MachineID)
+			if reEv.storage != nil {
+				apierr.WriteCode(w, http.StatusServiceUnavailable, "storage_unavailable", reEv.storage)
+			} else if reEv.notFound {
+				apierr.Write(w, http.StatusNotFound, i18n.Err("hub-deleted_sessions.unknown"))
+			} else {
+				refuse(http.StatusConflict, reEv.refuse, reEv.refuseMsg, reEv.refuseObs, "")
+			}
+			return
+		}
+		obsSec = reEv.obsSec
+
+		// If the session went offline while staging the archive record, commit as offline without calling the node.
+		if reEv.offline {
+			closeRes := &assistantwire.IdleArchiveCloseResult{Closed: false, Outcome: archiveCloseNotRunning}
+			auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
+				Actor:               actor,
+				Extension:           extID,
+				MachineID:           wireids.MachineID(mid),
+				SessionID:           wireids.SessionID(row.SessionID),
+				IdleMinutes:         req.IdleMinutes,
+				ObservedIdleSeconds: &obsSec,
+				CloseTerminal:       true,
+				Outcome:             idleArchiveOutcomeArchivedNotRunning,
+				CloseOutcome:        archiveCloseNotRunning,
+				Reason:              req.Reason,
+			})
+			if !persisted {
+				if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
+					svc.logf("idle archive %s/%s: rollback archive after audit failure: %v", mid, short(row.SessionID), rbErr)
+				}
+				svc.publishList(row.MachineID)
+				apierr.WriteCode(w, http.StatusServiceUnavailable, "audit_unavailable", errors.New("could not persist idle archive audit entry"))
+				return
+			}
+			if _, err := svc.noteAgentArchiveClosed(ctx, row, time.Now().UTC(), true); err != nil {
+				svc.logf("idle archive %s/%s: note offline close: %v", row.MachineID, short(row.SessionID), err)
+				svc.retryNativeArchiveClosed(ctx, row)
+			}
+			svc.publishList(row.MachineID)
+			apierr.WriteJSON(w, assistantwire.IdleArchiveResponse{
+				OK:                  true,
+				Archived:            true,
+				AlreadyArchived:     wasArchived,
+				ObservedIdleSeconds: obsSec,
+				Close:               closeRes,
+				AuditID:             auditID,
+				AuditPersisted:      persisted,
+			})
+			return
+		}
+		defer releaseFence()
+
+		attemptEntry := assistantwire.IdleArchiveAuditEntry{
+			ID:                  assistantwire.IdleArchiveAuditID("ia_" + randomHex(8)),
+			At:                  svc.idleArchiveNow().UTC(),
+			Actor:               actor,
+			Extension:           extID,
+			MachineID:           wireids.MachineID(mid),
+			SessionID:           wireids.SessionID(row.SessionID),
+			IdleMinutes:         req.IdleMinutes,
+			ObservedIdleSeconds: &obsSec,
+			CloseTerminal:       true,
+			Outcome:             idleArchiveOutcomeCloseAttempted,
+			Reason:              req.Reason,
+		}
+		auditID, attemptPersisted := svc.recordIdleArchiveAuditAttempt(ctx, attemptEntry)
+		if !attemptPersisted {
+			if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
+				svc.logf("idle archive %s/%s: rollback provisional archive after attempt audit failure: %v", mid, short(row.SessionID), rbErr)
+			}
+			svc.publishList(row.MachineID)
+			apierr.WriteCode(w, http.StatusServiceUnavailable, "audit_unavailable", errors.New("could not persist idle archive audit attempt before closing terminal"))
+			return
+		}
+		attemptEntry.ID = auditID
+
+		guard := retireActivityGuard{
+			Enabled:   true,
+			Rev:       reEv.raw.Rev,
+			HasRev:    true,
+			UpdatedAt: reEv.raw.UpdatedAt.UTC(),
+			Pane:      reEv.raw.PaneID,
+		}
+		res := svc.retireArchived(ctx, row, guard)
 		if res.Outcome != archiveCloseClosed && res.Outcome != archiveCloseNotRunning {
 			if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
 				svc.logf("idle archive %s/%s: rollback provisional archive: %v", mid, short(row.SessionID), rbErr)
@@ -841,7 +1702,21 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			if res.Detail != "" {
 				msg = msg + ": " + res.Detail
 			}
-			refuse(status, code, msg, &obsSec, res.Outcome)
+			finalRefusal := attemptEntry
+			finalRefusal.Outcome = idleArchiveOutcomeRefused
+			finalRefusal.RefusalCode = code
+			finalRefusal.CloseOutcome = res.Outcome
+			finalPersisted := svc.finalizeIdleArchiveAudit(ctx, finalRefusal)
+			if !finalPersisted {
+				svc.enqueueIdleArchiveAuditRetry(finalRefusal)
+			}
+			writeIdleArchiveStatusJSON(w, status, assistantwire.IdleArchiveRefusalResponse{
+				Message:        msg,
+				Code:           code,
+				AuditPersisted: finalPersisted,
+				AuditID:        auditID,
+				CloseOutcome:   res.Outcome,
+			})
 			return
 		}
 
@@ -868,18 +1743,26 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 		if res.Closed {
 			outcome = idleArchiveOutcomeArchivedAndClosed
 		}
-		auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
-			Actor:               actor,
-			Extension:           extID,
-			MachineID:           wireids.MachineID(mid),
-			SessionID:           wireids.SessionID(row.SessionID),
-			IdleMinutes:         req.IdleMinutes,
-			ObservedIdleSeconds: &obsSec,
-			CloseTerminal:       true,
-			Outcome:             outcome,
-			CloseOutcome:        res.Outcome,
-			Reason:              req.Reason,
-		})
+		finalEntry := attemptEntry
+		finalEntry.Outcome = outcome
+		finalEntry.CloseOutcome = res.Outcome
+		finalPersisted := svc.finalizeIdleArchiveAudit(ctx, finalEntry)
+		if !finalPersisted {
+			svc.enqueueIdleArchiveAuditRetry(finalEntry)
+			writeIdleArchiveStatusJSON(w, http.StatusServiceUnavailable, assistantwire.IdleArchiveResponse{
+				OK:                       false,
+				Code:                     idleArchiveCodeAuditFinalizationPending,
+				Message:                  "session was archived and terminal closed, but final audit outcome could not be persisted; durable retry queued",
+				Archived:                 true,
+				AlreadyArchived:          wasArchived,
+				ObservedIdleSeconds:      obsSec,
+				Close:                    closeRes,
+				AuditID:                  auditID,
+				AuditPersisted:           false,
+				AuditFinalizationPending: true,
+			})
+			return
+		}
 		apierr.WriteJSON(w, assistantwire.IdleArchiveResponse{
 			OK:                  true,
 			Archived:            true,
@@ -887,19 +1770,35 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			ObservedIdleSeconds: obsSec,
 			Close:               closeRes,
 			AuditID:             auditID,
-			AuditPersisted:      persisted,
+			AuditPersisted:      true,
 		})
 		return
 	}
 
 	// Archive-only path (close_terminal: false): stage Persona's archive record under the per-session
-	// lock without native-archive/publish side effects, and roll back if audit persistence fails.
+	// lock without native-archive/publish side effects, re-verify protected state, and roll back if audit persistence fails.
 	st, err := svc.stageIdleArchiveRecord(ctx, row, false)
 	if err != nil {
 		refuse(http.StatusInternalServerError, "archive_failed", err.Error(), &obsSec, "")
 		return
 	}
+	reEv := svc.reverifyBeforeArchiveOnlyCommit(ctx, mid, sid, isExt, req.IdleMinutes, st)
+	if reEv.storage != nil || reEv.notFound || reEv.refuse != "" {
+		if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
+			svc.logf("idle archive %s/%s: rollback archive after reverify failure: %v", mid, short(row.SessionID), rbErr)
+		}
+		svc.publishList(row.MachineID)
+		if reEv.storage != nil {
+			apierr.WriteCode(w, http.StatusServiceUnavailable, "storage_unavailable", reEv.storage)
+		} else if reEv.notFound {
+			apierr.Write(w, http.StatusNotFound, i18n.Err("hub-deleted_sessions.unknown"))
+		} else {
+			refuse(http.StatusConflict, reEv.refuse, reEv.refuseMsg, reEv.refuseObs, "")
+		}
+		return
+	}
 	row.ArchiveChangedAt = archiveChangedAt(st.changedAt)
+	obsSec = reEv.obsSec
 	auditID, persisted := svc.recordIdleArchiveAudit(ctx, assistantwire.IdleArchiveAuditEntry{
 		Actor:               actor,
 		Extension:           extID,
@@ -978,5 +1877,5 @@ func (svc *Service) handleAgentIdleArchiveAudit(w http.ResponseWriter, r *http.R
 			break
 		}
 	}
-	apierr.WriteJSON(w, map[string]any{"entries": out})
+	apierr.WriteJSON(w, assistantwire.IdleArchiveAuditResponse{Entries: out})
 }

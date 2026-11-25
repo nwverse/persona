@@ -310,3 +310,118 @@ func TestRetireHerdrCoreWithRuntimeDefault(t *testing.T) {
 		})
 	}
 }
+
+func TestHerdrRetireGuardedActivityVersion(t *testing.T) {
+	n, f, home := herdrNode(t)
+	cwd := mkdir(t, filepath.Join(home, "proj"))
+	updatedAt := time.Date(2026, 11, 26, 0, 10, 0, 0, time.UTC)
+	transcriptPath := writeTranscript(t, home, cwd, sidA, updatedAt,
+		`{"type":"user","cwd":"`+cwd+`","message":{"role":"user","content":"hi"},"uuid":"u1"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]},"uuid":"a1","parentUuid":"u1"}`,
+		`{"type":"system","subtype":"turn_duration","uuid":"d1","parentUuid":"a1","durationMs":1000}`)
+	n.state.put(sidA, sessionState{Launcher: "cc", Cwd: cwd, Model: "opus"})
+	f.reply("session.snapshot", snapshot(nil, nil, []any{
+		claudeAgent(sidA, proto.StatusDone, "w1:p1", "w1:t1", "w1", cwd, ""),
+	}, nil))
+	list := listSessions(t, n)
+	var row proto.Session
+	for _, s := range list {
+		if s.SessionID == sidA {
+			row = s
+			break
+		}
+	}
+	if row.Rev == 0 || row.UpdatedAt.IsZero() {
+		t.Fatalf("expected populated rev and updated_at, got %+v", row)
+	}
+	waitCalls(t, f, "pane.report_agent_session", 1)
+	f.reset()
+
+	// 1. Mismatched expected pane refuses without touching terminal.
+	_, err := request(t, n, "session.retire", map[string]any{
+		"session_id":          sidA,
+		"close_terminal":      true,
+		"guard_activity":      true,
+		"expected_rev":        row.Rev,
+		"has_expected_rev":    true,
+		"expected_updated_at": row.UpdatedAt,
+		"expected_pane_id":    "w1:p99",
+	})
+	if code, _ := refusalOf(t, err); code != notRetirable {
+		t.Fatalf("pane mismatch: got %v, want not_retirable", err)
+	}
+	if got := withoutAgentReports(f.trace("pane.send_keys", "tab.close", "pane.close")); len(got) != 0 {
+		t.Fatalf("pane mismatch touched terminal: %v", got)
+	}
+
+	// 2. Concurrent status change to working (observed via strict host refresh) refuses without touching terminal.
+	f.reply("session.snapshot", snapshot(nil, nil, []any{
+		claudeAgent(sidA, proto.StatusWorking, "w1:p1", "w1:t1", "w1", cwd, ""),
+	}, nil))
+	_, err = request(t, n, "session.retire", map[string]any{
+		"session_id":          sidA,
+		"close_terminal":      true,
+		"guard_activity":      true,
+		"expected_rev":        row.Rev,
+		"has_expected_rev":    true,
+		"expected_updated_at": row.UpdatedAt,
+		"expected_pane_id":    "w1:p1",
+	})
+	if code, _ := refusalOf(t, err); code != notRetirable {
+		t.Fatalf("working transition: got %v, want not_retirable", err)
+	}
+	if got := withoutAgentReports(f.trace("pane.send_keys", "tab.close", "pane.close")); len(got) != 0 {
+		t.Fatalf("working transition touched terminal: %v", got)
+	}
+
+	// Restore idle status in host snapshot, then simulate concurrent transcript write (activity version change).
+	f.reply("session.snapshot", snapshot(nil, nil, []any{
+		claudeAgent(sidA, proto.StatusDone, "w1:p1", "w1:t1", "w1", cwd, ""),
+	}, nil))
+	listSessions(t, n)
+	f.reset()
+
+	newerAt := updatedAt.Add(time.Minute)
+	writeTranscript(t, home, cwd, sidA, newerAt,
+		`{"type":"user","cwd":"`+cwd+`","message":{"role":"user","content":"hi"},"uuid":"u1"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]},"uuid":"a1","parentUuid":"u1"}`,
+		`{"type":"user","cwd":"`+cwd+`","message":{"role":"user","content":"new work"},"uuid":"u2"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"uuid":"a2","parentUuid":"u2"}`,
+		`{"type":"system","subtype":"turn_duration","uuid":"d2","parentUuid":"a2","durationMs":1000}`)
+	_, err = request(t, n, "session.retire", map[string]any{
+		"session_id":          sidA,
+		"close_terminal":      true,
+		"guard_activity":      true,
+		"expected_rev":        row.Rev,
+		"has_expected_rev":    true,
+		"expected_updated_at": row.UpdatedAt,
+		"expected_pane_id":    "w1:p1",
+	})
+	if code, _ := refusalOf(t, err); code != notRetirable {
+		t.Fatalf("concurrent transcript rev change: got %v, want not_retirable", err)
+	}
+	if got := withoutAgentReports(f.trace("pane.send_keys", "tab.close", "pane.close")); len(got) != 0 {
+		t.Fatalf("rev change touched terminal: %v", got)
+	}
+
+	// 3. Matching fresh rev, updated_at, and pane closes cleanly.
+	st, statErr := os.Stat(transcriptPath)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	res, err := request(t, n, "session.retire", map[string]any{
+		"session_id":          sidA,
+		"close_terminal":      true,
+		"guard_activity":      true,
+		"expected_rev":        st.Size(),
+		"has_expected_rev":    true,
+		"expected_updated_at": newerAt,
+		"expected_pane_id":    "w1:p1",
+	})
+	if err != nil || res["closed"] != true {
+		t.Fatalf("matching guarded retire: %v, %v", res, err)
+	}
+	if got := f.trace("tab.close"); len(got) != 1 || !strings.Contains(got[0], `"tab_id":"w1:t1"`) {
+		t.Fatalf("expected tab.close after matching guard, got %v", got)
+	}
+}

@@ -277,7 +277,7 @@ func (s *Service) autoLinkTodos(machine string, sessions []proto.Session) bool {
 			continue
 		}
 		key := [2]string{machine, c.SessionID}
-		if doneCreations[key] {
+		if doneCreations[key] || s.idleCloseFenceActive(machine, c.SessionID) {
 			continue
 		}
 

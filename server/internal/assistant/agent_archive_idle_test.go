@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -20,10 +21,14 @@ import (
 
 type recordingIdleAuditStore struct {
 	Store
-	mu             sync.Mutex
-	failAuditLoad  bool
-	failAuditWrite bool
-	rows           []struct {
+	mu                   sync.Mutex
+	failAuditLoad        bool
+	failAuditWrite       bool
+	failAuditWriteOnCall int
+	auditWriteCalls      int
+	onPutSetting         func(key string)
+	onAuditPersisted     func()
+	rows                 []struct {
 		plugin, action, actor string
 		detail                json.RawMessage
 	}
@@ -41,10 +46,26 @@ func (r *recordingIdleAuditStore) Setting(ctx context.Context, key string, dst a
 
 func (r *recordingIdleAuditStore) PutSetting(ctx context.Context, key string, value any) error {
 	r.mu.Lock()
-	fail := r.failAuditWrite
+	hook := r.onPutSetting
 	r.mu.Unlock()
-	if key == idleArchiveAuditKey && fail {
-		return errors.New("audit store write failed")
+	if hook != nil {
+		hook(key)
+	}
+	if key == idleArchiveAuditKey {
+		r.mu.Lock()
+		r.auditWriteCalls++
+		callNum := r.auditWriteCalls
+		fail := r.failAuditWrite || (r.failAuditWriteOnCall > 0 && callNum == r.failAuditWriteOnCall)
+		onPersisted := r.onAuditPersisted
+		r.mu.Unlock()
+		if fail {
+			return errors.New("audit store write failed")
+		}
+		err := r.Store.PutSetting(ctx, key, value)
+		if err == nil && onPersisted != nil {
+			onPersisted()
+		}
+		return err
 	}
 	return r.Store.PutSetting(ctx, key, value)
 }
@@ -69,13 +90,25 @@ func idleArchiveTestSetup(t *testing.T, now time.Time, edit func(*proto.Session)
 	t.Helper()
 	ft, row := closeTestService(t, func(s *proto.Session) {
 		s.UpdatedAt = now.Add(-45 * time.Minute)
+		s.Rev = 1024
 		if edit != nil {
 			edit(s)
 		}
 	})
 	rec := &recordingIdleAuditStore{Store: ft.s.store()}
 	ft.s.setStore(func() Store { return rec })
+	connAt := now.Add(-2 * time.Hour)
+	ft.d.mu.Lock()
+	ft.d.machines["mac"].connected = connAt
+	ft.d.mu.Unlock()
+	obsAt := now
+	if !row.UpdatedAt.IsZero() && row.UpdatedAt.Before(now) {
+		obsAt = row.UpdatedAt
+	}
+	ft.s.idleArchiveAudit.now = func() time.Time { return obsAt }
+	ft.s.observeIdleSessions("mac", []proto.Session{row}, connAt)
 	ft.s.idleArchiveAudit.now = func() time.Time { return now }
+	t.Cleanup(ft.s.stopIdleArchiveAuditRetry)
 	return ft, rec, row
 }
 
@@ -680,25 +713,82 @@ func TestIdleArchiveAdversarialReviewRegressions(t *testing.T) {
 			t.Fatalf("rolled-back offline archive leaked native archive intent: %+v", got)
 		}
 
-		// Audit write failure on post-close success omits audit_id from JSON and does not mirror to plugin_audit.
+		// Audit attempt write failure before live close aborts with 503, never closes terminal, rolls back archive, and skips plugin_audit.
 		ftLive, recLive, rowLive := idleArchiveTestSetup(t, now, nil)
 		recLive.mu.Lock()
 		recLive.failAuditWrite = true
 		recLive.mu.Unlock()
-		wLive := postIdleArchive(ftLive.s, "mac", rowLive.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
-		if wLive.Code != http.StatusOK {
-			t.Fatalf("live close with audit failure got %d (%s), want 200", wLive.Code, wLive.Body.String())
+		wLive := postIdleArchive(ftLive.s, "mac", rowLive.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"reclaim"}`)
+		if wLive.Code != http.StatusServiceUnavailable {
+			t.Fatalf("live close with attempt audit failure got %d (%s), want 503", wLive.Code, wLive.Body.String())
 		}
-		var bLive map[string]any
-		_ = json.Unmarshal(wLive.Body.Bytes(), &bLive)
-		if bLive["audit_persisted"] != false {
-			t.Fatalf("expected audit_persisted=false, got %+v", bLive)
+		if len(retiredOf(ftLive)) != 0 {
+			t.Fatalf("attempt audit failure still retired terminal: %v", retiredOf(ftLive))
 		}
-		if _, hasID := bLive["audit_id"]; hasID {
-			t.Fatalf("IdleArchiveResponse serialized audit_id when audit_persisted=false: %+v", bLive)
+		if archivedIDs(t, ftLive.s)[rowLive.SessionID] {
+			t.Fatal("attempt audit failure did not roll back provisional archive")
 		}
 		if recLive.count() != 0 {
-			t.Fatalf("failed audit mirrored %d rows to plugin_audit, want 0", recLive.count())
+			t.Fatalf("failed attempt audit mirrored %d rows to plugin_audit, want 0", recLive.count())
+		}
+		if got := ftLive.s.nativeArchiveView("mac", rowLive.SessionID); got != nil {
+			t.Fatalf("failed attempt audit leaked native archive intent: %+v", got)
+		}
+
+		// Audit finalization write failure after durable attempt + terminal close returns 503 (never 200),
+		// keeps the durable attempt entry in storage, and queues durable retry that finalizes once storage recovers.
+		ftFinal, recFinal, rowFinal := idleArchiveTestSetup(t, now, nil)
+		recFinal.mu.Lock()
+		recFinal.failAuditWriteOnCall = 2 // 1st write persists close_attempted; 2nd write (final outcome) fails
+		recFinal.mu.Unlock()
+		wFinal := postIdleArchive(ftFinal.s, "mac", rowFinal.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"reclaim-final"}`)
+		if wFinal.Code != http.StatusServiceUnavailable {
+			t.Fatalf("post-close finalization audit failure got %d (%s), want 503", wFinal.Code, wFinal.Body.String())
+		}
+		var respFinal assistantwire.IdleArchiveResponse
+		if err := json.Unmarshal(wFinal.Body.Bytes(), &respFinal); err != nil {
+			t.Fatalf("decode finalization failure response: %v", err)
+		}
+		if respFinal.OK || respFinal.Code != idleArchiveCodeAuditFinalizationPending || !respFinal.Archived ||
+			respFinal.Close == nil || !respFinal.Close.Closed || respFinal.AuditID == "" ||
+			respFinal.AuditPersisted || !respFinal.AuditFinalizationPending {
+			t.Fatalf("unexpected post-close finalization failure response: %+v", respFinal)
+		}
+		if len(retiredOf(ftFinal)) != 1 {
+			t.Fatalf("expected 1 retired terminal after persisted attempt, got %v", retiredOf(ftFinal))
+		}
+		var savedBeforeRetry []assistantwire.IdleArchiveAuditEntry
+		if _, err := recFinal.Store.Setting(context.Background(), idleArchiveAuditKey, &savedBeforeRetry); err != nil {
+			t.Fatalf("read persisted attempt from store: %v", err)
+		}
+		if len(savedBeforeRetry) != 1 || savedBeforeRetry[0].ID != respFinal.AuditID ||
+			savedBeforeRetry[0].Outcome != idleArchiveOutcomeCloseAttempted ||
+			savedBeforeRetry[0].Actor != "extension:guardrail-ext" || savedBeforeRetry[0].Reason != "reclaim-final" {
+			t.Fatalf("persisted attempt record = %+v", savedBeforeRetry)
+		}
+		if recFinal.count() != 0 {
+			t.Fatalf("pending finalization already mirrored %d plugin_audit rows, want 0", recFinal.count())
+		}
+
+		// Once audit storage recovers, durable retry / audit query flushes the final outcome and mirrors plugin_audit.
+		recFinal.mu.Lock()
+		recFinal.failAuditWriteOnCall = 0
+		recFinal.mu.Unlock()
+		aw := getIdleArchiveAudit(ftFinal.s, "?session_id="+rowFinal.SessionID, roleExtension, "guardrail-ext")
+		if aw.Code != http.StatusOK {
+			t.Fatalf("audit read after recovery got %d: %s", aw.Code, aw.Body.String())
+		}
+		var auditResp assistantwire.IdleArchiveAuditResponse
+		if err := json.Unmarshal(aw.Body.Bytes(), &auditResp); err != nil {
+			t.Fatal(err)
+		}
+		if len(auditResp.Entries) != 1 || auditResp.Entries[0].ID != respFinal.AuditID ||
+			auditResp.Entries[0].Outcome != idleArchiveOutcomeArchivedAndClosed ||
+			auditResp.Entries[0].CloseOutcome != archiveCloseClosed {
+			t.Fatalf("finalized audit entries = %+v", auditResp.Entries)
+		}
+		if recFinal.count() != 1 {
+			t.Fatalf("plugin_audit rows after durable retry flush = %d, want 1", recFinal.count())
 		}
 
 		// Audit write failure on refusal emits audit_persisted=false, omits audit_id, and skips plugin_audit.
@@ -824,4 +914,359 @@ func TestIdleArchiveConcurrentRaceAndHiddenSpace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestIdleArchiveP1AuditReviewFixes(t *testing.T) {
+	t.Run("P1-1 concurrent open-todo bind during stageIdleArchiveRecord DB wait refuses close", func(t *testing.T) {
+		now := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+		ft, rec, row := idleArchiveTestSetup(t, now, nil)
+		ft.s.todos.mu.Lock()
+		ft.s.todos.loaded = true
+		ft.s.todos.todos = map[string]*Todo{
+			"todo_concurrent": {ID: "todo_concurrent", Title: "concurrent open task"},
+		}
+		ft.s.todos.activeBySession = map[[2]string]string{}
+		ft.s.todos.mu.Unlock()
+
+		stageEntered := make(chan struct{})
+		stageRelease := make(chan struct{})
+		var once sync.Once
+		rec.mu.Lock()
+		rec.onPutSetting = func(key string) {
+			if key == agentArchivesKey {
+				once.Do(func() {
+					close(stageEntered)
+					<-stageRelease
+				})
+			}
+		}
+		rec.mu.Unlock()
+
+		respCh := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			respCh <- postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"race-check"}`)
+		}()
+
+		// Initial evaluation passed; handler is now paused inside stageIdleArchiveRecord's PutSetting.
+		select {
+		case <-stageEntered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for stageIdleArchiveRecord write")
+		}
+
+		// Concurrently bind the session to an open to-do (writes activeBySession).
+		linkDone := make(chan error, 1)
+		go func() {
+			linkDone <- ft.s.linkTodoAgent(context.Background(), "todo_concurrent", "mac", row.SessionID, row.Title, row.Cwd, row.Agent)
+		}()
+		bindDeadline := time.Now().Add(5 * time.Second)
+		for {
+			ft.s.todos.mu.RLock()
+			bound := ft.s.todos.activeBySession[[2]string{"mac", row.SessionID}] == "todo_concurrent"
+			ft.s.todos.mu.RUnlock()
+			if bound {
+				break
+			}
+			if time.Now().After(bindDeadline) {
+				close(stageRelease)
+				t.Fatal("timed out waiting for concurrent activeBySession bind")
+			}
+			runtime.Gosched()
+		}
+		close(stageRelease)
+		select {
+		case err := <-linkDone:
+			if err != nil {
+				t.Fatalf("concurrent linkTodoAgent failed: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for concurrent linkTodoAgent to finish")
+		}
+
+		var w *httptest.ResponseRecorder
+		select {
+		case w = <-respCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for idle-archive response")
+		}
+		if w.Code != http.StatusConflict {
+			t.Fatalf("expected 409 after concurrent open-todo bind, got %d: %s", w.Code, w.Body.String())
+		}
+		var refusal assistantwire.IdleArchiveRefusalResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil {
+			t.Fatalf("decode refusal: %v", err)
+		}
+		if refusal.Code != idleArchiveCodeOpenTodo || !refusal.AuditPersisted || refusal.AuditID == "" {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if len(retiredOf(ft)) != 0 {
+			t.Fatalf("concurrently linked open-todo session was still retired: %v", retiredOf(ft))
+		}
+		if archivedIDs(t, ft.s)[row.SessionID] {
+			t.Fatal("provisional archive was not rolled back after concurrent open-todo bind")
+		}
+	})
+
+	t.Run("P1-1 close fence serializes concurrent linkTodoAgent and sends node activity guard", func(t *testing.T) {
+		now := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+		ft, _, row := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+			s.Rev = 4096
+			s.PaneID = "w2:p3"
+		})
+		ft.s.todos.mu.Lock()
+		ft.s.todos.loaded = true
+		ft.s.todos.todos = map[string]*Todo{
+			"todo_wait": {ID: "todo_wait", Title: "waits for close fence"},
+		}
+		ft.s.todos.activeBySession = map[[2]string]string{}
+		ft.s.todos.mu.Unlock()
+
+		retireEntered := make(chan struct{})
+		retireRelease := make(chan struct{})
+		var gotParams sessionRetireParams
+		ft.f.answerNode(deviceSessionRetire, func(_ string, raw json.RawMessage) (any, error) {
+			if err := json.Unmarshal(raw, &gotParams); err != nil {
+				t.Errorf("unmarshal retire params: %v", err)
+			}
+			close(retireEntered)
+			<-retireRelease
+			return map[string]any{"closed": true}, nil
+		})
+
+		closeDone := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			closeDone <- postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		}()
+		select {
+		case <-retireEntered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for retire call")
+		}
+
+		// Verify manager passed activity version and pane guard to node retire.
+		if !gotParams.GuardActivity || !gotParams.HasExpectedRev || gotParams.ExpectedRev != 4096 ||
+			!gotParams.ExpectedUpdatedAt.Equal(row.UpdatedAt) || gotParams.ExpectedPane != "w2:p3" {
+			t.Fatalf("unexpected node retire guard params: %+v", gotParams)
+		}
+		if !ft.s.idleCloseFenceActive("mac", row.SessionID) {
+			t.Fatal("expected close fence active while retire is in flight")
+		}
+
+		// A concurrent open-todo link must block on the close fence rather than mutating activeBySession mid-close.
+		linkDone := make(chan error, 1)
+		go func() {
+			linkDone <- ft.s.linkTodoAgent(context.Background(), "todo_wait", "mac", row.SessionID, row.Title, row.Cwd, row.Agent)
+		}()
+		select {
+		case err := <-linkDone:
+			t.Fatalf("linkTodoAgent bypassed active close fence mid-retire: %v", err)
+		default:
+		}
+		close(retireRelease)
+
+		var w *httptest.ResponseRecorder
+		select {
+		case w = <-closeDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for close completion")
+		}
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		select {
+		case err := <-linkDone:
+			if err != nil {
+				t.Fatalf("linkTodoAgent after fence release failed: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for fenced linkTodoAgent to complete after retire")
+		}
+	})
+
+	t.Run("P1-2 manager wall clock 5m ahead of node refuses recently-idle live session", func(t *testing.T) {
+		nodeNow := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+		managerNow := nodeNow.Add(5 * time.Minute) // Manager wall clock is 5 minutes fast relative to node.
+		connAt := managerNow.Add(-2 * time.Hour)
+
+		ft, _, row := idleArchiveTestSetup(t, managerNow, func(s *proto.Session) {
+			// Session actually stopped 10s ago on node clock; managerNow - UpdatedAt looks like 310s (> 1m).
+			s.UpdatedAt = nodeNow.Add(-10 * time.Second)
+			s.Rev = 200
+		})
+		ft.d.mu.Lock()
+		ft.d.machines["mac"].connected = connAt
+		ft.d.mu.Unlock()
+
+		// Simulate real sessions.changed timeline on manager's local clock: working 20s ago, idle 10s ago.
+		clockNow := managerNow.Add(-20 * time.Second)
+		ft.s.idleArchiveAudit.now = func() time.Time { return clockNow }
+		working := row
+		working.Status, working.State = proto.StatusWorking, proto.StateWorking
+		ft.d.setSessions("mac", []proto.Session{working})
+		ft.s.setSessions("mac", []proto.Session{working})
+
+		clockNow = managerNow.Add(-10 * time.Second)
+		ft.d.setSessions("mac", []proto.Session{row})
+		ft.s.setSessions("mac", []proto.Session{row})
+
+		// At managerNow, cross-machine wall delta is 310s (> 60s), but local monotonic observation is only 10s.
+		clockNow = managerNow
+		wEarly := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":1}`)
+		if wEarly.Code != http.StatusConflict {
+			t.Fatalf("skewed clock early close got %d (%s), want 409", wEarly.Code, wEarly.Body.String())
+		}
+		var refusal assistantwire.IdleArchiveRefusalResponse
+		if err := json.Unmarshal(wEarly.Body.Bytes(), &refusal); err != nil {
+			t.Fatal(err)
+		}
+		if refusal.Code != idleArchiveCodeNotIdleLongEnough {
+			t.Fatalf("refusal code = %q, want %q", refusal.Code, idleArchiveCodeNotIdleLongEnough)
+		}
+		if len(retiredOf(ft)) != 0 || archivedIDs(t, ft.s)[row.SessionID] {
+			t.Fatal("skewed clock caused premature archive or close")
+		}
+
+		// Advancing manager's local clock past 60s of continuous unchanged observation allows guarded close.
+		clockNow = managerNow.Add(51 * time.Second) // 61s continuous local idle observation
+		wOK := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":1}`)
+		if wOK.Code != http.StatusOK {
+			t.Fatalf("after sufficient local observation got %d (%s), want 200", wOK.Code, wOK.Body.String())
+		}
+		var okResp assistantwire.IdleArchiveResponse
+		if err := json.Unmarshal(wOK.Body.Bytes(), &okResp); err != nil {
+			t.Fatal(err)
+		}
+		if okResp.ObservedIdleSeconds != 61 {
+			t.Fatalf("observed_idle_seconds = %d, want 61", okResp.ObservedIdleSeconds)
+		}
+	})
+
+	t.Run("P1-2 fresh connection, reconnect, rev bump, and unobserved live session fail closed", func(t *testing.T) {
+		now := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+
+		// (a) Freshly established node connection with old node UpdatedAt (2h ago) but only 15s of local observation.
+		ftFresh, _, rowFresh := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+			s.UpdatedAt = now.Add(-2 * time.Hour)
+		})
+		freshConn := now.Add(-15 * time.Second)
+		ftFresh.d.mu.Lock()
+		ftFresh.d.machines["mac"].connected = freshConn
+		ftFresh.d.mu.Unlock()
+		ftFresh.s.idleArchiveAudit.now = func() time.Time { return freshConn }
+		ftFresh.s.setSessions("mac", []proto.Session{rowFresh})
+		ftFresh.s.idleArchiveAudit.now = func() time.Time { return now }
+
+		wFresh := postIdleArchive(ftFresh.s, "mac", rowFresh.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":1}`)
+		if wFresh.Code != http.StatusConflict {
+			t.Fatalf("fresh connection got %d (%s), want 409", wFresh.Code, wFresh.Body.String())
+		}
+		var freshRef assistantwire.IdleArchiveRefusalResponse
+		_ = json.Unmarshal(wFresh.Body.Bytes(), &freshRef)
+		if freshRef.Code != idleArchiveCodeIdleUnverified {
+			t.Fatalf("fresh connection code = %q, want %q", freshRef.Code, idleArchiveCodeIdleUnverified)
+		}
+		if len(retiredOf(ftFresh)) != 0 || archivedIDs(t, ftFresh.s)[rowFresh.SessionID] {
+			t.Fatal("fresh connection mutated session")
+		}
+
+		// (b) Reconnect resets previously accumulated 45m local observation window.
+		ftReconn, _, rowReconn := idleArchiveTestSetup(t, now, nil)
+		reconnAt := now.Add(-5 * time.Second)
+		ftReconn.d.mu.Lock()
+		ftReconn.d.machines["mac"].connected = reconnAt
+		ftReconn.d.mu.Unlock()
+		ftReconn.s.idleArchiveAudit.now = func() time.Time { return reconnAt }
+		ftReconn.s.setSessions("mac", []proto.Session{rowReconn})
+		ftReconn.s.idleArchiveAudit.now = func() time.Time { return now }
+
+		wReconn := postIdleArchive(ftReconn.s, "mac", rowReconn.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":1}`)
+		if wReconn.Code != http.StatusConflict {
+			t.Fatalf("post-reconnect got %d (%s), want 409", wReconn.Code, wReconn.Body.String())
+		}
+		var reconnRef assistantwire.IdleArchiveRefusalResponse
+		_ = json.Unmarshal(wReconn.Body.Bytes(), &reconnRef)
+		if reconnRef.Code != idleArchiveCodeIdleUnverified {
+			t.Fatalf("post-reconnect code = %q, want %q", reconnRef.Code, idleArchiveCodeIdleUnverified)
+		}
+
+		// (c) Activity version (Rev) change resets local monotonic observation even when UpdatedAt stayed old.
+		ftRev, _, rowRev := idleArchiveTestSetup(t, now, nil)
+		bumped := rowRev
+		bumped.Rev = rowRev.Rev + 1
+		ftRev.d.setSessions("mac", []proto.Session{bumped})
+		ftRev.s.idleArchiveAudit.now = func() time.Time { return now.Add(-5 * time.Second) }
+		ftRev.s.setSessions("mac", []proto.Session{bumped})
+		ftRev.s.idleArchiveAudit.now = func() time.Time { return now }
+
+		wRev := postIdleArchive(ftRev.s, "mac", bumped.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":1}`)
+		if wRev.Code != http.StatusConflict {
+			t.Fatalf("rev bump got %d (%s), want 409", wRev.Code, wRev.Body.String())
+		}
+		var revRef assistantwire.IdleArchiveRefusalResponse
+		_ = json.Unmarshal(wRev.Body.Bytes(), &revRef)
+		if revRef.Code != idleArchiveCodeNotIdleLongEnough {
+			t.Fatalf("rev bump code = %q, want %q", revRef.Code, idleArchiveCodeNotIdleLongEnough)
+		}
+
+		// (d) Live session never observed on manager fails closed with idle_unverified.
+		ftUnobs, _, rowUnobs := idleArchiveTestSetup(t, now, nil)
+		ftUnobs.s.idleArchiveAudit.obsMu.Lock()
+		ftUnobs.s.idleArchiveAudit.liveObs = nil
+		ftUnobs.s.idleArchiveAudit.obsMu.Unlock()
+		wUnobs := postIdleArchive(ftUnobs.s, "mac", rowUnobs.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":1}`)
+		if wUnobs.Code != http.StatusConflict {
+			t.Fatalf("unobserved live session got %d (%s), want 409", wUnobs.Code, wUnobs.Body.String())
+		}
+		var unobsRef assistantwire.IdleArchiveRefusalResponse
+		_ = json.Unmarshal(wUnobs.Body.Bytes(), &unobsRef)
+		if unobsRef.Code != idleArchiveCodeIdleUnverified {
+			t.Fatalf("unobserved code = %q, want %q", unobsRef.Code, idleArchiveCodeIdleUnverified)
+		}
+	})
+
+	t.Run("P1-3 background durable retry finalizes post-close audit outcome automatically", func(t *testing.T) {
+		now := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+		ft, rec, row := idleArchiveTestSetup(t, now, nil)
+		ft.s.idleArchiveAudit.mu.Lock()
+		ft.s.idleArchiveAudit.retryInterval = 5 * time.Millisecond
+		ft.s.idleArchiveAudit.mu.Unlock()
+
+		persistedCh := make(chan struct{}, 4)
+		rec.mu.Lock()
+		rec.failAuditWriteOnCall = 2
+		rec.onAuditPersisted = func() {
+			select {
+			case persistedCh <- struct{}{}:
+			default:
+			}
+		}
+		rec.mu.Unlock()
+
+		w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"bg-retry"}`)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("got %d (%s), want 503", w.Code, w.Body.String())
+		}
+		var resp assistantwire.IdleArchiveResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		// Drain the attempt write signal, then wait for background retry to succeed automatically once write is re-enabled.
+		select {
+		case <-persistedCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("missing initial attempt write signal")
+		}
+		select {
+		case <-persistedCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("background durable retry did not finalize audit entry")
+		}
+		var saved []assistantwire.IdleArchiveAuditEntry
+		if _, err := rec.Store.Setting(context.Background(), idleArchiveAuditKey, &saved); err != nil {
+			t.Fatal(err)
+		}
+		if len(saved) != 1 || saved[0].ID != resp.AuditID || saved[0].Outcome != idleArchiveOutcomeArchivedAndClosed {
+			t.Fatalf("background finalized entries = %+v", saved)
+		}
+	})
 }

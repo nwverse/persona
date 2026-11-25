@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // "Archive and close" (docs/protocol/protocol.md "Agent session archives"): the session is archived, then its agent is
@@ -85,9 +86,29 @@ func (svc *Service) archiveAndCloseAgentSession(ctx context.Context, mid, sid st
 	return res, nil
 }
 
+// retireActivityGuard carries the session activity version and pane observed before a guarded idle close so the node
+// rejects concurrent activity version or pane changes before closing the terminal.
+type retireActivityGuard struct {
+	Enabled   bool
+	Rev       int64
+	HasRev    bool
+	UpdatedAt time.Time
+	Pane      string
+}
+
+type sessionRetireParams struct {
+	Session           wireids.SessionID `json:"session_id"`
+	CloseTerminal     bool              `json:"close_terminal,omitempty"`
+	GuardActivity     bool              `json:"guard_activity,omitempty"`
+	ExpectedRev       int64             `json:"expected_rev,omitempty"`
+	HasExpectedRev    bool              `json:"has_expected_rev,omitempty"`
+	ExpectedUpdatedAt time.Time         `json:"expected_updated_at,omitzero"`
+	ExpectedPane      string            `json:"expected_pane_id,omitempty"`
+}
+
 // retireArchived closes the archived session's agent through its node. A runtime with a declared close capability
 // uses session.close; a terminal agent uses session.retire, and the result says how that went.
-func (svc *Service) retireArchived(ctx context.Context, row proto.Session) agentArchiveCloseResult {
+func (svc *Service) retireArchived(ctx context.Context, row proto.Session, guards ...retireActivityGuard) agentArchiveCloseResult {
 	if row.Status == proto.StatusOffline {
 		return agentArchiveCloseResult{Outcome: archiveCloseNotRunning}
 	}
@@ -102,9 +123,17 @@ func (svc *Service) retireArchived(ctx context.Context, row proto.Session) agent
 		method = "session.close"
 	}
 	// close_terminal: the user asked to close it (a node before #4754 closes it anyway).
-	params := map[string]any{"session_id": row.SessionID}
-	if !runtimeClose {
-		params["close_terminal"] = true
+	params := sessionRetireParams{
+		Session:       wireids.SessionID(row.SessionID),
+		CloseTerminal: !runtimeClose,
+	}
+	if len(guards) > 0 && guards[0].Enabled {
+		g := guards[0]
+		params.GuardActivity = true
+		params.ExpectedRev = g.Rev
+		params.HasExpectedRev = g.HasRev
+		params.ExpectedUpdatedAt = g.UpdatedAt
+		params.ExpectedPane = g.Pane
 	}
 	err := svc.call(ctx, row.MachineID, method, params, &out)
 	var re *rpc.Error
