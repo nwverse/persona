@@ -197,18 +197,21 @@ export function navRailMark(index: number, count: number, current: number | null
 export interface NavRailPlan {
   start: number;
   pitch: number;
-  hidden: number;
   count: number;
+  content: number;
+  viewport: number;
 }
 
-/** Bound the DOM, not the navigable history: keep a window around the selected input. Keyboard navigation and
- *  the rail's wheel can move this window in either direction; older inputs are never permanently discarded. */
-export function planNavRailTicks(count: number, height: number, focus = count - 1): NavRailPlan {
-  if (count <= 0 || height <= 0) return { start: 0, pitch: NAV_RAIL_TICK_PITCH, hidden: 0, count: 0 };
-  const capacity = Math.max(1, Math.floor(height / NAV_RAIL_TICK_MIN_PITCH));
-  const shown = Math.min(count, capacity, NAV_RAIL_METRICS.maxTicks);
-  const start = Math.max(0, Math.min(Math.floor(focus) - Math.floor(shown / 2), count - shown));
-  return { start, pitch: Math.min(NAV_RAIL_TICK_PITCH, height / shown), hidden: count - shown, count: shown };
+/** A full-height track with only the marks in and just outside its viewport mounted. */
+export function planNavRailTicks(count: number, height: number, scrollTop = 0): NavRailPlan {
+  if (count <= 0 || height <= 0) return { start: 0, pitch: NAV_RAIL_TICK_PITCH, count: 0, content: 0, viewport: 0 };
+  const pitch = Math.min(NAV_RAIL_TICK_PITCH, Math.max(NAV_RAIL_TICK_MIN_PITCH, Math.floor(height / count)));
+  const content = count * pitch;
+  const viewport = Math.min(height, content);
+  const top = Math.max(0, Math.min(scrollTop, content - viewport));
+  const start = Math.max(0, Math.floor(top / pitch) - NAV_RAIL_METRICS.overscan);
+  const end = Math.min(count, Math.ceil((top + viewport) / pitch) + NAV_RAIL_METRICS.overscan);
+  return { start, pitch, count: end - start, content, viewport };
 }
 
 /** Cached monotone offsets make normal scrolling logarithmic, without per-message DOM reads. */
