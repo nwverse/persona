@@ -491,7 +491,11 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		s.mcpChanges.notify()   // and the page tool with them, in every open conversation's list (pages_tool.go)
 	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
-		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+		if before.Main != "" {
+			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+		} else {
+			s.handOverFormerMainTasks(context.WithoutCancel(ctx)) // after newMain / clearMain, old main sits in Former
+		}
 	}
 	apierr.WriteJSON(w, s.view(ctx, false))
 }
