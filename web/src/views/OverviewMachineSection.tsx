@@ -22,7 +22,7 @@ export function OverviewMachineSection({ Section, machines, agentCounts, offline
       count={machines.length}
       right={
         <div className="flex flex-wrap items-center justify-end gap-2 self-center">
-          <a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="whitespace-nowrap text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>
+          <a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="whitespace-nowrap text-meta text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>
           <OverviewMachineViewSwitch value={machineView} onChange={chooseMachineView} />
         </div>
       }

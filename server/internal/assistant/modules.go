@@ -135,6 +135,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		mods = kernel.Builtin()
 	}
 	coreTools := reservedCoreToolNames()
+	coreRoutes := slices.Concat(s.routes, s.routeFallbacks)
 	var acceptedRoutes []string
 	check := func(routes, tools []string) error {
 		for _, name := range tools {
@@ -142,7 +143,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 				return fmt.Errorf("tool %q is a core tool's", name)
 			}
 		}
-		if err := checkModuleRoutes(s.routes, acceptedRoutes, routes); err != nil {
+		if err := checkModuleRoutes(coreRoutes, acceptedRoutes, routes); err != nil {
 			return err
 		}
 		// The kernel commits this module immediately after a nil result, so these routes belong to the next check's
@@ -171,7 +172,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 // reservedCoreToolNames are names a module may not take, whether a conditional core tool is enabled now or later.
 func reservedCoreToolNames() map[string]bool {
 	out := map[string]bool{}
-	for _, name := range append(slices.Clone(toolNames), ownerActionPrepareTool, "health_intake", "health_strength", "urgent_call", knowledgeSearchTool, knowledgeReadTool, spaceStateTool,
+	for _, name := range append(slices.Clone(toolNames), ownerActionPrepareTool, "health_intake", "health_strength", "urgent_call", knowledgeSearchTool, knowledgeReadTool, spaceStateTool, externalSourcesReadTool, externalSourcesWriteTool,
 		"resource_acquire", "resource_get", "resource_renew", "resource_release", "resource_cancel") {
 		out[name] = true
 	}

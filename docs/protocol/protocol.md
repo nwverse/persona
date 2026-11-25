@@ -289,7 +289,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
 - In `proto.Features`, by area:
   - Connection and errors: `persona_contracts_v1` (the Persona naming contract: both sides read the old and the new names, and a client keeps sending the old ones to a hub without the flag, [rolling-upgrade-compatibility.md](rolling-upgrade-compatibility.md)), `tls` (the optional TLS listener and SPKI pin), `endpoints` (`GET /api/v1/endpoints`, see "Candidate addresses" below), `client_hello`, `heartbeat`, `app_ping` (see "Client capabilities and heartbeat"), `error_codes` (a stable `code` in error bodies, see "Error body"), `request_id` (`X-Request-Id`, see "Authentication" above), `client_ops` (see "Operation receipts"), `locale` (honors `Accept-Language`, `client_hello.locale` and the device's `locale`; human-readable text follows the language, [i18n.md](i18n.md)).
   - Devices: `ws_notify` (alerts over the WebSocket, see "Notifications over the persistent connection"), `lock_test` (see "Lock screen test"), `android_update` (see "Android packages"), `browser_qr_login` (a signed-in device approves a browser's sign-in code, see "Browser QR sign-in"), `browser_qr_match` (the approving device shows a number the browser types, `POST …/browser-login/confirm`; same section), `desktops` (desktop client registration: `register_desktop`, the `desktops` event, "Mute phone" `NotifyPrefs.mute_while_desktop`), `desktop_unregister` (`unregister_desktop` withdraws this connection's registration without closing the socket; without it, the desktop closes the socket and reconnects before it can register again), `desktops_link` (a client that lists `desktops_link` in `?features=` or `client_hello` also gets Persona Link desktops in the `desktops` event), `runtime_cli` (`POST /api/v1/phone/runtime-cli`, and `phone_runtime_cli` kept out of the phone's tools, [runtime-cli.md](../operations/runtime-cli.md) "Reaching a real device through the hub").
-  - Sessions and questions: `client_msg_id` (`session.send` dedupes retries), `agent_message_hold` (a message to an Agent whose computer is away is held and sent when it is back: 202 `{"delivered":"later"}`, the row's `undelivered` with `computer`, Retry / Delete on `…/held/{msg}`; see "Sending messages", #10661), `agent_start_hold` (a new Agent's `POST /api/v1/sessions` to an offline computer with `X-Persona-Op-Id` is held and started once the computer is back: 202 `{"delivered":"later","held_start":{…}}`, `GET /api/v1/machines/{mid}/held-starts`, Retry / Delete on `…/held-starts/{op}`, and `held_start` WebSocket events; #10674), `send_refusals` (409 `dialog_open` / `input_draft`, `clear_draft`, see "Sending messages"), `screen_dialog` (`interaction.dialog`, `Resolution.option`, 409 `prompt_changed`) and `secret_prompts` (`secret` on a password prompt), both in "Terminal dialogs", `resumable_interactions` (see "Interactions survive restarts"), `elicitation` (MCP forms and links, see "MCP elicitation"), `sessions_delta` (see "Session deltas"), `ultracode` (see below), `start_continue` (`POST /api/v1/sessions/{mid}/{sid}/start/continue`: answer the question a start's new tab stopped on, see "Answering a start's question"), `session_review` (`POST/GET /api/v1/sessions/{mid}/{sid}/review`: an explicitly started independent read-only reviewer, #1808; see "Reviewing a session's work" below).
+  - Sessions and questions: `agent_view` (each listed session's `view`: its phase, reason, whether it counts in the Agents list's Needs you, and its rank, computed by the manager; a row without one, from an older manager, falls back to `state`; [agent-states.md](agent-states.md) "Five phases", #15397), `client_msg_id` (`session.send` dedupes retries), `agent_message_hold` (a message to an Agent whose computer is away is held and sent when it is back: 202 `{"delivered":"later"}`, the row's `undelivered` with `computer`, Retry / Delete on `…/held/{msg}`; see "Sending messages", #10661), `agent_start_hold` (a new Agent's `POST /api/v1/sessions` to an offline computer with `X-Persona-Op-Id` is held and started once the computer is back: 202 `{"delivered":"later","held_start":{…}}`, `GET /api/v1/machines/{mid}/held-starts`, Retry / Delete on `…/held-starts/{op}`, and `held_start` WebSocket events; #10674), `send_refusals` (409 `dialog_open` / `input_draft`, `clear_draft`, see "Sending messages"), `screen_dialog` (`interaction.dialog`, `Resolution.option`, 409 `prompt_changed`) and `secret_prompts` (`secret` on a password prompt), both in "Terminal dialogs", `resumable_interactions` (see "Interactions survive restarts"), `elicitation` (MCP forms and links, see "MCP elicitation"), `sessions_delta` (see "Session deltas"), `ultracode` (see below), `start_continue` (`POST /api/v1/sessions/{mid}/{sid}/start/continue`: answer the question a start's new tab stopped on, see "Answering a start's question"), `session_review` (`POST/GET /api/v1/sessions/{mid}/{sid}/review`: an explicitly started independent read-only reviewer, #1808; see "Reviewing a session's work" below).
   - Scheduled prompt editing: `task_input` lets Web resolve references for a draft task. The hub advertises it when the default manager announces support. Structured creates and edits send the serialized prompt in `structured_prompt` in place of `prompt`; managers return the existing `prompt` field. An older manager rejects a structured write because it requires the prompt field.
   - Assistant: `assistant_compact` (manually compacting an assistant chat, the session's `compaction`), `assistant_main_new` (new main chat) and `assistant_main_clear` (clearing the main chat's context in place) and `assistant_conversation_delete` (permanent removal of ordinary and archived former main chats), all in the REST table; `assistant_start_ops` (`POST /api/v1/assistant/conversations` takes an operation ID, see "Operation receipts"); `assistant_readiness` (see "Main chat readiness"); `conversation_origin` (`origin` on assistant chats, see "Origin of assistant chats"); `model_configuration` (models configured by purpose, see "Model providers and per-purpose configuration"); `typed_models` (a model ID the launcher's `/model` list lacks is taken by a start, `POST …/modes` and a Persona chat message's pick, IDs typed before come back as `custom: true` and `DELETE …/models/custom` forgets one, #1644; the apps offer "Other model…" in the Persona chat's launcher menu only when the hub lists it, since an older hub dropped an unlisted pick there without a word); `assistant_model_pick` (an assistant chat keeps the launcher / model / effort the user switched it to: `PUT` / `DELETE /api/v1/assistant/conversations/{id}/model`, `model_pick` on the chat, and `unavailable` on `GET /api/v1/machines/{mid}/launchers?purpose=assistant`, #5033; [model-config.md](../assistant/model-config.md) "A conversation's own model"; an older hub keeps nothing, so the apps send the pick with each message there as before); `builtin_presets` (the hub's own provider presets, [launchers.md](../integrations/launchers.md) "Built-in presets"); `launcher_switch` (`POST …/modes` takes `launcher` and `from`: a running Claude Code Agent moves to another provider with the user's next message, sent with `apply_switch`, and sessions carry `pending_switch`, see "Switching a running Agent to another provider"; clients offer another provider of the same engine only when the hub lists it, since an older hub passes the field to nodes that drop it and switch only the model); `engine_switch` (`POST …/modes` with a launcher of the other engine, Claude Code ↔ Codex: the user's next message moves the conversation to it in the same terminal behind a handoff, `pending_switch.agent` and `engine_history` on sessions, see "Switching a running Agent to another engine"; clients offer the other engine's launchers only when the hub lists it); `launcher_import_parse` (`POST /api/v1/launchers/import/parse` reads a pasted configuration into provider drafts, and the alias import takes `alias`, #5193; the web offers "Paste a configuration" and "Found on your computers" only when the hub lists it); `launcher_auth_auto` (`POST /api/v1/launchers/test` and `/discover` send only the credential header `auth` names, a stored provider's own without it, take `auth: "auto"` and the test answers the `auth` that worked, [launchers.md](../integrations/launchers.md) "Authentication method"; the web wizard finds the method by itself only when the hub lists it); `launcher_import_link` (`POST /api/v1/launchers/import/parse` reads provider import links, cindy's `cindy://provider/import`, Persona's `persona://provider/import` and the web's `#import=`, `format: "link"`, #5420 and #5428, [launchers.md](../integrations/launchers.md) "Import links"); `launcher_auto_name` (`POST /api/v1/launchers` without `preset` takes an empty `name` and the hub makes the startup ID, and `GET /api/v1/machines/{mid}/launchers` carries a Persona-managed provider's `display_name`, [launchers.md](../integrations/launchers.md) "Display names"); `launcher_scope` (a Persona-managed provider's device scope, delivery, own-service rule and per-computer keys, [launchers.md](../integrations/launchers.md) "Device scope and on-demand delivery"), `launcher_secret_references` (a provider's key and its per-computer keys may be references to a provider extension's secrets, `api_key_reference` / `machine_key_references`, [secret-providers.md](../extensions/secret-providers.md) "Launcher keys"); `task_push` (`push` on scheduled tasks, [assistant.md](../assistant/assistant.md) "Push after running"); `task_inbox` (`inbox` on scheduled tasks, [assistant.md](../assistant/assistant.md) "Put it in the Inbox when done"); `task_execution` (task-local execution choices and resolved run history, [assistant.md](../assistant/assistant.md) "Task execution context"); `task_cron` (`repeat: "cron"` with `cron` on scheduled tasks and `GET /api/v1/assistant/tasks/cron`, [assistant.md](../assistant/assistant.md) "Scheduled tasks"); `todo_threads` (a to-do's chat thread: `PUT` / `DELETE /api/v1/todos/{id}/thread` and `thread` on the to-dos `GET` returns, [todos.md](../assistant/todos.md) "Chat thread"; the web shows its Topic section only when it is there); `todo_seen` (Got it on a Just finished to-do: `PUT` / `DELETE /api/v1/todos/{id}/seen` and `seen_at` on the to-dos `GET` returns, [todo-status-sop.md](../assistant/todo-status-sop.md) "Seen"; the apps offer Got it, and count opening such a to-do as seeing it, only when it is there); `connectors` (see "Connector API"); `channels` (`GET /api/v1/channels` and each channel's settings, binding and test, [channels.md](../extensions/channels.md) "6. API").
   - Terminal: `terminal_stream` (WebSocket `terminal_subscribe`, see "Terminal stream"), `terminal_control` (`terminal_subscribe` with `control`, `terminal_input`), `terminal_scroll`, `terminal_click` and `terminal_mouse` (the wheel, a tap and the mouse on a terminal the App drives, [terminal.md](../integrations/terminal.md) sections 16, 15 and 25), `terminal_panes` (`GET/POST /machines/{mid}/panes` and terminal stream ids of the form `pane:<pane id>`, [terminal.md](../integrations/terminal.md) section 19), `herdr_client` (the web client's full herdr interface: `herdr_open` etc., see "Full herdr interface" below), `herdr_focus` (focus sync for the full interface: `herdr_focus` etc., see "Focus sync" below).
@@ -311,7 +311,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - `meeting_transcription` only while the default manager names `meeting_transcription` beside `meeting_live_view` (and so `meeting_conversation` and `meeting_attendance`) in its `manager.hello` capabilities, the same way: the meeting conversation's phase 5, hub transcription (the upload's `transcription` and `timeline`, the audio socket `GET /api/v1/recordings/{id}/audio`, `PUT …/audio`, `transcription` and `interim` on `GET …/live`; see "Meeting conversation (#3862)"). The phone offers **On the hub** and opens the audio socket only when the hub lists it; whether the chosen transcription contribution is ready is the manager's `meeting_transcription_ready`, not this flag.
   - `recording_day` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): all-day recordings and their daily recap (#4741): the upload's `kind: "day"` with `day`, `tz`, `part` and `coverage`, `POST …/segments`, `detail.recap`, `recap_state`, `recap_final` and `recap_final_at`; see "All-day recordings (#4741)". The phone uploads a day recording only to a hub that lists it, since an older hub refuses the kind.
   - `assistant_search` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): `GET /api/v1/assistant/search`, the assistant's chats found by what was said in them (see "Assistant chat search (#6282)"). Without it the apps filter titles and last messages as before; a non-default manager from before it answers the route 404, which the apps take the same way.
-  - `assistant_pages` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it; #15017, [dashboards.md](../assistant/dashboards.md)): the assistant's pages, Dashboards. The built-in manager names it whenever it keeps pages, the switch on or off: the reserved extension `-pages` among `GET /api/v1/extensions/-/ui`'s places and its pages at `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`, the top-level boolean `dashboards` of `GET` / `PUT /api/v1/assistant` (absent or false: off) and the `assistant_pages` event. The apps show the **Let Persona make dashboards** switch in Settings › Assistant only while the hub lists it.
+  - `assistant_pages` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it; #15017, #13020, [dashboards.md](../assistant/dashboards.md)): the assistant's pages, Dashboards. The built-in manager names it whenever it keeps pages, the switch on or off: the reserved extension `-pages` among `GET /api/v1/extensions/-/ui`'s places (including `overview_card` places `g_<16 hex>` for kept watch pages on Overview when requested with `?pages_overview=1`) and its pages at `POST /api/v1/extensions/-pages/-/ui/{index|pg_…|g_…}`, the top-level boolean `dashboards` of `GET` / `PUT /api/v1/assistant` (absent or false: off) and the `assistant_pages` event. The apps show the **Let Persona make dashboards** switch in Settings › Assistant only while the hub lists it.
   - `health_tell` only while the default manager is connected and names it in `manager.hello`; extension reports cannot enable it. The core keeps it available without the Health data module. See "Tell Health".
   - `health_items` only while the default manager names it in its hello: ordered health items and revisions (see "Health items"). Extension reports cannot enable it.
   - `health_intake` only while the default manager is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): built-in water and protein records, daily totals, undo markers and the changes feed (see "Health intake"). Clients check this feature before offering intake controls; an older hub may refuse a watch request with 403 rather than 404.
@@ -674,7 +674,7 @@ A runtime that advertises `caps.models` also handles `launchers.models` for live
 
 `capabilities.queue_edit` and `capabilities.queue_send_now` advertise queue controls on runtime sessions. Runtime subagents do not support them. If a field is absent, clients keep their previous queue-control rules. A Claude Code session outside Persona's terminals reports both, false unless it runs in a tmux pane: its queue is on its own screen (`docs/integrations/claude-integration.md`, "Queue controls (#12789)").
 
-`capabilities.stop_cause` (#8214) is node-owned stopped-session recovery provenance: `user`, `idle`, `task_completed`, `restart`, `resume_failed`, `compact_failed`, `usage_limit`, `transient_error`, or `exit` (#10355: the Agent was told to quit, `/exit` or `/quit` sent through Persona; like `user` it never authorizes an assistant resume). `restart` is recorded for an Agent seen running (`ran_at`, which the hub keeps in the node-model metadata beside `stop_cause` and only moves forward) within 10 minutes before the node started and cut off since; `resume_failed` for the assistant's resume refused with nothing run (`delivered: none`, no kept tab; any other failed start stays unknown); `compact_failed` for an Agent that quit while it was compacted before a message (#11441). `usage_limit` and `transient_error` (#12095) are recorded for an exited terminal Agent whose latest turn has the recognized gateway quota-reset or temporary-capacity 429 error, only with a live observation after the error and the original Persona terminal still retained; unobserved history and a closed/replaced terminal do not authorize recovery. An explicit stop cause always wins, and an error older than a consumed start cannot grant recovery again. These causes, like `idle` and `task_completed`, permit the assistant's resume. Since #11528 an absent or empty value (unknown: no cause recorded) permits the assistant's deliberate resume too (`agent_send` with `resume`, a rework; not an event routed on its own, and not an archived Agent); only `user`, `exit` and unrecognized values never do. The node holds off the assistant's resume for 5 minutes after an uncertain start of the same session. It does not enable plain messages or change the owner's Resume. The node's `state.put` / `state.load` record carries `stop_cause` and monotonic `stop_cause_at` through existing node-model metadata, without a database migration; a new live observation or explicit start invalidates old stopped eligibility. Older managers may drop these optional fields, which leaves recovery refused. User closure reads the cause and revision back before stopping or closing. Resuming a previously eligible stop first saves and verifies unknown provenance, before any start; an uncertain attempt must not retain the previous stop's eligibility. A failed/unsupported save returns `stop_not_saved` with nothing started, stopped or closed. Stored newer user provenance wins over delayed older metadata writes.
+`capabilities.stop_cause` (#8214) is node-owned stopped-session recovery provenance: `user`, `idle`, `task_completed`, `restart`, `resume_failed`, `compact_failed`, `usage_limit`, `transient_error`, `timeout` (#15598: supervision timeout stopped a stalled terminal Agent; not a user stop, so the assistant may deliberately resume it with `agent_send` `resume: true`, while automatic PR/Inbox event routing leaves the decision to the supervisor), or `exit` (#10355: the Agent was told to quit, `/exit` or `/quit` sent through Persona; like `user` it never authorizes an assistant resume). `restart` is recorded for an Agent seen running (`ran_at`, which the hub keeps in the node-model metadata beside `stop_cause` and only moves forward) within 10 minutes before the node started and cut off since; `resume_failed` for the assistant's resume refused with nothing run (`delivered: none`, no kept tab; any other failed start stays unknown); `compact_failed` for an Agent that quit while it was compacted before a message (#11441). `usage_limit` and `transient_error` (#12095) are recorded for an exited terminal Agent whose latest turn has the recognized gateway quota-reset or temporary-capacity 429 error, only with a live observation after the error and the original Persona terminal still retained; unobserved history and a closed/replaced terminal do not authorize recovery. An explicit stop cause always wins, and an error older than a consumed start cannot grant recovery again. These causes, like `idle` and `task_completed`, permit the assistant's resume. Since #11528 an absent or empty value (unknown: no cause recorded) permits the assistant's deliberate resume too (`agent_send` with `resume`, a rework; not an event routed on its own, and not an archived Agent); only `user`, `exit` and unrecognized values never do. The node holds off the assistant's resume for 5 minutes after an uncertain start of the same session. It does not enable plain messages or change the owner's Resume. The node's `state.put` / `state.load` record carries `stop_cause` and monotonic `stop_cause_at` through existing node-model metadata, without a database migration; a new live observation or explicit start invalidates old stopped eligibility. Older managers may drop these optional fields, which leaves recovery refused. User closure reads the cause and revision back before stopping or closing. Resuming a previously eligible stop first saves and verifies unknown provenance, before any start; an uncertain attempt must not retain the previous stop's eligibility. A failed/unsupported save returns `stop_not_saved` with nothing started, stopped or closed. Stored newer user provenance wins over delayed older metadata writes.
 On iOS and Android, as on the web, `capabilities.model` true offers the model picker on a session without a terminal, listing its launcher's models (`GET /machines/{mid}/launchers/{name}/models`) and sending a pick through `POST …/modes {model}` (iOS never types `/model` for it, and offers no fixed Claude aliases before the list is read); `capabilities.rewind` true offers Rewind on such a session, whose item ids are its own (`<seq>#<n>`), with "code and conversation" only where `capabilities.rewind_code` is true.
 Session also has the optional field `pane_index` (#2320): this pane's positional index within its tab (from 0, top-left is 0). The herdr node computes it from the split tree in the snapshot's `layouts` (`splits`; by rect on older herdr without it). It is omitted when the host gives no layout, on old nodes, or when the pane isn't in the layout; `0` is still sent, and only absence means unknown. A change in it alone also pushes `sessions.changed`. Clients group the Agents of one tab (`slot_id`) in this order, with 0 as the initiator; old clients ignore it (`docs/protocol/agent-states.md` "Several panes in one tab").
 Session also has the optional field `space` (#2691): which assistant space an assistant chat belongs to. Chats in the health space are `"health"`; the assistant's own chats omit it. The hub fills it from the session's `cwd` (the health directory `~/.persona/health`), which for an assistant chat is the directory it started in, not where a `cd` in it went (#2368, see `cwd` below); it has nothing to do with herdr's `space_id` / `space_name`. Old clients ignore it (`docs/assistant/health.md`).
@@ -1195,6 +1195,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "asks":"Push it to beta?",   // what the last reply asks the user, read by the node off the whole reply (last_text is only its start); absent when it asks nothing (#5096, docs/protocol/agent-states.md "Awaiting your reply")
  "asks_read":true,            // the node read asks off the reply (empty asks then means it asks nothing, was answered, or its closeout says done and needs nobody, #4110); without it the hub reads last_text when it is whole
  "awaits_reply":true,         // stopped (unread / idle) on a question nobody answered, with no card, error or background work. Computed by the hub; clients list an idle one as "Awaiting your reply", not folded with the idle ones
+ "view":{"phase":"needs_you","reason":{"kind":"cards","n":2},"counted":true,"rank":0}, // the five-phase view the manager computes (agent_view feature, #15397): phase needs_you|working|done|error|idle, reason tagged by kind, counted in the Agents list's Needs you (fleetcount's decision), rank (lower first); state and status stay as they are. Absent from older hubs and managers (docs/protocol/agent-states.md "Five phases")
  // Session hierarchy (#5120, #5180, see "Session hierarchy" below), each omitted when empty:
  "completed_todo":{"id":"todo_…","title":"…"},  // display-only completed ownership, never active `todo` or supervision (#5929)
  "started_at":"...",                    // when the session began (a Codex rollout's first line, a runtime's created time); set by the node where it knows it
@@ -1999,6 +2000,7 @@ The hub records each install, upgrade and uninstall as an **operation**: split i
 | GET | `/api/v1/extensions/-/operations/{id}` | One operation; in `needs_consent` it also has `preview` (the full preview). 404 if missing or expired |
 | POST | `/api/v1/extensions/-/operations/{id}/retry` | Runs a failed operation again from the start and returns 202 `{"operation": new operation}`. A package already downloaded is in the cache, so `download` is `done` immediately (`cached`); if it failed after `consent` and the new preview's permission digest matches what the user agreed to, it does not ask again and goes straight on to install. A failed operation is retried once: afterwards its `retryable` is `false` (pushed to the apps) and the new operation carries on, so a second `POST` (a double tap, another app or the CLI) is 409 `not_retryable` and starts nothing |
 | DELETE | `/api/v1/extensions/-/operations/{id}` | Cancel: a download or check in progress (started async) stops (the download goes on only for another preview waiting for it), one waiting for consent drops its preview, and the operation becomes `canceled`; a finished one is removed from the list; once `install` has started it cannot be canceled (409 `cannot_cancel`) |
+| GET | `/api/v1/extensions/-/ui` | Declarative UI places (`{"ui": [UIPlace…]}`) of enabled extensions, followed by the built-in assistant's Dashboards (`-pages`, full-access owner devices only). Optional query parameters: `placement` (filter by slot; omitted lists every slot except `launcher_section` and `widget`), `launcher` and `machine` (for `placement=launcher_section`), and `pages_overview=1` (Dashboards phase 2, #13020: also includes each kept watch page marked `on_overview` as an `overview_card` place `g_<16 hex>` opening `pg_<16 hex>`, only when `placement` is empty or `overview_card`; omitted by iPhone and Android apps so watch pages do not appear in Settings' extension cards) ([extensions.md](../extensions/extensions.md) "UI slots", [dashboards.md](../assistant/dashboards.md) "How a watch is drawn") |
 | GET | `/api/v1/extensions/-/offload?machine={mid}` | The enabled `disk_offload` contributions (#14576, [machine-usage-map.md](../server/machine-usage-map.md) "Extension point `disk_offload`"), `full` only (an answer-only device or an extension's token 403 `read_only`): `OffloadProviders` `{providers:[{extension, id, name, kinds, restore}]}`; no program is called. An unknown `machine` 404 `not_found` |
 | GET | `/api/v1/extensions/{id}/-/offload/{cid}/inventory?machine={mid}&refresh=1` | `offload.inventory` within 20 s → `OffloadInventory` (`items` always present). The answer is held to `schema/extension/offload.schema.json` (else 502 `plugin_failed`) |
 | POST | `/api/v1/extensions/{id}/-/offload/{cid}/run` | `OffloadRunRequest` `{machine, action: offload\|restore, paths?, items?, dry_run?, confirm?, install?}` (1–50 paths for an offload, item ids for a restore) → 200 `OffloadRunResult` for a dry run, 202 `OffloadStarted` `{job}` when a job started. Every path of an offload is first checked with the node's `machine.storage.check` (`purpose: offload`): any refused 422 `offload_refused` with `items:[{path, refusal, reason}]`, offline 503 `machine_offline`, a node without `machine_storage_usage` 409 `node_outdated`. The program refusing 422 `offload_refused` with its `items`; its tool missing 409 `tool_install_required` with `tool` (nothing moved; the app asks the user and posts the same run with `install: true`); without `dry_run` or `confirm` 400 `confirmation_required`; within 30 s |
@@ -2039,6 +2041,13 @@ Clients report their errors and crashes only while `features` has `error_reports
 - At most 20 reports and 256 KB a request (400 beyond). `202 {"enabled": true, "accepted": n, "dropped": m}`: dropped are invalid, repeated (same `id`), folded (the same problem within 10 minutes) or over the rate limit; none of them should be sent again. `200 {"enabled": false, "accepted": 0}`: the feature is off; nothing was kept.
 - **What clients put in**: no user content (message text, mail, documents, prompts, notification bodies, file names the user chose), no device ids, account, hub address or machine names; breadcrumbs carry short code-chosen text (a screen's name, a route pattern). The manager scrubs again whatever slips through.
 - **Keeping and retrying**: a client keeps reports locally until it gets a 2xx (a crash is written before the process dies and sent at the next start with `previous_launch`), at most 50 for at most 7 days, and makes each report's `id` once so a retry is recognized.
+
+## Counts view (#15512)
+
+The counts people see (badges, tab numbers, switcher counts) are to come from one view per manager, `CountsView` in
+`schema/wire/counts.schema.json`, which the hub relays as it is. The view, its count ids, how an id may change and the
+clients' fallbacks are in [counts.md](counts.md). Nothing sends it yet: its WebSocket message, feature and roster field
+get their rows here when the manager and the hub start sending it.
 
 ## REST (App → hub)
 
@@ -2589,6 +2598,177 @@ contains no storage error, target, tool name, arguments, policy or credential.
 
 Layer / preview and push-layer integration are follow-up work, not part of this contract.
 
+## External source bindings
+
+Owners can opt into connecting external updates to directions and to-dos. These routes use full credentials and the
+selected assistant manager, via `X-Persona-Manager` or `manager`, with the usual default manager fallback.
+Unconfigured sources have forwarding off and ask the owner about new work. The API is available independently of
+Labs. Inbox routing uses these bindings and policies. The web editor uses the same routes from Inbox, work details
+and Settings. See [External sources in the web app](../web/web.md#external-sources-15518).
+
+### Reference paths
+
+An `ExternalRef` is a JSON object containing `provider`, an optional `channel`, and optional `container` and `item`
+nodes of the form `{"kind":"…","id":"…"}`. The channel names the provider's account or connection. An omitted
+channel selects the provider's default channel. The lookup path starts at the specified node and removes the item
+and then the container to reach the channel. Each request stays within that channel.
+
+| Provider | Channel | Container | Item |
+| --- | --- | --- | --- |
+| `lark` (also accepts `feishu`) | Optional account or connection | `chat` with the chat's ID | `thread` with the topic's ID |
+| `github` | Omit for public GitHub. For a self-hosted instance use its HTTP or HTTPS origin | `repository` with `owner/repo` | `issue` or `pull_request` with the positive decimal number as a string |
+| `mail` (also accepts `email`) | Required account ID | Optional `mailbox` or `label` with its ID | `thread` with the thread ID. An account-wide thread can omit the container |
+| Subscriptions and future providers | Optional account or connection | A provider-defined kind and ID, such as `source` with a feed ID | A provider-defined kind and ID, such as `item` with a feed entry ID |
+
+Provider and kind names are lowercased. They start with a letter or digit, may also contain dots, dashes and
+underscores, and have a 64-byte limit. Other IDs are trimmed UTF-8 text of up to 512 bytes and retain case, except
+that GitHub uses the repository association's canonical instance and repository path and strips a trailing `.git`.
+A GitHub issue and a pull request with the same number have separate identities. Opaque IDs can include slashes,
+as the JSON key boundaries keep them distinct. All providers except mail require a container for an item.
+Omit an unused node entirely. Empty and null nodes are invalid.
+
+For a GitHub pull request, a reference is
+`{"provider":"github","container":{"kind":"repository","id":"example/web"},"item":{"kind":"pull_request","id":"17"}}`.
+The `external_ref` query parameter is this JSON object percent-encoded as one query value.
+
+### Bindings and policies API
+
+Every node can bind to any number of directions and to-dos. Each explicit binding has an opaque `id`,
+`external_ref`, `target_kind` of `direction` or `todo`, `target_id`, and a sparse `policy`. The target must
+exist on the selected manager. Use the IDs from its direction and to-do APIs.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/assistant/external-source-bindings` | Returns `{"bindings":[…]}` with explicit bindings. Optional `target_kind`, `target_id`, `provider` and exact `external_ref` filters combine. |
+| POST | `/api/v1/assistant/external-source-bindings` | Creates a binding from `{external_ref,target_kind,target_id,policy?}` and returns it with status 201. |
+| PUT | `/api/v1/assistant/external-source-bindings/{id}` | Replaces the binding using the same body and returns it with the same ID. |
+| DELETE | `/api/v1/assistant/external-source-bindings/{id}` | Deletes the explicit binding and returns 204. |
+| GET | `/api/v1/assistant/external-source-bindings/lookup` | Takes `external_ref` and returns `{path,matches}`. Matches include all ancestors in most-specific-first order. |
+| GET | `/api/v1/assistant/external-source-bindings/summary` | Returns the read-only `{"bindings":[…]}` data-flow list with explicit connections and repository projections. Filter by `provider` and optionally by its `channel`. An empty `channel` selects that provider's default channel. |
+| GET | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and returns `{external_ref,policy}` with saved overrides for that exact node. An unset node returns an empty policy. |
+| PUT | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and replaces that node's policy with the JSON body. Send `{}` to restore inheritance. Returns the saved scope and policy. |
+| GET | `/api/v1/assistant/external-source-policies/effective` | Takes `external_ref` and optional `binding_id` and returns `{external_ref,policy,provenance}`. The binding must be on that reference path. |
+
+Each policy field inherits independently. A channel policy supplies the first override, followed by the container
+and then the item. A selected binding overrides the node at its own level. A more specific node can supersede it.
+Omitting a field in a replacement clears its previous override. An explicit empty `pre_filter` clears the
+inherited filter.
+
+| Policy field | Values |
+| --- | --- |
+| `mode` | `off` (default), `realtime`, `digest` or `on_demand` |
+| `digest_interval_minutes` | Optional integer from 1 to 525,600 minutes. Set it with `digest` or on its own to override an inherited interval. It appears in the effective result only when the effective mode is `digest` and an interval was supplied. |
+| `action_role` | `owner` or `fyi` (default) |
+| `new_item_policy` | `ask_owner` (default) or `auto_todo` |
+| `pre_filter` | Optional `keywords`, `mentions` and `senders` lists with at most 32 entries each. Entries are trimmed, deduplicated and ordered, with a 256-byte UTF-8 limit per entry. Keywords are lowercased. The default is an empty filter. |
+
+Each resolved field has a matching provenance entry with a `source` of `default`, `channel`, `container`,
+`item` or `binding`. A configured source also includes its canonical `external_ref`. A binding source additionally
+includes `binding_id`.
+
+Lookup and summary entries have `external_ref`, `target_kind`, `target_id`, and `source`. An explicit entry has
+`source: "explicit"` and its `binding_id`. A saved GitHub repository link gives a separate read-only
+`source: "repository_link"` entry with `repository_role` of `delivery` or `reference`. Omitted roles on old links
+mean `delivery`. Projected links match only their exact GitHub item and coexist with explicit matches for that item.
+An existing Lark bot to-do thread can also appear in the exact topic lookup as `source: "lark_topic"` with
+`target_kind: "todo"` and its `target_id`. Its source is the native chat link, so it has no `binding_id`.
+The lookup lists explicit entries first at the same node and returns empty arrays when there are no matches.
+
+A duplicate explicit reference and target pair returns 409 `external_binding_exists`. Missing or unrelated
+bindings and missing targets return 404 with `external_binding_not_found` or `external_target_not_found`.
+Invalid references, targets, policies and malformed JSON return 400. An unavailable store returns 503
+`external_sources_unavailable`.
+
+### Assistant tool contract
+
+The main conversation on its configured computer gets `external_sources_read` and `external_sources_write`.
+Both tools use the same canonical references, policies and stored bindings as the HTTP routes. Availability is
+independent of Labs.
+
+| Tool action | Arguments and result |
+| --- | --- |
+| Read `list` | Optional exact `external_ref` and a `target_kind` / `target_id` pair filter explicit bindings. Returns `bindings`. |
+| Read `inspect` | Requires `external_ref`. An optional `binding_id` selects a binding on that source's path. Returns the path, matches, saved scoped overrides and effective policy with provenance. |
+| Write `create_binding` | Requires `external_ref`, `target_kind`, `target_id` and optionally `policy`. |
+| Write `update_binding` | Takes `binding_id` and the same full replacement fields as create. |
+| Write `delete_binding` | Takes the explicit `binding_id`. |
+| Write `set_policy` | Takes `external_ref` and a replacement `policy`. Use an empty object to clear the override. |
+
+Reads return without a card. All writes require a fresh owner Allow through the existing approval interaction.
+This includes changes that can enable automatic work through inheritance, such as linking a new target under an
+automatic rule or clearing an override that previously asked the owner. Confirmation records the exact edit and any
+previous value. A concurrent edit to the binding or scoped override makes the pending approval stale. A saved
+write returns `saved` and `previous` so the owner can restore the prior value. A delete returns `saved: null`.
+
+### Inbox routing
+
+New Inbox items and updates carry `external_path`, their normalized source reference followed by its parents.
+The manager derives the path from source metadata. Lark and Feishu name the chat and the topic when reported.
+The primary Lark account uses the default channel and other built-in accounts use their account ID. GitHub uses the
+notification's repository and issue or pull request. CI updates can include the PR associated with the failing run.
+Mail uses the account, reported IMAP mailbox and existing thread key. IMAP presents labels as named mailboxes.
+Subscription rows use provider `subscription`, a `source` container with the subscription ID, and an `item` with
+the source thread key. A connector's native row keeps the provider's identity when it is collected through a second
+entry point. Other push connectors use their source ID as the provider and container. Connectors provide source
+identity and content through Inbox and have no access to the work bindings.
+
+Routing starts when a saved policy on the path or one of its bindings explicitly sets a mode. Projection of an
+existing repository link alone leaves the source unconfigured. Only new source updates are admitted. Use `off`
+or `on_demand` to keep automatic routing off for an opted-in scope. Owners can still use the ordinary Inbox actions
+on those items. Restoring inheritance removes an override. The existing Inbox defaults apply when a source has
+no explicit routing mode.
+
+The first scope with an available, eligible target wins, from item to container to channel. For that scope, the
+manager resolves the policy for each target, including its binding override. A projected reference stays read-only
+even if the same to-do has an explicit owner binding. Each populated pre-filter dimension must match at least one
+entry. Keywords match title or preview text without regard to case. Senders match the reported name or sender ID.
+Mentions match whole `@name` tokens and the reported `me` or `all` flags when available.
+
+A single eligible target goes directly to its activity or existing owner. A GitHub issue or pull request with one
+open delivery to-do eligible as an owner goes to that to-do, with read-only copies for its FYI targets. Neither
+decision needs a model. Multiple eligible targets at the same scope can use the configured Inbox triage model, with
+just each candidate's ID, kind, title, short scope and state, plus the updates' summaries. An assignment can name
+one action owner and any eligible FYI recipients. An unrelated update stays out of work routing. When there is
+new work, the default is an Inbox confirmation. Automatic creation requires an explicit `auto_todo` policy and
+one eligible owning direction for the new work. The new to-do is created in that direction and can be picked up
+through the usual work flow.
+
+`realtime` handles the update as soon as the Inbox commits it. `digest` groups due summaries for triage by scope
+and candidate list, at the close of each `digest_interval_minutes` window. Windows have fixed boundaries and
+default to 60 minutes when the policy omits the interval. A mixed set can resolve in realtime, and an individual
+digest recipient still waits for its configured window.
+
+Postgres records a receipt for each canonical source object and stable provider event ID, using the cursor when
+the provider has no event ID. A mail Message-ID is scoped to the account and thread across mailboxes. IMAP UID
+fallbacks include the mailbox and its generation. A replay through a different Inbox row or an overlapping binding
+uses the same receipt. A new update for an already owned object goes to its active task, Agent or supervisor while
+that owner is authorized. When the owner is still active but its policy no longer allows delivery, the update waits
+for the owner of Persona to decide. FYI copies are activity entries and do not wake an Agent. An uncertain live
+delivery stays tied to its original recipient and is recorded in the work activity for the owner to check.
+
+### Legacy routing compatibility
+
+- **Lark topics.** Existing bot registration and to-do thread links stay in place. The manager reads a legacy
+  link as a projection of the exact topic on the default Lark channel. The projection enables no routing by
+  itself. A scoped forwarding mode can use it for incoming Inbox updates. An explicit binding of the same topic
+  to the same target supplies the binding override and has one routing candidate. The registered bot still
+  handles the owner's new topics, commands and replies. Native collectors exclude the owner's messages from
+  incoming Inbox updates, and the routing path also excludes self-authored items and bot handoffs. Removing a
+  scoped override leaves the to-do's native topic link and the bot's reply path available.
+- **Legacy Inbox forwarding.** When `inbox.todo_forward.enabled` is on, the existing deterministic PR and issue
+  forwarding applies to updates without a scoped mode. It keeps its existing match rules, including older
+  associations and URLs found in Inbox content. Scoped routing uses canonical source metadata. Before opting in,
+  inspect the lookup and save an explicit binding when the intended target is missing. A configured mode takes
+  precedence for a newly received update, including `off` and `on_demand`. Clear the mode overrides on the path
+  to return future updates to legacy behavior. The original switch and associations remain available.
+- **Cutover and retries.** For newly forwarded events with a canonical identity, both Inbox paths use the same
+  Postgres receipt key. An update reserved by either path cannot be sent through the other, even if it reappears
+  in another Inbox row after a settings change. The legacy path keeps its original version and recipient for
+  retry. Changing routing rules does not replay the existing Inbox. Deduplication across delivery paths depends
+  on matching canonical provider identity. For example, a copy delivered as email and a separate notification
+  from GitHub can have different provider event IDs. Both routing paths must run on a manager with this
+  compatibility support for the shared receipt check to apply.
+
 ## Organization runtime snapshot (#11774)
 
 `GET /api/v1/assistant/organization/snapshot` is an Assistant read for the owner. It assembles the existing direction records, to-do SOP, task supervision, the session lists behind `agents_list`, admission counts and transcript-recorded model observations. It does not read report cards, work-log prose, digest text or a model's summary as runtime evidence, and it does not invoke a model. Client rendering is separate; the shared synthetic cases are in `spec/fixtures/organization-snapshot/`.
@@ -3075,7 +3255,7 @@ Server → client:
 | `assistant_feed` | `conversation`, `item` (`FeedItem`): a new entry in the chat feed; kind `view` is a live card's original position, and body.view is the AssistantView |
 | `assistant_view` | `conversation`, `view` (the schema's AssistantView: id, conversation, version, view, created_at, updated_at): an update to a live card already stored in the database; at most once per second per card, old updates ignored by version; no separate notification |
 | `assistant_view_block` | `conversation`, `key`: a body card has been validated from a trusted assistant text item and stored in the database, so its single reply can be enabled; replaying the same source doesn't broadcast again; goes into the existing event resume, and if missed is filled in by the feed.view_blocks snapshot |
-| `assistant_pages` | `{}`: the places of the assistant's pages changed (Dashboards, #15017: a page kept, pinned, unpinned, renamed, removed, restored or deleted, or the `dashboards` switch turned on or off); clients read `GET /api/v1/extensions/-/ui` again for the sidebar. What a page draws changed is `extension_ui` with `extension: "-pages"`, `id` (`index` or the page's `pg_…`) and `invalidate: true`, each page's at most once a second and the index's times at most once a minute, all of them within 150 in 15 minutes |
+| `assistant_pages` | `{}`: the places of the assistant's pages changed (Dashboards, #15017, #13020: a page kept, pinned, unpinned, renamed, removed, restored, deleted or toggled on Overview, or the `dashboards` switch turned on or off); clients read `GET /api/v1/extensions/-/ui` again (with `?pages_overview=1` on web/desktop). What a page draws changed is `extension_ui` with `extension: "-pages"`, `id` (`index`, the page's `pg_…`, or its Overview card `g_…`) and `invalidate: true`, each page's at most once a second and the index's times at most once a minute, all of them within 150 in 15 minutes |
 | `assistant_view_action` | `conversation`, `action` (ViewAction: key, action, page?, values, client_msg_id, status, revision, error?, at, updated_at, kind?, version?, text?): card submission and send status; `kind` absent or `action` means a declarative action, `html` is an HTML bridge reply (`action` is the component key, `text` is the confirmed text); `version` is the card version the user saw when submitting (older records don't have it); old states ignored by revision; goes into the existing event resume |
 | `task_plan` | `plan` (`TaskPlan`): a plan handed to the user, started, dismissed, or one of its tasks failed to start (`tasks[i].error`) |
 | `directions` | No payload: the direction tree changed (a to-do, an Agent's session, a direction or its name, an owner filing or leader-opened session, a reported `working` / `needs_you` state of a filed session or of a conversation a current direction's leader opened, or such a session's computer disconnecting or no longer being shown as before; gathered for one second, sent only when the tree's content differs); clients re-read `GET /api/v1/assistant/directions/tree`, and also on (re)connect. Quiet sessions, and those whose computer is offline or gone or does not list them, are available from `GET /api/v1/assistant/directions/{id}` |
@@ -3570,7 +3750,7 @@ Runtime summaries keep the existing snake_case names and decode as a `Session` w
 
 - Identity/ownership: `machine_id`, `session_id`, `manager`; pane/host origin `pane_source` and `host`; source/runtime and hierarchy fields (`source_kind`, `source_thread_id`, `source_instance_id`, `parent_thread_id`, `parent_session_id`, `root_session_id`, `is_subagent`).
 - Display/grouping: `title`, `cwd`, `workspace_cwd`, `repo_root`, `worktree`, `branch`, `agent`, `agent_label`, `agent_surface`, `agent_name`; space, parent-space, slot, pane, tab and workspace identifiers/names/indices; `todo {id,title}`.
-- State/freshness: `state`, `status`, `updated_at`, `state_since`, `seen_at`, `pending_interactions`, `rev`, `quiet`, `awaits_reply`, `background_working`, `background_waiting`, `background_stalled_since`, `starting`, `awaiting_first_message`, `start_error`, turn-error fields; `bypass_pending` when Allow Everything waits for a restart after the current turn (#10309).
+- State/freshness: `view` (the five-phase view, docs/protocol/agent-states.md "Five phases"), `state`, `status`, `updated_at`, `state_since`, `seen_at`, `pending_interactions`, `rev`, `quiet`, `awaits_reply`, `background_working`, `background_waiting`, `background_stalled_since`, `starting`, `awaiting_first_message`, `start_error`, turn-error fields; `bypass_pending` when Allow Everything waits for a restart after the current turn (#10309).
 - Session hierarchy (see "Session hierarchy" below): `parent_agent_id`, `parent_machine_id`, `folded_under`, `folded_under_machine_id`, `folded_as`, `folded_side`, `a2a_task_id`, `subagent_origin`, `children`, `started_at`, `asking_parent_session_id`, and the node's `aliases`.
 - Row content/progress: `last_text`, `activity`, `activity_at`, `model`, `effort`, context-token/window counts; bounded `work` (phase/on/line/wait/then/wake/attempts/agent/deferred/just_finished), `plan`, `goal`, and `loop` timing with its prompt omitted.
 - Model identity: `model` is the runtime/transcript-reported display name. A node may also send `requested_model` on a Persona-managed session: the last model ID passed to its process, persisted with node state. An empty string explicitly means launcher default; omission means no recorded identity (observed session or older node). Assistant carry-over uses this identity before the reported name; explicit picks and configured model purposes still win. Missing-model fallback is returned through the existing localized `launcher_note` response, as with launcher replacement.
@@ -6324,6 +6504,11 @@ the trailer available separately. `readInlineBody` in `web/src/lib/inline-messag
 against its matching context. Quote prefixes and description enrichment leave this lookup intact. A missing or
 unmatched anchor keeps its ordinary text, and unreferenced blocks keep their context display.
 
+In sent Web bubbles (#15410), the matching anchors become inline buttons and open the existing context details.
+Only anchors drawn in the prose consume a context from the collapsed Context row. The parser and bubble controls
+load when a rendered bubble has both a trailer and contexts. Copy, Forward, search and navigation previews use
+the prose. Editing the last sent message still reads the original trailer to restore the selections.
+
 ### Quote and comment blocks at the start of messages (web and iOS, #2427, #2437, #151)
 
 Web "Quote" and "Comment" use no tags or structured fields: on send they become `> ` blocks at the start of the message (`withQuoteBlock` in `web/src/lib/drafts.ts`, `web/src/lib/comments.ts`); the assistant and Agents on computers read them as text, and other clients that don't recognize them simply see `>` lines.
@@ -6382,6 +6567,7 @@ On reading back, web only recognizes blocks after the first block whose first li
 | `notice` | A notification relayed by Persona, such as a delivery PR update, task closeout, relay refusal, spawned conversation result, or incoming chat update | `title` labels the source. Persona supplies its own name |
 | `scheduled_task` | An automatic input from an external scheduler, such as a Codex heartbeat | `text` is the visible task instructions, not the runtime envelope; no Persona `injected` follow-up or patrol is implied |
 | `meeting` | A batch from a recorded meeting this session attends: live sentences, questions and answers since the last batch, the end of the meeting (#2981, [meeting-minutes.md](../assistant/meeting-minutes.md) "Feeding the attending session") | `title` is the meeting's name; no `conversation_id` |
+| `extension` | An event an extension reported to the main conversation (`assistant.event`, [extensions.md](../extensions/extensions.md) "Assistant events") | `title` is the extension's name from its manifest |
 
 The manager persists explicit provenance in the native transcript with a leading context block, rendered by `shared/message_source.md`:
 

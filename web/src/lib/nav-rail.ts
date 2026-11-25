@@ -2,7 +2,11 @@
 // the independent index without coupling the rail's gestures to transcript loading.
 
 import { NAV_RAIL_METRICS } from "../ui/nav-rail-metrics";
-import { isLoopTick, isOwnMessage, type ChatLine, type Segment, type UserMessage } from "./turns";
+import { lineItemIds } from "./chat-search";
+import { splitInlineTrailer } from "./inline-mentions";
+import { isLoopTick, isOwnMessage, parseUserText, type ChatLine, type Segment, type UserMessage } from "./turns";
+import type { Item } from "./types";
+import type { UserInputIndex } from "./user-input-index";
 
 /** One of your questions in the loaded conversation: what a tick knows. */
 export interface NavRailTick {
@@ -216,9 +220,31 @@ export function activeNavRailOffset(offsets: { index: number; top: number }[], t
   return offsets[Math.max(0, lo - 1)].index;
 }
 
-/** Explicit data-source seam: an index adapter may load missing content before resolving a selection. */
-export interface NavRailSource {
-  ticks: NavRailTick[];
-  total?: number;
-  select: (id: string) => void | Promise<void>;
+const entryOf = (id: string) => id.split("#")[0];
+
+export function indexedNavTicks(index: UserInputIndex, lines: ChatLine[], items: Item[]): NavRailTick[] {
+  const owner = new Map<string, string>();
+  for (const line of lines) for (const id of lineItemIds(line)) owner.set(entryOf(id), line.id);
+  const loaded = new Map(navRailTicks(lines).map((tick) => [tick.id, tick]));
+  const words = new Map<string, string>();
+  for (const item of items) {
+    if (item.role === "user" && item.kind === "text") {
+      const key = entryOf(item.id);
+      words.set(key, [words.get(key), parseUserText(item.text ?? "").text].filter(Boolean).join("\n"));
+    }
+  }
+  return index.inputs.map((input, i) => {
+    const key = entryOf(input.id);
+    const lineId = owner.get(key);
+    const tick = lineId ? loaded.get(lineId) : undefined;
+    const preview = navRailPreview(words.get(key) ?? "") || tick?.preview || navRailPreview(splitInlineTrailer(input.preview ?? "").text);
+    const attachments = preview ? undefined : tick?.attachmentsOnly ?? input.attachments;
+    const answer = tick?.answerExcerpt || navRailExcerpt(input.answer ?? "");
+    return {
+      id: `seg:${input.id}`, seq: input.seq, lineId, ordinal: index.total - index.inputs.length + i + 1,
+      preview,
+      ...(attachments ? { attachmentsOnly: attachments } : {}),
+      ...(answer ? { answerExcerpt: answer } : {}),
+    };
+  });
 }

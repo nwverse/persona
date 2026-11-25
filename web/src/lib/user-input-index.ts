@@ -1,6 +1,3 @@
-import { lineItemIds } from "./chat-search";
-import { navRailExcerpt, navRailPreview, navRailTicks, type NavRailTick } from "./nav-rail";
-import { parseUserText, type ChatLine } from "./turns";
 import type { Item } from "./types";
 
 export interface UserInputPosition {
@@ -45,33 +42,6 @@ export function windowUserInputs(index: UserInputIndex, earliestSeq?: number): U
   const loaded = earliestSeq === undefined ? -1 : index.inputs.findIndex((input) => input.seq >= earliestSeq);
   const start = loaded < 0 ? initial : Math.min(initial, loaded);
   return { ...index, inputs: index.inputs.slice(start) };
-}
-
-export function indexedNavTicks(index: UserInputIndex, lines: ChatLine[], items: Item[]): NavRailTick[] {
-  const owner = new Map<string, string>();
-  for (const line of lines) for (const id of lineItemIds(line)) owner.set(entry(id), line.id);
-  const loaded = new Map(navRailTicks(lines).map((tick) => [tick.id, tick]));
-  const words = new Map<string, string>();
-  for (const item of items) {
-    if (item.role === "user" && item.kind === "text") {
-      const key = entry(item.id);
-      words.set(key, [words.get(key), parseUserText(item.text ?? "").text].filter(Boolean).join("\n"));
-    }
-  }
-  return index.inputs.map((input, i) => {
-    const key = entry(input.id);
-    const lineId = owner.get(key);
-    const tick = lineId ? loaded.get(lineId) : undefined;
-    const preview = navRailPreview(words.get(key) ?? "") || tick?.preview || navRailPreview(input.preview ?? "");
-    const attachments = preview ? undefined : tick?.attachmentsOnly ?? input.attachments;
-    const answer = tick?.answerExcerpt || navRailExcerpt(input.answer ?? "");
-    return {
-      id: `seg:${input.id}`, seq: input.seq, lineId, ordinal: index.total - index.inputs.length + i + 1,
-      preview,
-      ...(attachments ? { attachmentsOnly: attachments } : {}),
-      ...(answer ? { answerExcerpt: answer } : {}),
-    };
-  });
 }
 
 export function containsInput(items: Item[], input: UserInputPosition): boolean {

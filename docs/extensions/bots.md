@@ -153,6 +153,12 @@ attachments included), Drive, Docs, Sheets, Base, Wiki and Minutes. It is the bu
    - **Paste once**: if that fails too, the page shows the redirect URL with a copy button and a link straight to the app's
      security settings; after pasting it there, **Continue** opens the authorization page.
 
+The iPhone and iPad app and the Android app have the same section on their Lark bot page (#15392), on the same routes.
+For the browser way they show Lark's authorization page in an in-app web view with the hub's own address plus
+`/lark-oauth` as the redirect URL, stop that view when it reaches the address (the web page never loads), and hand
+`state` and `code` to `POST /api/v1/bots/feishu/sync/oauth` themselves. The device flow and the paste-once way work as
+on the web. A hub without the sync (404, or `available: false`) hides the section.
+
 So a new owner confirms twice on one page (scan to create, then agree); an app that already has the scopes needs only
 the second. The tokens are sealed with `secret.key` (settings `bots.feishu.sync.bindings`, re-sealed by the key rotation),
 never shown and never logged.
@@ -188,12 +194,30 @@ missing a scope marks only that binding, and the others and the chat bot carry o
 Each enabled binding runs once a day, at `schedule_hour` local time (default 3) plus a minute of its own, or at once with
 **Sync now** (`POST /api/v1/bots/feishu/sync/bindings/{key}/run`). The first run reads the last 30 days; later runs read what
 changed since the cursors, with a few minutes of overlap. A run has a 20-minute budget; what is left is read next time.
-Requests are rate-limited per binding and per API family, and a 429 or `99991400` waits as the platform asks before
-trying again. **A read that fails leaves its cursor where it was**: the cursors, the dedup index and what the knowledge base
-will collect are committed together after a run, so nothing is skipped and nothing half-read is kept. A failed run tries
-again 15 minutes later; from the third failure in a row it backs off 1, 6 and then 24 hours. A run that ran out of budget
-or into the rate limit goes on an hour later. An authorization lasts at most 365 days; 14, 7 and 1 day before the end the owner
-gets a reminder to authorize again, and the page shows it.
+For bindings that include chat history (`full_with_im`), a lightweight incremental chat sync also runs every 15 minutes
+(5-minute budget) after the first full run: it reads only new messages since each chat's cursor, discovers newly started
+single chats (`chat_type: "p2p_chat"`), and follows any newly linked cloud documents and meeting minutes without walking
+Drive or Wiki. It shares the binding's rate limiter and running lock with the daily full sync (never overlapping it) and
+can be turned off in Settings (`PUT /api/v1/bots/feishu/sync` with `im_poll: false`), leaving the daily full run unchanged.
+
+Synced messages are scanned for Feishu / Lark cloud document and wiki links (`/docx/`, `/docs/`, `/sheets/`, `/base/`,
+`/bitable/`, `/file/`, `/wiki/`, `/minutes/`), including documents shared with the owner outside their My Space root.
+Wiki links resolve via `GET /open-apis/wiki/v2/spaces/get_node`, metadata is batch-queried via
+`POST /open-apis/drive/v1/metas/batch_query`, `docx` / `sheet` / `bitable` convert to Markdown with the existing readers,
+readable text files (`.md`, `.txt`, `.csv`, `.json`, `.yaml`, etc.) download via
+`GET /open-apis/drive/v1/files/{file_token}/download` using the user token, and non-text files keep metadata only. Every
+linked document deduplicates by `obj_token` + revision and records `message_link` in `sources[]`; unreadable documents
+(403, export disabled, oversized file) record the reason in `Note` at revision 0 without blocking the run. All required
+scopes (`drive:drive:readonly`, `docx:document:readonly`, `docs:document.content:read`, `sheets:spreadsheet:readonly`,
+`bitable:app:readonly`, `wiki:wiki:readonly`, `wiki:node:retrieve`, plus `drive:file:download` and `im:*` in `full_with_im`)
+are already covered by the existing packs.
+
+Requests are rate-limited per binding and per API family, and a 429, `99991400`, `230020` or `1061045` waits as the platform
+asks before trying again. **A read that fails leaves its cursor where it was**: the cursors, the dedup index and what the
+knowledge base will collect are committed together after a run, so nothing is skipped and nothing half-read is kept. A failed
+run tries again 15 minutes later; from the third failure in a row it backs off 1, 6 and then 24 hours. A run that ran out of
+budget or into the rate limit goes on an hour later. An authorization lasts at most 365 days; 14, 7 and 1 day before the end
+the owner gets a reminder to authorize again, and the page shows it.
 
 ### One copy of everything
 

@@ -4973,7 +4973,7 @@ def recording_named(out, body, rid=None):
 
 
 def recording_kind(body):
-    """An upload's kind as the hub's clean() reads it (kb/recordings.go): trimmed and lowercased, absent or "" a note;
+    """An upload's kind as the hub's clean() reads it (modules/recording/writers/recordings.go): trimmed and lowercased, absent or "" a note;
     None when it is neither (a 400)."""
     kind = body.get("kind")
     if kind is None: return "note"
@@ -4984,7 +4984,7 @@ def recording_kind(body):
 
 def meeting_attendance(body):
     """The role an upload puts in effect, the session it names (None: the main chat, and always when the role is off) and
-    why the role is off when another was asked for, as the hub's normalizeAttendance (kb/live.go) in its order: a role off
+    why the role is off when another was asked for, as the hub's normalizeAttendance (modules/recording/writers/live.go) in its order: a role off
     or absent says nothing whatever the session; then the role, the kind and the session are checked. A problem with these
     two fields never fails the upload (meeting-minutes.md "On PUT"). A watch recording is not refused: the phone never
     gives it a role."""
@@ -5214,7 +5214,7 @@ def meeting_ask(h, st, body, rec):
 
 
 # The meeting conversation (#3862, docs/assistant/meeting-minutes.md "Phase 1: the meeting conversation"), as the hub
-# branch has it (server/internal/modules/recording/meeting_*.go, server/internal/kb/meeting.go, hub/meeting_receipts.go): the
+# branch has it (server/internal/modules/recording/meeting_*.go, server/internal/modules/recording/writers/meeting.go, hub/meeting_receipts.go): the
 # feature `meeting_conversation` (only beside meeting_attendance); the upload's `room` and `private`, kept apart from the
 # #2981 fields as meeting.json is (a recording that once had `room` stays a room meeting, its role the room's); one room
 # conversation per attended room meeting (an assistant conversation, origin `meeting`, header first); …/ask answered in
@@ -6810,7 +6810,7 @@ def transcription_union(spans, margin=0):
     return out
 
 
-# Persona's echo (#5905, meeting-minutes.md "Persona's echo"), the hub's rule (kb/echo.go) for its own sentences in hub
+# Persona's echo (#5905, meeting-minutes.md "Persona's echo"), the hub's rule (modules/recording/writers/echo.go) for its own sentences in hub
 # mode: a line overlapping a speaking span widened by 0.5 s whose words are the answer said there (60% of its distinct
 # character bigrams, after NFKC, lower case, letters and decimal digits only); a span without text keeps the time rule
 # from before (half of the line inside, no margin). Checked against spec/fixtures/meeting-echo by the transcription tests.
@@ -7727,7 +7727,7 @@ def recordings_route_locked(h, method, p):
     if have and (have.get("kind") == "day") != (kind == "day"):
         return h.send_json({"error": "recording kind cannot change to or from day", "code": "kind_changed"}, 409) or True
     if kind == "day": return day_put(h, rid, body)
-    if rid in RECORDINGS_TRIMMED:  # the hub takes no transcript back (kb/recordings.go putRecording)
+    if rid in RECORDINGS_TRIMMED:  # the hub takes no transcript back (modules/recording/writers/recordings.go putRecording)
         out = {"id": rid, "revision": body["revision"], "status": "expired"}
         if MEETING_ATTENDANCE: out["attendance"] = "off"
         if (v := upload_room_view(rid, body)) is not None: out["room"] = v
@@ -21122,6 +21122,7 @@ _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-e
                 re.compile(r"<" + FILE_TAG_PATTERN + r"\b[^>]*?/?>(?:\s*</" + FILE_TAG_PATTERN + r">)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
+_SEARCH_INLINE_REFERENCE = re.compile(r"(?:^|\r?\n\r?\n)<!-- persona-inline-v1 \[[^\r\n]*", re.M)
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
 _SEARCH_CARD = re.compile(r"```(persona-view|persona-card)[^\n]*\n(.*?)\n```[^\n]*(?:\n|$)", re.S)
 
@@ -21154,7 +21155,7 @@ def search_index_text(item):
         text = _SEARCH_PASTED.sub(r"\1", text)
         for r in _SEARCH_IMAGES:
             text = r.sub("", text)
-        text = _SEARCH_ACTION.sub("", text.strip()).strip()
+        text = _SEARCH_ACTION.sub("", _SEARCH_INLINE_REFERENCE.sub("", text).strip()).strip()
     else:
         return None
     return text if text.strip() else None
