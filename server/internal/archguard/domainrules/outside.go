@@ -3,7 +3,6 @@ package domainrules
 import (
 	"go/ast"
 	"go/token"
-	"slices"
 	"strings"
 )
 
@@ -309,14 +308,27 @@ func (c *outsideChecks) implements(p *Pkg, f *File, fd *ast.FuncDecl) bool {
 				continue // an embedded interface: its own declaration is read where it is declared
 			}
 			for _, n := range m.Names {
-				if n.Name == fd.Name.Name && slices.Equal(typeKeys(ft.Params, theirs, p), params) &&
-					slices.Equal(typeKeys(ft.Results, theirs, p), results) {
+				if n.Name == fd.Name.Name && sameKeys(typeKeys(ft.Params, theirs, p), params) &&
+					sameKeys(typeKeys(ft.Results, theirs, p), results) {
 					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+// sameKeys says whether a and b spell the same types in the same order.
+func sameKeys(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // typeKeys is the type of each parameter in fl, spelled by typeKey.

@@ -26,7 +26,8 @@ What each flag writes (Go):
   --closed Name=a,b(Type)    a sealed interface over unexported variants; NameB(payload) (name the payload with
                              b(name:Type))
   --entity Name --id NameID  entity.go: an entity holding the --value types no --parse or part uses and the closed
-                             sets without payloads; NewName, RestoreName, ID, IsSame and Accept(NameVisitor)
+                             sets without payloads (one at least, unless --decider gives it a lifecycle); NewName,
+                             RestoreName, ID, IsSame and Accept(NameVisitor)
   --builder                  a staged builder (NewNameBuilder, one stage per part, Build refusing every zero part)
   --decider                  decide.go: an open / closed lifecycle with sealed Command and Event, Decide, Decided.Then
                              and Accept, and an unexported evolve; rename it to the domain's own
@@ -238,6 +239,10 @@ class Slice:
         if self.entity:
             self.parts = [v for v in self.values if v.simple and v.name != self.id and v.name not in used]
             self.parts += [c for c in self.closed if c.plain]
+            if not self.parts and not self.decider:
+                raise Refused(f"--entity {self.entity} holds only its id, which makes it a value: give it a part (a "
+                              "--value of string or int no other value or --parse uses, or a --closed set without "
+                              "payloads) or a lifecycle (--decider)")
             given = 1 + len(self.parts) + (1 if self.decider else 0)
             if not self.builder and given > 4:
                 raise Refused(f"{self.entity} has {given} inputs to New or Restore, and a function takes four at most: "

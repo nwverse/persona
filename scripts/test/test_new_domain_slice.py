@@ -69,7 +69,7 @@ COMBINATIONS = {
         "--value", "Query=string", "--zero-is", "no text", "--value", "Count=int", "--zero-is", "none",
         "--parse", "Search=query:string,count:int",
         "--closed", "Reason=none,snoozed(Snooze),titled(Title),pinned(Pin)", "--closed", "Wait=plain,nested(Reason)",
-        "--entity", "Note", "--id", "NoteID", "--adapter"],
+        "--value", "Body=string", "--entity", "Note", "--id", "NoteID", "--adapter"],
     # The shared kernel's types as parts and payloads, as a context's asker or card is.
     "the shared kernel's types as parts and payloads": [
         "go", "internal/assistant/askers", "--doc", "says who asked for one card",
@@ -87,6 +87,10 @@ GETTER = '''package getter
 // Title is the task's title: the getter a caller reaches for first.
 func (x Task) Title() Title { return x.title }
 '''
+
+
+# The packages generated code imports, whose rules_test.go hooks also judge that code.
+HOOKED = ["./internal/agentref/...", "./internal/domainkit/..."]
 
 
 def scaffold(*args, root):
@@ -142,6 +146,8 @@ class GenerateTests(unittest.TestCase):
             ("--value", "Pair=left:Pair"): "its parts hold Pair again",
             ("--value", "A=left:B", "--value", "B=right:A"): "its parts hold",
             ("--value", "Known=string", "--entity", "Box", "--id", "BoxID"): "the scaffold declares that name itself",
+            ("--value", "Tag=string", "--value", "Pair=tag:Tag", "--entity", "Box", "--id", "BoxID"):
+                "holds only its id, which makes it a value",
         }
         with tempfile.TemporaryDirectory() as work:
             for flags, says in cases.items():
@@ -226,9 +232,11 @@ class CompileTests(unittest.TestCase):
     def test_every_combination_vets_and_passes_its_tests_and_rules(self):
         vet = go(self.module, "vet", *self.dirs)
         self.assertEqual(vet.returncode, 0, vet.stdout + vet.stderr)
-        tested = go(self.module, "test", "-p", "4", "-count=1", *self.dirs)
+        # The kit's and agentref's hooks run too: a finding in generated code counts against the package whose type
+        # it uses (an agentref.Ref payload's test visitor against agentref), and only that package's hook reports it.
+        tested = go(self.module, "test", "-p", "4", "-count=1", *self.dirs, *HOOKED)
         self.assertEqual(tested.returncode, 0, tested.stdout + tested.stderr)
-        for d in self.dirs:
+        for d in self.dirs + HOOKED:
             self.assertIn(d[2:-4], tested.stdout)
 
     def test_a_planted_getter_fails_its_package_test_with_the_rules_message(self):
