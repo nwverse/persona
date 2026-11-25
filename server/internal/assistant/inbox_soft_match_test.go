@@ -42,6 +42,7 @@ func TestInboxSoftMatchBoundaries(t *testing.T) {
 		{name: "independent", title: "Example Review", prompt: "Ask Alice Example to investigate", want: true},
 		{name: "normalized group", title: "  EXAMPLE   Review ", prompt: softTestWords, want: true},
 		{name: "group only", title: "Example Review", prompt: "Investigate"},
+		{name: "rewritten topic is not group identity", title: "Upload failure", prompt: "Alice Example", change: func(s *Service, it *InboxItem) { it.Where = ""; it.TitleBy = TitleByModel }},
 		{name: "partial group", title: "Example Review Extended", prompt: "Alice Example"},
 		{name: "short public text", title: "Example Review", prompt: "Thanks everyone", change: func(s *Service, it *InboxItem) { it.Sender = "Other"; it.Preview = "Thanks everyone" }},
 		{name: "full URL", title: "Example Review", prompt: "Inspect https://example.com/issues/7", change: func(s *Service, it *InboxItem) { it.Preview = "https://example.com/issues/7" }, want: true},

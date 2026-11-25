@@ -187,6 +187,10 @@ func softPlace(it *InboxItem) string {
 	if it.Where != "" {
 		return it.Where
 	}
+	// A rewritten topic title cannot attest the source group name in legacy rows.
+	if it.TitleBy != "" {
+		return ""
+	}
 	return it.Title
 }
 
