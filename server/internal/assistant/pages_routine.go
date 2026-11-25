@@ -228,18 +228,68 @@ func (s *Service) cleanOrphanPageRoutines(ctx context.Context) {
 	}
 }
 
-// pageRoutineTask returns a copy of task id from the schedule.
+// peekSchedule returns the schedule's tasks, runs, and active sending flags without triggering loadSchedule's legacy
+// migration write. Read-only discovery and grant checks use this so checking whether a caller is a page routine never
+// mutates stored settings.
+func (s *Service) peekSchedule(ctx context.Context) (tasks []Task, runs []ScheduleRun, sending map[string]bool, err error) {
+	sc := &s.sched
+	sc.mu.Lock()
+	if sc.loaded {
+		tasks = slices.Clone(sc.tasks)
+		runs = slices.Clone(sc.runs)
+		if len(sc.sending) > 0 {
+			sending = make(map[string]bool, len(sc.sending))
+			for k, v := range sc.sending {
+				if v {
+					sending[k] = true
+				}
+			}
+		}
+		sc.mu.Unlock()
+		return tasks, runs, sending, nil
+	}
+	sc.mu.Unlock()
+
+	st := s.store()
+	if st == nil {
+		return nil, nil, nil, nil
+	}
+	ok, err := st.Setting(ctx, tasksKey, &tasks)
+	if err != nil {
+		return nil, nil, nil, errScheduleUnavailable
+	}
+	if !ok || len(tasks) == 0 {
+		return nil, nil, nil, nil
+	}
+	hasPageTask := false
+	for _, t := range tasks {
+		if t.PageID != "" {
+			hasPageTask = true
+			break
+		}
+	}
+	if !hasPageTask {
+		return tasks, nil, nil, nil
+	}
+	if _, err := st.Setting(ctx, runsKey, &runs); err != nil {
+		return nil, nil, nil, errScheduleUnavailable
+	}
+	return tasks, runs, nil, nil
+}
+
+// pageRoutineTask returns a copy of task id from the schedule without triggering legacy migration writes.
 func (s *Service) pageRoutineTask(ctx context.Context, id string) (Task, bool) {
 	if id == "" {
 		return Task{}, false
 	}
-	sc, err := s.lockedSchedule(ctx)
+	tasks, _, _, err := s.peekSchedule(ctx)
 	if err != nil {
 		return Task{}, false
 	}
-	defer sc.mu.Unlock()
-	if i := sc.indexLocked(id); i >= 0 {
-		return sc.tasks[i], true
+	for _, t := range tasks {
+		if t.ID == id {
+			return t, true
+		}
 	}
 	return Task{}, false
 }
@@ -285,40 +335,40 @@ func (s *Service) pageRoutineTaskFor(ctx context.Context, machine, session strin
 	if session == "" {
 		return Task{}, false, nil
 	}
-	sc, err := s.lockedSchedule(ctx)
+	tasks, runs, _, err := s.peekSchedule(ctx)
 	if err != nil {
 		return Task{}, false, err
 	}
-	for _, t := range sc.tasks {
+	byID := make(map[string]Task)
+	for _, t := range tasks {
 		if t.PageID == "" {
 			continue
 		}
+		byID[t.ID] = t
 		if t.RunSessionID == session && (t.RunMachineID == "" || machine == "" || s.sameMachine(t.RunMachineID, machine)) {
-			sc.mu.Unlock()
 			return t, true, nil
 		}
 		if t.SessionID == "" && t.LastSessionID == session && (t.RunMachineID == "" || machine == "" || s.sameMachine(t.RunMachineID, machine)) {
-			sc.mu.Unlock()
 			return t, true, nil
 		}
 	}
-	for i := len(sc.runs) - 1; i >= 0; i-- {
-		r := sc.runs[i]
+	if len(byID) == 0 {
+		return Task{}, false, nil
+	}
+	for i := len(runs) - 1; i >= 0; i-- {
+		r := runs[i]
 		if r.Conversation == "source" || r.SessionID != session {
 			continue
 		}
 		if r.MachineID != "" && machine != "" && !s.sameMachine(r.MachineID, machine) {
 			continue
 		}
-		if j := sc.indexLocked(r.RefID); j >= 0 && sc.tasks[j].PageID != "" {
-			t := sc.tasks[j]
-			sc.mu.Unlock()
+		if t, ok := byID[r.RefID]; ok {
 			return t, true, nil
 		}
 	}
-	sc.mu.Unlock()
 	if ref, ok := s.originTaskRef(ctx, machine, session); ok && ref != "" {
-		if t, found := s.pageRoutineTask(ctx, ref); found && t.PageID != "" {
+		if t, found := byID[ref]; found {
 			return t, true, nil
 		}
 	}
@@ -336,10 +386,10 @@ func (s *Service) isPageRoutineSession(ctx context.Context, session string) bool
 	return s.isPageRoutineConversation(ctx, "", session)
 }
 
-// latestPageRoutineRunLocked returns the (machine, session, startedAt) of task t's latest started run in sc.
-func (s *Service) latestPageRoutineRunLocked(sc *schedule, t Task) (machine, session string, startedAt time.Time, ok bool) {
-	for i := len(sc.runs) - 1; i >= 0; i-- {
-		r := sc.runs[i]
+// latestPageRoutineRun returns the (machine, session, startedAt) of task t's latest started run.
+func (s *Service) latestPageRoutineRun(runs []ScheduleRun, sending bool, t Task) (machine, session string, startedAt time.Time, ok bool) {
+	for i := len(runs) - 1; i >= 0; i-- {
+		r := runs[i]
 		if r.RefID != t.ID || r.Status == runSkipped || r.SessionID == "" || r.Conversation == "source" {
 			continue
 		}
@@ -348,7 +398,7 @@ func (s *Service) latestPageRoutineRunLocked(sc *schedule, t Task) (machine, ses
 			at = r.of
 		}
 		// While a resumed run is mid-dispatch, t.LastRun has already advanced ahead of the previous run's history entry.
-		if sc.sending[t.ID] && t.LastRun.After(at) && r.SessionID == t.RunSessionID &&
+		if sending && t.LastRun.After(at) && r.SessionID == t.RunSessionID &&
 			(r.MachineID == "" || t.RunMachineID == "" || s.sameMachine(r.MachineID, t.RunMachineID)) {
 			at = t.LastRun
 		}
@@ -411,18 +461,23 @@ func (s *Service) pageRoutineCallerOf(ctx context.Context, machine, session stri
 		}
 	}
 
-	sc, err := s.lockedSchedule(ctx)
+	tasks, runs, sending, err := s.peekSchedule(ctx)
 	if err != nil {
 		return pageRoutineCaller{}, err
 	}
-	idx := sc.indexLocked(task.ID)
-	if idx < 0 || sc.tasks[idx].PageID != task.PageID {
-		sc.mu.Unlock()
+	var cur Task
+	found := false
+	for _, t := range tasks {
+		if t.ID == task.ID {
+			cur = t
+			found = true
+			break
+		}
+	}
+	if !found || cur.PageID != task.PageID {
 		return pageRoutineCaller{}, errors.New("no_grant: this routine is no longer bound to this page")
 	}
-	cur := sc.tasks[idx]
-	runMachine, runSession, startedAt, hasRun := s.latestPageRoutineRunLocked(sc, cur)
-	sc.mu.Unlock()
+	runMachine, runSession, startedAt, hasRun := s.latestPageRoutineRun(runs, sending[cur.ID], cur)
 
 	now := time.Now()
 	if !hasRun || runSession != session || (runMachine != "" && !s.sameMachine(runMachine, machine)) || startedAt.IsZero() || now.Sub(startedAt) > pageRoutineRunWindow {
