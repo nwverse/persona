@@ -29,6 +29,7 @@ import { BrandMark } from "../../ui/BrandMark";
 import { ChannelMark } from "../../ui/ChannelMark";
 import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { Icon } from "../../ui/icons";
+import { countsOf, useSubscriptionSummary } from "../../lib/subscriptions";
 import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
 import { Feishu, Mail, MailInboxSwitch } from "./Connectors";
 import { AuthGroup } from "./ExtensionAuth";
@@ -407,8 +408,11 @@ function BuiltinIntegrationDetail({
         ? t("settings-integrations.lark_gateway_description")
         : channelCtl.detail?.description);
 
+  const subscriptionConnectorId = connectorId ?? (isMail ? "mail" : isLarkGateway ? "lark" : null);
+  const larkSubCounts = countsOf(useSubscriptionSummary(), (l) => isLarkGateway && l.connector === "lark");
   const showInboxSection =
     isMail ||
+    (isLarkGateway && !manager && larkSubCounts !== null) ||
     (!!connector && connectorHasInbox(connector)) ||
     (!!connectorId && !manager);
 
@@ -502,8 +506,8 @@ function BuiltinIntegrationDetail({
           {connector && connectorHasInbox(connector) && (
             <ConnectorInboxBlock connector={connector} reload={loadConnector} onSaved={setConnector} />
           )}
-          {connectorId && !manager && (
-            <SubscriptionsEntry pick={(l) => l.connector === connectorId} scope={{ c: connectorId }} />
+          {subscriptionConnectorId && !manager && (
+            <SubscriptionsEntry pick={(l) => l.connector === subscriptionConnectorId} scope={{ c: subscriptionConnectorId }} />
           )}
         </SectionBlock>
       )}

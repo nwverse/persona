@@ -87,19 +87,20 @@ func TestAcceptanceIsKeptWithoutABot(t *testing.T) {
 
 // The briefing's "To accept" section lists the card-less ask with the round the Accept button is made for.
 func TestAcceptanceWithoutABotIsInTheBriefing(t *testing.T) {
+	needsBriefingModule(t)
 	ctx := context.Background()
 	s, f, _, id := cardlessService(t, botNotSetUp)
 	a := deployedCardless(t, s, f, id)
 	facts := s.briefFactsAt(ctx, time.Now(), "")
-	if len(facts.Accept) != 1 || facts.Accept[0].id != id || facts.Changed[id] != a.Changed {
+	if len(facts.Accept) != 1 || facts.Accept[0].ID != id || facts.Changed[id] != a.Changed {
 		t.Fatalf("facts: %+v changed=%v", facts.Accept, facts.Changed)
 	}
-	body := facts.body(s, "Morning")
+	body := s.briefBodyOf(facts, "Morning")
 	if len(body.Accept) != 1 || body.Accept[0].ID != id || !body.Accept[0].AskedAt.Equal(a.AskedAt) || body.Accept[0].Title != "修登录崩溃" {
 		t.Fatalf("brief item: %+v", body.Accept)
 	}
-	if !strings.Contains(facts.modelText(), a.Changed) {
-		t.Fatalf("the model is not told what changed:\n%s", facts.modelText())
+	if !strings.Contains(s.briefModelText(facts), a.Changed) {
+		t.Fatalf("the model is not told what changed:\n%s", s.briefModelText(facts))
 	}
 }
 

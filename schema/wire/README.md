@@ -60,3 +60,15 @@ only (its Kotlin and Rust copies predate it). A decoder that reads the JSON key 
 quoted one in a Swift, Kotlin or ArkTS source the schema guards, outside its generated files and the tests. A key goes
 there only while no client source quotes it for another reason; TypeScript and Go are not scanned for keys, since plain
 code there compares the generated types' values.
+
+## IDs and AgentRef (`ids.schema.json`, #15397)
+
+`ids.schema.json` defines the first batch of contract IDs with `x-id` (`MachineID`, `SessionID`, `InteractionID`,
+`TodoID`, `ConversationID`, `HubID`, `DeviceID`, `ExtensionID`, `ClientMsgID`, `InboxItemID`, `ConnectorID`,
+`SubscriptionID`) and `AgentRef{machine, session}`, the one shape for "points at an Agent" (strict decode). Go's output is
+the contract package `server/internal/wireids`. Core's opaque `agentref` types keep their names; the guard above skips
+`server/internal/agentref` for those three names only (`OPAQUE_COUNTERPARTS` in `test_wire_schema.py`).
+
+Follow-up, not built: each wire schema loads on its own, so another schema cannot `$ref` `ids.schema.json` yet and
+declares its own `x-id` definitions meanwhile. Cross-schema `$ref`, and wiring the generated Rust file
+(`native/app-core/crates/persona-core/src/ids_wire.rs`, written but not yet a `mod`) into `persona-core`, are left for P5.

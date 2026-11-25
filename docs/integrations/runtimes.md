@@ -611,6 +611,14 @@ response, tool result or error has been exported). A failed summary read is logg
 with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
 session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
+A settled Persona-owned ACP reply writes `.persona-turn-completion` beside the conversation's history-epoch file (mode
+0600). It stores SHA-256 fingerprints of the branch and actual settled reply index: one for the full reply and one for
+its byte length and first/last eight characters so truncated exports can match, never message text. After a restart, a
+`summary_behind` row becomes `done` only while the current export matches that settled turn; a missing or mismatched
+marker, including one followed by later native work, leaves `unknown`. Starting another prompt or issuing a native rewind clears
+the marker, and a known or pending native-cut check suppresses recovery. Transcript-only status rules and the step-count
+coverage check above are unchanged.
+
 What subagents and background tasks send back reaches the CLI companion's chat (#14625). agy 1.5.15 writes each
 as a `SYSTEM_MESSAGE` step whose body is `[Message] … sender=<id> … content=<text>`; the companion maps it to a
 `notice` item with a `task` note (`integrations/antigravity/lib/map.js`): a subagent's report or its "has gone idle"

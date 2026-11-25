@@ -145,8 +145,7 @@ func TestInboxReplyPolicyDraftRejectsStateChangeAfterPersistenceLegacySchema(t *
 					t.Errorf("%s mutation did not preserve the original mirror pointer", tc.name)
 				}
 			}
-			h.store = func() Store { return st }
-
+			h.setStore(func() Store { return st })
 			text, err := h.draftReply(t.Context(), it.ID, "")
 			if afterCalls != 1 {
 				t.Errorf("successful publication write hook ran %d times, want once", afterCalls)
@@ -284,8 +283,7 @@ func TestInboxReplyPolicyDraftRejectsStateChangeAfterPersistence(t *testing.T) {
 					t.Errorf("%s mutation did not preserve the original mirror pointer", tc.name)
 				}
 			}
-			h.store = func() Store { return st }
-
+			h.setStore(func() Store { return st })
 			text, err := h.draftReply(t.Context(), it.ID, "")
 			if afterCalls != 1 {
 				t.Errorf("successful publication write hook ran %d times, want once", afterCalls)

@@ -1400,6 +1400,7 @@ func (c *coreChecks) seamRules() {
 	}
 	for _, t := range d.order {
 		if t.strct == nil {
+			c.seamPortType(t)
 			continue
 		}
 		for _, fl := range t.strct.Fields.List {
@@ -1438,11 +1439,48 @@ func (c *coreChecks) seamRules() {
 	}
 }
 
+// seamPortType checks the type a seam exports, leaving type parameter constraints outside the check.
+func (c *coreChecks) seamPortType(t *typeDecl) {
+	if !exported(t.name) {
+		return
+	}
+	if t.iface == nil || len(t.iface.Methods.List) == 0 {
+		if untyped(t.spec.Type) {
+			c.at(t.file, t.spec.Name, "seam-any", t.name+" exposes an untyped value")
+		}
+		return
+	}
+	c.seamInterfaceMethods(t, t.iface)
+}
+
+func (c *coreChecks) seamInterfaceMethods(t *typeDecl, iface *ast.InterfaceType) {
+	for _, method := range iface.Methods.List {
+		if embedded, ok := ast.Unparen(method.Type).(*ast.InterfaceType); ok {
+			c.seamInterfaceMethods(t, embedded)
+			continue
+		}
+		for _, name := range method.Names {
+			if exported(name.Name) && untyped(method.Type) {
+				c.at(t.file, name, "seam-any", t.name+"."+name.Name+" exposes an untyped value")
+			}
+		}
+	}
+}
+
 // untyped says whether a type expression holds any, interface{} or a map of them, outside a type parameter list.
 func untyped(e ast.Expr) bool {
 	found := false
 	ast.Inspect(e, func(n ast.Node) bool {
 		switch x := n.(type) {
+		case *ast.Field:
+			// A parameter, result or struct field can be named any and still have a concrete type.
+			found = found || untyped(x.Type)
+			return false
+		case *ast.SelectorExpr:
+			return false // a qualified name cannot be the predeclared any
+		case *ast.ArrayType:
+			found = found || untyped(x.Elt)
+			return false // the length is a value expression
 		case *ast.Ident:
 			if x.Name == "any" {
 				found = true

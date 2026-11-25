@@ -3,14 +3,14 @@ package writers
 import (
 	"context"
 	"encoding/json"
-	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"path/filepath"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
+	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 
 	"github.com/nwverse/persona/server/internal/kb"
 )
@@ -53,7 +53,7 @@ func (e *testEngine) eng() *engine { return e.Writers.engine() }
 func ws(s *kb.Store) *store {
 	testStoresMu.Lock()
 	defer testStoresMu.Unlock()
-	return newStore(testStores[s].core)
+	return testStores[s].store()
 }
 
 // What the knowledge base keeps to itself and these tests name: its files' names and a few limits, as they are on
@@ -61,12 +61,10 @@ func ws(s *kb.Store) *store {
 const (
 	meetingFile          = "meeting.json"
 	photosFile           = "photos.json"
-	photosDir            = "attachments"
 	minutesHubWait       = recordingwire.MinutesHubWait
 	maxCalendarTitle     = 200
 	maxCalendarAttendees = 100
 	maxCalendarName      = 100
-	liveTitleMax         = 4
 )
 
 // entryOf is the kind and id of the entry a path under the data directory belongs to (recordings/<id>/...).
@@ -76,20 +74,6 @@ func entryOf(rel string) (kind, id string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
-}
-
-// dropPhotos is the knowledge base's own (internal/kb/recording_photos.go, which moves here with the photo writers):
-// it takes out of m the items citing a photo gone says goes, the overview's with them, and numbers the actions again.
-func dropPhotos(m *Minutes, gone func(n int) bool) {
-	cites := func(n int) bool { return n > 0 && gone(n) }
-	m.Points = slices.DeleteFunc(m.Points, func(x MinutesPoint) bool { return cites(x.Photo) })
-	m.Decisions = slices.DeleteFunc(m.Decisions, func(x MinutesItem) bool { return cites(x.Photo) })
-	m.Actions = slices.DeleteFunc(m.Actions, func(x MinutesAction) bool { return cites(x.Photo) })
-	m.Open = slices.DeleteFunc(m.Open, func(x MinutesItem) bool { return cites(x.Photo) })
-	dropOverviewPhotos(m, cites)
-	for i := range m.Actions {
-		m.Actions[i].ID = "a" + strconv.Itoa(i+1)
-	}
 }
 
 // summaryDue is the knowledge base's own rule (internal/kb/recordings.go): r's summary is to be made (again).
@@ -113,7 +97,7 @@ func forgetOnlyPhoto(path string, n int) error {
 		return err
 	}
 	var photos []struct {
-		ID string `json:"id"`
+		ID recordingwire.PhotoID `json:"id"`
 	}
 	if err := json.Unmarshal(b["photos"], &photos); err != nil {
 		return err
@@ -134,11 +118,70 @@ func forgetOnlyPhoto(path string, n int) error {
 	return os.WriteFile(path, append(out, '\n'), 0o600)
 }
 
-// The title and summary rounds are the knowledge base's own code still; a test calls them there (the provider's
-// methods of the same names carry them to the same functions).
-func (e *testEngine) TitleRecordings(ctx context.Context, max int) int {
-	return e.Engine.TitleRecordings(ctx, max)
-}
+// The summary round is the knowledge base's own code still; a test calls it there (the provider's method of the same
+// name carries it to the same function).
 func (e *testEngine) SummarizeRecordings(ctx context.Context, max int) int {
 	return e.Engine.SummarizeRecordings(ctx, max)
+}
+
+// trimRecording trims recording id at now as the knowledge base's retention does, and only it: its meta.json is
+// written as trimmed (trimmed_at, attending off, the minutes and the recap planned again), then a retention round
+// runs, which finishes every trimmed recording whatever its age and leaves the ones within recording_days alone. The
+// tests called the store's own trim while they were in internal/kb; a round also tells meeting.json's transcription
+// and runs the sweep after it, as every real trim does.
+func trimRecording(t *testing.T, e *testEngine, id string, now time.Time) {
+	t.Helper()
+	markTrimmed(t, e, id, now)
+	e.PruneRecordings(now)
+	if r := recordingNow(t, e, id); !r.Trimmed() {
+		t.Fatalf("recording %s is not trimmed", id)
+	}
+}
+
+// More of what the knowledge base keeps to itself and these tests name (internal/kb/recording_photos_read.go,
+// live.go), and small helpers of its own tests (internal/kb/meeting_test.go).
+const (
+	photosText       = "photos.md"
+	maxLivePositions = 20000
+	maxSpokenText    = recordingwire.MaxSpokenText
+)
+
+// roomUploadJSON decodes an upload body as the HTTP layer does.
+func roomUploadJSON(t *testing.T, body string) RecordingUpload {
+	t.Helper()
+	var u RecordingUpload
+	if err := json.Unmarshal([]byte(body), &u); err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// metaKeys are the keys of recording id's meta.json on disk.
+func metaKeys(t *testing.T, e *testEngine, id string) map[string]json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile(e.Store.Path(KindRecording, id, "meta.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// markTrimmed writes recording id's meta.json as a trim cut short right after it leaves it: trimmed at now, nothing
+// else of the trim done (the knowledge base's putTrimmedMeta, which these tests called while they were in
+// internal/kb).
+func markTrimmed(t *testing.T, e *testEngine, id string, now time.Time) {
+	t.Helper()
+	r := recordingNow(t, e, id)
+	at := now.UTC().Truncate(time.Second)
+	r.TrimmedAt = &at
+	r.Attendance, r.AttendingSession = "", nil
+	planMinutes(r)
+	planRecap(r)
+	if err := ws(e.Store).putEntity(KindRecording, id, r, &r.Tagging, false); err != nil {
+		t.Fatal(err)
+	}
 }

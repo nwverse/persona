@@ -1695,6 +1695,23 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 			resumable[i].AlwaysHonored = &notKept
 		}
 	}
+	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
+		for _, id := range cancelled {
+			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			rec, err := func() (rec *db.InteractionRecord, err error) {
+				defer guard(&err)
+				return recStore.InteractionRecord(readCtx, id)
+			}()
+			cancel()
+			if err != nil {
+				s.logf("read invalidated interaction %s: %v", id, err)
+				continue
+			}
+			if rec != nil {
+				s.recordRestartInvalidation(ctx, rec.Interaction)
+			}
+		}
+	}
 	var back []proto.Interaction
 	s.fleet.mu.Lock()
 	m := s.ixMapLocked()
