@@ -105,5 +105,7 @@
   "start_goal_skipped": "開始目標なしで開始しました：{reason}",
   "side_handover_title": "「{title}」をメイン会話に引き継ぎました",
   "side_handover_archived": "元の会話「{origin}」がアーカイブされたため、タスク「{title}」のフォローをメイン会話に引き継ぎました。",
-  "side_handover_gone": "元の会話「{origin}」が利用できなくなったため、タスク「{title}」のフォローをメイン会話に引き継ぎました。"
+  "side_handover_gone": "元の会話「{origin}」が利用できなくなったため、タスク「{title}」のフォローをメイン会話に引き継ぎました。",
+  "inbox_link_removed": "受信トレイの話題が変わったため、自動リンクを解除しました。タスクは開始できます。",
+  "inbox_candidates": "関連する可能性のある受信トレイの項目：{items}。自動リンクは行っていません。リンクする前に送信元を確認してください。"
 }

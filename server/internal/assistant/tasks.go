@@ -51,6 +51,12 @@ type PlanTask struct {
 	InboxItem string `json:"inbox_item,omitempty"`
 	// InboxHandoff is the hub-owned operation validated when the plan was made.
 	InboxHandoff string `json:"inbox_handoff,omitempty"`
+	InboxOptOut  bool   `json:"inbox_opt_out,omitempty"`
+	// Soft-match provenance is set by the manager, never imported from a tool call.
+	InboxMatch      string   `json:"inbox_match,omitempty"`
+	InboxMatchText  string   `json:"inbox_match_text,omitempty"`
+	InboxCandidates []string `json:"inbox_candidates,omitempty"`
+	InboxNotice     string   `json:"inbox_notice,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
 	Cwd           string `json:"cwd"`

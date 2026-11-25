@@ -105,5 +105,7 @@
   "start_goal_skipped": "启动时没能设开始目标：{reason}",
   "side_handover_title": "「{title}」已转由主对话跟进",
   "side_handover_archived": "任务「{title}」已转由主对话跟进：原对话「{origin}」已归档。",
-  "side_handover_gone": "任务「{title}」已转由主对话跟进：原对话「{origin}」已不可用。"
+  "side_handover_gone": "任务「{title}」已转由主对话跟进：原对话「{origin}」已不可用。",
+  "inbox_link_removed": "收件箱话题已变化，自动关联已取消；任务仍可启动。",
+  "inbox_candidates": "可能相关的收件箱卡：{items}。未自动关联，请确认来源后再关联。"
 }
