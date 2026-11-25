@@ -1998,7 +1998,9 @@ spinner, live status label and an accent bar when the Hub reports a percentage. 
 header shows the short target and elapsed time when the start of the update can be
 observed. With only the phase's start available, label the time as phase elapsed. Let
 stage labels and measurements wrap. Keep the busy sessions and the confirmed restart
-override together in the inset panel while the Hub waits for idle.
+override together in the inset panel while the Hub waits for idle. The native version
+picker wraps its selected label on narrow screens to keep the second-level timestamp
+and short commit visible.
 
 Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait

@@ -183,7 +183,11 @@ try {
   }
   {
     const { context, page, shot } = await open(390, 'dark', 'large');
-    await page.getByRole('combobox', { name: 'Update version', exact: true }).selectOption('snapshot-20261112000100000000-cccccccccccc');
+    const version = page.getByRole('combobox', { name: 'Update version', exact: true });
+    await version.locator('option[value^="snapshot-"]').waitFor({ state: 'attached' });
+    await version.focus();
+    await version.press('ArrowDown');
+    assert.equal(await version.inputValue(), 'snapshot-20261112000100000000-cccccccccccc');
     await page.getByRole('button', { name: 'Apply backup', exact: true }).click();
     await shot('backup-confirm-narrow-dark-large');
     await context.close();

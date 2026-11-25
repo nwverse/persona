@@ -120,7 +120,8 @@ it("polls active development phases and replaces the step and metrics", async ()
     ["fetch", "done"], ["npm_install", "active"], ["web_build", "pending"], ["runtime_packages", "pending"],
     ["go_build", "pending"], ["manifest", "pending"],
   ]);
-  expect(host.querySelector('[data-step="npm_install"] [role="status"]')?.textContent).toContain("Install Web dependencies");
+  const announcement = host.querySelector('section[aria-label="Update pipeline"] [role="status"]');
+  expect(announcement?.textContent).toContain("Install Web dependencies");
   expect(host.querySelector('section[aria-label="Update pipeline"] header')?.textContent).toContain("b".repeat(12));
   expect(host.textContent).toContain("Elapsed 10 sec");
   expect(host.querySelector('[role="progressbar"]')).toBeNull();
@@ -131,6 +132,7 @@ it("polls active development phases and replaces the step and metrics", async ()
     item_done: 20, item_total: 45,
   } };
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  expect(announcement?.textContent).toContain("Archive history files");
   expect(host.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("39");
   expect(host.textContent).toContain("182 MB / 460 MB");
   expect(host.textContent).toContain("21.5 MB/s");
@@ -352,10 +354,10 @@ it("shows second-level local times on commits, version options, backup details a
   ]);
 });
 
-it("shows Unknown when the hub omits a date or sends an invalid one", async () => {
+it.each(["invalid", "2026-02-30T10:00:00Z", "2026-11-14"])("shows Unknown for omitted timestamps and %s", async updatedAt => {
   history = [{ from_version: "previous", to_version: "current", to_build: 123, result: "updated", auto: false }];
   await mount("available", { development: { configured: true, branch: "main", current_commit: "a".repeat(40) },
-    latest: { version: "web-dev-new", build: 123, newer: true, bad: false, commit: "b".repeat(40), updated_at: "invalid" } });
+    latest: { version: "web-dev-new", build: 123, newer: true, bad: false, commit: "b".repeat(40), updated_at: updatedAt } });
   expect(host.textContent).toContain(`Installed commitUnknown · ${"a".repeat(12)}`);
   expect(host.textContent).toContain(`Latest commitUnknown · ${"b".repeat(12)}`);
   const version = host.querySelector<HTMLSelectElement>('select[aria-label="Update version"]')!;

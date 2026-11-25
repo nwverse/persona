@@ -24,8 +24,13 @@ import { HubUpdatePipeline, observeHubUpdate } from "./HubUpdatePipeline";
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
 function updateDate(value?: string): string {
-  const date = new Date(value ?? "");
-  if (Number.isNaN(date.getTime())) return t("settings-hubsettings.unknown");
+  const iso = typeof value === "string" ? value : "";
+  const stamp = iso.match(/^(\d{4}-\d{2}-(\d{2}))T\d{2}:\d{2}:\d{2}/i);
+  const date = new Date(iso);
+  // Date normalizes impossible days such as February 30.
+  if (!stamp || Number.isNaN(date.getTime()) || new Date(`${stamp[1]}T00:00:00Z`).getUTCDate() !== Number(stamp[2])) {
+    return t("settings-hubsettings.unknown");
+  }
   const day = `${String(date.getFullYear()).padStart(4, "0")}-${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())}`;
   const time = `${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}:${twoDigits(date.getSeconds())}`;
   return `${day} ${time}`;

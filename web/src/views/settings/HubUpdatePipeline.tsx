@@ -127,7 +127,7 @@ function stepLabel(step: string): string {
   return localized === key ? step.replaceAll("_", " ").trim() || t("settings-hubsettings.pipeline_unknown_step") : localized;
 }
 
-function PhaseSteps({ p, builtinQuiesce, title }: { p: HubDevelopmentProgress; builtinQuiesce?: boolean; title: string }) {
+function PhaseSteps({ p, builtinQuiesce }: { p: HubDevelopmentProgress; builtinQuiesce?: boolean }) {
   const steps = [...phaseSteps[p.phase]];
   if (p.phase === "backing_up" && (p.step_total >= 6 || p.step === "resume_writers" || builtinQuiesce === false)) {
     steps.splice(steps.indexOf("verify_snapshot"), 0, "resume_writers");
@@ -139,31 +139,26 @@ function PhaseSteps({ p, builtinQuiesce, title }: { p: HubDevelopmentProgress; b
     steps.splice(active, 0, p.step ?? "");
   }
   return (
-    <>
-      <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-label">
-        <p className="font-medium text-ink-2">{title}</p>
-        {p.step_index > 0 && p.step_total > 0 && <span className="text-ink-3 tabular-nums">{formatNumber(p.step_index)}/{formatNumber(p.step_total)}</span>}
-      </div>
-      <ol role="list" aria-label={t("settings-hubsettings.pipeline_steps")}>
-        {steps.map((step, i) => {
-          const state = i < active ? "done" : i === active ? "active" : "pending";
-          return (
-            <li key={step} data-step={step} data-state={state} aria-current={state === "active" ? "step" : undefined}
-              className="relative flex min-w-0 gap-2.5 pb-2 last:pb-0">
-              {i < steps.length - 1 && <span aria-hidden className="absolute top-5 bottom-0 left-2.5 w-px bg-line-strong" />}
-              <Marker state={state} spinning />
-              <div className="min-w-0 flex-1 pt-0.5">
-                {state === "active" ? <ActiveStep p={p} label={stepLabel(step)} /> : (
-                  <span className={cx("block text-label leading-snug break-words", state === "done" ? "text-ink-2" : "text-ink-3")}>
-                    {stepLabel(step)}<AnnouncedState state={state} />
-                  </span>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ol>
-    </>
+    <ol role="list" aria-label={t("settings-hubsettings.pipeline_steps")} className="mt-2.5">
+      {steps.map((step, i) => {
+        const state = i < active ? "done" : i === active ? "active" : "pending";
+        const label = stepLabel(step);
+        return (
+          <li key={step} data-step={step} data-state={state} aria-current={state === "active" ? "step" : undefined}
+            className="relative flex min-w-0 gap-2.5 pb-2 last:pb-0">
+            {i < steps.length - 1 && <span aria-hidden className="absolute top-5 bottom-0 left-2.5 w-px bg-line-strong" />}
+            <Marker state={state} spinning />
+            <div className="min-w-0 flex-1 pt-0.5">
+              {state === "active" ? <ActiveStep p={p} label={label} /> : (
+                <span className={cx("block text-label leading-snug break-words", state === "done" ? "text-ink-2" : "text-ink-3")}>
+                  {label}<AnnouncedState state={state} />
+                </span>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -182,7 +177,7 @@ function ActiveStep({ p, label }: { p: HubDevelopmentProgress; label: string }) 
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline justify-between gap-2 text-label leading-snug text-accent-ink">
-        <span role="status" className="min-w-0 font-semibold break-words">{label}</span>
+        <span className="min-w-0 font-semibold break-words">{label}</span>
         {percent !== undefined && <span className="shrink-0 tabular-nums">{formatNumber(percent / 100, { style: "percent" })}</span>}
       </div>
       {percent !== undefined && (
@@ -213,12 +208,19 @@ export function HubUpdatePipeline({ s, run, onNow }: { s: HubUpdateStatus; run: 
       </header>
       <StageStrip s={s} restoringBackup={run.restoringBackup} />
       <div className="rounded-control bg-inset p-3">
-        {progress ? <PhaseSteps p={progress} builtinQuiesce={s.development?.builtin_quiesce} title={title} /> : (
-          <div role="status" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-label text-ink-2">
-            <span className="flex items-center gap-2 font-medium"><Spinner />{title}</span>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-label text-ink-2">
+          <div role="status" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="flex items-center gap-2 font-medium">
+              {!progress && <Spinner />}
+              {title}{progress && <span className="sr-only"> · {stepLabel(progress.step ?? "")}</span>}
+            </span>
             {s.state === "downloading" && s.progress && <span className="min-w-0 break-words text-ink-3 tabular-nums">{s.progress}</span>}
           </div>
-        )}
+          {progress && progress.step_index > 0 && progress.step_total > 0 && (
+            <span className="text-ink-3 tabular-nums">{formatNumber(progress.step_index)}/{formatNumber(progress.step_total)}</span>
+          )}
+        </div>
+        {progress && <PhaseSteps p={progress} builtinQuiesce={s.development?.builtin_quiesce} />}
         {s.state === "waiting_idle" && s.busy.length > 0 && (
           <>
             <ul role="list" className="mt-2 divide-y divide-line border-y border-line">
