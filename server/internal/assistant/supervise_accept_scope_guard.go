@@ -426,6 +426,7 @@ func parseSmallItemNum(s string) int {
 
 func cleanScopeItem(s string) string {
 	s = strings.TrimSpace(s)
+	// i18n-ignore: CJK punctuation trimmed from parsed scope items
 	s = strings.TrimRight(s, ";；,，。.")
 	s = strings.TrimSpace(s)
 	if strings.HasPrefix(s, "**") && strings.HasSuffix(s, "**") && len(s) > 4 {

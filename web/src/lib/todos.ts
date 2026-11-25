@@ -85,6 +85,26 @@ export interface TodoCreateOptions {
 /** What the hub last read of a PR on GitHub (pr_status.go). */
 export interface PRFacts { url: string; title?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
 
+/** Server-computed weakest-link ("barrel rule") Target Repo delivery gate summary under todos_v2 (#15699). */
+export interface TodoRepoGate {
+  state:
+    | "blocked_ci"
+    | "blocked_conflict"
+    | "blocked_changes"
+    | "awaiting_review"
+    | "checks_pending"
+    | "missing_pr"
+    | "ready"
+    | "reference_only"
+    | (string & {});
+  target_count: number;
+  ready_count: number;
+  reference_count: number;
+  blocking_repo?: string;
+  blocking_pr?: string;
+  reason?: string;
+}
+
 export interface Todo {
   id: string;
   title: string;
@@ -186,6 +206,8 @@ export interface Todo {
   /** The hub's view of the row (#10226, docs/assistant/todo-status-sop.md "The hub's view"): read only behind
    *  Developing Persona's switches for now (features/todos/model). Unset from managers without `todo_view`. */
   view?: TodoSummary;
+  /** Server-computed weakest-link Target Repo delivery gate summary, populated only when todos_v2 === true (#15699). */
+  repo_gate?: TodoRepoGate;
 }
 
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
@@ -880,6 +902,45 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
     json: { supersedes_id: supersedesId },
   });
   return r.decision;
+}
+
+/** One explicit item sent to POST /api/v1/todos/decisions/batch (#15698). */
+export interface TodoDecisionBatchItem {
+  todo_id: string;
+  option?: string;
+  reply?: string;
+}
+
+/** Per-item result returned by POST /api/v1/todos/decisions/batch (#15698). */
+export interface TodoDecisionBatchResult {
+  todo_id: string;
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+/** Batch decision submission response (#15698). */
+export interface TodoDecisionBatchResponse {
+  results: TodoDecisionBatchResult[];
+  succeeded: number;
+  failed: number;
+}
+
+/** Submit explicit per-item options or custom replies for multiple pending decisions in one request (#15698). */
+export async function submitTodoDecisionsBatch(
+  items: readonly TodoDecisionBatchItem[],
+): Promise<TodoDecisionBatchResponse> {
+  const res = await api<TodoDecisionBatchResponse>("/todos/decisions/batch", {
+    method: "POST",
+    headers: currentHeaders(),
+    json: { items },
+  });
+  const results = Array.isArray(res?.results) ? res.results : [];
+  return {
+    results,
+    succeeded: typeof res?.succeeded === "number" ? res.succeeded : results.filter((r) => r.ok).length,
+    failed: typeof res?.failed === "number" ? res.failed : results.filter((r) => !r.ok).length,
+  };
 }
 
 // ── API helpers ──────────────────────────────────────────────

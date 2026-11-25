@@ -332,7 +332,7 @@ export function LegacyExtensionUI({
   /** A native/legacy mixed stack has one history owner; HTTP entries delegate navigation. */
   navigation?: { push: (page: UIPush) => void; pop: () => void };
   active?: boolean;
-  /** The view drawn needs a wide page (UI version 4: split, code, diffs) or not. */
+  /** The view drawn needs a wide page (split, columns, code, diffs, or canvas components such as graph, scene, map) or not. */
   onWide?: (wide: boolean) => void;
   /** How many pages deep its stack is, whenever that changes (Inbox Sources keeps its List / Relationships switch on the first). */
   onDepth?: (depth: number) => void;
