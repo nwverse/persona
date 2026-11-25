@@ -1328,6 +1328,7 @@ type client struct {
 	mu             sync.Mutex
 	traffic        trafficAttribution // inferred once from the upgrade; hello may refine platform
 	subs           map[[2]string]bool
+	termSubs       map[[3]string]bool       // canonical machine, session, requested machine; independent of stream retries
 	fsw            map[[3]string]fsWatchReq // {machine id, cwd, asked id} -> the folders this browser has open there (fswatch.go)
 	phone          bool
 	phoneID        string
@@ -1824,6 +1825,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		c.mu.Unlock()
 		if !already {
 			m.watcherJoined(msg.SessionID)
+			h.fleetClientsChanged()
 		}
 		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
 		// backlog still goes after it, so nothing falls between the two.
@@ -1845,6 +1847,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		c.mu.Unlock()
 		if had {
 			m.watcherLeft(msg.SessionID)
+			h.fleetClientsChanged()
 			go m.syncUnwatch(msg.SessionID)
 		}
 	case "register_phone":

@@ -365,7 +365,7 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			closed := false
 			if t.DoneAt == nil {
 				var err error
-				closed, err = s.reviewDoneTodo(ctx, id, acceptedNote(s.botLang(ctx), &cp), true)
+				closed, err = s.reviewDoneTodoWithSupervision(ctx, id, acceptedNote(s.botLang(ctx), &cp), true, nil, true)
 				if err != nil {
 					b.mu.Lock()
 					if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {

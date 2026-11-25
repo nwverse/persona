@@ -294,6 +294,7 @@ func (m *Machine) establishViaOnce(ctx context.Context, p *nodePath, via string,
 		proto.MethodRoutineCheck: true,
 		"file.copy":              true,
 		"file.zip":               true,
+		nodeproto.StopIfIdle:     true,
 	}
 	// Every event goes on to the hub, the forwarded ports' bytes among them (the hub is their end, ports.go there).
 	c := &nodeConn{path: p, via: via, ctx: cctx, peer: peer, served: make(chan error, 1), cancel: cancel}

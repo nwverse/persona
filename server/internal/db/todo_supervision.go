@@ -102,6 +102,10 @@ func (d *DB) ListTodoSupervision(ctx context.Context) ([]TodoSupervisionRow, err
 // PutTodoSupervision writes a task's ledger whole (the assistant keeps it and writes it as it changes).
 // ErrTodoNotFound when the todo is gone.
 func (d *DB) PutTodoSupervision(ctx context.Context, r TodoSupervisionRow) error {
+	return putTodoSupervision(ctx, d.pool, r)
+}
+
+func putTodoSupervision(ctx context.Context, q execer, r TodoSupervisionRow) error {
 	when, _ := json.Marshal(r.DoneWhen)
 	if r.DoneWhen == nil {
 		when = []byte("[]")
@@ -121,7 +125,7 @@ func (d *DB) PutTodoSupervision(ctx context.Context, r TodoSupervisionRow) error
 	if len(r.Waits) > 0 {
 		waits = r.Waits
 	}
-	tag, err := d.pool.Exec(ctx, `INSERT INTO todo_supervision (todo_id, supervisor, done_when, expect_minutes, state, round, reviews, auto_review, waits, updated_at, criteria, pending_since, supervisor_source, cardless_told_at)
+	tag, err := q.Exec(ctx, `INSERT INTO todo_supervision (todo_id, supervisor, done_when, expect_minutes, state, round, reviews, auto_review, waits, updated_at, criteria, pending_since, supervisor_source, cardless_told_at)
 		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 WHERE EXISTS (SELECT 1 FROM todos WHERE id = $1)
 		ON CONFLICT (todo_id) DO UPDATE SET supervisor = EXCLUDED.supervisor, done_when = EXCLUDED.done_when,
 			expect_minutes = EXCLUDED.expect_minutes, state = EXCLUDED.state, round = EXCLUDED.round,
@@ -141,17 +145,51 @@ func (d *DB) PutTodoSupervision(ctx context.Context, r TodoSupervisionRow) error
 // reason while it is open or its start failed, clearing StartError in the same write; false when it was ordinarily
 // done already or it is a concern (only its report closes it). ErrTodoNotFound when it is gone.
 func (d *DB) ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*TodoRow, bool, error) {
+	return reviewDoneTodo(ctx, d.pool, id, reason, accepted, at)
+}
+
+// ReviewTodo commits a review's ledger and closure together. The final guard runs after the tentative writes;
+// a refusal rolls them both back, including activity that arrived while the database was busy.
+func (d *DB) ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *TodoSupervisionRow, guard func() error) (*TodoRow, bool, error) {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	if ledger != nil {
+		if err := putTodoSupervision(ctx, tx, *ledger); err != nil {
+			return nil, false, err
+		}
+	}
+	row, closed, err := reviewDoneTodo(ctx, tx, id, reason, accepted, at)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := guard(); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return row, closed, nil
+}
+
+func reviewDoneTodo(ctx context.Context, q queryRower, id, reason string, accepted bool, at time.Time) (*TodoRow, bool, error) {
 	doneBy := DoneByCancelled
 	if accepted {
 		doneBy = DoneByReview
 	}
 	var r TodoRow
-	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, start_error = '', updated_at = $2
+	err := q.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, start_error = '', updated_at = $2
 		WHERE id = $1 AND (done_at IS NULL OR start_error <> '') AND kind <> 'concern' RETURNING `+todoColumns, id, at, doneBy, reason).
 		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if _, gerr := d.GetTodo(ctx, id); gerr != nil {
-			return nil, false, gerr
+		var exists bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM todos WHERE id = $1)`, id).Scan(&exists); err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, ErrTodoNotFound
 		}
 		return nil, false, nil
 	}
