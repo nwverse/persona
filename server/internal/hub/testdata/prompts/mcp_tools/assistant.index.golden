@@ -89,6 +89,7 @@ todo_complete
 todo_reopen
 todo_delete
 concern_report
+todo_sort
 direction_name
 leader_progress
 decision_record
