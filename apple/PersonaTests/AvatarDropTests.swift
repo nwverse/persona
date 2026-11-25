@@ -164,7 +164,7 @@ struct AvatarDropTests {
         #expect(multiBytes == original)
         #expect(Self.frameCount(multiBytes) == 4)
 
-        // 3. Direct file import cleans up its temporary copy after read().
+        // 3. Direct file import cleans up its temporary copy after read(), and discard() cleans up unused copies.
         let direct = try DroppedAvatarImage.importFile(file)
         guard case .file(let staged) = direct.payload else {
             Issue.record("expected staged temporary file")
@@ -174,6 +174,21 @@ struct AvatarDropTests {
         let directBytes = try await direct.read()
         #expect(directBytes == original)
         #expect(!FileManager.default.fileExists(atPath: staged.path))
+
+        let unused = try DroppedAvatarImage.importFile(file)
+        guard case .file(let unusedStaged) = unused.payload else {
+            Issue.record("expected staged temporary file for discard")
+            return
+        }
+        #expect(FileManager.default.fileExists(atPath: unusedStaged.path))
+        unused.discard()
+        #expect(!FileManager.default.fileExists(atPath: unusedStaged.path))
+
+        // 4. Direct data import preserves animated bytes verbatim.
+        let fromData = DroppedAvatarImage.importData(original)
+        let dataBytes = try await fromData.read()
+        #expect(dataBytes == original)
+        #expect(Self.frameCount(dataBytes) == 4)
     }
 
     @Test func unsupportedDataReportsFailureThroughSamePath() async throws {
@@ -190,10 +205,24 @@ struct AvatarDropTests {
             _ = try await Self.loadTransferred(textProvider)
         }
 
-        // Oversized payload fails with AvatarImage.Problem.
-        let oversized = DroppedAvatarImage(payload: .tooLarge)
+        // Oversized data and file payloads fail with AvatarImage.Problem without copying the file.
+        let oversizedData = DroppedAvatarImage.importData(Data(repeating: 0xAA, count: 64), limit: 32)
         await #expect(throws: AvatarImage.Problem.self) {
-            _ = try await oversized.read()
+            _ = try await oversizedData.read()
+        }
+        let dir = FileManager.default.temporaryDirectory.appending(path: "avatar-drop-big-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bigFile = dir.appending(path: "huge.png")
+        try Data(repeating: 0xBB, count: 64).write(to: bigFile)
+        let oversizedFile = try DroppedAvatarImage.importFile(bigFile, limit: 32)
+        if case .tooLarge = oversizedFile.payload {
+            // expected
+        } else {
+            Issue.record("expected oversized file to be rejected before copying")
+        }
+        await #expect(throws: AvatarImage.Problem.self) {
+            _ = try await oversizedFile.read()
         }
 
         // Picker cards report corrupt / too-small drops via uploads.error.
@@ -214,6 +243,8 @@ struct AvatarDropTests {
         let editSheet = try #require(up.edit(mikan))
         #expect(!(await editSheet.receiveMain(corrupt)))
         #expect(editSheet.error?.isEmpty == false && editSheet.main == nil && !editSheet.changed)
+        #expect(!(await editSheet.receiveState(.working, tiny)))
+        #expect(editSheet.error?.isEmpty == false && editSheet.states[.working]?.source == .kept && !editSheet.changed)
 
         // Unreadable drop fallback uses the same failedToRead path as picking.
         editSheet.failedToRead(nil)

@@ -421,8 +421,8 @@ nonisolated struct DroppedAvatarImage: Transferable, Sendable {
         }
     }
 
-    static func importFile(_ file: URL) throws -> DroppedAvatarImage {
-        if let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > AvatarImage.fileLimit {
+    static func importFile(_ file: URL, limit: Int = AvatarImage.fileLimit) throws -> DroppedAvatarImage {
+        if let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > limit {
             return DroppedAvatarImage(payload: .tooLarge)
         }
         let dir = FileManager.default.temporaryDirectory.appending(path: "avatar-drops/" + UUID().uuidString)
@@ -432,8 +432,8 @@ nonisolated struct DroppedAvatarImage: Transferable, Sendable {
         return DroppedAvatarImage(payload: .file(dest))
     }
 
-    static func importData(_ data: Data) -> DroppedAvatarImage {
-        if data.count > AvatarImage.fileLimit {
+    static func importData(_ data: Data, limit: Int = AvatarImage.fileLimit) -> DroppedAvatarImage {
+        if data.count > limit {
             return DroppedAvatarImage(payload: .tooLarge)
         }
         return DroppedAvatarImage(payload: .data(data))
