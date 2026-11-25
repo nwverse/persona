@@ -46,6 +46,9 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     var someday = false
     /// Finished and seen, still open ("Finished Tue"): line 2 ends in Mark Done.
     var markDone = false
+    /// Its answers at its foot, after line 3 (OK or Retry, and Options ⌄), and what this device did with its ask ("✓ You
+    /// chose … · Undo" in line 2's place); none when its ask is answered only where it lives.
+    var answers: TodoRowAnswers?
     /// The row in words, for VoiceOver: the title, the state its mark draws, its line (with how many asks), line 3, then
     /// its time said in full ("Due Saturday", "16 minutes ago").
     var spoken = ""
@@ -375,9 +378,11 @@ nonisolated enum TodoRowContentLogic {
     /// `inProject`: the place shown is the row's project, whose title names it, so line 3 leaves it out.
     /// `underItsDay`: the row is under a heading that names its due day (Upcoming), so it says only its time, if any;
     /// an overdue one, under Overdue, keeps its day. VoiceOver still says the day, the row being heard on its own.
+    /// `answered`: what this device did with its ask (`AskCardModel.mark`).
     static func content(_ filed: TodoFiled, item: TodoItem, view: TodoSummary?, byProject: Bool = false, inProject: Bool = false,
                         underItsDay: Bool = false, now: Date, words: TodoWords = TodoWords(), calendar: Calendar = .current,
-                        projectName: (String) -> String = { $0 }, pending: TodoRowWrite? = nil) -> TodoRowContent {
+                        projectName: (String) -> String = { $0 }, pending: TodoRowWrite? = nil,
+                        answered: TodoAnswerMark? = nil) -> TodoRowContent {
         var c = TodoRowContent(id: filed.id, title: item.title, closed: filed.closed, inactive: filed.inactive)
         c.highPriority = item.priority == "high"
         let since = view?.since.flatMap(JSON.parseDate)
@@ -412,6 +417,12 @@ nonisolated enum TodoRowContentLogic {
             c.said = TodoLineText.said(view.line, since: since, closedReason: item.doneReason.flatMap(firstLine), now: now,
                                        words: words, calendar: calendar)
             c.asks = view.asks?.count ?? 0
+            // A run's plan or tool approval is named by the request's title (DESIGN_SYSTEM 5.6), not by what it is about:
+            // the row has no door, and its tap opens the to-do, where the request is.
+            if view.line?.key == TodoLineKey.agentAsks, let ask = view.asks?.first, let title = requestTitle(ask, words: words) {
+                let who = ask.run?.title.flatMap { $0.isEmpty ? nil : $0 } ?? view.line?.args?["run"] ?? words("An Agent [To-dos Line]")
+                c.said = TodoLineText.Said(lead: words("\(who): \(title) [To-dos Line]"), tone: .needs)
+            }
         }
         // A row filed by the app's own rules (an older manager's), and one whose line this build cannot say (a newer
         // manager's key), say their section's word: the mark is drawn on line 2, and Working must not lose its ◐.
@@ -445,6 +456,7 @@ nonisolated enum TodoRowContentLogic {
         c.agentWaits = !filed.closed && (view?.asks ?? []).contains { $0.run != nil }
         c.someday = filed.section == TodoListSection.someday
         c.markDone = view?.line?.key == TodoLineKey.finishedSeen && !filed.closed
+        c.answers = TodoRowAnswersLogic.answers(view, section: filed.section, closed: filed.closed, mark: answered)
         switch pending?.write {
         case .done(true)?:
             (c.closed, c.struck, c.markDone, c.mark) = (true, true, false, nil)
@@ -463,6 +475,7 @@ nonisolated enum TodoRowContentLogic {
             (c.said, c.mark, c.markDone, c.unsaved) = (TodoLineText.Said(rest: words("Not on your hub yet [To-dos List]")), nil, false, true)
         }
         if c.closed { c.highPriority = false } // closed, or ticked a moment ago: nothing to put first
+        if c.saving || c.struck { c.answers = nil } // nothing to answer on a row being saved or ticked a moment ago
         c.spoken = spoken(c, heard: heard, words: words)
         c.tickValue = c.closed ? StateName.done.text : words("Not done [To-dos Actions]")
         return c
@@ -482,9 +495,23 @@ nonisolated enum TodoRowContentLogic {
         case nil: c.struck || (c.closed && heard.isEmpty) ? StateName.done.text : nil
         }
         if let state, c.said?.lead != state { parts.append(state) }
-        if let said = c.said { parts.append(said.spoken(separator: separator)) }
+        switch c.answers?.mark {
+        case .chosen(let label, _)?: parts.append(label)
+        case .elsewhere?: parts.append(words("Answered elsewhere [To-dos Answers]"))
+        case .unsure?: parts.append(words("Not sure your answer went through [To-dos Answers]"))
+        default: if let said = c.said { parts.append(said.spoken(separator: separator)) }
+        }
         if let caption = c.caption { parts.append(caption) }
         return (parts + heard).joined(separator: separator)
+    }
+
+    /// The request's title for a run's plan or tool approval (DESIGN_SYSTEM 5.6); nil for any other ask.
+    private static func requestTitle(_ ask: OwnerAsk, words: TodoWords) -> String? {
+        switch ask.kind {
+        case OwnerAskKind.plan: words("Plan awaiting approval [To-dos Line]")
+        case OwnerAskKind.tool: words("Waiting for your approval [To-dos Line]")
+        default: nil
+        }
     }
 
     /// Where it is, when no line can be said (no view, or a key this build does not know).

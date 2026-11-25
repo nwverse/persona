@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	approvalJournalKey        = "assistant.approval_clarifications"
-	invalidationSummaryRunes  = 200
-	invalidationLabelRunes    = 80
+	approvalJournalKey       = "assistant.approval_clarifications"
+	invalidationSummaryRunes = 200
+	invalidationLabelRunes   = 80
 )
 
 var errApprovalConversationGone = errors.New("the originating conversation no longer exists")
