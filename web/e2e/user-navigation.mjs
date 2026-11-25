@@ -195,17 +195,21 @@ async function previewStyle(page, index) {
 
 async function idleMarks(page) {
   assert.equal(await page.locator(PREVIEW).count(), 0, "Idle widths are checked without a preview");
-  await page.waitForFunction((rail) => [...document.querySelectorAll(`${rail} [data-nav-mark]`)].every((mark) =>
-    Math.abs(mark.getBoundingClientRect().width - parseFloat(mark.style.width)) < 0.1), RAIL);
+  await page.waitForFunction((rail) => [...document.querySelectorAll(`${rail} [data-nav-mark]`)].every((mark) => {
+    const box = mark.getBoundingClientRect();
+    return Math.abs(box.width - parseFloat(mark.style.width)) < 0.1
+      && Math.abs(box.height - parseFloat(mark.style.height)) < 0.1
+      && Math.abs(Number(getComputedStyle(mark).opacity) - Number(mark.style.opacity)) < 0.001;
+  }), RAIL);
   const marks = await page.locator(`${RAIL} [data-nav-mark]`).evaluateAll((nodes) => nodes.map((mark) => ({
     width: mark.getBoundingClientRect().width, height: mark.getBoundingClientRect().height,
     current: mark.dataset.navMark === "current", color: getComputedStyle(mark).backgroundColor,
     opacity: getComputedStyle(mark).opacity,
   })));
   assert.ok(marks.length > 1, "Compare multiple rendered marks");
-  assert.ok(marks.filter((mark) => !mark.current).every((mark) => Math.abs(mark.width - 6) < 0.1 && Math.abs(mark.height - 1.5) < 0.1), "Idle marks stay short and thin");
+  assert.ok(marks.filter((mark) => !mark.current).every((mark) => Math.abs(mark.width - 6) < 0.1 && Math.abs(mark.height - 1) < 0.1), "Idle marks stay short and thin");
   const current = marks.find((mark) => mark.current), other = marks.find((mark) => !mark.current);
-  assert.ok(current && other && current.color !== other.color && current.opacity === "1" && current.width > other.width && current.height > other.height, "The current mark has stronger color, width and thickness");
+  assert.ok(current && other && current.color !== other.color && Number(current.opacity) > 0.999 && current.width > other.width && current.height > other.height, "The current mark has stronger color, width and thickness");
   return { marks: marks.length, widths: [...new Set(marks.map((mark) => mark.width))], current };
 }
 
@@ -369,7 +373,7 @@ async function open(browser, name, theme, viewport, count, reducedMotion = "no-p
 }
 async function standard(browser, theme, size) {
   const name = `${size}-${theme}`;
-  const { context, page, run } = await open(browser, name, theme, size === "wide" ? WIDE : NARROW, INPUTS);
+  const { context, page, run } = await open(browser, name, theme, size === "wide" ? WIDE : NARROW, size === "wide" ? INPUTS : INPUTS - 1);
   try {
     if (size === "narrow") {
       await check(`${name}: the narrow conversation scrolls without a rail or extra padding`, async () => {
@@ -542,25 +546,30 @@ async function many(browser, theme) {
         }
       }
       assert.deepEqual(reached, Array.from({ length: MANY_INPUTS }, (_, index) => index), "Windowing must not discard the older inputs");
-      assert.equal(maxRenderedMarks, 28);
-      assert.equal((await tick(page, MANY_INPUTS - 1).boundingBox()).height, 15);
+      const track = page.locator("[data-nav-track]");
+      const trackHeight = await track.evaluate(el => el.clientHeight);
+      const pitch = (await tick(page, MANY_INPUTS - 1).boundingBox()).height;
+      assert.ok(pitch >= 7 && pitch <= 8);
+      assert.ok(maxRenderedMarks > 28 && maxRenderedMarks <= Math.ceil(trackHeight / pitch) + 9);
       await page.keyboard.press("Home");
       await waitForSelection(page, 0);
       await page.keyboard.press("Enter");
       await landed(page, 0);
-      await check(`${name}: wheel windows reach later and earlier inputs without losing them`, async () => {
+      await check(`${name}: the rail's wheel scrolls its own track`, async () => {
         const count = await page.locator(`${RAIL} button[data-tick]`).count();
-        const box = await tick(page, 0).boundingBox();
-        assert.ok(box, "The windowed rail has a real wheel target");
+        const box = await track.boundingBox();
+        assert.ok(box, "The rail has a visible wheel target");
+        await page.waitForFunction(() => document.querySelector("[data-nav-track]").scrollTop === 0);
         const before = await page.locator(CHAT).evaluate((sc) => sc.scrollTop);
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         await page.mouse.wheel(0, 400);
-        await page.waitForFunction((rail) => Number(document.querySelector(`${rail} button[data-tick]`)?.getAttribute("data-tick")) > 0, RAIL);
-        const later = await selectedIndex(page);
-        assert.ok(later > 0, "Wheel navigation exposes later inputs");
+        await page.waitForFunction(() => document.querySelector("[data-nav-track]").scrollTop > 100);
+        const later = Number(await track.locator("button[data-tick]").first().getAttribute("data-tick")) + 6;
+        await tick(page, later).hover();
         await preview(page, later);
         await page.mouse.wheel(0, -400);
-        await page.waitForFunction((rail) => !!document.querySelector(`${rail} button[data-tick='0']`), RAIL);
+        await page.waitForFunction(() => document.querySelector("[data-nav-track]").scrollTop === 0);
+        await tick(page, 0).hover();
         await preview(page, 0);
         assert.equal(await page.locator(CHAT).evaluate((sc) => sc.scrollTop), before, "Wheel input on the rail does not move the transcript");
         return { renderedMarks: count, laterInput: later + 1, earliestRestored: true };

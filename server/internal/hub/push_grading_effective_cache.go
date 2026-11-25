@@ -95,9 +95,6 @@ func (c *pushGradingEffectiveCache) runLoad(load *pushGradingLoad, ctx context.C
 		finished bool
 	)
 	defer func() {
-		if r := recover(); r != nil {
-			err = errors.New("push grading load panicked")
-		}
 		if !finished {
 			c.mu.Lock()
 			if c.loading == load {

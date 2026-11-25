@@ -94,6 +94,10 @@ const (
 	ResDrive   = "drive"
 	ResWiki    = "wiki"
 	ResMinutes = "minutes"
+
+	// PendingLinksCursor is the per-binding cursor key in lark_sync_cursors holding the persistent queue of unfetched
+	// or retryable linked cloud documents discovered in synced messages.
+	PendingLinksCursor = "links_queue"
 )
 
 // Canonical-key prefixes: one piece of content has one key whichever bot, account or entry point read it.
@@ -214,10 +218,11 @@ const (
 
 // Error is an open-platform failure.
 type Error struct {
-	Kind string
-	Op   string
-	Code int
-	Msg  string
+	Kind       string
+	Op         string
+	Code       int
+	HTTPStatus int
+	Msg        string
 	// RetryAfter is how long the platform asked to wait (rate limits), 0 when it did not say.
 	RetryAfter time.Duration
 }
@@ -252,6 +257,10 @@ type Binding struct {
 	Backfill time.Duration
 	// Budget bounds one run; what is left is read next time, from where the cursors stopped.
 	Budget time.Duration
+	// AuthorizedAt and GrantedScopes describe the binding's current user authorization, so readers can detect
+	// re-authorization or newly granted scopes and immediately retry previously blocked linked documents.
+	AuthorizedAt  time.Time
+	GrantedScopes []string
 }
 
 // Attachment is a file or image of a message; the knowledge base fetches it lazily through the connector
@@ -390,6 +399,37 @@ type Syncer interface {
 // errors are omitted; a missing contact scope or auth/context error is returned alongside any names resolved so far.
 type NameResolver interface {
 	ResolveUserNames(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), openIDs []string) (map[string]string, error)
+}
+
+// LinkObjType is the canonical cloud object type of a Feishu / Lark document or wiki link.
+type LinkObjType string
+
+// Supported cloud object types for linked documents.
+const (
+	LinkObjDocx     LinkObjType = "docx"
+	LinkObjDoc      LinkObjType = "doc"
+	LinkObjSheet    LinkObjType = "sheet"
+	LinkObjBitable  LinkObjType = "bitable"
+	LinkObjFile     LinkObjType = "file"
+	LinkObjMindnote LinkObjType = "mindnote"
+	LinkObjSlides   LinkObjType = "slides"
+	LinkObjWiki     LinkObjType = "wiki"
+)
+
+// PendingLinkCandidate is a cloud document or wiki link extracted from a synced message during one-time remediation.
+type PendingLinkCandidate struct {
+	Token     string
+	ObjType   LinkObjType
+	URL       string
+	MessageAt time.Time
+}
+
+// PendingLinkBackfiller is optionally implemented by a Syncer to extract cloud document and wiki links from
+// already-synced messages and merge missing ones into a binding's PendingLinksCursor payload without duplicating
+// queued tokens or overwriting higher-priority live entries.
+type PendingLinkBackfiller interface {
+	ExtractDocLinks(text string) []PendingLinkCandidate
+	MergePendingLinks(existingCursor string, add []PendingLinkCandidate) (updatedCursor string, added int)
 }
 
 // Provider is what the Lark module provides for the sync (botport.Provider.Sync).

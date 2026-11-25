@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { chatLines } from "./turns";
 import { indexedNavTicks } from "./nav-rail";
 import type { Item } from "./types";
-import { containsInput, userInputRevision, validUserInputIndex, windowUserInputs, type UserInputIndex } from "./user-input-index";
+import { containsInput, userInputRevision, validUserInputIndex, type UserInputIndex } from "./user-input-index";
 
 const index: UserInputIndex = { total: 36, history: "fixture", inputs: Array.from({ length: 36 }, (_, i) => ({ id: `input-${i}#0`, seq: i * 2 + 1 })) };
 const items: Item[] = index.inputs.slice(-2).flatMap((input) => [
@@ -10,33 +10,13 @@ const items: Item[] = index.inputs.slice(-2).flatMap((input) => [
   { id: `answer-${input.seq}#0`, seq: input.seq + 1, role: "assistant" as const, kind: "text" as const, text: "Synthetic answer" },
 ]);
 
-describe("progressive user-input positions", () => {
-  it("starts a 678-input history at its latest 50 positions with global ordinals", () => {
+describe("independent user-input positions", () => {
+  it("keeps the first and last positions in a 678-input history when no bodies are loaded", () => {
     const long: UserInputIndex = { total: 678, history: "fixture", inputs: Array.from({ length: 678 }, (_, i) => ({ id: `long-${i}#0`, seq: i * 4 + 1 })) };
-    const window = windowUserInputs(long);
-    const ticks = indexedNavTicks(window, [], []);
-    expect(ticks).toHaveLength(50);
-    expect(ticks[0]).toMatchObject({ id: "seg:long-628#0", ordinal: 629 });
+    const ticks = indexedNavTicks(long, [], []);
+    expect(ticks).toHaveLength(678);
+    expect(ticks[0]).toMatchObject({ id: "seg:long-0#0", ordinal: 1, loadPreview: true });
     expect(ticks.at(-1)?.ordinal).toBe(678);
-    expect(window.total).toBe(678);
-    expect(long.inputs).toHaveLength(678);
-    const earlier = windowUserInputs(long, long.inputs[578].seq);
-    expect(indexedNavTicks(earlier, [], [])).toHaveLength(100);
-    expect(indexedNavTicks(earlier, [], [])[0].ordinal).toBe(579);
-    expect(windowUserInputs(long, 1).inputs).toHaveLength(678);
-  });
-
-  it("keeps all inputs in short histories and does not grow for non-input pages within the newest 50", () => {
-    for (const total of [0, 1, 2, 36, 49, 50]) {
-      const short = { ...index, total, inputs: Array.from({ length: total }, (_, i) => ({ id: `short-${i}`, seq: i + 1 })) };
-      expect(windowUserInputs(short).inputs).toHaveLength(total);
-    }
-    const long = { ...index, total: 300, inputs: Array.from({ length: 300 }, (_, i) => ({ id: `long-${i}`, seq: i * 10 + 1 })) };
-    expect(windowUserInputs(long, 2999).inputs).toHaveLength(50);
-    expect(windowUserInputs(long, 2800).inputs).toHaveLength(50);
-    expect(windowUserInputs(long, 2500).inputs).toHaveLength(50);
-    expect(windowUserInputs(long, 2499).inputs).toHaveLength(50);
-    expect(windowUserInputs(long, 2491).inputs).toHaveLength(51);
   });
 
   it("draws the server total with only the newest two input bodies loaded", () => {
