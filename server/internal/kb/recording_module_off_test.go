@@ -43,6 +43,25 @@ func recordingFilesOnDisk(t *testing.T, dir string) map[string]string {
 	return out
 }
 
+// writtenMinutes leaves recording id as the module's minutes round leaves it: minutes.json and minutes.md of its
+// current revision, and meta.json saying they are ready.
+func writtenMinutes(t *testing.T, e *Engine, id string) {
+	t.Helper()
+	r := recordingNow(t, e, id)
+	m := Minutes{Version: 1, Revision: r.Revision, Title: "发布评审", When: "2026-11-10 14:00", Where: "三号会议室",
+		Points:    []MinutesPoint{{Text: "导出超过 4 MB 的条目会被丢掉", At: 10, Who: "Ada"}},
+		Decisions: []MinutesItem{{Text: "这一版先保留上限", At: 20}},
+		Actions:   []MinutesAction{{ID: "a1", Who: "Bo", What: "补上回归测试", By: "周五前", At: 30}},
+		Open:      []MinutesItem{{Text: "上限按条还是按录音", At: 40}}}
+	m.Markdown = "# 发布评审\n\n## 要点\n\n- [14:00:10] 导出超过 4 MB 的条目会被丢掉（Ada）\n\n## 决定\n\n- [14:00:20] 这一版先保留上限\n\n" +
+		"## 行动项\n\n- [14:00:30] Bo：补上回归测试（周五前）\n\n## 未决问题\n\n- [14:00:40] 上限按条还是按录音"
+	putMeetingMinutes(t, e, id, m)
+	changeRecording(t, e, id, func(r *Recording) {
+		r.MinutesVersion, r.MinutesRev = 1, r.Revision
+		planMinutes(r)
+	})
+}
+
 // moduleOffFixture is a knowledge base the recording module wrote into, then opened again without the module: recID
 // is a meeting with its transcript and minutes, recID2 a meeting whose minutes were still to be written when the
 // module went. on is the engine with the module, off the one without it, on a store of its own over the same files.
@@ -50,13 +69,11 @@ func moduleOffFixture(t *testing.T) (on, off *Engine, m *captureModel, now time.
 	t.Helper()
 	m = &captureModel{reply: minutesReply}
 	on = goldenEngine(t, m)
-	on.SetRecordingProvider(RecordingWriters(on))
+	on.SetRecordingProvider(hookedWriters(on))
 	now = time.Date(2026, 11, 10, 16, 0, 0, 0, goldenZone)
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	putRecording(t, on, recID, meetingUpload(1, start, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", "那这一版先保留上限", "Bo 你周五前补上回归测试", "上限按条还是按录音算还没定"), now)
-	if n := on.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
-		t.Fatalf("with the module: wrote %d minutes, want 1", n)
-	}
+	writtenMinutes(t, on, recID)
 	putRecording(t, on, recID2, meetingUpload(1, start.Add(time.Hour), "第二个会议讨论排期", "下周三之前给出方案"), now)
 	if r := recordingNow(t, on, recID2); r.MinutesState != MinutesPending {
 		t.Fatalf("second meeting's minutes are %q, want pending", r.MinutesState)
@@ -199,13 +216,11 @@ func TestRecordingInFlightIsPausedWithoutTheModule(t *testing.T) {
 	if d, err := (&Engine{Store: ro}).Get(KindRecording, recID2, 0); err != nil || d.Paused != "" {
 		t.Errorf("a read-only knowledge base: paused %q, %v", d.Paused, err)
 	}
-	// The module is back: its round writes the minutes from the stored state, and nothing is paused.
+	// The module is back: nothing is paused, and the stored state is still the one its round takes up (pending; that
+	// the round then writes the minutes is the module's test, TestMinutesResumeWhenTheModuleIsBack).
 	back := &Engine{Store: off.Store, Model: off.Model, Owner: off.Owner, Logf: off.Logf}
-	back.SetRecordingProvider(RecordingWriters(back))
-	if n := back.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
-		t.Fatalf("back with the module: wrote %d minutes, want 1", n)
-	}
-	if d, list := paused(back); d != "" || list[recID2] != "" || recordingNow(t, back, recID2).MinutesState != MinutesReady {
+	back.SetRecordingProvider(hookedWriters(back))
+	if d, list := paused(back); d != "" || list[recID2] != "" || recordingNow(t, back, recID2).MinutesState != MinutesPending {
 		t.Errorf("back with the module: paused %q %v, state %q", d, list, recordingNow(t, back, recID2).MinutesState)
 	}
 }
@@ -270,8 +285,24 @@ func TestRecordingProviderIsNeverNil(t *testing.T) {
 	}
 	e.Store.recordingAudio().AudioDropped(recID, ErrNotFound)
 	e.Store.recordingAudio().AudioClosed(recID)
-	e.SetRecordingProvider(RecordingWriters(e))
-	if _, ok := e.Store.recordingAudio().(recordingWriters); !ok {
+	e.SetRecordingProvider(hookedWriters(e))
+	if _, ok := e.Store.recordingAudio().(hookedProvider); !ok {
 		t.Errorf("the store's audio side is %T after the module's hook", e.Store.recordingAudio())
 	}
+}
+
+// hookedProvider stands for the recording module's provider in these tests (the module's own is
+// internal/modules/recording/writers, which this package cannot import): a knowledge base that was hooked, whose
+// summary round is this package's and whose other rounds write nothing here.
+type hookedProvider struct {
+	recordingwire.NoProvider
+	rest recordingwire.WritersInCore
+}
+
+func (p hookedProvider) SummarizeRecordings(ctx context.Context, max int) int {
+	return p.rest.SummarizeRecordings(ctx, max)
+}
+
+func hookedWriters(e *Engine) recordingwire.Provider {
+	return hookedProvider{rest: RecordingWriters(e)}
 }

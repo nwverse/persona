@@ -96,11 +96,11 @@ func (n *Node) runtimeAssistantCwd(id, cwd string, st sessionState) string {
 }
 
 // assistantEnvForRuntime returns nil unless the local runtime explicitly accepts dedicated-worker environments.
-func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd string) map[string]string {
+func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd, session string) map[string]string {
 	if h == nil || !h.assistantEnvironment() {
 		return nil
 	}
-	entries := n.assistantRuntimeEnv(cwd)
+	entries := n.assistantRuntimeEnv(cwd, session)
 	env := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		if name, value, ok := strings.Cut(entry, "="); ok {
@@ -169,7 +169,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		n.assistantRuntimeSkills(cwd)
 	}
 	memDir := n.memoryForUse(cwd)
-	environment := n.assistantEnvForRuntime(h, cwd)
+	environment := n.assistantEnvForRuntime(h, cwd, id)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if environment != nil {
 		turn["env"] = environment
@@ -541,7 +541,7 @@ const gateOutputNotice = "\n…（输出太长，后面的没有放进来；用 
 func runGateScript(ctx context.Context, name, script string, args []string, cwd string, env []string) proto.ToolResult {
 	cmd := exec.CommandContext(ctx, "bash", append([]string{script}, args...)...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(withoutEnv(os.Environ(), []string{categoriesEnv}), env...)
 	killGroupOnCancel(cmd)
 	out := &cappedBuffer{max: gateOutputCap}
 	cmd.Stdout, cmd.Stderr = out, out // the same comparable writer: exec calls it from one goroutine at a time

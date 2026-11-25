@@ -7,46 +7,46 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* The Web shell columns share this gutter with the width budget in lib/layout.ts. */
+/* Desktop shell: flush sidebar on the shell canvas, inset framed cards for main and side panel (#14696). */
 @media (width >= 64rem) {
   [data-app-shell] {
     --panel-gap: 6px;
-    background: var(--inset);
+    background: var(--canvas);
+    padding-right: var(--panel-gap);
+  }
+
+  [data-app-shell][data-sidebar-hidden] {
+    padding-left: var(--panel-gap);
   }
 
   [data-sidebar-column] {
     flex-shrink: 0;
-    margin-right: var(--panel-gap);
     border-right: 0;
   }
 
+  [data-app-shell] > main,
   [data-app-shell] > aside {
-    margin-left: var(--panel-gap);
-    border-left: 0;
+    margin-block: var(--panel-gap);
+    border: 1px solid var(--line);
     border-radius: var(--radius-card);
   }
 
   [data-app-shell] > main {
     background: var(--page);
-  }
-
-  /* The sidebar's usage dialog may extend beyond the rounded background. */
-  [data-sidebar-column] > aside {
-    border-radius: var(--radius-card);
-  }
-
-  [data-app-shell] > main,
-  [data-app-shell] > aside > div:not([role="separator"]) {
-    border-radius: var(--radius-card);
     overflow: clip;
   }
 
-  [data-sidebar-column] > [role="separator"] {
-    right: calc(-0.25rem - var(--panel-gap) / 2);
+  [data-app-shell] > aside {
+    margin-left: var(--panel-gap);
+  }
+
+  [data-app-shell] > aside > div:not([role="separator"]) {
+    border-radius: calc(var(--radius-card) - 1px);
+    overflow: clip;
   }
 
   [data-app-shell] > aside > [role="separator"] {
-    left: calc(-0.25rem - var(--panel-gap) / 2);
+    left: calc(-0.25rem - var(--panel-gap) / 2 - 1px);
   }
 }
 
@@ -172,7 +172,7 @@
 
 [data-terminal-scheme="dark"], .dark {
   --page: #17181a;
-  --canvas: #1c1d1f;
+  --canvas: #101113;
   --surface: #232427;
   --inset: #1f2022;
   --hover: #2a2b2e;
@@ -342,6 +342,8 @@ body {
 /* ── Persona additions ──────────────────────────────────── */
 [data-terminal-scheme="light"], :root { --status-needs: var(--attention); --status-working: var(--orange); --status-waiting: color-mix(in srgb, var(--status-working) 55%, var(--ink-3)); --status-unread: var(--green); --status-idle: var(--ink-3); --user-bubble: #dceaff; --neutral-bubble: #f0f1f3; --term-magenta: #a347ba; --term-cyan: #0f8a9c; --term-bg: #1b1c1f; --term-fg: #e6e7e9; }
 [data-terminal-scheme="dark"], .dark { --user-bubble: #1d3557; --neutral-bubble: #2c2d31; --term-magenta: #c678dd; --term-cyan: #4fb6c4; --term-bg: #141517; --term-fg: #e6e7e9; }
+::highlight(persona-comment) { background-color: color-mix(in srgb, var(--accent) 20%, transparent); }
+::highlight(persona-comment-flash) { background-color: color-mix(in srgb, var(--accent) 36%, transparent); }
 /* The chat's trace (aligned with cindy's defaults, #1963): tool rows and their chevrons, the work group's rail, thought
    text, diff counts and the running status bar's accent. */
 :root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --status-accent: var(--accent-ink); --tool-hover: #ececec; }
@@ -392,24 +394,23 @@ body {
    card keeps the column's, so nothing in it moves while the ring shows */
 [data-answer][data-search-hit] { outline-offset: 6px; } /* text has no padding of its own: the ring sits just outside it */
 [data-answer][data-search-hit]:not(:has(pre, table, .card-ui)) { width: fit-content; max-width: 100%; }
-/* Active working/thinking text shimmer (inspired by Orca tw-shimmer). */
-.chat-shimmer {
-  background-image: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 42%, transparent) 50%, currentColor 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer-text 2.2s linear infinite;
+/* Active working/thinking text shimmer (inspired by Orca tw-shimmer).
+ * Keep currentColor available to paint the gradient when the glyph fill is transparent. */
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .chat-shimmer {
+    background-image: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 42%, var(--ink)) 50%, currentColor 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer-text 2.2s linear infinite;
+  }
 }
 /* Smooth bottom fade on folded long user prompts. */
 .user-bubble-fade {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
 }
-@media (prefers-reduced-motion: reduce) {
-  .chat-shimmer { animation: none; background-image: none; color: inherit; -webkit-background-clip: border-box; background-clip: border-box; }
-}
-
 html, body, #root { height: 100%; }
 /* Pulling down at the top of a scroller must not reload the app. Vertical only: the drawer's sideways drags are unaffected. */
 html, body { overscroll-behavior-y: none; }
@@ -435,11 +436,6 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
     transition: scrollbar-color var(--chat-scrollbar-fade) ease-out;
   }
   [data-chat-scroll][data-scrollbar-visible="true"] { scrollbar-color: var(--ink-3) transparent; }
-}
-/* The navigator's measured clearance grows only where the centered column's existing margin is insufficient. */
-[data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 5), var(--chat-nav-clearance, 0px)); }
-@media (min-width: 640px) {
-  [data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 8), var(--chat-nav-clearance, 0px)); }
 }
 button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
 /* Blue bubbles need stronger muted text in dark mode and a readable focus indicator in both schemes.

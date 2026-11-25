@@ -11,11 +11,10 @@ import (
 )
 
 // Runtime sessions use their existing item paging, without requiring #2071 or a new runtime SDK method.
-// The server reduces a complete, coherent read to positions; never return a partial list as the total.
-func (n *Node) runtimeUserInputs(ctx context.Context, sid string, read func(any) (json.RawMessage, error)) (proto.UserInputIndex, error) {
+// The server reduces a complete, coherent read to the input index. A partial scan never supplies a total.
+func (n *Node) runtimeUserInputs(ctx context.Context, sid string, before int, read func(any) (json.RawMessage, error)) (proto.UserInputIndex, error) {
 	var all []proto.Item
 	history := ""
-	before := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return proto.UserInputIndex{}, err
@@ -43,7 +42,11 @@ func (n *Node) runtimeUserInputs(ctx context.Context, sid string, read func(any)
 		if page.History != "" {
 			history = page.History
 		}
-		all = append(all, page.Items...)
+		for _, it := range page.Items {
+			if before <= 0 || it.Seq < before {
+				all = append(all, it)
+			}
+		}
 		if !page.HasMore {
 			break
 		}

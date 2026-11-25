@@ -144,8 +144,9 @@ func restartedOn(t *testing.T, st Store) (*Service, *fakeHub) {
 	f.hello.Assistant.MachineID = "server"
 	f.known["conv1"] = true
 	f.mu.Unlock()
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	// Settings changes can deliver a restored digest at once, so list main before they can look it up (#13418).
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	return s, f
 }
 
@@ -671,19 +672,24 @@ func TestTaskReceiptReservationIsReleased(t *testing.T) {
 			agentTurn(s, f, proto.StatusWorking, "", 0)
 			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
 				State: proto.StateUnread, LastText: "修好了", UpdatedAt: time.Now()})
-			f.mu.Lock()
-			f.onDevicesList = func() { // the node stops answering between the first look and the second
-				f.mu.Lock()
-				f.sessionsFail["box"] = agentReachAttempts
-				f.mu.Unlock()
+			// Drop this turn's second look after it reserved the receipt. The parallel todo-token sync also
+			// lists box's sessions and must not consume the failures meant for this turn.
+			var failures atomic.Int32
+			offline := func(machine string) bool {
+				if machine != "box" {
+					return false
+				}
+				s.tasks.mu.Lock()
+				_, reserved := s.tasks.receipted[todo.ID]
+				s.tasks.mu.Unlock()
+				if reserved {
+					failures.Add(1)
+				}
+				return reserved
 			}
-			f.mu.Unlock()
-			s.taskTurnEnded(ctx, "box", "s1")
-			f.mu.Lock()
-			fails, hook := f.sessionsFail["box"], f.onDevicesList
-			f.mu.Unlock()
-			if hook != nil || fails != 0 {
-				t.Fatalf("the second look did not meet the dropped link: hook left %v, %d failures left", hook != nil, fails)
+			s.taskTurnEnded(context.WithValue(ctx, sessionListOfflineForTest{}, offline), "box", "s1")
+			if got := failures.Load(); int(got) != agentReachAttempts {
+				t.Fatalf("the reserved turn met %d offline reads, want %d", got, agentReachAttempts)
 			}
 			if how == "told again" {
 				if got := len(recoveryReceipts(t, s, todo.ID)); got != 0 {

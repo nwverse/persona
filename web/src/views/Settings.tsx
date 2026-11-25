@@ -2,7 +2,7 @@ import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
-import { href } from "../lib/router";
+import { href, useRoute } from "../lib/router";
 import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -28,7 +28,6 @@ import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
 import { SavedPrompts } from "./settings/SavedPrompts";
-import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
@@ -39,7 +38,7 @@ import { StartPageGroup } from "./settings/StartPage";
 import { AgentsDisplayRow } from "./settings/AgentsDisplayRow";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
-import { PersonaPicker } from "./assistant/Persona";
+import { PersonaPicker } from "./assistant/PersonaPicker";
 import { TriageSettings } from "./settings/TriageSettings";
 import { TranslationSettings } from "./settings/TranslationSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
@@ -52,6 +51,7 @@ import { settingsTarget } from "../lib/channels";
 import { extensionsRoute, routeSub } from "../lib/extension-market";
 import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
+import { RecoverySettings } from "./settings/RecoverySettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
@@ -67,6 +67,7 @@ import { ProviderLinkCopy } from "./settings/ProviderLinkCopy";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
+import { SeenRowsRow } from "./settings/SeenRowsSetting";
 import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
 import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
 import { moduleFeaturesSource } from "../core/module-features";
@@ -157,10 +158,11 @@ export function tokens(n: number): string {
 const Extensions = lazyPage(() => import("./settings/Extensions").then((m) => m.Extensions));
 const Connectors = lazyPage(() => import("./settings/Connectors").then((m) => m.Connectors));
 const Integrations = lazyPage(() => import("./settings/Integrations").then((m) => m.Integrations));
+const SourcesUI = lazyPage(() => import("./subscriptions/SourcesUI").then((m) => m.SourcesUI));
 // Labs and the shared configuration form load on first use.
 const LabsSettings = lazyPage(() => import("./settings/Labs").then((m) => m.LabsSettings));
 const ModuleFeaturesForm = lazyPage(() => import("./settings/configuration/ConfigurationForm").then((m) => m.ConfigurationForm));
-const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors, integrations: Integrations };
+const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors, integrations: Integrations, sources: SourcesUI };
 // a failed load is not kept (lazyPage): opening the page asks again, and PageBoundary shows the failure then
 const preloadTab = (k: Tab) => void TAB_PAGES[k]?.preload().catch(() => {});
 
@@ -196,6 +198,16 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const now = settingsAt(location.search, location.hash);
     setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
   }, [integrationsMode, at.tab, at.sub]);
+  // External in-app navigation to /settings (e.g. "Change in Settings" from the sidebar while Settings is already open).
+  const route = useRoute();
+  const initialRoute = useRef(true);
+  useEffect(() => {
+    if (initialRoute.current) { initialRoute.current = false; return; }
+    const path = stripBase(location.pathname);
+    if (path !== "/settings" && !path.startsWith("/settings/")) return;
+    const now = readSettingsLocation(integrationsModeRef.current);
+    setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
+  }, [route]);
   // Back from a category opened from the list: the URL went back, the page follows it.
   useEffect(() => {
     const back = () => {
@@ -230,7 +242,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   useEffect(() => {
     if (!at.section || listed) return;
     const section = document.getElementById(`settings-${at.section}`);
-    if (!section) return;
+    if (!section) {
+      setScrollAnchor(at.section);
+      return;
+    }
     section.scrollIntoView?.({ block: "start" });
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => section.scrollIntoView?.({ block: "start" }));
@@ -245,10 +260,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Inbox Sources (#5278) only with a manager that draws them; a link to it still opens it
   const hasSources = useInboxSourcesShown();
   const shown = (k: Tab) => {
-    if (integrationsV2) {
-      if (isLegacyIntegrationTab(k)) return false;
-      return k !== "sources" || hasSources || tab === "sources";
-    }
+    if (integrationsV2) return !isLegacyIntegrationTab(k);
     if (k === "integrations") return false;
     return (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
       (k !== "sources" || hasSources || tab === "sources");
@@ -272,7 +284,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     }
     setAt({ tab: k, sub: id, section: section ?? null });
     // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
-    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : null, section);
+    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : (resolved.manager ?? null), section);
     if (k === "integrations" && !id && resolved.filter && resolved.filter !== "all") {
       to += `${to.includes("?") ? "&" : "?"}filter=${encodeURIComponent(resolved.filter)}`;
     }
@@ -417,7 +429,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
               {tab === "prompts" && <SavedPrompts />}
-              {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} onGraph={setSourcesGraph} />}
+              {tab === "sources" && (
+                <Suspense fallback={<Loading />}>
+                  <SourcesUI title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
+                </Suspense>
+              )}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
@@ -484,10 +500,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
               {tab === "devices" && <Devices />}
-              {tab === "hub" && <>
-                <HubSettings />
+              {tab === "hub" && (sub === "recovery" ? <RecoverySettings onBack={() => pick("hub")} /> : <>
+                <HubSettings onOpenRecovery={() => pick("hub", "recovery")} />
                 <AgentGroup />
-              </>}
+              </>)}
               {tab === "managers" && <ManagersSettings />}
               {!isCoreTab(tab) && <ModuleSettingsPage tab={tab} />}
             </div>
@@ -813,6 +829,7 @@ function AgentPreferences() {
   return (
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
       <AgentOpenRow />
+      <SeenRowsRow />
       <TerminalModeRow />
       {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")} wrapHint>
         <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />

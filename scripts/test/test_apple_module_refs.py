@@ -37,6 +37,8 @@ BASELINE = Path(__file__).resolve().with_name("apple_module_refs_baseline.json")
 # baseline.
 GUARDED = ("glasses", "screen-share", "health", "voice")
 _DIRS = module_classification.apple_module_dirs()
+_, _RULES = module_classification.parse((ROOT / "schema/module-classification.txt").read_text(encoding="utf-8"))
+_APPLE_OWNERS = {r.pattern.removesuffix("/..."): r.target for r in _RULES if r.kind == "apple" and "*" not in r.pattern}
 
 
 def guarded_dirs(dirs):
@@ -123,7 +125,7 @@ def swift_files(root=ROOT):
 
 
 def owner(rel, root=ROOT):
-    """The module whose directory holds this source. A compatibility symlink's shared target owns its declarations."""
+    """The guarded owner of the closest classified directory, following a source symlink to its declaration."""
     path = Path(root) / rel
     if path.is_symlink():
         resolved = path.resolve()
@@ -131,22 +133,21 @@ def owner(rel, root=ROOT):
             rel = resolved.relative_to(Path(root).resolve())
         except ValueError:
             return None
-    s = rel.as_posix()
-    if s == "apple/PersonaLink/App" or s.startswith("apple/PersonaLink/App/"):
-        return None
-    for module, dirs in MODULES.items():
-        if any(s == d or s.startswith(d + "/") for d in dirs):
-            return module
+    for parent in rel.parents:
+        directory = parent.as_posix()
+        module = _APPLE_OWNERS.get(directory)
+        if module is not None:
+            return module if directory in MODULES.get(module, ()) else None
     return None
 
 
-def symbols(files):
+def symbols(files, root=ROOT):
     """{module: set of type names} declared only by that module, not ambiguously by the core too."""
     out = {m: set() for m in MODULES}
     core = set()
     for rel in files:
-        names = declared(blank((ROOT / rel).read_text(encoding="utf-8", errors="replace")))
-        module = owner(rel)
+        names = declared(blank((root / rel).read_text(encoding="utf-8", errors="replace")))
+        module = owner(rel, root=root)
         if module:
             out[module].update(names)
         else:
@@ -253,6 +254,25 @@ class AppleModuleRefsTests(unittest.TestCase):
         src = ("nonisolated struct GlassesError: Error {}\n@Observable\n@MainActor\nfinal class MetaGlasses {\n"
                "    enum Inner {}\n}\nprivate struct Helper {}\n// struct Commented {}\n")
         self.assertEqual(declared(blank(src)), ["GlassesError", "MetaGlasses"])  # a private type is the file's own
+
+    def test_linked_source_keeps_its_declaration_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            shared = root / "apple/Shared/Compatibility.swift"
+            module = root / MODULES["screen-share"][0]
+            shared.parent.mkdir(parents=True)
+            module.mkdir(parents=True)
+            shared.write_text("enum SharedCompatibility {}\n", encoding="utf-8")
+            alias = module / "Compatibility.swift"
+            alias.symlink_to(shared)
+            screen = module / "Presentation.swift"
+            screen.write_text("struct ScreenPresentation {}\n", encoding="utf-8")
+            found = symbols([alias.relative_to(root), screen.relative_to(root)], root=root)
+            self.assertEqual(found["screen-share"], {"ScreenPresentation"})
+
+    def test_link_app_has_its_own_classification(self):
+        self.assertIsNone(owner(Path("apple/PersonaLink/App/Sources/PersonaLink/PairView.swift")))
+        self.assertEqual(owner(Path("apple/PersonaLink/Sources/PersonaScreen/ScreenCaptureSource.swift")), "screen-share")
 
     def test_module_symbols_do_not_alias_core_types(self):
         files = list(swift_files())

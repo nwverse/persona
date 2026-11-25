@@ -156,6 +156,19 @@ func assertBriefingAbsent(t *testing.T, s *Service) {
 	if _, err := s.moduleSettingGet("assistant.briefing_waits")(ctx); err == nil {
 		t.Error("the hidden setting answered a get")
 	}
+	f := s.hub.(*fakeHub)
+	f.answerAppBlocking(AppSettings, SettingsList, func(json.RawMessage) (any, error) {
+		return map[string]any{"settings": []Setting{{Key: "assistant.briefing_waits"}, {Key: "inbox.rules"}}}, nil
+	})
+	list := callReversibleSettingAction(ctx, s, "list", "", `null`, "conv1")
+	if len(f.appParams(AppSettings, SettingsList)) != 1 {
+		t.Fatal("the settings list did not query the hub catalog")
+	}
+	if text := reversibleResultText(list); list.IsError || strings.Contains(text, "assistant.briefing_waits") || !strings.Contains(text, "inbox.rules") {
+		t.Fatalf("settings from both catalogs with briefing absent: %s", text)
+	}
+	requireUnavailableBriefingAction(t, s, "get", `null`)
+	requireUnavailableBriefingAction(t, s, "set", `null`)
 	now := time.Now()
 	if got := s.runFacts(ctx, Task{ID: "morning", Facts: true}, now); got != "" {
 		t.Errorf("a routine with facts on opened with facts: %q", got)
@@ -163,10 +176,7 @@ func assertBriefingAbsent(t *testing.T, s *Service) {
 	if got, want := s.runFacts(ctx, Task{ID: "dot", Report: true}, now), s.northStarRunFacts(ctx, now); got != want {
 		t.Errorf("a daily report's facts = %q, want the north star's lines %q", got, want)
 	}
-	s.brief.mu.Lock()
-	runs := len(s.brief.byTask)
-	s.brief.mu.Unlock()
-	if runs != 0 {
+	if runs := s.briefTaskRunCount(); runs != 0 {
 		t.Errorf("%d briefing runs kept without the module", runs)
 	}
 	if dirs, off := s.briefDirections(ctx, now, s.botLang(ctx), testWeb); dirs != nil || off != nil {

@@ -19,7 +19,7 @@ struct CallSourceTests {
         var out: [(String, [String])] = []
         for directory in ["Persona", "Modules", "Shared"] + (tests ? ["PersonaTests", "PersonaUITests"] : []) {
             let base = root.appending(path: directory)
-            let walker = try #require(FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil), directory)
+            let walker = try #require(FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil), Comment(rawValue: directory))
             for case let url as URL in walker where url.pathExtension == "swift" {
                 let full = url.resolvingSymlinksInPath().path
                 guard full.hasPrefix(root.path + "/") else { continue }
