@@ -344,6 +344,33 @@ func TestAgentStartParamsAsksNoTabNameForTheDesktopApp(t *testing.T) {
 	if err != nil || p["tab_name"] != "fix-login" || len(f.tabAsked) != 1 {
 		t.Fatalf("terminal start: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
 	}
+	// A resume is no new session: desktop_start_naming.go does not name it, so its tab name is asked for as before.
+	p, err = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"cwd": "/code", "launcher": "claude-desktop",
+		"resume_session_id": "d1"}, NameFrom: "修登录"})
+	if err != nil || p["tab_name"] != "fix-login" || len(f.tabAsked) != 2 {
+		t.Fatalf("resume: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
+	}
+}
+
+// Nor when the computer's launcher list cannot be read and the last one seen there does not name the launcher: what
+// it runs is then unknown, and its name says it is the desktop app's. Another launcher's start is named as before.
+func TestAgentStartParamsAsksNoTabNameForTheDesktopAppItCannotList(t *testing.T) {
+	f := newFakeHub()
+	f.sessions["box"] = nil // listed among the devices
+	f.tabReply = "fix-login"
+	f.launcherList = nil // the list fails, and no list was seen there before
+	s := newTestService(t, f)
+	ctx := context.Background()
+	p, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"cwd": "/code", "launcher": "claude-desktop", "launch": "engine"},
+		NameFrom: "修登录"})
+	if err != nil || p["launcher"] != "claude-desktop" || p["tab_name"] != nil || len(f.tabAsked) != 0 {
+		t.Fatalf("desktop start: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
+	}
+	p, err = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"cwd": "/code", "launcher": "relay", "launch": "engine"},
+		NameFrom: "修登录"})
+	if err != nil || p["tab_name"] != "fix-login" || len(f.tabAsked) != 1 {
+		t.Fatalf("terminal start: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
+	}
 }
 
 // A session the manager starts in Claude's desktop app itself (agent_start here; dispatch and its other starts send the

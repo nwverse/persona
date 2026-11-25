@@ -10,7 +10,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -80,7 +79,7 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 				delete(params, "permission_mode")
 			}
 			leaveLauncherNote(ctx, note) // the app says so (agents_bus.go launcher_note, #4661)
-			inDesktopApp = compat.Source(agent.source) == proto.SourceClaudeDesktop
+			inDesktopApp = startsInDesktopApp(agent, params)
 			// AGY returns a session only after startup, including for a launcher resolved from Model settings.
 			if declared, _ := params["agent_type"].(string); declared == "" && agent.agent == "agy" {
 				params["agent_type"] = agent.agent

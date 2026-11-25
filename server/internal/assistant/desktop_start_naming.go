@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -123,6 +124,20 @@ func (s *Service) nameDesktopStartNow(ctx context.Context, machine, sid, seeded,
 	s.publishSessions(machine) // decorating takes the ledger lock: published after it is released
 	s.logf("agent naming: desktop start session=%q/%q result=named", machine, sid)
 	return agentNameResult{Title: title, Changed: title != raw}, nil
+}
+
+// claudeDesktopLauncher is the node's launcher that starts a session in Claude's desktop app (node/claudedesktop_new.go).
+const claudeDesktopLauncher = "claude-desktop"
+
+// startsInDesktopApp says a new start runs in Claude's desktop app, which has no tab to name (AgentStartParams): by
+// what its launcher runs, or by its name when that is unknown (the computer's list could not be read and the last one
+// seen there does not name it, fitLauncher).
+func startsInDesktopApp(agent startAgent, params map[string]any) bool {
+	if source := compat.Source(agent.source); source != "" {
+		return source == proto.SourceClaudeDesktop
+	}
+	launcher, _ := params["launcher"].(string)
+	return launcher == claudeDesktopLauncher
 }
 
 // startsSession says a node call is session.start. Service.call reads its answer after the call; the start is its
