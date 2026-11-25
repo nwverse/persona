@@ -1298,10 +1298,12 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		renames := a.Title != "" && title != t.Title // the title is part of the rendered prompt
 		return t.PromptSelections && a.Prompt == "" && (changesRun || enables || renames)
 	}
+	unchangedRunIf := false
 	if a.ID != "" && (changesRun || a.Enabled != nil || a.Title != "") {
 		// Refuse before model validation or pre-run command approval. Recheck
 		// under the schedule lock in case the owner edits the task meanwhile.
 		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
+			unchangedRunIf = runIf != nil && sameRoutineCheck(prev.RunIf, runIf)
 			if requiresOwner(prev) {
 				return "", errTaskSelectionsOwner
 			}
@@ -1315,7 +1317,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			}
 		}
 	}
-	if runIf != nil {
+	if runIf != nil && !unchangedRunIf {
 		approved, err := s.approveRoutineCheck(ctx, machine, self, runIf)
 		if err != nil {
 			return "", err
@@ -1340,6 +1342,10 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		if requiresOwner(t) {
 			sc.mu.Unlock()
 			return "", errTaskSelectionsOwner
+		}
+		if unchangedRunIf && !sameRoutineCheck(t.RunIf, runIf) {
+			sc.mu.Unlock()
+			return "", errors.New("run_if changed while the routine was being updated; retry the update")
 		}
 		old = t
 	} else {
@@ -1597,6 +1603,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.memoryDreamLoop(ctx)              // consolidating assistant memory, off by default
 	go s.memoryMergeLoop(ctx)              // telling the user what the node merged into the one memory (memory_merge.go)
 	go s.viewActionLoop(ctx)               // durable card reply outbox
+	go s.pagesLoop(ctx)                    // the taps on pages and the pages' upkeep (pages_actions.go)
 	go s.acceptLoop(ctx)                   // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
@@ -1608,6 +1615,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.historyLoop(ctx)        // durable assistant history, on by default
 	go s.undeliveredLoop(ctx)    // the owner's messages that could not go in (undelivered.go)
 	go s.captureLoop(ctx)        // sorting and filing quick captures (capture_sort.go)
+	go s.healthTellLoop(ctx)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
 }
@@ -2077,6 +2085,12 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		t.kbDir = s.kb.dir // the hint names where the knowledge base is, not the default
 	}
 	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
+	t, trainingDay := s.workoutPromptNow(ctx, t)
+	if trainingDay != "" {
+		if ref, ok := s.trainingChat(ctx, trainingDay); ok {
+			t.MachineID, t.SessionID = ref.MachineID, ref.SessionID
+		}
+	}
 	if prefix, body := t.promptParts(); prefix != "" && strings.TrimSpace(body) == "" {
 		// Identical titles and references can occur in consecutive runs in the same chat.
 		run.ID = "run_" + randomHex(12)
@@ -2219,6 +2233,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	s.noteRound(sess.MachineID, sess.SessionID, t.ID, t.runGrantBasis, time.Now().Add(-roundEarly)) // sent already: its prompt is older
 	s.logf("task %s ran %s after its time (new conversation %s, kept for the next runs)", t.ID, lateness(due, time.Now()), short(sess.SessionID))
 	s.adoptConversation(t.ID, sess.MachineID, sess.SessionID, sess.Launcher, ex)
+	if trainingDay != "" {
+		s.keepTrainingChat(ctx, trainingDay, SessionRef{MachineID: sess.MachineID, SessionID: sess.SessionID}, run.ConversationReason == "source_unavailable")
+	}
 	s.titleFixed(sess.MachineID, sess.SessionID, time.Now(), titleTask, t.label()) // "MMDD | scheduled | task name", the same for every run in it
 	var m *Device
 	if d, ok := s.device(ctx, sess.MachineID); ok {
@@ -2252,19 +2269,54 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 	return err
 }
 
+// notifyScheduleFailed hands a failed non-briefing scheduled run to its supervisor or the main conversation
+// instead of pushing to the owner. Owner-subscribed briefings (Facts/Report) and environments with no
+// supervisor or main conversation keep pushing to the owner.
+func (s *Service) notifyScheduleFailed(ctx context.Context, t Task, run ScheduleRun, m *Device, body string) {
+	l := s.lang(ctx)
+	name := t.labelIn(l)
+	if !t.Facts && !t.Report {
+		if to, ok := s.scheduleFailureTarget(ctx, t); ok {
+			title := i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name})
+			text := fmt.Sprintf("%s (task=%s run=%s)\n%s", title, t.ID, run.ID, body)
+			if _, kept := s.keepRelayLater(to, relayMsg{
+				From:      cardScheduleFailed,
+				FromTitle: title,
+				Tool:      cardScheduleFailed,
+				Text:      text,
+				At:        time.Now().UTC(),
+			}); kept {
+				s.publish(ctx)
+			}
+			return
+		}
+	}
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
+	}
+	n := Notification{
+		SessionID: run.SessionID,
+		Title:     i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}),
+		Body:      body,
+	}
+	if m != nil {
+		n.Subtitle, n.DeviceID = m.Name, m.ID
+	}
+	src := cardScheduleFailed
+	if t.Facts || t.Report {
+		src = cardBriefFallback
+	}
+	s.push(withCard(ctx, src), n)
+}
+
 // oneOffFailed keeps the failure notice even when delivery is unknown and retrying is unsafe.
 func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	if t.Repeat != repeatOnce || run.Manual {
 		return
 	}
-	l := s.lang(ctx)
-	name := t.labelIn(l)
 	body := clip(oneLine(run.Error), 300)
-	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
-	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
-		name, _ = s.redactedNotice(ctx, l, t.Space)
-	}
-	s.push(withCard(ctx, cardScheduleFailed), Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: body})
+	s.notifyScheduleFailed(ctx, t, run, nil, body)
 }
 
 // oneOffNotStarted handles confirmed pre-delivery failures; Facts/Report runs use the fixed-facts fallback first.
@@ -2451,12 +2503,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	if briefing {
 		s.briefFallback(ctx, run, t, m)
 	} else if !streak { // the streak notice already said it failed, with this reason
-		name := t.labelIn(s.lang(ctx))
-		// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
-		if s.exitPolicy(ctx, name+"\n"+text, run.SessionID, t.Space).Redact {
-			name, _ = s.redactedNotice(ctx, s.lang(ctx), t.Space)
-		}
-		s.push(withCard(ctx, cardScheduleFailed), Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
+		s.notifyScheduleFailed(ctx, t, run, &m, text)
 	}
 	if run.Retried {
 		return
@@ -3497,15 +3544,18 @@ func (s *Service) deleteTaskRoute(w http.ResponseWriter, r *http.Request) {
 	apierr.WriteJSON(w, map[string]any{"ok": true})
 }
 
-// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
-func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
-	sc, err := s.lockedSchedule(r.Context())
+// errTaskNotFound is returned by runTaskNow when no scheduled task has the given id.
+var errTaskNotFound = i18n.Err("assistant-schedule.gone")
+
+// runTaskNow starts scheduled task id immediately at now: a one-off is marked done, a repeating task keeps its
+// schedule. Returns errScheduleUnavailable / errScheduleSave on storage failure, errTaskNotFound when id is missing,
+// or errTaskBusy when the task's last run is still active.
+func (s *Service) runTaskNow(ctx context.Context, id string, now time.Time) (proto.Session, error) {
+	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, err)
-		return
+		return proto.Session{}, err
 	}
-	i := sc.indexLocked(r.PathValue("id"))
+	i := sc.indexLocked(id)
 	var t Task
 	if i >= 0 {
 		t = sc.tasks[i]
@@ -3518,22 +3568,31 @@ func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.saveLocked(sc, tasks); err != nil {
 			sc.mu.Unlock()
-			apierr.Write(w, http.StatusServiceUnavailable, err)
-			return
+			return proto.Session{}, err
 		}
 	}
 	sc.mu.Unlock()
 	if i < 0 {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
-		return
+		return proto.Session{}, errTaskNotFound
 	}
 	s.broadcastSchedule()
-	sess, err := s.runTask(t, now, now, true, false)
-	if errors.Is(err, errTaskBusy) {
+	return s.runTask(t, now, now, true, false)
+}
+
+// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
+func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.runTaskNow(r.Context(), r.PathValue("id"), time.Now())
+	switch {
+	case errors.Is(err, errScheduleUnavailable), errors.Is(err, errScheduleSave):
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	case errors.Is(err, errTaskNotFound):
+		apierr.Write(w, http.StatusNotFound, err)
+		return
+	case errors.Is(err, errTaskBusy):
 		apierr.Write(w, http.StatusConflict, i18n.Err("assistant-schedule.busy_wait"))
 		return
-	}
-	if err != nil {
+	case err != nil:
 		apierr.Call(w, err)
 		return
 	}

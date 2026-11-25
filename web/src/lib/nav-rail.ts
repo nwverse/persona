@@ -26,7 +26,7 @@ export const NAV_RAIL_MIN_TICKS = 1;
 export const NAV_RAIL_TICK_PITCH = NAV_RAIL_METRICS.tickPitch;
 export const NAV_RAIL_TICK_MIN_PITCH = NAV_RAIL_METRICS.minTickPitch;
 export const NAV_RAIL_MIN_HEIGHT = NAV_RAIL_METRICS.minHeight;
-/** The card renders at most two excerpt lines; this also bounds the underlying accessible description. */
+/** The card renders at most three excerpt lines. This also bounds the accessible description. */
 export const NAV_RAIL_EXCERPT_MAX = 200;
 /** The question line's cap for the label; the card truncates to one line, the label carries the whole preview. */
 export const NAV_RAIL_PREVIEW_MAX = 120;
@@ -160,15 +160,15 @@ function excerptHead(raw: string): string | undefined {
   return open ? undefined : linked.slice(0, -4);
 }
 
-/** Idle marks stay uniformly short; only an interactive preview creates bell-shaped focus shoulders. */
+/** Idle marks stay short, with emphasis on the current input. A preview creates bell-shaped focus shoulders. */
 export function navRailMark(index: number, count: number, current: number | null, preview: number | null) {
   const m = NAV_RAIL_METRICS;
   const isCurrent = index === current;
   if (preview === null) {
     return {
       state: isCurrent ? "current" : "idle",
-      width: m.tickWidth,
-      height: m.tickHeight,
+      width: isCurrent ? m.currentWidth : m.tickWidth,
+      height: isCurrent ? m.currentHeight : m.tickHeight,
       opacity: isCurrent ? 1 : m.tailOpacity,
     };
   }
@@ -198,7 +198,7 @@ export interface NavRailPlan {
 export function planNavRailTicks(count: number, height: number, focus = count - 1): NavRailPlan {
   if (count <= 0 || height <= 0) return { start: 0, pitch: NAV_RAIL_TICK_PITCH, hidden: 0, count: 0 };
   const capacity = Math.max(1, Math.floor(height / NAV_RAIL_TICK_MIN_PITCH));
-  const shown = Math.min(count, capacity);
+  const shown = Math.min(count, capacity, NAV_RAIL_METRICS.maxTicks);
   const start = Math.max(0, Math.min(Math.floor(focus) - Math.floor(shown / 2), count - shown));
   return { start, pitch: Math.min(NAV_RAIL_TICK_PITCH, height / shown), hidden: count - shown, count: shown };
 }

@@ -21,6 +21,9 @@ import PersonaWire
 
     /// nav_page entries, in the hub's order.
     private(set) var pages: [ExtensionUIPlace] = []
+    /// The entries Settings › Extensions lists: the extensions' own. Dashboards (#15017) are the assistant's, kept in the
+    /// sidebar and the drawer only.
+    var extensionPages: [ExtensionUIPlace] { pages.filter { !DashboardsUI.owns($0.owner) } }
     /// overview_card entries, in the hub's order.
     private(set) var cards: [ExtensionUIPlace] = []
     /// The cards' models, made when the cards are listed (the page pushes what they ask for, `extensionPushes`).
@@ -203,10 +206,11 @@ struct ExtensionSlotsSettingsSection: View {
     var body: some View {
         if slots.available {
             ExtensionCardsSection(link: $link, slots: slots)
-            if !slots.pages.isEmpty {
+            let pages = slots.extensionPages
+            if !pages.isEmpty {
                 Section {
                     Group {
-                        ForEach(slots.pages, id: \.scopedID) { page in
+                        ForEach(pages, id: \.scopedID) { page in
                             NavigationLink(value: SettingsPage.pluginPage(plugin: page.owner, ui: page.id, title: page.title, manager: slots.manager)) {
                                 ExtensionNavRow(place: page)
                             }

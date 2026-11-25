@@ -193,12 +193,14 @@ func TestHerdrResumeBringsBackAStoppedCodex(t *testing.T) {
 // terminal stays, so whether Orca could continue the session does not matter any more (#4754).
 func TestOrcaRetireKeepsTheTerminal(t *testing.T) {
 	withStop(t, 1, orcaProcsMaxAge+time.Second) // the node reads Orca's processes at most this often
-	cn, co, procs := orcaSession(t)
+	pid, exit := idleTerminalTestProcess(t)
+	cn, co, procs := orcaSessionWithPID(t, pid)
 	go func() { // claude quits once Ctrl+C has been pressed twice: its process leaves the terminal
 		tick := time.NewTicker(10 * time.Millisecond) // the fake's trace signals nothing: looked at 200 times at most
 		defer tick.Stop()
 		for range 200 {
 			if len(co.Trace("terminal.send")) >= 2 {
+				exit()
 				procs.set("tab1:leaf1")
 				return
 			}
@@ -271,10 +273,12 @@ func TestRetireHerdrCoreWithRuntimeDefault(t *testing.T) {
 		}
 		t.Run(action, func(t *testing.T) {
 			withStop(t, 1, 50*time.Millisecond)
-			n, hc := hcSession(t)
+			pid, exit := idleTerminalTestProcess(t)
+			n, hc := hcSessionWithPID(t, pid)
 			choice := proto.EngineChoice{Hosts: []string{proto.EngineHerdrCore, proto.EnginePaseo}, Default: proto.EnginePaseo}
 			n.eng.name, n.eng.set = proto.LegacyEngine(choice), &choice
 			hc.handle("terminal.keys", func(map[string]any) any {
+				exit()
 				hc.setTerminals(hcTerminal("t1", "", "", 4243, "zsh", hcCwd, "", "", ""))
 				return map[string]any{}
 			})

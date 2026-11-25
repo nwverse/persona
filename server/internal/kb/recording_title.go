@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"slices"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ const PurposeMeetingTitle = "meeting.title"
 const (
 	AITitleLive    = "live"
 	AITitleSummary = "summary"
-	AITitleMinutes = "minutes"
+	AITitleMinutes = recordingwire.AITitleMinutes
 )
 
 const (
@@ -113,26 +114,6 @@ func putNamed(p *RecordingPut, r *Recording) {
 	if p.NameSource = r.NameSource(); p.NameSource != "" {
 		p.Name = r.Name
 	}
-}
-
-// metaWithNameSource is a recording's meta.json (detail.meta) with name_source, where its name comes from (#8873);
-// as it is when it is named only by when it started.
-func metaWithNameSource(raw []byte) []byte {
-	var r Recording
-	if json.Unmarshal(raw, &r) != nil {
-		return raw
-	}
-	src := r.NameSource()
-	var meta map[string]json.RawMessage
-	if src == "" || json.Unmarshal(raw, &meta) != nil || meta == nil {
-		return raw
-	}
-	meta["name_source"], _ = json.Marshal(src)
-	out, err := json.Marshal(meta)
-	if err != nil {
-		return raw
-	}
-	return out
 }
 
 // titleLine is a title the model wrote, on one line, without marks or the quotes around it, at most titleRunes.
@@ -253,4 +234,15 @@ func headAndTail(s string, head, tail int) string {
 	}
 	r := []rune(s)
 	return string(r[:head]) + "\n…（中间省略）…\n" + string(r[len(r)-tail:])
+}
+
+// stripMarks and clipAtMost are the minutes overview's helpers titleLine uses; the overview moved to the recording
+// module with the minutes' writers, and these copies go there with the title writers (plan-kb-recording-port.md, PR 4).
+func stripMarks(s string) string { return strings.ReplaceAll(s, "**", "") }
+
+func clipAtMost(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return clip(s, n-1)
 }

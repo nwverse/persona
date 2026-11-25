@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -725,6 +726,64 @@ func TestAssistantPageConversationDeleted(t *testing.T) {
 	}
 	if _, err := d.RemoveConversationAssistantPages(ctx, "", "c1", at); err == nil {
 		t.Fatal("no machine")
+	}
+}
+
+// Deleting a conversation (PutConversationDeletion) hands its pages over in the same transaction: the kept one goes to
+// Recently removed and comes back as the main conversation's, its draft goes unlisted, another's stays.
+func TestConversationDeletionRemovesItsPages(t *testing.T) {
+	d, ctx := pagesDB(t)
+	mine := draft(11, "c1", "Mine", pagesBase)
+	mine.OwnerKind, mine.OwnerMachine, mine.OwnerRef = AssistantPageOwnerConversation, "m1", "c1"
+	owned := mustKeep(t, d, mustCreate(t, d, mine), pagesBase)
+	waiting := mustCreate(t, d, draft(12, "c1", "Waiting", pagesBase))
+	theirs := draft(13, "c2", "Theirs", pagesBase)
+	theirs.OwnerKind, theirs.OwnerMachine, theirs.OwnerRef = AssistantPageOwnerConversation, "m1", "c2"
+	other := mustKeep(t, d, mustCreate(t, d, theirs), pagesBase)
+	if err := d.PutConversationDeletion(ctx, "m1", "c1", json.RawMessage(`{"session_id":"c1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := d.AssistantPage(ctx, owned.ID); err != nil || p.RemovedBy != AssistantPageRemovedByConversation || !p.Listed() {
+		t.Fatalf("its kept page: %+v %v", p, err)
+	}
+	if p, err := d.AssistantPage(ctx, waiting.ID); err != nil || p.Status != AssistantPageRemoved || p.Listed() {
+		t.Fatalf("its draft: %+v %v", p, err)
+	}
+	if p, err := d.AssistantPage(ctx, other.ID); err != nil || p.Status != AssistantPageActive {
+		t.Fatalf("another's page: %+v %v", p, err)
+	}
+	row, changed, err := d.RestoreAssistantPage(ctx, owned.ID, time.Now())
+	if err != nil || !changed || row.OwnerKind != AssistantPageOwnerMain || row.OwnerRef != "" {
+		t.Fatalf("restored as the main conversation's: %+v %v", row, err)
+	}
+	// a deletion that names no machine (an old row) touches no page
+	if err := d.PutConversationDeletion(ctx, "", "c2", json.RawMessage(`{"session_id":"c2"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := d.AssistantPage(ctx, other.ID); p.Status != AssistantPageActive {
+		t.Fatalf("another's page: %+v", p)
+	}
+}
+
+// An Agent's removal keeps its reason (at most 200 characters) until the page is restored; the owner's has none.
+func TestAssistantPageRemovedReason(t *testing.T) {
+	d, ctx := pagesDB(t)
+	p := mustKeep(t, d, mustCreate(t, d, draft(21, "c1", "Runs", pagesBase)), pagesBase)
+	if _, _, err := d.RemoveAssistantPageWithReason(ctx, p.ID, AssistantPageRemovedByAgent, strings.Repeat("x", AssistantPageReasonMost+1), pagesBase); err == nil {
+		t.Fatal("a reason too long")
+	}
+	row, changed, err := d.RemoveAssistantPageWithReason(ctx, p.ID, AssistantPageRemovedByAgent, "You finished.", pagesBase)
+	if err != nil || !changed || row.RemovedReason != "You finished." {
+		t.Fatalf("removed %+v %v", row, err)
+	}
+	if listed, err := d.RecentlyRemovedAssistantPages(ctx, pagesBase); err != nil || len(listed) != 1 || listed[0].RemovedReason != "You finished." {
+		t.Fatalf("listed %+v %v", listed, err)
+	}
+	if row, _, err := d.RestoreAssistantPage(ctx, p.ID, pagesBase); err != nil || row.RemovedReason != "" {
+		t.Fatalf("restored %+v %v", row, err)
+	}
+	if row, _, err := d.RemoveAssistantPage(ctx, p.ID, AssistantPageRemovedByOwner, pagesBase); err != nil || row.RemovedReason != "" {
+		t.Fatalf("the owner's removal %+v %v", row, err)
 	}
 }
 
