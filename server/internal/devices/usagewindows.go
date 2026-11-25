@@ -195,11 +195,12 @@ func (u *usageWindowsHub) poll(ctx context.Context, sources []usageSource, now t
 // the result for the sidebar.
 //
 // Codex samples are grouped by their account key and use the newest snapshot's windows. Samples without a key
-// stand on their own. Other providers group by a plan window length and reset second, except when a gateway
-// reports distinct accounts. Their windows are taken per length (and model) from the newest sample. Expired windows
-// and accounts with no live window are dropped. Samples older than usageHubMaxAge are dropped, and the remaining
-// samples are marked stale according to their source. Accounts show where they were seen and the gateway's name when
-// available. The most used accounts come first, stale ones last.
+// stand on their own. Other providers group by a plan window length and reset second (or, for accounts with only
+// per-model windows, by model scope, window length and reset second across distinct reporting sources), except when a
+// gateway reports distinct accounts. Their windows are taken per length (and model) from the newest sample. Expired
+// windows and accounts with no live window are dropped. Samples older than usageHubMaxAge are dropped, and the
+// remaining samples are marked stale according to their source. Accounts show where they were seen and the gateway's
+// name when available. The most used accounts come first, stale ones last.
 func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAccount {
 	var live, passed []proto.UsageAccount
 	for _, a := range in {
@@ -249,20 +250,26 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 		return i
 	}
 	type key struct {
-		provider string
-		scope    string
-		minutes  int
-		resets   int64
-		local    bool
+		provider  string
+		scope     string
+		minutes   int
+		resets    int64
+		local     bool
+		modelOnly bool
 	}
 	seen := map[key]int{}
 	codexAccounts := map[string]int{}
 	// A component can grow through several samples. Checking only the first-seen sample lets a local sample bridge two
-	// different accounts of one gateway, so carry every component's refs and reject any conflict before joining it.
+	// different accounts of one gateway (#7324), or a remote sample bridge two distinct model-only sources on one
+	// machine (#1904), so carry every component's refs and local origins and reject any conflict before joining it.
 	refs := make(map[int][]string, len(live))
+	origins := make(map[int][]string, len(live))
 	for i, a := range live {
 		if a.Ref != "" {
 			refs[i] = []string{a.Ref}
+		}
+		if a.Local && a.Origin != "" {
+			origins[i] = []string{a.Origin}
 		}
 	}
 	// One launcher's balance samples are one row, whatever their amounts and sample times (#11825).
@@ -289,11 +296,15 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			continue
 		}
 		provider := canonicalUsageProvider(a.Provider)
+		hasPlan := slices.ContainsFunc(a.Windows, func(w proto.UsageWindow) bool { return w.Model == "" })
 		for _, w := range a.Windows {
-			if w.ResetsAt == nil || w.Model != "" {
+			if w.ResetsAt == nil || (hasPlan && w.Model != "") {
 				continue
 			}
-			k := key{provider: provider, minutes: w.WindowMinutes, resets: w.ResetsAt.Unix()}
+			k := key{provider: provider, minutes: w.WindowMinutes, resets: w.ResetsAt.Unix(), modelOnly: !hasPlan}
+			if !hasPlan {
+				k.scope = usageWindowModelKey(provider, w.Model)
+			}
 			if provider == antigravityUsageProvider {
 				// Reconcile local and external Antigravity windows individually in the display response.
 				k.scope, k.local = antigravityQuotaScope(a, w), a.Local
@@ -315,12 +326,23 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 					}
 				}
 			}
+			if k.modelOnly && !conflict {
+				for _, a := range origins[left] {
+					for _, b := range origins[right] {
+						if sameMachineOtherOrigin(a, b) {
+							conflict = true
+						}
+					}
+				}
+			}
 			if conflict {
 				continue
 			}
 			parent[left] = right
 			refs[right] = append(refs[right], refs[left]...)
 			delete(refs, left)
+			origins[right] = append(origins[right], origins[left]...)
+			delete(origins, left)
 		}
 	}
 	groups := map[int][]proto.UsageAccount{}
@@ -365,6 +387,7 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 			model   string
 		}
 		bySlot := map[slot]proto.UsageWindow{}
+		provider := canonicalUsageProvider(newest.Provider)
 		var sources, machines []string
 		for i, m := range members {
 			if acct.Plan == "" && m.Plan != "" { // the newest sample that knows the plan names the account
@@ -380,7 +403,7 @@ func mergeUsageAccounts(in []proto.UsageAccount, now time.Time) []proto.UsageAcc
 				continue // older snapshots may describe different quota windows
 			}
 			for _, w := range m.Windows {
-				k := slot{w.WindowMinutes, w.Model}
+				k := slot{w.WindowMinutes, usageWindowModelKey(provider, w.Model)}
 				if _, ok := bySlot[k]; !ok {
 					bySlot[k] = w
 				}
@@ -490,6 +513,25 @@ func sameSourceOtherAccount(a, b string) bool {
 	sa, _, okA := strings.Cut(a, ":")
 	sb, _, okB := strings.Cut(b, ":")
 	return okA && okB && sa == sb && a != b
+}
+
+// sameMachineOtherOrigin: both origins name distinct local sources on one machine ("<machine id>/<source>"). Two
+// model-only accounts read from separate local sources on the same machine are not merged together.
+func sameMachineOtherOrigin(a, b string) bool {
+	ma, _, okA := strings.Cut(a, "/")
+	mb, _, okB := strings.Cut(b, "/")
+	return okA && okB && ma != "" && ma == mb && a != b
+}
+
+// usageWindowModelKey normalizes a per-model window's scope for cross-machine deduplication and slot merging.
+func usageWindowModelKey(provider, model string) string {
+	if model == "" {
+		return ""
+	}
+	if provider == antigravityUsageProvider {
+		return antigravityModelScope(model)
+	}
+	return strings.ToLower(strings.TrimSpace(model))
 }
 
 // mostUsed is the used percentage of the account's fullest plan window: a per-model allowance that ran out is not the

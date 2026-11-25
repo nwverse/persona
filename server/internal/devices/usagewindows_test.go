@@ -523,3 +523,174 @@ func TestUsagePollDistinguishesUnidentifiedCodexHomesOnOneMachine(t *testing.T) 
 		t.Errorf("changing the source order changed the row IDs or names: %v to %v", first, after)
 	}
 }
+
+func TestMergeUsageAccountsDedupesModelOnlyAccountsAcrossMachines(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	fiveA, weekA := now.Add(2*time.Hour), now.Add(3*24*time.Hour)
+	fiveB, weekB := now.Add(3*time.Hour), now.Add(4*24*time.Hour)
+	mw := func(label string, minutes int, used float64, resets time.Time, model string) proto.UsageWindow {
+		w := uw(label, minutes, used, resets)
+		w.Model = model
+		return w
+	}
+
+	// Three machines reporting the same local Antigravity account (only per-model windows) must merge into one row.
+	agyMachines := []usageSource{
+		{id: "node-a", name: "node-a", online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{{UsageAccount: proto.UsageAccount{
+				Provider: "agy", Name: "Antigravity", SampledAt: now.Add(-5 * time.Minute),
+				Windows: []proto.UsageWindow{
+					mw("5h", 300, 100, fiveA, "Claude and GPT models"),
+					mw("7d", 10080, 100, weekA, "Claude and GPT models"),
+					mw("5h", 300, 10, fiveB, "Gemini Models"),
+					mw("7d", 10080, 20, weekB, "Gemini Models"),
+				},
+			}}}}, nil
+		}},
+		{id: "node-b", name: "node-b", online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{{UsageAccount: proto.UsageAccount{
+				Provider: "agy", Name: "Antigravity", SampledAt: now.Add(-time.Minute),
+				Windows: []proto.UsageWindow{
+					mw("5h", 300, 100, fiveA, "Claude and GPT models"),
+					mw("7d", 10080, 100, weekA, "Claude and GPT models"),
+					mw("5h", 300, 15, fiveB, "Gemini Models"),
+					mw("7d", 10080, 25, weekB, "Gemini Models"),
+				},
+			}}}}, nil
+		}},
+		{id: "node-c", name: "node-c", online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
+			return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{{UsageAccount: proto.UsageAccount{
+				Provider: "agy", Name: "Antigravity", SampledAt: now.Add(-3 * time.Minute),
+				Windows: []proto.UsageWindow{
+					mw("5h", 300, 95, fiveA, "Claude and GPT models"),
+					mw("7d", 10080, 98, weekA, "Claude and GPT models"),
+					mw("5h", 300, 12, fiveB, "Gemini Models"),
+					mw("7d", 10080, 22, weekB, "Gemini Models"),
+				},
+			}}}}, nil
+		}},
+	}
+	var hub usageWindowsHub
+	got := hub.poll(context.Background(), agyMachines, now)
+	if len(got) != 1 {
+		t.Fatalf("expected 3 machines with same model-only account to merge into 1 row, got %d: %+v", len(got), got)
+	}
+	acct := got[0]
+	if acct.Provider != "antigravity" || acct.Name != "Antigravity" || !slices.Equal(acct.Machines, []string{"node-a", "node-b", "node-c"}) {
+		t.Fatalf("unexpected merged account metadata: %+v", acct)
+	}
+	if !acct.SampledAt.Equal(now.Add(-time.Minute)) || len(acct.Windows) != 4 {
+		t.Fatalf("expected newest sample and 4 deduplicated windows: %+v", acct)
+	}
+	bySlot := map[string]float64{}
+	for _, w := range acct.Windows {
+		bySlot[w.Label+"|"+w.Model] = w.UsedPercent
+	}
+	if bySlot["5h|Gemini Models"] != 15 || bySlot["7d|Gemini Models"] != 25 || bySlot["5h|Claude and GPT models"] != 100 {
+		t.Fatalf("newest machine's per-model windows did not win: %v", bySlot)
+	}
+
+	// Generic provider with only per-model windows also merges across machines and normalizes model casing.
+	generic := []proto.UsageAccount{
+		{Provider: "acct-alpha", Name: "Alpha", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now.Add(-4 * time.Minute),
+			Windows: []proto.UsageWindow{mw("5h", 300, 10, fiveA, "Model-A"), mw("7d", 10080, 30, weekB, "model-b")}},
+		{Provider: "acct-alpha", Name: "Alpha", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now.Add(-time.Minute),
+			Windows: []proto.UsageWindow{mw("5h", 300, 20, fiveA, "model-a"), mw("7d", 10080, 40, weekB, "Model-B")}},
+	}
+	mergedGeneric := mergeUsageAccounts(generic, now)
+	if len(mergedGeneric) != 1 || mergedGeneric[0].Name != "Alpha" || !slices.Equal(mergedGeneric[0].Machines, []string{"node-a", "node-b"}) || len(mergedGeneric[0].Windows) != 2 {
+		t.Fatalf("expected generic model-only multi-machine merge: %+v", mergedGeneric)
+	}
+	if mergedGeneric[0].Windows[0].UsedPercent != 20 || mergedGeneric[0].Windows[1].UsedPercent != 40 {
+		t.Fatalf("expected newest generic window values: %+v", mergedGeneric[0].Windows)
+	}
+	// Permutation invariance across input order.
+	reversed := mergeUsageAccounts([]proto.UsageAccount{generic[1], generic[0]}, now)
+	if len(reversed) != 1 || reversed[0].ID != mergedGeneric[0].ID || reversed[0].Name != mergedGeneric[0].Name {
+		t.Fatalf("order changed merged row: %+v vs %+v", reversed, mergedGeneric)
+	}
+}
+
+func TestMergeUsageAccountsKeepsDistinctModelOnlyAccountsApart(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	week := now.Add(3 * 24 * time.Hour)
+	mw := func(used float64, resets time.Time, model string) proto.UsageWindow {
+		w := uw("7d", 10080, used, resets)
+		w.Model = model
+		return w
+	}
+
+	// Different reset times across machines remain distinct accounts.
+	diffResets := mergeUsageAccounts([]proto.UsageAccount{
+		{Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now, Windows: []proto.UsageWindow{mw(10, week, "Gemini Models")}},
+		{Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now, Windows: []proto.UsageWindow{mw(20, week.Add(time.Hour), "Gemini Models")}},
+	}, now)
+	if len(diffResets) != 2 {
+		t.Fatalf("accounts with different resets must stay separate: %+v", diffResets)
+	}
+
+	// Same reset time on different model pools must stay separate.
+	diffModels := mergeUsageAccounts([]proto.UsageAccount{
+		{Provider: "acct-alpha", Name: "Alpha", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now, Windows: []proto.UsageWindow{mw(10, week, "model-a")}},
+		{Provider: "acct-alpha", Name: "Alpha", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now, Windows: []proto.UsageWindow{mw(20, week, "model-b")}},
+	}, now)
+	if len(diffModels) != 2 {
+		t.Fatalf("accounts with different model scopes must stay separate: %+v", diffModels)
+	}
+
+	// A remote machine must not bridge two distinct model-only local sources on one machine.
+	noLocalBridge := mergeUsageAccounts([]proto.UsageAccount{
+		{Provider: "acct-alpha", Name: "Seat", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now, Windows: []proto.UsageWindow{mw(10, week, "model-a")}},
+		{Provider: "acct-alpha", Name: "Seat", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now, Windows: []proto.UsageWindow{mw(15, week, "model-a")}},
+		{Provider: "acct-alpha", Name: "Seat", Local: true, Origin: "node-a/1", Machines: []string{"node-a"}, SampledAt: now, Windows: []proto.UsageWindow{mw(20, week, "model-a")}},
+	}, now)
+	if len(noLocalBridge) != 2 {
+		t.Fatalf("remote sample must not bridge two sources on the same machine: %+v", noLocalBridge)
+	}
+
+	// Distinct gateway seats with only per-model windows and matching resets stay separate.
+	gatewaySeats := mergeUsageAccounts([]proto.UsageAccount{
+		{Provider: "acct-alpha", Name: "Seat A", Ref: "gw1:a", Origin: "gw1:a", Sources: []string{"Relay"}, SampledAt: now, Windows: []proto.UsageWindow{mw(10, week, "model-a")}},
+		{Provider: "acct-alpha", Name: "Seat B", Ref: "gw1:b", Origin: "gw1:b", Sources: []string{"Relay"}, SampledAt: now, Windows: []proto.UsageWindow{mw(20, week, "model-a")}},
+	}, now)
+	if len(gatewaySeats) != 2 {
+		t.Fatalf("two seats of one gateway must stay separate: %+v", gatewaySeats)
+	}
+
+	// A plan-windowed account and a model-only account sharing only a model window reset must stay separate.
+	planVsModelOnly := mergeUsageAccounts([]proto.UsageAccount{
+		{Provider: "claude", Name: "Plan", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now,
+			Windows: []proto.UsageWindow{uw("7d", 10080, 10, week.Add(time.Hour)), mw(90, week, "model-a")}},
+		{Provider: "claude", Name: "ModelOnly", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now,
+			Windows: []proto.UsageWindow{mw(50, week, "model-a")}},
+	}, now)
+	if len(planVsModelOnly) != 2 {
+		t.Fatalf("plan-windowed account must not merge with model-only account via per-model window: %+v", planVsModelOnly)
+	}
+
+	// Two local Antigravity machines merge first, then reconcile cleanly with an external Antigravity source.
+	nodeA := proto.UsageAccount{Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-a/0", Machines: []string{"node-a"}, SampledAt: now.Add(-2 * time.Minute),
+		Windows: []proto.UsageWindow{mw(100, week, "Claude and GPT models"), mw(30, week, "Gemini Models")}}
+	nodeB := proto.UsageAccount{Provider: "agy", Name: "Antigravity", Local: true, Origin: "node-b/0", Machines: []string{"node-b"}, SampledAt: now,
+		Windows: []proto.UsageWindow{mw(100, week, "Claude and GPT models"), mw(35, week, "Gemini Models")}}
+	extGemini := proto.UsageAccount{Provider: "antigravity", Name: "Antigravity · Gemini", Pass: true, Origin: "ext#0", Sources: []string{"External"}, SampledAt: now.Add(-time.Minute),
+		Windows: []proto.UsageWindow{uw("7d", 10080, 32, week)}}
+	reconciled := usageWindowsAnswer(mergeUsageAccounts([]proto.UsageAccount{nodeA, nodeB, extGemini}, now), nil, now)["accounts"].([]proto.UsageAccount)
+	if len(reconciled) != 2 {
+		t.Fatalf("expected 1 external Gemini row + 1 merged local Claude/GPT row, got %d: %+v", len(reconciled), reconciled)
+	}
+	var gotLocal, gotExt *proto.UsageAccount
+	for i := range reconciled {
+		if reconciled[i].Pass {
+			gotExt = &reconciled[i]
+		} else {
+			gotLocal = &reconciled[i]
+		}
+	}
+	if gotExt == nil || gotLocal == nil || !slices.Equal(gotExt.Machines, []string{"node-a", "node-b"}) || gotExt.Windows[0].UsedPercent != 35 {
+		t.Fatalf("external row did not receive merged multi-machine reading: ext=%+v local=%+v", gotExt, gotLocal)
+	}
+	if gotLocal.Name != "Antigravity" || len(gotLocal.Windows) != 1 || gotLocal.Windows[0].Model != "Claude and GPT models" || !slices.Equal(gotLocal.Machines, []string{"node-a", "node-b"}) {
+		t.Fatalf("remaining local pool should be one merged row: %+v", gotLocal)
+	}
+}
