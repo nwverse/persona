@@ -83,6 +83,7 @@ type Hub struct {
 	fsWatchForceMu       sync.Mutex
 	fsWatchForceByID     map[string]bool
 	push                 *Pusher
+	gradingReconcile     pushGradingLayerReconciler
 	agentWork            agentWork    // whether the manager is there to ask (agents_link.go)
 	store                Store        // nil in unit tests: nothing is persisted
 	lockTests            lockTestWake // wakes the lock test dispatcher when a test is scheduled (locktest.go)
@@ -184,6 +185,7 @@ type Hub struct {
 
 	secret       secretState  // secretkey.go
 	devtok       devTokens    // device token lookups (devicetokens.go)
+	readonlyMu   sync.Mutex   // serializes active-cap checks on read-only session issuance (readonly_sessions.go)
 	shareIngress shareIngress // anonymous admission limits; no sharing business state
 	public       publicState  // TLS identity, listener and advertised addresses (public.go)
 	sends        sendLog      // messages being / just sent, by client_msg_id (send.go)

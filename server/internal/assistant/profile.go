@@ -118,6 +118,8 @@ type Settings struct {
 	TodosV2 *bool `json:"todos_v2,omitempty"`
 	// IntegrationsV2 enables the unified experimental Integrations & Extensions experience (#14802, #14805). nil is off (the default).
 	IntegrationsV2 *bool `json:"integrations_v2,omitempty"`
+	// LabsSeen is the set of experiment IDs acknowledged on any client of this assistant.
+	LabsSeen []string `json:"labs_seen,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -822,10 +824,11 @@ type assistantView struct {
 	MainBackgroundFolded    bool `json:"main_background_folded"`
 	FoldRoutineRelayReplies bool `json:"fold_routine_relay_replies"`
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
-	RecentTaskChats bool `json:"recent_task_chats"`
-	WorkGuide       bool `json:"work_guide"`
-	TodosV2         bool `json:"todos_v2"`
-	IntegrationsV2  bool `json:"integrations_v2"`
+	RecentTaskChats bool     `json:"recent_task_chats"`
+	WorkGuide       bool     `json:"work_guide"`
+	TodosV2         bool     `json:"todos_v2"`
+	IntegrationsV2  bool     `json:"integrations_v2"`
+	LabsSeen        []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
 	MeetingTranscriptionDefault   string   `json:"meeting_transcription_default"`
@@ -901,6 +904,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		WorkGuide:               v.workGuideOn(),
 		TodosV2:                 v.todosV2On(),
 		IntegrationsV2:          v.integrationsV2On(),
+		LabsSeen:                append([]string{}, v.LabsSeen...),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DeliveryGate:            deliveryGateOf(v),
 		DoneNeedsDelivery:       deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
@@ -931,20 +935,29 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			// Select the headless conversations before copying, decorating or serializing the inventory: coding
 			// sessions can outnumber them by thousands.
 			if m, found := s.fleetMachine(d.ID); found {
-				list = s.decorateInventory(m.ID, s.assistantSessions(m), false)
+				list = s.decorateInventory(m.ID, s.assistantSessions(ctx, m), false)
 			}
 		} else {
 			list, _ = s.sessions(ctx, d.ID)
 		}
 		for _, c := range list {
-			if c.Assistant && !c.IsDeleted() && spaceOf(c) == sp && (withArchived || !c.Archived) {
-				out.Conversations = append(out.Conversations, c)
+			if !c.Assistant || c.IsDeleted() || !(withArchived || !c.Archived) {
+				continue
 			}
+			rowSpace, known := s.conversationRowSpace(ctx, c)
+			if !known || rowSpace != sp {
+				continue
+			}
+			c.Space = rowSpace
+			out.Conversations = append(out.Conversations, c)
 		}
 	}
 	if sp == "" && v.MainMachineID != "" && v.MainMachineID != v.MachineID {
-		if c, ok := s.session(ctx, v.MainMachineID, v.Main); ok && c.Assistant && spaceOf(c) == "" {
-			out.Conversations = append(out.Conversations, c)
+		if c, ok := s.session(ctx, v.MainMachineID, v.Main); ok && c.Assistant {
+			if rowSpace, known := s.conversationRowSpace(ctx, c); known && rowSpace == "" {
+				c.Space = rowSpace
+				out.Conversations = append(out.Conversations, c)
+			}
 		}
 	}
 	return out
@@ -968,7 +981,7 @@ func (s *Service) profileRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
-			out.Conversations = extensionConversations(out.Conversations)
+			out.Conversations = s.extensionViewConversations(r.Context(), out.Conversations)
 		}
 		apierr.WriteJSON(w, out)
 	})

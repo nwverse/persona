@@ -1277,6 +1277,26 @@ for a pairing and keeps them in `ShellSession.modules` (by id), with the hub's h
 A module that is off is absent: no page registered, no menu action, no Settings row, nothing left over. The voice module
 declares `module.voice`; its "Voice chat" item still appears only while the hub runs a voice extension, as before.
 
+**A hub module the app carries no module for** (`HubModule`, #15214). Some of the hub's modules have no `:module:<id>`
+project here: what they produced is shown by pages another module or the core draws. The app follows their flag by the
+same rule (`ModuleRegistry.isActive(HubModule, features)`) without listing them in `Modules.kt`, so
+`-Ppersona.modules` is unaffected. Off takes away the module's new activity and entry points and nothing else: what it
+produced earlier stays listed, readable and searchable (#13430). Today that is `HubModule.Recording`
+(`module.recording`):
+
+- The Knowledge list, search, deep links and a recording's page (transcript, stored minutes, facts, copy, share) are
+  as they are with the module on; they read the core's `kb` routes, which the hub keeps.
+- A recording's page hides the controls that write through the recording module's routes: Make / Regenerate minutes,
+  Add to to-dos / Add all, Hand to Agent. Tagging (`PUT /api/v1/kb/recordings/{id}`, a core route) and Ask Persona (a
+  chat message) stay.
+- The hub's `paused` on a recording's detail and list entry is decoded into the closed `RecordingPaused`
+  (`ModuleOff`, and `Unknown` for a reason a newer hub names). Paused for `module_off`, the minutes section shows
+  "Minutes are paused" where "Writing the minutes…" or "Updating…" stood, and the page stops reading the recording
+  again every five seconds; an unknown reason changes nothing.
+- The flag is read once, where the page is registered (`knowledgeEntries`), and becomes a `RecordingAccess` with the
+  recording's `paused` mark; `minutesView`, the hand-off entry and the poll take that and read neither again.
+  Tests: `ModuleRegistryTest`, `RecordingPausedContractTest`, `KnowledgeMinutesTest`, `RecordingModuleOffScreenTest`.
+
 ```sh
 cd android
 ./gradlew -Ppersona.modules= :app:testDebugUnitTest :app:lintDebug :app:assembleDebug   # Persona Core alone
