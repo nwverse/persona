@@ -66,6 +66,7 @@ func (h *Manager) Run(ctx context.Context) error {
 	go h.extensionMetricsLoop(ctx)
 	go h.pageLoop(ctx)
 	go h.sentLedgerLoop(ctx)
+	go h.larkSyncLoop(ctx) // the Lark user sync's daily runs (larksync_run.go)
 	h.apiMux = http.NewServeMux()
 	h.registerRoutes(h.apiMux)
 	close(h.started)

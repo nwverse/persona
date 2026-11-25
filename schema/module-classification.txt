@@ -164,6 +164,7 @@ go server/internal/kb core
 go server/internal/kbwire core
 go server/internal/knowledgeuihost core
 go server/internal/larkhost core
+go server/internal/larksyncwire core
 go server/internal/lazyre core
 go server/internal/lcuconfirm core
 go server/internal/link core
