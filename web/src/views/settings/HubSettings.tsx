@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ApiError, errorText } from "../../lib/api";
 import { ago } from "../../lib/format";
-import { formatDate, t } from "../../i18n";
+import { formatDate, formatNumber, t } from "../../i18n";
 import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
 import {
   applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
@@ -23,6 +23,7 @@ import { RecoveryEntry } from "./RecoverySettings";
 import { HubUpdatePipeline, observeHubUpdate } from "./HubUpdatePipeline";
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
+const HISTORY_PAGE_SIZE = 5;
 
 function updateDate(value?: string): string {
   const iso = typeof value === "string" ? value : "";
@@ -365,24 +366,7 @@ function HubUpdates() {
 
       <Nodes development={status.source === "web-dev"} />
 
-      {history.length > 0 && (
-        <Group title={t("settings-hubsettings.history")}>
-          {history.slice(0, 10).map((r, i) => (
-            <div key={`${r.to_build}/${r.started ?? i}`} className="px-4 py-2.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={cx("text-[13px] font-medium", { green: "text-green", orange: "text-orange", red: "text-red" }[recordTone(r.result)])}>{recordTitle(r.result)}</span>
-                {r.auto && <Pill>{t("settings-hubsettings.auto")}</Pill>}
-                {r.source === "web-dev" && <Pill>{t("settings-hubsettings.web_dev")}</Pill>}
-                <span className="flex-1" />
-                <span className="text-submeta text-ink-3 tabular-nums">{updateDate(r.ended || r.started)}</span>
-              </div>
-              <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{`${r.from_version} → ${r.to_version}`}</div>
-              {r.commit && <div className="mt-0.5 font-mono text-submeta text-ink-3 tabular-nums">{datedCommit(r.commit, r.ended || r.started)}</div>}
-              {r.reason && <p className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{r.reason}</p>}
-            </div>
-          ))}
-        </Group>
-      )}
+      <UpdateHistory records={history} />
 
       <Dialog open={confirmBackup} onClose={() => setConfirmBackup(false)} title={t("settings-hubsettings.apply_backup")} width={400}
         footer={<>
@@ -409,6 +393,64 @@ function HubUpdates() {
         </p>
       </Dialog>
     </>
+  );
+}
+
+function UpdateHistory({ records }: { records: HubUpdateRecord[] }) {
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(records.length / HISTORY_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  if (page !== currentPage) setPage(currentPage);
+  if (records.length === 0) return null;
+
+  const start = (currentPage - 1) * HISTORY_PAGE_SIZE;
+  const title = t("settings-hubsettings.history");
+  return (
+    <Group title={title}>
+      {records.slice(start, start + HISTORY_PAGE_SIZE).map((record, index) => {
+        const time = record.ended || record.started;
+        const commit = record.commit?.slice(0, 12);
+        const showCommit = commit && !record.to_version.toLowerCase().includes(commit.toLowerCase());
+        const tone = { green: "text-green", orange: "text-orange", red: "text-red" }[recordTone(record.result)];
+        const label = record.result === "held" ? t("settings-hubsettings.history_held")
+          : record.result === "failed" ? t("settings-hubsettings.history_failed")
+            : recordTitle(record.result);
+        return (
+          <div key={`${record.to_build}/${record.started ?? start + index}`} className="px-2.5 py-2 sm:px-4">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-1">
+              <div className="flex min-h-5 flex-wrap items-center gap-x-1 gap-y-0.5">
+                <span className={cx("text-label font-medium sm:text-meta", tone)}>{label}</span>
+                {record.auto && <Pill size="sm">{t("settings-hubsettings.auto")}</Pill>}
+                {record.source === "web-dev" && <Pill size="sm">{t("settings-hubsettings.web_dev")}</Pill>}
+              </div>
+              <time dateTime={time} className="whitespace-nowrap text-submeta leading-5 text-ink-3 tabular-nums max-sm:tracking-tight">{updateDate(time)}</time>
+            </div>
+            <div className="mt-0.5 flex gap-1 font-mono text-submeta text-ink-3">
+              <span className="truncate" title={record.from_version}>{record.from_version}</span>
+              <span className="shrink-0">{" → "}</span>
+              <span className="truncate" title={record.to_version}>{record.to_version}</span>
+            </div>
+            {showCommit && <div className="mt-0.5 font-mono text-submeta text-ink-3">{commit}</div>}
+            {record.reason && <p className="mt-0.5 text-submeta leading-snug text-ink-3 wrap-anywhere">{record.reason}</p>}
+          </div>
+        );
+      })}
+      {pageCount > 1 && (
+        <nav aria-label={title} className="flex flex-wrap items-center justify-between gap-x-2 px-2.5 py-1 sm:px-4">
+          <span role="status" className="text-submeta text-ink-3 tabular-nums">
+            {t("settings-hubsettings.history_page", {
+              page: formatNumber(currentPage), pages: formatNumber(pageCount), total: formatNumber(records.length),
+            })}
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <Button tone="quiet" size="sm" className="pointer-coarse:min-h-11"
+              disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>{t("settings-hubsettings.history_previous")}</Button>
+            <Button tone="quiet" size="sm" className="pointer-coarse:min-h-11"
+              disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>{t("settings-hubsettings.history_next")}</Button>
+          </div>
+        </nav>
+      )}
+    </Group>
   );
 }
 
