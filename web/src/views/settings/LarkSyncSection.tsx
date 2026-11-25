@@ -243,27 +243,30 @@ function BotBlock({ view, bot, busy, confirm, setConfirm, onConnect, onResume, o
   return (
     <>
       <Row icon={bot.primary ? "chat" : "link"} label={botTitle(bot)} hint={hint} wrapHint stackOnNarrow>
-        {approval && <Pill tone={approval.tone}>{approval.text}</Pill>}
-        {ready && (
-          <Button tone="quiet" icon="plus" onClick={onConnect}>
-            {t("settings-larksync.connect_account")}
-          </Button>
-        )}
-        {!ready && !bot.primary && bot.registering && (
-          <Button tone="quiet" icon="image" busy={busy === `bot:${bot.bot_id}`} onClick={onResume}>
-            {t("settings-larksync.continue_setup")}
-          </Button>
-        )}
-        {!bot.primary && (
-          <RowConfirm
-            open={confirm === `bot:${bot.bot_id}`}
-            busy={busy === `bot:${bot.bot_id}`}
-            confirm={t("settings-larksync.remove_bot")}
-            onCancel={() => setConfirm("")}
-            onConfirm={onRemoveBot}
-            trigger={<IconButton icon="x" label={t("settings-larksync.remove_bot_named", { name: botTitle(bot) })} onClick={() => setConfirm(`bot:${bot.bot_id}`)} />}
-          />
-        )}
+        {/* On a phone the controls go under the name, the row's width, and wrap there rather than run off the edge. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2 max-sm:w-full">
+          {approval && <Pill tone={approval.tone}>{approval.text}</Pill>}
+          {ready && (
+            <Button tone="quiet" icon="plus" onClick={onConnect}>
+              {t("settings-larksync.connect_account")}
+            </Button>
+          )}
+          {!ready && !bot.primary && bot.registering && (
+            <Button tone="quiet" icon="image" busy={busy === `bot:${bot.bot_id}`} onClick={onResume}>
+              {t("settings-larksync.continue_setup")}
+            </Button>
+          )}
+          {!bot.primary && (
+            <RowConfirm
+              open={confirm === `bot:${bot.bot_id}`}
+              busy={busy === `bot:${bot.bot_id}`}
+              confirm={t("settings-larksync.remove_bot")}
+              onCancel={() => setConfirm("")}
+              onConfirm={onRemoveBot}
+              trigger={<IconButton icon="x" label={t("settings-larksync.remove_bot_named", { name: botTitle(bot) })} onClick={() => setConfirm(`bot:${bot.bot_id}`)} />}
+            />
+          )}
+        </div>
       </Row>
       {bindings.map((b) => (
         <BindingRow
