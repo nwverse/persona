@@ -115,6 +115,7 @@ type AssistantHealthClaudeMD struct {
 	HealthDir      string
 	Language       string
 	Water          bool // The owner's added intake items; false when the Health module is absent or unavailable.
+	Strength       bool
 	Protein        bool
 	ItemsAvailable bool // The module can add items, including when neither intake item is added yet.
 }
@@ -1365,9 +1366,6 @@ type WorkspaceSession struct {
 func RenderWorkspaceMention(w WorkspaceMention) string {
 	return render("assistant/workspace_mention", w)
 }
-
-// RenderWorkoutReport describes one consented workout, never a medical diagnosis.
-func RenderWorkoutReport(data string) string { return render("assistant/workout_report", data) }
 
 // SuperviseCloseout is an agent's own closeout as a supervision message shows it: its claim, to be checked.
 type SuperviseCloseout struct {

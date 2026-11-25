@@ -61,6 +61,18 @@ describe("WorkGroup", () => {
     expect(html).not.toContain("echo 1");
     expect(html).not.toContain("echo 6");
   });
+
+  it("thinking-only nested group omits the fallback layers icon and keeps spinner when live (#14866)", () => {
+    const thought: Step = { kind: "thinking", id: "th#0", item: { id: "th#0", seq: 1, role: "assistant", kind: "thinking", text: "Checking details" } };
+    const doneHtml = renderToStaticMarkup(<WorkGroup g={group([thought], false, 1000)} p={{ ...props, nested: true }} />);
+    expect(doneHtml).toContain(">已工作 1s<");
+    expect(doneHtml.match(/<svg\b/g)).toHaveLength(1); // chevron only, no leading layers icon
+    expect(doneHtml).not.toContain("border-l-2");
+    expect(doneHtml).toContain("pl-3");
+
+    const liveHtml = renderToStaticMarkup(<WorkGroup g={group([thought], true)} p={{ ...props, nested: true }} />);
+    expect(liveHtml).toContain("animation:spin");
+  });
 });
 
 describe("ActionRow", () => {
