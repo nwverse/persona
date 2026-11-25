@@ -82,65 +82,65 @@ func strengthReportInputs(rows, prior []assistantwire.StrengthSet, es []assistan
 }
 
 // WorkoutReport reads current data for each run; it never changes the stored task or draft.
-func (s *Service) WorkoutReport(ctx context.Context, id, language string) (string, bool, error) {
+func (s *Service) WorkoutReport(ctx context.Context, id, language string) (assistantwire.StrengthReportPrompt, bool, error) {
 	st := s.h.StrengthStore()
 	if st == nil {
-		return "", false, nil
+		return assistantwire.StrengthReportPrompt{}, false, nil
 	}
 	added, err := s.strengthAdded(ctx)
 	if err != nil || !added {
-		return "", false, err
+		return assistantwire.StrengthReportPrompt{}, false, err
 	}
 	w, err := st.HealthStrengthWorkout(ctx, id)
 	if err != nil || w == nil {
-		return "", false, err
+		return assistantwire.StrengthReportPrompt{}, false, err
 	}
 	rows, err := st.HealthStrengthSets(ctx, assistantwire.StrengthSetFilter{Workout: id})
 	if err != nil {
-		return "", false, err
+		return assistantwire.StrengthReportPrompt{}, false, err
 	}
 	prior, err := st.HealthStrengthSets(ctx, assistantwire.StrengthSetFilter{Until: w.Start})
 	if err != nil {
-		return "", false, err
+		return assistantwire.StrengthReportPrompt{}, false, err
 	}
 	// Pre-start sets in the workout's inclusive window are current sets, never comparison baselines.
 	prior = slices.DeleteFunc(prior, func(v assistantwire.StrengthSet) bool { return v.WorkoutID != nil && *v.WorkoutID == id })
 	es, err := st.HealthStrengthExercises(ctx, true)
 	if err != nil {
-		return "", false, err
+		return assistantwire.StrengthReportPrompt{}, false, err
 	}
 	strength := &prompts.WorkoutStrength{}
 	if len(rows) > 0 {
 		raw, err := json.Marshal(strengthReportInputs(rows, prior, es, s.h.Location(ctx)))
 		if err != nil {
-			return "", false, err
+			return assistantwire.StrengthReportPrompt{}, false, err
 		}
 		strength.Sets = string(raw)
 	}
 	drafts, err := st.HealthStrengthDrafts(ctx, "open")
 	if err != nil {
-		return "", false, err
+		return assistantwire.StrengthReportPrompt{}, false, err
 	}
 	day := w.Start.In(s.h.Location(ctx)).Format("2006-01-02")
 	for _, d := range drafts {
 		if d.Kind == "plan" && d.PlanDay != nil && d.PlanDay.Format("2006-01-02") == day {
 			var body strengthDraftBody
 			if err = json.Unmarshal(d.Body, &body); err != nil {
-				return "", false, err
+				return assistantwire.StrengthReportPrompt{}, false, err
 			}
 			plan, err := strengthReportPlan(body.Sets, es)
 			if err != nil {
-				return "", false, err
+				return assistantwire.StrengthReportPrompt{}, false, err
 			}
 			raw, err := json.Marshal(plan)
 			if err != nil {
-				return "", false, err
+				return assistantwire.StrengthReportPrompt{}, false, err
 			}
 			strength.PlanDraft, strength.Plan = d.ID, string(raw)
 			break
 		}
 	}
-	return prompts.RenderWorkoutReport(prompts.WorkoutReport{Data: string(w.Report), Language: language, Strength: strength}), true, nil
+	return assistantwire.StrengthReportPrompt{Prompt: prompts.RenderWorkoutReport(prompts.WorkoutReport{Data: string(w.Report), Language: language, Strength: strength}), Start: w.Start}, true, nil
 }
 
 type strengthReportPlanSet struct {

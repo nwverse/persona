@@ -549,4 +549,3 @@ def register(d):
     d.route("PUT", r"/api/v1/assistant", lambda h, req: put_assistant(d, h, req))
     d.route("GET", r"/mock/dashboards", lambda h, req: control(d, h, req))
     d.on_reset(lambda: (seed(MODE), _keep_sidebar_keys(hub)))
-

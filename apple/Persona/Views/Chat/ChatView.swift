@@ -2889,6 +2889,7 @@ struct ChatView: View {
                 }
                 if !cardsDocked, !pendingCards.isEmpty {
                     PendingCards(cards: pendingCards, room: footerRoom)
+                        .stackSegment() // keep the deepest card subtree out of the page's opaque view chain (#15274)
                         .environment(\.cardSources, cardSources)
                         .task(id: CardSourceInputs(cards: pendingCards.map(\.id), count: store.items.count, last: store.items.last?.id)) {
                             findCardSources()

@@ -174,10 +174,47 @@ What the user jots down in passing (the share sheet, the watch, Siri, the web; #
 
 ## API
 
+### Tell Health
+
+Tell Health (#14714) is for people who want to speak or send a sentence to Health from their phone or watch.
+`POST /api/v1/assistant/health/tell` stores `{client_id,text}` and immediately returns a receipt, before model work.
+A retry with the same client ID keeps the first sentence. The receipt means received; delivery and the answer follow.
+
+The first Tell Health message or strength workout report starts the local day's **training chat**. Later sentences,
+the strength workout report and its plan stay in that chat. Saying that strength training has started asks Health
+to review the last session and prepare a plan draft for confirmation. Only these two entry points select the
+training chat; an ordinary Health conversation does not become it. The target is always Health, even if extra
+request fields name a different space or chat. A gone, deleted or invalid chat is replaced. An offline computer waits
+in receipt order; the original sentence stays in storage until delivery is confirmed. Each sentence's failed attempts
+are at least 30 seconds apart, even when a new receipt wakes the worker; later sentences wait behind it.
+
+Before continuing a chat, the sentence's destination is saved. An uncertain continuation retries only that original
+computer and chat with the same once-only key, even if the training-chat pointer changes, a lookup fails or the
+manager restarts. Only a definite refusal before delivery, including a deleted chat, permits a new Health chat.
+The hub's lookup does not expose whether the current connection's session list is complete. A transient lookup
+failure before a sentence is bound to a chat can therefore replace the pointer and split one day's training across
+chats; it does not redirect a sentence already bound for continuation.
+
+The day uses the owner's time zone. Sentences use receipt time; reports use workout start time. A workout begun
+at 23:30 and reported at 00:40 continues the previous day's chat unless a sentence after midnight has already opened
+the new day's chat. A sentence received at 00:10 starts the new day; if it has done so, the late previous-day report
+opens a separate chat.
+Only the latest day's chat pointer is retained; late older reports cannot take it over. Simultaneous first
+sentences and reports can start separate chats. Shortcuts actions and automation setup are client features.
+
+Replies use the Health space's fixed notification text, even when answered quickly. After 24 hours or five failed
+attempts, a fixed notification says delivery could not be confirmed; at most one notice is sent per worker round for
+newly failed sentences. It includes no sentence content and the stored originals are retained. Claude Code starts
+can reuse a reserved conversation ID after a restart. Other launchers may choose their own IDs: a reported uncertain
+start is abandoned, but a manager restart after the chat starts and before delivery is recorded can repeat the sentence
+once. Tell Health remains available when the Health data module is absent or off, including the
+`health_tell` capability; the strength report and plan guidance require the module and an added strength item.
+
 For the exact protocol, see the "Assistant" table in `docs/protocol/protocol.md`.
 
 | Endpoint | How the Health space uses it |
 | --- | --- |
+| `POST /api/v1/assistant/health/tell` | `{client_id,text}` → stored receipt, then today's training chat. Full or watch answer role; Health only. See "Tell Health" and `docs/protocol/protocol.md` for states and limits. |
 | `POST /api/v1/assistant/conversations` | With `"space":"health"`, starts a new chat in the health directory (writing the health CLAUDE.md first). Combined with `"main":true` it returns 400 (the Health space has no main chat); an unknown `space` returns 400 |
 | `GET /api/v1/assistant?space=health` | Lists the Health space's chats; `cwd` is the health directory. Without `space` it lists only the assistant's own chats, and health chats no longer appear. `?archived=1` works the same; an unknown `space` returns 400 |
 | `GET /api/v1/assistant/memory?space=health` | The Health space's memory `{"files":[…],"dir"}` |
