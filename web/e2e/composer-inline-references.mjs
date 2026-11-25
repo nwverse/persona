@@ -166,7 +166,14 @@ async function scenario({ width, height, theme, touch = false, large = false }) 
         el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }));
       });
       await field.locator(token).waitFor();
-      assert.equal(await field.textContent(), "请检查\n粘贴内容 dropped.md ");
+      const withDrop = "请检查\n粘贴内容 dropped.md ";
+      assert.equal(await field.textContent(), withDrop);
+      await page.evaluate(() => navigator.clipboard.writeText("Example text. ".repeat(65)));
+      await page.keyboard.press("Control+v");
+      await page.getByRole("button", { name: /Pasted text/ }).click();
+      await page.getByRole("button", { name: "Expand into input" }).waitFor();
+      assert.equal(await field.textContent(), withDrop);
+      await page.getByRole("button", { name: "Remove pasted text" }).click();
       await field.press("Control+a");
       await field.press("Backspace");
       assert.equal(await field.textContent(), "");
