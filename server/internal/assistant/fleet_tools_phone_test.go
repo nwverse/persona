@@ -93,8 +93,20 @@ func TestAssistantInstructionsRequireDevicePhoneTools(t *testing.T) {
 	}
 
 	h.set(0, "phone_calendar_events")
-	if withCalendar := s.claudeMD(context.Background(), "", false); !strings.Contains(withCalendar, "iPhone 日历（`phone_calendar_events`）") {
+	withCalendar := s.claudeMD(context.Background(), "", false)
+	if !strings.Contains(withCalendar, "手机日历（`phone_calendar_events`）") {
 		t.Error("the available phone calendar is missing from schedule guidance")
+	}
+	for _, unwanted := range []string{"- **iPhone**", "phone_reminders_create", "快捷指令只能", "家庭设备先"} {
+		if strings.Contains(withCalendar, unwanted) {
+			t.Errorf("calendar-only tools still inject unrelated phone procedure %q", unwanted)
+		}
+	}
+
+	h.set(0, "phone_calendar_create_event")
+	if withCreate := s.claudeMD(context.Background(), "", false); strings.Contains(withCreate, "phone_reminders_create") ||
+		strings.Contains(withCreate, "手机日历（`phone_calendar_events`）") {
+		t.Error("calendar create alone injected reminder procedures or the unavailable calendar query tool")
 	}
 }
 

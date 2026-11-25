@@ -35,7 +35,7 @@ var Redistributable = map[string]string{
 	workGuideName:       "Persona’s own Assistant work management guide",
 	MachineOpsSkillName: "Persona's opt-in read-only machine diagnostics guide (docs/server/machines.md)",
 	"persona-office":    "Persona's own (personad office's skill, docs/assistant/office.md)",
-	"persona-views":     "Persona's own rich-view construction guide (docs/assistant/assistant-views.md)",
+	viewsGuideName:      "Persona's own rich-view construction guide (docs/assistant/assistant-views.md)",
 }
 
 // ForAgents are the built-in skills the agents Persona starts get too, as the plugin WritePlugin makes (the
@@ -71,6 +71,7 @@ const (
 	// Codex can discover both native skill roots. One canonical file keeps a single catalog entry.
 	runtimeGuideLink = "../../.claude/skills/" + workGuideName
 	workGuideName    = "persona-work"
+	viewsGuideName   = "persona-views"
 	// MachineOpsSkillName is the built-in opt-in read-only machine diagnostics skill (#13053).
 	MachineOpsSkillName  = "persona-machine-ops"
 	machineOpsDigestFile = ".persona-machine-ops-digest"
@@ -238,6 +239,23 @@ func WorkGuideReady(cwd string) bool {
 		WorkGuideInstalled(filepath.Join(cwd, ".agents", "skills"))
 }
 
+// ViewsGuideReady reports whether both native skill roots contain the managed rich-view guide. A newly introduced
+// built-in never adopts an existing same-name directory, so compact instructions wait rather than refer to a local
+// skill whose contents Persona does not know. Older nodes simply ignore views_guide_md and retain the full prompt.
+func ViewsGuideReady(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	for _, runtime := range []string{".claude", ".agents"} {
+		dir := filepath.Join(cwd, runtime, "skills")
+		stamp, _ := os.ReadFile(filepath.Join(dir, builtinStamp))
+		if !slices.Contains(installedNames(stamp), viewsGuideName) || !filePresent(filepath.Join(dir, viewsGuideName, "SKILL.md")) {
+			return false
+		}
+	}
+	return true
+}
+
 const guideDigestFile = ".persona-work-digest"
 
 func filePresent(path string) bool {
@@ -348,6 +366,14 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 		}
 		if n == MachineOpsSkillName && !ownsOps {
 			// Leave a handwritten or user-managed persona-machine-ops directory untouched.
+			if _, err := os.Lstat(filepath.Join(dir, n)); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
+		if n == viewsGuideName && !slices.Contains(installed, n) {
+			// This built-in is new to an upgrading node. An existing path is not a copy this binary owns.
 			if _, err := os.Lstat(filepath.Join(dir, n)); err == nil {
 				continue
 			} else if !os.IsNotExist(err) {

@@ -100,9 +100,9 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	if err != nil {
 		return "", err
 	}
-	// A leader's own direction notes follow its role policy (direction_notes.go): changing them restarts only this one,
-	// on a send that finds it idle. Former leaders keep their remaining tasks as side supervisors, without leader rules.
-	return s.leaderPolicy(ctx, id, policy, leadIdle(c, known)), nil
+	// A leader's own direction notes and leader/side role changes follow its role policy (direction_notes.go): both wait
+	// for an idle send and roll back together if that send is refused. Former leaders keep remaining tasks as side supervisors.
+	return s.leaderPolicy(ctx, id, policy, leadIdle(c, known), role)
 }
 
 func (s *Service) putSupervisionInstructions(ctx context.Context, machine, id string, p map[string]any) error {

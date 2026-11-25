@@ -59,6 +59,15 @@
 | New hub, older manager | `agents.start_params` keeps the older synchronous model naming behavior. The older manager does not understand the completion event, so the new guarded late rename requires a manager upgrade too. |
 | Older hub, new manager | Start parameters carry the local placeholder without a model wait. An older hub does not emit the completion event for a synchronous start and retains its legacy asynchronous post-start behavior; upgrade the hub for the guarded completion path. |
 
+### On-demand assistant skills
+
+| Pair | What happens |
+| --- | --- |
+| New manager, older node | `assistant.prepare.claude_md` retains the complete work and rich-view procedures. The older node ignores `work_guide_md` and `views_guide_md`, so it never refers to a built-in skill its binary does not carry. |
+| Older manager, new node | An absent `views_guide_md` keeps the manager's complete rich-view procedure. Existing `work_guide_md` behavior is unchanged. |
+| New manager and node | The node syncs both native skill roots before writing instructions. It selects compact rich-view guidance only when both managed `persona-views` copies are ready; if work guidance was requested, its readiness is checked independently. |
+| Local same-name skill | A newly introduced built-in does not adopt or replace an existing `persona-views` directory. The node retains the complete instructions because that local directory is not a verified managed copy. |
+
 ### MCP namespace / tools
 
 The hub sends its feature list in `devices.connected`, matching the capabilities advertised in `hello.features`.

@@ -262,6 +262,61 @@ func TestWorkGuidePrepareAndRollback(t *testing.T) {
 }
 
 // A resumed process can start before the reconnected manager prepares this directory again.
+func TestViewsGuidePrepareAndLegacyFallback(t *testing.T) {
+	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	n, _ := testNode(t)
+	n.dir, n.bin, n.logger = t.TempDir(), "/opt/example/personad", log.New(io.Discard, "", 0)
+	for _, tc := range []struct {
+		name, full, work, views, want string
+	}{
+		{name: "old manager", full: "full views", want: "full views"},
+		{name: "views ready", full: "full views", views: "short views", want: "short views"},
+		{name: "both guides ready", full: "full both", work: "short work with full views", views: "short both", want: "short both"},
+		{name: "old manager with work guide", full: "full both", work: "short work with full views", want: "short work with full views"},
+		{name: "views only after rollback", full: "full both", views: "short views", want: "short views"},
+		{name: "old manager after rollback", full: "full both", want: "full both"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params, _ := json.Marshal(map[string]any{"dir": ".persona/assistant", "claude_md": tc.full, "work_guide_md": tc.work, "views_guide_md": tc.views})
+			out, err := n.handle(t.Context(), "assistant.prepare", params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cwd := out.(map[string]any)["cwd"].(string)
+			for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
+				got, err := os.ReadFile(filepath.Join(cwd, name))
+				if err != nil || string(got) != tc.want {
+					t.Fatalf("%s: %q, %v; want %q", name, got, err, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestViewsGuidePrepareKeepsFullInstructionsForALocalSkillCollision(t *testing.T) {
+	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	n, _ := testNode(t)
+	n.dir, n.bin, n.logger = t.TempDir(), "/opt/example/personad", log.New(io.Discard, "", 0)
+	custom := filepath.Join(n.dir, "assistant", ".agents", "skills", "persona-views", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(custom), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(custom, []byte("custom"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	params, _ := json.Marshal(map[string]string{"dir": ".persona/assistant", "claude_md": "full instructions", "views_guide_md": "short instructions"})
+	if _, err := n.handle(t.Context(), "assistant.prepare", params); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{custom: "custom", filepath.Join(n.dir, "assistant", "AGENTS.md"): "full instructions"} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Fatalf("%s: %q, %v", path, got, err)
+		}
+	}
+}
+
 func TestWorkGuideSurvivesNodeRestart(t *testing.T) {
 	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
 	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())

@@ -64,8 +64,12 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	if _, err := s.prepare(ctx, "server"); err != nil {
 		t.Fatal(err)
 	}
-	if got := bare.prepared[0]["claude_md"]; got != s.claudeMD(ctx, "server", true) || bare.prepared[0]["dir"] != compat.StateDir+"/assistant" {
-		t.Fatalf("assistant.prepare: %v", bare.prepared[0])
+	if got := bare.prepared[0]["views_guide_md"]; got != s.claudeMD(ctx, "server", true) {
+		t.Fatalf("assistant.prepare compact instructions: %v", bare.prepared[0])
+	}
+	full, _ := bare.prepared[0]["claude_md"].(string)
+	if !strings.Contains(full, `"title":"选择方案"`) || bare.prepared[0]["dir"] != compat.StateDir+"/assistant" {
+		t.Fatalf("assistant.prepare must retain the complete fallback for older nodes: %v", bare.prepared[0])
 	}
 }
 
@@ -86,6 +90,19 @@ func TestAssistantRichViewPromptKeepsCoreGuidance(t *testing.T) {
 	for _, moved := range []string{"getBoundingClientRect", "stat_grid 把多项放进 stats 数组", `"title":"选择方案"`} {
 		if strings.Contains(text, moved) {
 			t.Fatalf("detailed view procedure remains inline: %s", moved)
+		}
+	}
+	full := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{FullViewGuide: true})
+	blocks := wire.AssistantViewBlocks(full)
+	if len(blocks) != 1 {
+		t.Fatalf("legacy fallback has %d complete examples, want 1", len(blocks))
+	}
+	if _, err := blocks[0].Parse(); err != nil {
+		t.Fatalf("legacy fallback teaches an invalid view: %v", err)
+	}
+	for _, want := range []string{"getBoundingClientRect", "stat_grid 把多项放进 stats 数组", "persona.reply", "persona.open"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("legacy fallback lost %q", want)
 		}
 	}
 }

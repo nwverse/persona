@@ -68,7 +68,8 @@ func (s *Service) assistantPrompt(ctx context.Context, here string, larkCLI bool
 		KnowledgeDir: s.kb.dir, LarkCLI: larkCLI, Language: answerLanguage(hello.Locale),
 		BackgroundSupervisor: s.backgroundOn(settings), UrgentCall: s.urgentPrompt(ctx)}
 	for _, tool := range s.phoneTools(ctx) {
-		if strings.HasPrefix(tool.Name, "phone_") && !strings.HasPrefix(tool.Name, "phone_write_queue_") {
+		if strings.HasPrefix(tool.Name, "phone_") && !strings.HasPrefix(tool.Name, "phone_write_queue_") &&
+			!strings.HasPrefix(tool.Name, "phone_calendar_") {
 			d.PhoneTools = true
 		}
 		if tool.Name == "phone_calendar_events" {
@@ -151,14 +152,18 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	// The digest of the hub's own part lets the extensions' data instructions ride along when it changes (the
 	// conversation restarts for it anyway) instead of restarting it on their own (extmgr extension_assistant_data.go).
 	pluginParams := map[string]any{"machine_id": machine}
-	var own, onDemand string
+	var own, onDemand, viewsGuide string
 	if tmpl == trackTemplateAssistant {
 		settings := s.settings(ctx)
 		d := s.assistantPrompt(ctx, machine, conns.LarkCLI, settings)
+		viewsGuide = prompts.RenderAssistantClaudeMD(d)
+		d.FullViewGuide = true
 		own = prompts.RenderAssistantClaudeMD(d)
 		if settings.workGuideOn() {
 			d.WorkGuide = true
 			onDemand = prompts.RenderAssistantClaudeMD(d)
+			d.FullViewGuide = false
+			viewsGuide = prompts.RenderAssistantClaudeMD(d)
 		}
 		sum := sha256.Sum256([]byte(own))
 		pluginParams["base_digest"] = hex.EncodeToString(sum[:16])
@@ -190,7 +195,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 			prepCats = []string{}
 		}
 	}
-	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: string(denyKey),
+	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", viewsGuide: viewsGuide != "", deny: string(denyKey),
 		trackKind: kind, categories: strings.Join(prepCats, ","), categoriesKnown: floorKnown}
 	// A track's instructions end with its SPACE.md, which the node reads (and the user edits there): the node is asked
 	// every time, and what it read is compared after (space_md_digest).
@@ -204,9 +209,13 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	}
 	params := map[string]any{"dir": dir, "claude_md": md,
 		"connectors": conns.Connectors, "clis": conns.CLIs, "plugin_skills": plugins.Skills, "deny_dirs": deny}
-	// Older nodes read only claude_md, so they retain the complete instructions.
+	// Older nodes read only claude_md, so they retain every complete instruction. New nodes select each compact
+	// guide only after its managed skill is ready; views_guide_md is the final form when all requested guides are ready.
 	if onDemand != "" {
 		params["work_guide_md"] = onDemand + plugins.Instructions
+	}
+	if viewsGuide != "" {
+		params["views_guide_md"] = viewsGuide + plugins.Instructions
 	}
 	if tmpl == trackTemplateSpace {
 		params["space"] = map[string]any{"slug": track.Slug, "initial_space_md": s.initialSpaceMD(ctx, track)}
@@ -255,6 +264,7 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 type preparedState struct {
 	md, skills, deny string
 	workGuide        bool
+	viewsGuide       bool
 	trackKind        string
 	categories       string
 	categoriesKnown  bool

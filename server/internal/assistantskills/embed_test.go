@@ -314,6 +314,32 @@ func TestWorkGuideLeavesExistingSkillInPlace(t *testing.T) {
 	}
 }
 
+func TestViewsGuideLeavesANewNameCollisionInPlace(t *testing.T) {
+	for _, runtime := range []string{".claude", ".agents"} {
+		t.Run(runtime, func(t *testing.T) {
+			t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+			dir, user := filepath.Join(t.TempDir(), runtime, "skills"), t.TempDir()
+			skill(t, dir, "persona-views", "Personal view construction")
+			marker := filepath.Join(dir, "persona-views", "scripts", "keep.txt")
+			if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := Sync(dir, user, Selection{}, quiet); err != nil {
+					t.Fatal(err)
+				}
+				b, err := os.ReadFile(filepath.Join(dir, "persona-views", "SKILL.md"))
+				if err != nil || !strings.Contains(string(b), "Personal view construction") {
+					t.Fatalf("the upgrade replaced a handmade skill: %s, %v", b, err)
+				}
+				if b, err := os.ReadFile(marker); err != nil || string(b) != "keep" {
+					t.Fatalf("the handmade skill lost a file: %q, %v", b, err)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkGuideCatalogBudget(t *testing.T) {
 	dir, user := t.TempDir(), t.TempDir()
 	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())

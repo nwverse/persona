@@ -238,34 +238,34 @@ func directionLang(l i18n.Lang) string {
 	return ""
 }
 
-// leaderPolicy is the role policy of leader id: the supervision instructions and, when the owner wrote notes, the
-// direction's block after them, as notesInEffect has it for a send that finds the leader idle or not. Not a leader, or
-// no notes: the policy as it is.
-func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool) string {
+// leaderPolicy is the policy in effect for a direction's conversation. Notes and the leader/side role move together on
+// a send that finds it idle. A busy send keeps both the role and notes already running, and the same in-flight outcome
+// handling puts back a move the node refused. That covers ending and re-pinning a direction in either order.
+func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool, role prompts.SupervisionRole) (string, error) {
 	if policy == "" || id == "" {
-		return policy
+		return policy, nil
 	}
-	if !s.isLeader(ctx, id) {
-		// No leader now (an ended direction that still supervises a task: one handed out since it ended, or one its
-		// hand-back to main could not move, handBackDirectionTasks): no notes block. A send that finds it idle records
-		// that, so a direction made again starts from what the conversation runs on, not from the block it had before
-		// it ended (#11392).
-		s.notesInEffect(ctx, id, "", idle)
-		return policy
+	block := ""
+	if s.isLeader(ctx, id) {
+		block = prompts.RenderDirectionNotes(s.directionPrompt(ctx, id))
 	}
-	if block := s.notesInEffect(ctx, id, prompts.RenderDirectionNotes(s.directionPrompt(ctx, id)), idle); block != "" {
-		return policy + "\n\n" + block
+	block, inEffect := s.notesInEffect(ctx, id, block, idle, role)
+	if inEffect != role {
+		var err error
+		policy, err = prompts.RenderSupervisionInstructionsForRole(inEffect)
+		if err != nil {
+			return "", err
+		}
 	}
-	return policy
+	if block != "" {
+		policy += "\n\n" + block
+	}
+	return policy, nil
 }
 
-// notesInEffect is the notes block conversation id's policy carries on this send (#11392). A send that finds it idle
-// takes block (a leader's notes as they are now; "" for a conversation that is no leader) and keeps it with the
-// direction's record as the block in effect; any other send takes the block in effect, so notes saved while the
-// leader works wait for its first idle send instead of changing the policy of a process at work (the node refuses
-// that send, and the owner's message was not kept). Kept in the record, it outlives a manager restart. A record
-// without one yet takes block: no send recorded one and no notes were saved since (setDirectionNotes sets the
-// baseline), so block is what every send gave it.
+// notesInEffect is the notes block and leader/side role conversation id's policy carries on this send (#11392). A send
+// that finds it idle takes both as they are now and keeps them with the direction's record; any other send takes those
+// in effect, so edits and owner pin changes wait for an idle process instead of changing its fingerprint at work.
 //
 // Only a send whose outcome its caller reports moves the block: one whose ctx holds a notesCarry (withNotesCarry),
 // which this fills in. Any other send takes the last confirmed block, not one a send still in flight moved, which may
@@ -278,50 +278,62 @@ func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool
 // flight, the block in effect: that move's own, so the one notice settles the block that went, unless a later message
 // moved the block again, whose block the lead runs if that message went in; else the last confirmed block, as a send
 // no one reports.
-func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool) string {
+func (s *Service) notesInEffect(ctx context.Context, id, block string, idle bool, role prompts.SupervisionRole) (string, prompts.SupervisionRole) {
 	carry, _ := ctx.Value(notesCarryKey{}).(*notesCarry)
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.directionsLocked(ctx) {
-		return block
+		return block, role
 	}
 	d := b.m[id]
 	if d == nil {
-		return block
+		return block, role
 	}
 	s.notesOwnerExpireLocked(ctx, id)
 	if carry != nil && carry.id != "" {
 		if f := b.inflight[id]; carry.id == id && carry.move != nil && f != nil && slices.Contains(f.moved, carry.move) {
-			return f.moved[len(f.moved)-1].block
+			latest := f.moved[len(f.moved)-1]
+			return latest.block, latest.role
 		}
 		carry = nil
 	}
 	switch {
 	case carry == nil:
-		if given := b.inflight[id].confirmed(); given != nil {
-			return *given
+		if given, confirmedRole := b.inflight[id].confirmed(); given != nil {
+			if confirmedRole != "" {
+				role = confirmedRole
+			}
+			return *given, role
 		}
 		if d.NotesInEffect != nil {
-			return *d.NotesInEffect
+			block = *d.NotesInEffect
 		}
-		return block
+		if d.RoleInEffect != "" {
+			role = prompts.SupervisionRole(d.RoleInEffect)
+		}
+		return block, role
 	case !idle:
 		if d.NotesInEffect != nil {
 			block = *d.NotesInEffect
 		}
-	case d.NotesInEffect == nil || *d.NotesInEffect != block:
+		if d.RoleInEffect != "" {
+			role = prompts.SupervisionRole(d.RoleInEffect)
+		}
+	case d.NotesInEffect == nil || *d.NotesInEffect != block || d.RoleInEffect != string(role):
 		f := b.flight(id)
-		f.moved = append(f.moved, &notesMove{prev: d.NotesInEffect, block: block})
+		f.moved = append(f.moved, &notesMove{prev: d.NotesInEffect, block: block,
+			prevRole: prompts.SupervisionRole(d.RoleInEffect), role: role})
 		if len(f.moved) > notesInFlightMost {
 			f.moved = f.moved[1:] // its outcome no longer counts: its block is kept
 		}
 		given := block
 		d.NotesInEffect = &given
+		d.RoleInEffect = string(role)
 		s.saveDirectionsLocked(ctx)
 	}
-	carry.id, carry.move = id, b.inflight[id].carrying(block)
-	return block
+	carry.id, carry.move = id, b.inflight[id].carrying(block, role)
+	return block, role
 }
 
 // notesFlight is what is in flight for one conversation's notes block: the moves of the block in effect whose sends'
@@ -331,11 +343,12 @@ type notesFlight struct {
 	owner []notesOwnerSend
 }
 
-// notesMove is a send's move of the block in effect from prev (nil: none recorded) to block. carriers are the sends in
-// flight that carry block: the one that moved it, and any later one that took the same block.
+// notesMove is a send's move of the notes block and role in effect. carriers are the sends in flight that carry both.
 type notesMove struct {
 	prev     *string
 	block    string
+	prevRole prompts.SupervisionRole
+	role     prompts.SupervisionRole
 	carriers int
 }
 
@@ -398,13 +411,13 @@ func (b *directionBook) tidyFlight(id string) {
 	}
 }
 
-// carrying is the newest move in flight to block, now carried by one more send; nil when none is.
-func (f *notesFlight) carrying(block string) *notesMove {
+// carrying is the newest move in flight to block and role, now carried by one more send; nil when none is.
+func (f *notesFlight) carrying(block string, role prompts.SupervisionRole) *notesMove {
 	if f == nil {
 		return nil
 	}
 	for i := len(f.moved) - 1; i >= 0; i-- {
-		if m := f.moved[i]; m.block == block {
+		if m := f.moved[i]; m.block == block && m.role == role {
 			m.carriers++
 			return m
 		}
@@ -412,16 +425,21 @@ func (f *notesFlight) carrying(block string) *notesMove {
 	return nil
 }
 
-// confirmed is the last confirmed block: the one before the oldest move in flight (nil: none in flight). With none
-// recorded before that move, it is the move's own block, which every send before it gave the conversation.
-func (f *notesFlight) confirmed() *string {
+// confirmed is the last confirmed block and role: those before the oldest move in flight (nil block: none in flight).
+// With none recorded before that move, its own values are what every send before it gave the conversation.
+func (f *notesFlight) confirmed() (*string, prompts.SupervisionRole) {
 	if f == nil || len(f.moved) == 0 {
-		return nil
+		return nil, ""
 	}
-	if m := f.moved[0]; m.prev != nil {
-		return m.prev
+	m := f.moved[0]
+	block, role := m.prev, m.prevRole
+	if block == nil {
+		block = &m.block
 	}
-	return &f.moved[0].block
+	if role == "" {
+		role = m.role
+	}
+	return block, role
 }
 
 // notesSendOutcome settles carry's send once its outcome is known (#11392); a send that never left counts as not
@@ -465,8 +483,10 @@ func (s *Service) notesSettleLocked(ctx context.Context, carry *notesCarry, take
 		f.moved = slices.Delete(f.moved, i, i+1)
 		if i < len(f.moved) {
 			f.moved[i].prev = m.prev
-		} else if d := b.m[id]; b.loaded && d != nil && d.NotesInEffect != nil && *d.NotesInEffect == m.block {
+			f.moved[i].prevRole = m.prevRole
+		} else if d := b.m[id]; b.loaded && d != nil && d.NotesInEffect != nil && *d.NotesInEffect == m.block && d.RoleInEffect == string(m.role) {
 			d.NotesInEffect = m.prev
+			d.RoleInEffect = string(m.prevRole)
 			s.saveDirectionsLocked(ctx)
 		}
 	}

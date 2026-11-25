@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { AgyAcpClient } from '../lib/acp.js'
@@ -70,7 +70,13 @@ describe('agy acp process lifecycle', () => {
     const { client, cwds } = fakeClient(t, 'ok')
     await client.ensureStarted()
     const { directory } = client.nativeLogs.get(client.proc)
-    assert.deepEqual(cwds(), [directory])
+    assert.deepEqual(cwds().map((cwd) => realpathSync(cwd)), [realpathSync(directory)])
+  })
+
+  it('resolves a path-like relative agy before changing the launch directory', TIMEOUT, async (t) => {
+    const { client, cwds } = fakeClient(t, 'ok', { bin: relative(process.cwd(), process.execPath) })
+    await client.ensureStarted()
+    assert.equal(cwds().length, 1)
   })
 
   it('a missing agy fails the start instead of crashing the process', TIMEOUT, async (t) => {

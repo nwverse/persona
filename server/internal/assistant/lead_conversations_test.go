@@ -491,14 +491,14 @@ func nodeRefuses(string, json.RawMessage) (any, error) {
 
 func nodeTakes(string, json.RawMessage) (any, error) { return map[string]any{"ok": true}, nil }
 
-// A direction ended and made again does not bring back the notes block it had before it ended: once unpinned, an idle
-// send restarts the conversation on the plain policy (it still supervises its task), so after the owner clears the
-// notes and pins it again, a message that finds it working is sent on that plain policy, with no role change for the
-// node to refuse.
+// A direction ended and made again does not bring back the notes block or role it had before it ended: once unpinned,
+// an idle send restarts the conversation as a side supervisor. Re-pinning it while that side process works holds the
+// leader role until an idle send; a refused idle send rolls the role back instead of making later messages busy too.
 func TestDirectionNotesInEffectFollowTheConversationAcrossItsEnd(t *testing.T) {
 	s, f := notesEnv(t)
 	ctx := context.Background()
-	plain := mustSupervisionRole(t, prompts.SupervisionRoleLeader)
+	leader := mustSupervisionRole(t, prompts.SupervisionRoleLeader)
+	side := mustSupervisionRole(t, prompts.SupervisionRoleSide)
 	todo, err := s.createTodo(ctx, "Ship the build", "", "conv_lead", "")
 	if err != nil {
 		t.Fatal(err)
@@ -514,7 +514,7 @@ func TestDirectionNotesInEffectFollowTheConversationAcrossItsEnd(t *testing.T) {
 	if ended, err := s.endDirection(ctx, "conv_lead"); err != nil || !ended {
 		t.Fatalf("end: %v %v", ended, err)
 	}
-	if got := dispatchedPolicy(t, s, "conv_lead"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != side {
 		t.Fatalf("unpinned leader with remaining work did not become a side supervisor: %q", got)
 	}
 	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "", nil); err != nil {
@@ -524,8 +524,51 @@ func TestDirectionNotesInEffectFollowTheConversationAcrossItsEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusWorking})
-	if got := dispatchedPolicy(t, s, "conv_lead"); got != plain {
-		t.Fatalf("pinned again while it works: the policy changed to %q", strings.TrimPrefix(got, plain))
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != side {
+		t.Fatalf("pinned again while it works changed the running process's policy: %q", got)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusIdle})
+	if got := ownerPolicy(t, s, "conv_lead"); got != leader {
+		t.Fatalf("the idle send did not take the leader role: %q", got)
+	}
+	hubSent(s, "conv_lead", assistantwire.ConversationFailed)
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusWorking})
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != side {
+		t.Fatalf("a refused role change did not roll back: %q", got)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusIdle})
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != leader {
+		t.Fatalf("the next idle send did not retry the leader role: %q", got)
+	}
+}
+
+func TestDirectionEndWaitsForAnIdleRoleChange(t *testing.T) {
+	s, f := notesEnv(t)
+	ctx := context.Background()
+	leader := mustSupervisionRole(t, prompts.SupervisionRoleLeader)
+	todo, err := s.createTodo(ctx, "Ship the build", "", "conv_lead", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv_lead", []string{"Shipped"}, 30)
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusIdle})
+	if _, _, err := s.setDirectionNotes(ctx, "conv_lead", "Readings: the store build number.", nil); err != nil {
+		t.Fatal(err)
+	}
+	withNotes := dispatchedPolicy(t, s, "conv_lead")
+	if !strings.HasPrefix(withNotes, leader) {
+		t.Fatalf("lead: %q", withNotes)
+	}
+	if ended, err := s.endDirection(ctx, "conv_lead"); err != nil || !ended {
+		t.Fatalf("end: %v %v", ended, err)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusWorking})
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != withNotes {
+		t.Fatalf("ending a working direction changed its policy: %q", got)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusIdle})
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
+		t.Fatalf("the idle send did not become a side supervisor: %q", got)
 	}
 }
 
