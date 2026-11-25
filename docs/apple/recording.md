@@ -167,10 +167,20 @@ readable, searchable and the user's to delete. On the iPhone and iPad:
 - **No automatic `…/live`.** The meeting page and the recording page do not start their watch of the room while the
   module is off (`MeetingRoomOffers.liveWatch`); the page reads from the knowledge base and the phone's own copy.
 - **With the module on**, or a hub that sends no `modules` marker, every screen is as before.
-- **Not yet** (outer surfaces, tracked on #15214): App Intents / Shortcuts / Siri, the Live Activity's and notifications'
-  actions, the Home Screen and Control widgets, the quick action and the Apple Watch still start a local recording.
-  visionOS compiles the same sources and was not built or checked for this change.
-- Tests: `RecordingModuleOffTests`, `ModulesTests.recordingFollowsItsHubFlag`. Mock hub: `MOCK_HUB_MODULES=<flags without
+- **Outside the app's pages.** Every start that does not come from the Recordings page lands in
+  `MeetingRecorder.startMeeting`: the Start Meeting intent (Shortcuts, Siri, the Control Center control, the Home Screen
+  and Lock Screen widgets' button, the Action button), the Home Screen quick action, a calendar reminder's Start and the
+  composer's row. With the module off it starts nothing and answers "Meeting recording is off on this hub."
+  (`MeetingRecorder.startRefusal`): Siri and Shortcuts say it as the intent's failure, the app shows it as a toast. A
+  recording that already runs still opens. The quick action menu leaves Start Meeting out (`QuickAction.offered`), and
+  no meeting reminder is scheduled (`MeetingReminders.reminds`), so none offers a Start. The Live Activity's Ask
+  Persona, Talk, Turn Off and Bookmark do nothing while the module is off (`MeetingRecorder.changesOffered`); Stop and
+  Pause always act. The widgets and the Live Activity still draw their buttons: their extensions do not read the
+  module state.
+- **Not yet** (tracked on #15214): the Apple Watch still records (Record, All-Day, complications) and its relayed
+  minutes still say they are being written; it needs the allowance in its WatchConnectivity payload. visionOS compiles
+  the same sources and was not built or checked for this change.
+- Tests: `RecordingModuleOffTests`, `RecordingOuterSurfacesTests`, `ModulesTests.recordingFollowsItsHubFlag`. Mock hub: `MOCK_HUB_MODULES=<flags without
   module.recording>` turns the module off for the app.
 
 ## Persona in meetings
