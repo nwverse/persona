@@ -269,7 +269,8 @@ func (s *Service) rehomeQueuedSupervision(ctx context.Context, old string, ids m
 func (s *Service) digestTo(ctx context.Context, cfg Settings, g superviseSignal) string {
 	// Explicit escalations keep their destination; needs_user alone is not an escalation.
 	if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil && t.Supervision.assigned() &&
-		g.Kind != sigAsk && g.Kind != sigEscalated {
+		g.Kind != sigAsk && g.Kind != sigEscalated &&
+		!(g.Kind == sigDecide && g.Unreachable && g.Recipient != "" && g.To == cfg.Main) {
 		return s.effectiveSupervisor(ctx, cfg, t)
 	}
 	own := s.ownSupervisor(cfg)
@@ -628,7 +629,7 @@ func (s *Service) endSessionCards(machine, session string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	s.feishuDetach(ids)
+	s.larkModule().AskDetached(ids, resumeGrace)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The conversation that owned this approval ended; nothing changed.") {
 			continue

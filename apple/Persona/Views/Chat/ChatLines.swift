@@ -455,9 +455,10 @@ struct ChatLines {
                                          start: seg.user?.firstTS ?? (k == 0 ? wokeAt : nil) ?? seg.rows.first?.firstTS ?? t.startedAt,
                                          end: Self.workEnd(ending) ?? seg.rows.last?.lastTS))
                     }
-                    // Between the work and the answer: what the work looked at. Its id stays as pictures come in and
-                    // the answer changes, so the strip grows sideways in place.
+                    // Between the work and the answer: what the work looked at and out-of-band tool UI views. Its id
+                    // stays as items arrive so the row updates in place while the turn runs.
                     out += Self.viewed("vi-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
+                    out += Self.toolViews("tv-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
                     if let last { out.append(.row(seg.rows[last])) }
                     out += after.sorted().map { .row(seg.rows[$0]) }
                     if opening != nil, out.count > firstLine {
@@ -731,6 +732,11 @@ struct ChatLines {
     static func viewed(_ id: String, _ work: [WorkItem]) -> [ChatLine] {
         let images = ViewedImages.of(work)
         return images.isEmpty ? [] : [.viewed(id: id, images: images)]
+    }
+
+    static func toolViews(_ id: String, _ work: [WorkItem]) -> [ChatLine] {
+        let views = ToolViews.of(work)
+        return views.isEmpty ? [] : [.toolViews(id: id, views: views)]
     }
 
     static func photos(_ rows: [ChatRow]) -> [Item] {

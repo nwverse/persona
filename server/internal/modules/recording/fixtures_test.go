@@ -390,7 +390,7 @@ func (m *meetingFixture) minutesFor(id, reply string) {
 	e := m.engine()
 	model := minutesModel{reply: reply}
 	e.Model, e.ModelFor = model, func(string) kb.Model { return model }
-	if n := e.WriteMinutes(context.Background(), 5); n < 1 {
+	if n := e.RecordingProvider().WriteMinutes(context.Background(), 5); n < 1 {
 		m.t.Fatalf("no minutes written for %s", id)
 	}
 }

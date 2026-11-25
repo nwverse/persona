@@ -36,11 +36,12 @@ PACKAGES = {
     "PersonaModuleAPI": {"path": "Packages/PersonaModuleAPI"},
     "MarqueeGlow": {"url": "https://github.com/szupzj18/MarqueeGlow", "exactVersion": "0.1.0"},
 }
-MODULE_CONDITIONS = "$(inherited) PERSONA_MODULE_SCREEN_SHARE PERSONA_MODULE_HEALTH"
+MODULE_CONDITIONS = "$(inherited) PERSONA_MODULE_SCREEN_SHARE PERSONA_MODULE_HEALTH PERSONA_MODULE_VOICE"
 SOURCES = {
     "Persona": [
         {"path": "Modules/ScreenShare", "excludes": ["**/*.md"]},
         {"path": "Modules/Health", "excludes": ["**/*.md"]},
+        {"path": "Modules/Voice", "excludes": ["**/*.md"]},
         {"path": "Persona", "excludes": ["**/*.md"]},
         {"path": "Shared"},
         {"path": "LiveActivity"},

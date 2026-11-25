@@ -114,8 +114,8 @@ func newPostEnv(t *testing.T) *postEnv {
 func (e *postEnv) bound(title, thread string) string {
 	e.t.Helper()
 	id := e.create(title).ID
+	seedTopicAnchor(e.t, e.s, e.f, testChat, thread, "om_"+thread)
 	e.must("PUT", "/api/v1/todos/"+id+"/thread", `{"channel":"feishu","chat_id":"`+testChat+`","thread_id":"`+thread+`"}`)
-	e.s.rememberTopicMessage(context.Background(), testChat, thread, "om_"+thread)
 	return id
 }
 
@@ -258,6 +258,7 @@ func TestThreadPostsNotWhatTheTopicSaid(t *testing.T) {
 // The bot's own line in the topic is no reply: it is not from the owner (a bot's messages carry no user sender), so the
 // topic path drops it before anything is recorded or handed on.
 func TestThreadBotsOwnLineIsNoReply(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newPostEnv(t)
 	id := e.bound("发版", testThread)
 	e.must("PUT", "/api/v1/todos/"+id+"/agents/box/agent01", "")
@@ -295,9 +296,9 @@ func newFleetPost(t *testing.T) *fleetPost {
 	ft.f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_x"}, nil })
 	clk := newFakeClock()
 	clk.install(ft.s)
+	seedTopicAnchor(t, ft.s, ft.f, testChat, testThread, "om_anchor")
 	putTodo(ft.s, Todo{ID: "todo_f", Title: "修登录", Thread: &TodoThread{Channel: "feishu", ChatID: testChat, ThreadID: testThread},
 		Agents: []TodoAgent{{MachineID: "mac", SessionID: "s1"}}})
-	ft.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_anchor")
 	return &fleetPost{ft, clk}
 }
 
@@ -421,6 +422,7 @@ func TestThreadPostsNeedsYouNotHiddenByAnotherTopicsRun(t *testing.T) {
 // An agent with no name is "an agent", not two spaces: a bare directory mark is no name (the line's wording is the lark
 // module's, TestThreadPostTextWithoutAnAgentName there).
 func TestThreadNameOfAnAgentWithoutOne(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, name := range []string{"", ".", "/", "  "} {
 		if got := threadName(name); got != "" {
 			t.Fatalf("threadName(%q) = %q", name, got)
@@ -431,6 +433,7 @@ func TestThreadNameOfAnAgentWithoutOne(t *testing.T) {
 // A card asked in the topic itself (its run was asked there) is right there already: no line about it. One of an agent
 // whose todo has no thread is not said anywhere.
 func TestThreadPostsNoLineForACardInTheTopicItself(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	p := newFleetPost(t)
 	c := &p.ft.s.chans
 	c.mu.Lock()
@@ -448,6 +451,7 @@ func TestThreadPostsNoLineForACardInTheTopicItself(t *testing.T) {
 // A conversation with a private run and a topic's: the card goes to the DM and the topic gets its own line saying so
 // (feishu_cards.go); no second line about the same card.
 func TestThreadPostsNoLineWhenTheCardWentToTheDM(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	p := newFleetPost(t)
 	c := &p.ft.s.chans
 	c.mu.Lock()
@@ -474,6 +478,7 @@ func TestThreadPostsSameWordsTwiceBothArrive(t *testing.T) {
 	seen := map[string]bool{}
 	var landed []string
 	var keys []string
+	id := e.bound("发版", testThread) // its anchor seeded before the lines are counted
 	e.f.answerApp(AppFeishu, FeishuText, func(p json.RawMessage) (any, error) {
 		var m map[string]any
 		_ = json.Unmarshal(p, &m)
@@ -490,7 +495,6 @@ func TestThreadPostsSameWordsTwiceBothArrive(t *testing.T) {
 		}
 		return map[string]any{"message_id": "om_x"}, nil
 	})
-	id := e.bound("发版", testThread)
 	for range [3]int{} {
 		e.decide(id, "先发安卓")
 		e.clk.advance(threadPostEvery)
@@ -525,7 +529,7 @@ func TestThreadPostsAnchorGone(t *testing.T) {
 	id := e.bound("发版", testThread)
 	e.decide(id, "先发安卓")
 	e.clk.advance(threadPostEvery)
-	if got := e.s.topicMessage(context.Background(), testChat, testThread); got != "" {
+	if got := e.s.larkModule().TopicAnchor(context.Background(), testChat, testThread); got != "" {
 		t.Fatalf("the withdrawn anchor %q is still remembered", got)
 	}
 	n := len(e.posts()) // the one failed call
@@ -541,13 +545,8 @@ func TestThreadPostsAnchorGone(t *testing.T) {
 	if len(got) != n+1 || got[n]["reply_to"] != "om_new" || !strings.Contains(textOf(got[n]), "最后发网页") {
 		t.Fatalf("after the owner wrote again: %v", got[n:])
 	}
-	// A newer anchor that came meanwhile is not forgotten with the old one.
-	e.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_old")
-	e.s.rememberTopicMessage(context.Background(), testChat, testThread, "om_newer")
-	e.s.forgetTopicMessage(context.Background(), testChat, testThread, "om_old")
-	if got := e.s.topicMessage(context.Background(), testChat, testThread); got != "om_newer" {
-		t.Fatalf("anchor %q", got)
-	}
+	// A newer anchor that came meanwhile is not forgotten with the old one: the module's
+	// TestTopicAnchorForgetKeepsANewerOne.
 }
 
 // What the user wrote in the private chat as the answer to a "Please verify" card stays there; every other manual
@@ -656,8 +655,8 @@ func TestThreadPostsNothingToAChatNotInTheList(t *testing.T) {
 	needsLarkLayer(t)
 	e := newPostEnv(t)
 	id := e.create("发版").ID
+	seedTopicAnchor(t, e.s, e.f, "oc_made_up", "omt_x", "om_x")
 	e.must("PUT", "/api/v1/todos/"+id+"/thread", `{"channel":"feishu","chat_id":"oc_made_up","thread_id":"omt_x"}`)
-	e.s.rememberTopicMessage(context.Background(), "oc_made_up", "omt_x", "om_x")
 	e.decide(id, "先发安卓")
 	e.must("PATCH", "/api/v1/todos/"+id, `{"done":true}`)
 	e.clk.advance(time.Hour)
@@ -668,14 +667,14 @@ func TestThreadPostsNothingToAChatNotInTheList(t *testing.T) {
 	// The same todo's topic, once its chat is on the list, is said into (the list is read when the line goes out).
 	id2 := e.bound("在名单里", "omt_listed")
 	e.chats = nil
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.decide(id2, "先发安卓")
 	e.clk.advance(time.Hour)
 	if got := e.posts(); len(got) != 0 {
 		t.Fatalf("said with no chat on the list: %v", got)
 	}
 	e.chats = []string{testChat}
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 	e.decide(id2, "再发 iOS")
 	e.clk.advance(time.Hour)
 	mustContain(t, "line", textOf(e.onlyPost(t)), "再发 iOS")
@@ -683,6 +682,7 @@ func TestThreadPostsNothingToAChatNotInTheList(t *testing.T) {
 
 // 7. A todo with no thread says nothing, and queues nothing.
 func TestThreadPostsNothingWithoutAThread(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newPostEnv(t)
 	id := e.create("发版").ID
 	e.decide(id, "先发安卓")
@@ -728,32 +728,20 @@ func TestThreadPostsGoIntoTheTopicByItsLatestMessage(t *testing.T) {
 	}
 
 	// It survives a restart: the message is kept with the chat's state.
-	e2 := e.s.topicMessage(context.Background(), testChat, testThread)
+	e2 := e.s.larkModule().TopicAnchor(context.Background(), testChat, testThread)
 	if e2 != "om_t2" {
 		t.Fatalf("anchor %q", e2)
 	}
-	e.s.fbot.mu.Lock()
-	kept := e.s.fbot.st.Topics[testChat+"/"+testThread]
-	e.s.fbot.mu.Unlock()
-	if kept == nil || kept.MessageID != "om_t2" {
+	var stored botState
+	if _, err := e.s.store().Setting(context.Background(), botStateKey, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if kept := stored.Topics[testChat+"/"+testThread]; kept == nil || kept.MessageID != "om_t2" {
 		t.Fatalf("kept %+v", kept)
 	}
 }
 
-// The remembered messages are bounded, and old ones go.
-func TestTopicAnchorsAreBounded(t *testing.T) {
-	now := time.Now()
-	m := map[string]*topicAnchor{"old": {MessageID: "om_old", At: now.Add(-topicAnchorsKeepFor - time.Hour)}}
-	for i := 0; i < topicAnchorsKeep+10; i++ {
-		m[fmt.Sprintf("k%d", i)] = &topicAnchor{MessageID: "om", At: now.Add(-time.Duration(i) * time.Minute)}
-	}
-	pruneTopicAnchors(m, now)
-	if len(m) != topicAnchorsKeep || m["old"] != nil || m["k0"] == nil || m[fmt.Sprintf("k%d", topicAnchorsKeep+9)] != nil {
-		t.Fatalf("kept %d: old %v", len(m), m["old"])
-	}
-}
-
-// A topic's first message opens a to-do (feishu_thread_open.go); that message is where the to-do's first line replies
+// A topic's first message opens a to-do (the lark module's thread_open.go); that message is where the to-do's first line replies
 // to: it is remembered before the opening path takes the message, so the first progress hangs under the topic's root.
 func TestThreadPostsFirstProgressRepliesUnderTheRootMessage(t *testing.T) {
 	needsLarkLayer(t)

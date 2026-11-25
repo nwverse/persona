@@ -219,6 +219,17 @@ func postTransfer(t *testing.T, mux http.Handler, body string) *httptest.Respons
 
 const transferBody = `{"from":{"machine":"a","path":"Movies/movie.mov","cwd":"/home/me"},"to":{"machine":"b","dest":"inbox"}}`
 
+// The accepted start response is the initial running snapshot even when a tiny transfer finishes before the caller
+// reads the response. The transfer still completes normally; the slot is not held by the start path.
+func TestTransferStartAnswersTheInitialRunningSnapshot(t *testing.T) {
+	d, _, _, _, mux := transferDevices(t, &sourceNode{data: []byte("hello")}, &targetNode{})
+	rec := postTransfer(t, mux, transferBody)
+	got := started(t, rec)
+	if end := waitTransfer(t, d, mux, got.ID); end.State != proto.TransferDone {
+		t.Fatalf("end %+v", end)
+	}
+}
+
 // waitTransfer waits for the transfer to end and answers it as GET does.
 func waitTransfer(t *testing.T, d *Devices, mux http.Handler, id string) proto.FileTransfer {
 	t.Helper()

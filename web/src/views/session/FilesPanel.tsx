@@ -8,9 +8,10 @@ import { storedValue, storeValue } from "../../lib/compatibility";
 // (lib/fs-live.ts). Both views change files too (files/FileOps.tsx, #4883): files dropped or chosen upload into the
 // folder, and a row's menu (right click, its ⋯) downloads, renames, moves or moves it to the trash; "Select" picks several
 // for one of those. Folders outside the home are read-only.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText, isAbort } from "../../lib/api";
 import { t } from "../../i18n";
+import { FILES_TREE_WIDTH_KEY, TREE_PANE_DEFAULT, TREE_PANE_MAX, TREE_PANE_MIN, TREE_PANE_VIEWER_MIN } from "../../lib/layout";
 import { entryPayload, ENTRY_DRAG_TYPE } from "../../lib/entry-drag";
 import { aheadBehind, dirName, fileName, gitMark, joinPath, type FsEntry, type FsListing, type GitStatus } from "../../lib/files";
 import { revealDirs } from "../../lib/files-tree";
@@ -33,6 +34,7 @@ import { Icon } from "../../ui/icons";
 import { SearchField } from "../../ui/SearchField";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { PanelHeader } from "../../ui/PanelHeader";
+import { TreePaneSplitter, useResizableTreeWidth } from "../../ui/TreePaneSplitter";
 import { FileInfoDialog } from "./files/FileInfo";
 import { FILE_CHMOD_FEATURE, PermissionsDialog } from "./files/Permissions";
 import { NewItemDialog, type NewKind } from "./files/NewItem";
@@ -233,14 +235,34 @@ export function FilesPanel({
   const changes = git?.is_repo ? git.files.length : 0;
   const sync = aheadBehind(git);
   const canGoBackInViewer = open.length > 1 || (!file && open.length > 0);
+  const splitWorkbench = Boolean(viewing && tree && !narrow);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const treePaneId = useId();
+  const workbenchTreeId = useId();
+  const treePane = useResizableTreeWidth({
+    storageKey: FILES_TREE_WIDTH_KEY,
+    defaultWidth: TREE_PANE_DEFAULT,
+    minWidth: TREE_PANE_MIN,
+    maxWidth: TREE_PANE_MAX,
+    minViewerWidth: TREE_PANE_VIEWER_MIN,
+    containerRef: splitContainerRef,
+    observeKey: splitWorkbench,
+  });
   // where an upload goes when no folder row is meant: the folder shown (the tree's root)
   const here_dir = writable ? dir : "";
   const finding = query.trim() !== "";
 
   return (
-    <>
-      {!viewing && (
-      <div className="flex min-h-0 flex-1 flex-col">
+    <div ref={splitContainerRef} data-files-panel className={cx("flex min-h-0 flex-1", splitWorkbench ? "flex-row" : "flex-col")}>
+      <div
+        id={treePaneId}
+        className={cx(
+          "flex min-h-0 flex-col",
+          splitWorkbench ? "shrink-0 w-(--files-tree-w)" : "flex-1",
+          viewing && "hidden",
+        )}
+        style={splitWorkbench ? ({ "--files-tree-w": `${treePane.width}px` } as React.CSSProperties) : undefined}
+      >
         <PanelHeader
           icon="folder"
           title={t("session-filespanel.title")}
@@ -376,7 +398,6 @@ export function FilesPanel({
         </div>
         </div>
       </div>
-      )}
       {rowMenu?.scope === ops.scope && (
         <Menu
           items={beforeTrash(ops.rowItems(rowMenu.x, rowMenu.open), [
@@ -423,10 +444,12 @@ export function FilesPanel({
           {treeOpen && dir && (
             <div
               data-testid="file-workbench-tree"
+              id={workbenchTreeId}
               className={cx(
-                "flex min-h-0 w-[236px] shrink-0 flex-col border-r border-line bg-page",
-                narrow && "absolute inset-y-0 left-0 z-20 shadow-overlay",
+                "flex min-h-0 shrink-0 flex-col border-r border-line bg-page",
+                narrow ? "absolute inset-y-0 left-0 z-20 w-[236px] shadow-overlay" : "w-(--files-tree-w)",
               )}
+              style={splitWorkbench ? ({ "--files-tree-w": `${treePane.width}px` } as React.CSSProperties) : undefined}
             >
               <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
                 <Icon name="folder" size={14} className="shrink-0 text-ink-2" />
@@ -451,6 +474,19 @@ export function FilesPanel({
                 />
               </div>
             </div>
+          )}
+          {splitWorkbench && treeOpen && dir && (
+            <TreePaneSplitter
+              value={treePane.width}
+              min={treePane.min}
+              max={treePane.max}
+              onResize={treePane.setWidth}
+              onCommit={treePane.commitWidth}
+              onReset={treePane.resetWidth}
+              label={t("session-filespanel.resize_label")}
+              title={t("session-filespanel.resize_title")}
+              controls={workbenchTreeId}
+            />
           )}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <FileView
@@ -479,7 +515,7 @@ export function FilesPanel({
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
