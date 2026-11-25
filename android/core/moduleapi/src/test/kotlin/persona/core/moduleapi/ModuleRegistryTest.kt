@@ -57,6 +57,24 @@ class ModuleRegistryTest {
         assertTrue(ModuleRegistry.isActive(plain, setOf("modules")))
     }
 
+    /** The hub's recording module (#15214): no carried module, the same flag name and the same rule. */
+    @Test fun theHubsRecordingModuleFollowsTheSameRule() {
+        assertEquals("recording", HubModule.Recording.id)
+        assertEquals("module.recording", HubModule.Recording.feature)
+        // No hello yet, demo mode and an older hub without the marker: on.
+        assertTrue(ModuleRegistry.isActive(HubModule.Recording, emptySet()))
+        assertTrue(ModuleRegistry.isActive(HubModule.Recording, setOf("extensions", "inbox_sources")))
+        // A flag without the marker changes nothing, and neither does its absence.
+        assertTrue(ModuleRegistry.isActive(HubModule.Recording, setOf("module.recording")))
+        assertTrue(ModuleRegistry.isActive(HubModule.Recording, setOf("module.knowledge-ui")))
+        // A hub that publishes module flags: on with its flag, off without it, whatever the other modules are.
+        assertTrue(ModuleRegistry.isActive(HubModule.Recording, setOf("modules", "module.recording")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Recording, setOf("modules")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Recording, setOf("modules", "module.knowledge-ui", "module.voice")))
+        // It switches no carried module: the pages that show stored recordings stay.
+        assertEquals(listOf(plain, gated), registry.active(setOf("modules", "module.knowledge-ui")))
+    }
+
     @Test fun aFlagWithoutTheMarkerChangesNothing() {
         assertEquals(listOf(plain, gated), registry.active(setOf("module.voice")))
     }
