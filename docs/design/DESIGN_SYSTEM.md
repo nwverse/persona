@@ -1838,6 +1838,15 @@ Toasts: error, success or info; one slot, so a new toast replaces the old. Durat
 
 The hub's link while it is down (Waiting for network, Connecting…, Updating…, or what only the user can fix) is said once: in the title of a page that has one (an Agent's chat), else by a pill floating under the home bar on the home pages (iOS `ShellLinkPill`, `docs/apple/shell.md` "Connection status and toasts"; Android `JLinkPill`, #4339). It moves nothing, takes no touches and is announced; a spinner while it retries, a caution mark when it cannot.
 
+**Computer updates in Assistant** (web, #15687). This serves people who need to know why their assistant may briefly go away.
+Under the chat header, a quiet inset status strip uses `Spinner`, the shared clock icon, and the existing ink and meta
+text tokens. It names the live update phase in plain language and says the assistant will reconnect automatically.
+When the assistant is waiting to restart after the update, the strip says the new version is ready and will start once
+the assistant is idle. The computer running the conversation and the assistant's own host can each report an update.
+The assistant's host matches by machine UID first and by hostname for older data. An active update takes priority over
+the waiting state. The strip announces changes politely, wraps at narrow widths, and loads only for an active state.
+An ordinary chat has no strip.
+
 ### Web skill mentions (#5357)
 
 Reuse the composer's existing `ComposerPanel` surface for `@` and `SlashPalette` surface for `/`, their neutral sliding
@@ -2959,6 +2968,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
 | Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
+| Assistant update status | Outside scope of #15687 | Live update and idle-restart notice in Assistant | Outside scope of #15687 | web change |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## HarmonyOS native structure
