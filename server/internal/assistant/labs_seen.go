@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
@@ -80,5 +81,5 @@ func (s *Service) putLabsSeen(w http.ResponseWriter, ctx context.Context, ids []
 }
 
 func (s *Service) publishLabsSeen(ctx context.Context, ids []string) {
-	s.event(context.WithoutCancel(ctx), map[string]any{"type": "assistant_labs_seen", "labs_seen": ids})
+	s.broadcastEvent(context.WithoutCancel(ctx), assistantwire.LabsSeenEvent{Type: assistantwire.LabsSeenEventType, LabsSeen: ids})
 }

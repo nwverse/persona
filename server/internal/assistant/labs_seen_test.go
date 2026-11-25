@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
 
@@ -55,11 +56,8 @@ func TestLabsSeenSettingsRouteAndBroadcast(t *testing.T) {
 	}
 	select {
 	case raw := <-h.events:
-		var event struct {
-			Type string   `json:"type"`
-			Seen []string `json:"labs_seen"`
-		}
-		if err := json.Unmarshal(raw, &event); err != nil || event.Type != "assistant_labs_seen" || !slices.Equal(event.Seen, want) {
+		var event assistantwire.LabsSeenEvent
+		if err := json.Unmarshal(raw, &event); err != nil || event.Type != assistantwire.LabsSeenEventType || !slices.Equal(event.LabsSeen, want) {
 			t.Fatalf("broadcast = %s", raw)
 		}
 	default:
