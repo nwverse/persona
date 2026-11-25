@@ -23,6 +23,7 @@ registerHooks({
    export const window={};export const Strings={bind(){},refresh(){}};
    export const XiaoYiRuntimeContext={bind(){s.contextBound=(s.contextBound||0)+1;}};
    export const IntentSuggestionsService={async clearAll(){s.suggestionsCleared=(s.suggestionsCleared||0)+1;}};
+   export const ShareReceiver={isShareWant(w){return w?.action==='ohos.want.action.sendData';},async parseWant(w){const t=w?.parameters?.text||'';return t?{hasContent:true,title:'',text:t,url:'',draftText:t,route:{dest:'share',profile:'',manager:'',machine:'',session:'',autoStart:false,text:t,title:'',url:''}}:{hasContent:false,title:'',text:'',url:'',draftText:''};}};
    export const nativeMeetingServices={async initialize(){s.meetingRefreshes=(s.meetingRefreshes||0)+1},setRecordingEvent(){},
      receive(parameters){if(parameters.personaMeetingType==='persona.meeting.reminder' && parameters.occurrence)s.meetingOpens=(s.meetingOpens||0)+1}};
    export const NOTIFICATION_ACTION='persona.notification.OPEN';export const nativeNotifications={refresh:()=>s.query};
@@ -99,4 +100,15 @@ test('a pairing link still routes to pairing and never enters the XiaoYi deep-li
  const ability = new EntryAbility();
  ability.onNewWant({ uri: 'persona://pair?host=example.com&code=123456' }, {});
  assert.equal(state.xiaoYiRoutes.length, 0);
+});
+
+test('an incoming system share Want stages a share draft route without auto-sending', async () => {
+ reset();
+ const ability = new EntryAbility();
+ ability.onNewWant({ action: 'ohos.want.action.sendData', parameters: { text: 'Shared article excerpt' } }, {});
+ await turn();
+ assert.equal(state.xiaoYiRoutes.length, 1);
+ const parsed = JSON.parse(state.xiaoYiRoutes[0]);
+ assert.equal(parsed.dest, 'share');
+ assert.equal(parsed.text, 'Shared article excerpt');
 });

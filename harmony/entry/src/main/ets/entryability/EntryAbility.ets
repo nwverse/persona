@@ -6,6 +6,7 @@ import { parseXiaoYiWant } from '../core/XiaoYiRoutes';
 import { deviceFeatures } from '../models/DeviceFeatures';
 import { XiaoYiRuntimeContext } from '../xiaoyi/XiaoYiRuntimeContext';
 import { IntentSuggestionsService } from '../xiaoyi/IntentSuggestionsService';
+import { ShareReceiver } from '../xiaoyi/ShareReceiver';
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want, common } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
@@ -51,6 +52,16 @@ export default class EntryAbility extends UIAbility {
     if (phonePasswordLogin.receive(uri)) return;
     if (uri.length <= 16384 && isPairingLink(uri)) { client.pairingLink = uri; return; }
     if (want.action !== NOTIFICATION_ACTION) {
+      if (ShareReceiver.isShareWant(want)) {
+        const epoch = this.lifecycle;
+        ShareReceiver.parseWant(want).then((shared) => {
+          if (epoch === this.lifecycle && shared.hasContent && shared.route) {
+            this.pendingXiaoYiRoute = JSON.stringify(shared.route);
+            this.dispatchXiaoYiRoute();
+          }
+        }).catch(() => {});
+        return;
+      }
       const route = parseXiaoYiWant(uri, params);
       if (route) { this.pendingXiaoYiRoute = JSON.stringify(route); return; }
       if (!uri && params['personaPage'] === 'projects') client.projectsRequested = true;
