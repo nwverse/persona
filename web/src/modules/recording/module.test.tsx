@@ -127,6 +127,7 @@ describe("the recording module", () => {
     expect(text()).toContain("Keep the export cap.");
     expect(text()).toContain("设备");
     expect(text()).toContain("改名");
+    expect(text()).toContain("重新生成");
   });
 
   it("reads the recordings into the Meetings list while it is on", async () => {
