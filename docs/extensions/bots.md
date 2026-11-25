@@ -153,6 +153,12 @@ attachments included), Drive, Docs, Sheets, Base, Wiki and Minutes. It is the bu
    - **Paste once**: if that fails too, the page shows the redirect URL with a copy button and a link straight to the app's
      security settings; after pasting it there, **Continue** opens the authorization page.
 
+The iPhone and iPad app and the Android app have the same section on their Lark bot page (#15392), on the same routes.
+For the browser way they show Lark's authorization page in an in-app web view with the hub's own address plus
+`/lark-oauth` as the redirect URL, stop that view when it reaches the address (the web page never loads), and hand
+`state` and `code` to `POST /api/v1/bots/feishu/sync/oauth` themselves. The device flow and the paste-once way work as
+on the web. A hub without the sync (404, or `available: false`) hides the section.
+
 So a new owner confirms twice on one page (scan to create, then agree); an app that already has the scopes needs only
 the second. The tokens are sealed with `secret.key` (settings `bots.feishu.sync.bindings`, re-sealed by the key rotation),
 never shown and never logged.
