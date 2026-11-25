@@ -315,6 +315,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 					return err
 				}
 				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images, "client_msg_id": opts.ClientMsgID}
+				if p.PermissionMode != "" {
+					input["mode"] = p.PermissionMode
+				}
 				if p.A2AWakeOnSend {
 					input["a2a_wake_on_send"] = true
 				}

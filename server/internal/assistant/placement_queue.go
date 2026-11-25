@@ -650,6 +650,10 @@ func (s *Service) assignPendingPlacement(
 		}
 		configuredMode, _ := fitParams["permission_mode"].(string)
 		if !candidate.preservePermission {
+			if candidate.CallerPermission != nil {
+				candidate.Permission = *candidate.CallerPermission
+				candidate.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
+			}
 			switch {
 			case candidate.Readonly:
 				if fit.allowAll() {
