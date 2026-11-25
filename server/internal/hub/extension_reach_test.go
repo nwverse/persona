@@ -448,6 +448,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/sessions/{mid}/{sid}/queue/send-now": "path",
 		"POST /api/v1/sessions/{mid}/{sid}/seen":           "path",
 		"POST /api/v1/sessions/{mid}/{sid}/rename":         "path",
+		"POST /api/v1/sessions/{mid}/{sid}/archive-idle":   "path",
+		"GET /api/v1/sessions/archive-idle/audit":          "manager",
 		"POST /api/v1/sessions/{mid}/{sid}/modes":          "path", // and only of a conversation its extension opened (extensionModeRefused)
 		"POST /api/v1/interactions/{id}/choose":            "path",
 		"POST /api/v1/interactions/{id}/resolve":           "path",
