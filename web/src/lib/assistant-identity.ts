@@ -11,5 +11,18 @@ export function useAssistantIdentity(): ShownIdentity | null {
   const remembered = useShownIdentity();
   const picked = useChosenManager();
   // setRoster records the live identity separately, so status and count pushes leave the chat's title alone.
-  return !loaded && picked && remembered?.id !== picked ? { id: picked, name: pickedName() ?? picked } : remembered;
+  if (!loaded) {
+    if (picked) {
+      const same = remembered?.id === picked;
+      return {
+        id: picked,
+        name: same ? remembered.name : pickedName() ?? picked,
+        isDefault: false,
+        ...(same && remembered.line ? { line: remembered.line } : {}),
+        ...(same && remembered.tone ? { tone: remembered.tone } : {}),
+      };
+    }
+    return remembered ? { ...remembered, isDefault: remembered.isDefault ?? true } : null;
+  }
+  return remembered;
 }

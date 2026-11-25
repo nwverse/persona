@@ -274,7 +274,13 @@ function noteCurrentAssistant() {
   if (picked && roster) notePickedName(roster.managers.find((m) => m.id === picked)?.name ?? null);
   if (!roster) return;
   const current = installedManagers(roster).find((m) => m.id === shownManager());
-  noteShownIdentity(current ? { id: current.id, name: current.name } : null);
+  noteShownIdentity(current ? {
+    id: current.id,
+    name: current.name,
+    isDefault: current.id === roster.default,
+    line: switcherLine(current),
+    tone: statusLine(current).tone,
+  } : null);
 }
 onManagerChoice(noteCurrentAssistant);
 
