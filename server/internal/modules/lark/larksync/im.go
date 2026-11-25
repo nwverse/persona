@@ -223,6 +223,9 @@ func (r *run) listMessages(ctx context.Context, containerType, id string, from, 
 
 // message turns an API message of chat c into the sync's Message.
 func (r *run) message(am apiMessage, c chatInfo) larksyncwire.Message {
+	if am.Sender.ID != "" && am.Sender.SenderType != "" {
+		r.senderTypes[am.Sender.ID] = am.Sender.SenderType
+	}
 	text, files := messageText(am)
 	for i := range files {
 		files[i].Ref = attachmentRef(r.b.Key, am.MessageID, files[i].Ref, files[i].Kind)
@@ -311,6 +314,7 @@ func (r *run) readSearch(ctx context.Context) error {
 			r.addMessage(searchResource, st.msg, larksyncwire.EntrySearch)
 		}
 	}
+	r.nameSenders(ctx, found)
 	for _, m := range found {
 		r.addMessage(searchResource, m, larksyncwire.EntrySearch)
 		r.findLeads(searchResource, larksyncwire.EntryMessage, m.Text)
@@ -512,36 +516,57 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // nameSenders fills in the senders' display names, and a single chat's name when the platform gives none (the other
 // person's name, as the Lark gateway names it): the knowledge base matches a message it already has from the gateway
-// by chat name, sender and text (kb.NewGatewayAligner), and the gateway writes names, not open ids. Best effort: a
-// refused lookup (no contact scope) stops the lookups for the run and leaves the names empty.
+// by chat name, sender and text (kb.NewGatewayAligner), and the gateway writes names, not open ids. Best effort:
+// non-user senders (bots/apps such as cli_* or sender_type != "user") are skipped without querying the contact API;
+// a missing contact scope stops lookups for the rest of the run, while a single sender's failure leaves only that
+// sender unnamed.
 func (r *run) nameSenders(ctx context.Context, msgs []larksyncwire.Message) {
 	for i := range msgs {
 		m := &msgs[i]
-		if m.SenderID != "" && m.SenderName == "" {
+		if m.SenderName == "" && isContactUser(m.SenderID, r.senderTypes[m.SenderID]) {
 			m.SenderName = r.senderName(ctx, m.SenderID)
 		}
 	}
-	peer := ""
+	peers := map[string]string{}
 	for _, m := range msgs {
 		if m.ChatType == "p2p" && m.ChatName == "" && !m.Mine && m.SenderName != "" {
-			peer = m.SenderName
-			break
+			if _, ok := peers[m.ChatID]; !ok {
+				peers[m.ChatID] = m.SenderName
+			}
 		}
 	}
-	if peer == "" {
+	if len(peers) == 0 {
 		return
 	}
 	for i := range msgs {
 		if msgs[i].ChatName == "" {
-			msgs[i].ChatName = peer
+			if peer := peers[msgs[i].ChatID]; peer != "" {
+				msgs[i].ChatName = peer
+			}
 		}
 	}
 }
 
+// isContactUser reports whether a sender can be looked up through contact/v3/users by open_id.
+// Bot/app senders (sender_type "app" or cli_* app ids) and other non-user senders ("anonymous", "unknown") are not
+// contact users; querying contact/v3/users for them always fails.
+func isContactUser(senderID, senderType string) bool {
+	if senderID == "" {
+		return false
+	}
+	if st := strings.ToLower(strings.TrimSpace(senderType)); st != "" && st != "user" {
+		return false
+	}
+	return !strings.HasPrefix(senderID, "cli_")
+}
+
 // senderName is one open id's display name, read once per run.
 func (r *run) senderName(ctx context.Context, openID string) string {
-	if name, ok := r.names[openID]; ok || r.namesOff {
+	if name, ok := r.names[openID]; ok {
 		return name
+	}
+	if r.namesOff || ctx.Err() != nil {
+		return ""
 	}
 	var data struct {
 		User struct {
@@ -551,7 +576,16 @@ func (r *run) senderName(ctx context.Context, openID string) string {
 	err := r.sess.getJSON(ctx, request{family: famIM, op: "user name", path: "/open-apis/contact/v3/users/" + pathEsc(openID),
 		query: map[string]string{"user_id_type": "open_id"}}, &data)
 	if err != nil {
-		r.namesOff = true
+		if e := asSyncError(err); e != nil && e.Kind == larksyncwire.ErrKindScope {
+			r.namesOff = true
+			return ""
+		}
+		// Only a missing contact scope disables lookups for the rest of the run; a per-sender failure
+		// (deleted/external user, invalid id, transient or rate-limit error) leaves only this sender unnamed
+		// and is cached for the run so repeated messages from them do not repeat the failed lookup.
+		if ctx.Err() == nil {
+			r.names[openID] = ""
+		}
 		return ""
 	}
 	r.names[openID] = data.User.Name

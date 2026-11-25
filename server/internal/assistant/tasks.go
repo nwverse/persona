@@ -143,11 +143,13 @@ type PlanTask struct {
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
-	Goal          string   `json:"goal,omitempty"`
-	OutOfBounds   []string `json:"out_of_bounds,omitempty"`
-	Continues     string   `json:"continues,omitempty"`
-	ContinuesWhy  string   `json:"continues_why,omitempty"`
-	ScopeRevision string   `json:"scope_revision,omitempty"`
+	Goal               string   `json:"goal,omitempty"`
+	OutOfBounds        []string `json:"out_of_bounds,omitempty"`
+	Continues          string   `json:"continues,omitempty"`
+	ContinuesWhy       string   `json:"continues_why,omitempty"`
+	HandoffID          string   `json:"handoff_id,omitempty"`
+	HandoffOperationID string   `json:"handoff_operation_id,omitempty"`
+	ScopeRevision      string   `json:"scope_revision,omitempty"`
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`

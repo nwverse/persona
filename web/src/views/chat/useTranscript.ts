@@ -14,7 +14,7 @@ import { unlandedLive } from "../../lib/live-text";
 import { clearLive } from "../../lib/live";
 import { endPull, pullKey as gateKeyOf, resetPullGatesForTests, startPull } from "../../lib/pull-gate";
 import { archivedNow } from "../../lib/agent-archives";
-import { createItemCoalescer } from "../../lib/item-coalescer";
+import { createItemCoalescer, type ItemCoalescer } from "../../lib/item-coalescer";
 
 const PAGE = "turns=2&fold_work=1&lazy_images=1";
 /** How often a page checks whether it is behind (a pure comparison; nothing is asked unless it is, lib/stale-page.ts). */
@@ -164,6 +164,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   // an agent's last delta as it came, and what of it the page shows (lib/live-text.ts)
   const liveRaw = useRef("");
   const liveShown = useRef("");
+  const coalescer = useRef<ItemCoalescer | null>(null);
 
   const apply = useCallback((batch: Item[]) => {
     if (!batch.length) return;
@@ -210,6 +211,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     replacing.current = false;
     const ctl = new AbortController();
     const itemCoalescer = createItemCoalescer(apply);
+    coalescer.current = itemCoalescer;
     // Older pages and folds still on their way were asked for from what is shown now: they must not land on what replaces it.
     const disownReads = () => {
       invalidateHistoryReads();
@@ -223,6 +225,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       clearTimeout(handoffTimer);
       ctl.abort();
       itemCoalescer.cancel();
+      if (coalescer.current === itemCoalescer) coalescer.current = null;
       disownReads();
       snapshot.current = null;
       setItems([]);
@@ -326,6 +329,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     const rewritten = (nextHistory = "") => {
       disownReads();
       cancelSave();
+      itemCoalescer.cancel();
       replacing.current = true;
       authoritative = false;
       ready = false;
@@ -361,6 +365,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         return;
       }
       const want = liveRaw.current && unlandedLive(liveRaw.current, latest);
+      if (!batch && liveRaw.current && want !== liveRaw.current) itemCoalescer.flush();
       if (!want && liveRaw.current) return endLive();
       if (want === liveShown.current) return;
       liveShown.current = want;
@@ -415,7 +420,10 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         const got = p.items ?? [];
         // Not what the stream brought while this was on its way: those are merged as they are, and not a miss.
         fresh += got.filter((i) => i.seq > covered.current).length;
-        apply(got);
+        if (got.length) {
+          itemCoalescer.flush();
+          apply(got);
+        }
         remember(got, Boolean(p.more_after));
         showLive(got);
         if (p.to_seq) covered.current = Math.max(covered.current, p.to_seq);
@@ -511,11 +519,12 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       let visible = batch;
       const replay = e.has_more !== undefined && authoritative;
       if (e.has_more !== undefined) {
-        itemCoalescer.cancel();
         latestMore = e.has_more;
         recovered();
         // The first replay can stand in for a failed read. Later replays describe only the newest two turns.
         const skips = !replay && skipsCached(batch);
+        if (skips) itemCoalescer.cancel();
+        else itemCoalescer.flush();
         if (!replay) updateHasMore(latestMore);
         if (skips) disownReads();
         latest = skips ? [] : withoutFolded(latest, batch);
@@ -526,13 +535,15 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       }
       const gap = covered.current > 0 && ((e.from_seq ?? covered.current) > covered.current || (replay && batch.length > 0 && batch[0].seq > covered.current + 1));
       remember(e.items ?? [], gap);
+      const prevLiveShown = liveShown.current;
       showLive(e.items ?? []);
+      const liveHandoff = liveShown.current !== prevLiveShown;
       lastArrival = Date.now();
       if (e.items?.length && tally !== FRESH_TALLY) {
         tally = afterPush(tally); // the stream works
         setNotLive(false);
       }
-      itemCoalescer.push(visible, e.has_more !== undefined);
+      itemCoalescer.push(visible, e.has_more !== undefined || liveHandoff);
       if (!gap && e.to_seq) covered.current = Math.max(covered.current, e.to_seq);
       if (gap || e.more_after) queueGapFill();
     };
@@ -557,18 +568,18 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     });
 
     function commitPage(p: ItemsPage) {
-      itemCoalescer.cancel();
       const batch = p.items ?? [];
       const changed = Boolean(p.history && history.current && p.history !== history.current);
       const active = authoritative && !replacing.current && !changed;
       const replace = replacing.current || changed || !batch.length || (!active && skipsCached(batch));
+      const buffered = replace ? (itemCoalescer.cancel(), []) : itemCoalescer.drain();
       const gap = active && !replace && batch[0].seq > covered.current + 1;
       if (replace) disownReads();
       if (replacing.current || changed) setReplaceEpoch((n) => n + 1);
       const pushes = changed && !replacing.current && pendingHistory !== p.history ? [] : pendingItems;
       const refreshed = (have: Item[], page: Item[]) => mergeItems(mergeItems(replace ? [] : withoutFolded(have, page), page), withoutFolded(pushes, page));
       const visible = active ? keepExpanded(batch) : batch;
-      setItems(have => refreshed(have, visible));
+      setItems(have => refreshed(buffered.length ? mergeItems(have, buffered) : have, visible));
       latest = refreshed(latest, batch);
       latestMore = Boolean(p.has_more);
       if (replace || !active) updateHasMore(latestMore);
@@ -649,6 +660,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       clearTimeout(refused);
       clearTimeout(handoffTimer);
       itemCoalescer.cancel();
+      if (coalescer.current === itemCoalescer) coalescer.current = null;
       deltas.current.cancel();
       clearTimeout(gapTimer.current);
       gapTimer.current = undefined; // the next session's first gap starts its own
@@ -688,7 +700,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
           rewrite.current(p.history);
           return;
         }
-        apply(p.items ?? []);
+        const older = p.items ?? [];
+        if (older.length) {
+          coalescer.current?.flush();
+          apply(older);
+        }
         updateHasMore(Boolean(p.has_more));
         setError("");
         earlierRetryAt.current = 0;
@@ -735,7 +751,11 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       }
       if (complete) expanded.current.set(fold.id, fold.fold);
       // from_seq..through_seq is line-granular, so boundary lines can carry blocks of an adjacent fold (#13859).
-      apply(out.filter((i) => insideFold(i, fold)));
+      const expandedItems = out.filter((i) => insideFold(i, fold));
+      if (expandedItems.length) {
+        coalescer.current?.flush();
+        apply(expandedItems);
+      }
       // The closeout's evidence reader needs to know a capped or superseded read; existing fold UI keeps the partial steps.
       return complete;
     },
