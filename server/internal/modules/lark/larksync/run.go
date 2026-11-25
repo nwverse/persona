@@ -26,16 +26,18 @@ const lookupBatch = 100
 // end (finish), from the resources that did not fail: a resource that fails part way contributes nothing, neither
 // content nor index records nor its cursor.
 type run struct {
-	s        *Syncer
-	b        larksyncwire.Binding
-	sess     *session
-	cursors  map[string]string
-	idx      larksyncwire.Index
-	start    time.Time // the run's "now": windows' ends and SeenAt
-	deadline time.Time
-	owner    string // the owner's open id (Message.Mine)
-	webHost  string // the tenant's document site, learned from the first document URL read
-	partial  bool
+	s            *Syncer
+	b            larksyncwire.Binding
+	sess         *session
+	cursors      map[string]string
+	idx          larksyncwire.Index
+	start        time.Time // the run's "now": windows' ends and SeenAt
+	deadline     time.Time
+	stepDeadline time.Time // optional per-step deadline in ModeIM (zero: use deadline)
+	owner        string    // the owner's open id (Message.Mine)
+	webHost      string    // the tenant's document site, learned from the first document URL read
+	partial      bool
+	p2pLoaded    bool
 
 	res           map[string]*resourceState
 	errs          []larksyncwire.ResourceError
@@ -141,7 +143,13 @@ func newRun(s *Syncer, b larksyncwire.Binding, token func(context.Context) (stri
 	}
 }
 
-func (r *run) overBudget() bool { return !r.s.now().Before(r.deadline) }
+func (r *run) overBudget() bool {
+	now := r.s.now()
+	if !r.stepDeadline.IsZero() && !now.Before(r.stepDeadline) {
+		return true
+	}
+	return !now.Before(r.deadline)
+}
 
 // backfillFrom is where a resource without a cursor starts reading.
 func (r *run) backfillFrom() time.Time {

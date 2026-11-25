@@ -105,5 +105,7 @@
   "start_goal_skipped": "開始目標なしで開始しました：{reason}",
   "side_handover_title": "「{title}」をメイン会話に引き継ぎました",
   "side_handover_archived": "元の会話「{origin}」がアーカイブされたため、タスク「{title}」のフォローをメイン会話に引き継ぎました。",
-  "side_handover_gone": "元の会話「{origin}」が利用できなくなったため、タスク「{title}」のフォローをメイン会話に引き継ぎました。"
+  "side_handover_gone": "元の会話「{origin}」が利用できなくなったため、タスク「{title}」のフォローをメイン会話に引き継ぎました。",
+  "placement_waiting": "自動的なコンピューター配置を待機しています。",
+  "placement_no_match": "現在、このタスクの配置制約と容量制限を満たすオンラインのコンピューターがありません。"
 }

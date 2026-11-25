@@ -808,6 +808,19 @@ let graceTimer: number | undefined;
 // The hub said hub_restarting on this socket: its close is a restart whatever the close code.
 let restartNotice = false;
 let cursor: EventCursor = NO_CURSOR;
+// Tracks the active failed-upgrade HTTP probe episode so stale probe results settling after hello, disconnect, or a
+// credential change cannot poison state.link.lastError or block later disconnect probes.
+let probeEpoch = 0;
+let probeAbort: AbortController | null = null;
+let probeOwner = "";
+
+function cancelLinkProbe() {
+  const prev = probeAbort;
+  probeEpoch++;
+  probeAbort = null;
+  probeOwner = "";
+  prev?.abort();
+}
 
 export function send(msg: Record<string, unknown>) {
   if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -843,12 +856,13 @@ export function connect() {
   socketChanged(false);
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   socketToken = getToken();
+  const sockOwner = credentialOwner();
+  if (probeAbort && probeOwner !== sockOwner) cancelLinkProbe();
   if (cold && socketToken) {
-    const owner = credentialOwner();
     // Give a fast hello the only read. If it takes longer, show the REST snapshots while waiting for the socket.
     // The normal hello refresh still covers changes between these snapshots and the start of the event stream.
     sidebarTimer = setTimeout(() => {
-      if (owner !== credentialOwner()) return;
+      if (sockOwner !== credentialOwner()) return;
       void refreshAssistant().catch(() => {});
       void refreshTodos();
     }, 250);
@@ -880,7 +894,10 @@ export function connect() {
       if (appSocketReady()) privateStreamListeners.forEach((listener) => listener(ev.data));
       return; // Private trees never enter the global replay cursor or store.
     }
-    if (msg.type === "hello") authenticatedSocket = sock;
+    if (msg.type === "hello") {
+      authenticatedSocket = sock;
+      cancelLinkProbe();
+    }
     pushing = true;
     try {
       onMessage(msg);
@@ -899,9 +916,30 @@ export function connect() {
     if (stopped) return;
     // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
     // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
-    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential, setLinkError);
-    const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
+    if (restart || (probeAbort && probeOwner !== credentialOwner())) cancelLinkProbe();
+    if (!wasLive && !restart && !probeAbort && sockOwner === credentialOwner()) {
+      const controller = new AbortController();
+      const epoch = probeEpoch;
+      const probeCurrent = () => epoch === probeEpoch && !stopped && authenticatedSocket === null && sockOwner === credentialOwner();
+      probeAbort = controller;
+      probeOwner = sockOwner;
+      void probeEdge(
+        undefined,
+        () => (probeCurrent() ? probeCredential(probeCurrent, controller.signal) : Promise.resolve()),
+        (reason) => {
+          if (probeCurrent()) setLinkError(reason);
+        },
+        controller.signal,
+        probeCurrent,
+      ).finally(() => {
+        if (probeAbort === controller) {
+          probeAbort = null;
+          probeOwner = "";
+        }
+      });
+    }
+    const now = Date.now();
     // the drop starts while online; a restart announced on a later attempt stretches its grace
     const next = !drop && state.conn === "online" ? { at: now, restart } : drop && restart && !drop.restart ? { ...drop, restart } : null;
     if (next) {
@@ -932,13 +970,13 @@ const setLinkError = (reason: string) => {
 // read asks. A credential it no longer takes (removed in Settings › Devices, or the hub forgot it) answers 401, which
 // api() hands to the sign-in page with "signed out" (App.tsx handleUnauthorized) instead of retrying as if the hub were
 // out of reach. Other HTTP/API rejections surface their error detail in ConnectionDetails; network errors change nothing.
-const probeCredential = () =>
-  api("/machines", { timeout: 15_000 }).then(
+const probeCredential = (isCurrent: () => boolean, signal: AbortSignal) =>
+  api("/machines", { timeout: 15_000, signal, isAuthContextCurrent: isCurrent }).then(
     () => {
-      if (state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
+      if (isCurrent() && state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
     },
     (e: unknown) => {
-      if (e instanceof ApiError && e.status >= 400 && e.message) setLinkError(e.message);
+      if (isCurrent() && e instanceof ApiError && e.status >= 400 && e.message) setLinkError(e.message);
     },
   );
 
@@ -956,6 +994,7 @@ function back() {
 /** "Retry now" (the pill's details): try now instead of waiting for the backoff. */
 export function reconnectNow() {
   if (stopped) return;
+  cancelLinkProbe();
   connect();
 }
 
@@ -969,12 +1008,16 @@ setOfflineProbe(() => (!networkUp() ? "network" : state.conn !== "online" || dro
 export function disconnect() {
   setCompatibilityFeatures([]);
   stopped = true;
+  cancelLinkProbe();
+  retry = 0;
+  fastTries = 0;
   // a reconnect scheduled after a drop would otherwise fire connect(), which clears stopped (signed out: an empty token)
   clearTimeout(retryTimer);
   clearTimeout(sidebarTimer);
   back();
   ws?.close();
   ws = null;
+  if (state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
   socketChanged(false);
 }
 
@@ -1010,7 +1053,10 @@ if (typeof document !== "undefined") {
 if (typeof window !== "undefined") {
   window.addEventListener("online", () => {
     set({ link: { ...state.link, networkUp: true } });
-    if (!stopped) connect();
+    if (!stopped) {
+      cancelLinkProbe();
+      connect();
+    }
   });
   window.addEventListener("offline", () => set({ link: { ...state.link, networkUp: false } }));
 }
