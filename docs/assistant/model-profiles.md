@@ -12,6 +12,8 @@ Ask Persona to “switch to economy” or “switch to performance”. Persona u
 - `model_profile_rollback`: undo the most recent switch (stepping back through earlier switches across quick round trips such as `performance` → `economy` → `performance`; rolling back the last remaining point redoes on the next rollback).
 - `model_profile_capture` with `id`: show what capturing the current six purpose bindings and their managed-launcher model fields would change in that existing profile, then save only after explicit phone approval. Every tier stays byte-for-byte unchanged. The card's catalog revision and exact target before-image are checked again at apply; a conflict writes nothing. The saved profile is read back and returned with the new catalog revision. Current configuration is not changed.
 
+Related `model_profiles.bindings` / `model_profiles.tiers` writes and a following `model_profile_switch` can share one `owner_action_prepare` approval. Preparation builds a private sequential catalog plan, so every card and later switch sees the preceding items' after-images. Each execution checks the exact display and expected catalog revision against real storage: revisions advanced by earlier items in this batch match, while any external write causes a conflict. The first failure stops later items and reports completed and unexecuted positions. Rollback uses the same exact dry-run, rollback-point display and revision check. Ordinary direct profile switch/rollback behavior is unchanged when no exact batch item matches.
+
 The live `persona-context` snapshot identifies the current profile and its tiers (with what each runs on and is for) on every turn, without waiting for the ordinary snapshot cache. Model calls use the changed configuration on their next invocation. Existing Agent sessions and running turns are not interrupted.
 
 ## What the built-in profiles use
@@ -30,6 +32,8 @@ Each template gets two tiers named by the kind of work, `core` (the main chat's 
 | research | Long-context model | Economical long-context model |
 
 Every purpose binding has `provider`, `model`, optional `effort`, and (for launcher-backed purposes only) optional `permission_mode`. Empty provider with empty model inherits the existing default source; empty model or permission mode uses its inherited/launcher default. Legacy model-only category bindings (non-empty `model` with empty `provider`) are normalized to their resolved provider on read, capture, save, apply, and rollback when a configured provider exists, so they display and apply predictably without drifting when defaults change (empty `{}` bindings and effort-only bindings keep inheriting). Profiles cover `assistant`, `agent.new`, `kb`, `inbox.triage`, `agent.delegate`, and `translate`; independent extension overrides such as `lark.agent` are not changed.
+
+A scheduled task whose saved new-namespace override outlives the task can be cleaned up without recreating that task. `persona_settings` accepts `{"action":"set","key":"model_config.task.<id>","value":null}` only when the task is absent and a non-empty override actually exists. The ordinary card (or an `owner_action_prepare` item) shows the old binding → inherit Main chat, checks its record revision again, and reads back the empty override. Any non-null value is refused: a nonexistent task can never receive a new binding. The retired legacy `model_config.task.<id>` records remain inert and are not resurrected.
 
 ## Agent presets (tiers)
 

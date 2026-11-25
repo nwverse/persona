@@ -71,11 +71,29 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		late bool // stored with a later message of the owner's: older than lines written before it
 	}
 	var picks []pick
+	// dups: messages another source already archived (Engine.Align), by ID: received, never written.
+	var dups map[string]time.Time
+	// repairs: already-received larksync messages arriving with a resolved SenderName to backfill pre-#15486 "?:" lines.
+	var repairs []SourceMessage
 	for _, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
 		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
+			if exists && syncSource(src) && !m.Mine && strings.TrimSpace(m.SenderName) != "" {
+				if lr, hasLine := r.Lines[m.ID]; hasLine && !lr.Mine && lr.Hash != "" {
+					repairs = append(repairs, m)
+				}
+			}
+			continue
+		}
+		if e.Align != nil && e.Align(src, sc, m) {
+			if m.ID != "" {
+				if dups == nil {
+					dups = map[string]time.Time{}
+				}
+				dups[m.ID] = m.At
+			}
 			continue
 		}
 		if !selecting {
@@ -139,10 +157,22 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		}
 		kept = append(kept, m)
 	}
+	if len(repairs) > 0 {
+		if err := e.repairLarkSyncSenders(src, sc, cut, repairs); err != nil {
+			return 0, err
+		}
+	}
 	if len(lines) == 0 {
 		if err := saveWindow(); err != nil {
 			return 0, err
 		}
+		if len(dups) > 0 && exists {
+			if err := e.receiveOnly(src, sc, cut, dups); err != nil {
+				return 0, err
+			}
+		}
+		// A chat not stored yet keeps no receipts for its duplicates: an empty chat would list beside the one that
+		// has the messages. They are asked about again when they come again.
 		return unchanged()
 	}
 	if err := ctx.Err(); err != nil {
@@ -156,6 +186,9 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	if err := attributeChat(c, src); err != nil {
 		return 0, err
+	}
+	for id, at := range dups {
+		r.IDs[id] = at
 	}
 	for i, m := range kept {
 		if m.ID != "" {
@@ -196,6 +229,24 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	e.index(KindChat, c.ID, c.Name, c.Tagging, c.OneLine, c.LastAt)
 	return len(lines), nil
+}
+
+// receiveOnly records the IDs of dups (messages another source already archived) in a stored chat's receipts without
+// writing a line, so they are not aligned again. The caller holds ingestMu.
+func (e *Engine) receiveOnly(src Source, sc SourceChat, cut time.Time, dups map[string]time.Time) error {
+	e.Store.chatMu.Lock()
+	defer e.Store.chatMu.Unlock()
+	c, exists, r, err := e.Store.ingestState(src.Name(), sc, cut)
+	if err != nil || !exists {
+		return err
+	}
+	if err := attributeChat(c, src); err != nil {
+		return err
+	}
+	for id, at := range dups {
+		r.IDs[id] = at
+	}
+	return e.Store.commitIngest(c, nil, r, false, "")
 }
 
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.

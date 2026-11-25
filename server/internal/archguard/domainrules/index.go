@@ -31,6 +31,7 @@ type Index struct {
 	contracts map[string]bool // import paths testdata/contracts.txt lists
 	rules     string          // domainrules' own import path
 	tree      *tree           // where the packages were read
+	bareIDs   map[string]bool // names contract-bare-id lets stand; nil leaves the rule off (WithBareIDs)
 }
 
 // NewIndex indexes pkgs; contracts is testdata/contracts.txt's entries (paths under the module, or full import

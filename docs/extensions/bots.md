@@ -120,6 +120,128 @@ The two complement each other and have separate switches.
   The owner and consumed code must be saved before pairing is acknowledged or messages are authorized. If saving fails, the bot asks you to send the same code again before it expires; the previous code, expiry and attempt count stay unchanged. A later failure to save the optional contact name keeps the committed binding and its previous display name.
 - Names: reading contacts needs `contact:user.base:readonly`; without that permission the owner is called by `assistant.owner` in the manager's `manager.json`, and others "someone".
 
+## Reading as you: daily sync
+
+The bot reads and writes as itself (a tenant token). Separately, the owner can let a bot's app read **as them** once, and
+from then on a daily sync copies what changed in their Lark into the knowledge base: chats and their history (threads and
+attachments included), Drive, Docs, Sheets, Base, Wiki and Minutes. It is the built-in Lark channel's own feature
+(`server/internal/modules/lark/larkauth` and `server/internal/modules/lark/larksync`, with the manager's side in
+`server/internal/extmgr/larksync.go` and its neighbours); it needs no extension and no lark-cli.
+
+### Two steps on one page
+
+1. **Create or extend the app.** The device-code registration of "Pairing and permissions" now also asks for user scopes
+   (the page's `addons.scopes.user`), from one of two packs:
+   - **Documents and minutes** (`docs_standard`): Drive, Docs, Sheets, Base, Wiki, Minutes and message search, plus
+     `offline_access`, which is what gives a refresh token.
+   - **Everything, chat history included** (`full_with_im`): adds the chats and their history as the owner
+     (`im:message.group_msg:get_as_user`, `im:message.p2p_msg:get_as_user`) and file downloads.
+
+   An existing app (the chat bot's, or one added earlier) gets the scopes added by a registration that names its App ID
+   (`POST /api/v1/bots/feishu/sync/bots/{bot}/scopes`); a new sync-only app is one QR code
+   (`POST /api/v1/bots/feishu/sync/bots`, then `POST /api/v1/bots/feishu/sync/bots/{bot}/register` until done).
+2. **Authorize.** Right after, the page starts the user authorization (`POST /api/v1/bots/feishu/sync/bots/{bot}/authorize`):
+   OAuth v3 with PKCE and `offline_access`. The redirect URL is the web app's `/lark-oauth` page; the manager first adds it to
+   the app through `PATCH /open-apis/application/v7/applications/{app_id}/config` (`security.add.redirect_urls`, effective at
+   once without review) together with the user scopes, and publishes a version. The page then opens Lark's authorization
+   page; Lark returns to `/lark-oauth`, which hands `state` and `code` to `POST /api/v1/bots/feishu/sync/oauth`.
+
+   Changing the app's configuration needs `application:application:patch`, which the platform does not grant by default.
+   Without it there are two fallbacks, in order:
+   - **Device flow**: the page shows a QR code that authorizes without any redirect URL (the endpoint lark-cli uses,
+     `oauth/v1/device_authorization`; it is not in the public API catalogue, so it may change).
+   - **Paste once**: if that fails too, the page shows the redirect URL with a copy button and a link straight to the app's
+     security settings; after pasting it there, **Continue** opens the authorization page.
+
+The iPhone and iPad app and the Android app have the same section on their Lark bot page (#15392), on the same routes.
+For the browser way they show Lark's authorization page in an in-app web view with the hub's own address plus
+`/lark-oauth` as the redirect URL, stop that view when it reaches the address (the web page never loads), and hand
+`state` and `code` to `POST /api/v1/bots/feishu/sync/oauth` themselves. The device flow and the paste-once way work as
+on the web. A hub without the sync (404, or `available: false`) hides the section.
+
+So a new owner confirms twice on one page (scan to create, then agree); an app that already has the scopes needs only
+the second. The tokens are sealed with `secret.key` (settings `bots.feishu.sync.bindings`, re-sealed by the key rotation),
+never shown and never logged.
+
+### Company tenants and approval
+
+The app the registration creates is a **custom app of the tenant** of whoever scans (Lark has no separate "personal app"
+type that skips the tenant's rules). In a company tenant:
+
+- **User scopes need the admin's approval**, unless the admin made them review-free. Reading chat history as a user
+  (`…:get_as_user`), Drive and Minutes are sensitive and usually reviewed. Until a version is approved the page shows that
+  the app is waiting for the admin's approval (`awaiting_approval`); authorizing meanwhile only grants what is already approved.
+- If the company does not let employees create apps, the scan is refused: ask IT to create the app (or allow it), enter its
+  credentials under **Already have a Lark app?**, then add the scopes and authorize.
+- Only people within the app's availability scope can authorize it (error `20010` otherwise).
+- When the admin will not approve chat history, choose **Documents and minutes**: documents, wiki and minutes still sync,
+  and company chats stay with what the Lark gateway already collects.
+- A personal account without a team can create a free one-person team in the Lark app first; its owner is its admin and
+  approves their own app.
+
+### Several accounts and several bots
+
+Bindings are (account × bot) pairs. The bot in `bots.feishu` stays the **primary** bot (`bot_id` `primary`): the only one
+that chats, configured exactly as before, so older settings need no migration and keep working unchanged. Every other bot
+is **sync-only** (`bots.feishu.sync.bots`) and holds no long connection. An account is whoever authorized
+(`<brand>:<tenant_key>:<open_id>`); a work account and a personal account, each with its own tenant's app, are two
+bindings. Each binding has its own token refresh (one at a time: the platform rotates the refresh token, so two
+concurrent refreshes would lose it), cursors, rate limits and failure backoff: one binding being refused, rate-limited or
+missing a scope marks only that binding, and the others and the chat bot carry on.
+
+### The daily run
+
+Each enabled binding runs once a day, at `schedule_hour` local time (default 3) plus a minute of its own, or at once with
+**Sync now** (`POST /api/v1/bots/feishu/sync/bindings/{key}/run`). The first run reads the last 30 days; later runs read what
+changed since the cursors, with a few minutes of overlap. A run has a 20-minute budget; what is left is read next time.
+For bindings that include chat history (`full_with_im`), a lightweight incremental chat sync also runs every 15 minutes
+(5-minute budget) after the first full run: it reads only new messages since each chat's cursor, discovers newly started
+single chats (`chat_type: "p2p_chat"`), and follows any newly linked cloud documents and meeting minutes without walking
+Drive or Wiki. It shares the binding's rate limiter and running lock with the daily full sync (never overlapping it) and
+can be turned off in Settings (`PUT /api/v1/bots/feishu/sync` with `im_poll: false`), leaving the daily full run unchanged.
+
+Synced messages are scanned for Feishu / Lark cloud document and wiki links (`/docx/`, `/docs/`, `/sheets/`, `/base/`,
+`/bitable/`, `/file/`, `/wiki/`, `/minutes/`), including documents shared with the owner outside their My Space root.
+Wiki links resolve via `GET /open-apis/wiki/v2/spaces/get_node`, metadata is batch-queried via
+`POST /open-apis/drive/v1/metas/batch_query`, `docx` / `sheet` / `bitable` convert to Markdown with the existing readers,
+readable text files (`.md`, `.txt`, `.csv`, `.json`, `.yaml`, etc.) download via
+`GET /open-apis/drive/v1/files/{file_token}/download` using the user token, and non-text files keep metadata only. Every
+linked document deduplicates by `obj_token` + revision and records `message_link` in `sources[]`; unreadable documents
+(403, export disabled, oversized file) record the reason in `Note` at revision 0 without blocking the run. All required
+scopes (`drive:drive:readonly`, `docx:document:readonly`, `docs:document.content:read`, `sheets:spreadsheet:readonly`,
+`bitable:app:readonly`, `wiki:wiki:readonly`, `wiki:node:retrieve`, plus `drive:file:download` and `im:*` in `full_with_im`)
+are already covered by the existing packs.
+
+Requests are rate-limited per binding and per API family, and a 429, `99991400`, `230020` or `1061045` waits as the platform
+asks before trying again. **A read that fails leaves its cursor where it was**: the cursors, the dedup index and what the
+knowledge base will collect are committed together after a run, so nothing is skipped and nothing half-read is kept. A failed
+run tries again 15 minutes later; from the third failure in a row it backs off 1, 6 and then 24 hours. A run that ran out of
+budget or into the rate limit goes on an hour later. An authorization lasts at most 365 days; 14, 7 and 1 day before the end
+the owner gets a reminder to authorize again, and the page shows it.
+
+### One copy of everything
+
+Every piece of content has one canonical key: `feishu_msg:<message_id>`, `feishu_doc:<obj_token>` (a wiki node resolves to
+its document), `feishu_minute:<token>`. The manager's index (Postgres `lark_sync_index`) records each key's revision, body
+hash and every place it was read from (`sources`: binding, account, how it was found). Content read again by another bot,
+another account, or through both Drive and Wiki is written once and only gains a source. A document whose revision grew is
+updated in place; one that arrives late with an older revision never replaces the newer one. The knowledge base applies
+the same rule to its items (`canonical_key`, `revision` and `sources` on `kbwire.Item`).
+
+Alignment with what the Lark gateway already put in the knowledge base: documents and minutes match by the
+token in their URL (a wiki link by its node token), so the existing item is updated in place and lists both sources.
+Messages first use a known pairing of the two chats (the knowledge base's `chats/.crosswalk.json`), then a content
+fingerprint: the same chat name, sender, two-second window and text means the same message, which is not written twice and
+records the pairing for next time.
+
+### Endpoints
+
+Under `/api/v1/bots/feishu/sync` (writes need a full-access device): `GET` the view (accounts, bots, bindings with their
+health and last run; never tokens), `PUT` the schedule, `POST /bots`, `POST /bots/{bot}/register`, `POST /bots/{bot}/scopes`,
+`DELETE /bots/{bot}`, `POST /bots/{bot}/authorize`, `POST /bots/{bot}/authorize/poll`, `POST /oauth`,
+`PUT` or `DELETE /bindings/{key}` and `POST /bindings/{key}/run`. Removing a binding forgets its tokens and cursors; what it
+already put in the knowledge base stays.
+
 ## What it can do (`features`, one switch each in the App)
 
 `PUT /api/v1/bots/feishu` changes only the feature keys supplied in `features`; omitted keys keep their current values,

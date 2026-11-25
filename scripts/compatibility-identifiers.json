@@ -1245,6 +1245,7 @@
       "tokens": [
         "JARVIS_ASSISTANT",
         "JARVIS_ASSISTANT_BIN",
+        "JARVIS_CATEGORIES",
         "JARVIS_GUEST",
         "JARVIS_SESSION_ID",
         "JARVIS_SPACE",
@@ -1382,6 +1383,14 @@
       "reason": "Dedicated adapter for a versioned runtime, protocol or persisted identity.",
       "tokens": [
         "jarvis.theme"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "web/e2e/composer-inline-references.mjs": {
+      "reason": "Browser assertions for the exact legacy context/file markers accepted by the registered compatibility adapter.",
+      "tokens": [
+        "jarvis"
       ],
       "path_tokens": [],
       "external_refs": []

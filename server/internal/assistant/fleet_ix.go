@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -164,6 +165,7 @@ func (s *Service) tellApps(ix proto.Interaction) proto.Interaction {
 	s.tellCard(ix)
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // whether it is told counts for Persona Link's summary, not for the list
+	s.cardStateChanged(ix)
 	return ix
 }
 
@@ -186,9 +188,11 @@ func (s *Service) tellUser(ix proto.Interaction, push bool) {
 // user's (pending.told): only tell does.
 func (s *Service) show(ix proto.Interaction) {
 	s.taskPlanApproval()
-	s.tellCard(s.withTask(ix))
+	shown := s.withTask(ix)
+	s.tellCard(shown)
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // the card, and whether the assistant decides on it, count for Persona Link's summary
+	s.cardStateChanged(shown)
 }
 
 // tellCard gives the hub card ix (fleet.interaction), as tellApps and show do. A card can end while it is on its way:
@@ -241,10 +245,14 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
 	}
-	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
-	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
+	// Plan mode enforces a read-only task's launch constraint. Its supervisor report and strictly read-only
+	// inspection Bash commands may run once without a card, while exiting plan mode stays denied and any write,
+	// ambiguous, credential-touching or inbox-origin Bash command still asks. Neither path registers a card or grants permissions.
 	report := ix.Kind == proto.IxPermission && slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), ix.ToolName)
-	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
+	safeReadonlyBash := ix.Kind == proto.IxPermission && ix.ToolName == "Bash" &&
+		!s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, false) &&
+		readonlyTaskSafeBash(ix.ToolInput, ix.Cwd)
+	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report || safeReadonlyBash {
 		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
 			plans, err := s.conversationPlans(ctx, todo.Origin)
 			if err != nil {
@@ -260,6 +268,10 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 							if todo.Supervision == nil || todo.Supervision.Supervisor == "" {
 								continue
 							}
+							allow := true
+							return proto.Resolution{Allow: &allow}, nil
+						}
+						if safeReadonlyBash {
 							allow := true
 							return proto.Resolution{Allow: &allow}, nil
 						}
@@ -881,6 +893,11 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		s.fleet.mu.Unlock()
 		return errHandoffElsewhere // a channel, the assistant, a remembered answer, an older hub: a no only
 	}
+	if p != nil && proto.SecretRunEnvInteraction(p.ix) && !proto.SecretHandoffDeclines(r) &&
+		(approver == nil || approver.DeviceID == "" || authorization != nil) {
+		s.fleet.mu.Unlock()
+		return errSecretRunEnv // an older specialized client would show no env warning before its Run
+	}
 	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
 		s.fleet.mu.Unlock()
 		return errInvalidQuestionCancel
@@ -1156,6 +1173,7 @@ func (s *Service) finished(p *pending) {
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.tellResolved(done)
 	s.publishSessions(p.ix.MachineID)
+	s.cardStateChanged(p.ix)
 }
 
 // The hub treats omissions from a reconnect inventory as resolutions. Order the read and the
@@ -1263,18 +1281,160 @@ func (s *Service) refreshPendingCards() {
 
 // pendingOf are the pending interactions of the sessions in want (by computer, the session ids), by computer and
 // session, as they are held, in no order: without the task each agent works for (withTask), which a to-do's view
-// does not read. A list read copies only its runs' few cards this way, never the whole fleet's.
+// does not read. Claimed cards are skipped, machine IDs are canonicalized, and folded sub-agent / side-session cards
+// are resolved to their folded parent outside fleet.mu so to-do projections see supervisor-held child cards.
 func (s *Service) pendingOf(want map[string]map[string]bool) map[[2]string][]proto.Interaction {
 	out := map[[2]string][]proto.Interaction{}
+	if len(want) == 0 {
+		return out
+	}
 	s.fleet.mu.Lock()
-	defer s.fleet.mu.Unlock()
+	snap := make([]proto.Interaction, 0, len(s.fleet.interactions))
 	for _, p := range s.fleet.interactions {
-		if want[p.ix.MachineID][p.ix.SessionID] {
-			k := [2]string{p.ix.MachineID, p.ix.SessionID}
-			out[k] = append(out[k], p.ix)
+		if !p.claimed {
+			snap = append(snap, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	if len(snap) == 0 {
+		return out
+	}
+	canonWant := make(map[string]map[string]bool, len(want))
+	for m, ids := range want {
+		cm := s.canonical(m)
+		if canonWant[cm] == nil {
+			canonWant[cm] = map[string]bool{}
+		}
+		for sid, ok := range ids {
+			if ok {
+				canonWant[cm][sid] = true
+			}
+		}
+	}
+	seen := map[[2]string]map[string]bool{}
+	emit := func(m, sid string, ix proto.Interaction) {
+		if !canonWant[m][sid] {
+			return
+		}
+		k := [2]string{m, sid}
+		if seen[k] == nil {
+			seen[k] = map[string]bool{}
+		}
+		if ix.ID != "" && seen[k][ix.ID] {
+			return
+		}
+		if ix.ID != "" {
+			seen[k][ix.ID] = true
+		}
+		out[k] = append(out[k], ix)
+	}
+	for _, ix := range snap {
+		mid := s.canonical(ix.MachineID)
+		ix.MachineID = mid
+		if ix.FoldedUnder == "" {
+			underMid, under, as, side := s.foldedUnderWithMachine(mid, ix.SessionID)
+			if under != "" {
+				ix.FoldedUnder = under
+				ix.FoldedAs = as
+				ix.FoldedSide = side
+				if underMid != "" {
+					ix.FoldedUnderMachineID = s.canonical(underMid)
+				}
+			}
+		} else if ix.FoldedUnderMachineID != "" {
+			ix.FoldedUnderMachineID = s.canonical(ix.FoldedUnderMachineID)
+		}
+		emit(mid, ix.SessionID, ix)
+		if ix.FoldedUnder != "" {
+			emit(cmp.Or(ix.FoldedUnderMachineID, mid), ix.FoldedUnder, ix)
+		}
+		if ix.FoldedSide != "" {
+			emit(mid, ix.FoldedSide, ix)
 		}
 	}
 	return out
+}
+
+// heldOnlySessions returns canonical (machine, session) keys whose pending cards (direct or folded) are all held by a
+// supervisor or assistant (Delegating == true), with at least one pending card and zero non-delegating owner cards.
+func (s *Service) heldOnlySessions() map[[2]string]bool {
+	s.fleet.mu.Lock()
+	snap := make([]proto.Interaction, 0, len(s.fleet.interactions))
+	for _, p := range s.fleet.interactions {
+		if !p.claimed {
+			snap = append(snap, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	if len(snap) == 0 {
+		return nil
+	}
+	type flags struct {
+		held bool
+		user bool
+	}
+	bySession := map[[2]string]flags{}
+	mark := func(m, sid string, delegating bool) {
+		if m == "" || sid == "" {
+			return
+		}
+		k := [2]string{m, sid}
+		st := bySession[k]
+		if delegating {
+			st.held = true
+		} else {
+			st.user = true
+		}
+		bySession[k] = st
+	}
+	for _, ix := range snap {
+		mid := s.canonical(ix.MachineID)
+		underMid, under, _, side := s.foldedUnderWithMachine(mid, ix.SessionID)
+		if under == "" && ix.FoldedUnder != "" {
+			under, underMid, side = ix.FoldedUnder, ix.FoldedUnderMachineID, ix.FoldedSide
+		}
+		mark(mid, ix.SessionID, ix.Delegating)
+		if under != "" {
+			mark(s.canonical(cmp.Or(underMid, mid)), under, ix.Delegating)
+		}
+		if side != "" {
+			mark(mid, side, ix.Delegating)
+		}
+	}
+	out := map[[2]string]bool{}
+	for k, st := range bySession {
+		if st.held && !st.user {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// cardStateChanged refreshes todo views and the direction tree when a card is routed, escalated, or resolved, even if
+// the machine's serialized session list did not change (for example, flipping Delegating on a pending card or updating
+// a cross-machine folded sub-agent's card).
+func (s *Service) cardStateChanged(ix proto.Interaction) {
+	mid := s.canonical(ix.MachineID)
+	underMid, under, _, _ := s.foldedUnderWithMachine(mid, ix.SessionID)
+	if under == "" && ix.FoldedUnder != "" {
+		under, underMid = ix.FoldedUnder, ix.FoldedUnderMachineID
+	}
+	notify := func(machine string) {
+		if machine == "" {
+			return
+		}
+		s.todoRunsChanged(machine)
+		if s.todoRunsOn(machine) {
+			s.directionTreeSoon()
+		}
+	}
+	notify(mid)
+	if under != "" {
+		parentMid := s.canonical(cmp.Or(underMid, mid))
+		if parentMid != mid {
+			notify(parentMid)
+		}
+	}
 }
 
 // pendingIx is one pending interaction; false when it is not pending.
@@ -1693,6 +1853,23 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 			resumable[i].AlwaysKeys = nil
 			notKept := false
 			resumable[i].AlwaysHonored = &notKept
+		}
+	}
+	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
+		for _, id := range cancelled {
+			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			rec, err := func() (rec *db.InteractionRecord, err error) {
+				defer guard(&err)
+				return recStore.InteractionRecord(readCtx, id)
+			}()
+			cancel()
+			if err != nil {
+				s.logf("read invalidated interaction %s: %v", id, err)
+				continue
+			}
+			if rec != nil {
+				s.recordRestartInvalidation(ctx, rec.Interaction)
+			}
 		}
 	}
 	var back []proto.Interaction

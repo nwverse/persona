@@ -86,6 +86,47 @@ func TestCodexIndexSharesBlockedWork(t *testing.T) {
 	<-finished
 }
 
+func TestCodexSessionsCarryGoalAndPlan(t *testing.T) {
+	n := remoteTestNode(t)
+	const threadID = "cccc0000-0000-4000-8000-000000000003"
+	writeThread(t, n.home, threadID, n.home, "fix the parser")
+	matches, err := filepath.Glob(filepath.Join(n.home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+threadID+".jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("find rollout: matches=%v err=%v", matches, err)
+	}
+	rollout := matches[0]
+	extra := `{"timestamp":"2026-11-22T10:00:02Z","type":"event_msg","payload":{"type":"thread_goal_updated","goal":{"objective":"Keep all tests green","status":"active","tokensUsed":120,"tokenBudget":1000,"timeUsedSeconds":15}}}` + "\n" +
+		`{"timestamp":"2026-11-22T10:00:03Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"call_reg_1","arguments":"{\"plan\":[{\"step\":\"Reproduce\",\"status\":\"completed\"},{\"step\":\"Fix\",\"status\":\"in_progress\"}]}"}}` + "\n" +
+		`{"timestamp":"2026-11-22T10:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_reg_1","output":"Plan updated"}}` + "\n"
+	f, err := os.OpenFile(rollout, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(extra); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	rows := n.codexSessions(map[string]bool{})
+	var found *proto.Session
+	for i := range rows {
+		if rows[i].SourceThreadID == threadID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("codexSessions did not return thread %s: %+v", threadID, rows)
+	}
+	if found.Goal == nil || found.Goal.Objective != "Keep all tests green" || found.Goal.Status != proto.GoalActive {
+		t.Fatalf("codexSessions Goal = %+v, want active goal", found.Goal)
+	}
+	if found.Plan == nil || found.Plan.Done != 1 || found.Plan.Total != 2 || found.Plan.Current != "Fix" {
+		t.Fatalf("codexSessions Plan = %+v, want 1/2 Fix", found.Plan)
+	}
+}
+
 func TestCodexIndexUsesOneWaitBudgetForAList(t *testing.T) {
 	var index codexHomeIndex
 	release := make(chan struct{})
@@ -331,4 +372,221 @@ func TestCodexIndexRecoversNewlyCreatedHomeAndPropagatesStatFailure(t *testing.T
 	if n.indexCodexHome(notDir, time.Now().Add(codexHomeListWait)) {
 		t.Fatal("cached non-directory home was reported as healthy on repeat check")
 	}
+}
+
+// A failed scan (transient permission, mount, or I/O error) must not be cached as fresh so the next bounded scan
+// restores healthy rows as soon as the filesystem recovers.
+func TestCodexIndexDoesNotCacheFailedScanAsFresh(t *testing.T) {
+	t.Run("available does not cache failed scan TTL", func(t *testing.T) {
+		var index codexHomeIndex
+		var calls atomic.Int32
+		if index.available("flaky", time.Now().Add(codexHomeListWait), func() (time.Duration, bool) {
+			calls.Add(1)
+			return time.Minute, false
+		}) {
+			t.Fatal("failed scan was reported available")
+		}
+		if !index.available("flaky", time.Now().Add(codexHomeListWait), func() (time.Duration, bool) {
+			calls.Add(1)
+			return time.Second, true
+		}) {
+			t.Fatal("recovered scan was blocked by a cached failure")
+		}
+		if calls.Load() != 2 {
+			t.Fatalf("scan ran %d times, want 2", calls.Load())
+		}
+	})
+
+	t.Run("recovered home lists immediately without waiting a second", func(t *testing.T) {
+		n := remoteTestNode(t)
+		root := t.TempDir()
+		home := canonicalCodexHome(filepath.Join(root, ".codex"), n.home)
+		// Start with a non-directory so indexCodexHome returns false.
+		if err := os.WriteFile(home, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		n.configureCodex(proto.CodexConfig{Homes: []string{home}})
+		if n.indexCodexHome(home, time.Now().Add(codexHomeListWait)) {
+			t.Fatal("non-directory home succeeded")
+		}
+		// Immediately replace it with a healthy Codex home containing a thread.
+		if err := os.Remove(home); err != nil {
+			t.Fatal(err)
+		}
+		const id = "f2000000-0000-4000-8000-000000000001"
+		writeThread(t, root, id, n.home, "recovered immediately")
+		rows := n.codexSessions(map[string]bool{})
+		if !slices.ContainsFunc(rows, func(s proto.Session) bool { return s.SourceThreadID == id && s.Status != proto.StatusUnknown }) {
+			t.Fatalf("recovered home was hidden by cached failure: %+v", rows)
+		}
+	})
+}
+
+// A healthy pass where another surface (a live pane or a runtime claim) suppresses a thread's history row must still
+// retain the last observed snapshot so a subsequent home stall + pane/runtime removal emits a StatusUnknown row
+// instead of making the thread vanish.
+func TestCodexListPreservesSnapshotAcrossLiveOwnershipAndRuntimeClaims(t *testing.T) {
+	t.Run("history -> healthy live ownership -> home stall -> pane removal -> recovery", func(t *testing.T) {
+		n := remoteTestNode(t)
+		slowRoot := t.TempDir()
+		slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
+		const slowID = "f3000000-0000-4000-8000-000000000001"
+		const healthyID = "f3000000-0000-4000-8000-000000000002"
+		writeThread(t, slowRoot, slowID, n.home, "observed history title")
+		writeThread(t, n.home, healthyID, n.home, "healthy thread")
+		n.configureCodex(proto.CodexConfig{Homes: []string{slowHome}})
+		slowPublicID := codexSourceID(slowHome, slowID, n.codexInventory().LegacyHome)
+
+		// 1. Observe thread as healthy history.
+		initial := n.sessionList(context.Background(), false)
+		var origTitle string
+		for _, r := range initial {
+			if r.SessionID == slowPublicID {
+				origTitle = r.Title
+			}
+		}
+		if origTitle == "" {
+			t.Fatalf("initial history missing %s: %+v", slowPublicID, initial)
+		}
+
+		// 2. Healthy live ownership suppresses the history row via seen[id].
+		n.mu.Lock()
+		n.agents = map[string]host.Agent{
+			slowPublicID: {Agent: "codex", PaneID: "tmux:%1", Cwd: n.home, AgentStatus: proto.StatusIdle, Title: "live pane"},
+		}
+		n.mu.Unlock()
+		livePass := n.sessionList(context.Background(), false)
+		if !slices.ContainsFunc(livePass, func(s proto.Session) bool { return s.SessionID == slowPublicID && s.PaneID == "tmux:%1" }) {
+			t.Fatalf("healthy live pane missing: %+v", livePass)
+		}
+
+		// 3. Home stalls and the pane disappears.
+		n.mu.Lock()
+		n.agents = map[string]host.Agent{}
+		n.mu.Unlock()
+		n.codices.index.mu.Lock()
+		if s := n.codices.index.homes[slowHome]; s != nil {
+			s.fresh = time.Time{}
+		}
+		n.codices.index.mu.Unlock()
+		cache := rolloutCacheFor(slowHome)
+		cache.mu.Lock()
+		var once sync.Once
+		release := func() { once.Do(cache.mu.Unlock) }
+		defer release()
+
+		stalled := n.sessionList(context.Background(), false)
+		var sawSlowUnavailable, sawHealthy bool
+		for _, r := range stalled {
+			if r.SourceThreadID == healthyID && r.Status != proto.StatusUnknown {
+				sawHealthy = true
+			}
+			if r.SessionID == slowPublicID && r.Status == proto.StatusUnknown && r.Title == origTitle &&
+				r.Capabilities != nil && !r.Capabilities.Send && !r.Capabilities.Terminal {
+				sawSlowUnavailable = true
+			}
+		}
+		if !sawSlowUnavailable || !sawHealthy {
+			t.Fatalf("stalled list after pane removal: slowUnavailable=%v healthy=%v rows=%+v", sawSlowUnavailable, sawHealthy, stalled)
+		}
+
+		// 4. Home recovers and emits fresh history row again.
+		release()
+		waitFor(t, "stalled home recovers after pane removal", func() bool {
+			for _, r := range n.sessionList(context.Background(), false) {
+				if r.SessionID == slowPublicID && r.Status == proto.StatusOffline {
+					return true
+				}
+			}
+			return false
+		})
+	})
+
+	t.Run("history -> live runtime claim -> home stall -> runtime removal", func(t *testing.T) {
+		n := remoteTestNode(t)
+		slowRoot := t.TempDir()
+		slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
+		const slowID = "f4000000-0000-4000-8000-000000000001"
+		writeThread(t, slowRoot, slowID, n.home, "claimed by runtime")
+		n.configureCodex(proto.CodexConfig{Homes: []string{slowHome}})
+		slowPublicID := codexSourceID(slowHome, slowID, n.codexInventory().LegacyHome)
+
+		// 1. Observe thread as healthy history.
+		initial := n.codexSessions(map[string]bool{})
+		if len(initial) != 1 || initial[0].SessionID != slowPublicID {
+			t.Fatalf("initial history = %+v", initial)
+		}
+
+		// 2. Live runtime claim suppresses the history row on a healthy pass.
+		pass := newCodexListPass()
+		pass.runtimes = map[string]codexClaim{slowID: {session: "rt-1", live: true}}
+		if rows := n.codexSessionsIn(map[string]bool{}, pass); len(rows) != 0 {
+			t.Fatalf("live runtime claim did not suppress history row: %+v", rows)
+		}
+
+		// 3. Home stalls and runtime claim is gone: cached unknown-status row must still appear.
+		n.codices.index.mu.Lock()
+		if s := n.codices.index.homes[slowHome]; s != nil {
+			s.fresh = time.Time{}
+		}
+		n.codices.index.mu.Unlock()
+		cache := rolloutCacheFor(slowHome)
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+
+		stalled := n.codexSessions(map[string]bool{})
+		if len(stalled) != 1 || stalled[0].SessionID != slowPublicID || stalled[0].Status != proto.StatusUnknown ||
+			stalled[0].Title != initial[0].Title {
+			t.Fatalf("cached snapshot lost after runtime claim: %+v", stalled)
+		}
+	})
+
+	t.Run("live-first pane preserved when home stalls and pane drops", func(t *testing.T) {
+		n := remoteTestNode(t)
+		slowRoot := t.TempDir()
+		slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
+		const slowID = "f5000000-0000-4000-8000-000000000001"
+		writeThread(t, slowRoot, slowID, n.home, "live first thread")
+		path := rolloutPath(slowHome, slowID)
+		n.configureCodex(proto.CodexConfig{Homes: []string{slowHome}})
+		slowPublicID := n.registerCodex(slowHome, slowID, path)
+
+		// First observation is exclusively as a live pane (never seen as offline history before).
+		n.mu.Lock()
+		n.agents = map[string]host.Agent{
+			slowPublicID: {Agent: "codex", PaneID: "tmux:%2", Cwd: n.home, AgentStatus: proto.StatusIdle, Title: "live pane"},
+		}
+		n.mu.Unlock()
+		first := n.sessionList(context.Background(), false)
+		var liveTitle string
+		for _, r := range first {
+			if r.SessionID == slowPublicID {
+				liveTitle = r.Title
+			}
+		}
+		if liveTitle == "" {
+			t.Fatalf("live-first row missing: %+v", first)
+		}
+
+		// Home stalls and pane drops from n.agents (as after a pane lookup timeout).
+		n.mu.Lock()
+		n.agents = map[string]host.Agent{}
+		n.mu.Unlock()
+		n.codices.index.mu.Lock()
+		if s := n.codices.index.homes[slowHome]; s != nil {
+			s.fresh = time.Time{}
+		}
+		n.codices.index.mu.Unlock()
+		cache := rolloutCacheFor(slowHome)
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+
+		stalled := n.sessionList(context.Background(), false)
+		if !slices.ContainsFunc(stalled, func(s proto.Session) bool {
+			return s.SessionID == slowPublicID && s.Status == proto.StatusUnknown && s.Title == liveTitle &&
+				s.Capabilities != nil && !s.Capabilities.Send && !s.Capabilities.Terminal
+		}) {
+			t.Fatalf("live-first pane vanished when home stalled and pane dropped: %+v", stalled)
+		}
+	})
 }

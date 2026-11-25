@@ -1,14 +1,17 @@
 import { Wire } from './Wire';
-import { TODO_LIST_SECTIONS, type TodoListSection } from './TodoViewWire';
+import { TODO_LIST_SECTIONS, parseTodoListSection, type TodoListSection } from './TodoViewWire';
 
 // GET /api/v1/todos, as specified by schema/wire/todo-view.schema.json. The
 // Hub owns the rank and counts. New reason and line keys leave the row readable.
+// The row's section is read key by key as the hub's text (TodoHubRow), so a
+// newer hub's section stays a string here and is drawn in no section.
 export const TODO_HUB_SECTIONS: TodoListSection[] = [...TODO_LIST_SECTIONS];
 export const TODO_HUB_CHOICES: string[] = ['all', 'needs_you', 'in_progress', 'todo', 'done'];
 
 const [needsYou, canWait, working, waiting, todo, justFinished, someday, done] = TODO_LIST_SECTIONS;
 
-export function todoHubLabel(value: TodoListSection): string {
+// The label of a section or of a Filter choice ('in_progress' is no section).
+export function todoHubLabel(value: string): string {
   switch (value) {
     case canWait: return 'flow_todo_can_wait';
     case someday: return 'flow_todo_someday';
@@ -19,10 +22,10 @@ export function todoHubLabel(value: TodoListSection): string {
   }
 }
 
-export function todoHubChoiceIncludes(choice: string, section: TodoListSection): boolean {
+export function todoHubChoiceIncludes(choice: string, section: string): boolean {
   switch (choice) {
     case 'needs_you': return section === needsYou || section === canWait;
-    case 'in_progress': return [working, waiting, justFinished].includes(section);
+    case 'in_progress': return section === working || section === waiting || section === justFinished;
     case 'todo': return section === todo || section === someday;
     case 'done': return section === done;
     default: return true;
@@ -80,7 +83,8 @@ export class TodoHubRow {
     row.section = Wire.text(view, 'section');
     row.phase = Wire.text(view, 'phase');
     row.rank = count(view, 'rank');
-    if (!TODO_HUB_SECTIONS.includes(row.section) || !row.phase || row.rank < 0) return undefined;
+    // No view, or a section this build does not know (parsed as unknown, and counted): the local rules file the row.
+    if (!row.section || typeof parseTodoListSection(row.section) !== 'string' || !row.phase || row.rank < 0) return undefined;
     const line = Wire.object(view, 'line');
     const args = Wire.object(line, 'args');
     const key = Wire.text(line, 'key');

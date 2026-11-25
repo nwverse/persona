@@ -46,11 +46,11 @@ func (n *Node) indexCodexHome(home string, deadline time.Time) bool {
 				// Not created yet (e.g. before first Codex use): recheck quickly so new history appears promptly.
 				return time.Second, true
 			}
-			// Propagate permission, mount, or I/O failures as unavailable instead of caching a fresh empty scan.
-			return time.Second, false
+			// Propagate permission, mount, or I/O failures as unavailable without caching a fresh failure.
+			return 0, false
 		}
 		if !st.IsDir() {
-			return time.Second, false
+			return 0, false
 		}
 		n.registerRollouts(home)
 		n.registerCodexAppThreads(home, nil)
@@ -170,7 +170,12 @@ func (i *codexHomeIndex) available(home string, deadline time.Time, scan func() 
 			freshFor, ok := scan()
 			run.ok = ok
 			i.mu.Lock()
-			s.fresh = time.Now().Add(freshFor)
+			if ok && freshFor > 0 {
+				s.fresh = time.Now().Add(freshFor)
+			} else {
+				// Never cache failed scans as fresh: a transient error must recover on the next bounded scan.
+				s.fresh = time.Time{}
+			}
 			s.ok = ok
 			if s.run == run {
 				s.run = nil

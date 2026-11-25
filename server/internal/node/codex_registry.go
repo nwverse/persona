@@ -46,6 +46,7 @@ type codexRegistry struct {
 	stdioHomes        map[string]bool            // canonical home → a stdio app-server currently runs there
 	remoteDiags       map[string]codexRemoteDiag // resolved endpoint → last connection failure kind
 	byPane            map[string]string
+	byPanePID         map[string]int
 	threads           map[string]codexSource
 	remotes           map[string]*codexRemote
 	retries           map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
@@ -337,6 +338,7 @@ func (n *Node) discoverCodex() {
 	// an app-server subprocess must not override its terminal client.
 	found := scan()
 	byPane := map[string]string{}
+	byPanePID := map[string]int{}
 	for _, p := range found {
 		if n.herdrSessionBlocked(p.herdrSession) {
 			continue
@@ -361,9 +363,19 @@ func (n *Node) discoverCodex() {
 		if pane != "" && (p.endpoint == "" || byPane[pane] == "") {
 			byPane[pane] = home
 		}
+		if p.endpoint == "" && p.pid > 0 {
+			pidPane := pane
+			if pidPane == "" && p.orcaPane != "" {
+				pidPane = host.PaneRef{Kind: host.Orca, ID: p.orcaPane}.String()
+			}
+			if pidPane != "" {
+				byPanePID[pidPane] = p.pid
+			}
+		}
 	}
 	r.mu.Lock()
 	r.byPane = byPane
+	r.byPanePID = byPanePID
 	r.mu.Unlock()
 	claudeIDs := map[string]bool{}
 	for _, path := range n.globProjects("*", "*.jsonl") {
@@ -630,12 +642,13 @@ func (n *Node) codexSharedReadOnlyReason(home, endpoint string) string {
 // row's decoration (ultracodeRow) also resolved the data directory and rebuilt that name. It lives for one pass of one
 // caller, so nothing in it is shared or needs invalidating. A nil pass looks everything up each time.
 type codexListPass struct {
-	unavailable      map[string]bool      // previously observed rows whose filesystem is unavailable on this pass
-	unavailableHomes map[string]bool      // Codex homes whose index or rollout cache mutex was unavailable on this pass
-	real             map[string]string    // directory → realPath
-	stats            map[string]codexStat // rollout path → os.Stat
-	desktop          map[string]bool      // Codex home → codexDesktopAvailable
-	own              string               // assistantProject, once ownSet
+	unavailable      map[string]bool          // previously observed rows whose filesystem is unavailable on this pass
+	unavailableHomes map[string]bool          // Codex homes whose index or rollout cache mutex was unavailable on this pass
+	liveRows         map[string]proto.Session // healthy live Codex pane rows observed on this pass, for stall fallback
+	real             map[string]string        // directory → realPath
+	stats            map[string]codexStat     // rollout path → os.Stat
+	desktop          map[string]bool          // Codex home → codexDesktopBusAvailable
+	own              string                   // assistantProject, once ownSet
 	ownSet           bool
 	// runtimes is the runtime session each Codex thread is listed as (thread → session, runtimecodex.go): the list
 	// has that session's row, so the thread's own is left out and its subagents hang off the session.
@@ -706,16 +719,23 @@ func (p *codexListPass) stat(path string) (os.FileInfo, error) {
 	return st.info, st.err
 }
 
-func (p *codexListPass) desktopAvailable(home string) bool {
+func (p *codexListPass) desktopBusAvailable(home string) bool {
 	if p == nil {
-		return codexDesktopAvailable(home)
+		return codexDesktopBusAvailable(home)
 	}
 	up, ok := p.desktop[home]
 	if !ok {
-		up = codexDesktopAvailable(home)
+		up = codexDesktopBusAvailable(home)
 		p.desktop[home] = up
 	}
 	return up
+}
+
+func (p *codexListPass) desktopAvailable(home string) bool {
+	if p.desktopBusAvailable(home) {
+		return true
+	}
+	return codexDesktopQueueCLI(home) != ""
 }
 
 // appState is loadCodexAppState with each home's state looked up once per pass.
@@ -781,6 +801,16 @@ func (p *codexListPass) assistantProject(n *Node) string {
 	return p.own
 }
 
+func (n *Node) lastCodexRow(id string) (proto.Session, bool) {
+	if n.codices == nil {
+		return proto.Session{}, false
+	}
+	n.codices.mu.Lock()
+	row, ok := n.codices.lastRows[id]
+	n.codices.mu.Unlock()
+	return row, ok
+}
+
 func (n *Node) codexSessions(seen map[string]bool) []proto.Session {
 	return n.codexSessionsIn(seen, newCodexListPass())
 }
@@ -838,23 +868,29 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			pass.unavailable[id] = true
 		}
 	}
+	suppressed := map[string]bool{}
 	for id, src := range sources {
 		if pass.homeUnavailable(src.home) {
 			emitUnavailable(id, src)
 			continue // decorating it from the filesystem would wait on the same home
+		}
+		if seen[id] {
+			suppressed[id] = true
+			continue
 		}
 		src, visible := n.listedCodexSource(id, src, pass)
 		if pass.homeUnavailable(src.home) {
 			emitUnavailable(id, src)
 			continue
 		}
-		if !visible || seen[id] || n.isAssistantSessionIn(id, pass) || n.ownedAssistantSource(src.thread) {
+		if !visible || n.isAssistantSessionIn(id, pass) || n.ownedAssistantSource(src.thread) {
 			continue
 		}
 		// A runtime's session is this thread: the conversation is listed once, as that session. While the session
 		// runs, always; once it does not, unless another program has the thread (elsewhere, below).
 		claim := pass.runtimeOf(src.thread)
 		if claim.live {
+			suppressed[id] = true
 			continue
 		}
 		elsewhere := false
@@ -892,6 +928,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Effort = m.effort
 				m.turnErr.set(&s)
 				setContext(&s, m)
+				s.Goal, s.Plan = m.goal, m.plan
 				title, ok := threadTitleIn(src.home, src.thread, pass)
 				if !ok {
 					emitUnavailable(id, src)
@@ -975,13 +1012,27 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		} else if codexDesktopChatIn(src, pass) {
 			// Retain App identity and grouping when an update removes its bus, including database-only chats.
 			s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
-			s.Capabilities.Send = pass.desktopAvailable(src.home)
+			busUp := pass.desktopBusAvailable(src.home)
+			s.Capabilities.Send = busUp || codexDesktopQueueCLI(src.home) != ""
 			elsewhere, desktopViewOnly = s.Capabilities.Send, !s.Capabilities.Send
 			s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopUnavailableKey)
 			n.placeCodexDesktopIn(&s, src, src.thread, false, pass)
+			if !busUp {
+				// Interrupting a running turn requires the legacy follower bus; native queue delivery only enqueues messages.
+				s.Capabilities.Interrupt = false
+			}
 			if s.Capabilities.Send {
 				s.ReadOnlyReason = ""
-				n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+				if busUp {
+					n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
+				} else if s.Model == "" {
+					if app := codexAppThreads(src.home)[src.thread]; app.Model != "" {
+						s.Model = app.Model
+						if s.Effort == "" {
+							s.Effort = app.Effort
+						}
+					}
+				}
 			}
 		} else if o := codexThreadOrigin(src); o.desktop { // a subagent whose rollout is gone too: its database row (#8191)
 			if o.parent != "" {
@@ -994,6 +1045,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		}
 		if claim.session != "" {
 			if !elsewhere {
+				suppressed[id] = true
 				continue // nothing else has the thread: the runtime's session, though not running, is the conversation
 			}
 			own[src.thread] = true
@@ -1044,10 +1096,37 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	sort.Slice(out, func(i, j int) bool { return out[i].SessionID < out[j].SessionID })
 	resolveCodexHierarchy(out)
 	slotCodexDesktop(out)
-	saved := make(map[string]proto.Session, len(out))
+	saved := make(map[string]proto.Session, len(out)+len(suppressed))
 	for id, last := range previous {
-		if pass.homeUnavailable(sources[id].home) || pass.unavailable[id] {
-			saved[id] = last // another surface may have shown this thread on this pass
+		if pass.homeUnavailable(sources[id].home) || pass.unavailable[id] || suppressed[id] {
+			saved[id] = last // keep observed metadata across stalls and live/runtime ownership
+		}
+	}
+	for id, row := range pass.liveRows {
+		if !pass.unavailable[id] && !pass.homeUnavailable(sources[id].home) {
+			if src, known := sources[id]; known {
+				if prev, ok := previous[id]; ok {
+					if row.SourceKind == "" {
+						row.SourceKind = prev.SourceKind
+					}
+					if row.AgentName == "" {
+						row.AgentName = prev.AgentName
+					}
+					if row.AgentSurface == "" {
+						row.AgentSurface = prev.AgentSurface
+					}
+					if row.Title == "" {
+						row.Title = prev.Title
+					}
+				}
+				if row.SourceKind == "" {
+					row.SourceKind = "codex_history"
+				}
+				if row.SourceThreadID == "" {
+					row.SourceThreadID = src.thread
+				}
+				saved[id] = row
+			}
 		}
 	}
 	for i := range out {

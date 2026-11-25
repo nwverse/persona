@@ -87,7 +87,7 @@ func TestCardCategoriesOfTheSixKinds(t *testing.T) {
 		cardOutboundWrite: cardCatOutward,
 		cardPlanMoney:     cardCatMoney, cardPlanOutward: cardCatOutward, cardPlanIrreversible: cardCatIrreversible,
 		cardLeaderNeedsUser: cardCatDirection, cardDecision: cardCatDirection, cardAskEscalated: cardCatDirection,
-		cardTodoRemind: cardCatDirection, cardHealthWater: cardCatDirection, cardMinutesReady: cardCatDirection,
+		cardTodoRemind: cardCatDirection, cardHealthWater: cardCatDirection, cardPageAlert: cardCatDirection, cardMinutesReady: cardCatDirection,
 		cardDayRecap: cardCatDirection, cardBriefFallback: cardCatDirection, cardAgentDone: cardCatDirection,
 		cardConfirmOutbound: cardCatNone, cardSettingsChange: cardCatNone, cardAgentPermission: cardCatNone,
 		cardAgentPlan: cardCatNone, cardAgentQuestion: cardCatNone, cardPlanWaiting: cardCatNone, cardAskUser: cardCatNone,

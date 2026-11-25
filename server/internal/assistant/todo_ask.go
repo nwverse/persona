@@ -79,6 +79,8 @@ type listedTodo struct {
 	DecisionReview       *decisionReview            `json:"decision_review,omitempty"`
 	Orphaned             *TodoOrphan                `json:"orphaned,omitempty"`
 	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
+	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
+	ItemType             string                     `json:"item_type,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.
@@ -171,6 +173,7 @@ func (s *Service) askChanged(context.Context) {
 	s.trevision.changed()
 	s.todosPushSoon() // with the rest of the write that changed it
 	s.boardChanged()
+	s.directionTreeSoon()
 }
 
 // pushDecision pushes task id's decision that waits for the owner and recommends an option (a "decide" push): what is to

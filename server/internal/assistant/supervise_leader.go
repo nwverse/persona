@@ -51,8 +51,8 @@ func (s *Service) supervises(ctx context.Context, id string) bool {
 	return s.isMain(ctx, id) || s.isLeader(ctx, id)
 }
 
-// defaultPlanSupervisor assigns a direction lead its own plans, and otherwise uses main. A task leader's
-// workers and active reporting conversations retain their specialized topology.
+// defaultPlanSupervisor assigns a direction lead or live assistant side conversation its own plans, and otherwise uses
+// main. A task leader's workers and active reporting conversations retain their specialized topology.
 func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, parent string) (string, bool) {
 	if parent != "" || conversation == "" {
 		return "", false
@@ -62,6 +62,9 @@ func (s *Service) defaultPlanSupervisor(ctx context.Context, conversation, paren
 	}
 	if _, reports := s.reporterOf(ctx, conversation); reports {
 		return "", false
+	}
+	if s.liveSideSupervisor(ctx, conversation) {
+		return conversation, true
 	}
 	main := s.settings(ctx).Main
 	return main, main != ""
