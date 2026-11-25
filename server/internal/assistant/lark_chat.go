@@ -138,16 +138,6 @@ func (s *Service) nudgeLoop(ctx context.Context) {
 	}
 }
 
-// ---- the cards closed when their node went away (feishu_cards.go) ----
-
-// detachedCards are the Feishu cards closed because their node's connection ended (feishuDetach), by interaction id,
-// kept for resumeGrace in case the same card comes back (feishuCardBack). The chat's lock is taken inside mu, never
-// the other way round.
-type detachedCards struct {
-	mu    sync.Mutex
-	cards map[string]detachedCard
-}
-
 // ---- the chat's clock ----
 
 // larkNow is the chat's clock: the time now, or the one a test set.

@@ -240,34 +240,3 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 	}
 	s.closeEndedBotCards(ctx, pending, true)
 }
-
-// closeEndedBotCards closes the bot's cards whose interaction is over. Not being in pending is not enough: right
-// after a restart the manager's table is empty or partial (interactions are restored, screen and Codex cards rebuilt,
-// after this runs), so each is closed only once the history says it ended for good (botCardOver). One that may still
-// be waiting is looked at again a little later, once (again).
-func (s *Service) closeEndedBotCards(ctx context.Context, pending map[string]bool, again bool) {
-	var maybe []botCard
-	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { // cards posted before a restart are in the chat's state
-		for id, card := range b.Cards() {
-			if !pending[id] && card.MessageID != "" {
-				maybe = append(maybe, card)
-			}
-		}
-	})
-	var unsure []botCard
-	for _, card := range maybe {
-		switch s.botCardOver(ctx, card.Ix.ID) {
-		case cardOver:
-			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
-		case cardUnsure:
-			unsure = append(unsure, card)
-		}
-	}
-	if again && len(unsure) > 0 {
-		time.AfterFunc(botCardRecheck, func() {
-			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			s.closeEndedBotCards(cctx, nil, false)
-		})
-	}
-}
