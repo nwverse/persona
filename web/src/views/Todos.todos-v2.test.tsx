@@ -42,7 +42,8 @@ const flush = async () => {
 };
 const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unknown as Record<string, unknown>, patch);
 
-const view = (section: string, reason: string, phase: string, rank = 0): TodoSummary => ({ phase, section, reason, rank });
+// The view as the wire carries it: raw strings, which may be a newer hub's values the closed types do not know.
+const view = (section: string, reason: string, phase: string, rank = 0): TodoSummary => ({ phase, section, reason, rank }) as TodoSummary;
 
 const sampleTodos: Todo[] = [
   // Personal to-do without project
