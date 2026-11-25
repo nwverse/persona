@@ -209,7 +209,10 @@ private fun SettingsContent(
     LaunchedEffect(slots, page, connection) {
         if (slots != null && (page == "settings" || page == "plugins") && connection == ConnectionState.Online) slots.load()
     }
-    val channelService = mine.channels.takeUnless { services.demo }
+    // The hub's Lark module (#15995): read here once, and handed to the list, the channel's page and the bot's page.
+    val larkBot = rememberLarkBotEntry()
+    val channelSource = mine.channels.takeUnless { services.demo }
+    val channelService = remember(channelSource, larkBot) { channelSource?.let(larkBot::listing) }
     val channelsAvailable by remember(channelService) { channelService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
     val channelListState = remember(assistant.id) { mutableStateOf<List<HubChannel>?>(null) }
     var channelList by channelListState
@@ -336,7 +339,7 @@ private fun SettingsContent(
         }
     }
     SettingsPageContent(
-        services = services, mine = mine, assistant = assistant, owner = owner,
+        services = services, mine = mine, assistant = assistant, owner = owner, larkBot = larkBot, channelService = channelService,
         pageState = pageState, searchQueryState = searchQueryState,
         purposeManagerState = purposeManagerState, purposeState = purposeState,
         extensionState = extensionState, extensionManagerState = extensionManagerState,
@@ -397,6 +400,8 @@ private fun SettingsPageContent(
     mine: SettingsServices,
     assistant: CurrentAssistant,
     owner: String?,
+    larkBot: LarkBotEntry,
+    channelService: ChannelManagement?,
     pageState: MutableState<String>,
     searchQueryState: MutableState<String>,
     purposeManagerState: MutableState<String?>,
@@ -470,7 +475,6 @@ private fun SettingsPageContent(
     var extensionSummary by extensionSummaryState
     var channelList by channelListState
     var hubUpdateStatus by hubUpdateStatusState
-    val channelService = mine.channels.takeUnless { services.demo }
     val connectorsService = mine.connectors.takeUnless { services.demo }
     val hubUpdates = services.hubUpdates.takeUnless { services.demo }
     fun checkUpdate() { scope.launch { updateController.check(manual = true) } }
@@ -511,7 +515,7 @@ private fun SettingsPageContent(
                         selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
                         onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
                 })
-        "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate) }
+        "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate, larkBot = larkBot) }
             ?: ChannelsPage(channelService, back,
                 onChannel = { id -> onNavigate?.invoke(persona.core.navigation.ChannelRoute(id)) ?: run { channel = id } },
                 // Installed for the current assistant, whose channels these are.
@@ -652,7 +656,7 @@ private fun SettingsPageContent(
             onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage", owner)) ?: run {
                 purposeManager = owner; purpose = "agent.triage"; page = "models" } })
         "mail" -> MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
-        "feishu-bot" -> FeishuBotPage(mine.feishuBot.takeUnless { services.demo }, back)
+        "feishu-bot" -> FeishuBotPage(mine.feishuBot.takeUnless { services.demo }, back, larkBot)
         "mail-add" -> AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
         "feishu" -> FeishuConnectorPage(connectorsService, onBack = back, onAgentModel = {
             // The model of the current assistant's agent there, as the page's connector is that one's.

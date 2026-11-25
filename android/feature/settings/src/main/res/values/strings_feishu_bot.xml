@@ -2,6 +2,7 @@
 <!-- Settings › Lark bot (#2806); words shared with the web (settings-feishubot, lib-feishu-bot). -->
 <resources>
     <string name="settings_feishu_bot_title">Lark bot</string>
+    <string name="settings_lark_bot_module_off">Lark is off on this hub, so the Lark bot can\'t be set up or changed here. Everything you already have stays.</string>
     <string name="settings_feishu_bot_footer">Messaging this bot in Lark is talking to Persona. It only answers you once paired, and stays quiet in groups.</string>
     <string name="settings_feishu_bot_enable">Turn on Lark bot</string>
     <string name="settings_feishu_bot_last_event">Last received</string>
