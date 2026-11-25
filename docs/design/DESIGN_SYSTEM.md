@@ -875,6 +875,10 @@ sending identity or confirmation behavior.
 
 The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. A detail opened from the overview hides the mounted overview instead of squeezing it; Back or Escape closes the detail and restores the overview's scroll and originating row's focus. While the overview stays open, Cmd+B can close and reopen its detail. Turning the overview off or leaving its conversation closes the dependent detail and removes it from Cmd+B memory, so a later toggle cannot expose a stale origin. List-origin details keep ordinary Cmd+B memory. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
+Antigravity sessions with a Swarm roster (#13749) show a **Swarm** disclosure in Session overview. Its count is the
+number of workers in the native roster. Expanding it shows read-only worker names and activity states in the
+existing overview list style.
+
 ### 3.4 Lists and rows
 
 - Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
