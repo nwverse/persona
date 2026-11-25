@@ -20,6 +20,20 @@ import { Icon } from "../../ui/icons";
 import { Group, Pill, Row, Switch, SettingsHint, settingsInputClass } from "./SettingsParts";
 import { ExtensionDownloadMirrors } from "./ExtensionDownloadMirrors";
 
+const twoDigits = (value: number) => String(value).padStart(2, "0");
+
+function updateDate(value?: string): string {
+  const date = new Date(value ?? "");
+  if (Number.isNaN(date.getTime())) return t("settings-hubsettings.unknown");
+  const day = `${String(date.getFullYear()).padStart(4, "0")}-${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())}`;
+  const time = `${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}:${twoDigits(date.getSeconds())}`;
+  return `${day} ${time}`;
+}
+
+function datedCommit(commit?: string, date?: string): string {
+  return commit ? `${updateDate(date)} · ${commit.slice(0, 12)}` : t("settings-hubsettings.unknown");
+}
+
 export function HubSettings() {
   return <><HubUpdates /><ExtensionDownloadMirrors /></>;
 }
@@ -190,16 +204,16 @@ function HubUpdates() {
 
   const working = updateWorking(status);
   const view = updateView(status);
+  const source = status.source ?? "release";
+  const runningChannel = status.version.startsWith("web-dev-") ? "web-dev" : status.channel;
+  const showChannel = !status.development || runningChannel !== source;
+  const showUpdateVersion = source === "web-dev" && status.can_update;
   const warning = latestWarning(status);
   const activeBackup = working ? status.latest?.backup_id : undefined;
   const selectedID = activeBackup || selectedVersion;
-  const selectedBackup = status.source === "web-dev" ? backups.find(v => v.id === selectedID) : undefined;
-  const updateDate = (value?: string) => {
-    const date = value ? new Date(value) : null;
-    if (!date || Number.isNaN(date.getTime())) return t("settings-hubsettings.unknown");
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-  };
-  const datedCommit = (commit?: string, date?: string) => commit ? `${updateDate(date)} · ${commit.slice(0, 12)}` : t("settings-hubsettings.unknown");
+  const selectedBackup = source === "web-dev" ? backups.find(v => v.id === selectedID) : undefined;
+  const showReleaseHeading = view.kind === "newer" && !showUpdateVersion;
+  const latestDetails = (!selectedBackup || activeBackup) && (view.kind === "newer" || showUpdateVersion) ? status.latest : undefined;
   const behind = sourceBehindWarning(status);
 
   return (
@@ -219,11 +233,11 @@ function HubUpdates() {
         <Row label={t("settings-hubsettings.version")} mono stackOnNarrow>
           <span className="max-w-[320px] truncate" title={status.version}>{status.version}</span>
         </Row>
-        <Row label={t("settings-hubsettings.channel")} anchor="hub-channel">{status.version.startsWith("web-dev-") ? t("settings-hubsettings.web_dev") : channelTitle(status.channel)}</Row>
+        {showChannel && <Row label={t("settings-hubsettings.channel")} anchor="hub-channel">{channelTitle(runningChannel)}</Row>}
         {status.development && <>
-          <Row label={t("settings-hubsettings.source")} stackOnNarrow>
+          <Row label={t("settings-hubsettings.source")} anchor={showChannel ? undefined : "hub-channel"} stackOnNarrow>
             <select aria-label={t("settings-hubsettings.source")} className={settingsInputClass}
-              value={status.source ?? "release"} disabled={working || checking || starting || savingSource || savingAuto}
+              value={source} disabled={working || checking || starting || savingSource || savingAuto}
               onChange={(e) => void setSource(e.target.value as "release" | "beta" | "web-dev")}>
               <option value="release">{t("lib-hub-update.channel_release")}</option>
               <option value="beta">{t("settings-hubsettings.beta_channel")}</option>
@@ -236,8 +250,12 @@ function HubUpdates() {
         {status.source === "web-dev" && <>
           <SettingsHint>{t("settings-hubsettings.dev_scope")}</SettingsHint>
           <Row label={t("settings-hubsettings.branch")} wrapValue>{status.development?.branch}</Row>
-          <Row label={t("settings-hubsettings.current_commit")} mono wrapValue>{datedCommit(status.development?.current_commit, status.development?.current_updated_at)}</Row>
-          <Row label={t("settings-hubsettings.latest_commit")} mono wrapValue>{!status.latest?.backup_id ? datedCommit(status.latest?.commit, status.latest?.updated_at) : t("settings-hubsettings.unknown")}</Row>
+          <Row label={t("settings-hubsettings.current_commit")} mono wrapValue>
+            <span className="break-normal tabular-nums">{datedCommit(status.development?.current_commit, status.development?.current_updated_at)}</span>
+          </Row>
+          <Row label={t("settings-hubsettings.latest_commit")} mono wrapValue>
+            <span className="break-normal tabular-nums">{status.latest?.backup_id ? t("settings-hubsettings.unknown") : datedCommit(status.latest?.commit, status.latest?.updated_at)}</span>
+          </Row>
         </>}
         {status.last_check && <Row label={t("settings-hubsettings.last_check")}>{ago(status.last_check)}</Row>}
         <div className="flex justify-end px-4 py-2.5">
@@ -248,9 +266,9 @@ function HubUpdates() {
       </Group>
 
       <Group title={t("settings-hubsettings.update")} anchor="hub-update" footer={status.can_update ? t("settings-hubsettings.update_footer") : undefined}>
-        {status.source === "web-dev" && status.can_update && <>
+        {showUpdateVersion && <>
           <Row label={t("settings-hubsettings.update_version")} stackOnNarrow>
-            <select aria-label={t("settings-hubsettings.update_version")} className={cx(settingsInputClass, "min-w-0 max-w-full")}
+            <select aria-label={t("settings-hubsettings.update_version")} className={cx(settingsInputClass, "min-w-0 max-w-full tabular-nums")}
               value={selectedID} disabled={working || checking || starting || savingSource || loadingBackups}
               onChange={e => setSelectedVersion(e.target.value)}>
               <option value="">{t("settings-hubsettings.latest_main")}{status.latest?.commit && !status.latest.backup_id ? ` · ${datedCommit(status.latest.commit, status.latest.updated_at)}` : ""}</option>
@@ -263,8 +281,12 @@ function HubUpdates() {
             <Button disabled={loadingBackups} onClick={() => void loadBackups()}>{t("settings-hubsettings.retry")}</Button>
           </div>}
           {selectedBackup && <>
-            <Row label={t("settings-hubsettings.target_commit")} mono wrapValue>{datedCommit(selectedBackup.commit, selectedBackup.updated_at)}</Row>
-            <Row label={t("settings-hubsettings.backup_created_at")} wrapValue>{updateDate(selectedBackup.created_at)}</Row>
+            <Row label={t("settings-hubsettings.target_commit")} mono wrapValue>
+              <span className="break-normal tabular-nums">{datedCommit(selectedBackup.commit, selectedBackup.updated_at)}</span>
+            </Row>
+            <Row label={t("settings-hubsettings.backup_created_at")} wrapValue>
+              <span className="break-normal tabular-nums">{updateDate(selectedBackup.created_at)}</span>
+            </Row>
             <SettingsHint>{t("settings-hubsettings.program_backup_hint")}</SettingsHint>
             {!working && <div className="flex justify-end px-4 py-2.5">
               <Button tone="accent" busy={starting} disabled={starting || checking || savingSource || loadingBackups} onClick={() => setConfirmBackup(true)}>{t("settings-hubsettings.apply_backup")}</Button>
@@ -273,21 +295,25 @@ function HubUpdates() {
         </>}
         {view.kind === "docker" && <DockerRows s={status} />}
         {view.kind === "cannot" && <p className="px-4 py-3 text-[12.5px] leading-relaxed text-ink-3">{view.why}</p>}
+        {latestDetails && (showReleaseHeading || latestDetails.notes || warning) && (
+          <div className="space-y-1 px-4 py-3">
+            {showReleaseHeading && (
+              <div className="flex items-center gap-2">
+                <span className="truncate text-[13.5px] font-medium text-ink">{t("settings-hubsettings.new_version", { version: latestDetails.version })}</span>
+                {latestDetails.released && <span className="shrink-0 text-submeta text-ink-3">{t("settings-hubsettings.released", { time: ago(latestDetails.released) })}</span>}
+              </div>
+            )}
+            {latestDetails.notes && <p className="text-label leading-relaxed break-words text-ink-2">{latestDetails.notes}</p>}
+            {warning && (
+              <p className="flex items-start gap-1.5 text-label leading-snug text-orange">
+                <Icon name="info" size={13} className="mt-px shrink-0" />
+                <span className="min-w-0 break-words">{warning}</span>
+              </p>
+            )}
+          </div>
+        )}
         {!selectedBackup && view.kind === "newer" && status.latest && (
           <>
-            <div className="px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-[13.5px] font-medium text-ink">{t("settings-hubsettings.new_version", { version: status.latest.version })}</span>
-                {status.latest.released && <span className="shrink-0 text-[11.5px] text-ink-3">{t("settings-hubsettings.released", { time: ago(status.latest.released) })}</span>}
-              </div>
-              {status.latest.notes && <p className="mt-1 text-[12.5px] leading-relaxed text-ink-2">{status.latest.notes}</p>}
-              {warning && (
-                <p className="mt-1.5 flex items-start gap-1.5 text-[12px] leading-snug text-orange">
-                  <Icon name="info" size={13} className="mt-px shrink-0" />
-                  {warning}
-                </p>
-              )}
-            </div>
             {view.working ? (
               <Progress s={status} onNow={() => setConfirmNow(true)} />
             ) : (
@@ -341,10 +367,10 @@ function HubUpdates() {
                 {r.auto && <Pill>{t("settings-hubsettings.auto")}</Pill>}
                 {r.source === "web-dev" && <Pill>{t("settings-hubsettings.web_dev")}</Pill>}
                 <span className="flex-1" />
-                {(r.ended || r.started) && <span className="shrink-0 text-[11.5px] text-ink-3">{updateDate(r.ended || r.started)}</span>}
+                <span className="text-submeta text-ink-3 tabular-nums">{updateDate(r.ended || r.started)}</span>
               </div>
               <div className="mt-0.5 truncate font-mono text-[11.5px] text-ink-3">{`${r.from_version} → ${r.to_version}`}</div>
-              {r.commit && <div className="mt-0.5 font-mono text-submeta text-ink-3">{datedCommit(r.commit, r.ended || r.started)}</div>}
+              {r.commit && <div className="mt-0.5 font-mono text-submeta text-ink-3 tabular-nums">{datedCommit(r.commit, r.ended || r.started)}</div>}
               {r.reason && <p className="mt-0.5 text-[11.5px] leading-snug text-ink-3">{r.reason}</p>}
             </div>
           ))}

@@ -38,6 +38,8 @@ export function updateStateTitle(s: HubUpdateStatus): string {
 export const DOCKER_COMMAND = "docker compose pull && docker compose up -d";
 
 export function channelTitle(channel: string): string {
+  if (channel === "web-dev") return t("settings-hubsettings.web_dev");
+  if (channel === "beta") return t("settings-hubsettings.beta_channel");
   return channel === "release" ? t("lib-hub-update.channel_release") : channel === "docker" ? "Docker" : t("lib-hub-update.channel_dev");
 }
 

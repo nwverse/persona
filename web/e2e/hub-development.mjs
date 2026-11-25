@@ -56,8 +56,8 @@ try {
   for (const width of [1440, 390]) for (const theme of ['light', 'dark']) for (const size of ['standard', 'large']) {
     const { context, page, shot } = await open(width, theme, size, 'multi-assistant');
     const tag = `${width}-${theme}-${size}`;
-    assert.match(await page.locator('[data-settings-group="hub-version"]').innerText(), /2026-11-13 · a{12}/);
-    assert.match(await page.locator('[data-settings-group="hub-version"]').innerText(), /2026-11-14 · b{12}/);
+    assert.match(await page.locator('[data-settings-group="hub-version"]').innerText(), /2026-11-13 10:00:00 · a{12}/);
+    assert.match(await page.locator('[data-settings-group="hub-version"]').innerText(), /2026-11-14 10:00:00 · b{12}/);
     assert.equal(await page.getByRole('switch', { name: 'Update hub automatically', exact: true }).getAttribute('aria-checked'), 'false');
     const versionLabel = page.locator('[data-settings-group="hub-version"] .truncate').filter({ hasText: /^Version$/ }).first();
     assert.equal(await versionLabel.evaluate(el => el.scrollWidth > el.clientWidth), false, 'Version label is readable at the selected text size');

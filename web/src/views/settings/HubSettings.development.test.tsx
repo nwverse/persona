@@ -3,11 +3,12 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
-import type { HubUpdateStatus } from "../../lib/hub-update";
+import type { HubUpdateRecord, HubUpdateStatus } from "../../lib/hub-update";
 import type { ManagerList } from "../../lib/managers";
 import type { Machine } from "../../lib/types";
 
 let status: HubUpdateStatus;
+let history: HubUpdateRecord[] = [];
 let machines: Machine[] = [];
 let roster: ManagerList | null = null;
 const saved: unknown[] = [];
@@ -15,6 +16,11 @@ let backupReads = 0;
 let updateReads = 0;
 let readUpdate: (() => Promise<HubUpdateStatus>) | undefined;
 const events = new Map<string, (message: { update?: HubUpdateStatus }) => void>();
+const installedAt = "2026-11-13T00:23:47Z";
+const latestAt = "2026-11-14T10:24:58+08:00";
+const backupCommitAt = "2026-11-12T10:25:11Z";
+const backupCreatedAt = "2026-11-13T10:26:35.123Z";
+const localTime = new Intl.DateTimeFormat("sv-SE", { dateStyle: "short", timeStyle: "medium", hourCycle: "h23" });
 vi.mock("../../lib/hub-update", async (original) => ({
   ...await original<typeof import("../../lib/hub-update")>(),
   hubUpdate: async () => { updateReads++; return readUpdate ? readUpdate() : status; },
@@ -39,9 +45,9 @@ vi.mock("../../lib/hub-update", async (original) => ({
 }));
 vi.mock("../../lib/hub-update-settings", async (original) => ({
   ...await original<typeof import("../../lib/hub-update-settings")>(),
-  hubUpdateHistory: async () => [],
+  hubUpdateHistory: async () => history,
   hubUpdateBackups: async () => { backupReads++; return [{ id: "snapshot-fixture", version: "web-dev-backup", build: 202611120001,
-    commit: "c".repeat(40), updated_at: "2026-11-12T10:00:00Z", created_at: "2026-11-13T10:00:00Z" }]; },
+    commit: "c".repeat(40), updated_at: backupCommitAt, created_at: backupCreatedAt }]; },
   applyHubUpdateBackup: async (id: string) => {
     saved.push({ backup: id });
     status = { ...status, state: "applying_backup", auto: false };
@@ -65,7 +71,7 @@ let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement;
 afterEach(() => {
   act(() => root?.unmount()); host?.remove();
-  saved.length = 0; machines = []; roster = null; backupReads = 0; events.clear();
+  saved.length = 0; history = []; machines = []; roster = null; backupReads = 0; events.clear();
   updateReads = 0; readUpdate = undefined; vi.useRealTimers();
 });
 
@@ -74,11 +80,11 @@ async function mount(state = "available", overrides: Partial<HubUpdateStatus> = 
   status = {
     version: "web-dev-old", build: 202611130000, channel: "release", source: "web-dev", can_update: true,
     state, busy: [], auto: false, auto_notice: false, confirmed: true, auto_update_nodes: false,
-    development: { configured: true, branch: "main", current_commit: "a".repeat(40), current_updated_at: "2026-11-13T10:00:00Z",
+    development: { configured: true, branch: "main", current_commit: "a".repeat(40), current_updated_at: installedAt,
       backup_directory: "/var/snapshots", backup_default_directory: "/home/persona/.persona/update/development-backups",
       backup_directory_is_default: false, backup_retain: 3, builtin_quiesce: true },
     latest: { version: "web-dev-new", build: 202611130001, newer: true, bad: false, commit: "b".repeat(40), branch: "main",
-      updated_at: "2026-11-14T10:00:00Z",
+      updated_at: latestAt,
       backup_id: state === "applying_backup" ? "snapshot-fixture" : undefined },
     backup: { id: "snapshot-fixture", retained: 3, pruned: ["snapshot-old"] },
     ...overrides,
@@ -217,15 +223,45 @@ it("offers beta as an explicit reversible source without enabling it by default"
   expect(host.textContent).not.toContain("Choose Release to return to stable updates");
 });
 
-it("puts historical program versions in the development update selector and hides them on release", async () => {
+it("shows second-level local times on commits, version options, backup details and history", async () => {
+  history = [{ from_version: "previous", to_version: "current", to_build: 123, result: "updated", auto: false,
+    source: "web-dev", commit: "d".repeat(40), started: backupCreatedAt, ended: installedAt },
+  { from_version: "older", to_version: "previous", to_build: 122, result: "updated", auto: false, started: backupCommitAt }];
   await mount();
-  expect(host.textContent).toContain("a".repeat(12));
-  expect(host.textContent).toContain("b".repeat(12));
   const versionGroup = host.querySelector('[data-settings-group="hub-version"]')!;
-  expect(versionGroup.textContent).toContain(`Installed commit2026-11-13 · ${"a".repeat(12)}`);
-  expect(versionGroup.textContent).toContain(`Latest commit2026-11-14 · ${"b".repeat(12)}`);
+  const installed = localTime.format(new Date(installedAt));
+  const latest = localTime.format(new Date(latestAt));
+  const backup = localTime.format(new Date(backupCommitAt));
+  const created = localTime.format(new Date(backupCreatedAt));
+  expect(versionGroup.textContent).toContain(`Installed commit${installed} · ${"a".repeat(12)}`);
+  expect(versionGroup.textContent).toContain(`Latest commit${latest} · ${"b".repeat(12)}`);
   expect(versionGroup.textContent).not.toContain("Updated at");
-  expect(host.querySelector('select[aria-label="Update version"]')?.textContent).toContain("c".repeat(12));
+  const version = host.querySelector<HTMLSelectElement>('select[aria-label="Update version"]')!;
+  expect(version.options[0].textContent).toContain(`${latest} · ${"b".repeat(12)}`);
+  expect(version.options[1].textContent).toContain(`${backup} · ${"c".repeat(12)}`);
+  expect(version.classList.contains("tabular-nums")).toBe(true);
+  await act(async () => { version.value = "snapshot-fixture"; version.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(host.textContent).toContain(`Target commit${backup} · ${"c".repeat(12)}`);
+  expect(host.textContent).toContain(`Backed up at${created}`);
+  const historyGroup = [...host.querySelectorAll("section")].find(s => s.querySelector("h2")?.textContent === "Update history")!;
+  expect([...historyGroup.querySelectorAll(".tabular-nums")].map(el => el.textContent)).toEqual([
+    installed, `${installed} · ${"d".repeat(12)}`, backup,
+  ]);
+});
+
+it("shows Unknown when the hub omits a date or sends an invalid one", async () => {
+  history = [{ from_version: "previous", to_version: "current", to_build: 123, result: "updated", auto: false }];
+  await mount("available", { development: { configured: true, branch: "main", current_commit: "a".repeat(40) },
+    latest: { version: "web-dev-new", build: 123, newer: true, bad: false, commit: "b".repeat(40), updated_at: "invalid" } });
+  expect(host.textContent).toContain(`Installed commitUnknown · ${"a".repeat(12)}`);
+  expect(host.textContent).toContain(`Latest commitUnknown · ${"b".repeat(12)}`);
+  const version = host.querySelector<HTMLSelectElement>('select[aria-label="Update version"]')!;
+  expect(version.options[0].textContent).toContain(`Unknown · ${"b".repeat(12)}`);
+  expect(host.textContent).toContain("Update historyUpdatedUnknown");
+});
+
+it("hides backup versions when switching to the release source", async () => {
+  await mount();
   const automatic = host.querySelector('[role="switch"]') as HTMLButtonElement;
   expect(automatic.getAttribute("aria-checked")).toBe("false");
   const source = host.querySelector('select[aria-label="Update source"]') as HTMLSelectElement;
@@ -233,6 +269,41 @@ it("puts historical program versions in the development update selector and hide
   expect(saved).toEqual([{ source: "release" }]);
   expect(host.textContent).not.toContain("snapshot-fixture");
   expect(host.querySelector('select[aria-label="Update version"]')).toBeNull();
+});
+
+it.each([
+  { version: "web-dev-running", channel: "release", source: "web-dev", match: true },
+  { version: "v1.0", channel: "release", source: undefined, match: true },
+  { version: "v1.0-beta.1", channel: "beta", source: "beta", match: true },
+  { version: "web-dev-running", channel: "release", source: "release", match: false, running: "Web development" },
+  { version: "v1.0-beta.1", channel: "beta", source: "release", match: false, running: "Beta (prereleases)" },
+] as const)("keeps the channel search anchor with $version and source $source", async ({ match, running, ...s }) => {
+  await mount("idle", s);
+  const source = host.querySelector<HTMLSelectElement>('select[aria-label="Update source"]')!;
+  expect(source.disabled).toBe(false);
+  expect(source.value).toBe(s.source ?? "release");
+  const anchors = host.querySelectorAll('[data-settings-row="hub-channel"]');
+  expect(anchors).toHaveLength(1);
+  if (match) expect(anchors[0].contains(source)).toBe(true);
+  else expect(anchors[0].textContent).toBe(`Channel${running}`);
+});
+
+it.each(["release", "docker"])("keeps the Channel row on a %s hub without source selection", async channel => {
+  await mount("idle", { version: "v1.0", channel, source: undefined, development: undefined });
+  expect(host.querySelector('[data-settings-row="hub-channel"]')?.textContent).toBe(`Channel${channel === "docker" ? "Docker" : "Release"}`);
+  expect(host.querySelector('select[aria-label="Update source"]')).toBeNull();
+});
+
+it.each(["web-dev", "release", "beta"] as const)("shows target notes and warnings with the %s source", async source => {
+  await mount("available", { source, latest: { version: "fixture-target", commit: "b".repeat(40), build: 123,
+    newer: true, bad: false, held: "Test update required", notes: "A note from the source." }, auto: true });
+  const update = host.querySelector('[data-settings-group="hub-update"]')!;
+  expect(update.textContent).toContain("A note from the source.");
+  expect(update.textContent).toContain("Test update required");
+  if (source === "web-dev") {
+    expect(update.querySelector('select[aria-label="Update version"]')).not.toBeNull();
+    expect(update.textContent).not.toContain("New version fixture-target");
+  } else expect(update.textContent).toContain("New version fixture-target");
 });
 
 it("confirms program-only restoration and applies the selected backup", async () => {
