@@ -24,7 +24,7 @@ class SchemaError(Exception):
 class TypeRef:
     kind: str  # string | int | int64 | number | bool | time | any | array | map | ref
     of: "TypeRef | None" = None
-    ref: str = ""
+    ref: str = ""  # a ref's definition; on a bool, the x-tristate definition Go writes it as
 
 
 @dataclass
@@ -40,7 +40,7 @@ class Field:
 @dataclass
 class Def:
     name: str
-    kind: str  # struct | enum | union | any | id (x-id) | opaque (x-opaque)
+    kind: str  # struct | enum | union | any | id (x-id) | text (x-text) | tristate (x-tristate) | opaque (x-opaque)
     doc: str = ""
     fields: list[Field] = field(default_factory=list)
     values: list[str] = field(default_factory=list)  # enum
@@ -67,6 +67,10 @@ class Def:
 ENUM_MODES = ("closed",)
 UNKNOWN_MODES = ("count",)
 DECODE_MODES = ("strict",)
+
+
+# Keywords that name a definition and may stand on a property in place of a $ref to it, with the property's JSON type.
+NAMED = {"x-id": "string", "x-text": "string", "x-tristate": "boolean"}
 
 
 def is_scalar(s: dict) -> bool:
@@ -110,7 +114,9 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
                 if name in aliases:
                     raise SchemaError(f"{at}: cyclic validation alias {name}")
                 return typeof(target, name, aliases + (name,))
-            if "x-opaque" in target or "x-id" in target:
+            if "x-tristate" in target:
+                return TypeRef("bool", ref=name)
+            if "x-opaque" in target or "x-id" in target or "x-text" in target:
                 return TypeRef("ref", ref=name)
             if target.get("x-untagged"):
                 return TypeRef("ref", ref=name) if target.get("x-json-value") else TypeRef("any")
@@ -120,12 +126,15 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
         if "x-opaque" in s:
             raise SchemaError(f"{at}: x-opaque names a type: put it on a definition and $ref that")
         t = s.get("type")
-        if "x-id" in s:
-            # A property may name its ID type in place of a $ref: the definition with that x-id, in these files.
-            name = s["x-id"]
-            if t != "string" or name not in raw or raw[name][1].get("x-id") != name:
-                raise SchemaError(f"{at}: x-id {name!r} is not a string definition with that x-id")
-            return TypeRef("ref", ref=name)
+        for key, json_type in NAMED.items():
+            if key not in s:
+                continue
+            # A property may name its ID, label or three-state type in place of a $ref: the definition with that
+            # keyword, in these files.
+            name = s[key]
+            if t != json_type or name not in raw or raw[name][1].get(key) != name:
+                raise SchemaError(f"{at}: {key} {name!r} is not a {json_type} definition with that {key}")
+            return TypeRef("bool", ref=name) if key == "x-tristate" else TypeRef("ref", ref=name)
         if t is None:
             if "const" in s:
                 return TypeRef("string")
@@ -180,6 +189,14 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
             if s["x-id"] != name or s.get("type") != "string" or "enum" in s:
                 raise SchemaError(f"{name}: x-id goes on a string definition and repeats its name")
             defs[name] = Def(name, "id", doc)
+        elif "x-text" in s:
+            if s["x-text"] != name or s.get("type") != "string" or "enum" in s or "format" in s:
+                raise SchemaError(f"{name}: x-text goes on a string definition and repeats its name")
+            defs[name] = Def(name, "text", doc)
+        elif "x-tristate" in s:
+            if s["x-tristate"] != name or s.get("type") != "boolean":
+                raise SchemaError(f"{name}: x-tristate goes on a boolean definition and repeats its name")
+            defs[name] = Def(name, "tristate", doc)
         elif "x-opaque" in s:
             if not isinstance(s["x-opaque"], str) or not s["x-opaque"].strip():
                 raise SchemaError(f"{name}: x-opaque takes the reason this JSON stays open")
@@ -212,6 +229,9 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
             for fname, fs in s.get("properties", {}).items():
                 fields.append(Field(fname, typeof(fs, f"{name}.{fname}"), fname in req, fs.get("description", ""),
                                     bool(fs.get("x-go-pointer")), fs.get("const")))
+                if fields[-1].type.kind == "bool" and fields[-1].type.ref and (fields[-1].required or fields[-1].pointer):
+                    raise SchemaError(f"{name}.{fname}: an x-tristate field is optional (its absence is the third "
+                                      "value) and takes no x-go-pointer")
             exclusive = []
             for option in s.get("oneOf", []):
                 if set(option) != {"required"} or len(option["required"]) != 1:
