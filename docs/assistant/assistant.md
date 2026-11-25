@@ -1230,7 +1230,7 @@ yet it silently reran the old prompt 3 minutes later): deleted tasks don't retry
 
 ### Task execution context
 
-The web task editor's **Execution options**, before the prompt, is an advanced group for people who need a task to use
+The web task editor's **Advanced**, before the prompt, is an advanced group for people who need a task to use
 a particular assistant backend, model, computer or directory. Its collapsed summary shows the launcher name, actual
 agent backend, model and thinking effort. Every untouched control explicitly follows Assistant, with known inherited
 values shown; its title and summary share one line. Task rows use the same summary from their effective `execution`,

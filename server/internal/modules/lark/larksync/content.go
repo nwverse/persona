@@ -1,11 +1,17 @@
 package larksync
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/larksyncwire"
 )
 
@@ -13,25 +19,44 @@ import (
 const (
 	bodyMost          = 200 << 10 // a document's Markdown handed over
 	transcriptMost    = 4 << 20   // a transcript downloaded (then bounded to bodyMost)
+	fileDownloadMost  = 4 << 20   // a readable text file downloaded (then bounded to bodyMost)
 	docxBlockPages    = 20        // 10 000 blocks
 	sheetsMost        = 10        // sheets of one spreadsheet
 	sheetRange        = "A1:T200"
 	bitableTablesMost = 10
 	bitableRowsMost   = 200
+	linkedDocsMost    = 500 // linked cloud documents followed from messages per run
+	metaBatchMost     = 50  // documents per POST /open-apis/drive/v1/metas/batch_query call
 )
 
-// docCandidate is a document a listing found: what is known before reading it.
+// readableTextExts are file extensions whose content is downloaded and stored as text; other Drive files keep their
+// metadata only without downloading binary blobs.
+var readableTextExts = map[string]bool{
+	".md": true, ".markdown": true, ".txt": true, ".text": true,
+	".csv": true, ".tsv": true, ".json": true, ".jsonl": true,
+	".yaml": true, ".yml": true, ".toml": true, ".xml": true,
+	".ini": true, ".conf": true, ".log": true,
+	".html": true, ".htm": true, ".rst": true, ".org": true, ".tex": true,
+}
+
+func isReadableTextFile(title string) bool {
+	ext := strings.ToLower(path.Ext(strings.TrimSpace(title)))
+	return ext != "" && readableTextExts[ext]
+}
+
+// docCandidate is a document a listing or message link found: what is known before reading it.
 type docCandidate struct {
 	objToken, objType string
 	title, url        string
 	alias             string // a wiki node token
 	edited            int64  // last edit, seconds
+	metaFailCode      int    // non-zero when drive/v1/metas/batch_query returned this token in failed_list
 }
 
-// consider reads a listed document's content when the index says it is new or newer, and records the sighting
+// consider reads a listed or linked document's content when the index says it is new or newer, and records the sighting
 // either way. The revision is the docx revision_id (one cheap call) or the last edit time; a body that cannot be read
-// for a reason that will not pass (no permission on that one document, an unsupported kind) is kept as its title and
-// link at revision 0, so a later readable revision replaces it.
+// for a reason that will not pass (no permission on that one document, export disabled, file too large) is kept as its
+// title, link and reason (Note) at revision 0, so a later readable revision replaces it.
 func (r *run) consider(ctx context.Context, resource, entry string, c docCandidate) error {
 	key := larksyncwire.KeyDoc + c.objToken
 	st := r.docs[key]
@@ -42,6 +67,7 @@ func (r *run) consider(ctx context.Context, resource, entry string, c docCandida
 	}
 	st.merge(c)
 	rev := c.edited
+	var metaErr error
 	if c.objType == "docx" {
 		if !st.hasMeta {
 			meta, err := r.docxMeta(ctx, c.objToken)
@@ -53,8 +79,10 @@ func (r *run) consider(ctx context.Context, resource, entry string, c docCandida
 				}
 			case passing(err):
 				return err
+			default:
+				metaErr = err
 			}
-			st.hasMeta = true // an unreadable one is revision 0: its title and link only
+			st.hasMeta = true // an unreadable one is revision 0: its title, link and reason only
 		}
 		rev = st.metaRev
 	}
@@ -71,17 +99,38 @@ func (r *run) consider(ctx context.Context, resource, entry string, c docCandida
 		st.sightings = append(st.sightings, sighting{resource: resource, ref: r.ref(entry), revision: rev})
 		return nil
 	}
-	body, err := r.body(ctx, c.objType, c.objToken)
+	var body, note string
+	var err error
+	switch c.objType {
+	case "file":
+		body, note, err = r.fileBody(ctx, c.objToken, st.doc.Title)
+	case "docx", "sheet", "bitable":
+		body, err = r.body(ctx, c.objType, c.objToken)
+	default:
+		if c.metaFailCode != 0 && st.doc.Title == "" {
+			rev = 0
+			note = fmt.Sprintf("unreadable: drive metadata failed (code %d)", c.metaFailCode)
+		}
+	}
 	switch {
 	case err == nil:
+		if body != "" && rev == 0 {
+			rev = 1 // a readable body without a modification timestamp supersedes a revision-0 stub
+		}
 	case passing(err):
 		return err
 	default:
-		body, rev = "", 0
+		if metaErr != nil && err == nil {
+			err = metaErr
+		}
+		body, rev, note = "", 0, unreadableReason(err)
 	}
-	st.setContent(rev, body, c.edited)
+	if st.doc.Title == "" {
+		st.doc.Title = cmpString(st.doc.URL, c.objToken)
+	}
+	st.setContent(rev, body, note, c.edited)
 	st.sightings = append(st.sightings, sighting{resource: resource, ref: r.ref(entry), revision: rev})
-	r.findLeads(resource, entry, body)
+	r.findMinuteLeads(resource, entry, body)
 	return nil
 }
 
@@ -90,6 +139,9 @@ func (st *docState) merge(c docCandidate) {
 	d := &st.doc
 	if d.Title == "" {
 		d.Title = c.title
+	}
+	if d.ObjType == "" && c.objType != "" {
+		d.ObjType = c.objType
 	}
 	if d.URL == "" || strings.Contains(d.URL, "/wiki/") && c.alias == "" && c.url != "" {
 		d.URL = cmpString(c.url, d.URL) // a document's own link is preferred over a wiki node's
@@ -102,10 +154,10 @@ func (st *docState) merge(c docCandidate) {
 	}
 }
 
-// setContent keeps body as the document's content at rev.
-func (st *docState) setContent(rev int64, body string, edited int64) {
+// setContent keeps body and optional note as the document's content at rev.
+func (st *docState) setContent(rev int64, body, note string, edited int64) {
 	body = bound(body, bodyMost)
-	st.doc.Revision, st.doc.Body, st.fetched = rev, body, true
+	st.doc.Revision, st.doc.Body, st.doc.Note, st.fetched = rev, body, note, true
 	st.doc.BodyHash = ""
 	if body != "" {
 		st.doc.BodyHash = hashOf(body)
@@ -116,8 +168,12 @@ func (st *docState) setContent(rev int64, body string, edited int64) {
 }
 
 // passing: an error that fails the resource rather than only one document (a refused token, a missing scope, a rate
-// limit or a server failure): the document is tried again next run.
+// limit or a server failure): the document is tried again next run. An oversized file or a single-document permission
+// error is not passing.
 func passing(err error) bool {
+	if errors.Is(err, botcard.ErrTooLarge) {
+		return false
+	}
 	if fatal(err) {
 		return true
 	}
@@ -130,6 +186,44 @@ func passing(err error) bool {
 		return true
 	}
 	return false
+}
+
+// unreadableReason summarizes why a single document or file could not be read, without leaking tokens or secrets.
+func unreadableReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, botcard.ErrTooLarge) {
+		return "unreadable: file too large"
+	}
+	if e := asSyncError(err); e != nil {
+		if e.Code != 0 {
+			return fmt.Sprintf("unreadable: %s (%s, code %d)", e.Op, e.Msg, e.Code)
+		}
+		return fmt.Sprintf("unreadable: %s (%s)", e.Op, e.Msg)
+	}
+	return "unreadable: " + err.Error()
+}
+
+// fileBody downloads a Drive file when its extension is a readable text format (.md, .txt, etc.) and returns its UTF-8
+// content; non-text or binary files return an empty body with a metadata-only note without failing.
+func (r *run) fileBody(ctx context.Context, token, title string) (string, string, error) {
+	if !isReadableTextFile(title) {
+		return "", "metadata only: non-text file", nil
+	}
+	raw, _, err := r.sess.download(ctx, request{
+		family: famDriveDownload,
+		op:     "download file",
+		path:   "/open-apis/drive/v1/files/" + pathEsc(token) + "/download",
+	}, fileDownloadMost)
+	if err != nil {
+		return "", "", err
+	}
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF}) // optional UTF-8 BOM
+	if !utf8.Valid(raw) || bytes.IndexByte(raw, 0) >= 0 {
+		return "", "metadata only: binary content", nil
+	}
+	return strings.TrimSpace(string(raw)), "", nil
 }
 
 type docxInfo struct {
@@ -374,19 +468,356 @@ func (r *run) readMinute(ctx context.Context, resource, key string, l minuteLead
 	default:
 		rev = 0 // the title only; a readable transcript replaces it later
 	}
-	st.setContent(rev, body, 0)
+	st.setContent(rev, body, "", 0)
 	st.sightings = append(st.sightings, sighting{resource: resource, ref: r.ref(l.entry), revision: rev})
 	return nil
 }
 
-// findLeads keeps the minutes linked in text, found in resource through entry.
-func (r *run) findLeads(resource, entry, text string) {
+// linkedCandidate is a resolved cloud document link ready to be fetched via consider.
+type linkedCandidate struct {
+	docCandidate
+	resource string
+	entry    string
+}
+
+// readLinkedDocs follows cloud document and wiki links found in synced messages (docx, sheet, bitable, wiki, file, etc.)
+// using the owner's user token, including documents shared with the owner outside their My Space root. Each document is
+// deduplicated by obj_token + revision through the existing index; unreadable documents (403, export disabled, etc.)
+// record their reason in Note without blocking the rest of the run.
+func (r *run) readLinkedDocs(ctx context.Context) error {
+	var leads []docLead
+	seenLead := map[string]bool{}
+	for _, l := range r.docLeads {
+		if l.token == "" || !r.valid(l.resource) {
+			continue
+		}
+		k := l.objType + ":" + l.token
+		if seenLead[k] {
+			continue
+		}
+		seenLead[k] = true
+		leads = append(leads, l)
+		if len(leads) >= linkedDocsMost {
+			break
+		}
+	}
+	if len(leads) == 0 {
+		return nil
+	}
+
+	var direct []linkedCandidate
+	directIdx := map[string]int{} // objToken -> index in direct
+	addDirect := func(c linkedCandidate) {
+		if c.objToken == "" {
+			return
+		}
+		if i, ok := directIdx[c.objToken]; ok {
+			if direct[i].alias == "" && c.alias != "" {
+				direct[i].alias = c.alias
+			}
+			if direct[i].title == "" && c.title != "" {
+				direct[i].title = c.title
+			}
+			if direct[i].edited == 0 && c.edited > 0 {
+				direct[i].edited = c.edited
+			}
+			if direct[i].url == "" || (strings.Contains(direct[i].url, "/wiki/") && c.alias == "" && c.url != "") {
+				direct[i].url = cmpString(c.url, direct[i].url)
+			}
+			return
+		}
+		directIdx[c.objToken] = len(direct)
+		direct = append(direct, c)
+	}
+
+	// Step 1: resolve wiki links to their underlying obj_token + obj_type (reusing nodes already walked in readWiki).
+	for _, l := range leads {
+		if r.overBudget() {
+			r.partial = true
+			return nil
+		}
+		if l.objType != "wiki" {
+			addDirect(linkedCandidate{
+				docCandidate: docCandidate{objToken: l.token, objType: l.objType, url: l.url},
+				resource:     l.resource,
+				entry:        l.entry,
+			})
+			continue
+		}
+		node, ok := r.wikiNodes[l.token]
+		if !ok {
+			var data struct {
+				Node struct {
+					NodeToken   string `json:"node_token"`
+					ObjToken    string `json:"obj_token"`
+					ObjType     string `json:"obj_type"`
+					Title       string `json:"title"`
+					ObjEditTime string `json:"obj_edit_time"`
+				} `json:"node"`
+			}
+			err := r.sess.getJSON(ctx, request{
+				family: famWiki,
+				op:     "get wiki node",
+				path:   "/open-apis/wiki/v2/spaces/get_node",
+				query:  map[string]string{"token": l.token},
+			}, &data)
+			if err != nil {
+				if fatal(err) {
+					return err
+				}
+				if e := asSyncError(err); e != nil {
+					switch e.Kind {
+					case larksyncwire.ErrKindRateLimited:
+						r.fail("links", err)
+						return nil
+					case larksyncwire.ErrKindScope:
+						r.fail("links:wiki", err)
+						r.recordUnreadableDoc(l.resource, l.entry, l.token, "wiki", l.token, l.url, unreadableReason(err))
+						continue
+					case larksyncwire.ErrKindTransient:
+						r.fail("links:wiki:"+l.token, err)
+						continue
+					}
+				}
+				r.recordUnreadableDoc(l.resource, l.entry, l.token, "wiki", l.token, l.url, unreadableReason(err))
+				continue
+			}
+			node = wikiNodeInfo{
+				objToken: data.Node.ObjToken,
+				objType:  strings.ToLower(data.Node.ObjType),
+				title:    data.Node.Title,
+				edited:   parseUnix(data.Node.ObjEditTime),
+			}
+			r.wikiNodes[l.token] = node
+		}
+		if node.objType == "minutes" && node.objToken != "" {
+			r.leads = append(r.leads, minuteLead{token: node.objToken, url: l.url, resource: l.resource, entry: l.entry})
+			continue
+		}
+		if docType(node.objType) && node.objToken != "" {
+			addDirect(linkedCandidate{
+				docCandidate: docCandidate{
+					objToken: node.objToken,
+					objType:  node.objType,
+					title:    node.title,
+					url:      l.url,
+					alias:    l.token,
+					edited:   node.edited,
+				},
+				resource: l.resource,
+				entry:    l.entry,
+			})
+		}
+	}
+
+	if len(direct) == 0 {
+		return nil
+	}
+
+	// Step 2: batch-query Drive metadata for direct candidates that still need title / latest_modify_time.
+	var needMeta []int
+	for i, c := range direct {
+		if st := r.docs[larksyncwire.KeyDoc+c.objToken]; st != nil && st.fetched {
+			continue // already read in readDrive / readWiki this run
+		}
+		if c.title == "" || c.edited == 0 {
+			needMeta = append(needMeta, i)
+		}
+	}
+	if len(needMeta) > 0 {
+		metas, failed, err := r.batchDocMeta(ctx, direct, needMeta)
+		if err != nil {
+			if fatal(err) {
+				return err
+			}
+			if e := asSyncError(err); e != nil {
+				switch e.Kind {
+				case larksyncwire.ErrKindRateLimited:
+					r.fail("links", err)
+					return nil
+				case larksyncwire.ErrKindScope:
+					r.fail("links:meta", err)
+				}
+			}
+		}
+		for _, i := range needMeta {
+			tok := direct[i].objToken
+			if m, ok := metas[tok]; ok {
+				if direct[i].title == "" {
+					direct[i].title = m.title
+				}
+				if m.edited > direct[i].edited {
+					direct[i].edited = m.edited
+				}
+				if m.url != "" && (direct[i].url == "" || strings.Contains(direct[i].url, "/wiki/")) {
+					direct[i].url = m.url
+				}
+				if m.docType != "" && docType(m.docType) {
+					direct[i].objType = m.docType
+				}
+			} else if code, ok := failed[tok]; ok {
+				direct[i].metaFailCode = code
+			}
+		}
+	}
+
+	// Step 3: read each resolved document via consider, isolating per-document failures.
+	for _, c := range direct {
+		if r.overBudget() {
+			r.partial = true
+			return nil
+		}
+		if c.objType == "file" && c.metaFailCode != 0 && c.title == "" {
+			r.recordUnreadableDoc(c.resource, c.entry, c.objToken, c.objType, c.alias, c.url,
+				fmt.Sprintf("unreadable: drive metadata failed (code %d)", c.metaFailCode))
+			continue
+		}
+		if err := r.consider(ctx, c.resource, c.entry, c.docCandidate); err != nil {
+			if fatal(err) {
+				return err
+			}
+			if e := asSyncError(err); e != nil {
+				switch e.Kind {
+				case larksyncwire.ErrKindRateLimited:
+					r.fail("links", err)
+					return nil
+				case larksyncwire.ErrKindScope:
+					r.fail("links:"+c.objType, err)
+					continue
+				}
+			}
+			r.fail("links:"+c.objToken, err)
+		}
+	}
+	return nil
+}
+
+type driveDocMeta struct {
+	docType string
+	title   string
+	url     string
+	edited  int64
+}
+
+// batchDocMeta queries POST /open-apis/drive/v1/metas/batch_query in chunks of metaBatchMost.
+func (r *run) batchDocMeta(ctx context.Context, direct []linkedCandidate, indices []int) (map[string]driveDocMeta, map[string]int, error) {
+	metas := map[string]driveDocMeta{}
+	failed := map[string]int{}
+	for len(indices) > 0 {
+		if r.overBudget() {
+			r.partial = true
+			return metas, failed, nil
+		}
+		n := min(len(indices), metaBatchMost)
+		chunk := indices[:n]
+		indices = indices[n:]
+		reqDocs := make([]map[string]string, 0, len(chunk))
+		for _, i := range chunk {
+			reqDocs = append(reqDocs, map[string]string{
+				"doc_token": direct[i].objToken,
+				"doc_type":  direct[i].objType,
+			})
+		}
+		var data struct {
+			Metas []struct {
+				DocToken         string `json:"doc_token"`
+				DocType          string `json:"doc_type"`
+				Title            string `json:"title"`
+				LatestModifyTime string `json:"latest_modify_time"`
+				URL              string `json:"url"`
+			} `json:"metas"`
+			FailedList []struct {
+				Token string `json:"token"`
+				Code  int    `json:"code"`
+			} `json:"failed_list"`
+		}
+		err := r.sess.getJSON(ctx, request{
+			family: famDrive,
+			op:     "batch doc meta",
+			method: "POST",
+			path:   "/open-apis/drive/v1/metas/batch_query",
+			query:  map[string]string{"user_id_type": "open_id"},
+			body:   map[string]any{"request_docs": reqDocs, "with_url": true},
+		}, &data)
+		if err != nil {
+			return metas, failed, err
+		}
+		for _, m := range data.Metas {
+			if m.DocToken == "" {
+				continue
+			}
+			metas[m.DocToken] = driveDocMeta{
+				docType: strings.ToLower(strings.TrimSpace(m.DocType)),
+				title:   m.Title,
+				url:     m.URL,
+				edited:  parseUnix(m.LatestModifyTime),
+			}
+		}
+		for _, f := range data.FailedList {
+			if f.Token != "" {
+				failed[f.Token] = f.Code
+			}
+		}
+	}
+	return metas, failed, nil
+}
+
+// recordUnreadableDoc records a revision-0 stub with an explanatory Note for a linked document or wiki node that could
+// not be read, so the reason is persisted without blocking the run and a later readable revision can replace it.
+func (r *run) recordUnreadableDoc(resource, entry, token, objType, alias, u, note string) {
+	key := larksyncwire.KeyDoc + token
+	st := r.docs[key]
+	if st == nil {
+		st = &docState{kind: recDoc, doc: larksyncwire.Doc{
+			Key:      key,
+			Kind:     "docs",
+			ObjToken: token,
+			ObjType:  objType,
+			Title:    cmpString(u, token),
+			URL:      u,
+			Revision: -1,
+		}}
+		if alias != "" {
+			st.doc.Aliases = []string{alias}
+		}
+		r.docs[key] = st
+		r.docOrder = append(r.docOrder, key)
+	}
+	if !st.fetched {
+		st.setContent(0, "", note, 0)
+	}
+	st.sightings = append(st.sightings, sighting{resource: resource, ref: r.ref(entry), revision: max(st.doc.Revision, 0)})
+}
+
+// findMessageLeads collects both cloud document / wiki links and minutes links found in a synced message.
+func (r *run) findMessageLeads(resource, entry, text string) {
+	if !strings.Contains(text, "http") {
+		return
+	}
+	for _, raw := range linkPattern.FindAllString(text, -1) {
+		u := trimLinkURL(raw)
+		objType, tok, ok := docLinkFromURL(u)
+		if !ok {
+			continue
+		}
+		r.learnWebHost(u)
+		if objType == "minutes" {
+			r.leads = append(r.leads, minuteLead{token: tok, url: u, resource: resource, entry: entry})
+			continue
+		}
+		r.docLeads = append(r.docLeads, docLead{token: tok, objType: objType, url: u, resource: resource, entry: entry})
+	}
+}
+
+// findMinuteLeads keeps the minutes linked in a document body, found in resource through entry.
+func (r *run) findMinuteLeads(resource, entry, text string) {
 	if !strings.Contains(text, "/minutes/") {
 		return
 	}
-	for _, u := range linkPattern.FindAllString(text, -1) {
+	for _, raw := range linkPattern.FindAllString(text, -1) {
+		u := trimLinkURL(raw)
 		if kind, tok := TokenFromURL(u); kind == "minutes" {
-			r.leads = append(r.leads, minuteLead{token: tok, url: strings.TrimRight(u, ".,;:!?)]}>\"'"), resource: resource, entry: entry})
+			r.leads = append(r.leads, minuteLead{token: tok, url: u, resource: resource, entry: entry})
 		}
 	}
 }

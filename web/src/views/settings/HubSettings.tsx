@@ -19,6 +19,7 @@ import { Button, copyText, cx, Dialog, IconButton, Loading, toast } from "../../
 import { Icon } from "../../ui/icons";
 import { Group, Pill, Row, Switch, SettingsHint, settingsInputClass } from "./SettingsParts";
 import { ExtensionDownloadMirrors } from "./ExtensionDownloadMirrors";
+import { RecoveryEntry } from "./RecoverySettings";
 import { HubUpdatePipeline, observeHubUpdate } from "./HubUpdatePipeline";
 
 const twoDigits = (value: number) => String(value).padStart(2, "0");
@@ -40,8 +41,8 @@ function datedCommit(commit?: string, date?: string): string {
   return commit ? `${updateDate(date)} · ${commit.slice(0, 12)}` : t("settings-hubsettings.unknown");
 }
 
-export function HubSettings() {
-  return <><HubUpdates /><ExtensionDownloadMirrors /></>;
+export function HubSettings({ onOpenRecovery }: { onOpenRecovery?: () => void }) {
+  return <><HubUpdates /><RecoveryEntry onOpen={onOpenRecovery} /><ExtensionDownloadMirrors /></>;
 }
 
 function HubUpdates() {

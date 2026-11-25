@@ -92,7 +92,7 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
             return ".null"
         if d.kind == "enum":
             return '.unknown("")' if d.closed else '""'
-        if d.kind == "id":
+        if d.kind in ("id", "text"):
             return f'{swift_name(t.ref)}("")'
         if d.kind == "union":
             raise SchemaError(f"a required field of union type {t.ref}: not in the subset")
@@ -181,7 +181,23 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
         else:
             lines += ["    public init() {}", "", "    public init(from decoder: Decoder) throws {}", "",
                       "    public func encode(to encoder: Encoder) throws {}"]
+        if d.keyed:
+            lines += keyed_subscript(d)
         lines += ["}", ""]
+        return lines
+
+    def keyed_subscript(d: Def) -> list[str]:
+        """A struct made from an enum-keyed map, read and written by its key: an unknown key has the zero value, and
+        setting it changes nothing."""
+        key, typ = swift_name(d.keyed), stype(d.fields[0].type)
+        cases = [(swift_case(f.name), swift_ident(lower_camel(f.name))) for f in d.fields]
+        lines = ["", f"    /// The field of one {d.keyed}: an unknown one reads {zero(d.fields[0].type)}, and setting it changes nothing.",
+                 f"    public subscript(_ key: {key}) -> {typ} {{", "        get {", "            switch key {"]
+        lines += [f"            case .{swift_ident(c)}: {n}" for c, n in cases]
+        lines += [f"            case .unknown: {zero(d.fields[0].type)}", "            }", "        }", "        set {",
+                  "            switch key {"]
+        lines += [f"            case .{swift_ident(c)}: {n} = newValue" for c, n in cases]
+        lines += ["            case .unknown: break", "            }", "        }", "    }"]
         return lines
 
     def closed_enum(d: Def) -> list[str]:
@@ -210,7 +226,7 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
 
     def id_type(d: Def) -> list[str]:
         name = swift_name(d.name)
-        lines = comment("/// ", d.doc or f"{d.name}: an ID.")
+        lines = comment("/// ", d.doc or f"{d.name}: {'a label (free text, not a closed set)' if d.kind == 'text' else 'an ID'}.")
         lines += ["/// It encodes as the bare string.",
                   f"public nonisolated struct {name}: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {{",
                   "    public let rawValue: String", "",
@@ -224,9 +240,11 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
         return lines
 
     for d in defs.values():
+        if d.external:
+            continue  # a shared file's ID: PersonaWire's own file declares it
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
-        elif d.kind == "id":
+        elif d.kind in ("id", "text"):
             out += id_type(d)
         elif d.kind == "opaque":
             out += comment("/// ", " ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))

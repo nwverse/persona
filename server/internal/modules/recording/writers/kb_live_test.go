@@ -3,7 +3,7 @@ package writers
 import (
 	"context"
 	"errors"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"testing"
 	"time"
 )
@@ -15,11 +15,11 @@ func TestMeetingWithoutTextGetsNoMinutes(t *testing.T) {
 	e := goldenEngine(t, m)
 	now := time.Date(2026, 11, 10, 15, 0, 0, 0, goldenZone)
 	start := now.Add(-time.Hour)
-	putRecording(t, e, recID, attendedUpload(1, start, kb.AttendanceListener), now)
+	putRecording(t, e, recID, attendedUpload(1, start, recordingwire.AttendanceListener), now)
 	if r := recordingNow(t, e, recID); r.MinutesState != MinutesPending {
 		t.Fatalf("while recording: %q, want pending", r.MinutesState)
 	}
-	done := attendedUpload(2, start, kb.AttendanceListener)
+	done := attendedUpload(2, start, recordingwire.AttendanceListener)
 	done.Complete = true
 	putRecording(t, e, recID, done, now)
 	if r := recordingNow(t, e, recID); r.MinutesState != "" {

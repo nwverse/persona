@@ -86,6 +86,8 @@ export const MODEL_DIVIDER_HEIGHT = 42.5;
 export const ENGINE_DIVIDER_HEIGHT = MODEL_DIVIDER_HEIGHT;
 /** Compact tool view card height estimate before a deferred turn mounts. */
 export const TOOL_VIEW_HEIGHT = 244;
+/** A promoted relay's collapsed source row before it mounts: card padding, source title, disclosure and their gaps. */
+const PROMOTED_RELAY_SOURCE_HEIGHT = 72;
 
 /** A finished exchange's height in px before it is first drawn (content-visibility, docs/web/web.md "Long chats"), by
  *  its text the way bubbleLines counts it: its bubble (folded past BUBBLE_MAX_LINES), its words at 2.5 times the
@@ -95,8 +97,8 @@ export const TOOL_VIEW_HEIGHT = 244;
 export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], modelChange = false, engineSwitch = false, toolViews = 0): number {
   // gap: the exchange's blocks stand 14 px apart (`gap-3.5`, cindy's msg-stream-items)
   const line = 24, gap = 14, row = 28;
-  const lines = user ? bubbleLines(user.text) : 0;
-  let h = user ? (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0) : 0;
+  const lines = user && !user.promotedRelay ? bubbleLines(user.text) : 0;
+  let h = user ? (user.promotedRelay ? PROMOTED_RELAY_SOURCE_HEIGHT : (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0)) : 0;
   for (const n of nodes) h += n.kind === "step" && n.step.kind === "text" ? bubbleLines(n.step.item.text ?? "", CHARS_PER_LINE * 2.5) * line : row;
   if (modelChange) h += MODEL_DIVIDER_HEIGHT;
   if (engineSwitch) h += ENGINE_DIVIDER_HEIGHT;
@@ -460,7 +462,7 @@ export const SegmentView = memo(function SegmentView({
   // `contain-intrinsic-block-size: auto`, and the later rich mount starts from a different height than the old body did.
   const placeholder = useMemo(() => {
     if (mounted) return "";
-    const user = trace && seg.user?.rawInput ? seg.user.rawInput.map((i) => i.text) : [seg.user?.text, ...(seg.user?.contexts.map((c) => c.text) ?? [])];
+    const user = trace && seg.user?.rawInput ? seg.user.rawInput.map((i) => i.text) : seg.user?.promotedRelay ? [] : [seg.user?.text, ...(seg.user?.contexts.map((c) => c.text) ?? [])];
     return [...user, ...own.flatMap((s) => s.kind === "tool" ? [toolChip(s.use), s.result?.text] : [s.item.text])].filter(Boolean).join("\n");
   }, [mounted, own, seg.user, trace]);
   return (
