@@ -57,6 +57,7 @@ vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../.
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
 import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
+import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
 import { whenComposer } from "../../lib/links";
 import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
@@ -71,8 +72,11 @@ const row = (x: Partial<Session> = {}): Session => ({ machine_id: "mac", session
 const item = (seq: number, x: Partial<Item> = {}): Item => ({ id: `i${seq}`, seq, role: "assistant", kind: "text", text: `row ${seq}`, ts: "2026-11-06T00:00:00Z", ...x }) as Item;
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 const push = async (seq: number, x: Partial<Item> = {}) => {
-  act(() => live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq })));
-  await settle();
+  await act(async () => {
+    live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq }));
+    // These checks measure individual replies after they draw. Give the transcript its trailing flush between pushes.
+    await new Promise((resolve) => setTimeout(resolve, ITEM_COALESCE_MS));
+  });
 };
 const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 
