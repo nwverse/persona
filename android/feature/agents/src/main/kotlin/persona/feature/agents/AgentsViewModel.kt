@@ -13,6 +13,10 @@ import kotlinx.coroutines.flow.*
 import persona.core.designsystem.Haptic
 import persona.core.designsystem.ListTapMotion
 import persona.core.designsystem.ListTapMotionKind
+import persona.feature.chat.InteractionReply
+import persona.feature.chat.InteractionSubmission
+import persona.feature.chat.classifyInteractionFailure
+import persona.feature.chat.isCommandInputPermission
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -181,6 +185,8 @@ internal class AgentsViewModel(
     private var previousContext: List<Any?>? = null
     private val _delivery = MutableStateFlow<Map<String, RequestDelivery>>(emptyMap())
     val delivery = _delivery.asStateFlow()
+    private val _commandInputErrors = MutableStateFlow<Map<String, InteractionReply>>(emptyMap())
+    val commandInputErrors = _commandInputErrors.asStateFlow()
     private val _requestHistory = MutableStateFlow<List<Interaction>>(emptyList())
     val requestHistory = _requestHistory.asStateFlow()
     private val _refreshing = MutableStateFlow(false)
@@ -511,6 +517,8 @@ internal class AgentsViewModel(
                 }
                 previous = pending
                 _delivery.update { RequestDeliveries.prune(it, pending) }
+                val pendingIds = pending.mapTo(mutableSetOf()) { it.id }
+                _commandInputErrors.update { errors -> errors.filterKeys { it in pendingIds } }
             }
         }
         if (operations != null) {
@@ -665,6 +673,14 @@ internal class AgentsViewModel(
         change(session.machineId, R.string.agents_notice_renamed) {
             if (renamer != null) renamer.rename(session, edit.title, edit.tabName)
             else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName))
+        }
+    }
+    fun renameUnified(session: Session, name: String) {
+        val edit = SessionRename.unifiedChanges(session, name)
+        if (!edit.changed) return
+        change(session.machineId, R.string.agents_notice_renamed) {
+            if (renamer != null) renamer.renameUnified(session, name)
+            else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName), unified = true)
         }
     }
     fun renameSpace(session: Session, name: String) {
@@ -1015,6 +1031,7 @@ internal class AgentsViewModel(
         }
         val result = AnswerBuilder.build(latest, action, draft, AnswerContext(fullPlanRead = fullPlanRead))
         val resolution = result.resolution ?: return
+        _commandInputErrors.update { it - latest.id }
         _delivery.update { it + (interaction.id to RequestDelivery.Sending) }
         viewModelScope.launch {
             try {
@@ -1033,6 +1050,17 @@ internal class AgentsViewModel(
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }
                 throw e
             } catch (e: Exception) {
+                if (latest.isCommandInputPermission) {
+                    val problem = classifyInteractionFailure(e, keepUnconfirmedReason = true)
+                    if (!problem.withdraw) {
+                        _commandInputErrors.update { it + (latest.id to problem) }
+                        if (problem.submission == InteractionSubmission.Refused) {
+                            _delivery.update { it + (latest.id to RequestDelivery.Retry) }
+                            problem.submission.haptic?.let(_haptics::tryEmit)
+                            return@launch
+                        }
+                    }
+                }
                 // A lost acknowledgement must never cause an automatic duplicate approval.
                 _delivery.update { it + (interaction.id to RequestDelivery.Unknown) }
                 answerFailureHaptic(e)?.let(_haptics::tryEmit)

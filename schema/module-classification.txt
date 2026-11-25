@@ -79,6 +79,7 @@ go server/internal/assistant core
 go server/internal/assistant/archiverecovery core
 go server/internal/assistant/chatsearch core
 go server/internal/assistant/kernel core
+go server/internal/assistant/kernel/seam core
 go server/internal/assistant/repository core
 go server/internal/assistant/repositorystore core
 go server/internal/assistant/saved core
@@ -164,6 +165,7 @@ go server/internal/kb core
 go server/internal/kbwire core
 go server/internal/knowledgeuihost core
 go server/internal/larkhost core
+go server/internal/larksyncwire core
 go server/internal/lazyre core
 go server/internal/lcuconfirm core
 go server/internal/link core

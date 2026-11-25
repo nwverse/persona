@@ -28,6 +28,7 @@ func (m *promptModel) JSONMax(_ context.Context, system, _ string, _ int, out an
 // The owner's language on the hub reaches the knowledge base: a meeting recording that says no language of its own
 // gets English minutes for an English-speaking owner, while one that says Chinese keeps Chinese.
 func TestMinutesFollowTheOwnersLanguage(t *testing.T) {
+	needsRecordingModule(t) // the minutes round is the module's
 	f := newFakeHub()
 	f.mu.Lock()
 	f.hello.Locale = "en"
@@ -55,7 +56,7 @@ func TestMinutesFollowTheOwnersLanguage(t *testing.T) {
 		model.mu.Lock()
 		model.systems = nil
 		model.mu.Unlock()
-		if n := e.WriteMinutes(context.Background(), 2); n != 1 {
+		if n := e.RecordingProvider().WriteMinutes(context.Background(), 2); n != 1 {
 			t.Fatalf("%s: wrote %d", tc.id, n)
 		}
 		model.mu.Lock()

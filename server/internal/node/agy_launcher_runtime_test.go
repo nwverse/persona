@@ -206,14 +206,14 @@ func TestAgyStartRoutesHerdrAndCompanion(t *testing.T) {
 				t.Fatalf("terminal-less catalog = %s, %v", models, err)
 			}
 			res, err = nodeCall(t, n, "session.start", map[string]any{
-				"cwd": home, "launcher": agyAgent, "host": agyAgent, "model": "companion-model", "effort": "high",
+				"cwd": home, "launcher": agyAgent, "host": agyAgent, "model": "companion-model", "effort": "high", "defer_mcp": true,
 			})
 			if err != nil || !strings.Contains(string(res), "agy-companion") {
 				t.Fatalf("terminal-less session = %s, %v", res, err)
 			}
 			var args runtimeStartParams
 			starts := companion.got("session.start")
-			if len(starts) != 1 || json.Unmarshal(starts[0], &args) != nil || args.Model != "companion-model" || args.Effort != "high" {
+			if len(starts) != 1 || json.Unmarshal(starts[0], &args) != nil || args.Model != "companion-model" || args.Effort != "high" || !args.DeferMCP {
 				t.Fatalf("companion start = %s", starts)
 			}
 			if got, err := os.ReadFile(calls); err != nil || string(got) != "models\n" {

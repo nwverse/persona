@@ -5,6 +5,8 @@ package kb
 
 import (
 	"os"
+
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Meeting photos (docs/assistant/meeting-minutes.md "Phase 3: photos"): the phone adds the photos taken during a
@@ -37,4 +39,88 @@ func (e *Engine) PhotosMarkdown(rawID string) string {
 		return ""
 	}
 	return string(raw)
+}
+
+// PhotoImage is photo n of recording rawID: its mime type and bytes. ErrRecordingDeleted, ErrNotFound, then
+// ErrPhotoNotFound when it is not listed (also one the owner deleted, or a trim removed).
+func (e *Engine) PhotoImage(rawID string, n int) (string, []byte, error) {
+	r, err := e.Store.photosRecording(rawID)
+	if err != nil {
+		return "", nil, err
+	}
+	st := e.Store
+	st.recFilesMu.RLock()
+	defer st.recFilesMu.RUnlock()
+	b, _, err := st.readPhotosLocked(r.ID)
+	if err != nil {
+		return "", nil, err
+	}
+	i := b.Index(n)
+	if i < 0 {
+		return "", nil, ErrPhotoNotFound
+	}
+	p := b.Photos[i]
+	data, err := os.ReadFile(st.path(KindRecording, r.ID, photosDir, p.FileName()))
+	if os.IsNotExist(err) {
+		return "", nil, ErrPhotoNotFound
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return p.Mime, data, nil
+}
+
+// Re-exported from recordingwire.
+var (
+	ErrPhotoNotFound = recordingwire.ErrPhotoNotFound
+	ErrPhotoDeleted  = recordingwire.ErrPhotoDeleted
+	ErrPhotosFull    = recordingwire.ErrPhotosFull
+	ErrOpIDReused    = recordingwire.ErrOpIDReused
+	ErrBadPhoto      = recordingwire.ErrBadPhoto
+)
+
+// PhotoUpload is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type PhotoUpload = recordingwire.PhotoUpload
+
+// readPhotos is readPhotosLocked for a reader, also on a read-only knowledge base.
+func (s *Store) readPhotos(id string) (photoBook, error) {
+	s.recFilesMu.RLock()
+	defer s.recFilesMu.RUnlock()
+	b, _, err := s.readPhotosLocked(id)
+	return b, err
+}
+
+// photosRecording is the recording rawID names, for the photo routes: ErrRecordingDeleted after a delete, ErrNotFound
+// with no upload of it.
+func (s *Store) photosRecording(rawID string) (*Recording, error) {
+	id, ok := RecordingID(rawID)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if _, gone := s.tombstones()[id]; gone {
+		return nil, ErrRecordingDeleted
+	}
+	r, ok := s.Recording(id)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return r, nil
+}
+
+// PhotoTexts are the words of recording rawID's listed photos, oldest first (a photo with none has all three ""):
+// what the minutes, kb_get, the follow-up's seed and meeting.answer read of them. None for an unknown recording.
+func (e *Engine) PhotoTexts(rawID string) []PhotoText {
+	id, ok := RecordingID(rawID)
+	if !ok {
+		return nil
+	}
+	b, err := e.Store.readPhotos(id)
+	if err != nil {
+		return nil
+	}
+	var out []PhotoText
+	for _, p := range b.Photos {
+		out = append(out, p.Words())
+	}
+	return out
 }

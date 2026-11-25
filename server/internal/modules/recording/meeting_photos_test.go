@@ -1,7 +1,6 @@
 package recording
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -38,7 +37,7 @@ func TestMeetingPhotoSendInDoubt(t *testing.T) {
 		t.Fatalf("listed %v", ps)
 	}
 	e := r.engine()
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 2 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 2 {
 		t.Fatalf("queued %+v", queued)
 	}
 	if out := photoNoteTool(e, meetingRec, json.RawMessage(`{"photo":1,"text":"The Q3 budget"}`)); out.IsError {
@@ -49,7 +48,7 @@ func TestMeetingPhotoSendInDoubt(t *testing.T) {
 	if sent := r.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != "photo-"+photoOne {
 		t.Fatalf("sent again %v", sent)
 	}
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 2 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 2 {
 		t.Fatalf("queued %+v", queued)
 	}
 
@@ -57,7 +56,7 @@ func TestMeetingPhotoSendInDoubt(t *testing.T) {
 	r.photoNode(lost)
 	r.look(meetingRec)
 	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
-	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 2 {
+	if _, withdraw := writersOf(e).PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 2 {
 		t.Fatalf("withdraw %+v", withdraw)
 	}
 	r.photoNode(taken)
@@ -79,10 +78,10 @@ func TestMeetingPhotosInTheFollowup(t *testing.T) {
 	r.look(meetingRec)
 	r.look(meetingRec)
 	e := r.engine()
-	if err := e.PhotoNote(meetingRec, 1, "PHOTO-ONE-NOTE"); err != nil {
+	if err := writersOf(e).PhotoNote(meetingRec, 1, "PHOTO-ONE-NOTE"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.PhotoNote(meetingRec, 2, "PHOTO-TWO-NOTE"); err != nil {
+	if err := writersOf(e).PhotoNote(meetingRec, 2, "PHOTO-TWO-NOTE"); err != nil {
 		t.Fatal(err)
 	}
 	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
@@ -182,6 +181,8 @@ func (m *meetingFixture) raw(method, path string, want int) (*http.Response, []b
 // number never given again, and every refusal in the contract's order: 403, 413, 410 and 404 before the body is read,
 // 400 for what is wrong with it, then the same id (its photo, or op_id_reused), an id the owner deleted
 // (photo_deleted), not_meeting by the recording's kind.
+// The image itself (GET …/photos/{n}) is the knowledge base's own route, tested in the assistant's
+// recording_module_off_test.go beside the module off.
 func TestMeetingPhotoRoutes(t *testing.T) {
 	m := newMeetingFixture(t)
 	p := photosPath(meetingRec)
@@ -191,7 +192,6 @@ func TestMeetingPhotoRoutes(t *testing.T) {
 	wantCode(t, m.do("POST", p, "", strings.Repeat(" ", maxPhotoBody+1), http.StatusRequestEntityTooLarge), "too_large")
 	wantCode(t, m.do("POST", p, "", `{"id":`, http.StatusNotFound), codeRecordingNotFound) // the recording before the body
 	wantCode(t, m.do("GET", p, "", nil, http.StatusNotFound), codeRecordingNotFound)
-	wantCode(t, m.do("GET", p+"/1", "", nil, http.StatusNotFound), codeRecordingNotFound)
 	wantCode(t, m.do("DELETE", p+"/1", "", nil, http.StatusNotFound), codeRecordingNotFound)
 	m.upload(meetingRec, 1, map[string]any{"title": "Design review"})
 
@@ -255,17 +255,6 @@ func TestMeetingPhotoRoutes(t *testing.T) {
 		t.Fatalf("list %v", ps)
 	}
 
-	// The image, as it came, never sniffed or kept by a cache.
-	resp, body := m.raw("GET", p+"/2", http.StatusOK)
-	want, _ := base64.StdEncoding.DecodeString(two["data"].(string))
-	if !bytes.Equal(body, want) || resp.Header.Get("Content-Type") != "image/jpeg" || resp.Header.Get("X-Content-Type-Options") != "nosniff" ||
-		resp.Header.Get("Cache-Control") != "private, no-store" {
-		t.Fatalf("image: %d bytes, %v", len(body), resp.Header)
-	}
-	for _, n := range []string{"9", "0", "abc", "-1"} {
-		wantCode(t, m.do("GET", p+"/"+n, "", nil, http.StatusNotFound), codePhotoNotFound)
-	}
-
 	// Deleted: gone from the list and the images, false when deleted again, never added again under its id; its
 	// number is not given again.
 	if out := m.do("DELETE", p+"/2", "", nil, http.StatusOK); out["deleted"] != true {
@@ -275,7 +264,6 @@ func TestMeetingPhotoRoutes(t *testing.T) {
 		t.Fatalf("delete again %v", out)
 	}
 	wantCode(t, m.do("DELETE", p+"/9", "", nil, http.StatusNotFound), codePhotoNotFound)
-	wantCode(t, m.do("GET", p+"/2", "", nil, http.StatusNotFound), codePhotoNotFound)
 	wantCode(t, m.do("POST", p, "", two, http.StatusGone), codePhotoDeleted)
 	if d := m.addPhoto(meetingRec, photoBody(t, photoFour, 5, nil)); d["n"] != float64(4) {
 		t.Fatalf("a number given again: %v", d)
@@ -292,7 +280,6 @@ func TestMeetingPhotoRoutes(t *testing.T) {
 	m.do("DELETE", "/api/v1/recordings/"+meetingRec, "", nil, http.StatusOK)
 	wantCode(t, m.do("POST", p, "", `{"id":`, http.StatusGone), codeRecordingDeleted)
 	wantCode(t, m.do("GET", p, "", nil, http.StatusGone), codeRecordingDeleted)
-	wantCode(t, m.do("GET", p+"/1", "", nil, http.StatusGone), codeRecordingDeleted)
 	wantCode(t, m.do("DELETE", p+"/1", "", nil, http.StatusGone), codeRecordingDeleted)
 }
 
@@ -319,7 +306,6 @@ func TestMeetingPhotosReadOnly(t *testing.T) {
 	if ps := m.photosOf(meetingRec); len(ps) != 1 {
 		t.Fatalf("list %v", ps)
 	}
-	m.raw("GET", p+"/1", http.StatusOK)
 	wantCode(t, m.do("DELETE", p+"/9", "", nil, http.StatusNotFound), codePhotoNotFound)
 	wantCode(t, m.do("DELETE", p+"/1", "", nil, http.StatusForbidden), "kb_read_only")
 	wantCode(t, m.do("DELETE", p+"/2", "", nil, http.StatusForbidden), "kb_read_only")
@@ -334,7 +320,6 @@ func TestMeetingPhotosWithoutKnowledgeBase(t *testing.T) {
 	p := photosPath(meetingRec)
 	wantCode(t, m.do("POST", p, "", strings.Repeat(" ", maxPhotoBody+1), http.StatusServiceUnavailable), "kb_disabled")
 	wantCode(t, m.do("GET", p, "", nil, http.StatusServiceUnavailable), "kb_disabled")
-	wantCode(t, m.do("GET", p+"/1", "", nil, http.StatusServiceUnavailable), "kb_disabled")
 	wantCode(t, m.do("DELETE", p+"/1", "", nil, http.StatusServiceUnavailable), "kb_disabled")
 }
 
@@ -531,7 +516,7 @@ func TestMeetingPhotoWithdrawn(t *testing.T) {
 	if len(r.photoSends()) != 3 {
 		t.Fatalf("sent again %v", r.photoSends()[3:])
 	}
-	if _, withdraw := r.engine().PhotosForRoom(meetingRec); len(withdraw) != 0 {
+	if _, withdraw := writersOf(r.engine()).PhotosForRoom(meetingRec); len(withdraw) != 0 {
 		t.Fatalf("still to withdraw %v", withdraw)
 	}
 	if ps := r.photosOf(meetingRec); len(ps) != 1 || ps[0]["id"] != photoTwo {
@@ -611,7 +596,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	if r.photoTries(one) != photoSendTries+1 || len(r.photoSends()) != 1 {
 		t.Fatalf("again: %d tries, %v", r.photoTries(one), r.photoSends())
 	}
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 1 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 1 {
 		t.Fatalf("counted as sent: queued %+v", queued)
 	}
 	r.photoNode(func(string) (bool, error) { return false, nil })
@@ -619,7 +604,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	if sent := r.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != one {
 		t.Fatalf("once the node takes it: %v", sent)
 	}
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 0 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 0 {
 		t.Fatalf("queued %+v", queued)
 	}
 
@@ -629,7 +614,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	for range photoSendTries + 1 {
 		r.look(meetingRec)
 	}
-	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 1 || r.photoTries("photo-withdrawn-"+photoOne) != photoSendTries+1 {
+	if _, withdraw := writersOf(e).PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 1 || r.photoTries("photo-withdrawn-"+photoOne) != photoSendTries+1 {
 		t.Fatalf("withdrawal dropped: %+v after %d tries", withdraw, r.photoTries("photo-withdrawn-"+photoOne))
 	}
 	r.photoNode(func(string) (bool, error) { return false, nil })
@@ -637,7 +622,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	if sent := r.photoSends(); len(sent) != 3 || sent[2]["client_msg_id"] != "photo-withdrawn-"+photoOne {
 		t.Fatalf("withdrawal %v", sent)
 	}
-	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 0 {
+	if _, withdraw := writersOf(e).PhotosForRoom(meetingRec); len(withdraw) != 0 {
 		t.Fatalf("still to withdraw %+v", withdraw)
 	}
 }

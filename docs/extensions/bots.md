@@ -120,6 +120,104 @@ The two complement each other and have separate switches.
   The owner and consumed code must be saved before pairing is acknowledged or messages are authorized. If saving fails, the bot asks you to send the same code again before it expires; the previous code, expiry and attempt count stay unchanged. A later failure to save the optional contact name keeps the committed binding and its previous display name.
 - Names: reading contacts needs `contact:user.base:readonly`; without that permission the owner is called by `assistant.owner` in the manager's `manager.json`, and others "someone".
 
+## Reading as you: daily sync
+
+The bot reads and writes as itself (a tenant token). Separately, the owner can let a bot's app read **as them** once, and
+from then on a daily sync copies what changed in their Lark into the knowledge base: chats and their history (threads and
+attachments included), Drive, Docs, Sheets, Base, Wiki and Minutes. It is the built-in Lark channel's own feature
+(`server/internal/modules/lark/larkauth` and `server/internal/modules/lark/larksync`, with the manager's side in
+`server/internal/extmgr/larksync.go` and its neighbours); it needs no extension and no lark-cli.
+
+### Two steps on one page
+
+1. **Create or extend the app.** The device-code registration of "Pairing and permissions" now also asks for user scopes
+   (the page's `addons.scopes.user`), from one of two packs:
+   - **Documents and minutes** (`docs_standard`): Drive, Docs, Sheets, Base, Wiki, Minutes and message search, plus
+     `offline_access`, which is what gives a refresh token.
+   - **Everything, chat history included** (`full_with_im`): adds the chats and their history as the owner
+     (`im:message.group_msg:get_as_user`, `im:message.p2p_msg:get_as_user`) and file downloads.
+
+   An existing app (the chat bot's, or one added earlier) gets the scopes added by a registration that names its App ID
+   (`POST /api/v1/bots/feishu/sync/bots/{bot}/scopes`); a new sync-only app is one QR code
+   (`POST /api/v1/bots/feishu/sync/bots`, then `POST /api/v1/bots/feishu/sync/bots/{bot}/register` until done).
+2. **Authorize.** Right after, the page starts the user authorization (`POST /api/v1/bots/feishu/sync/bots/{bot}/authorize`):
+   OAuth v3 with PKCE and `offline_access`. The redirect URL is the web app's `/lark-oauth` page; the manager first adds it to
+   the app through `PATCH /open-apis/application/v7/applications/{app_id}/config` (`security.add.redirect_urls`, effective at
+   once without review) together with the user scopes, and publishes a version. The page then opens Lark's authorization
+   page; Lark returns to `/lark-oauth`, which hands `state` and `code` to `POST /api/v1/bots/feishu/sync/oauth`.
+
+   Changing the app's configuration needs `application:application:patch`, which the platform does not grant by default.
+   Without it there are two fallbacks, in order:
+   - **Device flow**: the page shows a QR code that authorizes without any redirect URL (the endpoint lark-cli uses,
+     `oauth/v1/device_authorization`; it is not in the public API catalogue, so it may change).
+   - **Paste once**: if that fails too, the page shows the redirect URL with a copy button and a link straight to the app's
+     security settings; after pasting it there, **Continue** opens the authorization page.
+
+So a new owner confirms twice on one page (scan to create, then agree); an app that already has the scopes needs only
+the second. The tokens are sealed with `secret.key` (settings `bots.feishu.sync.bindings`, re-sealed by the key rotation),
+never shown and never logged.
+
+### Company tenants and approval
+
+The app the registration creates is a **custom app of the tenant** of whoever scans (Lark has no separate "personal app"
+type that skips the tenant's rules). In a company tenant:
+
+- **User scopes need the admin's approval**, unless the admin made them review-free. Reading chat history as a user
+  (`…:get_as_user`), Drive and Minutes are sensitive and usually reviewed. Until a version is approved the page shows that
+  the app is waiting for the admin's approval (`awaiting_approval`); authorizing meanwhile only grants what is already approved.
+- If the company does not let employees create apps, the scan is refused: ask IT to create the app (or allow it), enter its
+  credentials under **Already have a Lark app?**, then add the scopes and authorize.
+- Only people within the app's availability scope can authorize it (error `20010` otherwise).
+- When the admin will not approve chat history, choose **Documents and minutes**: documents, wiki and minutes still sync,
+  and company chats stay with what the Lark gateway already collects.
+- A personal account without a team can create a free one-person team in the Lark app first; its owner is its admin and
+  approves their own app.
+
+### Several accounts and several bots
+
+Bindings are (account × bot) pairs. The bot in `bots.feishu` stays the **primary** bot (`bot_id` `primary`): the only one
+that chats, configured exactly as before, so older settings need no migration and keep working unchanged. Every other bot
+is **sync-only** (`bots.feishu.sync.bots`) and holds no long connection. An account is whoever authorized
+(`<brand>:<tenant_key>:<open_id>`); a work account and a personal account, each with its own tenant's app, are two
+bindings. Each binding has its own token refresh (one at a time: the platform rotates the refresh token, so two
+concurrent refreshes would lose it), cursors, rate limits and failure backoff: one binding being refused, rate-limited or
+missing a scope marks only that binding, and the others and the chat bot carry on.
+
+### The daily run
+
+Each enabled binding runs once a day, at `schedule_hour` local time (default 3) plus a minute of its own, or at once with
+**Sync now** (`POST /api/v1/bots/feishu/sync/bindings/{key}/run`). The first run reads the last 30 days; later runs read what
+changed since the cursors, with a few minutes of overlap. A run has a 20-minute budget; what is left is read next time.
+Requests are rate-limited per binding and per API family, and a 429 or `99991400` waits as the platform asks before
+trying again. **A read that fails leaves its cursor where it was**: the cursors, the dedup index and what the knowledge base
+will collect are committed together after a run, so nothing is skipped and nothing half-read is kept. A failed run tries
+again 15 minutes later; from the third failure in a row it backs off 1, 6 and then 24 hours. A run that ran out of budget
+or into the rate limit goes on an hour later. An authorization lasts at most 365 days; 14, 7 and 1 day before the end the owner
+gets a reminder to authorize again, and the page shows it.
+
+### One copy of everything
+
+Every piece of content has one canonical key: `feishu_msg:<message_id>`, `feishu_doc:<obj_token>` (a wiki node resolves to
+its document), `feishu_minute:<token>`. The manager's index (Postgres `lark_sync_index`) records each key's revision, body
+hash and every place it was read from (`sources`: binding, account, how it was found). Content read again by another bot,
+another account, or through both Drive and Wiki is written once and only gains a source. A document whose revision grew is
+updated in place; one that arrives late with an older revision never replaces the newer one. The knowledge base applies
+the same rule to its items (`canonical_key`, `revision` and `sources` on `kbwire.Item`).
+
+Alignment with what the Lark gateway already put in the knowledge base: documents and minutes match by the
+token in their URL (a wiki link by its node token), so the existing item is updated in place and lists both sources.
+Messages first use a known pairing of the two chats (the knowledge base's `chats/.crosswalk.json`), then a content
+fingerprint: the same chat name, sender, two-second window and text means the same message, which is not written twice and
+records the pairing for next time.
+
+### Endpoints
+
+Under `/api/v1/bots/feishu/sync` (writes need a full-access device): `GET` the view (accounts, bots, bindings with their
+health and last run; never tokens), `PUT` the schedule, `POST /bots`, `POST /bots/{bot}/register`, `POST /bots/{bot}/scopes`,
+`DELETE /bots/{bot}`, `POST /bots/{bot}/authorize`, `POST /bots/{bot}/authorize/poll`, `POST /oauth`,
+`PUT` or `DELETE /bindings/{key}` and `POST /bindings/{key}/run`. Removing a binding forgets its tokens and cursors; what it
+already put in the knowledge base stays.
+
 ## What it can do (`features`, one switch each in the App)
 
 `PUT /api/v1/bots/feishu` changes only the feature keys supplied in `features`; omitted keys keep their current values,
@@ -401,7 +499,7 @@ The owner hands out many tasks and wants one thing of each: its conclusion. Code
 
 ## The waiting-for-you board (#6052)
 
-With `board` on, `/tasks` (and `/进展`, `/总览`) keeps one standing card in the owner's private chat that lists everything waiting for them, and edits that card in place instead of sending a snapshot each time. Code: `server/internal/assistant/feishu_board.go`. With `board` off nothing changes: `/tasks` sends its snapshot every time and the board is never made or edited.
+With `board` on, `/tasks` (and `/进展`, `/总览`) keeps one standing card in the owner's private chat that lists everything waiting for them, and edits that card in place instead of sending a snapshot each time. Code: `server/internal/modules/lark/board.go` (when and how it is edited) and `server/internal/assistant/board_rows.go` (what it lists). With `board` off nothing changes: `/tasks` sends its snapshot every time and the board is never made or edited.
 
 - **One card, edited.** The first `/tasks` sends the board as a message of its own and remembers its message id and the time it was sent (`board` in the chat's state, `bots.feishu.state`). Every later `/tasks` edits that message and replies with one short line, "Updated, it is the card above", as a reply to the board (Feishu shows the quoted board in the reply, and tapping it jumps there; Feishu has no link to a message). A new board is sent only when the old one can no longer be edited: it is older than 14 days (Feishu's edit period, counted from when it was sent; no edit is tried), or an edit fails with an answer that will not change: deleted or withdrawn (230110 / 230011), past the edit period (230031, "Update sent message card" in Feishu's docs), not a card (a card Feishu refused went out as rich text, and its id is a text message's), or any other Feishu refusal. Only a passing failure keeps the board as it is: no answer at all (the network, a timeout, the connection to the hub), a rate limit (230020), a server error (5xx) or a token that had to be renewed; then `/tasks` answers with the snapshot as it does with the switch off. The new board goes out under a key made of the old one, so a send that timed out and is tried again is still one message, and it is remembered and is the board from then on. Writes are one at a time, so two `/tasks`, or `/tasks` and the timer, make one board. A new pairing starts the chat's state afresh, and the board with it.
 - **Kept current.** Once there is a board, it is edited about 3 seconds after any of these (changes that come within those seconds are one edit; nothing is scheduled while the chat has no board): a card opens or ends (`interaction.announced` / `interaction.ended`: answered anywhere, dismissed, expired, its Agent gone), a to-do enters or leaves "Please verify" (its card goes out, it is passed, it is closed, reopened or deleted), and once when the assistant has connected to the hub and read the cards that are pending (a restart of either); before that read, nothing is written, because the list is empty only for being unread. With the switch turned off, or the bot unpaired, nothing is edited, and the to-dos changing do not ask for the bot's status more than once a minute. A bot paired again is a new chat: the old owner's board is forgotten, not edited.
@@ -413,7 +511,7 @@ With `board` on, `/tasks` (and `/进展`, `/总览`) keeps one standing card in 
 
 ## The workbench (#1961)
 
-For people whose front end is Lark rather than the app. With the `workbench` switch on, the standing board below is drawn as a home page and kept where the owner finds it. Code: `server/internal/modules/lark/workbench.go` (the cards, the commands, the Inbox actions), `feishu_workbench_pin.go` (pinning, the button on every card), `feishu_companions.go` (companion bots).
+For people whose front end is Lark rather than the app. With the `workbench` switch on, the standing board below is drawn as a home page and kept where the owner finds it. Code: `server/internal/modules/lark/workbench.go` (the cards, the commands, the Inbox actions), `workbench_pin.go` (pinning, the button on every card), `companions.go` (companion bots and their four routes, `hub_routes` of the lark module: 404 with the module off).
 
 - **The home card.** Where messages go now as its subtitle, and as tags how many things wait for the owner and how many agents are busy; what waits for the owner, as the board lists it (the first three, each a row pressed whole: one holding an Agent up withdraws its card and posts it again at the bottom of the chat, a to-do to verify opens its page); the agents at work (the first three, each a row with its state as a tag, pressed to make it where messages go); the Inbox (what needs the owner, what is only to know, the first two items); the next meeting; how many computers are online; and one row of buttons: the Inbox (filled when something there needs the owner; an `inbox` companion's link in its place), Tasks, and a "more" menu with Today, `/agents`, `/start`, the main chat, a new chat, Refresh and the other companion bots. The `main` and `agents` switches still decide which of those entries are there.
 - **One, pinned.** `/home`, the **Workbench** button of any card, or `POST /api/v1/assistant/feishu/workbench` posts a fresh home card at the bottom of the chat, pins it (`feishu.pin` with `exclusive`: the bot's other pins in the chat come off, the owner's own stay) and withdraws the one before (`feishu.recall`); one too old for Lark to withdraw is redrawn as a line that says the workbench moved. The card is the board from then on (`botState.Board`), so it is edited in place as the board is, and a home card that can no longer be edited is replaced by a new one, pinned in its place.

@@ -308,6 +308,9 @@ The generator understands only what is below; anything else stops it with an err
   fails `test_schema_keywords_are_known` (#4012); what an `x-` annotation holds is not checked as keywords.
   Rules a schema cannot say (at most 300 components a page, the same labels in every chart series, field names
   unique, `state` at most 16 KB) stay the hub's hand-written checks.
+- The opt-in typed keywords (`x-enum: closed`, `x-unknown: count`, `x-id`, enum-keyed maps made structs,
+  `x-decode: strict`, `x-opaque`) and the Rust output are described in `schema/wire/README.md` ("Typed keywords
+  (opt-in)"); no extension schema uses them yet.
 - A manifest example also has to pass the hub's `extension.Parse` (semantic checks beyond the schema, such as
   `contributes.events` needing `on_startup`): `server/internal/extension/manifest_examples_test.go` requires
   `examples/Manifest.*.json` and `sdk/templates/{go,ts}/persona-extension.json` (placeholders filled in) to install
