@@ -89,7 +89,7 @@ func TestSuperviseReviewDoesNotAssertCompletion(t *testing.T) {
 					}}
 					text := RenderSupervise(data)
 					// i18n-ignore: review is a notification, not an acceptance verdict.
-					wants := []string{"signal=review", "待逐项复核，不代表完成", "验收标准见待办，需要时用 todo_get 取原文", event.detail}
+					wants := []string{"signal=review", "待逐项复核，不代表完成", "验收标准用 todo_get 取原文", event.detail}
 					wants = append(wants, event.evidence...)
 					for _, want := range wants {
 						if !strings.Contains(text, want) {

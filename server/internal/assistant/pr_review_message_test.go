@@ -59,7 +59,7 @@ func TestPRReviewWakeMessageDoesNotCompleteCriteria(t *testing.T) {
 				t.Fatal("the PR event no longer reaches the supervisor")
 			}
 			text := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{entry}})
-			for _, want := range []string{signal.Detail, "验收标准见待办，需要时用 todo_get 取原文"} {
+			for _, want := range []string{signal.Detail, "验收标准用 todo_get 取原文"} {
 				if !strings.Contains(text, want) {
 					t.Errorf("supervisor message lost %q:\n%s", want, text)
 				}

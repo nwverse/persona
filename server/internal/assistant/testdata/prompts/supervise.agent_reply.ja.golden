@@ -4,4 +4,4 @@
 
 1. 任务「Example task」（todo_example，signal=decision_reply）：ユーザーが box/agent-session に発言。既定の実行は停止中。`agent_read` で確認し、`task_decided` または質問で確定する。
 
-   验收标准见待办，需要时用 todo_get 取原文
+   验收标准：未记录

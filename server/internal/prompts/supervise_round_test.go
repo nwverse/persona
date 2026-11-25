@@ -44,7 +44,7 @@ func TestSuperviseCriteriaUseTodoPointer(t *testing.T) {
 	for _, want := range []string{
 		"任务「缩短督办消息」（todo_example，signal=ask，链接 https://hub.example/todos/todo_example）",
 		"它的 Agent 有卡片在等，先交给你处理，用户还没收到",
-		"验收标准见待办，需要时用 todo_get 取原文",
+		"验收标准用 todo_get 取原文",
 		"请选择下一步：\n     1. 继续修改\n     2. 保持现状",
 		"最初的要求（2026-11-25 用户原话）：把督办消息里的验收标准改成短指引，其他内容保持。",
 	} {
@@ -57,8 +57,15 @@ func TestSuperviseCriteriaUseTodoPointer(t *testing.T) {
 			t.Errorf("message repeats criterion %q:\n%s", criterion, text)
 		}
 	}
-	if strings.Count(text, "验收标准见待办，需要时用 todo_get 取原文") != 1 {
+	if strings.Count(text, "验收标准用 todo_get 取原文") != 1 {
 		t.Errorf("criteria pointer should appear exactly once:\n%s", text)
+	}
+
+	withoutCriteria := entry
+	withoutCriteria.DoneWhen = nil
+	emptyText := RenderSupervise(Supervise{Entries: []SuperviseEntry{withoutCriteria}})
+	if !strings.Contains(emptyText, "验收标准：未记录") || strings.Contains(emptyText, "验收标准用 todo_get 取原文") {
+		t.Errorf("an entry without criteria should keep its short empty state:\n%s", emptyText)
 	}
 }
 
