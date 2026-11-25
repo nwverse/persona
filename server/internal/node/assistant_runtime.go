@@ -4,7 +4,7 @@ package node
 // the assistant capability runs the conversation, driven with the runtime protocol's own session calls. What is the
 // assistant's stays here, as for Claude and Codex: the conversation's state (launcher, directory), the live snapshot
 // each message starts with, the permission mode, the shared memory, and the gated skill commands Feishu goes through
-// (larkgate.go; their credentials never leave the node). Nothing in this file is any one runtime's.
+// (larkgate.go; Auth-held credentials never leave the node). Nothing in this file is any one runtime's.
 
 import (
 	"context"
@@ -95,13 +95,28 @@ func (n *Node) runtimeAssistantCwd(id, cwd string, st sessionState) string {
 	return identity.AssistantDir(n.home)
 }
 
+// assistantEnvForRuntime returns nil unless the local runtime explicitly accepts dedicated-worker environments.
+func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd string) map[string]string {
+	if h == nil || !h.assistantEnvironment() {
+		return nil
+	}
+	entries := n.assistantRuntimeEnv(cwd)
+	env := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		if name, value, ok := strings.Cut(entry, "="); ok {
+			env[name] = value
+		}
+	}
+	return env
+}
+
 // assistantSendRuntime is assistantSend on a runtime (h, nil when it is not connected): a new conversation is started
 // there (session.start with assistant), then the message goes with the snapshot as its context unless public is true,
 // the conversation's permission mode and its memory directory; a new conversation's first message also carries the
 // instructions only a runtime needs (memory, Feishu). Runtimes that advertise caps.supervision_policy receive manager-owned
 // supervision_instructions as an explicit protocol field on session.start and session.send; non-capable runtimes keep
 // the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
-func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict bool, selected []assistantskills.Entry, modelEffortPolicy ...string) (string, error) {
+func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict, modeExplicit bool, selected []assistantskills.Entry, modelEffortPolicy ...string) (string, error) {
 	hasInput := strings.TrimSpace(text) != "" || len(images) != 0
 	if id != "" && hasInput && n.runtimes.compacting(id) {
 		return "", runtimeCompactingRefusal(ctx)
@@ -139,6 +154,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", errRuntimeAway(launcher)
 	}
 	supportsPolicy := h.supervisionPolicy()
+	remote := h.remoteAgent()
+	wasRemote := st.RemoteAgent
 	if !supportsPolicy && policy != "" {
 		if err := n.runtimePolicyDropped(ctx, id); err != nil {
 			return "", err
@@ -152,7 +169,11 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		n.assistantRuntimeSkills(cwd)
 	}
 	memDir := n.memoryForUse(cwd)
+	environment := n.assistantEnvForRuntime(h, cwd)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
+	if environment != nil {
+		turn["env"] = environment
+	}
 	if pickedModel != "" {
 		turn["model"] = pickedModel
 	}
@@ -162,6 +183,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	startedNew := id == ""
 	if startedNew {
 		startParams := map[string]any{"cwd": cwd, "assistant": true}
+		if environment != nil {
+			startParams["env"] = environment
+		}
 		if pickedModel != "" {
 			startParams["model"] = pickedModel
 		}
@@ -184,11 +208,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			st.SupervisionInstructions = policy
 		}
 	}
+	if remote {
+		st.RemoteAgent = true
+		n.gates().markRemote(id)
+	}
 	n.noteModes(id, mode, pickedEffort)
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
 	}
-	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") {
+	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") || (remote && !wasRemote) {
 		if st.StartedAt.IsZero() {
 			st.StartedAt = time.Now().UTC()
 		}
@@ -198,7 +226,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		}
 		n.state.put(id, st)
 	}
-	n.persistModes(id, mode, pickedEffort)
+	n.persistModes(id, mode, pickedEffort, modeExplicit)
 	if !hasInput {
 		awaitList(n.notifySessionsSoon())
 		return id, nil
@@ -213,8 +241,18 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		if !public {
 			live, commit = n.turnContext(id, n.assistantContext(id))
 		}
+		// Antigravity loads .agents/rules on every turn. Other generic runtimes have no verified native
+		// rule-directory contract, so carry the exact split remainder alongside their bounded AGENTS.md.
+		if h.agent() != "agy" {
+			remainder, err := assistantInstructionRemainder(cwd)
+			if err != nil {
+				return "", err
+			}
+			live = joinInstructionRemainderAndPolicy(remainder, live)
+		}
 		if st.AwaitingFirstMessage {
-			live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
+			memoryTools := h.remoteAgent() && n.guestOf(id) == nil && cwd != "" && identity.IsAssistantDir(filepath.Clean(cwd))
+			live = strings.TrimSpace(n.runtimeInstructionsWithTools(cwd, memDir, memoryTools) + "\n" + live)
 		}
 	}
 	if len(selected) > 0 {
@@ -255,7 +293,10 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if !command {
 		n.ttft.arm(id, sentAt, "")
 	}
-	if err := h.peer.Call(cctx, "session.send", params, &said); err != nil {
+	finishAgy := n.runtimes.agyWorkBegin(h, "session.send", id)
+	err := h.peer.Call(cctx, "session.send", params, &said)
+	finishAgy(err, false)
+	if err != nil {
 		if !command && !maybeDelivered(err) {
 			n.ttft.disarm(id, sentAt)
 		}
@@ -341,7 +382,11 @@ func (n *Node) assistantInterruptRuntime(ctx context.Context, id string) error {
 	}
 	cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
 	defer cancel()
-	return h.peer.Call(cctx, "session.interrupt", map[string]any{"session_id": id}, nil)
+	var out json.RawMessage
+	finishAgy := n.runtimes.agyWorkBegin(h, "session.interrupt", id)
+	err := h.peer.Call(cctx, "session.interrupt", map[string]any{"session_id": id}, &out)
+	finishAgy(err, runtimeAnswerFlag(out, "settled"))
+	return err
 }
 
 // runtimeStartWith starts a session on h with params (cwd and the rest) and lists it right away (runtimeStart).
@@ -360,7 +405,11 @@ func (n *Node) runtimeStartWith(ctx context.Context, h *runtimeConn, params map[
 // runtimeInstructions is the first message's instructions for an assistant on a runtime: the memory it shares with
 // Claude and Codex (memory.go), and the skills' gated commands it runs as tools here.
 func (n *Node) runtimeInstructions(cwd, memDir string) string {
-	r := prompts.RuntimeInstructions{Dir: memDir}
+	return n.runtimeInstructionsWithTools(cwd, memDir, false)
+}
+
+func (n *Node) runtimeInstructionsWithTools(cwd, memDir string, memoryTools bool) string {
+	r := prompts.RuntimeInstructions{Dir: memDir, MemoryTools: memoryTools}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, g := range n.assistantLark(ctx).Gates {

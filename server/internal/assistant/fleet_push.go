@@ -377,23 +377,29 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 }
 
 func (s *Service) quietBackgroundReply(machine string, sess proto.Session) bool {
-	if !sess.Assistant || !assistantwire.SupervisedFinish(sess, true) || sess.AwaitsReply {
+	if !sess.Assistant || sess.AwaitsReply || strings.TrimSpace(sess.FailureReason) != "" || sess.TurnErrorKind != "" ||
+		sess.Status == proto.StatusBlocked || sess.Status == proto.StatusInterrupted || !assistantwire.NormalFinish(sess) {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	cfg := s.settings(ctx)
+	foldRelay := sess.SessionID != "" && sess.SessionID == cfg.Main && cfg.foldRoutineRelayReplies() && quietOn(cfg.MainBackgroundFolded)
+	// Only the native agents reliably distinguish an empty turn from a service failure. A different runtime
+	// can skip an alert only for an opted-in relay with an actual successful answer in its transcript.
+	knownFinish := assistantwire.SupervisedFinish(sess, true)
+	if !knownFinish && !foldRelay {
+		return false
+	}
 	var page struct {
 		Items []proto.Item `json:"items"`
 	}
 	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{
-		"session_id": sess.SessionID, "turns": 1, "lazy_images": true,
+		"session_id": sess.SessionID, "turns": 2, "lazy_images": true,
 	}, &page); err != nil {
 		return false
 	}
-	if transcript.BackgroundReplyMissing(page.Items) {
-		return true
-	}
-	return s.mainBackgroundFolded(ctx) && s.isMain(ctx, sess.SessionID) && transcript.RoutineConversationReply(page.Items)
+	return knownFinish && transcript.BackgroundReplyMissing(page.Items) || foldRelay && transcript.RoutineConversationReply(page.Items)
 }
 
 // reportSlack is how long before its turn started a scheduled run or notice may have been sent (the node starts the
@@ -536,24 +542,34 @@ func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covere
 func (s *Service) notifyInteractionAt(ix proto.Interaction, machine string, covered bool, level, key string) {
 	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
 		Interaction: &ix, Level: level, RelatedKey: key}
+	src := s.inputCardSource(ix, level != "" || key != "") // a level or key: ask_route rang it (card_layers.go)
 	if !covered || s.devs == nil {
-		s.deliver(n)
+		s.deliverCard(src, n)
 		return
 	}
 	go func() {
 		n.LinkCovered = s.devs.LinkRang(s.runCtx(), ix.ID, linkRangWait)
-		s.deliver(n)
+		s.deliverCard(src, n)
 	}()
 }
 
 // deliver has the hub deliver a push the manager decided on (notify.request), off the caller's way.
-func (s *Service) deliver(n Notification) {
+func (s *Service) deliver(n Notification) { s.deliverCard("", n) }
+
+// deliverCard is deliver of a push made at source (card_layers.go); "" counts a finished turn's push as agent_done
+// and any other as untagged.
+func (s *Service) deliverCard(source string, n Notification) {
 	if n.ID == "" {
 		n.ID = "ntf_" + randomHex(8)
+	}
+	if source == "" && n.Kind == assistantwire.NotifyDone {
+		source = cardAgentDone
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		// Off the caller's way, no lock of theirs is held: the owner may be read from the to-dos.
+		s.noteCardOwner(ctx, source, s.supervisingOwner(ctx, n))
 		s.capTrackPush(ctx, &n) // a track's push_cap (track_attention.go); never a card's
 		if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
 			s.logf("assistant: push: %v", err)

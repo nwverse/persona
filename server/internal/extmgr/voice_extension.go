@@ -8,16 +8,22 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/voice"
 )
 
 // The built-in voice extension, `personad voice` (docs/extensions/extensions.md "Built-in voice extension", docs/assistant/voice.md
 // "Configurable GPT-Live upstream"): a built-in extension with a settings form and a secret key, so its realtime
 // service can be set from the apps. hub.json's first entry of it is taken over under its own id (its upstreams stay,
 // and come first); without one the extension is there, switched off, as "voice".
+//
+// The extension comes with its module (internal/modules/voice), which provides what the host needs of it through
+// internal/builtinext; in a build without the module (persona_without_voice) there is no such extension, and a
+// hub.json entry running `personad voice` stays an extension of hub.json's like any other.
 
 // voiceExtensionID is its id when hub.json has no entry of it.
 const voiceExtensionID = "voice"
@@ -27,7 +33,7 @@ const voiceSecretKey = "key"
 
 // voiceConfig is the settings form: one upstream (models custom/<model>) and how the model talks. ssh, key_file,
 // key_command, an explicit tools and more upstreams are hub.json's only: key_command runs a command on the hub's
-// machine. The form's upstream declares the function tools on its own (voice.Provider.Tools unset, #1420).
+// machine. The form's upstream declares the function tools on its own (the extension's Provider.Tools unset, #1420).
 const voiceConfig = `{
   "type": "object",
   "properties": {
@@ -44,7 +50,7 @@ const voiceConfig = `{
 
 // voiceManifest is the built-in voice extension under id, named name (hub.json's entry's, or the Chinese for "Realtime
 // voice").
-func voiceManifest(h *Manager, id, name string) *extension.Manifest {
+func voiceManifest(h *Manager, voice builtinext.Voice, id, name string) *extension.Manifest {
 	if name == "" {
 		name = "实时语音"
 	}
@@ -64,7 +70,10 @@ func voiceManifest(h *Manager, id, name string) *extension.Manifest {
 
 // takesOverVoice says whether a hub.json entry runs `personad voice`: its first such entry becomes the built-in
 // extension. Any other program (a node script) stays a hub.json extension.
-func takesOverVoice(c ExtensionConfig) bool {
+func takesOverVoice(s moduleswitch.Set, c ExtensionConfig) bool {
+	if _, ok := builtinext.VoiceExtension(s); !ok { // the module is not in this build
+		return false
+	}
 	return (c.Kind == "" || c.Kind == "voice") && extension.IsBuiltinCommand(c.Command) && len(c.Args) > 0 && c.Args[0] == "voice"
 }
 
@@ -74,6 +83,10 @@ func takesOverVoice(c ExtensionConfig) bool {
 // installed under that id before (it keeps the id). It never yields its id to a package installed later: that one is
 // refused as any of the same id (Preview), so no other program is handed the key set here.
 func (h *Manager) addVoiceExtension(ctx context.Context, reg *extension.Registry, store extension.Store) {
+	voice, ok := builtinext.VoiceExtension(h.modules())
+	if !ok { // the module is not in this build
+		return
+	}
 	ps := h.extensions
 	c := ps.voice
 	if c == nil {
@@ -94,7 +107,7 @@ func (h *Manager) addVoiceExtension(ctx context.Context, reg *extension.Registry
 				return // the package installed under this id before keeps it (Load)
 			}
 		}
-		if err := reg.AddBuiltin(voiceManifest(h, voiceExtensionID, ""), "", false); err != nil {
+		if err := reg.AddBuiltin(voiceManifest(h, voice, voiceExtensionID, ""), "", false); err != nil {
 			h.logf("plugin %s: %v", voiceExtensionID, err)
 			return
 		}
@@ -102,7 +115,7 @@ func (h *Manager) addVoiceExtension(ctx context.Context, reg *extension.Registry
 		return
 	}
 	// On without a row (an upgraded hub's entry runs as it did); disabled holds it off without writing that to its row.
-	if err := reg.AddBuiltin(voiceManifest(h, c.ID, c.Name), "", true); err != nil {
+	if err := reg.AddBuiltin(voiceManifest(h, voice, c.ID, c.Name), "", true); err != nil {
 		h.logf("plugin %s: %v", c.ID, err)
 		ps.mu.Lock()
 		delete(ps.byID, c.ID) // its placeholder from newExtensions: nothing will start it
@@ -150,10 +163,11 @@ func (ps *extensions) voiceSpec(p *extension.Extension, s *host.Spec) {
 	}
 }
 
-// voiceGatewaySpec returns the serialized voice.Provider derived from an enabled quota gateway extension's settings
+// voiceGatewaySpec returns the serialized provider (the extension's Provider) derived from an enabled quota gateway extension's settings
 // and secret when it has a valid gateway_url and an API key.
 func (ps *extensions) voiceGatewaySpec(ctx context.Context) json.RawMessage {
-	if ps == nil || ps.reg == nil {
+	voice, ok := builtinext.VoiceExtension(ps.modules())
+	if ps == nil || ps.reg == nil || !ok {
 		return nil
 	}
 	for _, p := range ps.reg.List() {
@@ -168,20 +182,18 @@ func (ps *extensions) voiceGatewaySpec(ctx context.Context) json.RawMessage {
 		if p.Full != nil && p.Full.Name != "" {
 			name = p.Full.Name
 		}
-		prov, ok := voice.GatewayProviderFromConfig(ps.reg.Config(p), name, secrets[gatewaySecretKey])
-		if !ok {
-			continue
+		if b, ok := voice.GatewayProvider(ps.reg.Config(p), name, secrets[gatewaySecretKey]); ok {
+			return b
 		}
-		b, _ := json.Marshal(prov)
-		return b
 	}
 	return nil
 }
 
-// voiceGatewayState returns a placeholder voice.Provider derived from an enabled quota gateway extension's settings
+// voiceGatewayState returns a placeholder provider derived from an enabled quota gateway extension's settings
 // without unsealing the secret (only checking whether gateway_key is set).
 func (ps *extensions) voiceGatewayState(ctx context.Context) json.RawMessage {
-	if ps == nil || ps.reg == nil {
+	voice, ok := builtinext.VoiceExtension(ps.modules())
+	if ps == nil || ps.reg == nil || !ok {
 		return nil
 	}
 	for _, p := range ps.reg.List() {
@@ -192,12 +204,9 @@ func (ps *extensions) voiceGatewayState(ctx context.Context) json.RawMessage {
 		if p.Full != nil && p.Full.Name != "" {
 			name = p.Full.Name
 		}
-		prov, ok := voice.GatewayProviderFromConfig(ps.reg.Config(p), name, "set")
-		if !ok {
-			continue
+		if b, ok := voice.GatewayProvider(ps.reg.Config(p), name, "set"); ok {
+			return b
 		}
-		b, _ := json.Marshal(prov)
-		return b
 	}
 	return nil
 }
@@ -210,7 +219,7 @@ func (ps *extensions) voiceHubJSON() json.RawMessage {
 	return ps.voice.Config
 }
 
-// voiceState is what the built-in voice extension lacks before a conversation can start (voice.Config.Setup) and the
+// voiceState is what the built-in voice extension lacks before a conversation can start (its Config.Setup) and the
 // settings it does not take, merged as the extension merges them. It runs either way; the apps offer voice only once
 // it has an upstream. Only whether the key is set is read: its value stays sealed.
 func (ps *extensions) voiceState(ctx context.Context, p *extension.Extension) (setup string, warnings []string) {
@@ -218,11 +227,15 @@ func (ps *extensions) voiceState(ctx context.Context, p *extension.Extension) (s
 	if ps.reg.SecretsSet(ctx, p)[voiceSecretKey] {
 		key = "set"
 	}
-	cfg, err := voice.Merge(voice.Sources{Form: ps.reg.Config(p), Key: key, HubJSON: ps.voiceHubJSON(), Gateway: ps.voiceGatewayState(ctx)})
+	voice, ok := builtinext.VoiceExtension(ps.modules())
+	if !ok {
+		return "", nil
+	}
+	setup, warnings, err := voice.State(builtinext.VoiceSources{Form: ps.reg.Config(p), Key: key, HubJSON: ps.voiceHubJSON(), Gateway: ps.voiceGatewayState(ctx)})
 	if err != nil {
 		return "", nil // the extension does not start and says why itself
 	}
-	return cfg.Setup, cfg.Warnings
+	return setup, warnings
 }
 
 // voiceView adds to the built-in voice extension's view: needs_setup while it has no upstream (it runs, but no
@@ -249,7 +262,7 @@ func (ps *extensions) voiceView(ctx context.Context, p *extension.Extension, v *
 // key before it is saved, whoever saves it, in the same registry operation a key is set in, so the key is never sent
 // as a Bearer to a host it was not given for.
 func (ps *extensions) voiceKeyFollowsURL(p *extension.Extension, old, next json.RawMessage) []string {
-	if !ps.isVoice(p) || sameOrigin(voiceURL(old), voiceURL(next)) {
+	if !ps.isVoice(p) || sameOrigin(voiceURL(ps.modules(), old), voiceURL(ps.modules(), next)) {
 		return nil
 	}
 	return []string{voiceSecretKey}
@@ -263,17 +276,19 @@ func (e keyNeedsURLError) Unwrap() error { return e.error }
 // voiceKeyNeedsURL refuses a key for the built-in voice extension while its settings have no address (the registry's
 // SecretNeeds): a key is set for an address (voiceKeyFollowsURL).
 func (ps *extensions) voiceKeyNeedsURL(p *extension.Extension, name string, config json.RawMessage) error {
-	if name != voiceSecretKey || !ps.isVoice(p) || voiceURL(config) != "" {
+	if name != voiceSecretKey || !ps.isVoice(p) || voiceURL(ps.modules(), config) != "" {
 		return nil
 	}
 	return keyNeedsURLError{i18n.Err("hub-voice_extension.key_needs_url")}
 }
 
 // voiceURL is the settings' address ("" none).
-func voiceURL(config json.RawMessage) string {
-	var f voice.Form
-	_ = json.Unmarshal(config, &f)
-	return strings.TrimSpace(f.URL)
+func voiceURL(s moduleswitch.Set, config json.RawMessage) string {
+	voice, ok := builtinext.VoiceExtension(s)
+	if !ok {
+		return ""
+	}
+	return voice.FormURL(config)
 }
 
 // sameOrigin says whether two addresses have the same scheme, host and port (a default port written or not); two

@@ -26,13 +26,14 @@ import (
 const conversationSegmentsKey = "assistant.segments"
 
 type logicalSwitchRequest struct {
-	OperationID    string `json:"operation_id"`
-	ExpectedEpoch  int64  `json:"expected_epoch"`
-	MachineID      string `json:"machine_id"`
-	Launcher       string `json:"launcher"`
-	Model          string `json:"model,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	PermissionMode string `json:"permission_mode,omitempty"`
+	OperationID        string `json:"operation_id"`
+	ExpectedEpoch      int64  `json:"expected_epoch"`
+	MachineID          string `json:"machine_id"`
+	Launcher           string `json:"launcher"`
+	Model              string `json:"model,omitempty"`
+	Effort             string `json:"effort,omitempty"`
+	PermissionMode     string `json:"permission_mode,omitempty"`
+	AllowOfflineSource bool   `json:"allow_offline_source,omitempty"`
 }
 type logicalInput struct {
 	Method    string               `json:"method"`
@@ -165,6 +166,7 @@ func (s *Service) logicalSwitchRoutes() {
 			apierr.Write(w, 400, err)
 			return
 		}
+		p.AllowOfflineSource = false
 		op, err := s.beginLogicalSwitch(r.Context(), p.SourceMachine, r.PathValue("id"), p.logicalSwitchRequest)
 		if err != nil {
 			apierr.Call(w, err)
@@ -204,6 +206,19 @@ func (s *Service) logicalRoleRequired(ctx context.Context, machine, id string) (
 	return policy != "" || slices.Contains(cfg.Leaders, id) || id == cfg.BackgroundSupervisor || id == cfg.Main && cfg.MainSupervisesOwnTasks != nil && *cfg.MainSupervisesOwnTasks, nil
 }
 
+func (s *Service) conversationSwitchBusy(machine, id string, row proto.Session) bool {
+	if row.Starting || row.Status == proto.StatusWorking || row.Status == proto.StatusBlocked || row.PendingInteractions > 0 ||
+		backgroundRunning(row) || len(row.Queued) > 0 || (row.Compaction != nil && row.Compaction.State == proto.CompactionRunning) {
+		return true
+	}
+	for _, ix := range s.pendingInteractions() {
+		if ix.SessionID == id && ix.MachineID == machine {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p logicalSwitchRequest) (any, error) {
 	st, ok := s.store().(logicalSwitchStore)
 	if !ok {
@@ -235,14 +250,16 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, err
 	}
 	row, known := s.session(ctx, machine, id)
-	if !known || !row.Assistant || row.PaneID != "" || s.isWorkMachine(p.MachineID) {
-		return nil, logicalRefusal(ctx, "unavailable")
-	}
-	if row.Starting || row.Status == proto.StatusWorking || row.Status == proto.StatusBlocked || row.PendingInteractions > 0 || backgroundRunning(row) || len(row.Queued) > 0 || (row.Compaction != nil && row.Compaction.State == proto.CompactionRunning) {
-		return nil, logicalRefusal(ctx, "busy")
-	}
-	for _, ix := range s.pendingInteractions() {
-		if ix.SessionID == id && ix.MachineID == machine {
+	offlineSource := p.AllowOfflineSource && s.machinePhysicallyOffline(ctx, machine)
+	if !known {
+		if !offlineSource || !s.isFailoverEligibleOffline(ctx, machine, id) || s.isWorkMachine(p.MachineID) {
+			return nil, logicalRefusal(ctx, "unavailable")
+		}
+	} else {
+		if !row.Assistant || row.PaneID != "" || s.isWorkMachine(p.MachineID) {
+			return nil, logicalRefusal(ctx, "unavailable")
+		}
+		if !offlineSource && s.conversationSwitchBusy(machine, id, row) {
 			return nil, logicalRefusal(ctx, "busy")
 		}
 	}
@@ -258,21 +275,49 @@ func (s *Service) beginLogicalSwitch(ctx context.Context, machine, id string, p 
 		return nil, s.supervisionRuntimeRefusal(ctx, p.MachineID)
 	}
 	if c == nil {
-		if p.ExpectedEpoch != 1 || assistantKind(sessionEngineAgent(row)) == "" {
+		if p.ExpectedEpoch != 1 {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
-		var page historyPage
-		if err = s.physicalHistoryCall(ctx, machine, DeviceSessionItems, map[string]any{"session_id": id, "limit": 1, "lazy_images": true}, &page); err != nil {
-			return nil, err
+		var historyGen string
+		var sourceEngine string
+		if known && assistantKind(sessionEngineAgent(row)) != "" {
+			sourceEngine = proto.AssistantExecutionIdentity(sessionEngineAgent(row), row.SourceKind, row.SourceInstanceID, row.Launcher)
 		}
-		if page.History == "" {
+		if !offlineSource {
+			if assistantKind(sessionEngineAgent(row)) == "" {
+				return nil, logicalRefusal(ctx, "unknown_engine")
+			}
+			var page historyPage
+			if err = s.physicalHistoryCall(ctx, machine, DeviceSessionItems, map[string]any{"session_id": id, "limit": 1, "lazy_images": true}, &page); err != nil {
+				return nil, err
+			}
+			historyGen = page.History
+		} else {
+			// Source machine is offline: read persisted ConversationHistory from Postgres.
+			var page historyPage
+			if err = s.physicalHistoryCall(ctx, machine, DeviceSessionItems, map[string]any{"session_id": id, "limit": 1, "lazy_images": true}, &page); err == nil && page.History != "" {
+				historyGen = page.History
+			} else if hs, ok := s.store().(conversationHistoryStore); ok {
+				if h, herr := hs.ConversationHistory(ctx, machine, id); herr == nil && h != nil && h.History != "" {
+					historyGen = h.History
+				}
+			}
+			if sourceEngine == "" {
+				cfg := s.settings(ctx)
+				agent := s.launcherAgent(ctx, machine, cfg.Launcher)
+				if assistantKind(agent) == "" {
+					agent = "claude"
+				}
+				sourceEngine = proto.AssistantExecutionIdentity(agent, "", "", cfg.Launcher)
+			}
+		}
+		if historyGen == "" {
 			return nil, logicalRefusal(ctx, "missing_generation")
 		}
-		sourceEngine := proto.AssistantExecutionIdentity(sessionEngineAgent(row), row.SourceKind, row.SourceInstanceID, row.Launcher)
 		if sourceEngine == "" {
 			return nil, logicalRefusal(ctx, "unknown_engine")
 		}
-		if err = st.AdoptConversationAliases(ctx, machine, id, randomHex(16), sourceEngine, page.History, s.physicalAliases(machine)); err != nil {
+		if err = st.AdoptConversationAliases(ctx, machine, id, randomHex(16), sourceEngine, historyGen, s.physicalAliases(machine)); err != nil {
 			return nil, err
 		}
 		c, err = st.LogicalConversation(ctx, machine, id)
@@ -444,6 +489,7 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		params := map[string]any{"operation_id": logicalNodeOperation(c, op.OperationID), "launcher": p.Launcher, "model": p.Model, "effort": p.Effort, "permission_mode": p.PermissionMode, "is_main": c.SessionID == s.settings(ctx).Main}
 		if method == "assistant.segment.prepare" {
 			row, _ := s.session(ctx, c.MachineID, c.SessionID)
+			params["title"] = row.Title
 			cwd, err := s.prepareSpace(ctx, p.MachineID, row.Space)
 			if err != nil {
 				_ = st.ResolveConversationSwitch(ctx, c.MachineID, c.SessionID, op.OperationID, "rejected", "preparation unavailable")
@@ -517,14 +563,28 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 			return err
 		}
 		// Pull a proven physical tail after preparation; never infer it from item count.
+		// For an offline-source failover switch, fall back to persisted Postgres ConversationHistory.
 		var tail historyPage
-		if err = s.physicalHistoryCall(ctx, source.MachineID, DeviceSessionItems, map[string]any{"session_id": source.SessionID, "limit": 1, "lazy_images": true}, &tail); err != nil {
-			return err
-		}
-		if tail.ToSeq == nil || tail.MoreAfter {
+		var tailSeq int
+		err = s.physicalHistoryCall(ctx, source.MachineID, DeviceSessionItems, map[string]any{"session_id": source.SessionID, "limit": 1, "lazy_images": true}, &tail)
+		if err == nil && tail.ToSeq != nil && !tail.MoreAfter {
+			tailSeq = *tail.ToSeq
+		} else if p.AllowOfflineSource && (errors.Is(busError(err), apierr.ErrOffline) || errors.Is(busError(err), rpc.ErrClosed) || s.machinePhysicallyOffline(ctx, source.MachineID)) {
+			seq, okTail := s.offlineHistoryTailSeq(ctx, source.MachineID, source.SessionID)
+			if !okTail {
+				if err != nil {
+					return err
+				}
+				return logicalRefusal(ctx, "missing_generation")
+			}
+			tailSeq = seq
+		} else {
+			if err != nil {
+				return err
+			}
 			return logicalRefusal(ctx, "missing_generation")
 		}
-		if err = st.PrepareConversationSegment(ctx, c.MachineID, c.SessionID, op.OperationID, conversationlog.Segment{ID: randomHex(16), MachineID: p.MachineID, SessionID: reply.SessionID, Engine: target.Engine, Launcher: p.Launcher, Model: p.Model, Effort: p.Effort, PermissionMode: p.PermissionMode}, *tail.ToSeq); err != nil {
+		if err = st.PrepareConversationSegment(ctx, c.MachineID, c.SessionID, op.OperationID, conversationlog.Segment{ID: randomHex(16), MachineID: p.MachineID, SessionID: reply.SessionID, Engine: target.Engine, Launcher: p.Launcher, Model: p.Model, Effort: p.Effort, PermissionMode: p.PermissionMode}, tailSeq); err != nil {
 			return err
 		}
 		c, err = st.LogicalConversation(ctx, c.MachineID, c.SessionID)
@@ -542,7 +602,7 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		}
 		if source, ok := c.Active(); ok {
 			_, err := s.logicalPhysical(ctx, source.MachineID, "assistant.segment.retire", map[string]any{"session_id": source.SessionID})
-			if err != nil && !errors.Is(err, apierr.ErrOffline) {
+			if err != nil && !errors.Is(err, apierr.ErrOffline) && !errors.Is(busError(err), apierr.ErrOffline) && !errors.Is(busError(err), rpc.ErrClosed) {
 				return err
 			}
 		}
@@ -642,14 +702,35 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 			delete(queued.Params, key)
 		}
 		queued.Params["launcher"], queued.Params["model"], queued.Params["effort"], queued.Params["permission_mode"] = a.Launcher, a.Model, a.Effort, a.PermissionMode
+		// The active segment's mode is inherited state, not the queued caller's explicit choice. A Claude segment uses
+		// the current default; non-Claude and external segments keep their legacy generic mode without a resume default.
+		delete(queued.Params, assistantwire.PermissionModeExplicitParam)
+		defaultMode, _ := queued.Params[assistantwire.DefaultPermissionModeParam].(string)
+		useDefault := defaultMode != "" && !proto.IsExternalLauncher(a.Launcher) && s.startPermissionModeSupported(ctx, a.MachineID, a.Launcher, defaultMode)
+		if useDefault && a.Launcher != "" && a.Launcher != "claude" {
+			agent := s.launcherAgent(withUnhidden(ctx, a.Launcher), a.MachineID, a.Launcher)
+			useDefault = agent == "" || agent == "claude"
+		}
+		if useDefault {
+			delete(queued.Params, "permission_mode")
+		} else {
+			delete(queued.Params, assistantwire.DefaultPermissionModeParam)
+		}
 	}
+	var handoff json.RawMessage
 	if c.Switch != nil {
-		raw, _, err := st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID)
-		if err != nil {
+		if handoff, _, err = st.ConversationPreparation(ctx, c.MachineID, c.SessionID, c.Switch.OperationID); err != nil {
 			return err
 		}
+	} else if c.Epoch > 1 {
+		// An idle acceptance kept it for this input (#14488); accepting the input discards it.
+		if handoff, err = st.ConversationPendingHandoff(ctx, c.MachineID, c.SessionID, a.ID); err != nil {
+			return err
+		}
+	}
+	if c.Switch != nil || len(handoff) > 0 {
 		var h mainHandoff
-		if err = json.Unmarshal(raw, &h); err != nil {
+		if err = json.Unmarshal(handoff, &h); err != nil {
 			return err
 		}
 		text, _ := queued.Params["text"].(string)
@@ -703,18 +784,108 @@ func renderLogicalHandoff(language string, h mainHandoff, text string) string {
 	for _, t := range h.Recent {
 		turns = append(turns, prompts.HandoffTurn{Role: t.Role, Text: t.Text})
 	}
-	return prompts.RenderSegmentHandoff(prompts.SegmentHandoff{Language: language, Summary: h.Summary, Recent: turns, Text: text, Partial: h.Partial})
+	return prompts.RenderSegmentHandoff(prompts.SegmentHandoff{
+		Language:     language,
+		FromLauncher: h.FromLauncher,
+		FromModel:    h.FromModel,
+		Summary:      h.Summary,
+		Recent:       turns,
+		Text:         text,
+		Partial:      h.Partial,
+	})
+}
+
+func logicalHandoffExecution(row proto.Session, c *db.LogicalConversation, items []proto.Item) (string, string) {
+	prev := conversationExecutionNow(c.MachineID, row, c)
+	launcher, model := strings.TrimSpace(prev.Launcher), strings.TrimSpace(prev.Model)
+	if model == "" {
+		model = strings.TrimSpace(row.Model)
+	}
+	if model == "" {
+		for i := len(items) - 1; i >= 0; i-- {
+			if items[i].Role == "assistant" {
+				if m := strings.TrimSpace(items[i].Model); m != "" {
+					model = m
+					break
+				}
+			}
+		}
+	}
+	return launcher, model
+}
+
+func logicalHandoffTurn(item proto.Item) (prompts.HandoffTurn, bool, bool) {
+	switch item.Kind {
+	case proto.KindText:
+		if item.Role != "user" && item.Role != "assistant" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		if item.Stored != nil && !item.Stored.Complete {
+			return prompts.HandoffTurn{}, false, true
+		}
+		text := strings.TrimSpace(transcript.StripInjected(item.Text))
+		if text == "" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		return prompts.HandoffTurn{Role: item.Role, Text: text}, true, false
+	case proto.KindToolUse:
+		name := strings.TrimSpace(item.ToolName)
+		raw := strings.TrimSpace(string(item.ToolInput))
+		if name == "" && raw == "" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		text := name
+		if raw != "" {
+			text = name + "(" + clip(oneLine(raw), 400) + ")"
+		}
+		return prompts.HandoffTurn{Role: "tool_use", Text: text}, true, item.Stored != nil && !item.Stored.Complete
+	case proto.KindToolResult:
+		name := strings.TrimSpace(item.ToolName)
+		body := strings.TrimSpace(transcript.StripInjected(item.Text))
+		if name == "" && body == "" {
+			return prompts.HandoffTurn{}, false, false
+		}
+		var b strings.Builder
+		if item.IsError {
+			b.WriteString("[error] ")
+		}
+		if name != "" {
+			b.WriteString(name)
+			if body != "" {
+				b.WriteString(": ")
+			}
+		}
+		if body != "" {
+			b.WriteString(clip(body, 800))
+		}
+		return prompts.HandoffTurn{Role: "tool_result", Text: b.String()}, true, item.Stored != nil && !item.Stored.Complete
+	default:
+		return prompts.HandoffTurn{}, false, false
+	}
 }
 
 func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation) (mainHandoff, error) {
+	var h mainHandoff
 	raw, err := s.logicalHistoryCall(ctx, st, c, DeviceAssistantHandoff, json.RawMessage(`{}`))
 	if err != nil {
+		// When the active source machine is offline and Postgres has no covered page yet,
+		// degrade to a partial handoff carrying any persisted summary instead of blocking failover.
+		if a, ok := c.Active(); ok && (errors.Is(busError(err), apierr.ErrOffline) || errors.Is(busError(err), rpc.ErrClosed) || s.machinePhysicallyOffline(ctx, a.MachineID)) {
+			h.Partial = true
+			if history, ok := s.store().(conversationHistoryStore); ok {
+				if source, herr := history.ConversationHistory(ctx, a.MachineID, a.SessionID); herr == nil && source != nil && source.SummaryKnown {
+					h.Summary = strings.TrimSpace(source.Summary)
+				}
+			}
+			return h, nil
+		}
 		return mainHandoff{}, err
 	}
-	var h mainHandoff
 	if err = json.Unmarshal(raw, &h); err != nil {
 		return h, err
 	}
+	row, _ := s.session(ctx, c.MachineID, c.SessionID)
+	h.FromLauncher, h.FromModel = logicalHandoffExecution(row, c, nil)
 	previousSummary := h.Summary
 	h.Summary = ""
 	if a, ok := c.Active(); ok {
@@ -745,36 +916,38 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 	if err != nil {
 		return h, err
 	}
+	if h.FromLauncher == "" || h.FromModel == "" {
+		h.FromLauncher, h.FromModel = logicalHandoffExecution(row, c, page.Items)
+	}
 	summaryTurns := []prompts.HandoffTurn{}
 	size := 0
 	for i := len(page.Items) - 1; i >= 0; i-- {
-		item := page.Items[i]
-		if item.Kind != proto.KindText || (item.Role != "user" && item.Role != "assistant") {
-			continue
-		}
-		if item.Stored != nil && !item.Stored.Complete {
+		turn, ok, partial := logicalHandoffTurn(page.Items[i])
+		if partial {
 			h.Partial = true
+		}
+		if !ok {
 			continue
 		}
-		text := strings.TrimSpace(transcript.StripInjected(item.Text))
-		if text == "" {
-			continue
-		}
-		if size+len(text) > 120000 {
+		if size+len(turn.Text) > 120000 {
 			h.Partial = true
 			break
 		}
-		size += len(text)
-		summaryTurns = append(summaryTurns, prompts.HandoffTurn{Role: item.Role, Text: text})
+		size += len(turn.Text)
+		summaryTurns = append(summaryTurns, turn)
 	}
 	slices.Reverse(summaryTurns)
 	h.Partial = h.Partial || page.Partial || (page.HasMore != nil && *page.HasMore)
-	input, _ := json.Marshal(map[string]any{"previous_summary": previousSummary, "history": summaryTurns})
+	payload := map[string]any{"previous_summary": previousSummary, "history": summaryTurns}
+	if h.FromLauncher != "" || h.FromModel != "" {
+		payload["previous_execution"] = map[string]string{"launcher": h.FromLauncher, "model": h.FromModel}
+	}
+	input, _ := json.Marshal(payload)
 	call, err := checkModelCall(assistantwire.ModelCompleteParams{System: prompts.RenderSegmentSummary(answerLanguage(s.hello(ctx).Locale)), Messages: []assistantwire.ModelMessage{{Role: "user", Content: string(input)}}, MaxTokens: 2048})
 	if err != nil {
 		return h, err
 	}
-	result, err := waitLogicalSummary(ctx, func() (assistantwire.ModelCompleteResult, error) {
+	h, fellBack, err := summarizeLogicalHandoff(ctx, h, previousSummary, func() (assistantwire.ModelCompleteResult, error) {
 		out, err := s.runModelCall(ctx, "kb", "conversation handoff", "conversation handoff", call)
 		if err != nil {
 			return assistantwire.ModelCompleteResult{}, err
@@ -788,8 +961,30 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 	if err != nil {
 		return h, err
 	}
-	h.Summary = result.Text
+	if fellBack {
+		s.logf("assistant: conversation handoff for %s/%s continues without a new summary: the knowledge-processing model is unavailable", c.MachineID, c.SessionID)
+	}
 	return h, nil
+}
+
+// summarizeLogicalHandoff asks run for the handoff's summary. A paused model is waited out (waitLogicalSummary).
+// A model that is not set up (model_unavailable) does not recover by retrying: the sweep would retry the switch
+// every few seconds and leave it preparing until someone changed Settings. The switch goes ahead with the recent
+// turns already in h, the earlier summary if there was one, and Partial set so the new session is told some
+// history is missing; fellBack reports that. Any other failure is returned for the sweep to retry.
+func summarizeLogicalHandoff(ctx context.Context, h mainHandoff, previousSummary string, run func() (assistantwire.ModelCompleteResult, error)) (mainHandoff, bool, error) {
+	result, err := waitLogicalSummary(ctx, run)
+	if err != nil {
+		var re *rpc.Error
+		if errors.As(err, &re) && re.Code == assistantwire.CodeModelUnavailable {
+			h.Summary = previousSummary
+			h.Partial = true
+			return h, true, nil
+		}
+		return h, false, err
+	}
+	h.Summary = result.Text
+	return h, false, nil
 }
 
 func waitLogicalSummary(ctx context.Context, run func() (assistantwire.ModelCompleteResult, error)) (assistantwire.ModelCompleteResult, error) {

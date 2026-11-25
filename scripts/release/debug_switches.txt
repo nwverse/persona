@@ -22,6 +22,7 @@ larkTop
 loadAll
 newAssistant
 openAbout
+openAdvancedSettings
 openAgent
 openAgentsFresh
 openAlarms
@@ -107,8 +108,10 @@ openMacTodo
 openMachineClipboard
 openMachineDetail
 openMachineFiles
+openMachineMonitor
 openMachinePage
 openMachines
+openMachinesFootnote
 openMailLabel
 openMailThread
 openManagerPage
@@ -197,6 +200,7 @@ openTranslationSettings
 openTriageSettings
 openUploadDemo
 openUrgentCallSettings
+openUsageMap
 openViewedImage
 openVoice
 openWelcome
@@ -291,6 +295,7 @@ showGitReload
 showHandOffNewAgent
 showHealthActivityExample
 showHealthHomeTrendsExample
+showHealthItemsEditor
 showHealthTrends
 showHerdrStart
 showHomeState
@@ -313,6 +318,7 @@ showInboxSuggestionEdit
 showInboxSuggestionStale
 showInboxTodo
 showInfo
+showIntakeSyncStatus
 showJumpPerf
 showKeyMods
 showKnowledgeDay
@@ -357,6 +363,7 @@ showMinutesSearch
 showMinutesTab
 showModelConfigSheet
 showModelSearch
+showModules
 showNewAgentPrompt
 showNewChat
 showNewMain
@@ -434,6 +441,7 @@ showSwiftUIJumps
 showSystemCallService
 showTaskBoard
 showTaskDetail
+showTellHealthResult
 showTerminalUpload
 showTerminalsUnlinked
 showTestNotification

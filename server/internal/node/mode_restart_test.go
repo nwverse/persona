@@ -181,6 +181,20 @@ func TestModeRestartBackoff(t *testing.T) {
 	}
 }
 
+// A user's cancellation owns the withdrawn try: a no-op completion from it must not publish a done event.
+func TestModeRestartSettleRejectsAWithdrawnTry(t *testing.T) {
+	var s switchShare
+	now := time.Now()
+	s.setRestart("x", proto.ModeBypass, now, 4101, "linux:4101")
+	if s.takeRestart("x", now) == "" {
+		t.Fatal("the restart was not taken")
+	}
+	s.setRestart("x", "", time.Time{}, 0, "")
+	if s.settleRestart("x", proto.ModeBypass, nil, now) {
+		t.Fatal("a withdrawn restart claimed a completion")
+	}
+}
+
 // withProcesses has processAlive answer from the returned switch: run(pid, true) starts a process, run(pid, false) ends it.
 func withProcesses(t *testing.T) (run func(pid int, on bool)) {
 	t.Helper()
@@ -280,6 +294,14 @@ func TestAWaitingBypassRestartGoesWhenItsProcessExits(t *testing.T) {
 	if !rowOf(t, n, sidA).BypassPending {
 		t.Fatal("no restart waits")
 	}
+	// A try a listing started may still be under way; one being carried out is left alone (dropGoneRestart).
+	sh := n.switches()
+	waitFor(t, "no try under way", func() bool {
+		sh.mu.Lock()
+		defer sh.mu.Unlock()
+		r := sh.restarts[sidA]
+		return r == nil || !r.applying
+	})
 	run(4101, false)
 	if rowOf(t, n, sidA).BypassPending || n.switches().restartMode(sidA) != "" {
 		t.Error("the pick outlived the claude it was picked for")

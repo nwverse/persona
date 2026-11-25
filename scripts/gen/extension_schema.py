@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "schema" / "extension"
 SCHEMA_FILES = ["manifest.schema.json", "protocol.schema.json", "view.schema.json", "messaging.schema.json",
-                "connector.schema.json", "channel.schema.json", "kb.schema.json", "todos.schema.json", "leaders.schema.json", "models.schema.json", "assistant.schema.json", "assistant_data.schema.json", "machines.schema.json", "browser.schema.json", "storage.schema.json", "stream.schema.json", "transcription.schema.json", "repository.schema.json", "memory.schema.json"]
+                "connector.schema.json", "channel.schema.json", "kb.schema.json", "todos.schema.json", "leaders.schema.json", "models.schema.json", "assistant.schema.json", "assistant_data.schema.json", "machines.schema.json", "browser.schema.json", "storage.schema.json", "stream.schema.json", "transcription.schema.json", "repository.schema.json", "memory.schema.json", "offload.schema.json"]
 
 GO_OUT = ROOT / "sdk/go/wire/wire_gen.go"
 # The TypeScript SDK's types, and the web app's copy. A schema file marked "x-side": "plugin" (what only the hub and
@@ -1178,7 +1178,7 @@ def outputs(defs: dict[str, Def]) -> dict[Path, str]:
     return {p: (s.rstrip("\n") + "\n") for p, s in out.items()}
 
 
-WIRE_TARGETS = ("ts", "swift", "go", "kotlin")
+WIRE_TARGETS = ("ts", "swift", "go", "kotlin", "arkts")
 
 
 def declared_package(out: Path, suffix: str, derived: str) -> str:
@@ -1225,6 +1225,9 @@ def wire_outputs() -> dict[Path, str]:
                 raise SchemaError(f"{path.name}: x-out kotlin is not under a kotlin source root")
             package = declared_package(kt, ".kt", ".".join(parts[parts.index("kotlin") + 1:-1]))
             out[kt] = gen_kotlin(defs, header=header, prefix="", package=package)
+        if "arkts" in targets:
+            # ArkTS accepts this schema's plain TypeScript subset: interfaces, string enums and their ordered values.
+            out[ROOT / targets["arkts"]] = gen_ts(defs, header=header)
     return out
 
 

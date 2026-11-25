@@ -5,8 +5,9 @@ import { storedValue } from "../../lib/compatibility";
 // agent works and nothing is typed. Quotes, edits and edited images from the chat arrive as draft events (drafts.ts).
 // Its bottom row is cindy's toolbar (#5324, at the owner's request): a bare round + that opens the + / @ panel
 // (ComposerPanel.tsx) and the `leading` permission picker on the left; the model pill, a second Stop while the agent
-// works and something is typed, voice and one round Send / Queue / Stop button on the right.
+// works and something is typed, a module's action (core/module-host.ts composer.trailingAction) and one round Send / Queue / Stop button on the right.
 import { memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { useQuickPrompts } from "../../lib/extension-declared";
 import { promptCommands, type ComposerCommand as Command } from "../../lib/extension-prompts";
 import { useSavedPromptRows } from "../../lib/saved-prompt-rows";
@@ -33,7 +34,7 @@ import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-menti
 import { getState } from "../../lib/store";
 import { AttachmentTray } from "../../ui/AttachmentTray";
 import { FileTiles } from "./FileTiles";
-import { cx, EASE, Spinner, toast } from "../../ui/atoms";
+import { Button, cx, Dialog, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ContextChips, ContextChipList } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
@@ -46,7 +47,7 @@ import { permissionsCommand, PERMISSIONS_COMMAND, requestPermissionPicker } from
 import { hasSlashSkillQuery, openPickerCommand, rankCommands } from "../../lib/composer-commands";
 import { escapeCancelsEdit, escapeCountsForEdit, upStartsEdit, type EditLastBox } from "../../lib/edit-last-key";
 import { t } from "../../i18n";
-import type { VoiceOffer } from "./voice/VoiceParts";
+import type { ComposerAction } from "../../core/module-host";
 
 // Drawn only while an attached image is edited: its own chunk, fetched by the idle preload or the first edit (lib/lazy-page.ts).
 const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor), { idle: true });
@@ -77,6 +78,8 @@ export interface Attachment {
 export interface Outgoing {
   text: string;
   images: { mime: string; data: string }[];
+  /** Ctrl/⌘+Enter hands the message over immediately through the queue's Send now action. */
+  sendNow?: boolean;
   /** A real Quote action, not typed Markdown, a comment or an edit's restored quote (#10346): keep an earlier reader's
    *  place; already at the end, the send follows as usual. UI-only, never part of the hub's wire body. */
   quoteReply?: boolean;
@@ -93,6 +96,22 @@ export interface EditingLast {
   /** The edit was cancelled, or the box moved on to other words. */
   cancel: () => void;
 }
+
+interface PastedBlock {
+  id: string;
+  text: string;
+}
+
+interface ConfirmState {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone?: "primary" | "danger";
+  onConfirm: () => void;
+}
+
+const PASTE_CHIP_CHARS = 800;
+const PASTE_CHIP_LINES = 12;
 
 export const AGENT_COMMANDS: Command[] = [
   { word: t("chat-composer.cmd_continue_word"), desc: t("chat-composer.cmd_continue_desc"), text: t("chat-composer.cmd_continue_text") },
@@ -161,7 +180,7 @@ export const Composer = memo(function Composer({
   planMode,
   onFocusChange,
   blocked,
-  voice,
+  action,
   top,
 }: {
   draftKey: string;
@@ -203,7 +222,7 @@ export const Composer = memo(function Composer({
   /** Right after the +: an Agent's or a Persona conversation's permission picker (#5324, PermissionPicker.tsx). Keep it the
    *  same object while nothing in it changes, as `trailing`. */
   leading?: React.ReactNode;
-  /** At the right of the bottom row, before voice / Stop / Send: an Agent's model pill (#5032, ModelPill.tsx). It sizes
+  /** At the right of the bottom row, before the action / Stop / Send: an Agent's model pill (#5032, ModelPill.tsx). It sizes
    *  itself by the card's width (the card is the `composer` container); keep it the same object while nothing in it
    *  changes, as `footer`. */
   trailing?: React.ReactNode;
@@ -219,9 +238,9 @@ export const Composer = memo(function Composer({
   /** The main conversation cannot answer yet (docs/assistant/onboarding.md 4.4): the send button says what to do first and opens
    *  it; the box still takes typing and keeps the draft, nothing is sent or queued. */
   blocked?: { label: string; onClick?: () => void; onNudge?: () => void };
-  /** Voice chat (docs/web/web.md "Voice"): with an empty box and an idle agent it takes the send button's place, round;
-   *  otherwise it is a plain icon before send / stop. "explain": its click says why a call cannot start here. */
-  voice?: VoiceOffer;
+  /** A module's action (core/module-host.ts `composer.trailingAction`, ChatView useComposerAction): a primary one takes
+   *  the send button's place, round, with an empty box and an idle agent; otherwise it is a plain icon before send / stop. */
+  action?: ComposerAction;
   /** First in the card, flush with its top and edges, a hairline under it: the chat's queued messages (QueuePanel.tsx,
    *  cindy's pending queue, #5327). Keep it the same object while nothing in it changes, as `footer`. */
   top?: React.ReactNode;
@@ -246,6 +265,9 @@ export const Composer = memo(function Composer({
   const files = useComposerFiles(draftKey);
   const uploading = files.some((f) => f.state === "waiting" || f.state === "uploading");
   const filesReady = files.some((f) => f.file);
+  const [pastedBlocks, setPastedBlocks] = useState<PastedBlock[]>([]);
+  const [previewPasteId, setPreviewPasteId] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [active, setActive] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -382,6 +404,8 @@ export const Composer = memo(function Composer({
     setPlusOpen(false);
     releaseAttachments(attsNow.current);
     setAtts([]);
+    setPastedBlocks([]);
+    setPreviewPasteId(null);
     // not on a touch screen alone: there the focus brings the keyboard up over the conversation just opened. Nor when
     // the person already went to another field or a dialog by then.
     if (!autoFocus || !hasFinePointer()) return;
@@ -647,7 +671,7 @@ export const Composer = memo(function Composer({
   const editBox = (): EditLastBox => ({
     offered: Boolean(onEditLastMessage),
     busy: Boolean(working || needsYou || disabled || blocked || loadingDraft),
-    holds: Boolean(draft || atts.length || files.length || reading.current || contexts.length || quotes.length),
+    holds: Boolean(draft || pastedBlocks.length || atts.length || files.length || reading.current || contexts.length || quotes.length),
     menu: Boolean(slashOpen || mOpen || history.searching || document.querySelector("[role=dialog],[role=menu]")),
   });
 
@@ -811,11 +835,11 @@ export const Composer = memo(function Composer({
     }
   };
 
-  const canSend = (draft.trim().length > 0 || atts.length > 0 || filesReady || contexts.length > 0 || quote) && !uploading && !disabled && !loadingDraft;
+  const canSend = (draft.trim().length > 0 || pastedBlocks.length > 0 || atts.length > 0 || filesReady || contexts.length > 0 || quote) && !uploading && !disabled && !loadingDraft;
   // Claude's suggested next message (iOS SuggestionPill): while the box is empty and the agent waits for a message
   // (not working, not on a card); a tap fills it
   // in, "Send now" sends it as it is (the node drops it once the agent works again)
-  const pill = suggestion && suggestion !== sentPill && !editingLast && !blocked && !draft && !atts.length && !contexts.length && !quote && !working && !needsYou && !disabled ? suggestion : null;
+  const pill = suggestion && suggestion !== sentPill && !editingLast && !blocked && !draft && !pastedBlocks.length && !atts.length && !contexts.length && !quote && !working && !needsYou && !disabled ? suggestion : null;
   const fillSuggestion = (text: string) => {
     setDraft(text);
     setDismissed(true);
@@ -827,14 +851,14 @@ export const Composer = memo(function Composer({
       el.setSelectionRange(text.length, text.length);
     });
   };
-  const typed = Boolean(draft.trim() || atts.length || files.length || contexts.length || quote);
+  const typed = Boolean(draft.trim() || pastedBlocks.length || atts.length || files.length || contexts.length || quote);
   // the round button is Stop while the agent works and nothing is typed; with something typed Send queues it and a
-  // second Stop sits left of voice (cindy's mainSlotIsStop / showSecondaryStop)
+  // second Stop sits left of the action (cindy's mainSlotIsStop / showSecondaryStop)
   const showStop = working && !typed && onStop;
   const secondStop = Boolean(working && typed && onStop && !blocked);
   const queues = Boolean(working || needsYou);
-  // an empty box and an idle agent: voice takes the send button's place (it would be off anyway), as on iOS
-  const roundVoice = voice?.mode === "start" && !canSend && !showStop && !blocked && !disabled;
+  // an empty box and an idle agent: a primary action takes the send button's place (it would be off anyway), as on iOS
+  const roundAction = Boolean(action?.primary) && !canSend && !showStop && !blocked && !disabled;
 
   // `/model` alone opens the model panel (where the agent switches models), `/permissions` alone the permission menu
   // (#6476), from Enter and the send buttons alike. Where the chat has no such picker, the words are sent as typed.
@@ -855,7 +879,11 @@ export const Composer = memo(function Composer({
       return;
     }
     const hasFiles = readyFiles(draftKey).length > 0;
-    if (editor || disabled || blocked || loadingDraft || (!text.trim() && !atts.length && !hasFiles && !refs.length && !q.length)) return;
+    const sentPasted = pastedBlocks;
+    const fullText = sentPasted.length
+      ? [...sentPasted.map((b) => b.text), ...(text.trim() ? [text] : [])].join("\n\n")
+      : text;
+    if (editor || disabled || blocked || loadingDraft || (!fullText.trim() && !atts.length && !hasFiles && !refs.length && !q.length)) return;
     // Any message spends the suggestion shown: it stays on the hub until the agent starts (#4644).
     if (suggestion) setSentPill(suggestion);
     // An edit of the last message: the rewind to before the old one first, the box kept as it is (read-only meanwhile).
@@ -869,7 +897,7 @@ export const Composer = memo(function Composer({
       // the box went away or shows another conversation: the words wait in this one's stored draft
       if (!mounted.current || keyNow.current !== draftKey) return;
     }
-    // The message shows in the chat at once (a sending bubble), so the box empties at once too: waiting for the hub to
+    // The message shows at once, so the box empties at once too: waiting for the hub to
     // hand it to the agent (seconds when it starts up) left the same words in both places. A send that never went
     // (onSend false) puts them back; one that failed stays in the chat as a failed bubble.
     const sent = atts;
@@ -879,6 +907,8 @@ export const Composer = memo(function Composer({
     unsaved.current = null;
     storeDraft(draftKey, "");
     setAtts([]);
+    setPastedBlocks([]);
+    setPreviewPasteId(null);
     refs.forEach((r) => removeContext(draftKey, r.id));
     setQuotes(draftKey, []);
     // Ready for the next message now, not when the hub answers (the chat sends them in order). Back to the box only with
@@ -888,24 +918,26 @@ export const Composer = memo(function Composer({
     if (hasFinePointer() && (!at || at === document.body || box.current?.contains(at))) input.current?.focus({ preventScroll: true });
     // picked contexts ride in front as <persona-context> tags (docs/protocol/protocol.md "Tags in messages"), the quote as `> ` lines,
     // files after the words as <persona-file> tags, the words as typed (with none, a line saying to look at them)
-    const said = !text.trim() && !sent.length && sentFiles.length ? t("chat-composer.see_files") : text;
+    const said = !fullText.trim() && !sent.length && sentFiles.length ? t("chat-composer.see_files") : fullText;
     const body = withFiles(withQuoteBlock(q, said), sentFiles);
     const quoteReply = !edit && q.some((x) => !x.comment);
     const ok = await onSend({ text: withContexts(refs, body, sent.length > 0), images: sent.map((a) => ({ mime: a.mime, data: a.data })),
+      ...(now && queues ? { sendNow: true } : {}),
       ...(quoteReply ? { quoteReply: true } : {}), ...(committed ? { edit: committed } : {}) });
     if (!canWriteDraft()) { releaseAttachments(sent); return; }
     if (ok && now && queues) await onSendNow?.();
     if (ok) {
-      history.record(skillDraft(refs, text));
+      history.record(skillDraft(refs, fullText));
       releaseAttachments(sent);
     } else {
       // the box closed or shows another conversation now: the words go back to this conversation's draft (its open
       // box, or the stored one), not into the box; the pictures are not put back there, only freed
       if (mounted.current && keyNow.current === draftKey) {
         setDraft((cur) => withUnsent(cur, text));
+        if (sentPasted.length) setPastedBlocks((cur) => [...sentPasted, ...cur]);
         setAtts((cur) => [...sent, ...cur]);
       } else {
-        if (text) sendDraft(draftKey, { type: "unsent", text });
+        if (fullText) sendDraft(draftKey, { type: "unsent", text: fullText });
         releaseAttachments(sent);
       }
       refs.forEach((r) => addContext(draftKey, r));
@@ -929,17 +961,31 @@ export const Composer = memo(function Composer({
       pickRow(c, { start: 0, end: draft.length, query: "" });
       return;
     }
-    if (c.confirm && !confirm(c.confirm)) return;
-    // `/permissions` opens the permission menu at once; where the chat has no picker it goes in the box as any command
-    if (c.text === PERMISSIONS_COMMAND && requestPermissionPicker(draftKey)) {
-      setDraft("");
+    const apply = () => {
+      // `/permissions` opens the permission menu at once; where the chat has no picker it goes in the box as any command
+      if (c.text === PERMISSIONS_COMMAND && requestPermissionPicker(draftKey)) {
+        setDraft("");
+        setDismissed(true);
+        return;
+      }
+      changeText(c.text);
       setDismissed(true);
+      input.current?.focus({ preventScroll: true });
+    };
+    if (c.confirm) {
+      setConfirmState({
+        title: t("chat-composer.confirm_run_title", { word: c.word }),
+        message: c.confirm,
+        confirmLabel: t("chat-composer.confirm_ok"),
+        tone: "danger",
+        onConfirm: apply,
+      });
       return;
     }
-    changeText(c.text);
-    setDismissed(true);
-    input.current?.focus({ preventScroll: true });
+    apply();
   };
+
+  const previewPaste = pastedBlocks.find((b) => b.id === previewPasteId) ?? null;
 
   const MentionPanel = mention?.workspaces || mention?.repositories ? AssistantComposerPanel : ComposerPanel;
   const slashProps = {
@@ -998,10 +1044,18 @@ export const Composer = memo(function Composer({
       <div
         className={cx(
           // a container: what sits in its bottom row (the model pill) takes its width modes from the card's own width
-          "@container/composer relative flex flex-col gap-1.5 rounded-[14px] border bg-surface p-1.5 shadow-card transition-[border-color,box-shadow] duration-150 focus-within:border-line-strong",
-          dragging ? "border-accent shadow-[0_0_0_3px_var(--accent-tint)]" : "border-line",
+          "@container/composer relative flex flex-col gap-1.5 rounded-[14px] border bg-surface/95 p-1.5 shadow-card backdrop-blur-md transition-[border-color,box-shadow] duration-150 focus-within:border-line-strong",
+          dragging ? "border-dashed border-accent shadow-[0_0_0_3px_var(--accent-tint)]" : "border-line",
         )}
       >
+        {dragging && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[14px] bg-surface/80 backdrop-blur-[2px]">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-surface px-3 py-1 text-xs font-medium text-accent shadow-card">
+              <Icon name="image" size={14} />
+              {t("chat-composer.drop_here")}
+            </span>
+          </div>
+        )}
         {/* out to the card's border over its padding; nothing drawn yet (its chunk on the way), no gap either */}
         {top && <div data-composer-top className="-mx-1.5 -mt-1.5 empty:hidden">{top}</div>}
         {editingLast && (
@@ -1034,14 +1088,77 @@ export const Composer = memo(function Composer({
             }}
           />
         )}
-        {atts.length > 0 && (
-          <div className="px-0.5 pt-0.5">
-            <AttachmentTray attachments={atts} onOpen={(id) => setEditing(atts.find((a) => a.id === id) ?? null)} onRemove={(id) => {
-              const att = atts.find((a) => a.id === id);
-              // an edited picture's source and edits go with it
-              if (att) releaseAttachments([att]);
-              setAtts((cur) => cur.filter((a) => a.id !== id));
-            }} />
+        {(atts.length > 0 || pastedBlocks.length > 0) && (
+          <div className="flex flex-col gap-1.5 px-0.5 pt-0.5">
+            {atts.length > 0 && (
+              <AttachmentTray attachments={atts} onOpen={(id) => setEditing(atts.find((a) => a.id === id) ?? null)} onRemove={(id) => {
+                const att = atts.find((a) => a.id === id);
+                // an edited picture's source and edits go with it
+                if (att) releaseAttachments([att]);
+                setAtts((cur) => cur.filter((a) => a.id !== id));
+              }} />
+            )}
+            {pastedBlocks.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {pastedBlocks.map((b) => {
+                  const open = previewPasteId === b.id;
+                  return (
+                    <span
+                      key={b.id}
+                      className={cx(
+                        "inline-flex h-6.5 max-w-full items-center gap-1 rounded-[8px] border px-2 text-label transition-colors",
+                        open ? "border-accent/40 bg-accent-tint text-accent-ink" : "border-line bg-inset text-ink-2 hover:bg-hover",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPreviewPasteId((cur) => (cur === b.id ? null : b.id))}
+                        className="inline-flex min-w-0 items-center gap-1.5 truncate"
+                        title={t("chat-composer.pasted_preview_hint")}
+                      >
+                        <Icon name="paste" size={12} className="shrink-0 opacity-75" />
+                        <span className="truncate">{t("chat-composer.pasted_chip", { count: b.text.length })}</span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={t("chat-composer.pasted_remove")}
+                        onClick={() => {
+                          setPastedBlocks((cur) => cur.filter((x) => x.id !== b.id));
+                          if (previewPasteId === b.id) setPreviewPasteId(null);
+                        }}
+                        className="ml-0.5 flex size-4 shrink-0 items-center justify-center rounded-[4px] text-ink-3 transition-colors hover:bg-hover hover:text-ink"
+                      >
+                        <Icon name="x" size={10} stroke={2.4} />
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            {previewPaste && (() => {
+              const allLines = previewPaste.text.split(/\r?\n/);
+              const snippet = allLines.slice(0, 6).join("\n") + (allLines.length > 6 ? "\n…" : "");
+              return (
+                <div className="rounded-[8px] border border-line bg-inset p-2 text-label">
+                  <div className="mb-1 flex items-center justify-between gap-2 text-ink-3">
+                    <span>{t("chat-composer.pasted_stats", { lines: allLines.length, chars: previewPaste.text.length })}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        changeText(draft ? `${draft}\n\n${previewPaste.text}` : previewPaste.text);
+                                  setPastedBlocks((cur) => cur.filter((x) => x.id !== previewPaste.id));
+                        setPreviewPasteId(null);
+                        input.current?.focus();
+                      }}
+                      className="font-medium text-accent-ink hover:underline"
+                    >
+                      {t("chat-composer.pasted_expand")}
+                    </button>
+                  </div>
+                  <pre className="max-h-28 overflow-hidden font-mono text-submeta leading-[1.45] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">{snippet}</pre>
+                </div>
+              );
+            })()}
           </div>
         )}
         {files.length > 0 && (
@@ -1076,7 +1193,7 @@ export const Composer = memo(function Composer({
             const next = e.target.value;
             if (parseSlash(next) !== query) setActive(0);
             changeText(next);
-            setDismissed(false);
+                setDismissed(false);
             setCaret(e.target.selectionStart);
           }}
           onSelect={trackCaret}
@@ -1086,6 +1203,12 @@ export const Composer = memo(function Composer({
             if (files.length) {
               e.preventDefault();
               void addFiles(files);
+              return;
+            }
+            const text = e.clipboardData.getData("text/plain");
+            if (text && (text.length > PASTE_CHIP_CHARS || text.split(/\r?\n/).length > PASTE_CHIP_LINES)) {
+              e.preventDefault();
+              setPastedBlocks((cur) => [...cur, { id: uuid(), text }]);
             }
           }}
           onKeyDown={(e) => {
@@ -1239,33 +1362,33 @@ export const Composer = memo(function Composer({
           {/* not overflow-hidden: the chips' tap areas reach past this row (touch-hit); the footer truncates its own text */}
           <div className="min-w-0 flex-1 px-1 text-[11.5px] whitespace-nowrap text-ink-3">{footer}</div>
           {trailing}
-          {/* while the agent works and something is typed, Stop stays left of voice and Send queues (cindy's second slot) */}
+          {/* while the agent works and something is typed, Stop stays left of the action and Send queues (cindy's second slot) */}
           {secondStop && <StopButton stopping={stopping} onStop={onStop!} />}
-          {voice && !roundVoice && (
+          {action && !roundAction && (
             <button
               type="button"
-              data-testid="composer-voice"
-              data-voice-mode={voice.mode}
-              aria-label={t("voice.voice_chat")}
-              title={voice.label}
-              onClick={voice.onClick}
-              className={cx(TOOL, voice.mode === "start" ? "text-ink-2" : "text-ink-3")}
+              data-testid="composer-action"
+              {...action.attributes}
+              aria-label={action.name}
+              title={action.label}
+              onClick={action.onClick}
+              className={cx(TOOL, action.primary ? "text-ink-2" : "text-ink-3")}
             >
-              <Icon name="voice" size={15} stroke={2} />
+              <Icon name={action.icon} size={15} stroke={2} />
             </button>
           )}
-          {editor ? null : roundVoice ? (
+          {editor ? null : roundAction ? (
             <button
               type="button"
-              data-testid="composer-voice"
-              data-voice-mode="start"
-              aria-label={t("voice.voice_chat")}
-              title={voice!.label}
-              onClick={voice!.onClick}
+              data-testid="composer-action"
+              {...action!.attributes}
+              aria-label={action!.name}
+              title={action!.label}
+              onClick={action!.onClick}
               className={ROUND}
               style={{ animation: `pop-in 200ms ${EASE} both` }}
             >
-              <Icon name="voice" size={15} stroke={2.2} />
+              <Icon name={action!.icon} size={15} stroke={2.2} />
             </button>
           ) : showStop ? (
             <StopButton stopping={stopping} onStop={onStop!} />
@@ -1293,7 +1416,7 @@ export const Composer = memo(function Composer({
               onClick={() => void submit()}
               className={ROUND}
             >
-              <Icon name="send" size={14} stroke={2} className="-translate-x-px translate-y-px fill-current" />
+              <Icon name="up" size={15} stroke={2.4} />
             </button>
           )}
         </div>
@@ -1341,16 +1464,43 @@ export const Composer = memo(function Composer({
           />
         </Suspense>
       )}
+      {confirmState && (
+        <Dialog
+          open
+          onClose={() => setConfirmState(null)}
+          title={confirmState.title}
+          width={400}
+          footer={
+            <>
+              <Button tone="quiet" onClick={() => setConfirmState(null)}>
+                {t("chat-composer.confirm_cancel")}
+              </Button>
+              <Button
+                tone={confirmState.tone ?? "primary"}
+                onClick={() => {
+                  const fn = confirmState.onConfirm;
+                  setConfirmState(null);
+                  fn();
+                }}
+              >
+                {confirmState.confirmLabel}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-[length:var(--chat-secondary)] leading-relaxed text-ink-2">{confirmState.message}</p>
+        </Dialog>
+      )}
     </div>
   );
 });
 
 // The toolbar's two looks (#5324, cindy's): bare 30 px round tools that show the model pill's frame on hover or while open,
-// and the one dark 28 px round action (Send, Queue, Stop, round voice), faded when it can't be pressed.
+// and the one dark 28 px round action (Send, Queue, Stop, a round action), faded when it can't be pressed.
 const TOOL = "touch-hit flex size-[30px] shrink-0 items-center justify-center rounded-full border border-transparent transition-colors duration-150 hover:border-line-strong hover:bg-hover aria-expanded:border-line-strong aria-expanded:bg-hover";
 const ROUND = "touch-hit flex size-7 shrink-0 items-center justify-center rounded-full bg-ink text-surface transition-[opacity,transform] duration-150 enabled:hover:opacity-90 enabled:active:scale-[0.94] disabled:opacity-40";
 
-/** Stop in the round button's shell: a small square, a spinner while the stop is on its way. */
+/** Stop in the round button's shell: a spinning ring with a small square, a spinner while the stop is on its way. */
 function StopButton({ stopping, onStop }: { stopping?: boolean; onStop: () => void }) {
   return (
     <button
@@ -1360,10 +1510,27 @@ function StopButton({ stopping, onStop }: { stopping?: boolean; onStop: () => vo
       title={stopping ? t("chat-composer.stopping") : t("chat-composer.interrupt_hint")}
       onClick={onStop}
       disabled={stopping}
-      className={ROUND}
+      className={cx(ROUND, "relative")}
       style={{ animation: `pop-in 200ms ${EASE} both` }}
     >
-      {stopping ? <Spinner size={12} /> : <span aria-hidden className="size-2.5 rounded-[1.5px] bg-current" />}
+      {stopping ? (
+        <Spinner size={12} />
+      ) : (
+        <span className="relative flex size-5 items-center justify-center" aria-hidden="true">
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 20 20"
+            fill="none"
+            className={cx("absolute inset-0", BUSY_MOTION)}
+            style={spinStyle(1100)}
+          >
+            <circle cx="10" cy="10" r="8" stroke="currentColor" strokeOpacity="0.28" strokeWidth="1.6" />
+            <path d="M10 2a8 8 0 0 1 8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+          <span className="size-1.5 rounded-xs bg-current" />
+        </span>
+      )}
     </button>
   );
 }

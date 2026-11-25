@@ -18,7 +18,7 @@ func a2aSessionCaller(ref a2aRef) a2aCaller {
 
 func (s *Service) a2aTool(ctx context.Context, ref a2aRef, name string, args json.RawMessage) proto.ToolResult {
 	cfg := s.a2aConfig(ctx)
-	if !s.a2aAllowed(ctx, cfg, ref) {
+	if !s.a2aToolAllowed(ctx, cfg, ref) {
 		return proto.TextResult(errA2AUnavailable.Error(), true)
 	}
 	st, err := s.a2aStore()
@@ -32,6 +32,10 @@ func (s *Service) a2aTool(ctx context.Context, ref a2aRef, name string, args jso
 	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
+	if text, ok := out.(string); ok {
+		// a2a_read: a conversation to read, as agent_read gives it; it changes no task, so nothing to deliver.
+		return proto.TextResult(text, false)
+	}
 	s.a2aSignal()
 	data, err := json.Marshal(out)
 	if err != nil {
@@ -42,15 +46,17 @@ func (s *Service) a2aTool(ctx context.Context, ref a2aRef, name string, args jso
 
 type a2aToolArgs struct {
 	a2aRef
-	Task     string `json:"task_id"`
-	ID       string `json:"message_id"`
-	Context  string `json:"context_id"`
-	Text     string `json:"text"`
-	State    string `json:"state"`
-	Wake     *bool  `json:"wake"`
-	Before   string `json:"before"`
-	CWD      string `json:"cwd"`
-	Launcher string `json:"launcher"`
+	Task           string `json:"task_id"`
+	ID             string `json:"message_id"`
+	Context        string `json:"context_id"`
+	Text           string `json:"text"`
+	State          string `json:"state"`
+	Wake           *bool  `json:"wake"`
+	Before         string `json:"before"`
+	CWD            string `json:"cwd"`
+	Launcher       string `json:"launcher"`
+	PermissionMode string `json:"permission_mode"`
+	Turns          int    `json:"turns"`
 }
 
 type a2aTaskView struct {
@@ -93,11 +99,14 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 	if err := json.Unmarshal(args, &a); err != nil {
 		return nil, errA2AInvalid
 	}
+	a.a2aRef = s.a2aResolve(ctx, cfg, a.a2aRef) // an id the session's conversation went by: its row now (a2a_resolve.go)
 	var t *a2aTask
 	var err error
 	switch name {
 	case "a2a_sessions":
 		return s.a2aDiscover(ctx, cfg, c.Ref, a.Machine), nil
+	case "a2a_read":
+		return s.a2aRead(ctx, cfg, c.Ref, a.a2aRef, a.Turns)
 	case "a2a_get":
 		if a.Task == "" {
 			return s.a2aInbox(ctx, st, cfg, c, a.Before)
@@ -116,7 +125,7 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 				if err := s.workerRefusal(ctx, c.Ref.Machine, c.Ref.Session); err != nil {
 					return nil, err
 				}
-				launch = &a2aLaunch{CWD: a.CWD, Launcher: a.Launcher, Pending: true}
+				launch = &a2aLaunch{CWD: a.CWD, Launcher: a.Launcher, PermissionMode: a.PermissionMode, Pending: true, Subagent: true}
 			} else if err := s.a2aCanSendMessage(ctx, c.Ref, a.a2aRef, a.Text); err != nil {
 				return nil, err
 			}
@@ -169,8 +178,15 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 	return t.view(), nil
 }
 
-// errA2ADeclined: the user declined a hand-off on the phone.
+// errA2ADeclined: the user themselves declined a hand-off on the phone. A card nobody answered is not that
+// (a2aUnanswered).
 var errA2ADeclined = errors.New("the user declined on the phone: nothing was sent")
+
+// a2aUnanswered is a2aConfirm's error for a hand-off whose card ended without the user's own answer (outcome: it
+// expired, was withdrawn or cleared, someone else answered it): nothing was sent, and the user did not decline it.
+func a2aUnanswered(outcome string) error {
+	return errors.New(outboundNotDone(outcome, errA2ADeclined.Error(), "nothing was sent"))
+}
 
 // a2aConfirm asks the phone before an assistant conversation hands text to another session, or to a new one in
 // folder where, through A2A (health.go confirmOutbound: at once when the text needs no confirming). Other senders are
@@ -186,12 +202,15 @@ func (s *Service) a2aConfirm(ctx context.Context, from, to a2aRef, where, text s
 	if where != "" {
 		label += " · " + where
 	}
-	ok, err := s.confirmOutbound(ctx, from.Machine, from.Session, "a2a_send", text, label+"\n\n"+text, args)
+	ok, outcome, err := s.confirmOutbound(ctx, from.Machine, from.Session, "a2a_send", text, label+"\n\n"+text, args)
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if !ok && outcome == proto.OutcomeDeclined {
 		return errA2ADeclined
+	}
+	if !ok {
+		return a2aUnanswered(outcome)
 	}
 	return nil
 }

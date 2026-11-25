@@ -91,6 +91,9 @@ type Placement struct {
 	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
 	// CompleteAgentlessTodos lets a supervising conversation complete its own agentless memo without another card.
 	CompleteAgentlessTodos bool `json:"complete_agentless_todos,omitempty"`
+	// AutoApproveReversibleSettings skips confirmation cards only for the exact, restorable Assistant settings allowlist.
+	// It is set only by manager.json, never by persona_settings.
+	AutoApproveReversibleSettings bool `json:"auto_approve_reversible_settings,omitempty"`
 	// SupervisionBatchMinutes is manager.json's administrator-pinned routine supervision interval. Nil leaves the
 	// assistant's saved setting in effect; an explicit zero pins immediate delivery through the legacy cadence.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
@@ -323,6 +326,10 @@ type Notification struct {
 	// immersive mode lets through when it is the track in focus. Older hubs drop both.
 	Depth string `json:"depth,omitempty"`
 	Track string `json:"track,omitempty"`
+	// CardID is the card a NotifyPush push stands for (a plan's id) when that card is answered elsewhere: the push
+	// carries it as `interaction_id`, and once the manager says the card is over (EventFleetResolved with it) the hub
+	// takes the push back from the devices it went to, as an interaction's (#4349). Older hubs drop it.
+	CardID string `json:"card_id,omitempty"`
 }
 
 // Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").

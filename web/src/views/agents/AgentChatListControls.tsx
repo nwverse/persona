@@ -18,7 +18,7 @@ import {
 } from "../../lib/agent-chatlist-filter";
 import { awaitsReply, justFinished, sessionSource, sourceName, type AgentMutes } from "../../lib/agent-groups";
 import { ago, backgroundWaiting, sessionPreview, sessionTitle, stateOf, tabLabel } from "../../lib/format";
-import { sessionCard } from "../../lib/folded-rows";
+import { rowCards } from "../../lib/supervisor-held";
 import { machineWithHub } from "../../lib/mesh";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { openPaletteWith } from "../../lib/palette";
@@ -29,6 +29,7 @@ import { rememberSessionRow, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { ultracodeMarkShown } from "../../lib/ultracode";
 import { SessionMark } from "../../ui/AgentMark";
+import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
 import { cx, Menu, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
 import { Icon } from "../../ui/icons";
@@ -345,12 +346,13 @@ export const AgentChatListRow = memo(function AgentChatListRow({
   ctx: EvalContext;
   onMenu?: RowMenuFn;
 }) {
-  const st = stateOf(s);
-  const awaiting = awaitsReply(s, mutes);
-  const finished = justFinished(s, mutes);
-  const ix = useStore((state) => sessionCard(state.interactions, s.machine_id, s.session_id));
+  const { ix, heldOnly } = useStore((state) => rowCards(state.interactions, s.machine_id, s.session_id));
+  const row = heldOnly && stateOf(s) === "needs_you" ? { ...s, state: "working" as const } : s;
+  const st = stateOf(row);
+  const awaiting = awaitsReply(row, mutes);
+  const finished = justFinished(row, mutes);
   const draft = draftLine(useLeftDraft(`${s.machine_id}/${s.session_id}`));
-  const line: { lead?: string; text: string; tone?: "needs" | "reply" } | undefined = draft ?? rowLine(s, ix, awaiting, finished);
+  const line: { lead?: string; text: string; tone?: "needs" | "reply" } | undefined = draft ?? rowLine(row, ix, awaiting, finished);
   const previewText = line?.text || plainMarkdown(sessionPreview(s)) || s.activity || "";
   const now = useNow(60_000, Boolean(s.updated_at));
   const timeLabel = s.updated_at ? ago(s.updated_at, now) : "";
@@ -403,7 +405,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
         <span className="relative mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-inset shadow-hairline">
           <SessionMark s={s} size={17} />
           <span className="absolute -right-0.5 -bottom-0.5 flex size-3.5 items-center justify-center rounded-full bg-canvas ring-1 ring-canvas">
-            <StatusMark state={st} size="sm" awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} />
+            <StatusMark state={st} size="sm" awaiting={awaiting} finished={finished} waiting={backgroundWaiting(row)} />
           </span>
         </span>
 
@@ -453,7 +455,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
             </span>
           ) : (
             (line?.lead || previewText) && (
-              <span className="truncate text-[11.5px] leading-4 text-ink-3">
+              <span className="truncate text-submeta leading-4 text-ink-3">
                 {line?.lead && (
                   <span className={cx("mr-1 font-medium", line.tone === "reply" ? "text-green" : "text-attention")}>
                     {line.lead}
@@ -463,6 +465,8 @@ export const AgentChatListRow = memo(function AgentChatListRow({
               </span>
             )
           )}
+
+          <BackgroundStallHint session={s} className="text-submeta leading-4" />
 
           {/* Line 3: Compact metadata capsules (Machine · Project · Tab · Harness · Model) */}
           <span className="mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] leading-4 text-ink-3" data-testid="agent-chatlist-chips">

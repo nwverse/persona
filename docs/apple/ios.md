@@ -62,6 +62,16 @@ Working sessions also use last activity, not work-start time; seen, idle and not
 The existing `AgentsFeed` and scroll protection remain; structure updates only when activity timestamps change relative session order, with reordering paused while browsing to preserve reading position.
 Mac's previous / next Agent follows pinned order then recent activity in this mode; other modes retain their order.
 
+## Use the herdr tab name as the session name (#13899)
+
+Who it serves: people who name terminal tabs in herdr and want Agents on iOS to match the names they see on Web (`use_herdr_tab_name` in `GET`/`PUT /api/v1/agents/display-settings`). Default: off; older hubs that omit `use_herdr_tab_name` or return 404 keep the setting off and hide the switch.
+
+- **Per-hub sync and caching**: each paired hub group keeps its own `AgentsDisplayStore` (`apple/Persona/App/AgentsDisplayStore.swift`), cached in `StateCache` (`agents-display` / `agents-display.<group>`), refreshed on every hub hello, pull-to-refresh, and when Settings › Agent opens. Writes send a single-field `PUT /api/v1/agents/display-settings` (`{"use_herdr_tab_name": true|false}`) and only update local state after the hub acknowledges; failures preserve the last acknowledged value and offer Retry. Demo Mode leaves the switch hidden and off.
+- **Settings › Agent**: `AgentHerdrTabNameSection` (`apple/Persona/Views/Settings/SettingsAgentView.swift`) exposes the **Use the herdr tab name as the session name** switch (with saving status and Retry on write failure) and adds herdr/tab-name search aliases under `settings.search.agents`.
+- **Display and search**: `apple/Shared/SessionNaming.swift` (`herdrTabName`, `displayTabName(preferTab:)`, `displayTitle(preferTab:)`, `displayTitleDetail(preferTab:)`, `usesUnifiedHerdrRename(preferTab:)`) mirrors server `Session.HerdrTabName` and Web `web/src/lib/format.ts`. When enabled for a session's hub, Agents rows (`SlotRow` across Avatar / Two Lines / State Cards / BeautifulUI, `CompactSlotRow`, `WorkspaceAgentRow`, `TabGroupRow`, `SessionRow`, `SlotCard`, Needs You rows), Chat headers (`ChatView` title, `devSubtitle`, `SessionOverviewSheet` / `SessionInfoSheet`, `SubagentOverview`, `ChildSessionCard`, `NextNeedsYouStrip`, `SiblingList`), `TerminalsView`, and Search (`AssistantFullSearch`, Agents list search, `ForwardTargets`, `MentionMenu`) promote the herdr tab name to the main title, move a differing CLI session title to the secondary/detail line, and avoid repeating the tab name in the place line. When off, rendering stays unchanged.
+- **Unified Rename**: when enabled for a session with a herdr tab name, `RenameSessionAlert` (`SessionRenameForm`) merges into a single **Name** field with unified hint text (`"Updates the herdr tab and, where supported, the CLI session name."`), updating `tab_name` and — for Claude Code and Codex — also `title` (tab-only for other CLIs). When off, the separate Tab name and Session name fields stay unchanged.
+- **Tests**: `HerdrTabNameTests` (`apple/PersonaTests/HerdrTabNameTests.swift`).
+
 ## Pinned directions (#4352)
 
 One tree from the hub drives the sidebar, the To-dos page and the Agents page: `GET /api/v1/assistant/directions/tree`
@@ -796,6 +806,9 @@ Inspired by dot and ChatGPT App (user-provided screenshots). Code in `Persona/Vi
   with a right-side state mark only for Needs you / Unread / Working (`RowStateMark`: a blue dot, a green dot, the amber spinner; the same mark on the main chat's row, the Directions rows and in All Chats, #4538); the last message appears only in long-press preview. Current chat has a rounded gray background. Bottom row: avatar + name + Online / Offline and machine
   (tap for profile), Settings on the right (drawer only; split mode has the tab bar beside it). Search lists only results (N chats). Long-press also copies session ID or ends the chat.
   **All Chats** (#3264, `AutoConversationsView`): every conversation, filtered along the top by All, Mine and each origin the hub reports (`conversation_origin`, session `origin`, `docs/protocol/protocol.md` ("Origin of assistant chats")): Inbox AI twin, scheduled tasks, Lark /agent, derived chats and extension-created chats. It opens on All every time (the last pick is not kept), and its rows carry the same source mark as the sidebar's (#5195): for a chat an extension opened, that extension's own icon once it is drawn, with "From <its name>" for VoiceOver and under the first message (#10358, `ConversationOpener.swift`; `docs/design/DESIGN_SYSTEM.md`). Same view in iPhone drawer, iPad split and Mac sidebar. Search still searches all. Old hubs without origins omit the source filters.
+- **Health home**: on iPhone and iPad, the water-extension migration notice appears above Today only when intake reports
+  `water_extension:"pending"`, outside demo mode. Its explicit import button disables during the request; success refreshes
+  Today and removes the card, while failure shows the reason and permits retry (`docs/assistant/health.md`, "Moving from the water extension").
 - **Gestures** (2026-10-31, rebuilt to match ChatGPT after build 49 feedback "not smooth, not following the finger, small area, swipes do nothing"): right-drag anywhere on the page opens the sidebar,
   using the same state as the button. UIKit pan (`DrawerPan`) decides after roughly ten points, from **actual displacement since touch-down**; within 45° of horizontal belongs to the sidebar
   (`AssistantDrawer.takes`; thumb diagonals typically 30°–40°, vertical scrolling steeper); when closed only rightward motion counts. Previous pan translation / velocity logic
@@ -1342,7 +1355,7 @@ A preset with a model or effort waits for its own launcher's model-list request:
 
 ## Launcher health in New Agent (#1643)
 
-`Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher. Since #4437 the hub leaves out a launcher whose latest check failed, so the list the app reads carries `blocked` only for `not_in_terminal` and for the configured default; the rest are gone until a check passes.
+`Launcher.health` (`apple/Shared/Models.swift`) is the hub's record for the computer the list is for (`docs/server/launcher-health.md` "In the App"); a record it can't read is dropped, never the launcher. Since #4437 the hub leaves out a launcher whose latest check failed, so the list the app reads carries `blocked` only for `not_in_terminal` and for the configured default; since #14535 the rest come in `unavailable` (code `launcher_unhealthy`, the hub's reason) and are drawn under "Unavailable here" as below, until a check passes.
 `Launcher.block` / `LauncherChoices` (`Views/NewChat/LauncherAvailability.swift`, `LauncherHealthTests`) decide what is grayed out: only `blocked`, one line per failure class.
 In `LauncherPicker` a blocked row is gray with the line (`LauncherBlockLine`) and an info mark; a tap opens `LauncherBlockedHelp` (why, How to Fix, the record under Details, Add Provider → `ProviderWizard`, Try Anyway picks it once the sheet has closed),
 never picks it. The form says the line under the launcher row when the launcher that will run is blocked (Model Settings' default, or picked anyway); Start stays enabled. Run Agent Here picks a usable launcher first, lists blocked ones last in its menu under a section titled with the line (a picker menu drops an option's second line), and says it in its footer once picked.
@@ -1700,7 +1713,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
     (`Theme.Motion.layout`). Nothing moves on the first draw or with Reduce Motion; at rest every value is exactly the extension's text. Mock: `MOCK_EXTENSIONS=1`,
     `-openExtension showcase -openExtensionPage motion`; `GET /mock/motion/next` draws its other step (`ExtensionMotionUITests`).
 - Voice orb (`DesignSystem/VoiceOrb.swift`, #3506, voice design #3489): centered call-bar ball; pages pass only phase (`VoiceOrb.Phase`: not started/connecting/listening/hearing you/speaking/listening with Agent working/paused/muted/ended) and volume 0…1, no style decisions.
-  - Motion: listening slow breath (`Theme.Motion.voiceBreath`, 1.6 s one-way), speaking audio beat (`voiceBeat`, 0.42 s one-way), matches Android `Voice.kt` (`VoiceOrbTests` reads/checks); hearing scales by volume, connecting/Agent working arcs (`voiceSpin` / `voiceLap`). `TimelineView` clock ≤30fps (`voiceFrame`, like Needs you dots/avatar glow), static phases paused; Reduce Motion or Low Power one static frame per phase (like avatar dot), Reduce Motion switches phase without scaling. One of few continuous animations, only during calls.
+  - Motion: listening slow breath (`Theme.Motion.voiceBreath`, 1.6 s one-way), speaking audio beat (`voiceBeat`, 0.42 s one-way), matches Android `VoiceComponents.kt` in `:module:voice` (`VoiceOrbTests` reads/checks); hearing scales by volume, connecting/Agent working arcs (`voiceSpin` / `voiceLap`). `TimelineView` clock ≤30fps (`voiceFrame`, like Needs you dots/avatar glow), static phases paused; Reduce Motion or Low Power one static frame per phase (like avatar dot), Reduce Motion switches phase without scaling. One of few continuous animations, only during calls.
   - Rendering: Liquid Glass/solid styles highlight sphere, pale avatar accent (`Theme.persona`) listening, accent speaking; BeautifulUI flat disc + five volume bars like dictation, filled accent speaking, white bars (near-black on pale/yellow accent). Connecting arc accent, working arc amber `Theme.busy`; paused/muted/ended gray, `pause` / `voiceMute` icons on nonhighlight gray with white contrast ≥3:1 (`VoiceOrbTests` light/dark).
   - Size `Theme.Size.voiceOrb` 52 including glow/enlargement, sphere 0.7, text-scaled; everything inside frame, glow never enlarges with ball, gradient sphere edge to frame edge, not covering neighboring text/buttons. `voiceLevelBar` / `voiceLevelGap` / `voiceLevelHeight` scale proportionally; `Shared/Design/VoiceTokens.swift` also watch-compiled, no watch voice UI.
   - Speaking with `interrupt` is a button labeled Interrupt voice: stops speech only, not Agent (separate Stop Claude call-bar button); otherwise decorative, `disabled`/no keyboard activation, VoiceOver skipped, status in adjacent text.
@@ -1744,6 +1757,121 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
 - Brand coral (`Theme.brand`) only Persona marks: chat-home icon, Lock Screen four-point star. Actions use current `Theme.accent`.
   Both AccentColor assets (watch titles/tint, system dialogs) system blue; iPhone/iPad window `tintColor` follows theme (`WindowTint`, UIKit List icons, #1188); Live Activities cannot read style, stroke/buttons fixed system blue, button deep `#0071E3`, white contrast 4.7:1.
 
+## Modules
+
+Persona Core and feature modules (#13430; the Apple part is #13432). The product layer and the module contract shared by
+every platform are described from #13430; this section is the Apple side.
+
+- **`PersonaModuleAPI`** (`apple/Packages/PersonaModuleAPI`): the contract, Foundation and SwiftUI only, tested with
+  `swift test` (and in `scripts/ci/apple.sh`). A module is a `PersonaModule`: a `ModuleDescriptor` (`id` from #13430
+  section 2, `feature` for the wire feature flag it needs, the `slots` it uses), `isAvailable` (built into this binary)
+  and `register(into:)`, which adds entries through a `ModuleRegistrar`. `ModuleRegistry` is built once from the module
+  list; a module is active when it is listed and enabled, and an inactive module registers nothing. Entries for an
+  undeclared slot, duplicate ids and malformed ids are refused and listed in `problems` (asserted empty in DEBUG). The
+  package links into the iOS and Vision apps and PersonaTests; nothing in `Shared/` imports it, so the watch, widgets and
+  extensions never link it. It sets no build settings of its own, so a Release build keeps the project's
+  `SWIFT_REFLECTION_METADATA_LEVEL = all`.
+- **Slots** (`ModuleSlot`, raw values are the contract's field names): served today are `launch_hooks` (after the core's
+  launch work, `application(_:didFinishLaunchingWithOptions:)`), `deep_links` (`onOpenURL`, before the core's routes),
+  `composer_actions` (the composer's +: the panel's More tab, the + menus and the prompt bar's sources; a row
+  `attach-<id>` opens the action's sheet, whose picture goes into the composer like a camera photo; #13400's
+  `composer_source`), and, since #14017, the place slots `toolbar_items`, `chat_accessories` and `chat_card_kinds`
+  (`ModuleRegistrar.view(at:when:)`: a view at one of the host's `Place`s — a chat's ··· menu and the assistant's
+  top-bar menu, a chat's footer and the task dock, under a tool call — drawn by `ModuleViews`; `when` says whether it
+  has anything to draw so the host leaves its spacing out), `settings` (`settingsEntry(id:info:row:page:)`: an entry
+  listed, searched and routed as the core's own through `SettingsPage.module(<id>)`) and the client-side
+  `capabilities` (`provide(_:_:)`: an interface the core declares and asks for, such as `LiveScreen`; nil when no
+  active module provides it, and the core then offers none of it), since #14278, `shell_places`
+  (`shellPage(id:_:)`: a page the core routes to by id, handed `PersonaHostApp.ShellContext`; the core lists its row and
+  opens its route only while a module provides it), and, since #13849, `audio_leases`
+  (`audioLease(id:kind:)`: a lease on the shared audio session, ranked `call > voice_conversation > meeting_recording >
+  playback`, recorded by the core's `AudioSessionBroker` in `apple/Shared/AudioSessionBroker.swift`, through which every
+  direct `AVAudioSession` call routes — guarded by `scripts/test/test_apple_audio_session_broker.py`). Declared but
+  **not yet served**, with no API until a module needs one: `hello_hooks`, `frame_handlers`, `hub_session_lifecycle`,
+  `phone_tools`, `intents` and `push_categories`. Each gets its registrar
+  method and registry reader with the first module that needs it (#13849).
+- **The module list** (`apple/Persona/App/Modules.swift`) is the seed of the `PersonaHostApp` layer (#13430 decision 4;
+  `apple/Packages/PersonaCore` stays the Rust binding). `PersonaHostApp` is the `ModuleHost` (a composer action hands
+  back a `UIImage`), `Modules.builtIn` lists the modules in the order their entries appear, and `Modules.registry` is
+  the registry the core reads. It is the only core file that names a module's type.
+- **The switch.** A module is on when it is in the list, its build includes it (`isAvailable`: the build-time overlay or
+  config that compiles its SDK in) and the hub allows it. There is no everyday setting. DEBUG builds take
+  `-showModules <ids>` (comma-separated, `none` for none) to turn exactly those modules on, for screenshots and tests in
+  any build.
+- **The hub's module flags** (#13849; the wire rule agreed on #13844). A module the hub may turn off declares
+  `feature` = `module.<id>` (`ModuleDescriptor(id:hubGated:slots:)`); a hub that publishes module flags also announces
+  the marker `modules`. Both names live only in `HubModules` (`PersonaModuleAPI`). A module with a feature is off only
+  when the hub-level hub's hello has `modules` and lacks the module's flag; an older hub (no `modules`) and a hub never
+  heard from leave it on. Each hub's answer is remembered (`HubModuleMemory`: one UserDefaults key per hub group,
+  `hubModules.<group>`, written only when it changes, removed for an older hub), and before this launch's hello the
+  registry is built from it, so a module does not appear and then vanish. `ModuleState` holds the registry: observed, so
+  a hello or a change of hub that changes the answer rebuilds it (`ModuleRegistry.rebuilt(hub:)`) and the views that
+  read it draw again; a module turned on that late runs its launch hooks then, once (`launch(after:)`); one turned off
+  keeps what its hook set up and registers nothing. A hello with no features says nothing and keeps the last answer.
+  The mock hub's `MOCK_HUB_MODULES=<module.id,…|none>` (`scripts/mock/hub_modules_mock.py`) publishes the flags.
+  Tests: `HubModulesTests` (package) and `ModulesTests` (an older hub, a publishing hub with and without the flag, the
+  remembered answer before the hello, another hub's hello).
+- **Performance.** The registry is built once, on its first read at launch, by describing entries (no IO but one
+  UserDefaults read of the remembered answer; P2, P10), and again only when the hub's answer changes. Lookups are reads
+  of arrays built then; the one observed property is the registry itself, which changes at most once per hello
+  (P4, P5, P7). A module's titles are
+  `LocalizedStringResource`s resolved where they are drawn, as before.
+- **The ratchet.** `scripts/test/test_apple_module_refs.py` (Linux-runnable, run by `scripts/ci/python-tests.py`) counts,
+  per core file, references to the types declared at the top level of each module's directories, by symbol with comments
+  and strings blanked out; the baseline `scripts/test/apple_module_refs_baseline.json` may only go down (`--update`
+  lowers it, `--list` shows each reference). The core is `apple/` outside module directories, outside the module list
+  and outside tests.
+- **Modules today.** `glasses` (the pilot, `apple/Persona/Glasses/`, `docs/apple/meta-glasses.md`): launch set-up,
+  the Meta AI app's callback URL and Glasses Photo in the composer. Its sources compile into the iOS app and, as a stub
+  without a composer action, into PersonaVision (which compiles all of `Persona/`); the watch and widgets do not include
+  it. It is on only in a build with the Meta Wearables SDK (`apple/meta-wearables.yml`). Before the pilot the core named
+  its types 8 times in 4 files; now 0.
+- **Module homes and the core-only build** (#14017). A module that has left `apple/Persona/` lives in
+  `apple/Modules/<Name>/`. `apple/modules.yml` (included by `project.yml`) compiles each home into the iPhone and Vision
+  apps and sets its condition (`PERSONA_MODULE_SCREEN_SHARE`, `PERSONA_MODULE_HEALTH`, `PERSONA_MODULE_VOICE`), under which `Modules.builtIn`
+  lists it;
+  `apple/modules-core-only.yml`, enabled by `PERSONA_CORE_ONLY=YES` at `xcodegen generate`, leaves every home out, as
+  the server's `persona_core_only` tag does. `scripts/ci/apple.sh ios-core-only` (and the local `all` lane) builds
+  that core-only app ("Core-only iOS build"); in hosted CI, `.github/workflows/apple-test.yml` runs it in its own
+  parallel `ios-core-only` job alongside the full `ios` lane so both gate `CI required` without pushing `ios` past its
+  120-minute limit (#14496).
+  The watch, widgets and extensions never compile a module home. Source-scanning PersonaTests (token, icon, motion,
+  sheet and dialog rules) walk `apple/Modules` as well as `apple/Persona`.
+- **`screen-share`** (`apple/Modules/ScreenShare/`, #14017, `feature` = `module.screen-share`): a Mac's live screen over
+  VNC or video, its small window, the screen menus, the computer-activity pill, VNC under a computer tool, Settings ›
+  Live Screen and the kept sign-ins. It adds views at `chatMenu`, `chatFooter` and `toolCall`, the `live-screen`
+  settings entry, and provides `LiveScreen`, which the machine pages ask for (`AppModel.liveScreen`): without the
+  module they offer no VNC, One-Tap Unlock or kept sign-in, and the lock line stands alone. Its DEBUG switches
+  (`-openScreenFresh`, `-openScreenDemo`) and runtime-CLI state run from its launch hook. Its wire and capture packages
+  (`PersonaScreenCore`, `PersonaScreenKit`) stay where they are.
+- **`health`** (`apple/Modules/Health/`, #14278, `feature` = `module.health`): the Health home (Today, Activity, trends,
+  the space's conversations, memory, sources). It provides the shell page `health` (`SidebarRoute.healthPage`), which
+  the drawer, the sidebar and the iPad and Sidebar layouts open; without it there is no Health row, `enterHealth()` and
+  `-openShellPage health` open nothing, and New in a health conversation starts Persona's. Its DEBUG sample
+  (`-showHealthTrends`) is applied through `ModuleDebugSamples` in `Modules.swift`. The health space's conversations
+  (`AppModel`, `Session.isHealth`), the phone's Health tools, the widgets and Health's settings stay in the core until
+  their slots (`phone_tools`, widgets, `settings`) are served. The ratchet counts type names only: a core call to a
+  module's method (a `View` extension) is caught by the core-only build, not by the ratchet.
+- **`voice`** (`apple/Modules/Voice/`, #13431, `feature` = `module.voice`): full-duplex voice in a conversation's page —
+  the composer's phone icon and Voice Chat, the call's bar in the composer's place, the line a call that ended by itself
+  leaves, its captions as the thread's last rows, Asking by Voice on a card, the voice settings on the voice extension's
+  page (`VoiceTimbreSection`) and the DEBUG switches `-showVoiceSample` / `-openVoice`. It provides `ConversationVoice`
+  (`apple/Persona/App/ConversationVoice.swift`), which the chat, the meeting page's follow-up, the question cards and
+  Settings ask for through `AppModel.voice`; without it the page offers no call, no Voice Chat row, no bar and no
+  captions, and the composer's microphone (dictation, core) is all there is. What a call runs on stays in the core for
+  now, because system calls, CarPlay and recording share it: the engine (`VoiceCalls`, `VoiceConversation`, the audio,
+  the socket; `apple/Persona/Voice`), the starts and refusals (`VoiceEntry`), the call screens (`apple/Persona/Calls`,
+  `apple/Persona/CarPlay`) and the call intents. `-openVoice silent`'s audio (`SilentVoiceAudio`) is core, since a call to
+  Persona takes it too. The ratchet counts `apple/Modules/Voice` (and `apple/PersonaCallIntents`); the voice directories
+  still in `apple/Persona` count as the core until they move (`guarded_dirs` in `scripts/test/test_apple_module_refs.py`).
+- **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
+  `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
+  `GUARDED` in the ratchet; write a type
+  conforming to `PersonaModule` there (descriptor, `isAvailable`, `register(into:)`); add it to `Modules.builtIn`; turn
+  each core call site into a registry read. If it needs a slot that is not served yet, add the slot's registrar method,
+  its registry reader and package tests in the same change. Lower the ratchet's baseline as references go. Folders move
+  into `PersonaModule<Name>` packages later (#13432 step 3).
+
 ## Data flow
 
 - Logic-layer choice (2026-10-31): pages with "load → display → edit → save" use MVVM: an `@Observable` `XxxModel` beside the page,
@@ -1765,7 +1893,7 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   Affirmative buttons require unlocking (`.authenticationRequired`); Deny does not. Plan approval from a notification uses `acceptEdits` (the whole plan has not been viewed, so commands still need individual approval),
   and "Approve and run automatically" is App-only. Buttons call resolve directly in the background without opening the App; failure (already handled, cannot reach hub) produces a local notification explaining why. Questions and terminal interactions have no buttons; tap to handle them.
   MCP forms and links are pushed too (#2433, `docs/protocol/protocol.md` "MCP elicitation"): the iOS app alone registers `features: ["withdraw", "elicitation"]` (`PushRegistrar.features`, the rule of `LiveConnection.helloFeatures`), so the hub pushes it these cards and waits for it while no app that shows them is open. Category `INTERACTION_ELICITATION` has no buttons: a tap opens the conversation, where the card arrives over the socket; the hub's withdrawal push takes it back like any card's. The alert names the MCP server and never carries the link or a form's values.
-  What the hub gives for taking a to-do's recommendation with one tap (#2056, `docs/assistant/todos.md` "Waiting for the owner"; the App's rows are in "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)"): each to-do waiting for the owner has `ask: {outcome?, verdict, recommend?, asked_at}` in `GET /api/v1/todos` (a `{"type":"todos"}` event when it comes up, is taken or ends), and a decision with a recommended option is pushed with category `TODO_DECIDE`, whose Take Recommendation action takes it, and a top-level `todo: {id, asked_at, recommend, manager}`; from a manager that says how the push may answer it, `todo` also has `ask` and `lockscreen`, with `options` and `aps.mutable-content: 1` when `lockscreen` is `answer`, while `open_only` sends category `TODO_DECIDE_OPEN`, with no action (#10465); both are taken with `POST /api/v1/todos/{id}/accept {"asked_at"}` (409: already handled, refresh; 423 with a `code` such as `dialog_open`: the Agent's node refused it and nothing was taken, #7343; 502: the recommendation did not reach the Agent, nothing taken). The watch's answer-only credential cannot call either route yet.
+  What the hub gives for taking a to-do's recommendation with one tap (#2056, `docs/assistant/todos.md` "Waiting for the owner"; the App's rows are in "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)"): each to-do waiting for the owner has `ask: {outcome?, verdict, recommend?, asked_at}` in `GET /api/v1/todos` (a `{"type":"todos"}` event when it comes up, is taken or ends), and a decision with a recommended option is pushed with category `TODO_DECIDE`, whose Take Recommendation action takes it, a top-level `todo_id` (without `interaction_id`), and `todo: {id, asked_at, recommend, manager}`; from a manager that says how the push may answer it, `todo` also has `ask` and `lockscreen`, with `options` and `aps.mutable-content: 1` when `lockscreen` is `answer`, while `open_only` sends category `TODO_DECIDE_OPEN`, with no action (#10465); both are taken with `POST /api/v1/todos/{id}/accept {"asked_at"}` (409: already handled, refresh; 423 with a `code` such as `dialog_open`: the Agent's node refused it and nothing was taken, #7343; 502: the recommendation did not reach the Agent, nothing taken). Delivered decision and needs-user pushes are keyed by `card_id` (`todo-ask:<todo id>`) and `todo_id` (falling back to `todo.id` from older hubs, without `interaction_id`) in `NotificationWithdrawal`, so `todo-ask:<todo id>` (via silent withdrawal push or WebSocket `interaction_resolved`) removes them from Notification Center while `NotificationWithdrawal.stale` never sweeps unanswered assistant cards or to-do decisions (#13916, #14388). The watch's answer-only credential cannot call either route yet.
   Settings › Notifications (`NotificationSettingsView`): "When you are needed" toggle, "When an Agent finishes" never / long tasks only / every time, Live Activities (Lock Screen and Dynamic Island / show details on Lock Screen / what each side of Dynamic Island shows, `IslandSettingsView`, `docs/apple/live-activity.md`), stored per device on the hub (`PushRegistrar.deviceID`). Changes save one at a time in the order they were made, each PUT the hub's last answer plus that one change, so a failed one reverts alone and no later PUT carries it (`NotificationSettingsModel.change`, #1913; the web's queue, #1285); quiet hours keep their own endpoint.
   Tapping a notification opens its session: use the completion-handler version of `UNUserNotificationCenterDelegate`, switch to the main queue to handle it, then call back (the async version returns on a background executor,
   UIKit receives completion off the main thread and a notification-triggered cold launch crashes).
@@ -1775,6 +1903,13 @@ iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and
   and answers / sends messages / interrupts directly through the hub too.
   UI hierarchy: each row's main content (question, session name, Inbox title) uses headline; type and location use footnote; messages and plans strip Markdown markers (`WatchText.shown`),
   bubbles fit text width, own messages align right; before any data arrives show "Loading"; when the hub is unreachable, a top row says "Can't reach the hub" + "Retry" (with old data, say how old it is).
+- Watch intake complications (#13275): Water and Protein each support circular, rectangular and inline, without a
+  new watch app page, a corner family or a four-item face. The timeline reads the watch's own shared answer-only
+  credential and requests the default manager's intake with `space=health`, about every 15 minutes subject to system
+  budgets. Failures keep a separate pairing-scoped cache; an old hub's 403 says Update the hub and leaves extension
+  credentials and content untouched. A watch intake writer calls `WatchIntakeKind.reloadTimelines()` after success to
+  reload `persona.watch.water` and `persona.watch.protein` at once. See `docs/apple/home-widgets.md` for the cache,
+  hub choice, day-boundary and rendering contracts.
 
 ## Demo mode (see every feature without a hub, 2026-10-30)
 
@@ -2338,13 +2473,55 @@ built in stages behind the hub's `todo_view`; this section grows with it.
   the entry, which leaves the table (at most 64: one more lets the oldest go without a state), while the cell keeps
   what it was told. Each cell is observed on its own, so a burst of other sends' receipts draws nothing. Receipts are
   feedback only: the HTTP answer, or the op id's receipt, stays authoritative, and the events are not replayed after a
-  reconnect. Nothing reads the cells yet: the to-do page's composer will, and the chats still show Processing after
-  the HTTP answer (`ChatSendFeedback`). `MOCK_TODO_VIEW` sends both (`docs/operations/testing.md`). Tests:
-  `SendReceiptsTests`; `SendReceiptsBurstTests` prints the main thread's time per event under a burst.
+  reconnect. Chats expect their `client_msg_id` before posting (`sendPending`), move `ChatSendFeedback` to Processing
+  on a trusted `message_send_state` receipt (tracking Send → Processing separately from execution, and ending
+  Processing on `failed`/`kept`/`unknown` without altering outbox durability), and keep the HTTP answer as the fallback
+  on older hubs or dropped sockets (#12773); the to-do page's composer will read `todo_send_state` cells.
+  `MOCK_TODO_VIEW` sends both (`docs/operations/testing.md`). Tests: `SendReceiptsTests`, `ChatSendFeedbackTests`;
+  `SendReceiptsBurstTests` prints the main thread's time per event under a burst.
 - **404 and 405.** An older hub answers 405 for `GET /api/v1/todos/{id}` and `GET /api/v1/todos/places` (the `PATCH` and
   `DELETE` routes of `/api/v1/todos/{id}` match the path) and 404 for the other new routes: `TodoNotThere` takes both
   as "not there". A 404 with `todo_not_found` is the to-do itself gone. `GET /api/v1/todos` answering 404 still hides
   the To-dos entrance, as before.
+
+## Domain spaces
+
+Who it serves: everyday people who keep one part of their life (family, money, a home) apart from the main chat, as the
+health space does. The iOS / iPadOS app follows the web (`docs/web/web.md`, "Domain spaces"); the server side is in
+`docs/assistant/health.md` ("Tracks and kinds").
+
+- **Optional extension (#14574)**: the domain-space product surface belongs to `space-conversations`, not the schema-driven `spaces` extension. Core has no default Spaces entry. `ExtensionSlots.spaceConversationsEnabled` is true only while that extension's `home` navigation contribution is enabled; the sidebar shows its Spaces section only then. A hub with no spaces or no extension installs nothing automatically. Existing tracks and conversations are retained when the extension is off.
+- **Upgrade**: an installation with existing non-health tracks gets the extension once from the signed official marketplace and starts it. An installed or disabled extension is never replaced by migration. The health space's own entry and pages are unchanged.
+- **Extension handoff** (`ExtensionConversationLink`): the extension page can open only a bounded `persona://tracks/<machine>/<space>/<session>` link. It resolves to the existing `openAssistantConversation` host, with no WebView or general internal-link grant; Health and arbitrary app links are refused.
+
+- **Model**: `apple/Shared/Tracks.swift` decodes tracks, kinds, `SPACE.md`, a conversation's categories and the extension
+  grants; every field is optional and unknown ones are ignored. Every call goes to the default manager (no
+  `X-Persona-Manager`), as spaces are the default manager's. A hub without `GET /api/v1/assistant/tracks` (404 / 405, or an
+  answer without `tracks`) has no spaces: the section stays out and nothing else changes. `SpaceStore.shared` keeps the
+  list, read again when the hub or its hello changes (`RootView`).
+- **Sidebar and drawer**: a Spaces section lists the tracks of the `spaces` sidebar group by their order (built-in health
+  and archived ones left out), then New space; in the Sidebar layout it is a folding section after Pages. A tap opens the
+  space's latest conversation, else its home (`SpaceHomeModel.entry`). Health keeps its own row and pages unchanged.
+- **Space home** (`apple/Persona/Views/Spaces/SpaceHomeView.swift`): the name, a composer whose conversation starts in the
+  space, a plain privacy line, its conversations (swipe to archive), About this space (the user's part of `SPACE.md` as
+  formatted text, a leading heading repeating the name dropped, folded past a height) with Where things stand (the state
+  block), and the kinds of personal information it holds. Edit and Archive are in the page's menu; built-in spaces have no
+  Archive. Archive confirms first and sends the revision it was read at.
+- **SPACE.md editor**: the parts the user wrote are fields; the `persona:managed` blocks show read-only under "Kept up to
+  date by Persona" and go back byte for byte (`SpaceMarkdown`, which works on UTF-8 bytes, since Swift's `String ==`
+  calls an NFC copy equal and a CRLF line end does not end in `\n`). A save sends the `base_digest` it read; a stale one
+  says another change came first and offers Load latest; a changed block, a missing space and an offline computer each
+  have a plain sentence.
+- **New space**: name, one line about it, an icon from 16 tokens (`SpaceIcon`, never a color or a raw symbol name), the
+  personal information it holds and, only when the assistant offers more than one, its kind (reconciled against the kinds
+  read: the default kind, else the first on offer). The slug is made from the name and never shown; a taken one gets the
+  next number, once more on a 409.
+- **A space conversation's categories**: chips under the top bar (`SpaceConversationCategories`, room added to the
+  chat's top inset through `assistantTopExtra`). A chip the user may take away is a menu with Remove; the space's own
+  carry a lock; removed ones come back from +. Changes are optimistic and roll back with a toast.
+- **Extension grants**: the extension detail page of the default manager shows "Personal information it may read": an
+  owner switch ("This is my own extension") or one switch per kind. Read-only when the extension is set outside the app
+  (`readOnly`, or a dev / config-file source); left out on an assistant without grants and on another manager's page.
 
 ## Quiet supervision rounds (#2092)
 
@@ -2395,7 +2572,7 @@ visible one; its block shows only the one-line `injected.line` (`ChatLine.hidesP
 the supervision rule (`Supervision.visible`): a successful `ask_user` / `notify_user`, a pending live `ask_user`, an
 accepted / needs-user `task_review`, a `supervision_finish` receipt with user visibility, or `fold.supervision_user`.
 A completed round with a nonblank final reply also stays visible unless it successfully finished silent, except for a
-routine cross-conversation report to the main conversation: that reply stays inside the expandable background record,
+routine cross-conversation report when the main conversation has opted into folding these replies. It then stays inside the expandable background record,
 just as on the web. Explicit owner-visibility actions above still open and notify. The reply uses the usual bubble and
 the work stays collapsed. See `docs/assistant/assistant.md` "Background rounds".
 
@@ -2417,7 +2594,14 @@ and the count are unchanged (`ActionTrayContent.grouped`); with one group the tr
 
 The hub's `main_background_folded` (`GET` / `PUT /api/v1/assistant`, on unless changed; an older hub that omits it
 counts as on and hides the switch) is Settings › Assistant › **Fold background rounds**. Off, the main conversation
-and Needs You look exactly as before. Tests: `ChatBackgroundRoundsTests`.
+and leader conversations show their background rounds, and Needs You uses its usual grouping.
+
+The separate **Fold routine replies from other chats** preference (`fold_routine_relay_replies`, #11899) starts off.
+Ordinary completed replies from another conversation appear in the main chat and receive their finished notification.
+When both switches are on, the main chat keeps these replies in the expandable source record and the Hub quiets that
+notification. Explicit requests for the user’s attention and completed replies in leader conversations still appear.
+An older Hub that omits the opt-in keeps the default and hides the new switch. Each change writes only its own field.
+`ChatBackgroundRoundsTests` covers the wire values and transcript projection.
 
 ## Agent follow-up settings (#7005)
 
@@ -2450,13 +2634,30 @@ hub sends (`GET /api/v1/assistant`, the value in effect). Who it is for: people 
   request that names its manager, so those rows need `manager` in the read). The hub's answer is kept for that field
   and handed to `AppModel.assistantConfig`; a refusal puts the page's value back with a toast. A control waits while its
   own write is out.
-- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524), and
-  `default_permission_mode` has no page in the app yet.
+- **Not here**: `inbox_signals` (Tell supervisors about new messages) moves to the Inbox's own settings (#4524).
 - **Mock hub**: the default mock sends every field with the hub's defaults and checks a `PUT` as the hub does;
   `MOCK_LEGACY_HUB=1` has none of them. Debug launch: `-openAssistantPage agentFollowUp`.
 - **Tests**: `AgentFollowUpTests` (reads, each change's request and header, the hub's answer, rollback, the menus'
   words) and `AgentFollowUpUITests` against the mock hub (light / dark shots with `TEST_RUNNER_PERSONA_SHOTS`);
   `AssistantSettingsModelTests.testMainSupervisesOwnTasksSwitch` on this page.
+
+## Permission defaults (#13286)
+
+Settings › Agent includes **Default Permissions**, the manager's existing `default_permission_mode` from
+`GET /api/v1/assistant`. It applies only to new non-guest conversations without an explicit choice; existing
+conversations keep their current mode. A direction leader's title menu also has **Default Permissions**, opening the
+same `DefaultPermissionsSettingsSection` in a sheet rather than a direction-specific override. Both use the existing
+sparse `PUT /api/v1/assistant`, require the answering manager to confirm the selected mode, and put the previous value
+back if the write or confirmation fails.
+
+Settings › Models decodes the existing launcher `permission_mode` in `ModelBinding`. The AI twin's editor shows **Inbox
+Permissions**: an unset or legacy Plan value displays **Default permissions**, never the parent Agents' Full access,
+and Plan is not offered. An explicit supported choice saves through the same purpose PATCH; Follow Agents writes
+`permission_mode: null` and restores the safe default. Other launcher purposes retain their ordinary inheritance and
+provider-specific mode lists.
+
+Tests: `AgentFollowUpTests`, `ModelConfigurationModelTests`, `AgentFollowUpUITests`,
+`LarkAgentModelConfigurationTests` and `DirectionScreensUITests`; the UI cases use only synthetic loopback fixtures.
 
 ## Background supervisor (#5083)
 
@@ -3291,13 +3492,21 @@ Key points:
 
 ## Settings by scope (#5236)
 
-The shared iPhone, iPad and Mac settings page has three groups:
+The shared iPhone and iPad settings page has three groups, then one Advanced row. Settings home shows each group's core rows
+only (#13395, at most ten; `SettingsCatalog.core`); Settings › Advanced shows the rest under the same groups
+(`SettingsCatalog.advanced`), and search finds every entry on either:
 
-| Scope | Entries |
-| --- | --- |
-| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Extensions, Knowledge Selection, Meetings, Agent, Machines (platform and hub capabilities decide availability) |
-| This Device | Appearance & Display, Language & Dictation, Notifications, Translation, Storage, Health, This iPhone, About |
-| Hub | Hub Connection, Hub Version, Assistants, Avatar, Devices & Pairing |
+| Scope | Settings home | Settings › Advanced |
+| --- | --- | --- |
+| Current Assistant's Settings | Models, Assistant Profile, Channels, Connectors, Inbox Sources, Extensions, Machines | Knowledge Selection, Meetings, Agent |
+| This Device | Notifications, About | Appearance & Display, Language & Dictation, Live Screen, Translation, Storage, Health, Alarms and Timers, This iPhone |
+| Hub | Hub Connection | Hub Version, Assistants, Avatar, Devices & Pairing |
+
+Platform and hub capabilities decide availability, as before: Inbox Sources with the hub's `inbox_sources`, Extensions with
+its extension manager, Live Screen while a computer offers it, Alarms and Timers with AlarmKit, and the hub's own rows only with
+a hub paired (not in demo mode). The Advanced row's value is the hub update's state while one is out or under way. A row keeps
+its accessibility identifier wherever its tier puts it (`SettingsEntry.rowID`); `-openAdvancedSettings YES` (DEBUG) opens
+Settings › Advanced for screenshots.
 
 Whenever the hub answers a roster, with one or many installed assistants, the first heading is **<name>'s Settings**,
 with the current assistant's first-letter avatar and state dot plus **Switch**. Switch opens the same assistant
@@ -3395,3 +3604,33 @@ Clicking a worktree's title or branch opens its first direct Agent in the sideba
 Right-click a worktree title, branch or direct Agent row on Mac, or long-press it on iPhone, for the same worktree commands: Open Worktree, New Session, New Child Worktree, Copy Path, Copy Worktree Name and, when present, Open Parent Worktree. It uses that exact workspace as the initial code source and parent, including a nested or Agent-free container. The form can change either choice independently; a folder needs a Git code source. Successful creation refreshes the sidebar catalog and opens the existing New Session form for the new child using the server-acknowledged parent. All regions use the owning worktree's identity. An Agent row also retains its session commands. A title with one Agent offers those commands directly; with multiple Agents it offers named submenus so session actions have an explicit target. Each descendant keeps its own menu scope. The UI names these containers worktrees; protocol and accessibility identifiers retain their workspace names for compatibility.
 
 New Session also offers a searchable workspace picker, with full ancestor paths and an explicit Choose by Folder fallback. A chosen workspace sends its source ID and directory to the existing session-start route. New Child Worktree separates Code Source (the repository and base commit) from Parent Worktree (any Orca workspace on the same computer, including empty folders and other projects). On a phone, the selected parent's name has its own line above the ancestor path so a deep breadcrumb cannot hide the selected destination. The node advertises `choose_parent` before the client enables independent parent selection. With `automatic_name`, Create Worktree is ready without entering a branch or path on every supported engine. The native form keeps those overrides in Advanced, collapsed initially. An unnamed create sends `auto_name: true`. Orca receives a generated creature seed without a branch override and owns its prefix, retired-name/collision policy and first-work rename. Other supported hosts use a unique node-generated branch and directory through their existing creation route; subsequent naming follows the host’s capabilities. Explicit branch/path inputs retain their existing validation; older nodes keep the manual form. A created worktree appears through discovery even if the New Session form is cancelled before an Agent starts. Stale explicit launch targets and missing parents are refused rather than silently redirected.
+
+## Disk usage map (#14576)
+
+The contract is `docs/server/machine-usage-map.md`; the look and the interactions are `docs/design/DESIGN_SYSTEM.md`
+"Usage treemap".
+
+- Ways in: the Disk almost full chip on a computer's card and the Disk tile in its details open the map in reclaim mode
+  when the disk level is raised (the biggest reclaimable items are marked and listed as chips under a headline); a
+  banner in the details, shown while the disk is above normal, offers "See What's Using Space". The route is
+  `MachineUsageMapRoute` (registered next to `MachineDetailRoute`; on iPad it opens in the right column).
+- Wire models: `PersonaWire/MachineUsageMap.swift` (unknown enum values decode to a fallback). Calls:
+  `APIClient` "Disk usage map" (usage, trash / untrash / purge, the existing `POST /cleanup`, offload providers,
+  inventory, run, jobs).
+- `UsageMapModel` (`@Observable`, `Deps` for tests with `FakeHub`) polls while the hub is still measuring and only
+  while the page is visible (`.tabActiveTask(id:)`), keeps a zoom trail per side, the selection, the tint (kind or last
+  used), the providers and the inventory. Layout runs off the main thread (`TreemapLayout`, cached by node id, size and
+  depth). An offload that answers 409 `tool_install_required` asks a second, separate confirmation to install the tool;
+  the job is polled until it ends, then the map refreshes in place. Trash shows an Undo notice; Delete Permanently
+  is its own confirmation.
+- No provider: the cloud side's empty state links to Settings › Extensions. An older hub without the usage route shows
+  "Can't Show the Disk" with what to update.
+- Debug: `-tab settings -openMachines YES -openUsageMap <machine>` (or `reclaim:<machine>`). Mock: `MOCK_USAGE_MAP=1`
+  (`old` answers as a hub without the route). UI test: `UsageMapUITests` with
+  `TEST_RUNNER_PERSONA_USAGE_MAP_HUB=http://127.0.0.1:<port>`.
+
+## Model profiles
+
+Settings › Models (`ModelConfigurationView`, `ModelProfilesViews.swift`, `ModelProfilesModel.swift`, `apple/Shared/ModelProfiles.swift`) adds **Model Profiles** backed by `/api/v1/model-profiles` (hidden cleanly when an older hub returns 404). Each profile row opens a sheet (`ModelProfileSheet`) to inspect its Agent presets, purpose bindings, managed launcher overrides, and any fields that differ from the current live configuration (`changes`). Both profile detail (`ModelProfileDetailView`) and the interactive editor (`ModelProfileEditorView`) expose **Update from current configuration** (`PUT /api/v1/model-profiles/{id}` with minimal `{ revision, name, description?, capture: true }`, preserving Agent presets and handling 409 Conflict reload recovery).
+
+When applying a profile with zero drift (`changes` empty and no unsaved drift on the active profile), **Apply Profile** applies directly without an extra confirmation screen. When drift exists, `ModelProfileApplyConfirmView` names every affected purpose and launcher field (including target values such as Follow default or Clear), highlights unsaved active-profile drift, and offers **Capture current into `<active>` first** (`PUT capture: true` on the active profile followed by `POST apply` on the target inside one write-fenced flow — aborting apply if capture fails and keeping captured state if apply fails), **Apply directly**, or **Cancel** (re-applying a drifted active profile also offers **Update from current configuration**). Validation and save/apply errors plus 409 Reload controls sit pinned inside the bottom action bars directly beside Save / Apply (and at the top of `ModelPurposeEditorView` next to its toolbar Save button), and profile saves omit blank optional fields and default `"standard"` tier speed for cross-version hub compatibility while hiding empty `permission_mode` pickers on older hubs whose launcher purposes omit `permission_mode` in `fields`. Regression coverage: `ModelProfilesModelTests`.

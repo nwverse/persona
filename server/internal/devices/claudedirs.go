@@ -128,9 +128,13 @@ func (m *Machine) usageWindows() bool { return m.cfg.UsageWindows == nil || *m.c
 func (m *Machine) configureNode(ctx context.Context, peer *rpc.Peer, hub *devicewire.ConnectedReply, own bool) {
 	params := map[string]any{"machine_id": m.cfg.ID, "claude_dirs": m.claudeDirs(ctx),
 		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "agent_dirs_blocked": m.blockedAgentDirsParam(ctx),
-		"botmux": m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
+		"herdr_sessions_blocked": m.blockedHerdrSessionsParam(ctx),
+		"botmux":                 m.botmux(ctx), "claude_start_dir": m.cfg.ClaudeStartDir,
 		"herdr_autostart": m.herdrAutostart(ctx), "herdr_autoinstall": m.cfg.HerdrAutoinstall, "claude_global_hooks": m.cfg.ClaudeGlobalHooks,
 		"usage_windows": m.usageWindows(), "claude_live_replies": m.liveReplies(ctx), "extra_path": m.extraPath()}
+	if m.d.config().PrivateNetwork {
+		params["private_network"] = true // office network mode: the node stops its tailcat endpoint (node/tailcat.go)
+	}
 	// The sessions it lists however quiet are the assistant's to say (its profile); before it said, the node keeps
 	// what it has.
 	if keep, ok := m.d.keptOn(m.cfg.ID); ok {
@@ -301,7 +305,8 @@ func (m *Machine) reconfigureClaudeDirs(ctx context.Context) {
 	// must not be the node's first word on it (an older hub's, node/hostbotmux.go useBotmux).
 	if err := m.call(ctx, "node.configure", map[string]any{"claude_dirs": m.claudeDirs(ctx),
 		"claude_dirs_blocked": m.blockedClaudeDirsParam(ctx), "agent_dirs_blocked": m.blockedAgentDirsParam(ctx),
-		"botmux": m.botmux(ctx)}, nil); err != nil {
+		"herdr_sessions_blocked": m.blockedHerdrSessionsParam(ctx),
+		"botmux":                 m.botmux(ctx)}, nil); err != nil {
 		m.d.logf("[%s] configure claude dirs: %v", m.cfg.ID, err)
 		return
 	}

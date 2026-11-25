@@ -23,7 +23,7 @@ import persona.core.navigation.ExtensionUiRoute
 
 /**
  * Settings pages opened by key rather than from the settings list: a machine's engine (from its page in Agents) and
- * one AI use of "Model configuration" (from that list, or from the voice page for its extension's model), one extension of "Extensions" and the
+ * one AI use of "Model configuration" (from that list, or from a module's page for its extension's model), one extension of "Extensions" and the
  * pages it draws, "Extension market" with its extensions and markets, a launcher of a machine (from the machine's page), and one channel
  * of "Channels".
  */
@@ -49,7 +49,8 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             launchers = services.providers.takeUnless { demo }?.let { p -> { p.launchers() } },
             onUpgrade = { market, id -> navigator.navigate(ExtensionCatalogRoute(market, id, manager = manager)) },
             connectors = services.connectors.takeUnless { demo }, onConnector = { navigator.navigate(ConnectorRoute(it, manager)) },
-            onSubscriptions = { navigator.navigate(subscriptionsRoute(subscriptionsTitle, extension = route.extensionId)) })
+            onSubscriptions = { navigator.navigate(subscriptionsRoute(subscriptionsTitle, extension = route.extensionId)) },
+            trust = services.extensionTrust.takeUnless { demo })
     }
     entry<ConnectorRoute> { route ->
         val subscriptionsTitle = stringResource(R.string.settings_subscriptions_title)
@@ -63,7 +64,8 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             shown = LocalExtensionPageVisible.current && (persona.core.navigation.LocalDetailKey.current == null || persona.core.navigation.LocalDetailKey.current == route),
             onPush = { navigator.navigate(it.copy(manager = it.manager ?: route.manager)) }, manager = route.manager,
             notificationActionToken = route.notificationActionToken,
-            onAsk = if (route.extensionId == persona.core.contracts.api.SUBSCRIPTIONS_UI) askPersona?.let { ask -> { text -> ask(navigator, text) } } else null)
+            onAsk = if (route.extensionId == persona.core.contracts.api.SUBSCRIPTIONS_UI) askPersona?.let { ask -> { text -> ask(navigator, text) } } else null,
+            onConversation = { machine, session -> navigator.navigate(persona.core.navigation.ChatRoute(machine, session)) })
     }
     // The market of the current assistant's Extensions (docs/assistant/managers.md "Clients"): what it installs is that one's.
     entry<ExtensionMarketRoute> {

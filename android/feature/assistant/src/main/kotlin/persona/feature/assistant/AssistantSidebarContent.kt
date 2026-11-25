@@ -37,8 +37,12 @@ object AssistantSidebarShade {
     const val Schedule = "schedule"
     const val Health = "health"
     const val None = "none"
+    /** The new space form (#13500): [space] of [SpacesModel.NEW], a word no space's address may be. */
+    const val NewSpace = "space:new"
 
     fun agent(key: SessionKey) = "agent:${key.path}"
+    /** A domain space's row (#13500). */
+    fun space(slug: String) = "space:$slug"
 }
 
 /** The Agents list supplies the scroll viewport and places the footer below its Needs You jump. */
@@ -101,6 +105,11 @@ fun AssistantSidebarContent(
         ?: AssistantSnapshot(manager = choice.manager, managerId = choice.shown)
     val base = LocalAssistantHost.current?.management
     val management = remember(base, choice.hubId, choice.shown) { base?.forManager(choice.shown) }
+    // The domain spaces (#13500): the page opens them, so they show only where the page is the real assistant's.
+    val sidebarHost = LocalAssistantSidebarHost.current
+    val spacesEnabled = LocalSpaceConversationsEnabled.current?.collectAsStateWithLifecycle()?.value == true
+    val spaces = rememberSpaces(choice.hubId, base,
+        enabled = spacesEnabled && !demo && sidebarHost != null && repository is persona.core.contracts.api.AssistantConversations)
     val conversationArranger = remember(management, repository, demo) {
         management?.takeUnless { demo }?.let { api ->
             ConversationArranger(
@@ -290,7 +299,11 @@ fun AssistantSidebarContent(
                 merged = merged,
                 showSchedule = merged == null || (management != null && !demo),
                 onAgentSearch = { openSearch(true) },
-                arranger = conversationArranger, arrangeScope = operationScope, onArrange = beginArrange)
+                arranger = conversationArranger, arrangeScope = operationScope, onArrange = beginArrange,
+                spaces = spaces?.sidebar,
+                onSpace = { slug -> sidebarHost?.openSpace = slug; onAction(AssistantSidebarAction.Space) },
+                onNewSpace = { sidebarHost?.openSpace = SpacesModel.NEW; onAction(AssistantSidebarAction.Space) },
+                frontSpace = sidebarHost?.spaceInFront)
             JToastHost(toast, Modifier.align(Alignment.TopCenter))
         }
     }

@@ -9,18 +9,33 @@
 # Each lane keeps about eight CPUs busy by itself (the Go partitions, -p, vitest's workers and the Python suites in
 # parallel), so the lanes run side by side only as far as the CPUs this process may use allow: one lane per eight,
 # at least one. All six at once on eight CPUs took each lane two to three times as long and timed out the tests that
-# measure their own deadlines. PERSONA_CI_FULL_JOBS sets how many lanes run at once; PERSONA_CI_FULL_EXCLUDE (lane
-# names, separated by spaces or commas) leaves lanes out, for a runner that runs them elsewhere. Each lane's log is
+# measure their own deadlines. PERSONA_CI_FULL_JOBS sets how many lanes run at once. For a runner that spreads the lanes
+# over several machines or slots, PERSONA_CI_FULL_INCLUDE runs only the lanes it names and PERSONA_CI_FULL_EXCLUDE
+# leaves out the lanes it names (lane names, separated by spaces or commas; both may be set). Each lane's log is
 # printed whole when it ends, in the order they end, then a summary line per lane; the exit code is the first failed
 # lane's in the listed order.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 2
-LANES=(server-build server-managers server-node server-other web scripts)
+LANES=(server-build server-managers server-node server-other server-core-node server-core-managers server-core-other web scripts)
 [ "$#" -eq 0 ] || LANES=("$@")
-if [ -n "${PERSONA_CI_FULL_EXCLUDE:-}" ]; then
+include=" ${PERSONA_CI_FULL_INCLUDE:-} " exclude=" ${PERSONA_CI_FULL_EXCLUDE:-} "
+include=${include//,/ } exclude=${exclude//,/ }
+ALL_LANES=" server-build server-managers server-node server-other server-core-node server-core-managers server-core-other web scripts "
+# shellcheck disable=SC2086
+for name in $include $exclude; do
+  case "$ALL_LANES" in *" $name "*) ;; *) printf 'full.sh: unknown lane %s in PERSONA_CI_FULL_INCLUDE or PERSONA_CI_FULL_EXCLUDE\n' "$name" >&2; exit 2 ;; esac
+done
+if [ -n "${include// /}" ]; then
   kept=()
   for lane in "${LANES[@]}"; do
-    case " ${PERSONA_CI_FULL_EXCLUDE//,/ } " in *" $lane "*) printf 'full.sh: %s left out (PERSONA_CI_FULL_EXCLUDE)\n' "$lane" ;; *) kept+=("$lane") ;; esac
+    case "$include" in *" $lane "*) kept+=("$lane") ;; *) printf 'full.sh: %s left out (not in PERSONA_CI_FULL_INCLUDE)\n' "$lane" ;; esac
+  done
+  LANES=("${kept[@]}")
+fi
+if [ -n "${exclude// /}" ]; then
+  kept=()
+  for lane in "${LANES[@]}"; do
+    case "$exclude" in *" $lane "*) printf 'full.sh: %s left out (PERSONA_CI_FULL_EXCLUDE)\n' "$lane" ;; *) kept+=("$lane") ;; esac
   done
   LANES=("${kept[@]}")
 fi
@@ -36,13 +51,29 @@ command_for() {
     server-managers) echo "scripts/ci/server.sh managers" ;;
     server-node) echo "scripts/ci/server.sh node" ;;
     server-other) echo "scripts/ci/server.sh other" ;;
+    server-core-node) echo "scripts/ci/server.sh core-node" ;;
+    server-core-managers) echo "scripts/ci/server.sh core-managers" ;;
+    server-core-other) echo "scripts/ci/server.sh core-other" ;;
     web) echo "scripts/ci/web.sh" ;;
     scripts) echo "scripts/ci/scripts.sh" ;;
     *) return 1 ;;
   esac
 }
 for lane in "${LANES[@]}"; do
-  command_for "$lane" >/dev/null || { printf 'full.sh: unknown lane %s (one of server-build server-managers server-node server-other web scripts)\n' "$lane" >&2; exit 2; }
+  command_for "$lane" >/dev/null || { printf 'full.sh: unknown lane %s (one of server-build server-managers server-node server-other server-core-node server-core-managers server-core-other web scripts)\n' "$lane" >&2; exit 2; }
+done
+# A portable ordinary server lane includes its core-only counterpart, so it covers the same module checks and Postgres
+# fixtures as the hosted core lane rather than only the ordinary test shard.
+paired_core_lanes=()
+for lane in "${LANES[@]}"; do
+  case "$lane" in
+    server-node) paired_core_lanes+=(server-core-node) ;;
+    server-managers) paired_core_lanes+=(server-core-managers) ;;
+    server-other) paired_core_lanes+=(server-core-other) ;;
+  esac
+done
+for lane in "${paired_core_lanes[@]}"; do
+  case " ${LANES[*]} " in *" $lane "*) ;; *) LANES+=("$lane") ;; esac
 done
 declare -A pid_lane=() started=() status=() took=()
 next=0
@@ -50,8 +81,10 @@ while [ "$next" -lt "${#LANES[@]}" ] || [ "${#pid_lane[@]}" -gt 0 ]; do
   while [ "$next" -lt "${#LANES[@]}" ] && [ "${#pid_lane[@]}" -lt "$jobs" ]; do
     lane=${LANES[$next]}
     next=$((next + 1))
+    # Pair the ordinary and core versions in the four portable server jobs.
+    case "$lane" in server-node|server-managers|server-other) pair=1 ;; *) pair=0 ;; esac
     # shellcheck disable=SC2046
-    TMPDIR="$work" bash $(command_for "$lane") > "$work/$lane.log" 2>&1 &
+    PERSONA_CI_PAIRED_SERVER_SHARDS=$pair TMPDIR="$work" bash $(command_for "$lane") > "$work/$lane.log" 2>&1 &
     pid_lane[$!]=$lane
     started[$lane]=$SECONDS
   done
