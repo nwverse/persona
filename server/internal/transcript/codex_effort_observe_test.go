@@ -27,7 +27,14 @@ func TestCodexThreadSettingsApplied(t *testing.T) {
 	}
 	var parsed Meta
 	for i, line := range lines {
-		if items := ParseLine(i, []byte(line), &parsed); len(items) != 0 {
+		items := ParseLine(i, []byte(line), &parsed)
+		if i == 3 {
+			if len(items) != 1 || items[0].Kind != "model_change" || items[0].Text != "gpt-test" || items[0].Model != "gpt-other" {
+				t.Fatalf("line %d items = %+v, want model_change gpt-test -> gpt-other", i, items)
+			}
+			continue
+		}
+		if len(items) != 0 {
 			t.Fatalf("line %d made items %+v", i, items)
 		}
 	}

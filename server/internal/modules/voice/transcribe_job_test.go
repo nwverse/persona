@@ -681,6 +681,9 @@ func TestTranscriptionRollover(t *testing.T) {
 	trFast(t)
 	setVar(t, &trSessionMost, 400*time.Millisecond)
 	setVar(t, &trRollOverlap, 200*time.Millisecond)
+	// At the fixture's 200x catch-up, a healthy delayed reply otherwise crosses the one-second
+	// audio-time stale cutoff and is assigned to the next window. Production keeps five seconds at 4x.
+	setVar(t, &trReplyWait, time.Minute)
 	_, srv, logs, live := trLive(t, voicetest.Script{Sentences: trScript})
 	tc := startTr(t, srv, liveStart())
 	tc.next(extwire.TFReady)

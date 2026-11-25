@@ -61,6 +61,7 @@ func (s *Service) healthClaudeMD(ctx context.Context, here string) string {
 			d.ItemsAvailable = true
 			d.Water = slices.Contains(items, "water")
 			d.Protein = slices.Contains(items, "protein")
+			d.Strength = slices.Contains(items, "strength")
 		}
 	}
 	if name := identity.HealthDirName(s.id); name != identity.SpaceHealth {

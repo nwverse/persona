@@ -68,10 +68,35 @@ var standardStatusKeys = map[int]string{
 	http.StatusGatewayTimeout:        "http-status.timeout",
 }
 
+// WriteBody writes body, an error, with status, and notes it on w (NoteError).
 func WriteBody(w http.ResponseWriter, status int, body map[string]any) {
+	NoteError(w, status, body)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// ErrorNoter is a ResponseWriter that takes note of the error bodies written to it with WriteBody: the hub's request
+// log says a server error's code and words from them (#14490). A body passed on as bytes, such as another service's
+// answer through a reverse proxy, is never noted.
+type ErrorNoter interface {
+	NoteError(status int, body map[string]any)
+}
+
+// NoteError tells the first writer in w's Unwrap chain that takes note of errors (ErrorNoter) that body goes out with
+// status. For a body the caller built itself and writes as bytes; WriteBody notes its own.
+func NoteError(w http.ResponseWriter, status int, body map[string]any) {
+	for range 16 {
+		if n, ok := w.(ErrorNoter); ok {
+			n.NoteError(status, body)
+			return
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = u.Unwrap()
+	}
 }
 
 func Body(status int, code string, err error) map[string]any {

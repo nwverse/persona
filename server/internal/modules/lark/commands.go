@@ -111,7 +111,7 @@ func (s core) botCommand(ctx context.Context, f FeishuFeatures, messageID, text,
 		}
 		reply(s.startAgentCard(ctx, rest), "")
 	case "/stop", "/停止", "/停":
-		_, message := s.h.StopConversation(ctx, f, s.botTargetFor(root, parent))
+		_, message := s.stopConversation(ctx, f, s.botTargetFor(root, parent))
 		s.botNote(ctx, messageID, message)
 		return true, ""
 	case "/status", "/状态":
@@ -246,7 +246,7 @@ func (s core) statusCard(ctx context.Context, t botTarget) (*botcard.Card, strin
 	for _, ix := range shown {
 		q := clip(s.h.PendingQuestion(ix), 120)
 		kind := ""
-		if key := s.h.IxKindTag(ix.Kind); key != "" {
+		if key := ixKindTags[ix.Kind]; key != "" {
 			kind = i18n.T(l, key)
 		}
 		md := "**" + botcard.EscapeMarkdown(q) + "**"

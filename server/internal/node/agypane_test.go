@@ -1271,3 +1271,72 @@ func TestAgyPaneLegitimateConversationSwitches(t *testing.T) {
 		t.Fatalf("switch to SYSTEM-sourced USER_INPUT conversation failed: span=%+v item=%+v", lastSpan, lastItem)
 	}
 }
+
+func TestAgySubagentColdBindResolvesParent(t *testing.T) {
+	n, f, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	const (
+		parentID     = agyTestID
+		childID      = "aaaaaaaa-4444-4444-8555-666666666661"
+		grandchildID = "aaaaaaaa-4444-4444-8555-666666666662"
+		cycleA       = "aaaaaaaa-4444-4444-8555-666666666663"
+		cycleB       = "aaaaaaaa-4444-4444-8555-666666666664"
+	)
+	root := n.agyDataRoot()
+	agyTestFile(t, root, parentID, ""+
+		`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"Main task"}`+"\n"+
+		`{"step_index":1,"type":"PLANNER_RESPONSE","content":"Running subagent"}`+"\n")
+	agyTestFile(t, root, childID, fmt.Sprintf(
+		`{"step_index":0,"type":"SYSTEM_MESSAGE","source":"SYSTEM","content":"<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-25T04:11:13Z sender=%s priority=HIGH\n"}`+"\n",
+		parentID,
+	))
+	agyTestFile(t, root, grandchildID, fmt.Sprintf(
+		`{"step_index":0,"type":"SYSTEM_MESSAGE","source":"SYSTEM","content":"<SYSTEM_MESSAGE>\n[Message] sender=%s\n"}`+"\n",
+		childID,
+	))
+	agyTestFile(t, root, cycleA, fmt.Sprintf(
+		`{"step_index":0,"type":"SYSTEM_MESSAGE","source":"SYSTEM","content":"[Message] sender=%s"}`+"\n",
+		cycleB,
+	))
+	agyTestFile(t, root, cycleB, fmt.Sprintf(
+		`{"step_index":0,"type":"SYSTEM_MESSAGE","source":"SYSTEM","content":"[Message] sender=%s"}`+"\n",
+		cycleA,
+	))
+
+	// 1. Cold bind when herdr reports a subagent UUID resolves directly to its parent.
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, childID))
+	items, page := agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 2 || items[0].Text != "Main task" || page["history"] != agyStepsHistory(parentID).token {
+		t.Fatalf("cold bind from subagent did not resolve parent: page=%+v items=%+v", page, items)
+	}
+
+	// 2. Nested grandchild subagent walks up the sender chain to the root normal parent.
+	n.mu.Lock()
+	delete(n.agyBound, agyTestPane)
+	n.mu.Unlock()
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, grandchildID))
+	items, page = agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 2 || items[0].Text != "Main task" || page["history"] != agyStepsHistory(parentID).token {
+		t.Fatalf("cold bind from grandchild subagent did not resolve parent: page=%+v items=%+v", page, items)
+	}
+
+	// 3. Sender cycle terminates cleanly without binding.
+	n.mu.Lock()
+	delete(n.agyBound, agyTestPane)
+	n.mu.Unlock()
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, cycleA))
+	items, _ = agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 1 || items[0].Kind != "notice" {
+		t.Fatalf("sender cycle should stay unbound notice, got: %+v", items)
+	}
+
+	// 4. Cross-pane conflict: if another pane already claims parentID, cold bind refuses to steal it.
+	n.mu.Lock()
+	delete(n.agyBound, agyTestPane)
+	n.mu.Unlock()
+	seedAgents(t, n, f, agyTestAgent(agyTestPane, home, childID), agyTestAgent("w1:p2", home, parentID))
+	items, _ = agyTestItems(t, n, agyTestRow, nil)
+	if len(items) != 1 || items[0].Kind != "notice" {
+		t.Fatalf("cross-pane conflict should refuse stealing parent, got: %+v", items)
+	}
+}

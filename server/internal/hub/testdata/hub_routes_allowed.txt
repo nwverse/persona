@@ -145,6 +145,7 @@ POST /api/v1/interactions/{id}/choose
 POST /api/v1/interactions/{id}/clarify # owner-only relay to the prepared operation's manager, like resolve
 POST /api/v1/interactions/{id}/reanswer
 POST /api/v1/interactions/{id}/resolve
+POST /api/v1/interactions/{id}/seen # owner-only card view receipt to start short countdown on owner-only timed cards
 POST /api/v1/looks/uploads # the hub keeps the looks: personas/ is its own directory (look_uploads.go)
 POST /api/v1/machines/{id}/confirm
 POST /api/v1/machines/{id}/reject

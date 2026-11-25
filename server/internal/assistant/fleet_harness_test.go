@@ -58,6 +58,7 @@ type fleetDevs struct {
 type fleetNode struct {
 	name, home, trust string
 	homeReal          string // home with its links followed, when the node says it is another path
+	executable        string // the file its node said it runs from when its connection began ("": it did not say)
 	sessions          []proto.Session
 	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
@@ -151,7 +152,8 @@ func (d *fleetDevs) List() []devices.Summary {
 	var out []devices.Summary
 	for _, id := range d.order {
 		n := d.machines[id]
-		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away})
+		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+			Online: !n.away, Reachable: !n.away})
 	}
 	return out
 }
@@ -170,7 +172,8 @@ func (d *fleetDevs) Summary(id string) (devices.Summary, bool) {
 	if n == nil || !slices.Contains(d.order, id) {
 		return devices.Summary{}, false
 	}
-	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away}, true
+	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+		Online: !n.away, Reachable: !n.away}, true
 }
 
 // Shown is the node's shownUntil and unlisted, as the devices say them.
