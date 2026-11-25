@@ -110,9 +110,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.Reroute, t.Placement = nil, nil
 		t.Dispatch = nil // the hub's: written by the start that resolves the tier
 		t.Title, t.Prompt, t.Cwd = strings.TrimSpace(t.Title), strings.TrimSpace(t.Prompt), strings.TrimSpace(t.Cwd)
+		t.Machine = strings.TrimSpace(t.Machine)
 		t.Model = strings.TrimSpace(t.Model)
 		t.Speed = strings.TrimSpace(t.Speed)
 		t.Permission = strings.TrimSpace(t.Permission)
+		if err := s.normalizePlacementConstraints(ctx, t); err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
 		if t.Host = strings.TrimSpace(t.Host); checkStartHostName(t.Host) != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, checkStartHostName(t.Host))
 		}
@@ -128,12 +132,17 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
-		if m, ok := s.machineByName(ctx, t.Machine); ok && t.Role == roleLeader && s.isWorkMachine(m.ID) {
-			return "", fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only the "+
-				"reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)
+		if t.Machine != "" {
+			if m, ok := s.machineByName(ctx, t.Machine); ok && t.Role == roleLeader && s.isWorkMachine(m.ID) {
+				return "", fmt.Errorf("task %d: role \"leader\" cannot run on %s: a work-trust computer gives its agents only the "+
+					"reporting tools, so it could not supervise workers. Put the task leader on a computer you own", i+1, m.Name)
+			}
 		}
 		if err := t.normalizeMachinePolicy(); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+		if t.Machine == "" && (t.backendWorkspace() || t.containerWorkspace()) {
+			return "", fmt.Errorf("task %d: workspace.backend and workspace.container require an explicit machine", i+1)
 		}
 		if t.ExpectMinutes < 0 {
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
@@ -181,6 +190,26 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		if len(t.Attachments)+len(t.Mentioned) > 0 {
 			t.AttachFrom = machine
+		}
+		if t.Machine == "" {
+			if _, err := validateStartSpeed(map[string]any{"speed": t.Speed}); err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			preview := *t
+			if err := s.applyTaskTier(ctx, &preview); err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			if t.Continues != "" {
+				if prevTodo, ok := s.todoNow(t.Continues); ok {
+					if err := s.checkContinuationBlockers(ctx, prevTodo, t.Permission, t.Readonly, false); err != nil {
+						return "", fmt.Errorf("task %d: %w", i+1, err)
+					}
+				}
+			}
+			if t.ReservedTodoID == "" {
+				t.ReservedTodoID = firstNonEmpty(t.ReuseTodo, t.TodoID, "todo_"+randomHex(8))
+			}
+			continue
 		}
 		if !s.placeTask(ctx, t) {
 			return "", fmt.Errorf("task %d: unknown machine %q (machines: %s)", i+1, t.Machine, s.machineIDs(ctx))
@@ -343,15 +372,14 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	// Supervisors orchestrate on the owner's behalf (decision rights, 2026-11-23): a plan from the main conversation or
 	// a direction lead is the supervisor's own release, so it starts at once, read-only or writable, whether or not the
-	// owner asked for it in so many words (user_requested only records where the work came from). It waits for the
-	// owner's Start only when a task needs them: a request gate, a track that confirms every hand-off (health), or a
-	// task that spends money, speaks outward as the owner or takes an irreversible step they have not agreed to
-	// (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words handed to the wrong
-	// lead start work in the wrong place, which is reversible and its supervisor's to set right, none of the six. Not in a
-	// scheduled round, where "the user asked for this" is only the model's word. An ordinary conversation's plan is not
-	// its supervisor's release: as before.
-	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait)) &&
-		!s.inScheduledTurn(ctx, machine, sessionID)
+	// owner asked for it in so many words (user_requested only records where the work came from). This holds in
+	// scheduled follow-up and check-in rounds in that supervisor's own conversation too (user_requested is still cleared
+	// above). It waits for the owner's Start only when a task needs them: a request gate, a track that confirms every
+	// hand-off (health), or a task that spends money, speaks outward as the owner or takes an irreversible step they
+	// have not agreed to (owner_step). Also in a lead a hand-over of the owner's quoted words went into (#11699): words
+	// handed to the wrong lead start work in the wrong place, which is reversible and its supervisor's to set right, none
+	// of the six. Ordinary conversations and standalone scheduled tasks are not a supervisor's release: as before.
+	orchestrates := scope == nil && (s.isLeader(ctx, sessionID) || (s.isMainOn(ctx, machine, sessionID) && !s.mainPlansWait))
 	// A plan from a conversation hands its prompts to agents outside it (scene 3): what it says, titles first (they are
 	// what its push shows), decides once whether it waits for "Start" and what its push says (health.go). A leader's
 	// workers (scope) need no decision.
@@ -394,6 +422,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if wait > 0 && len(a.Tasks) == 1 && scope == nil {
 		a.Tasks[0].WaitInputID = "wait_" + randomHex(16)
 	}
+	if s.settings(ctx).todosV2On() {
+		for i := range a.Tasks {
+			if a.Tasks[i].ReuseTodo == "" {
+				s.applyTodosV2DispatchDefaults(ctx, sessionID, cmp.Or(a.Tasks[i].Supervisor, sessionID), &a.Tasks[i], nil)
+			}
+		}
+	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
@@ -422,6 +457,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				fmt.Fprintf(&b, "- %s on %s: dispatch failed: %s\n", t.Title, t.Machine, t.Error)
 			} else if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (queued: %s)\n", t.Title, t.TodoID, t.Machine, t.Queue.Reason)
+			} else if t.Queue != nil && t.Queue.Key == pendingPlacementQueueKey {
+				fmt.Fprintf(&b, "- %s → todo %s (pending placement)\n", t.Title, t.TodoID)
 			} else {
 				fmt.Fprintf(&b, "- %s → todo %s on %s (dispatching)\n", t.Title, t.TodoID, t.Machine)
 			}
@@ -507,6 +544,8 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		} else {
 			if t.Queue != nil && t.Queue.Key == workspaceQueueKey {
 				fmt.Fprintf(&b, "- %s: automatic start queued (%s) → todo %s on %s (queued: %s)\n", t.Title, reason, t.TodoID, t.Machine, t.Queue.Reason)
+			} else if t.Queue != nil && t.Queue.Key == pendingPlacementQueueKey {
+				fmt.Fprintf(&b, "- %s: automatic start queued (%s) → todo %s (pending placement)\n", t.Title, reason, t.TodoID)
 			} else {
 				fmt.Fprintf(&b, "- %s: automatic start initiated (%s) → todo %s on %s (dispatching)\n", t.Title, reason, t.TodoID, t.Machine)
 			}

@@ -663,16 +663,13 @@ walk (risk 1), the index purge on a path class change (the search view does not 
 2. **Rename and other edits with the module off.** The user can read, search, delete, and edit tags and projects; not rename.
    Recommend this for PR 2; the owner's rule does not require more, but the user's wish "my old recording has a wrong title"
    is a legitimate follow-up (a Core `rename` using the same `putNamed` path would cost about 40 lines).
-3. **Photo images and audio playback with the module off. DECIDED by the supervisor (the owner's rule: what the user
-   has stays readable): photos are readable through Core's read-only route; stored audio is not applicable.**
-   - Photos, implemented: `GET /api/v1/recordings/{id}/photos/{n}` is served by Core (`assistant/kb_recording_media.go`,
-     reading `kb.Engine.PhotoImage`, now in `kb/recording_photos_read.go`) with the module on and off: the same path, full
-     credentials only, `Content-Type` of the stored file, `X-Content-Type-Options: nosniff`, `Cache-Control: private,
-     no-store`, no Range, `404 photo_not_found` for a photo that is not listed (deleted, or removed by the trim),
-     `410`/`404` for a deleted or unknown recording, the knowledge base's `503`s. It reads under `recFilesMu` (read side)
-     as `PhotoImage` always did, writes nothing and derives nothing. Adding, listing and deleting photos stay the module's
-     routes: with the module off a client can open a photo it knows the number of (the photo texts and numbers are in the
-     recording's detail), but cannot add or delete one. The module no longer registers its copy of the GET.
+3. **Photo reads and audio playback with the module off. DECIDED by the supervisor (the owner's rule: what the user
+   has stays readable): photo lists and images are readable through Core's read-only routes; stored audio is not applicable.**
+   - Photos, implemented: `GET /api/v1/recordings/{id}/photos` and `GET …/photos/{n}` are served by Core
+     (`assistant/kb_recording_media.go`, reading `kb.Engine.PhotosRead` and `PhotoImage` in `kb/recording_photos_read.go`)
+     with the module on and off: the same paths, full credentials only, the existing JSON and image responses, and the
+     existing `410`/`404` and knowledge-base `503` errors. They write nothing. Adding and deleting photos stay the
+     module's routes; the module no longer registers its copies of the GETs.
    - Audio, no code: no client-facing route has ever served stored audio. `kb.AudioRead` is used only by the module's
      final transcription pass; the chunk files (`attachments/audio/<from>.pcm`) are raw PCM16 and are deleted after the
      final pass; the only audio routes are the phone's upload socket and the gap upload. There was nothing to keep readable,

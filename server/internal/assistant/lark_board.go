@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 )
 
@@ -28,12 +29,12 @@ func (s *Service) workbenchStamp(ctx context.Context, c *botcard.Card) *botcard.
 }
 
 // divertNotices hands cards to the notifications companion when it takes them; false: they go to the bot's chat.
-func (s *Service) divertNotices(ctx context.Context, kind string, cards []*botcard.Card, fallbacks []string) bool {
+func (s *Service) divertNotices(ctx context.Context, kind assistantwire.NoticeKind, cards []*botcard.Card, fallbacks []string) bool {
 	return s.larkModule().DivertNotices(ctx, kind, cards, fallbacks)
 }
 
 // divertAnswer is divertNotices for an answer laid out in cards.
-func (s *Service) divertAnswer(ctx context.Context, kind string, cards []botAnswerCard) bool {
+func (s *Service) divertAnswer(ctx context.Context, kind assistantwire.NoticeKind, cards []botAnswerCard) bool {
 	cs := make([]*botcard.Card, 0, len(cards))
 	fs := make([]string, 0, len(cards))
 	for _, ac := range cards {

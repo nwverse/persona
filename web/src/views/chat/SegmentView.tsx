@@ -32,7 +32,7 @@ import type { InlineBubbleContent } from "./InlineUserBubble";
 import { ForwardBlock, ForwardCards } from "./ForwardCard";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { useFullText } from "./FullText";
-import { FileCards, ReplyFiles } from "./FileCards";
+import { LazyFileCards, LazyReplyFiles } from "./LazyFileCards";
 import { ReplyPorts } from "./PortChips";
 import { MessageActions } from "./MessageActions";
 import { skillEditText } from "../../lib/skill-mentions";
@@ -143,7 +143,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
         )}
         {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
         {remaining.length > 0 && <ContextGroup contexts={remaining} />}
-        {msg.files && <FileCards files={msg.files} mid={mid} />}
+        {msg.files && <LazyFileCards files={msg.files} mid={mid} />}
         {(msg.text || forwards.length > 0) &&
           (starting || pending ? bubble : (
             <MessageActions text={msg.text} editText={msg.inlineTrailer
@@ -311,7 +311,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
         </CardItem.Provider>
       </div>
       {full.more}
-      {!live && mid && sid && <ReplyFiles text={text} mid={mid} cwd={cwd} />}
+      {!live && mid && sid && <LazyReplyFiles text={text} mid={mid} cwd={cwd} />}
       {!live && mid && sid && <ReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
     </MessageActions>
   );

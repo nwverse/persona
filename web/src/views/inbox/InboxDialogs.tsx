@@ -1,7 +1,9 @@
 // What can be done with one item besides reading it (docs/assistant/inbox.md "Item actions"): "AI draft reply" (a reply in the
 // user's voice, edited and sent from here) and "Hand to AI" (the item as <persona-context> to Persona or a running agent;
 // Persona's main conversation may then write back to the item).
-import { ownerHeaders } from "../../lib/manager-choice";
+import { defaultManager, ownerHeaders } from "../../lib/manager-choice";
+import { BindingDialog } from "../../features/external-sources/BindingDialog";
+import type { ExternalSourceBindingEditorProps } from "../../features/external-sources/ExternalSourceBindingEditor";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
@@ -24,6 +26,14 @@ import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
 import { handOffAgents, Target, TARGET_SUB } from "./HandOffTargets";
+
+export function InboxExternalSourceDialog({ item, source, onClose }: {
+  item: InboxItem;
+  source: NonNullable<ExternalSourceBindingEditorProps["source"]>;
+  onClose: () => void;
+}) {
+  return <BindingDialog manager={item.manager ?? defaultManager()} source={source} onClose={onClose} />;
+}
 
 // A dialog's error under its controls.
 const ERROR = "mt-2 text-[12px] text-red";

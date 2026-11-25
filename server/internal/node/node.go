@@ -1246,6 +1246,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		cause := proto.StopUser
 		if a.Retire && a.StopCause.AllowsSupervisorResume() {
 			cause = a.StopCause
+		} else if !a.Retire && a.StopCause == proto.StopTimeout {
+			cause = proto.StopTimeout
 		}
 		if method == nodeproto.StopIfIdle && a.CloseTerminal {
 			stopped, closed, err := n.closeIdleTerminal(ctx, p.SessionID, cause)

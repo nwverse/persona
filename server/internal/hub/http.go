@@ -57,6 +57,7 @@ func (h *Hub) routes() http.Handler {
 	if h.upd != nil {
 		h.upd.routes(api)
 	}
+	h.recoveryRoutes(api)
 	h.machineRoutes(api)
 	// Confirm / reject / rename a computer (machine_trust.go, machine_rename.go).
 	h.machineTrustRoutes(api)

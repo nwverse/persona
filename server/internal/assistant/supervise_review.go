@@ -52,6 +52,12 @@ func (s *Service) canReviewLedger(ctx context.Context, self string, t Todo, v *S
 		return isMain
 	}
 	sup := v.Supervisor
+	if s.isLeader(ctx, sup) {
+		if d, _, loaded := s.directionSnapshot(ctx, sup); loaded && d.Outside != nil {
+			// Legacy reporting-only assignments have no reviewer conversation; their reminders already go to main.
+			return isMain
+		}
+	}
 	// An unassigned non-leader task (such as a main-chat task after main changed) belongs to the current main
 	// conversation alone.
 	if !v.assigned() && !s.isLeader(ctx, sup) && !s.isLeaderRef(sup) {

@@ -241,7 +241,9 @@ Persona Core is a product on its own: a hub built without any module starts, ser
 - **End-to-end gate**: `python3 scripts/ci/module-e2e.py --modules <ids>` switches the modules off and on at run time
   (the `modules` row) on a test hub started the same way, with a default build and the real web app in headless
   Chrome: flags, the manager's list, the module's routes, extensions and connectors, its web entry and chunks, and the
-  core's pages in every phase, plus the mock hub as an older hub. A module move merges only after it passes on its
+  core's pages in every phase, plus the mock hub as an older hub. Off, a module's entry points are gone, and data the
+  user already has is asserted the other way: a stored recording is still listed and opens read-only in the web app,
+  with none of the module's controls and none of its chunks. A module move merges only after it passes on its
   branch (docs/operations/testing.md "Module e2e gate", #14417).
 - **Tests**: `GOFLAGS="-trimpath -tags=persona_core_only" python3 scripts/ci/server-shards.py <node|managers|other>
   --database-file <file with database_url>` runs a shard's every package without modules; a test of a module's own
@@ -396,6 +398,21 @@ The modules of this kind:
 
 ### Guards
 
+**Controlling changes to the core (#14916).** Persona Core has no UI: it is the hub API and data model for Agents, sessions,
+tasks and to-dos, with the clients' headless code and the foundation interfaces. The clients' interface code is the default
+panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict: label + reason, owner review, no module
+references) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
+more pieces control changes to tier core itself, in this order of strength. The merge check: `scripts/hooks/core-change-check.py`, run by
+`scripts/hooks/merge-pr.sh`, refuses a PR that changes a tier-core path of `schema/core-paths.txt` (read by `scripts/test/core_paths.py`:
+the server units this file's classification calls `core`, the clients' headless directories and the foundation interfaces
+and guards named one by one; panel files and tests-only changes do not count) unless it has the label `core-change` and a `## Why this must change the core` section. CODEOWNERS:
+the core block of `.github/CODEOWNERS` is generated from tier core of the same list (`scripts/hooks/codeowners.py --write`) and requests
+the owners' review; whether the review is required is a branch ruleset the administrator sets. The reference guard:
+`scripts/test/test_core_references_no_module.py` needs no toolchain and checks on every platform that the four guards'
+baselines stay empty and that no core or panel Go, web or Kotlin file imports a module (the Apple ratchet is called as it is). A PR
+that edits the list, the check or the guards is itself a core change. The contributor steps are in `CONTRIBUTING.md`,
+"Changing Persona Core".
+
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
 `server/` (testdata left out), whatever its build constraint or GOOS, so a file only a `persona_core_only` build or one
 platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` proves it on a fixture).
@@ -508,7 +525,7 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   meeting turns against tool calls, hub transcription end to end) stay in `internal/assistant` and skip without the
   module (`needsRecordingModule`).
 - **With the module absent** (`persona_without_recording`, `persona_core_only`, or switched off) the recording routes
-  answer 404, the audio socket is unknown (so are the photo upload, list and delete routes), the hello names none of the nine meeting and recording capabilities (so
+  answer 404, the audio socket is unknown (so are the photo upload and delete routes; the list stays readable below), the hello names none of the nine meeting and recording capabilities (so
   the hub announces none of their feature flags), no room tool is offered and no final pass or attending feeder runs
   (`TestRecordingFollowsItsModule`). The recordings already stored stay in the knowledge base, **listed, readable
   and searchable, byte for byte unchanged** ("A module that is off keeps what the user has" above):
@@ -522,9 +539,9 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   | Delete (`DELETE /api/v1/kb/recordings/{id}`) | Works: the knowledge base's own route, always there |
   | Retention (`recording_days`, `minutes_days`) | Runs as configured (`kb.RetentionWithoutRecordingModule`, the one decision point) |
   | Crash recovery of an interrupted upload | Runs when the store opens, as ever |
-  | New recordings, uploads, appends, the audio socket, photos, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
+  | New recordings, uploads, appends, the audio socket, photo upload and deletion, rename, the minutes and recap routes | Gone: the module's routes answer 404 |
   | The minutes, titles and recap lanes, summaries, the sweep of hub transcripts after a prune | Run and do nothing: no model call, no file written |
-  | A stored photo's image (`GET /api/v1/recordings/{id}/photos/{n}`) | Works: Core's own read-only route (`assistant/kb_recording_media.go`), the same path and response with the module on or off; adding, listing and deleting photos stay the module's |
+  | Stored photos (`GET /api/v1/recordings/{id}/photos` and `GET …/photos/{n}`) | Work: Core's own read-only routes (`assistant/kb_recording_media.go`), the same paths and responses with the module on or off; adding and deleting photos stay the module's |
   | Stored audio | No route has ever served it (the chunks are the final pass's input, deleted after it); the chunk files of a recording in flight stay on disk untouched and the module resumes from them |
 
 - **Reader, kept writes and writers** (`docs/plans/plan-kb-recording-port.md`, PR 2): in `server/internal/kb` every
@@ -745,12 +762,14 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   edited (the settle timer and its lock), how it is sent and replaced, the workbench's pin, its loop and the button
   every card carries, and the notices a notifications companion long-polls. The core tells them through
   `larkhost.Board` (`BoardChanged`, `WorkbenchOn`, `WorkbenchStamp`, `DivertNotices`: nothing, the card unchanged and
-  `false` without the module). The rows (what waits and for how long, `board_rows.go`) and the waiting list as a card
-  stay the core's, since the briefing and the acceptance rounds read them too; the module asks for the card as of a
-  time (`Host.BoardCard`) and for whether the pending cards are read (`Host.FleetReady`). The four routes the companions
-  use (`PUT …/feishu/companions`, `GET …/feishu/notices`, `POST …/feishu/notices/action`, `POST …/feishu/workbench`)
-  are the module's `hub_routes`, served through the kernel only while it is on: with the module off or built out they
-  answer 404 (before, an off bot answered from the core). The request tells the module which manager's layer it is for
+  `false` without the module). `DivertNotices` takes `assistantwire.NoticeKind`, with `report`, `push` and `task` as
+  its JSON values. An unknown kind raises a defect even when no companion is available.
+  The rows (what waits and for how long, `board_rows.go`) and the waiting list as a card stay the core's, since the
+  briefing and the acceptance rounds read them too. The module asks for the card as of a time (`Host.BoardCard`) and
+  for whether the pending cards are read (`Host.FleetReady`). The four routes the companions use (`PUT
+  …/feishu/companions`, `GET …/feishu/notices`, `POST …/feishu/notices/action`, `POST …/feishu/workbench`) are the
+  module's `hub_routes`, served through the kernel only while it is on. With the module off or built out they answer
+  404 (before, an off bot answered from the core). The request tells the module which manager's layer it is for
   (`larkhost.WithLayer`, put on it where the core registers a module's routes). The stored chat state
   (`bots.feishu.state`: the board's message, the companions) is only ever written by the module's code; switching it
   off neither rewrites nor deletes it, and it is read again when the module comes back. Locks, the same before and after the move: the board's `run` (one send or edit at a time) is the outermost; under it
