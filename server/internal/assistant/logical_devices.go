@@ -48,6 +48,8 @@ type logicalSwitchStore interface {
 	ConversationUnresolvedInput(context.Context, string, string) (*db.ConversationInput, error)
 	ConversationInputPending(context.Context, string, string) (bool, error)
 	AcceptIdleConversationSwitch(context.Context, string, string, string, int64) (bool, error)
+	CancelConversationSwitch(context.Context, string, string, string, int64, string) (bool, error)
+	NoteConversationSwitchError(context.Context, string, string, string, string) error
 	ConversationClosures(context.Context) ([][2]string, error)
 	ConversationClosureDone(context.Context, string, string) error
 }

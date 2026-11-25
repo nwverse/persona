@@ -215,6 +215,7 @@ func TestInboxReplyPolicyFailedPublicationUnmarkedRowCannotSendAfterReloadLegacy
 }
 
 func TestInboxReplyPolicyWorkbenchTransientDraftDoesNotBorrowLiveMirrorVersionLegacySchema(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
@@ -325,6 +326,7 @@ func TestInboxReplyPolicyWorkbenchTransientSendRechecksPolicyAfterMutexWaitLegac
 }
 
 func TestInboxReplyPolicyUnversionedWorkbenchCardCannotRetryFailedAttemptLegacySchema(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	const text = "Same text on an old card and its replacement"
 	newAttempt := func(t *testing.T) (*inboxHub, *recoveryReplier, *InboxItem, map[string]any, map[string]any, chan struct{}) {
 		t.Helper()
