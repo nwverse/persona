@@ -65,6 +65,7 @@ export interface Manifest {
    * executable; writes and arbitrary command lines are not part of this contract.
    */
   host_integrations?: HostIntegrationSpec[];
+  upgrade?: UpgradeSpec;
 }
 
 /**
@@ -136,6 +137,24 @@ export interface AuthSpec {
    * do leave it out of its pages.
    */
   page?: string;
+}
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+export interface UpgradeSpec {
+  /** auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade. */
+  backup?: string;
+  /**
+   * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+   */
+  prepare?: boolean;
+  /**
+   * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+   * snapshot.
+   */
+  health_check?: boolean;
 }
 
 export interface Dependency {
@@ -1069,6 +1088,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */
@@ -3969,8 +3993,8 @@ export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "
  * and calls their short tool names. An extension's connector with one this hub does not know loses only that
  * capability.
  */
-export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | (string & {});
-export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"] as const;
+export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | "inbox_visibility" | (string & {});
+export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"] as const;
 
 /**
  * ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.

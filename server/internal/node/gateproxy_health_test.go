@@ -99,7 +99,7 @@ func (r *spaceRig) processNamed(cwd string) (env []string, name func(id string))
 
 // open is openIn for a process outside the health space, for the tests that are not about the space.
 func (p *gateProxy) open(command, session string) (base string, release func(), err error) {
-	return p.openIn(command, session, false)
+	return p.openIn(command, session, false, false)
 }
 
 // cards is how many cards the phone was asked.

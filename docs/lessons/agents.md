@@ -63,7 +63,9 @@ a property, and defaults, examples and constants are data. Keep call arguments a
 unchanged. Regress with the real tool schema and proxy wire flow; a `tools/call` result containing `tools` is not a list.
 
 - Keep Codex app-server ancestry as raw thread IDs until session decoration maps it into home-scoped public IDs
-  (#9393). Mapping a secondary home's parent twice leaves the child orphaned. Model-facing Agent lists must reuse
+  (#9393). Mapping a secondary home's parent twice leaves the child orphaned. A terminal start already claims its public
+  ID from the matched rollout. Bind that ID directly to preserve the source home and native thread for later messages
+  (#13737). Model-facing Agent lists must reuse
   `folded_under` and the parent's folded state too; fixing the client list alone still leaves helper rows in
   `agents_list` and the main chat's counts. Do not hide an unknown-parent session by its title or subagent flag alone.
 
