@@ -513,11 +513,57 @@ func (s *Service) expireLogicalSwitch(ctx context.Context, st logicalSwitchStore
 func (s *Service) afterLogicalSwitchCancel(ctx context.Context, st logicalSwitchStore, machine, id string) {
 	if next, err := st.LogicalConversation(ctx, machine, id); err == nil && next != nil {
 		rebind, cancel := context.WithTimeout(ctx, 5*time.Second)
+		s.restoreLogicalSource(rebind, next, 3)
 		s.logicalRebind(rebind, next)
 		cancel()
 	}
 	s.logicalChanged()
 	s.historyWake()
+}
+
+// restoreAfterCancelledRetire runs where a prepared switch's own retire of its source has returned but the switch
+// did not activate. If the switch was cancelled meanwhile (its source still active), it lifts the retirement again:
+// the cancel's own restore can run before that retire lands on the node, or meet the node busy with it, and nothing
+// else lifts the mark at the first epoch until the next send.
+func (s *Service) restoreAfterCancelledRetire(ctx context.Context, st logicalSwitchStore, machine, id, operation string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	op, err := st.ConversationSwitch(ctx, machine, id, operation)
+	if err != nil || op == nil || op.Phase != "rejected" {
+		return
+	}
+	c, err := st.LogicalConversation(ctx, machine, id)
+	if err != nil || c == nil {
+		return
+	}
+	if a, ok := c.Active(); !ok || a.ID != op.SourceSegment {
+		return
+	}
+	s.restoreLogicalSource(ctx, c, 5)
+	s.logicalRebind(ctx, c)
+}
+
+// restoreLogicalSource lifts the node's retirement mark from c's active segment, trying up to attempts times: the
+// node refuses it while another call on that conversation holds its lock.
+func (s *Service) restoreLogicalSource(ctx context.Context, c *db.LogicalConversation, attempts int) {
+	a, ok := c.Active()
+	if !ok || !logicalSourceMayBeRetired(c) {
+		return
+	}
+	var err error
+	for try := range attempts {
+		if try > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		if _, err = s.logicalPhysical(ctx, a.MachineID, "assistant.segment.restore", map[string]any{"session_id": a.SessionID}); err == nil {
+			return
+		}
+	}
+	s.logf("assistant: %s/%s keeps its retirement until its next send: %v", c.MachineID, short(c.SessionID), err)
 }
 
 func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation) error {
@@ -689,10 +735,15 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		if source, ok := c.Active(); ok {
 			_, err := s.logicalPhysical(ctx, source.MachineID, "assistant.segment.retire", map[string]any{"session_id": source.SessionID})
 			if err != nil && !errors.Is(err, apierr.ErrOffline) && !errors.Is(busError(err), apierr.ErrOffline) && !errors.Is(busError(err), rpc.ErrClosed) {
+				// The retire may still have landed on the node.
+				s.restoreAfterCancelledRetire(ctx, st, c.MachineID, c.SessionID, op.OperationID)
 				return err
 			}
 		}
 		if err := st.ActivateConversationSegment(ctx, c.MachineID, c.SessionID, op.OperationID, c.Epoch); err != nil {
+			if errors.Is(err, db.ErrConversationEpoch) {
+				s.restoreAfterCancelledRetire(ctx, st, c.MachineID, c.SessionID, op.OperationID)
+			}
 			return err
 		}
 		var err error

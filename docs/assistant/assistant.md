@@ -2921,7 +2921,8 @@ items. `restore_batch_id` creates a new, itself-restorable batch toward the orig
 than a global default. It only includes completed items whose current epoch and execution still match that batch's
 target. An item still `switching` whose operation has not activated is restored by cancelling that operation instead:
 only while the conversation is at the item's expected epoch, on its saved before-image, with the operation's source
-still active. The restore batch reports it `switched` with a reason, the original item becomes `refused`, and nothing
+still active. The restore item (`cancel`) is saved with its batch before the cancel runs, so a restart finishes it
+once; the restore batch reports it `switched` with a reason, the original item becomes `refused`, and nothing
 is prepared. If the switch activates first (or while the MCP confirmation is open), the item is refused and the switch
 finishes; restore it again afterwards. The usage-limit fallback's automatic restore does not cancel. A
 conversation changed independently is reported and left alone. Empty requested model/effort retain launcher-

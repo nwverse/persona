@@ -6852,7 +6852,7 @@ completed item's exact saved machine, launcher, requested model, effort and perm
 launcher-default meaning; an empty saved permission becomes explicit `default` rather than inheriting the fallback's
 mode. Restore itself saves a new before-image and queues busy items. An original item still `switching` whose operation
 has not activated its target is restored by cancelling that operation, fenced by the item's expected epoch and saved
-before-image: the restore item is `switched` with a `reason`, the original item becomes `refused`, and nothing is
+before-image: the restore item carries `cancel: true`, is saved before the cancel runs, and ends `switched` with a `reason`, the original item becomes `refused`, and nothing is
 prepared (#15317). Any other unfinished original item, an epoch mismatch or an independently changed execution is
 refused and left untouched; restoring never overwrites a newer user choice. A switch that has not activated within 30
 minutes of its start ends `refused`, with a reason naming what it waited for and its last error, and the conversation

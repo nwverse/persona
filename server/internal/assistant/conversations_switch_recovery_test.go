@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -225,6 +226,153 @@ func TestConversationSwitchRestoreLeavesASwitchThatActivated(t *testing.T) {
 	c, err := r.d.LogicalConversation(context.Background(), item.Machine, item.ConversationID)
 	if a, ok := c.Active(); err != nil || !ok || a.SessionID != "late-chat" {
 		t.Fatalf("the activated switch did not finish: %+v %v", c, err)
+	}
+}
+
+// conversationSwitchTestHold sits between the service and the rig's fake hub. It can hold one node method until
+// released, without holding the fake's lock, and it keeps fresh-chat's retirement mark the way the node does: a
+// restore is refused as busy while a retire holds the conversation's lock.
+type conversationSwitchTestHold struct {
+	inner   Hub
+	method  string
+	entered chan struct{}
+	release chan struct{}
+
+	mu       sync.Mutex
+	retiring bool
+	retired  bool
+}
+
+func conversationSwitchTestHoldOn(r *conversationSwitchTestRig, method string) *conversationSwitchTestHold {
+	h := &conversationSwitchTestHold{inner: r.s.hub, method: method, entered: make(chan struct{}), release: make(chan struct{})}
+	r.s.hub = &firstToolsTimingHub{Hub: r.s.hub, beforeCall: h.call}
+	return h
+}
+
+func (h *conversationSwitchTestHold) call(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	fresh := strings.Contains(string(p.Params), `"fresh-chat"`)
+	switch {
+	case p.Method == "assistant.segment.retire" && fresh:
+		h.mu.Lock()
+		h.retiring = true
+		h.mu.Unlock()
+		defer func() {
+			h.mu.Lock()
+			h.retiring, h.retired = false, true
+			h.mu.Unlock()
+		}()
+	case p.Method == "assistant.segment.restore" && fresh:
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.retiring {
+			return nil, errors.New("fake conversation busy")
+		}
+		h.retired = false
+	}
+	if p.Method == h.method {
+		select {
+		case <-h.entered:
+		default:
+			close(h.entered)
+			<-h.release
+		}
+	}
+	return h.inner.DeviceCall(ctx, p)
+}
+
+func (h *conversationSwitchTestHold) retirement() (retiring, retired bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.retiring, h.retired
+}
+
+// A restore that cancels a prepared switch while that switch's retire of its source is still on the node: the
+// cancel's own restore meets the node busy, the retire then lands, and the source must still end up not retired.
+func TestConversationSwitchCancelDuringRetireLeavesTheSourceUsable(t *testing.T) {
+	r := newConversationSwitchTestRig(t)
+	hold := conversationSwitchTestHoldOn(r, "assistant.segment.retire")
+	started, item := conversationSwitchTestStart(t, r)
+	go r.s.logicalSweep(context.Background())
+	select {
+	case <-hold.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the switch never retired its source")
+	}
+
+	code, raw := conversationSwitchTestCall(t, r.s, http.MethodPost, "/api/v1/assistant/conversation-switches", "", `{"restore_batch_id":"`+started.BatchID+`"}`)
+	restoring := conversationSwitchTestDecode(t, code, raw)
+	if got := conversationSwitchTestItemFor(t, restoring, "fresh-chat"); got.Outcome != "switched" || !strings.Contains(got.Reason, "cancelled") {
+		t.Fatalf("restore during the retire: %+v", restoring)
+	}
+	close(hold.release)
+	waitFor(t, "the source to be usable after the late retire", func() bool {
+		retiring, retired := hold.retirement()
+		return !retiring && !retired
+	})
+	conversationSwitchTestSettle(t, r.s)
+	if _, retired := hold.retirement(); retired {
+		t.Fatal("the late retire left the source retired")
+	}
+	conversationSwitchTestOnSource(t, r, item, 2)
+}
+
+// The restore batch with its cancel is saved before the cancel runs, so a crash on either side of the cancel ends
+// the same way after a restart: the cancel is done once, the restore item is switched and the original refused.
+func TestConversationSwitchRestoreCancelSurvivesACrash(t *testing.T) {
+	r := newConversationSwitchTestRig(t)
+	conversationSwitchTestUnknownReceipt(r)
+	started, item := conversationSwitchTestStart(t, r)
+	conversationSwitchTestWaitSwitch(t, r, item, "in_doubt", "fake receipt unavailable")
+	conversationSwitchTestSettle(t, r.s)
+
+	// Before the cancel: a receipt check holds the conversation's lock, so the saved cancel cannot run yet.
+	hold := conversationSwitchTestHoldOn(r, "assistant.segment.receipt")
+	go r.s.logicalSweep(context.Background())
+	select {
+	case <-hold.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no receipt check started")
+	}
+	code, raw := conversationSwitchTestCall(t, r.s, http.MethodPost, "/api/v1/assistant/conversation-switches", "", `{"restore_batch_id":"`+started.BatchID+`"}`)
+	restoring := conversationSwitchTestDecode(t, code, raw)
+	if got := conversationSwitchTestItemFor(t, restoring, "fresh-chat"); restoring.BatchID == "" || got.Outcome != "queued" || got.OperationID != item.OperationID {
+		t.Fatalf("the cancel was not saved before it ran: %+v", restoring)
+	}
+	if op, _ := r.d.ConversationSwitch(context.Background(), item.Machine, item.ConversationID, item.OperationID); op.Phase != "in_doubt" {
+		t.Fatalf("cancelled under the lock: %+v", op)
+	}
+	close(hold.release)
+	conversationSwitchTestSettle(t, r.s)
+
+	restarted := withSettings(t, r.f, New(Options{Hub: r.f, Store: func() Store { return r.d }, Logf: testLogf(t)}))
+	conversationSwitchTestDrive(t, restarted, restoring.BatchID, map[string]string{"fresh-chat": "switched"})
+	reason := "cancelled by restore batch " + restoring.BatchID
+	if op, _ := r.d.ConversationSwitch(context.Background(), item.Machine, item.ConversationID, item.OperationID); op.Phase != "rejected" || !strings.Contains(op.Error, reason) {
+		t.Fatalf("restart did not finish the saved cancel: %+v", op)
+	}
+	conversationSwitchTestDrive(t, restarted, started.BatchID, map[string]string{"fresh-chat": "refused"})
+
+	// After the cancel: the save of its outcome is lost. The next run finds the cancel done by this batch.
+	var state conversationSwitchState
+	if _, err := r.d.Setting(context.Background(), conversationSwitchesKey, &state); err != nil {
+		t.Fatal(err)
+	}
+	for bi := range state.Batches {
+		if state.Batches[bi].ID == restoring.BatchID {
+			state.Batches[bi].Items[0].Outcome, state.Batches[bi].Items[0].Reason = conversationSwitchQueued, ""
+		}
+	}
+	if err := r.d.PutSetting(context.Background(), conversationSwitchesKey, state); err != nil {
+		t.Fatal(err)
+	}
+	again := withSettings(t, r.f, New(Options{Hub: r.f, Store: func() Store { return r.d }, Logf: testLogf(t)}))
+	got := conversationSwitchTestItemFor(t, conversationSwitchTestDrive(t, again, restoring.BatchID, map[string]string{"fresh-chat": "switched"}), "fresh-chat")
+	if !strings.Contains(got.Reason, "cancelled") {
+		t.Fatalf("a cancel done before the crash was not recognised: %+v", got)
+	}
+	conversationSwitchTestOnSource(t, r, item, 1)
+	if n := len(conversationSwitchTestPreparations(r)); n != 0 {
+		t.Fatalf("restore prepared a conversation: %d", n)
 	}
 }
 

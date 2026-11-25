@@ -57,9 +57,10 @@ type conversationSwitchItem struct {
 	Outcome        string                `json:"outcome"`
 	Reason         string                `json:"reason,omitempty"`
 
-	// cancel marks a planned restore of an item whose switch has not activated: executing it cancels operation
-	// OperationID instead of starting a switch back. Never stored.
-	cancel bool
+	// Cancel marks a restore of an item whose switch has not activated: it cancels the original operation
+	// OperationID instead of starting a switch back. It is saved with its batch before the cancel runs, so a restart
+	// finishes it (runConversationSwitchCancel).
+	Cancel bool `json:"cancel,omitempty"`
 }
 
 type conversationSwitchBatch struct {
@@ -363,31 +364,41 @@ func (s *Service) planConversationSwitchCancel(ctx context.Context, st logicalSw
 	if !sameConversationExecution(conversationExecutionNow(old.Machine, row, c), old.Before) {
 		return refuse("the conversation changed independently; its newer settings were left untouched")
 	}
-	item.Outcome, item.cancel = conversationSwitchReady, true
+	item.Outcome, item.Cancel = conversationSwitchReady, true
 	return item
 }
 
-// cancelConversationSwitchItem executes a planned cancel for restore batch batchID. The cancel shares the
+// runConversationSwitchCancel finishes the saved cancel of a restore batch's item (Cancel): it cancels the original
+// operation, or finds that an earlier pass of this batch did before a crash lost the outcome. The cancel shares the
 // conversation's row lock with activation and is fenced by its epoch, so a switch that activated meanwhile is left
-// to finish and this item is refused.
-func (s *Service) cancelConversationSwitchItem(ctx context.Context, st logicalSwitchStore, batchID string, item *conversationSwitchItem) {
+// to finish and this item is refused. A lock held for a moment is retried on the next pass.
+func (s *Service) runConversationSwitchCancel(ctx context.Context, st logicalSwitchStore, batchID string, item *conversationSwitchItem) bool {
+	if item.Outcome != conversationSwitchQueued && item.Outcome != conversationSwitchReady {
+		return false
+	}
 	reason := "cancelled by restore batch " + batchID + "; the conversation kept its original settings"
 	cancelled, err := st.CancelConversationSwitch(ctx, item.Machine, item.ConversationID, item.OperationID, item.ExpectedEpoch, reason)
-	item.cancel = false
+	if errors.Is(err, db.ErrConversationSwitchBusy) {
+		return false
+	}
+	if err == nil && !cancelled {
+		op, opErr := st.ConversationSwitch(ctx, item.Machine, item.ConversationID, item.OperationID)
+		if opErr != nil {
+			s.logf("conversations_switch %s: cancel check: %v", item.OperationID, opErr)
+			return false
+		}
+		cancelled = op != nil && op.Phase == "rejected" && op.Error == reason
+	}
 	switch {
-	case errors.Is(err, db.ErrConversationSwitchBusy):
-		item.Outcome, item.Reason = conversationSwitchRefused, "the switch was busy; restore the batch again"
 	case err != nil:
-		item.Outcome, item.Reason = conversationSwitchRefused, err.Error()
+		item.Outcome, item.Reason, item.OperationID = conversationSwitchRefused, err.Error(), ""
 	case !cancelled:
-		item.Outcome, item.Reason = conversationSwitchRefused, "the switch went ahead before it could be cancelled; restore the batch again once it finishes"
+		item.Outcome, item.Reason, item.OperationID = conversationSwitchRefused, "the switch went ahead before it could be cancelled; restore the batch again once it finishes", ""
 	default:
 		item.Outcome, item.Reason = conversationSwitchSwitched, "the unfinished switch was cancelled; the conversation kept its original settings"
 		s.afterLogicalSwitchCancel(ctx, st, item.Machine, item.ConversationID)
 	}
-	if item.Outcome == conversationSwitchRefused {
-		item.OperationID = ""
-	}
+	return true
 }
 
 func actionableConversationSwitchItems(items []conversationSwitchItem) int {
@@ -465,6 +476,9 @@ func conversationSwitchBusyError(err error) bool {
 }
 
 func (s *Service) runConversationSwitchItem(ctx context.Context, st logicalSwitchStore, state *conversationSwitchState, batch *conversationSwitchBatch, item *conversationSwitchItem) bool {
+	if item.Cancel {
+		return s.runConversationSwitchCancel(ctx, st, batch.ID, item)
+	}
 	if item.Outcome == conversationSwitchSwitching {
 		changed, err := s.reconcileConversationSwitchItem(ctx, st, batch.FirstTurn, item)
 		if err != nil {
@@ -652,7 +666,7 @@ func (s *Service) executeConversationSwitches(ctx context.Context, a conversatio
 		allowed = map[string]bool{}
 		for _, item := range items {
 			if item.Outcome != conversationSwitchRefused {
-				allowed[item.Machine+"\x00"+item.ConversationID] = item.cancel
+				allowed[item.Machine+"\x00"+item.ConversationID] = item.Cancel
 			}
 		}
 	}
@@ -679,11 +693,11 @@ func (s *Service) executeConversationSwitches(ctx context.Context, a conversatio
 			}
 			cancel, ok := allowed[items[i].Machine+"\x00"+items[i].ConversationID]
 			if !ok {
-				items[i].Outcome = conversationSwitchRefused
+				items[i].Outcome, items[i].OperationID, items[i].Cancel = conversationSwitchRefused, "", false
 				items[i].Reason = "the item became eligible while confirmation was open; preview and confirm it again"
-			} else if cancel != items[i].cancel {
+			} else if cancel != items[i].Cancel {
 				// A switch that activated (or settled) while confirmation was open is not cancelled, nor switched back unasked.
-				items[i].Outcome, items[i].OperationID = conversationSwitchRefused, ""
+				items[i].Outcome, items[i].OperationID, items[i].Cancel = conversationSwitchRefused, "", false
 				items[i].Reason = "the switch moved on while confirmation was open; preview and confirm it again"
 			}
 		}
@@ -692,16 +706,13 @@ func (s *Service) executeConversationSwitches(ctx context.Context, a conversatio
 		return conversationSwitchReport{RestoreOf: a.RestoreBatchID, Items: items}, "", nil
 	}
 	batch := conversationSwitchBatch{ID: randomHex(16), Space: space, RestoreOf: a.RestoreBatchID, CreatedAt: time.Now().UTC(), Items: items}
-	st, _ := s.store().(logicalSwitchStore) // planConversationSwitches plans nothing without one
 	for i := range batch.Items {
 		item := &batch.Items[i]
 		switch {
-		case item.cancel && item.Outcome != conversationSwitchRefused:
-			// A switch that has not activated is cancelled now, under the batch lock, instead of switching back.
-			s.cancelConversationSwitchItem(ctx, st, batch.ID, item)
-		case item.cancel:
-			// Refused while confirmation was open: nothing was cancelled.
-			item.cancel, item.OperationID = false, ""
+		case item.Cancel:
+			// A switch that has not activated is cancelled, not switched back. The item keeps the original operation's
+			// ID, and the cancel runs only once this batch is saved (runConversationSwitchCancel).
+			item.Outcome = conversationSwitchQueued
 		case item.Outcome != conversationSwitchRefused:
 			item.OperationID = randomHex(16)
 			item.Outcome = conversationSwitchQueued
