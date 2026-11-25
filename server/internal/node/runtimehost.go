@@ -381,7 +381,7 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		// (runtimeworkspaces.go).
 		features := []string{"prefer_running", "resume_argv", "handover", "transcript", "launchers", "start_params", "modes", "resume", "codex_thread", "unlisted_transcripts", "workspaces", "usage"}
 		if !h.isDaemon() {
-			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp")
+			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp", "remote_agent", "memory_tools")
 			if hello.Caps.Assistant {
 				features = append(features, "assistant_pids")
 			}
@@ -435,6 +435,13 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 		}
 		if assistant && !p.LeaderOnly {
 			res.Tools = append(res.Tools, n.gateTools()...)
+			if h.remoteAgent() {
+				if p.SessionID == "" {
+					res.Tools = append(res.Tools, n.memoryTools()...)
+				} else if _, ok := n.sessionAllowsMemoryTools(p.SessionID); ok {
+					res.Tools = append(res.Tools, n.memoryTools()...)
+				}
+			}
 		}
 		if h.isDaemon() {
 			res.Tools = slices.DeleteFunc(res.Tools, func(tool proto.Tool) bool { return !assistantwire.IsA2ATool(tool.Name) })
@@ -469,7 +476,17 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			return n.saveMailAttachment(ctx, p.Args, p.SessionID, assistant, n.guestOf(p.SessionID) != nil), nil
 		}
 		if g := n.gateTool(p.Name); assistant && g != nil {
+			if h.remoteAgent() {
+				rh.reg.markRemote(p.SessionID)
+				n.gates().markRemote(p.SessionID)
+			}
 			return n.assistantGateTool(ctx, g, p.SessionID, p.Args), nil
+		}
+		if isMemoryTool(p.Name) {
+			if !h.remoteAgent() || !assistant {
+				return proto.TextResult("Memory tools require a remote assistant session", true), nil
+			}
+			return n.assistantMemoryTool(ctx, p.Name, p.SessionID, p.Args), nil
 		}
 		var res json.RawMessage
 		params := map[string]any{"name": p.Name, "args": p.Args, "session_id": p.SessionID, "assistant": assistant, "guest": n.guestOf(p.SessionID) != nil}

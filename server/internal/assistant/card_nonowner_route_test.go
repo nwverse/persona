@@ -97,6 +97,56 @@ func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	}
 }
 
+// Antigravity's ACP permission title and Skill instruction arguments are local data, not evidence
+// of an outward action. Their sanitized production shapes take the non-owner route without a push
+// or an agent_permission ledger entry; form/secret/owner-proposal precedence is pinned in TestUserApproval.
+func TestLocalNonActionPermissionsUseNonOwnerRoute(t *testing.T) {
+	now := time.Now().UTC()
+	for _, tc := range []struct {
+		name string
+		ix   proto.Interaction
+	}{
+		{"antigravity draft mentioning deletion", proto.Interaction{
+			ID: "ix_local_agy_delete", MachineID: "mac", SessionID: "agy-local-draft", Kind: proto.IxPermission,
+			ToolName: "File /work/draft.md", ToolInput: []byte(`{"TargetFile":"/work/draft.md","CodeContent":"删除该字段"}`), // i18n-ignore: synthetic Antigravity file payload
+			CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		}},
+		{"antigravity draft mentioning a comment", proto.Interaction{
+			ID: "ix_local_agy_comment", MachineID: "mac", SessionID: "agy-local-review", Kind: proto.IxPermission,
+			ToolName: "File /work/review.md", ToolInput: []byte(`{"Path":"/work/review.md","Content":"Replay the comment"}`),
+			CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		}},
+		{"Skill instructions with a negated send", proto.Interaction{
+			ID: "ix_local_skill", MachineID: "mac", SessionID: "standalone-skill", Kind: proto.IxPermission,
+			ToolName: "Skill", ToolInput: []byte(`{"skill":"agent-browser","args":"只读检查、不发送邮件、不改设置"}`), // i18n-ignore: synthetic skill arguments
+			CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			if got := userApproval(tc.ix); got != "" {
+				t.Fatalf("local non-action is owner-only: %s", got)
+			}
+			answered := e.raise(tc.ix)
+			waitFor(t, "local non-action routed to main", func() bool {
+				return hasRelayFrom(e.s, "conv1", cardAgentPermission, "interaction_id="+tc.ix.ID)
+			})
+			e.settle()
+			if n := e.pushesOf(tc.ix.ID); n != 0 {
+				t.Fatalf("local non-action pushed to the owner %d times", n)
+			}
+			if c := cardsToday(t, e.s)[cardAgentPermission]; c.N != 0 {
+				t.Fatalf("agent_permission ledger = %+v, want 0", c)
+			}
+			allow := true
+			if err := e.s.resolve(tc.ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+				t.Fatal(err)
+			}
+			answerOf(t, answered)
+		})
+	}
+}
+
 // Source 2 (agent_question): non-six-class questions and parsed non-user terminal dialogs from an
 // unsupervised agent go to the main conversation without pushing to the owner, while six-class cards
 // (elicitation/form, folder trust, delete risk) still push to the owner.
