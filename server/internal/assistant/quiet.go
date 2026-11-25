@@ -327,13 +327,14 @@ func (s *Service) dropQueuedNeeds(todoID string) bool {
 	return removed || changed
 }
 
-// prepareAgentTask records an assistant agent_start before the node is called (#5732). The calling conversation stays
-// its origin; the calling lead supervises its own work, otherwise main does. Quiet controls notification behavior,
-// never whether the work is tracked. The supervisor also gets a card when it differs from the origin.
+// prepareAgentTask records an assistant agent_start before the node is called (#5732, #13657). The calling conversation
+// stays its origin; a calling lead or live assistant side conversation supervises its own work, otherwise main does.
+// Quiet controls notification behavior, never whether the work is tracked. The supervisor also gets a card when it differs
+// from the origin.
 func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any) (Todo, string, bool) {
 	supervisor := s.settings(ctx).Main
 	source := ""
-	if s.isLeader(ctx, conversation) {
+	if s.isLeader(ctx, conversation) || s.liveSideSupervisor(ctx, conversation) {
 		supervisor, source = conversation, "plan"
 	}
 	tabName, _ := tab.(string)

@@ -361,7 +361,7 @@ func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, 
 	_, _, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 		if v.assigned() {
 			supervisor = v.Supervisor // a transfer that won before this write stays authoritative
-		} else if s.isLeader(ctx, supervisor) {
+		} else if s.isLeader(ctx, supervisor) || s.liveSideSupervisor(ctx, supervisor) {
 			v.SupervisorSource = "plan"
 		}
 		if t.Continues == "" {
