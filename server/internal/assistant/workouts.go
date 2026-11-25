@@ -150,18 +150,19 @@ func (s *Service) acceptWorkout(ctx context.Context, v WorkoutReport) error {
 	return s.keepWorkoutReceipt(ctx, task)
 }
 
-func (s *Service) workoutPromptNow(ctx context.Context, t Task) Task {
+func (s *Service) workoutPromptNow(ctx context.Context, t Task) (Task, string) {
 	if t.WorkoutID == "" || t.Space != SpaceHealth || s.healthMod == nil {
-		return t
+		return t, ""
 	}
 	p, ok, err := s.healthMod.WorkoutReport(ctx, t.WorkoutID, answerLanguage(s.hello(ctx).Locale))
 	if err != nil {
 		s.logf("workout report %s: assembled prompt unavailable, using the stored one: %v", t.WorkoutID, err)
 	}
 	if ok && err == nil {
-		t.Prompt, t.PromptSelections = p, false
+		t.Prompt, t.PromptSelections = p.Prompt, false
+		return t, p.Start.In(s.location(ctx)).Format("2006-01-02")
 	}
-	return t
+	return t, ""
 }
 func (s *Service) workoutRoutes() {
 	s.handle("POST /api/v1/assistant/health/workouts", func(w http.ResponseWriter, r *http.Request) {

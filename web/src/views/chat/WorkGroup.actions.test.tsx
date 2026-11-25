@@ -13,7 +13,7 @@ const group = (id: string, tools: ToolStep[], live = false): WorkGroupNode => ({
 
 it("headers retain first-seen kind order, deduplicate read paths, combine edit kinds, and stop after three kinds", () => {
   const g = group("g", [tool("1", "Bash"), tool("2", "Read", { file_path: "src/example.ts" }), tool("3", "Read", { file_path: "src/example.ts" }), tool("4", "Edit"), tool("5", "Write"), tool("6", "Grep")]);
-  expect(actionSummary(g)).toEqual({ text: "运行 1 条命令 · 读取 1 个文件 · 编辑 2 个文件", icon: "run" });
+  expect(actionSummary(g)).toEqual({ text: "运行 1 条命令 · 读取 1 个文件 · 编辑 2 个文件", icon: "terminal" });
   expect(actionSummary(group("g", [tool("1", "Grep"), tool("2", "Read")])).icon).toBe("search");
   expect(actionSummary(group("g", [tool("1", "Edit", { file_path: "src/example.ts" }), tool("2", "Write", { file_path: "src/example.ts" })])).text).toBe("编辑 1 个文件");
   expect(actionSummary(group("g", [tool("1", "CustomTool")])).text).toContain("CustomTool");

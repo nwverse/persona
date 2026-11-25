@@ -49,6 +49,8 @@ App 核对 state 并向原 HTTPS 地址兑换 code，禁止重定向。跳转链
 
 ## Authentication
 
+- Tell Health (#14714) adds only `POST /api/v1/assistant/health/tell` to the watch's `answer` allowlist. Full devices may also call it; no extension scope opens it. Neighboring paths and other methods remain forbidden to the watch. See "Tell Health".
+
 - Prefer `Authorization: Bearer <token>`. The current implementation has not locked down URL tokens: when there is no Authorization value, every authenticated API (WebSocket included) still falls back to `?token=`, not only on loopback or for WS. Clients should use the header so credentials stay out of URLs.
 - The workspace board (#1646) adds GET `/api/v1/workspace-board` and `/api/v1/workspaces` to the `answer` read allowlist; changing the board still requires `full`. See "Workspace board".
 - Health intake (#13175) adds only `GET /api/v1/assistant/health/intake` and `POST /api/v1/assistant/health/intake` to the watch's `answer` allowlist. The changes feed and undo require `full`; no extension scope opens any intake route. Other paths under this prefix, including detail-page actions and imports, remain forbidden to `answer` credentials. See "Health intake".
@@ -310,6 +312,7 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - `recording_day` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): all-day recordings and their daily recap (#4741): the upload's `kind: "day"` with `day`, `tz`, `part` and `coverage`, `POST …/segments`, `detail.recap`, `recap_state`, `recap_final` and `recap_final_at`; see "All-day recordings (#4741)". The phone uploads a day recording only to a hub that lists it, since an older hub refuses the kind.
   - `assistant_search` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): `GET /api/v1/assistant/search`, the assistant's chats found by what was said in them (see "Assistant chat search (#6282)"). Without it the apps filter titles and last messages as before; a non-default manager from before it answers the route 404, which the apps take the same way.
   - `assistant_pages` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it; #15017, [dashboards.md](../assistant/dashboards.md)): the assistant's pages, Dashboards. The built-in manager names it whenever it keeps pages, the switch on or off: the reserved extension `-pages` among `GET /api/v1/extensions/-/ui`'s places and its pages at `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`, the top-level boolean `dashboards` of `GET` / `PUT /api/v1/assistant` (absent or false: off) and the `assistant_pages` event. The apps show the **Let Persona make dashboards** switch in Settings › Assistant only while the hub lists it.
+  - `health_tell` only while the default manager is connected and names it in `manager.hello`; extension reports cannot enable it. The core keeps it available without the Health data module. See "Tell Health".
   - `health_items` only while the default manager names it in its hello: ordered health items and revisions (see "Health items"). Extension reports cannot enable it.
   - `health_intake` only while the default manager is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): built-in water and protein records, daily totals, undo markers and the changes feed (see "Health intake"). Clients check this feature before offering intake controls; an older hub may refuse a watch request with 403 rather than 404.
   - `health_strength` only while the default manager names it in its `manager.hello`: strength exercises, sets, drafts, managed cards and pages under the reserved `-health-intake` id (see "Strength training"). Extension reports cannot enable it. It follows the Health module, independently of whether the owner added strength training.
@@ -2221,6 +2224,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/assistant/search?q=&limit=` | The assistant's chats found by their title, the user's words or the replies (`assistant_search`); see "Assistant chat search (#6282)" |
 | GET | `/api/v1/assistant/health/items` | `{catalog:[{id,source}],items:[id],revision,saved}`. Full devices only; see "Health items". Omit manager selection to use the default. |
 | PUT | `/api/v1/assistant/health/items` | `{items:[id],revision}` → current state; stale revision returns 409 with current state. Full devices only. |
+| POST | `/api/v1/assistant/health/tell` | `{client_id,text}` → 202 stored `{id,status:"received"}`; duplicate ID → 200 `{id,status,duplicate:true}`. Full or answer role; no extension scope. Only canonical Health chats; see "Tell Health". |
 | GET | `/api/v1/assistant/health/intake?days=7&space=health` | `{items:[id],water:{today,goal,entries},protein:{today,goal,entries},days:[{date,water,protein}],zone,water_extension?}`. Full or answer role; no extension scope. See "Health intake" for types, defaults and limits. Omit manager selection to use the default; `space` does not route. |
 | POST | `/api/v1/assistant/health/intake?space=health` | `{id,kind,amount?,at?,note?}` → `{entry,today:{water,protein},zone}`. The caller's UUID makes retries idempotent, including after undo. Full or answer role; see "Health intake". Omit manager selection to use the default; `space` does not route. |
 | DELETE | `/api/v1/assistant/health/intake/{id}?space=health` | Undo from any date → `{today:{water,protein},zone}`. Repeating an undo succeeds; unknown id 404. Full role only; see "Health intake". Omit manager selection to use the default; `space` does not route. |
@@ -2730,6 +2734,51 @@ returns the receipt; another click returns `already_answered`, and an open stale
 Adjust opens `strength.edit`; without a public URL the card points the owner to the Health overview. Moving a draft
 with `show` makes the old card read-only. `view_update` and HTML actions cannot rewrite these keys. With Health absent,
 the card remains stored but its actions return 404.
+
+## Tell Health
+
+`POST /api/v1/assistant/health/tell` (#14714, feature `health_tell`) hands the owner's sentence to Health.
+The core manager stores it in Postgres before answering, without a node call or model work in the receipt path.
+Full and answer-only devices are allowed; extensions and scoped devices are refused before forwarding and again
+by the manager. The source is always `shortcut`; the sentence is not vouched as an in-app owner message or approval.
+
+| Request / response | Contract |
+| --- | --- |
+| Request | `{client_id,text}`; `client_id` is 8–128 ASCII letters, digits, dots, dashes, underscores or colons, reused on every retry. Text is trimmed, must be nonempty valid UTF-8, and is limited to 8 KB; controls except newline and tab are removed. Body limit: 16 KB (invalid input: 400). |
+| First receipt | `202 {id:"tell_<16 hex>",status:"received"}` after the insert commits. Receipt is not delivery or execution. |
+| Retry | `200 {id,status,duplicate:true}` for the same client_id, even with different text. The first sentence wins. |
+| States | `received`: waiting; `delivered`: handed to the Health conversation, stored text cleared; `failed`: delivery abandoned, original text retained for recovery. Missing storage: 503; failed insert: 500. |
+
+Unknown fields are ignored. `space`, `main`, `session_id`, `machine_id`, `source`, `via` and client times cannot
+select a target or change the receipt day. Messages go only to the canonical Health conversation directory on the
+current assistant computer. The first Tell Health message or successfully assembled strength workout report for
+a local day starts that day's training chat; later messages and strength reports continue it. A missing or invalid
+or deleted chat is replaced; an offline computer waits, preserving sentence order without counting attempts.
+
+Before a continuation is dispatched, its machine and session are saved on the received row. A retry uses only that
+target and the same once-only key, without reselecting the training-chat pointer. Only a definite pre-delivery
+refusal, including `conversation_deleted`, allows a new start; reserving the start clears the old continuation
+target atomically. The hub lookup has no current-connection list-readiness marker. Before a sentence is bound,
+a transient session lookup failure can therefore replace the training pointer and split the day's training across
+chats. An already-bound continuation is not redirected by that lookup failure or a manager restart.
+
+The worker runs on receipt and every 30 seconds. Failed attempts for the same row are at least 30 seconds apart;
+new receipts cannot accelerate retries, and later rows keep waiting in order. Continuing a chat uses a stable
+`health-tell:<id>` once-only key; new starts reserve a session ID before dispatch so Claude Code can acknowledge an
+existing start after a restart.
+Other launchers may choose their own IDs: a reported uncertain start is abandoned rather than repeated, but a manager
+restart after a new chat starts and before delivery is recorded can repeat the sentence once. Delivery expires after
+24 hours or five failed attempts. Each worker round sends at most one fixed Health notification for newly abandoned
+rows, saying delivery could not be confirmed without including original text. Responses use
+the existing fixed Health title/body and respect notification settings; even a quick response qualifies for a
+completion notification. Receipt latency and delivery latency are logged separately without sentence content.
+
+The receipt's day uses the manager's receipt time in the owner's time zone. A strength report uses the workout's
+start day: a 23:30 workout reported at 00:40 continues the previous day's chat unless a sentence after midnight has
+already opened the new day's chat. A new sentence at 00:10 starts the new day; when it has done so, the late previous-day
+report opens a separate chat. Only the latest day's pointer is retained; an older late report cannot replace it. Simultaneous
+first messages and reports can start separate chats. Tell Health and its capability stay available without the
+Health data module; strength report assembly and its training-chat selection require that module.
 
 ## Health intake
 

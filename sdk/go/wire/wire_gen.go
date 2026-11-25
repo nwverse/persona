@@ -1076,9 +1076,12 @@ type InitializeParams struct {
 	Extension *ExtensionInfo `json:"extension,omitempty"`
 	Plugin    *ExtensionInfo `json:"plugin,omitempty"`
 	// The configuration with the schema's defaults filled in.
-	Config  json.RawMessage   `json:"config,omitempty"`
-	Secrets map[string]string `json:"secrets,omitempty"`
-	Granted Permissions       `json:"granted"`
+	Config json.RawMessage `json:"config,omitempty"`
+	// The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+	// authorization input, not extension settings persisted in the extension registry.
+	InboxVisibility json.RawMessage   `json:"inbox_visibility,omitempty"`
+	Secrets         map[string]string `json:"secrets,omitempty"`
+	Granted         Permissions       `json:"granted"`
 	// The contributions this run is for, by extension point.
 	Active map[string][]string `json:"active,omitempty"`
 	// The contributions of the other extensions that are on to the points it exports, by its point id (event
@@ -3693,31 +3696,32 @@ var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "nod
 // read-only sources and calls their short tool names. An extension's connector with one this hub does not know loses
 // only that capability.
 const (
-	ConnectorCapabilityStatus         = "status"
-	ConnectorCapabilityTools          = "tools"
-	ConnectorCapabilityActions        = "actions"
-	ConnectorCapabilityEvents         = "events"
-	ConnectorCapabilityInbox          = "inbox"
-	ConnectorCapabilitySettle         = "settle"
-	ConnectorCapabilityArchive        = "archive"
-	ConnectorCapabilityChats          = "chats"
-	ConnectorCapabilityItems          = "items"
-	ConnectorCapabilityLogin          = "login"
-	ConnectorCapabilityOptions        = "options"
-	ConnectorCapabilityThreads        = "threads"
-	ConnectorCapabilitySnapshot       = "snapshot"
-	ConnectorCapabilityGroup          = "group"
-	ConnectorCapabilityMeta           = "meta"
-	ConnectorCapabilityFallback       = "fallback"
-	ConnectorCapabilityMachines       = "machines"
-	ConnectorCapabilityRecall         = "recall"
-	ConnectorCapabilityHistory        = "history"
-	ConnectorCapabilityHistoryAnchors = "history_anchors"
-	ConnectorCapabilityCatalog        = "catalog"
+	ConnectorCapabilityStatus          = "status"
+	ConnectorCapabilityTools           = "tools"
+	ConnectorCapabilityActions         = "actions"
+	ConnectorCapabilityEvents          = "events"
+	ConnectorCapabilityInbox           = "inbox"
+	ConnectorCapabilitySettle          = "settle"
+	ConnectorCapabilityArchive         = "archive"
+	ConnectorCapabilityChats           = "chats"
+	ConnectorCapabilityItems           = "items"
+	ConnectorCapabilityLogin           = "login"
+	ConnectorCapabilityOptions         = "options"
+	ConnectorCapabilityThreads         = "threads"
+	ConnectorCapabilitySnapshot        = "snapshot"
+	ConnectorCapabilityGroup           = "group"
+	ConnectorCapabilityMeta            = "meta"
+	ConnectorCapabilityFallback        = "fallback"
+	ConnectorCapabilityMachines        = "machines"
+	ConnectorCapabilityRecall          = "recall"
+	ConnectorCapabilityHistory         = "history"
+	ConnectorCapabilityHistoryAnchors  = "history_anchors"
+	ConnectorCapabilityCatalog         = "catalog"
+	ConnectorCapabilityInboxVisibility = "inbox_visibility"
 )
 
 // ConnectorCapabilities are the values of ConnectorCapability, in order.
-var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"}
+var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"}
 
 // ConnectorState: connectorStatus.state. disabled is the hub's own (the user switched it off); a program never
 // answers it.
