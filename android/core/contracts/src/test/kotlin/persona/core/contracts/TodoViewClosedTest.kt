@@ -26,7 +26,7 @@ class TodoViewClosedTest {
         assertEquals(TodoPhase.Unknown("a_newer_phase"), view.phase)
         assertEquals(TodoListSection.Unknown("a_newer_section"), view.section)
         assertEquals(TodoReason.Unknown("a_newer_reason"), view.reason)
-        assertEquals(TodoLineKey.Unknown("a_newer_line"), TodoLineKey.of(view.line?.key ?? ""))
+        assertEquals(TodoLineKey.Unknown("a_newer_line"), TodoLineKey.of(view.line?.key ?: ""))
         assertEquals(codec.parseToJsonElement(json), codec.encodeToJsonElement(TodoSummary.serializer(), view))
         assertEquals(TodoListSection.JustFinished, TodoListSection.of("just_finished"))
     }
