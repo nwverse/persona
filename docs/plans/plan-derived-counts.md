@@ -138,7 +138,7 @@ CountsView {                       // per manager; schema/wire, generated for Go
 
 The first schema is only what today's rules and section 6 say. `held` lists the muted rows that `AgentsNeedsYou.rows`
 keeps and the badge leaves out, and the held cards (D11); the header draws them in uncounted groups (D6). Quiet rows are
-not in it: fleetInputsInto drops them before any input is built (`assistant/fleet_live.go:173`), so listing them would
+not in it: fleetInputsInto drops them before any input is built (its quiet line in `assistant/fleet_live.go`), so listing them would
 mean widening that function inside the repair PRs' hunks (and still keeping them out of FleetState and Link) or reading
 the lists a second time. So the header's quiet rows (D6) come from the client's own list, until a later optional
 `why: quiet` comes with that cost stated. There is no `surfaces: {<surface>: <id>}` map (D5): each client names the ids
@@ -297,6 +297,41 @@ identical on the fixtures; the core's tests run on their own (`go test -p 4`, `G
 its adapter pass their domain-rules hooks; the whole round's benchmark holds the gate in section 6.2; the known
 internal/assistant failures on main are unchanged. *Revised 2026-11-22 in #10613:* a core and its adapter, gated on
 the domain rules and agentref rather than a domain-package list, with an allocation gate on the whole round.
+
+*Landed (#15250):* `server/internal/assistant/fleetcount` (core) decides every surface's rows in `AgentsNeedsYou`,
+`fleetcount/fleetcountadapt` (adapter) builds its agents and cards from proto and fills `FleetState`'s and Persona
+Link's needs-you rows, `fleetcount/fleetcounttest` (testkit) writes a tally down for tests, and `assistant/fleetview`
+(library) writes the text the needs-you and working rows share. The needs-you fixture replays in `fleetcountadapt`
+(`TestAgentsNeedsYouFollowsTheSharedFixtures`, every case), and TestFleetMatchesOracle's 1500 random fleets keep
+FleetState and Persona Link's bytes on the agents `fleetInputsInto` hands over. What differs from section 6.2, and why:
+`fleetInputsInto`'s quiet line asks `fleetcountadapt.Visibility(sess).LeftOut()`, since the four repair PRs were still
+closed when this landed; Persona Link's summary types moved to a contract (`internal/linkwire`, aliased in `link`),
+because an adapter returns only contracts; `i18n`, `textfmt`, `compat`, `lazyre` and `deeplink` declare the `library`
+layer the adapter and `fleetview` import them as; `transcript` stays undeclared (it imports the legacy core `tokenuse`),
+so package assistant hands the renderers an agent's title before it is clipped; `Holding` has a third value,
+`HoldingHeldBySupervisor`, for the cards D11's 2026-11-23 confirmation keeps out of every row; the badge's rows tell
+their further cards (`VisitCardUnder`), which the fixture's rows list; an unknown update time is not refused (the kit's
+zero Instant is unknown, and an agent sent without one still waits); `Agent` has no `Turn` stage and the adapter's
+`Agent` no turn start, since `workingSince` stays here until step 11; the adapter's `Agent` and `Card` take the caller's
+place as an index and mint its Slot, since only an adapter or a testkit may mint one (`out-slot-mint`); `Agent`'s one
+exported predicate is `Counts(Surface)`: no caller asks whether one agent needs the owner (the Tally tells the rows, and
+the working rows and `foldSidesIn` read the wire state until step 11), so it has no `NeedsOwner()`, and `LeftOut()` is
+`Visibility`'s, since `fleetInputsInto` drops a session before it has an Agent and the exclusion reads the visibility
+alone; `Counts` asks it on the Live Activity's and Persona Link's surfaces, so the core leaves those agents and their
+cards out whatever it is handed and one list of agents serves every surface (the fixture replay does not apply it: the
+badge lists a quiet agent's row and leaves a directory-hidden one out itself); `Card`'s `Standing` stage also takes a
+`Telling` (`TellingTold`, `TellingUntold`) and the adapter's `Card` whether the owner was told, since Persona Link rings
+for an agent only once one of its cards is the owner's and was rung for, which `Holding` does not say (a card can be the
+owner's and not rung for yet); on Persona Link's surface `WhyHeld` is any row none of whose agent's cards was handed to
+the owner, a terminal dialog with no card included, since that summary keeps one bit per row, whether it rings, and
+carries no why word, while on the Agents list's surface `WhyHeld` is D11's held only; the fixture replay reads the
+badge's tally through a test visitor, since no wire shape carries those rows before steps 6 and 7a; the benchmark
+measures the core's copies instead of printing `unsafe.Sizeof`, which the domain rules refuse beside a core; and
+`agentKey` and `keyOf` stay with `foldSidesIn`, which reads the Live Activity's rule through `liveCounted`. The gate
+(`BenchmarkRound`, 60 agents, 12 cards, a kept round as `liveLoop` runs it): 284 to 255 allocs/op and 56,512 to 30,008
+B/op, the latter including the core's own copies (12,800 B/op: per surface 60 agents in a 5,376-byte block and 12 cards
+in a 1,024-byte one). `BenchmarkLiveRound` (500 agents, no card): 134 to 136 allocs/op and 62.8 to 161.8 KB/op, the two
+surfaces' copies of the agents (two 49,152-byte blocks) and nothing else.
 
 **6. The schema and generated types.** *Change:* schema/wire/counts.schema.json (`x-out` ts, swift, go, kotlin;
 `x-guard` arkts, rust), its four outputs, `.gitattributes` rows and a `schema/wire/README.md` row; samples from step 5's

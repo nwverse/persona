@@ -61,7 +61,6 @@ import { AgentRowMenu, MarkSeenDialog as MarkSeenDialogContent, SpaceMenu } from
 import { NodeMenu } from "./NodeMenu";
 import { NodePrompt as NodePromptContent } from "./NodePrompt";
 import { SidebarUsage as SidebarUsageContent } from "./UsageBars";
-import "../lib/node-palette";
 import type { MenuNode } from "../lib/node-actions";
 import type { MenuAt } from "../ui/menu-model";
 import { useSidebarTerminals } from "../lib/sidebar-terminals";
