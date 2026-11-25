@@ -3,12 +3,11 @@ package writers
 import (
 	"context"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/kb"
 )
 
 const hubMinutesReply = `{"title": "设计评审", "points": [{"text": "上限保持在 4 MB", "line": 1}]}`
@@ -46,7 +45,7 @@ func TestHubMinutesWaitForTheFinalTranscript(t *testing.T) {
 	if n := e.WriteMinutes(context.Background(), 2); n != 0 || len(m.calls) != 0 {
 		t.Fatalf("written while the final pass runs: %d, %d calls", n, len(m.calls))
 	}
-	finishTranscription(t, e, recID, kb.TranscriptionFinal, []RecordingSegment{
+	finishTranscription(t, e, recID, recordingwire.TranscriptionFinal, []RecordingSegment{
 		hseg(0, 8, "我们先把 export cap 保持在 4 MB。"), hseg(8.5, 9, "Bo owns the vendor follow-up.")})
 	if !audioThere(e, recID) {
 		t.Fatal("the audio went before the minutes")
@@ -94,7 +93,7 @@ func TestHubMinutesMadeAgainQuietlyAfterTheFinalPass(t *testing.T) {
 		t.Fatal("minutes of the live text took the audio")
 	}
 	*clock = clock.Add(time.Minute)
-	finishTranscription(t, e, recID, kb.TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
+	finishTranscription(t, e, recID, recordingwire.TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
 	r := recordingNow(t, e, recID)
 	if r.MinutesState != MinutesPending || !quietMinutes(r) {
 		t.Fatalf("not made again quietly: %q quiet %d asks %d", r.MinutesState, r.MinutesQuiet, r.MinutesAsks)
@@ -119,7 +118,7 @@ func TestHubMinutesMadeAgainQuietlyAfterTheFinalPass(t *testing.T) {
 func TestHubAudioGoesWithoutMinutes(t *testing.T) {
 	e, _, clock, _ := hubMinutesEngine(t, `{"title": "x", "points": [{"text": "made up", "line": 99}]}`)
 	hubCompleteMeeting(t, e, recID, *clock, []string{"手机一"}, nil)
-	finishTranscription(t, e, recID, kb.TranscriptionFailed, nil)
+	finishTranscription(t, e, recID, recordingwire.TranscriptionFailed, nil)
 	for range minutesTries {
 		e.WriteMinutes(context.Background(), 2)
 	}
@@ -136,7 +135,7 @@ func TestHubAudioGoesWithoutMinutes(t *testing.T) {
 	if r := recordingNow(t, e, silent); r.MinutesState != "" || r.Chars != 0 {
 		t.Fatalf("silent %+v", r)
 	}
-	finishTranscription(t, e, silent, kb.TranscriptionFailed, nil)
+	finishTranscription(t, e, silent, recordingwire.TranscriptionFailed, nil)
 	if audioThere(e, silent) {
 		t.Fatal("a meeting with no text kept its audio")
 	}
@@ -146,7 +145,7 @@ func TestHubAudioGoesWithoutMinutes(t *testing.T) {
 	if _, err := e.AudioPut(open, 0, pcmAt(0, 100)); err != nil {
 		t.Fatal(err)
 	}
-	finishTranscription(t, e, open, kb.TranscriptionFinal, []RecordingSegment{hseg(0, 5, "final words")})
+	finishTranscription(t, e, open, recordingwire.TranscriptionFinal, []RecordingSegment{hseg(0, 5, "final words")})
 	if audioThere(e, open) {
 		t.Fatal("a recording never complete kept its audio after the final pass")
 	}
@@ -169,7 +168,7 @@ func TestHubOnlyMeetingGetsMinutes(t *testing.T) {
 	if err := e.AskMinutes(recID); err != nil {
 		t.Fatalf("ask: %v", err)
 	}
-	finishTranscription(t, e, recID, kb.TranscriptionFinal, nil)
+	finishTranscription(t, e, recID, recordingwire.TranscriptionFinal, nil)
 	if n := e.WriteMinutes(context.Background(), 2); n != 1 || *told != 1 || !strings.Contains(m.calls[0][1], "下周三之前 Alice 要把 pricing 的 proposal 发出来。") {
 		t.Fatalf("written %d told %d", n, *told)
 	}
@@ -188,7 +187,10 @@ func TestHubAudioSweep(t *testing.T) {
 	// The crash after the minutes: written from the final transcript, the audio still there.
 	const crashed, untold = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b", "6c7d4e5b-2e3f-4a91-8b2c-3d4e5f6a7b8c"
 	hubCompleteMeeting(t, e, crashed, *clock, []string{"手机一"}, nil)
-	if _, err := e.TranscriptionUpdate(crashed, func(t *kb.MeetingTranscription, _ Recording) error { t.State = kb.TranscriptionFinal; return nil }); err != nil {
+	if _, err := e.TranscriptionUpdate(crashed, func(t *recordingwire.MeetingTranscription, _ Recording) error {
+		t.State = recordingwire.TranscriptionFinal
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	*clock = clock.Add(time.Minute)
@@ -199,7 +201,10 @@ func TestHubAudioSweep(t *testing.T) {
 	putMeetingMinutes(t, e, untold, Minutes{Version: 1, Title: "Design review", When: "w", GeneratedAt: *clock})
 	changeRecording(t, e, untold, func(r *Recording) { r.MinutesRev, r.MinutesState = r.Revision, MinutesReady })
 	*clock = clock.Add(time.Minute)
-	if _, err := e.TranscriptionUpdate(untold, func(t *kb.MeetingTranscription, _ Recording) error { t.State = kb.TranscriptionFinal; return nil }); err != nil {
+	if _, err := e.TranscriptionUpdate(untold, func(t *recordingwire.MeetingTranscription, _ Recording) error {
+		t.State = recordingwire.TranscriptionFinal
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -236,7 +241,7 @@ func TestHubEchoIsKeptMarkedAndLeftOutOfTheMinutes(t *testing.T) {
 	u.Segments[2].Echo = true // the phone's mark, where the hub has no sentence
 	putRecording(t, e, recID, u, *clock)
 	echo := RecordingSegment{Start: 10, End: 18, Text: "We keep the cap for this release.", Echo: true}
-	if _, err := e.HubTranscriptPut(recID, kb.HubPassLive, []RecordingSegment{hseg(0, 8, "我们先把 export cap 保持在 4 MB。"), echo}); err != nil {
+	if _, err := e.HubTranscriptPut(recID, recordingwire.HubPassLive, []RecordingSegment{hseg(0, 8, "我们先把 export cap 保持在 4 MB。"), echo}); err != nil {
 		t.Fatal(err)
 	}
 	h, _ := e.HubTranscript(recID)
@@ -263,7 +268,7 @@ func TestHubEchoIsKeptMarkedAndLeftOutOfTheMinutes(t *testing.T) {
 	if r := recordingNow(t, e, recID); r.Chars != len([]rune("我们先把 export cap 保持在 4 MB。")) {
 		t.Fatalf("chars %d: Persona's echo counted", r.Chars)
 	}
-	finishTranscription(t, e, recID, kb.TranscriptionFinal, nil)
+	finishTranscription(t, e, recID, recordingwire.TranscriptionFinal, nil)
 	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
 		t.Fatalf("written %d", n)
 	}

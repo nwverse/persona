@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"testing"
 	"time"
@@ -43,18 +45,18 @@ func TestWriteRecordingFixture(t *testing.T) {
 	e := newTestEngine(&kb.Engine{Store: st, Model: fixtureMinutesModel{}, Owner: "Owner", Logf: func(string, ...any) {}})
 	now := time.Now().Truncate(time.Second)
 	put := func(id, title string, start time.Time, texts ...string) {
-		u := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: float64(10 * len(texts)), Language: "en-US", Device: "phone",
-			Title: title, Complete: true, Kind: kb.RecordingMeeting}
+		u := recordingwire.RecordingUpload{Revision: 1, StartedAt: start, Duration: float64(10 * len(texts)), Language: "en-US", Device: "phone",
+			Title: title, Complete: true, Kind: recordingwire.RecordingMeeting}
 		for i, text := range texts {
-			u.Segments = append(u.Segments, kb.RecordingSegment{Start: float64(10 * i), End: float64(10*i + 9), Text: text})
+			u.Segments = append(u.Segments, kbwire.RecordingSegment{Start: float64(10 * i), End: float64(10*i + 9), Text: text})
 		}
-		if p, err := e.PutRecording(id, u, now); err != nil || p.Status != kb.RecordingStored {
+		if p, err := e.PutRecording(id, u, now); err != nil || p.Status != recordingwire.RecordingStored {
 			t.Fatalf("put %s: %+v %v", id, p, err)
 		}
 	}
 	put(fixtureRecording, "Kept recording", now.Add(-2*time.Hour), "This made-up meeting is the module gate's fixture",
 		"The quokka transcript stays readable without the module", "Stored recordings are never hidden by a switch")
-	photo := kb.PhotoUpload{ID: "6f1c2a3b-0000-4000-8000-0000000000f1", At: 12, Mime: kb.PhotoJPEG, Width: 1600, Height: 1200,
+	photo := recordingwire.PhotoUpload{ID: "6f1c2a3b-0000-4000-8000-0000000000f1", At: 12, Mime: recordingwire.PhotoJPEG, Width: 1600, Height: 1200,
 		Data: []byte("\xff\xd8 the module gate's made-up photo \xff\xd9"), Text: "whiteboard", Caption: "Plan", Digest: "fixture-photo"}
 	if _, created, err := e.PhotoAdd(fixtureRecording, photo, false); err != nil || !created {
 		t.Fatalf("add the photo: %v (created %v)", err, created)
@@ -67,13 +69,13 @@ func TestWriteRecordingFixture(t *testing.T) {
 		t.Fatalf("the pending fixture's minutes state: %+v", r)
 	}
 	e.TranscriptionReady = func() bool { return true }
-	live := kb.RecordingUpload{Revision: 1, StartedAt: now.Add(-30 * time.Minute), Duration: 10, Language: "en-US", Device: "phone",
-		Title: "Kept recording, audio held", Kind: kb.RecordingMeeting, Segments: []kb.RecordingSegment{{Start: 0, End: 9, Text: "Audio is still held"}}}
-	live.SetTranscription(kb.TranscriptionHub, nil)
-	if p, err := e.PutRecording(fixtureAudioRecording, live, now); err != nil || p.Status != kb.RecordingStored {
+	live := recordingwire.RecordingUpload{Revision: 1, StartedAt: now.Add(-30 * time.Minute), Duration: 10, Language: "en-US", Device: "phone",
+		Title: "Kept recording, audio held", Kind: recordingwire.RecordingMeeting, Segments: []kbwire.RecordingSegment{{Start: 0, End: 9, Text: "Audio is still held"}}}
+	live.SetTranscription(recordingwire.TranscriptionHub, nil)
+	if p, err := e.PutRecording(fixtureAudioRecording, live, now); err != nil || p.Status != recordingwire.RecordingStored {
 		t.Fatalf("put the in-flight recording: %+v %v", p, err)
 	}
-	pcm := make([]byte, 4*kb.AudioRate)
+	pcm := make([]byte, 4*recordingwire.AudioRate)
 	for i := range pcm {
 		pcm[i] = byte(i*7 + 1)
 	}

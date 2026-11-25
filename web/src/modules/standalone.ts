@@ -11,6 +11,7 @@
 import type { ReactElement } from "react";
 import type { ModuleDescriptor } from "../core/module-host";
 import { moduleSwitchedOff } from "../core/module-switch";
+import { rememberedHubServes, rememberHubModules } from "../core/module-hub-storage";
 import { MODULES_FEATURE } from "../core/module-flags";
 import { addCatalogs } from "../i18n";
 import { getToken } from "../lib/api";
@@ -56,12 +57,16 @@ export function helloFeatures(token: string, ms = HELLO_WAIT_MS): Promise<string
   });
 }
 
-/** Whether the hub serves module `d` (the hub flag rule): no flag named, no hello in time, or a hello without the
- *  `modules` marker (an older hub) leave it on; a hello with the marker and without the module's flag turns it off. */
+/** Whether the hub serves module `d` (the hub flag rule): a hello with the `modules` marker and without the module's
+ *  flag turns it off; an older hub leaves it on. With no hello in time, the remembered per-hub answer applies, so a
+ *  known-off module stays off while a first-seen hub keeps the default on. */
 export async function hubServesHere(d: ModuleDescriptor, token: string, hello = helloFeatures): Promise<boolean> {
   if (!d.feature) return true;
   const features = await hello(token);
-  return !features || !features.includes(MODULES_FEATURE) || features.includes(d.feature);
+  if (!features) return rememberedHubServes(d.feature);
+  // The standalone page runs before App's host, so its live hello updates the same remembered answer too.
+  rememberHubModules(features);
+  return !features.includes(MODULES_FEATURE) || features.includes(d.feature);
 }
 
 /**

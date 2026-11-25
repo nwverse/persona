@@ -837,6 +837,8 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	s.settingsChanged(ctx)
 	if handoff.From != "" {
 		s.handOverMainTasks(context.WithoutCancel(ctx), handoff.From, sess.SessionID) // its open tasks follow (main_handover.go)
+	} else {
+		s.handOverFormerMainTasks(context.WithoutCancel(ctx)) // e.g. after /clear, which puts the old main in Former with no handoff.From
 	}
 	return sess, nil
 }
@@ -1326,6 +1328,9 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		}
 	}
 	if err == nil && said && owner {
+		if err := s.releasePushes(ctx, p.SessionID); err != nil {
+			return nil, err
+		}
 		s.endHeldChannelRuns(p.MachineID, p.SessionID)
 		s.ownerInterjects(p.SessionID, params)
 	}
