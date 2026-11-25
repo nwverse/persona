@@ -116,11 +116,37 @@ describe("Assistant Needs you / In progress trays", () => {
     const row = host.querySelector('[data-needs-row="task:verify-task"][data-needs-open]');
     expect(row).not.toBeNull();
     expect(row?.textContent).toContain("Please verify the result");
-    expect(host.querySelector('[data-needs-row="task:other-verify"]')).toBeNull();
+    const other = host.querySelector('[data-needs-row="task:other-verify"]');
+    if (main) {
+      expect(other).not.toBeNull();
+      expect(other?.closest("[data-needs-supervisor]")).toBeNull();
+    } else {
+      expect(other).toBeNull();
+    }
     const pass = row?.querySelector<HTMLButtonElement>(`button[title="${t("assistant-brief.accept_row", { title })}"]`);
     expect(pass).toBeDefined();
     await act(async () => pass!.click());
     expect(writes).toContain("/api/v1/todos/verify-task/accept");
+  });
+
+  it.each([false, true])("opens a quiet verification whose Pass round has not arrived (main=%s)", async (main) => {
+    const verification: Todo = {
+      id: "verify-without-pass", title: "Inspect the finished work", quiet: true, origin: "dispatch-chat", created_at: at, updated_at: at,
+      supervision: { state: "user_check", supervisor: main ? "direction-lead" : conversation },
+      view: { phase: "needs_you", section: "needs_you", reason: "verify", rank: 0 },
+    };
+    moreTodos = [verification];
+    mainChat = main ? conversation : "main-chat";
+    await act(async () => refresh());
+    expect(entry("needs")).not.toBeNull();
+    await act(async () => entry("needs").click());
+    const row = host.querySelector<HTMLButtonElement>('button[data-needs-row="task:verify-without-pass"]');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toContain(t("assistant-tasks.review_user_check"));
+    expect(row?.closest("[data-needs-supervisor]")).toBeNull();
+    await act(async () => row!.click());
+    expect(getPanel()).toEqual({ kind: "task", todo: verification.id });
+    expect(writes.filter((path) => path.endsWith("/accept"))).toEqual([]);
   });
 
   it.each([

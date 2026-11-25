@@ -1,6 +1,6 @@
 import { decisionDismissed, reviewState } from "./supervision";
 import { decisionLaterKey, type NeedsYouItem } from "./assistant-entries";
-import { heldDelivery, openAsk, personalVerificationAsk, taskReviewDecisionAsk } from "./todos";
+import { heldDelivery, openAsk, taskReviewDecisionAsk } from "./todos";
 import { hubNeedsYou } from "./todo-triage";
 import type { Interaction } from "./types";
 
@@ -59,7 +59,7 @@ export function directUserWaiting(items: NeedsYouItem[], deferred: Record<string
     if (item.kind === "task" && hub !== undefined) {
       // assistantEntries already selects the explicit review asks that belong in this tray.
       const quietOwnerAsk = item.todo.quiet && item.todo.view?.section === "needs_you" &&
-        (personalVerificationAsk(item.todo) || taskReviewDecisionAsk(item.todo) && !deferred[decisionLaterKey(item.todo)]);
+        (reviewState(item.todo) === "user_check" || taskReviewDecisionAsk(item.todo) && !deferred[decisionLaterKey(item.todo)]);
       if (hub || quietOwnerAsk) {
         out.push({ ...item, asks: item.asks.filter((ix) => hubTaskInteraction(item.todo, ix)) });
         continue;
