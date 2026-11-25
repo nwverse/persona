@@ -710,3 +710,33 @@ it("keeps the actual engine connection until a same-kind runtime default is expl
   expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
   expect(defaultSetup).toEqual({ provider: "claude", model: "opus", effort: "high" });
 });
+
+it("shows the actual AGY engine and Gemini model on main chat under default Claude config instead of Claude Default (recommended)", async () => {
+  defaultSetup = { provider: "claude", model: "", effort: "high" };
+  mainSetup = { provider: "claude", model: "", effort: "high" };
+  const agyCalls: string[] = [];
+  const origFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/agy/models")) {
+      agyCalls.push(url);
+      return json({
+        agent: "agy",
+        models: [{ id: "gemini-3-pro-high", name: "Gemini 3 Pro (High)", default_effort: "high" }],
+      });
+    }
+    return origFetch(input, init);
+  }));
+  await show(chat({
+    agent: "agy",
+    launcher: undefined,
+    source_kind: "runtime",
+    source_instance_id: "agy",
+    model: "gemini-3-pro-high",
+    effort: "high",
+  }));
+  expect(pill().querySelector("[data-pill-engine]")?.getAttribute("data-pill-engine")).toBe("agy");
+  expect(pill().textContent).toContain("Gemini 3 Pro");
+  expect(pill().textContent).not.toContain("Default (recommended)");
+  expect(agyCalls.some((url) => url.includes("/launchers/agy/models") && url.includes("host=agy"))).toBe(true);
+});

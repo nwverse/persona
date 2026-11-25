@@ -3,7 +3,7 @@ import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initI18n } from "../../i18n";
-import { HeldPushesEntry } from "./HeldPushes";
+import { HeldPushesDialog, HeldPushesEntry } from "./HeldPushes";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const NOW = new Date("2026-11-14T04:00:00Z");
@@ -90,5 +90,18 @@ describe("held-push entry", () => {
     await renderEntry();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-held-pushes-entry]")!.click());
     expect(document.body.textContent).toContain("No pushes were held today.");
+  });
+
+  it("loads intercepts on demand when HeldPushesDialog opens and stays idle while closed", async () => {
+    await act(async () => {
+      root.render(<StrictMode><HeldPushesDialog open={false} onClose={() => {}} /></StrictMode>);
+    });
+    expect(requests).toEqual([]);
+    await act(async () => {
+      root.render(<StrictMode><HeldPushesDialog open onClose={() => {}} /></StrictMode>);
+    });
+    expect(requests.some((path) => path.endsWith("/api/v1/push/intercepts"))).toBe(true);
+    expect(requests.some((path) => path.includes("/ln-mode"))).toBe(false);
+    expect(document.body.textContent).toContain("Review the release");
   });
 });

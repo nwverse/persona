@@ -129,6 +129,79 @@ export function useHeldPushes() {
   return { enabled, groups, loading, failed, refresh };
 }
 
+function HeldPushesDialogBody({ groups, loading, failed, refresh, destinations }: {
+  groups: HeldPushGroups;
+  loading: boolean;
+  failed: boolean;
+  refresh: () => void;
+  destinations?: (item: HeldPushItem) => HeldPushDestination | undefined;
+}) {
+  const count = groups.p1.length + groups.p2.length;
+  return (
+    <>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-label text-ink-3">{t("push-intercepts.held_explanation")}</p>
+        <Button icon="retry" busy={loading} onClick={refresh}>{t("assistant-tasks.retry")}</Button>
+      </div>
+      {failed && <div role="alert" className="mb-3 rounded-control bg-danger-wash px-3 py-2 text-label text-ink">{t("push-intercepts.held_load_failed")}</div>}
+      {loading && count === 0 && !failed ? <Loading label={t("push-intercepts.held_loading")} /> : <HeldPushList groups={groups} destinations={destinations} />}
+    </>
+  );
+}
+
+/** On-demand dialog for secondary settings screens: fetches `/push/intercepts` only while open. */
+export function HeldPushesDialog({ open, onClose, destinations }: {
+  open: boolean;
+  onClose: () => void;
+  destinations?: (item: HeldPushItem) => HeldPushDestination | undefined;
+}) {
+  const [groups, setGroups] = useState<HeldPushGroups>({ p1: [], p2: [] });
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const abort = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+
+  const refresh = useCallback(async () => {
+    abort.current?.abort();
+    const controller = new AbortController();
+    abort.current = controller;
+    setLoading(true);
+    try {
+      const records = await api<unknown>("/push/intercepts", { signal: controller.signal });
+      if (controller.signal.aborted || !mounted.current) return;
+      setGroups(heldPushGroups(records));
+      setFailed(false);
+    } catch {
+      if (controller.signal.aborted || !mounted.current) return;
+      setFailed(true);
+    } finally {
+      if (!controller.signal.aborted && mounted.current) setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      abort.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      abort.current?.abort();
+      return;
+    }
+    void refresh();
+  }, [open, refresh]);
+
+  return (
+    <Dialog open={open} onClose={onClose} title={t("push-intercepts.held_title")} width={560}>
+      {open && <HeldPushesDialogBody groups={groups} loading={loading} failed={failed} refresh={() => void refresh()} destinations={destinations} />}
+    </Dialog>
+  );
+}
+
 export function HeldPushesEntry({ className, destinations }: { className?: string; destinations?: (item: HeldPushItem) => HeldPushDestination | undefined }) {
   const { enabled, groups, loading, failed, refresh } = useHeldPushes();
   const [open, setOpen] = useState(false);
@@ -153,12 +226,7 @@ export function HeldPushesEntry({ className, destinations }: { className?: strin
         {count > 0 && <span className="tabular-nums text-ink-2">{count}</span>}
       </button>
       <Dialog open={open} onClose={() => setOpen(false)} title={t("push-intercepts.held_title")} width={560}>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-label text-ink-3">{t("push-intercepts.held_explanation")}</p>
-          <Button icon="retry" busy={loading} onClick={() => void refresh()}>{t("assistant-tasks.retry")}</Button>
-        </div>
-        {failed && <div role="alert" className="mb-3 rounded-control bg-danger-wash px-3 py-2 text-label text-ink">{t("push-intercepts.held_load_failed")}</div>}
-        {loading && count === 0 && !failed ? <Loading label={t("push-intercepts.held_loading")} /> : <HeldPushList groups={groups} destinations={destinations} />}
+        <HeldPushesDialogBody groups={groups} loading={loading} failed={failed} refresh={() => void refresh()} destinations={destinations} />
       </Dialog>
     </>
   );

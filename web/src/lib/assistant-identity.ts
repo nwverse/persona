@@ -10,6 +10,17 @@ export function useAssistantIdentity(): ShownIdentity | null {
   const picked = useChosenManager();
   const record = managerOf(roster, current);
   const known = record?.installing ? null : record;
-  const kept = picked ? { id: picked, name: remembered?.id === picked ? remembered.name : pickedName() ?? picked } : remembered;
-  return known ?? (!roster ? kept : null);
+  if (known) return { id: known.id, name: known.name, isDefault: known.id === roster?.default };
+  if (roster) return null;
+  if (picked) {
+    const same = remembered?.id === picked;
+    return {
+      id: picked,
+      name: same ? remembered.name : pickedName() ?? picked,
+      isDefault: false,
+      ...(same && remembered.line ? { line: remembered.line } : {}),
+      ...(same && remembered.tone ? { tone: remembered.tone } : {}),
+    };
+  }
+  return remembered ? { ...remembered, isDefault: remembered.isDefault ?? true } : null;
 }

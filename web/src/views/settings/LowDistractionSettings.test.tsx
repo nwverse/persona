@@ -67,6 +67,24 @@ describe("LowDistractionSettings", () => {
     expect(toggle()?.getAttribute("aria-checked")).toBe("false");
   });
 
+  it("exposes held pushes inside settings only while enabled and loads intercepts on demand", async () => {
+    await mount({ enabled: false });
+    expect(host.querySelector('[data-settings-row="held-pushes"]')).toBeNull();
+    expect(calls).toHaveLength(1);
+
+    act(() => toggle()!.click());
+    await act(async () => last().resolve({ enabled: true }));
+    const row = host.querySelector<HTMLButtonElement>('[data-settings-row="held-pushes"]')!;
+    expect(row).not.toBeNull();
+    // Turning the switch on does not eagerly poll /push/intercepts before the user opens the list.
+    expect(calls.some((c) => c.path === "/push/intercepts")).toBe(false);
+
+    act(() => row.click());
+    expect(last()).toMatchObject({ path: "/push/intercepts", method: "GET" });
+    await act(async () => last().resolve({ intercepts: [{ at: new Date().toISOString(), level: "P1", reason: "ln_p1_held", title: "Digest waiting" }] }));
+    expect(document.body.textContent).toContain("Digest waiting");
+  });
+
   it("goes back and says so when the hub refuses the change", async () => {
     await mount({ enabled: true });
     act(() => toggle()!.click());
