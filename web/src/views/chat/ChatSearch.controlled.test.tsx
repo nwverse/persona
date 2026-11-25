@@ -165,6 +165,80 @@ describe("ChatSearch with controlled search and loading props", () => {
     expect(document.body.textContent).toContain("Custom status notice");
     expect(buttonByText(t("chat-chatsearch.load_earlier"))).toBeUndefined();
   });
+
+  it("fences overlapping and partially controlled earlier-loading runs against stale page, outcome and failure updates", async () => {
+    const runs: Array<{
+      onPage: (n: number) => void;
+      stopped: () => boolean;
+      resolve: (outcome: string | null) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const onLoadEarlier = vi.fn((onPage: (n: number) => void, stopped: () => boolean) =>
+      new Promise<string | null>((resolve, reject) => {
+        runs.push({ onPage, stopped, resolve, reject });
+      }));
+
+    // Partially controlled: loadingEarlier is held false while pages and notice remain internal,
+    // allowing a second run to start before the first settles.
+    mount({ hasMore: true, loadingEarlier: false, onLoadEarlier });
+    act(() => buttonByText(t("chat-chatsearch.load_earlier"))!.click());
+    expect(runs).toHaveLength(1);
+    act(() => runs[0].onPage(1));
+    expect(runs[0].stopped()).toBe(false);
+
+    act(() => buttonByText(t("chat-chatsearch.load_earlier"))!.click());
+    expect(runs).toHaveLength(2);
+    expect(runs[0].stopped()).toBe(true);
+    expect(runs[1].stopped()).toBe(false);
+    act(() => runs[1].onPage(2));
+
+    // Releasing controlled loadingEarlier exposes internal loading and page count for the active run.
+    mount({ hasMore: true, onLoadEarlier });
+    expect(document.body.textContent).toContain(t("chat-chatsearch.loading_pages", { count: 2 }));
+    expect(buttonByText(t("chat-chatsearch.stop_loading"))).toBeDefined();
+
+    // Stale page progress and settlement from run 1 cannot overwrite run 2 or end loading early.
+    act(() => runs[0].onPage(9));
+    expect(document.body.textContent).toContain(t("chat-chatsearch.loading_pages", { count: 2 }));
+    await act(async () => {
+      runs[0].resolve("Stale run 1 notice");
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toContain(t("chat-chatsearch.loading_pages", { count: 2 }));
+    expect(document.body.textContent).not.toContain("Stale run 1 notice");
+    expect(buttonByText(t("chat-chatsearch.stop_loading"))).toBeDefined();
+
+    await act(async () => {
+      runs[1].resolve("Run 2 finished");
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toContain("Run 2 finished");
+    expect(buttonByText(t("chat-chatsearch.load_earlier"))).toBeDefined();
+
+    // A stale rejection from an overlapped run also cannot clobber the newer run.
+    mount({ hasMore: true, loadingEarlier: false, onLoadEarlier });
+    act(() => buttonByText(t("chat-chatsearch.load_earlier"))!.click());
+    act(() => buttonByText(t("chat-chatsearch.load_earlier"))!.click());
+    expect(runs).toHaveLength(4);
+    expect(runs[2].stopped()).toBe(true);
+    expect(runs[3].stopped()).toBe(false);
+    act(() => runs[3].onPage(4));
+
+    mount({ hasMore: true, onLoadEarlier });
+    await act(async () => {
+      runs[2].reject(new Error("Stale run 3 failure"));
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toContain(t("chat-chatsearch.loading_pages", { count: 4 }));
+    expect(document.body.textContent).not.toContain(t("chat-chatview.search_load_failed"));
+    expect(buttonByText(t("chat-chatsearch.stop_loading"))).toBeDefined();
+
+    await act(async () => {
+      runs[3].resolve("Run 4 recovered");
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).toContain("Run 4 recovered");
+  });
 });
 
 describe("ChatSearch default compatibility", () => {

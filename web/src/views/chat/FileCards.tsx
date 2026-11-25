@@ -19,6 +19,10 @@ import { t } from "../../i18n";
 const FOLD_AT = 4;
 const FOLDED = 3;
 
+function openFilePanel(mid: string, path: string, cwd?: string) {
+  openPanel(cwd ? { kind: "file", mid, path, cwd } : { kind: "file", mid, path });
+}
+
 export interface FileCardsProps {
   files: AttachedFile[];
   mid: string;
@@ -96,7 +100,7 @@ function FileCard({
   return (
     <button
       type="button"
-      onClick={() => (onOpenFile ? onOpenFile(f) : openPanel({ kind: "file", mid, path: f.path }))}
+      onClick={() => (onOpenFile ? onOpenFile(f) : openFilePanel(mid, f.path, cwd))}
       className="flex max-w-[360px] min-w-0 items-center gap-2 rounded-[12px] bg-inset px-3 py-2 text-left shadow-hairline hover:bg-hover"
       title={f.path}
     >
@@ -135,7 +139,7 @@ function renderReplyFiles(files: AttachedFile[], { mid, cwd, onOpenFile, resolve
   const rest = files.filter((f) => !isDocument(f.path));
   return files.length ? (
     <div className="mt-2 flex flex-col gap-1.5">
-      {rest.length > 0 && <FileCards files={rest} mid={mid} align="start" onOpenFile={onOpenFile} resolveDownloadURL={resolveDownloadURL} />}
+      {rest.length > 0 && <FileCards files={rest} mid={mid} align="start" cwd={cwd} onOpenFile={onOpenFile} resolveDownloadURL={resolveDownloadURL} />}
       {docs.length > 0 && <DocumentCards files={docs} mid={mid} cwd={cwd} onOpenFile={onOpenFile} resolveThumbURL={resolveThumbURL} />}
     </div>
   ) : null;
@@ -204,7 +208,7 @@ function DocumentCard({
   return (
     <button
       type="button"
-      onClick={() => (onOpenFile ? onOpenFile(f) : openPanel({ kind: "file", mid, path: f.path }))}
+      onClick={() => (onOpenFile ? onOpenFile(f) : openFilePanel(mid, f.path, cwd))}
       title={f.path}
       className="flex h-16 w-60 max-w-full shrink-0 items-center gap-3 rounded-[14px] bg-inset px-2 text-left shadow-hairline outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
       style={{ animation: "fade-in 220ms ease-out both" }}

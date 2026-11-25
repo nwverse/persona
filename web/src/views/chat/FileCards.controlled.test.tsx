@@ -198,7 +198,7 @@ describe("ReplyFiles with controlled path stats and explicit files", () => {
 });
 
 describe("FileCards default compatibility", () => {
-  it("keeps openPanel and fileDownloadURL defaults in FileCards", async () => {
+  it("keeps openPanel and fileDownloadURL defaults in FileCards when cwd is omitted", async () => {
     const files: AttachedFile[] = [
       { kind: "file", path: "/workspace/readme.md", name: "readme.md", size: 100 },
       { kind: "video", path: "/workspace/clip.mp4", name: "clip.mp4", size: 1000 },
@@ -207,6 +207,7 @@ describe("FileCards default compatibility", () => {
 
     act(() => host.querySelector<HTMLButtonElement>('button[title="/workspace/readme.md"]')!.click());
     expect(mocks.openPanel).toHaveBeenCalledWith({ kind: "file", mid: "example-machine", path: "/workspace/readme.md" });
+    expect(Object.hasOwn(mocks.openPanel.mock.calls[0][0], "cwd")).toBe(false);
 
     const video = host.querySelector("video")!;
     expect(video.getAttribute("src")).toBe("default-download:example-machine:/workspace/clip.mp4::inline");
@@ -216,15 +217,103 @@ describe("FileCards default compatibility", () => {
     );
   });
 
-  it("keeps fileThumbURL and openPanel defaults in DocumentCards", async () => {
-    const doc: AttachedFile = { kind: "file", path: "/workspace/slides.pptx", name: "slides.pptx" };
-    await mountDocumentCards({ files: [doc], mid: "example-machine", cwd: "/workspace" });
+  it("forwards cwd to default openPanel and MediaPlayer for relative paths in FileCards", async () => {
+    const files: AttachedFile[] = [
+      { kind: "file", path: "notes/plan.md", name: "plan.md", size: 64 },
+      { kind: "video", path: "clips/demo.mp4", name: "demo.mp4", size: 1024 },
+      { kind: "audio", path: "audio/clip.mp3", name: "clip.mp3", size: 256 },
+    ];
+    await mountFileCards({ files, mid: "example-machine", cwd: "/workspace/project" });
+
+    act(() => host.querySelector<HTMLButtonElement>('button[title="notes/plan.md"]')!.click());
+    expect(mocks.openPanel).toHaveBeenCalledWith({
+      kind: "file",
+      mid: "example-machine",
+      path: "notes/plan.md",
+      cwd: "/workspace/project",
+    });
+
+    const video = host.querySelector("video")!;
+    const audio = host.querySelector("audio")!;
+    expect(video.getAttribute("src")).toBe("default-download:example-machine:clips/demo.mp4:/workspace/project:inline");
+    expect(audio.getAttribute("src")).toBe("default-download:example-machine:audio/clip.mp3:/workspace/project:inline");
+    act(() => video.dispatchEvent(new Event("error")));
+    expect(host.querySelector<HTMLAnchorElement>("a[download]")?.getAttribute("href")).toBe(
+      "default-download:example-machine:clips/demo.mp4:/workspace/project:attachment",
+    );
+  });
+
+  it("forwards cwd for explicit ReplyFiles relative media, plain files, and documents", async () => {
+    const files: AttachedFile[] = [
+      { kind: "video", path: "clips/demo.mp4", name: "demo.mp4", size: 2048 },
+      { kind: "audio", path: "audio/voice.mp3", name: "voice.mp3", size: 512 },
+      { kind: "file", path: "notes/run.csv", name: "run.csv", size: 32 },
+      { kind: "file", path: "docs/report.pdf", name: "report.pdf", size: 4096 },
+    ];
+    await mountReplyFiles({
+      text: "",
+      mid: "example-machine",
+      cwd: "/workspace/project",
+      files,
+    });
+
+    expect(mocks.usePathLinks).not.toHaveBeenCalled();
+
+    const video = host.querySelector("video")!;
+    const audio = host.querySelector("audio")!;
+    expect(video.getAttribute("src")).toBe("default-download:example-machine:clips/demo.mp4:/workspace/project:inline");
+    expect(audio.getAttribute("src")).toBe("default-download:example-machine:audio/voice.mp3:/workspace/project:inline");
+    act(() => video.dispatchEvent(new Event("error")));
+    expect(host.querySelector<HTMLAnchorElement>("a[download]")?.getAttribute("href")).toBe(
+      "default-download:example-machine:clips/demo.mp4:/workspace/project:attachment",
+    );
+
+    act(() => host.querySelector<HTMLButtonElement>('button[title="notes/run.csv"]')!.click());
+    expect(mocks.openPanel).toHaveBeenNthCalledWith(1, {
+      kind: "file",
+      mid: "example-machine",
+      path: "notes/run.csv",
+      cwd: "/workspace/project",
+    });
 
     expect(host.querySelector<HTMLImageElement>('[data-testid="document-card"] img')?.getAttribute("src")).toBe(
-      "default-thumb:example-machine:/workspace/slides.pptx:/workspace:128",
+      "default-thumb:example-machine:docs/report.pdf:/workspace/project:128",
     );
     act(() => host.querySelector<HTMLButtonElement>('[data-testid="document-card"]')!.click());
-    expect(mocks.openPanel).toHaveBeenCalledWith({ kind: "file", mid: "example-machine", path: "/workspace/slides.pptx" });
+    expect(mocks.openPanel).toHaveBeenNthCalledWith(2, {
+      kind: "file",
+      mid: "example-machine",
+      path: "docs/report.pdf",
+      cwd: "/workspace/project",
+    });
+  });
+
+  it("keeps fileThumbURL and openPanel defaults in DocumentCards consistent for absolute and relative paths", async () => {
+    const relativeDoc: AttachedFile = { kind: "file", path: "docs/slides.pptx", name: "slides.pptx" };
+    await mountDocumentCards({ files: [relativeDoc], mid: "example-machine", cwd: "/workspace/project" });
+
+    expect(mocks.fileThumbURL).toHaveBeenCalledWith("example-machine", "docs/slides.pptx", "/workspace/project", 128);
+    expect(host.querySelector<HTMLImageElement>('[data-testid="document-card"] img')?.getAttribute("src")).toBe(
+      "default-thumb:example-machine:docs/slides.pptx:/workspace/project:128",
+    );
+    act(() => host.querySelector<HTMLButtonElement>('[data-testid="document-card"]')!.click());
+    expect(mocks.openPanel).toHaveBeenCalledWith({
+      kind: "file",
+      mid: "example-machine",
+      path: "docs/slides.pptx",
+      cwd: "/workspace/project",
+    });
+
+    mocks.openPanel.mockClear();
+    const absoluteDoc: AttachedFile = { kind: "file", path: "/workspace/slides.pptx", name: "slides.pptx" };
+    await mountDocumentCards({ files: [absoluteDoc], mid: "example-machine" });
+    act(() => host.querySelector<HTMLButtonElement>('[data-testid="document-card"]')!.click());
+    expect(mocks.openPanel).toHaveBeenCalledWith({
+      kind: "file",
+      mid: "example-machine",
+      path: "/workspace/slides.pptx",
+    });
+    expect(Object.hasOwn(mocks.openPanel.mock.calls[0][0], "cwd")).toBe(false);
   });
 
   it("keeps usePathLinks and default card wiring in ReplyFiles", async () => {
@@ -245,6 +334,11 @@ describe("FileCards default compatibility", () => {
       "default-thumb:example-machine:/workspace/spec.pdf:/workspace:128",
     );
     act(() => host.querySelector<HTMLButtonElement>('button[title="/workspace/run.csv"]')!.click());
-    expect(mocks.openPanel).toHaveBeenCalledWith({ kind: "file", mid: "example-machine", path: "/workspace/run.csv" });
+    expect(mocks.openPanel).toHaveBeenCalledWith({
+      kind: "file",
+      mid: "example-machine",
+      path: "/workspace/run.csv",
+      cwd: "/workspace",
+    });
   });
 });

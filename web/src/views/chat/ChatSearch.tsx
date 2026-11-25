@@ -108,6 +108,7 @@ export function ChatSearch({
   const pages = controlledLoadedPages ?? internalPages;
   const notice = controlledNotice !== undefined ? controlledNotice : internalNotice;
   const stop = useRef(false);
+  const loadRun = useRef(0);
   const wasOpen = useRef(open);
   // the panel closing stops a run going
   useEffect(() => {
@@ -118,19 +119,29 @@ export function ChatSearch({
       if (closed && loading) onStopLoadEarlier?.();
     }
   }, [open, loading, onStopLoadEarlier]);
+  useEffect(() => () => {
+    stop.current = true;
+    loadRun.current += 1;
+  }, []);
   const loadEarlier = async () => {
     if (!onLoadEarlier) return;
+    const run = ++loadRun.current;
     stop.current = false;
     setInternalLoading(true);
     setInternalPages(0);
     setInternalNotice(null);
     try {
-      const outcome = await onLoadEarlier(setInternalPages, () => stop.current);
-      if (outcome !== undefined) setInternalNotice(outcome);
+      const outcome = await onLoadEarlier(
+        (n) => {
+          if (loadRun.current === run) setInternalPages(n);
+        },
+        () => stop.current || loadRun.current !== run,
+      );
+      if (loadRun.current === run && outcome !== undefined) setInternalNotice(outcome);
     } catch {
-      setInternalNotice(t("chat-chatview.search_load_failed"));
+      if (loadRun.current === run) setInternalNotice(t("chat-chatview.search_load_failed"));
     } finally {
-      setInternalLoading(false);
+      if (loadRun.current === run) setInternalLoading(false);
     }
   };
   const stopLoading = () => {
