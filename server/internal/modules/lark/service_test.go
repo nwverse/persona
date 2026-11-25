@@ -31,9 +31,6 @@ const (
 	AppFeishu          = assistantwire.AppFeishu
 	FeishuPost         = assistantwire.FeishuPost
 	FeishuUpdateCard   = assistantwire.FeishuUpdateCard
-	FeishuReact        = assistantwire.FeishuReact
-	FeishuUnreact      = assistantwire.FeishuUnreact
-	FeishuMessages     = assistantwire.FeishuMessages
 	FeishuStatusGet    = assistantwire.FeishuStatusGet
 	FeishuCotCreate    = assistantwire.FeishuCotCreate
 	FeishuCotAppend    = assistantwire.FeishuCotAppend
@@ -214,6 +211,7 @@ func newTestService(t testing.TB, f Hub) *Service {
 	s := &Service{t: t, hub: f, ctx: ctx}
 	s.chans.live = map[string]*chanLive{}
 	s.layer = New(s)
+	s.layer.turns.board.now = s.clock // the board's clock is the fake one (the home card's "updated at")
 	t.Cleanup(cancel)
 	return s
 }
@@ -466,10 +464,6 @@ func (s *Service) Note(ctx context.Context, to assistantwire.ChannelTarget, repl
 	_ = s.call(ctx, FeishuText, targetParams(to, map[string]any{"reply_to": replyTo, "text": text}), nil)
 }
 
-func (s *Service) Reply(ctx context.Context, to assistantwire.ChannelTarget, replyTo, text, key string, full bool) error {
-	return s.call(ctx, FeishuText, targetParams(to, map[string]any{"reply_to": replyTo, "text": text, "uuid": key, "full_answer": full}), nil)
-}
-
 func (s *Service) UpdateCard(ctx context.Context, messageID string, card *botcard.Card) error {
 	return s.call(ctx, FeishuUpdateCard, map[string]any{"message_id": messageID, "card": card.JSON()}, nil)
 }
@@ -524,28 +518,6 @@ func (s *Service) Call(ctx context.Context, method string, params, out any) erro
 	return s.call(ctx, method, params, out)
 }
 
-func (s *Service) React(ctx context.Context, messageID, emoji string) (string, error) {
-	var res struct {
-		ReactionID string `json:"reaction_id"`
-	}
-	err := s.call(ctx, FeishuReact, map[string]any{"message_id": messageID, "emoji": emoji}, &res)
-	return res.ReactionID, err
-}
-
-func (s *Service) Unreact(ctx context.Context, messageID, reactionID string) {
-	_ = s.call(ctx, FeishuUnreact, map[string]any{"message_id": messageID, "reaction_id": reactionID}, nil)
-}
-
-func (s *Service) Messages(ctx context.Context, messageID string) ([]botcard.Item, error) {
-	var res struct {
-		Items []botcard.Item `json:"items"`
-	}
-	err := s.call(ctx, FeishuMessages, map[string]any{"message_id": messageID}, &res)
-	return res.Items, err
-}
-
-func (s *Service) WorkbenchStamp(_ context.Context, c *botcard.Card) *botcard.Card { return c }
-
 func (s *Service) LinkNamer(context.Context) func(*url.URL) string { return nil }
 
 // OpenButton is the conversation's web link when the hub has a web address: /persona/<id> as the core's for a Persona
@@ -581,37 +553,10 @@ func (s *Service) StepParts(_ i18n.Lang, it proto.Item) (string, string) {
 	return it.ToolName, ""
 }
 
-// ProgressCard is a progress card with what the core's shows that these tests read: its state, the elapsed time, the
-// steps and the words in their element.
-func (s *Service) ProgressCard(l i18n.Lang, r *channel.Run, took time.Duration, steps []string, live string) *botcard.Card {
-	c := botcard.NewCard("", "", i18n.T(l, "assistant-feishu.working_summary_took", i18n.Args{"took": channel.Duration(l, took)}))
-	c.Markdown(botcard.InlineTag(i18n.T(l, "assistant-feishu.state_working"), botcard.Blue) + " " + botcard.EscapeMarkdown(r.Label+" · "+channel.Duration(l, took)))
-	if len(steps) > 0 {
-		c.Markdown("- " + strings.Join(steps, "\n- "))
-	}
-	c.MarkdownID(botcard.ProgressLiveID, botcard.EscapeMarkdown(live))
-	return c
-}
-
-// ProcessPanel folds the steps into a collapsible panel, as the core's does.
-func (s *Service) ProcessPanel(l i18n.Lang, c *botcard.Card, steps []string) {
-	if len(steps) > 0 {
-		c.Collapsible(i18n.T(l, "assistant-feishu.cot_tools", i18n.Args{"count": len(steps)}), "- "+strings.Join(steps, "\n- "))
-	}
-}
-
-func (s *Service) MissingPiecesNote(_ i18n.Lang, missing []int) string {
-	return fmt.Sprintf("missing pieces %v", missing)
-}
-
-// AnswerCards is the answer as one card, its steps folded and its foot as its note, as the core's for a short answer.
-func (s *Service) AnswerCards(l i18n.Lang, _ func(*url.URL) string, answer string, quiet bool, steps []string, foot string) ([]*botcard.Card, []string) {
-	c := botcard.NewCard("", "", answer)
-	if !quiet && answer != "" {
-		c.Markdown(answer)
-	}
-	s.ProcessPanel(l, c, steps)
-	return []*botcard.Card{c.Note(foot)}, []string{answer}
+// RunProgress is a run that is going on and has nothing more to tell: its time is the fake's clock, its Stop button
+// goes to no conversation.
+func (s *Service) RunProgress(*channel.Run) assistantwire.RunProgress {
+	return assistantwire.RunProgress{Now: s.Now()}
 }
 
 func (s *Service) Now() time.Time {
@@ -758,20 +703,19 @@ func lastCard(t *testing.T, r *channel.Run, posts []map[string]any) string {
 
 // wbData is what the fake core gives the workbench (tests set it).
 type wbData struct {
-	web       string
-	counts    assistantwire.WorkbenchCounts
-	agents    []assistantwire.WorkbenchAgent
-	inbox     []assistantwire.WorkbenchItem
-	board     []assistantwire.WorkbenchBoardRow
-	companion []assistantwire.WorkbenchCompanion
-	today     json.RawMessage
-	target    string
-	main      *bool
-	done      []string
-	mutes     []string
-	drafts    []string
-	replies   []string
-	draft     string
+	web     string
+	counts  assistantwire.WorkbenchCounts
+	agents  []assistantwire.WorkbenchAgent
+	inbox   []assistantwire.WorkbenchItem
+	board   []assistantwire.WorkbenchBoardRow
+	today   json.RawMessage
+	target  string
+	main    *bool
+	done    []string
+	mutes   []string
+	drafts  []string
+	replies []string
+	draft   string
 }
 
 func (s *Service) wb() *wbData {
@@ -785,7 +729,6 @@ func (s *Service) wb() *wbData {
 
 func (s *Service) WebBase(context.Context) string          { return s.wb().web }
 func (s *Service) Location(context.Context) *time.Location { return time.UTC }
-func (s *Service) StandingNow() time.Time                  { return s.clock() }
 func (s *Service) ClipFallback(text string) string         { return clip(text, 1500) }
 
 func (s *Service) WorkbenchAgents(context.Context, time.Time) (assistantwire.WorkbenchCounts, []assistantwire.WorkbenchAgent) {
@@ -814,17 +757,15 @@ func (s *Service) SessionNames(_ context.Context, sess proto.Session) (string, s
 
 func (s *Service) NextMeeting(context.Context, time.Time) *assistantwire.WorkbenchMeeting { return nil }
 
-func (s *Service) Companions(context.Context) []assistantwire.WorkbenchCompanion {
-	return s.wb().companion
-}
-
 func (s *Service) TodayBody(context.Context) json.RawMessage { return s.wb().today }
 
-func (s *Service) SummonWorkbench(context.Context)            {}
-func (s *Service) WorkbenchRefresh(context.Context)           {}
-func (s *Service) WorkbenchBringCard(context.Context, string) {}
-
 func (s *Service) TasksOverview(context.Context) ([]*botcard.Card, []string) { return nil, nil }
+
+func (s *Service) BoardCard(context.Context, time.Time) (*botcard.Card, string, string) {
+	return botcard.NewCard("Board", botcard.Blue, "Board"), "board", "board"
+}
+
+func (s *Service) FleetReady() bool { return true }
 
 func (s *Service) InboxDone(_ context.Context, id string, dismissed bool) error {
 	d := s.wb()
@@ -842,15 +783,15 @@ func (s *Service) InboxMute(_ context.Context, source, tag, value, name string) 
 	return nil
 }
 
-func (s *Service) DraftReply(_ context.Context, id, instruction string) (string, error) {
+func (s *Service) DraftReply(_ context.Context, id, instruction string, _ int, _ bool) (assistantwire.WorkbenchItem, string, error) {
 	d := s.wb()
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
 	d.drafts = append(d.drafts, id+": "+instruction)
-	return d.draft, nil
+	return assistantwire.WorkbenchItem{ID: id}, d.draft, nil
 }
 
-func (s *Service) ReplyInbox(_ context.Context, id, text, clientID string) (bool, error) {
+func (s *Service) ReplyInbox(_ context.Context, id, text, clientID string, _ int) (bool, error) {
 	d := s.wb()
 	s.tmu.Lock()
 	defer s.tmu.Unlock()

@@ -423,6 +423,10 @@ func (u *updater) saveLocked(ctx context.Context) error {
 func (u *updater) record(ctx context.Context, r updateRecord) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	return u.recordLocked(ctx, r)
+}
+
+func (u *updater) recordLocked(ctx context.Context, r updateRecord) error {
 	if err := u.loadLocked(ctx); err != nil {
 		return err
 	}

@@ -180,3 +180,11 @@ export const CHANGES_DIFF_MIN = 160;
 /** Deep indentation yields space to the file name and its count rather than hiding the entire name. */
 export const CHANGES_TREE_INDENT = 12;
 export const CHANGES_TREE_INDENT_MAX_SHARE = 0.4;
+
+/** Resizable directory-tree sidebar defaults and storage keys (#14926). */
+export const TREE_PANE_DEFAULT = 240;
+export const TREE_PANE_MIN = 160;
+export const TREE_PANE_MAX = 420;
+export const TREE_PANE_VIEWER_MIN = 200;
+export const FILES_TREE_WIDTH_KEY = "persona.filesTreeWidth";
+export const CHANGES_TREE_WIDTH_KEY = "persona.changesTreeWidth";

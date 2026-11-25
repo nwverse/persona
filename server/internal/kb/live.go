@@ -55,8 +55,6 @@ const (
 	materialMaxEarlier = 6
 )
 
-const liveFile = "live.json"
-
 // SessionRef is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type SessionRef = recordingwire.SessionRef
 
@@ -118,12 +116,6 @@ var (
 
 // LiveGapError is declared in recordingwire.
 type LiveGapError = recordingwire.LiveGapError
-
-// jsonNull: a field absent or null.
-func jsonNull(raw json.RawMessage) bool {
-	raw = bytes.TrimSpace(raw)
-	return len(raw) == 0 || string(raw) == "null"
-}
 
 // normalizeAttendance settles the attendance fields of an upload clean accepted (its Kind is set), never failing it:
 // an unknown role, a role on a recording that is not a meeting, or a session with exactly one id or one over

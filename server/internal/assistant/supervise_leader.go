@@ -629,7 +629,7 @@ func (s *Service) endSessionCards(machine, session string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	s.feishuDetach(ids)
+	s.larkModule().AskDetached(ids, resumeGrace)
 	for _, id := range ids {
 		if s.endPreparedByID(id, "cancelled", "The conversation that owned this approval ended; nothing changed.") {
 			continue

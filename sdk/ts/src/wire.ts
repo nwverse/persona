@@ -65,6 +65,7 @@ export interface Manifest {
    * executable; writes and arbitrary command lines are not part of this contract.
    */
   host_integrations?: HostIntegrationSpec[];
+  upgrade?: UpgradeSpec;
 }
 
 /**
@@ -136,6 +137,24 @@ export interface AuthSpec {
    * do leave it out of its pages.
    */
   page?: string;
+}
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+export interface UpgradeSpec {
+  /** auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade. */
+  backup?: string;
+  /**
+   * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+   */
+  prepare?: boolean;
+  /**
+   * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+   * snapshot.
+   */
+  health_check?: boolean;
 }
 
 export interface Dependency {
@@ -1069,6 +1088,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */
@@ -3969,8 +3993,8 @@ export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "
  * and calls their short tool names. An extension's connector with one this hub does not know loses only that
  * capability.
  */
-export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | (string & {});
-export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"] as const;
+export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | "inbox_visibility" | (string & {});
+export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"] as const;
 
 /**
  * ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.
@@ -5503,6 +5527,12 @@ export interface KBEntry {
    * absent on other kinds, before a match and from an older hub.
    */
   meeting_id?: string;
+  /**
+   * A recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a hub
+   * transcription not final) while nothing can settle it: module_off when the recording module is off. Derived when
+   * read, never stored; absent otherwise and from an older hub.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;
@@ -5577,6 +5607,11 @@ export interface KBDetail {
    * (docs/assistant/knowledge.md "Person profiles").
    */
   profiles?: Record<string, KBProfileRecord>;
+  /**
+   * A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is
+   * off. Derived when read, never stored.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;
@@ -7333,6 +7368,12 @@ export interface MemoryEntriesResult {
   has_more: boolean;
   /** Opaque: what to send as after for the next page; required in practice whenever has_more is true. */
   after?: string;
+  /**
+   * The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+   * keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+   * out or 0: 4096. Entries past it are left out, the most important kept.
+   */
+  standing_bytes?: number;
 }
 
 /**
@@ -7347,8 +7388,8 @@ export interface MemoryEntry {
   /** What the entry says, as the program would render it, on one or a few lines. */
   text: string;
   /**
-   * The program's own grouping (preferences, workflow, people…). Informational: the hub neither filters nor orders by
-   * it.
+   * The program's own grouping (preferences, workflow, people…). Used for explicit recall tag matching; it does not
+   * change priority or visibility.
    */
   facet?: string;
   /**

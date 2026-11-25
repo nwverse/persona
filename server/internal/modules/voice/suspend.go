@@ -82,6 +82,9 @@ type suspension struct {
 	onHold bool
 	holdAt time.Time
 	holds  int
+
+	// Closed once the buffered text write is committed to history or restored for replay.
+	textWrite chan struct{}
 }
 
 // ring is the app's audio of the last span bytes, oldest first.
@@ -373,6 +376,7 @@ func (c *conversation) flushRing() {
 			return
 		}
 		var out []any
+		var typedAt time.Time
 		frames, text := c.sus.ring.take(), ""
 		switch {
 		case len(frames) > 0:
@@ -384,8 +388,9 @@ func (c *conversation) flushRing() {
 			}
 		case len(c.sus.texts) > 0:
 			text, c.sus.texts = c.sus.texts[0], c.sus.texts[1:]
-			c.remember("user", text, time.Now())
-			c.gate.user = time.Now()
+			c.sus.textWrite = make(chan struct{})
+			typedAt = time.Now()
+			c.gate.user = typedAt
 			c.gate.typed = c.gate.user
 			c.owe(c.gate.user, owedTyped, false) // the woken session owes it an answer (nudge.go)
 			out = append(out, w.text(text))
@@ -402,17 +407,25 @@ func (c *conversation) flushRing() {
 		c.mu.Unlock()
 		for i, f := range out {
 			err := c.writeUp(up, f)
+			if text != "" {
+				c.mu.Lock()
+				if err == nil {
+					c.remember("user", text, typedAt)
+				} else {
+					c.sus.texts = append([]string{text}, c.sus.texts...)
+				}
+				close(c.sus.textWrite)
+				c.sus.textWrite = nil
+				c.mu.Unlock()
+			}
 			if err == nil {
 				continue
 			}
-			c.mu.Lock()
-			if text != "" {
-				c.takeBack(text)
-				c.sus.texts = append([]string{text}, c.sus.texts...)
-			} else {
+			if text == "" {
+				c.mu.Lock()
 				c.sus.ring.unread(frames[i:])
+				c.mu.Unlock()
 			}
-			c.mu.Unlock()
 			c.lost(gen, err) // nothing when it was lost already
 			c.mu.Lock()
 			if c.up == up { // not taken off: the call is over, or out of reconnects (lost ends it)
