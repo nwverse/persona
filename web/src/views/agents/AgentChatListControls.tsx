@@ -35,6 +35,7 @@ import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { UltraMark } from "../chat/Ultracode";
 import { CURRENT_ROW, type GoFn, type RegFn, type RowMenuFn } from "../SidebarParts";
+import { sidebarRowHover } from "../SidebarRowHover";
 
 type FilterPage = "root" | "scope" | "harnesses" | "projects" | "models" | "machines";
 type FacetKey = Exclude<FilterPage, "root" | "scope">;
@@ -348,6 +349,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
   const { ix, heldOnly } = useStore((state) => rowCards(state.interactions, s.machine_id, s.session_id));
   const row = heldOnly && stateOf(s) === "needs_you" ? { ...s, state: "working" as const } : s;
   const st = stateOf(row);
+  const title = sessionTitle(s);
   const awaiting = awaitsReply(row, mutes);
   const finished = justFinished(row, mutes);
   const draft = draftLine(useLeftDraft(`${s.machine_id}/${s.session_id}`));
@@ -388,6 +390,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
           go(to)(e);
         }}
         {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at)) : {})}
+        {...sidebarRowHover(() => ({ title, session: row, draft, tab: associatedTab }))}
         onMouseEnter={() => hover(k)}
         onFocus={() => hover(k)}
         onBlur={() => hover(null)}
@@ -420,7 +423,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
                 active || st === "unread" || st === "needs_you" ? "font-semibold text-ink" : st === "offline" ? "text-ink-3" : "font-medium text-ink-2",
               )}
             >
-              {sessionTitle(s)}
+              {title}
             </span>
             {ultra && <UltraMark size={10} />}
           </span>

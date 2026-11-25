@@ -1,10 +1,10 @@
 // The sidebar's rows: Persona's main conversation, the pinned heading, a page's row, an agent's row and the personal
-// agents. Imports only SidebarParts among the sidebar's files.
+// agents.
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { formatList, t } from "../i18n";
 import { awaitsReply, justFinished, sessionSource, sourceName } from "../lib/agent-groups";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
-import { backgroundWaiting, sessionDisplayTab, sessionPreview, sourceSubtitle, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
+import { backgroundWaiting, sessionDisplayTab, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
 import { useHerdrTabName } from "../lib/agents-display";
 import { firstAndCurrent } from "../lib/persona-nav";
 import { pickMainChat } from "../lib/handoff";
@@ -50,6 +50,7 @@ import { backgroundStall } from "../lib/background-work";
 import { SESSIONS_LIST_FEATURE } from "../lib/session-list";
 import { personalHideDeps, personalOrder, personalSessions, removeAgentSession, useGoingIds } from "../lib/agents";
 import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type RegFn, ROW_TITLE_MIN, type RowMenuFn, Section } from "./SidebarParts";
+import { sidebarRowHover } from "./SidebarRowHover";
 import { requestDirectWaiting } from "../lib/direct-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
 
@@ -78,12 +79,13 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
       href={href(to)}
       onClick={open}
       {...(onMenu ? contextMenuProps((at, el) => onMenu(el, at)) : {})}
+      {...(main && sidebarRowHover(() => ({ title: sessionTitle(main), session: main, draft })))}
       onMouseEnter={() => hover("persona")}
       onFocus={() => hover("persona")}
       onBlur={() => hover(null)}
       aria-current={active ? "page" : undefined}
       aria-keyshortcuts={chord ? ariaKeyshortcuts(chord) : undefined}
-      title={t("sidebar.persona_main")}
+      aria-description={t("sidebar.persona_main")}
       // pinned over the list (#5581), its own hover fill: the gliding highlight passes under the pinned box
       className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-[background-color,transform] duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active ? CURRENT_ROW : "hover:bg-hover focus-visible:bg-hover", onMenu && active && "pr-8", onMenu && "[@media(hover:none)]:pr-11")}
     >
@@ -338,7 +340,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const s = heldOnly && stateOf(base) === "needs_you" ? { ...base, state: "working" as const } : base;
   const preferTab = useHerdrTabName();
   const title = sessionTitle(s, preferTab);
-  const titleDetail = sessionTitleDetail(s, preferTab);
+  const displayTitle = label ?? title;
   const st = stateOf(s);
   // A lead row whose own conversation is idle while something under it runs (the tree's `running`: an Agent at work,
   // #6626) carries the working arc anyway (#6230). An own needs-you / unread / working state still wins, and Agent rows
@@ -353,7 +355,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const source = showState && !s.assistant && !endRoom ? sessionSource(s) : undefined;
   // a Persona conversation the hub opened by itself (#3758, #5195): what opened it, in the source mark's place
   const origin = source ? undefined : autoOrigin(s);
-  // the extension whose own icon that mark draws, which the row's tooltip names too (#10358)
+  // The hover card can name the extension whose icon the origin mark draws (#10358).
   const [openerName, setOpenerName] = useState<string>();
   const hasTabAssociation = !!(s.slot_id?.trim() || s.tab_id?.trim());
   const primaryTab = sessionDisplayTab(s, preferTab);
@@ -362,7 +364,6 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // A structural tab row keeps its old plain-text fallback, but only a real association earns the localized identity.
   const structuralTabHint = !hasTabAssociation && tabFallback || (tab && !primaryTab ? tabLabel(s) : "");
   const tail = [hintFull ? hint : "", tabIdentity || structuralTabHint].filter(Boolean).join(" · ");
-  const preview = sessionPreview(s);
   // Settings › Appearance › show details on agent rows (#2430): a second line under an agent's title — folder · model · context · age
   const details = useAgentDetails();
   const withDetail = details && showState && !s.assistant;
@@ -437,12 +438,15 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {...destination}
       // right click (at the pointer), the menu key and Shift+F10 (beside the row): the row's menu, the same as its ⋯
       {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at)) : {})}
+      {...sidebarRowHover(() => ({
+        title: displayTitle, session: s, titleDetail: displayTitle !== title ? title : sessionTitleDetail(s, preferTab),
+        draft, working: leadActive, tab: associatedTab || structuralTabHint,
+        origin: origin ? openerFrom(origin, openerName) : undefined,
+      }))}
       onMouseEnter={() => hover(k)}
       onFocus={() => hover(k)}
       onBlur={() => hover(null)}
       aria-current={active ? "page" : undefined}
-      // its mark's name is in the row's tooltip too: the mark steps aside while the row is hovered
-      title={`${title}${titleDetail ? `\n${titleDetail}` : ""}${source ? `\n${sourceName(source)}` : ""}${origin ? `\n${openerFrom(origin, openerName)}` : ""}${sourceSubtitle(s) ? `\n${sourceSubtitle(s)}` : ""}${hint ? `\n${hint}` : ""}${tabIdentity ? `\n${tabIdentity}` : ""}${s.todo ? `\n${t("sidebar.todo_tag", { title: s.todo.title })}` : ""}${preview ? `\n${preview}` : ""}`}
       // a touch screen: rows a finger can hit (44), and room at the end for the ⋯ that is always there; the open row
       // keeps its ⋯ too, so it has room for it
       className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW, // room for "N agents" and the ⋯ beside it (instead of the ⋯'s own)
@@ -463,13 +467,13 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
-                {label ?? title}
+                {displayTitle}
               </span>
               <UltraMark size={10} />
             </span>
           ) : (
             <span className={cx("truncate text-[13px]", active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
-              {label ?? title}
+              {displayTitle}
             </span>
           )}
           {line && <SecondLine line={line} draft={!!draft} />}
@@ -531,7 +535,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
         </span>
       ) : (
         <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>
-          {label ?? title}
+          {displayTitle}
         </span>
       )}
       {host && <span className={cx("shrink-0 rounded bg-hover px-1 text-[10px] leading-4 text-ink-3", aside)}>{host}</span>}
@@ -786,6 +790,7 @@ export const AgentRow = memo(function AgentRow({ s, reg, hover, active, go, pinn
   const regRow = useMemo(() => reg(k), [reg, k]);
   const to: Route = { name: "agents", id: s.id };
   const unread = s.unreadCount > 0;
+  const title = s.title || t("lib-format.untitled_session");
   return (
     <div className="group/row relative" onContextMenu={(e) => {
       e.preventDefault();
@@ -795,15 +800,15 @@ export const AgentRow = memo(function AgentRow({ s, reg, hover, active, go, pinn
         ref={regRow}
         href={href(to)}
         onClick={go(to)}
+        {...sidebarRowHover(() => ({ title, agent: s }))}
         onMouseEnter={() => hover(k)}
         onFocus={() => hover(k)}
         onBlur={() => hover(null)}
         aria-current={active ? "page" : undefined}
-        title={`${s.title || t("lib-format.untitled_session")} · ${providerLabel(s.provider)}`}
         className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(hover:none)]:pr-11 [@media(pointer:coarse)]:min-h-11", active && cx(CURRENT_ROW, "pr-7"))}
       >
         <AgentAvatar s={s} size={16} />
-        <span className={cx("min-w-0 flex-1 truncate text-[13px]", active || unread ? "font-medium text-ink" : "text-ink-2")}>{s.title || t("lib-format.untitled_session")}</span>
+        <span className={cx("min-w-0 flex-1 truncate text-[13px]", active || unread ? "font-medium text-ink" : "text-ink-2")}>{title}</span>
         {unread && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-white tabular-nums", !active && "group-hover/row:invisible")}>{s.unreadCount}</span>}
       </a>
       <button
