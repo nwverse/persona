@@ -786,7 +786,9 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	if !keepDone {
 		it.Read = false
 	}
-	b.noteReceived(it, prev, nil)
+	// A composed event can share its batch cursor with another event. Use
+	// its own most recent message as the receipt's source identity.
+	b.noteReceived(it, prev, nil, e.messages[max(0, len(e.messages)-1):]...)
 	if reopened {
 		it.DoneAt, it.DoneBy = nil, ""
 		b.chainAdd(it, InboxChainEntry{Kind: ChainReopened, Via: it.Source,

@@ -381,3 +381,21 @@ func TestExternalInboxDirectionReusesTheSupervisorConversation(t *testing.T) {
 		t.Fatalf("direction update did not append once to its supervisor: %+v", queued)
 	}
 }
+
+func TestExternalInboxGroupedEventsWithASharedCursor(t *testing.T) {
+	f := newExternalRoutingFixture(t)
+	todo := f.todo(t, "todo_delivery", "delivery_agent")
+	f.bind(t, externalPushRef(), todo, externalRealtime())
+	f.collect(t)
+	source := w.InboxSource{ID: "push", Group: true}
+	batch := externalPush("group", "shared_cursor", "A grouped message")
+	batch.Group = &connector.ThingGroup{Batch: "batch", New: []string{"one", "two"}}
+	f.writeGroup(t.Context(), source, batch, &groupPlan{events: []plannedEvent{
+		{messages: []string{"one"}, title: "First request"},
+		{messages: []string{"two"}, title: "Second request"},
+	}})
+	f.sweep(t, time.Now())
+	if got := f.sent(); !slices.Equal(got, []string{"delivery_agent", "delivery_agent"}) {
+		t.Fatalf("two source events with a shared Inbox cursor went to %v", got)
+	}
+}

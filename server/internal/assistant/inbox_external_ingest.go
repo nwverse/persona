@@ -36,7 +36,7 @@ func (it *InboxItem) externallyRouted() bool {
 	return it.Last != "" && (it.ExternalRouteOf == it.Last || it.externalChecking)
 }
 
-func (b *inboxBook) captureExternalInbox(it *InboxItem) {
+func (b *inboxBook) captureExternalInbox(it *InboxItem, sourceEvent []string) {
 	if !b.externalCapture || len(it.ExternalPath) == 0 || !it.open() || it.Read || it.Kind == "bot_handoff" {
 		return
 	}
@@ -47,6 +47,9 @@ func (b *inboxBook) captureExternalInbox(it *InboxItem) {
 	}
 	if it.Connector != nil {
 		event.URL = inboxTaskScopeURL(it.Connector.URL)
+		if event.URL == "" {
+			event.URL = inboxTaskScopeURL(it.Connector.OpenURL)
+		}
 		event.Senders = append(event.Senders, cleanExternalText(inboxExternalTag(it.Connector.Tags, connector.TagSender), 256))
 		if refURL := inboxExternalTag(it.Connector.Tags, connector.TagExternalObject); refURL != "" {
 			event.URL = inboxTaskScopeURL(refURL)
@@ -64,7 +67,10 @@ func (b *inboxBook) captureExternalInbox(it *InboxItem) {
 			event.Mentions = append(event.Mentions, "all")
 		}
 	}
-	for _, id := range inboxExternalEventIDs(it) {
+	if len(sourceEvent) == 0 {
+		sourceEvent = inboxExternalEventIDs(it)
+	}
+	for _, id := range sourceEvent {
 		if id == "" {
 			continue
 		}
