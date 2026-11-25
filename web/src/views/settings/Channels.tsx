@@ -289,7 +289,6 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
         </div>
       </div>
       {d.description && <p className="-mt-2 mb-5 px-1 text-[12.5px] leading-relaxed text-ink-3">{d.description}</p>}
-      {d.installed && d.kind !== "app" && <ConnectorExternalSourceSettings ids={[d.id]} manager={manager} />}
       {d.state === "error" && d.error && (
         <div role="alert" className="mb-5 flex items-start gap-2 rounded-card bg-red-tint px-3.5 py-2.5 text-[12.5px] text-red">
           <Icon name="info" size={14} className="mt-px shrink-0" />
@@ -405,6 +404,7 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
         </Group>
       )}
 
+      {d.installed && d.kind !== "app" && <ConnectorExternalSourceSettings ids={[d.id]} manager={manager} />}
       <TargetPicker open={picking} current={d.target} onClose={() => setPicking(false)} onPick={(target) => (setPicking(false), void change("target", { target }))} />
       <Dialog
         open={unbinding}

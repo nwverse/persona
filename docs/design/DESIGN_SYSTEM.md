@@ -3208,6 +3208,19 @@ hint styles. A choice with consequences can request confirmation for a specific 
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
 
+## External source connections on web (#15518)
+
+Inbox and work open one binding editor so the owner can set the same destination, source scope and update policy
+from either place. It uses the shared `Dialog`, buttons and settings fields. Native controls carry labels and
+announce inherited values and their origins. A known Inbox source starts with its name and scope. The owner can
+expand **Source details** to see or edit its identity and choose custom filters to reveal the three lists.
+The sheet keeps Save and Cancel in its fixed footer while those controls scroll.
+
+Work uses settings groups for explicit connections and the existing repository group inside **External sources**.
+Disconnect asks for confirmation because the association and its overrides are removed together. Settings reuses
+the policy fields at channel scope and lists destinations as links. A rejected save leaves the draft in place.
+See [External sources in the web app](../web/web.md#external-sources-15518).
+
 ## Extension entry lists
 
 A declared list of extension accounts, gateways or similar entries (#9504) belongs in the existing **Settings** group; it does not create a page, tabs or an extension-owned layout. The audience is an everyday owner managing a small list, so rows use the entry's name and plain state words, never its host-owned ID, array index, secret name or engine terminology. Reuse settings `Group`, `Row`, `Button`, `IconButton` and `Dialog`, the existing radius, surface, hairline, spacing and type roles; do not introduce a second card style or new tokens for one extension.

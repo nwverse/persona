@@ -349,6 +349,7 @@ function TodoListView({
   // Direction metadata shared by the direction grouping, batch reorganize, and todos_v2 slim row meta (#14830).
   const directionTree = useDirectionTree();
   const leaderTitles = useStore((s) => s.assistant?.conversations);
+  const directionMenu = useMenu();
   const cachedDirectionNames = useCachedDirectionNames();
   const reorganizeDirections = useMemo(
     () => (todosV2 ? reorganizeDirectionOptions(directionTree, leaderTitles, assistant?.leaders) : []),
@@ -637,7 +638,7 @@ function TodoListView({
     const open = new Map(filteredUncompleted.filter((td) => placed.open.has(td.id)).map((td) => [td.id, td]));
     return directionTree.directions
       .map((d) => ({ d, todos: (d.tasks ?? []).map((task) => open.get(task.id)).filter((td): td is Todo => !!td) }))
-      .filter((g) => !g.d.secretary || g.todos.length > 0)
+      .filter((g) => g.todos.length > 0)
       .map(({ d, todos }) => ({ d, todos, title: directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title) }));
   }, [grouping, byDirection, directionTree, filteredUncompleted, placed, leaderTitles]);
   // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it
@@ -972,6 +973,14 @@ function TodoListView({
           </div>
         </div>
         <div className="flex items-center gap-2.5">
+          {byDirection && <IconButton icon="target" label={t("external-sources.direction_details")}
+            onClick={directionMenu.open} active={Boolean(directionMenu.anchor)} />}
+          {byDirection && directionMenu.anchor && <Menu anchor={directionMenu.anchor} onClose={directionMenu.close} align="right"
+            items={directionTree.directions.filter((direction) => !direction.secretary).map((direction) => ({
+              key: direction.id,
+              label: direction.name || leaderTitles?.find((row) => row.session_id === direction.id)?.title || t("external-sources.untitled"),
+              onSelect: () => navigate({ name: "todos", direction: direction.id, manager: repositoryManager }),
+            }))} />}
           {todosV2 && (
             <a
               href={settingsHref("labs", null, false)}
@@ -1242,7 +1251,7 @@ function TodoListView({
               >
                 {todosError}
               </Empty>
-            ) : (grouping === "direction" ? directionSections.length === 0 && directionUnlisted === 0 && directionRest.length === 0 : filteredUncompleted.length === 0) && filteredCompleted.length === 0 && filteredCancelled.length === 0 ? (
+            ) : (filteredUncompleted.length === 0 || (grouping === "direction" && directionSections.length === 0 && directionUnlisted === 0 && directionRest.length === 0)) && filteredCompleted.length === 0 && filteredCancelled.length === 0 ? (
               offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : search.trim() ? (
@@ -1338,7 +1347,6 @@ function TodoListView({
                       <TodoDirectionSection
                         key={g.d.id}
                         direction={g.d}
-                        manager={repositoryManager}
                         title={g.title}
                         todos={g.todos}
                         views={views}
@@ -1858,7 +1866,6 @@ function HiddenWaitingLine({ count, filter, onShowAll }: { count: number; filter
  *  folding title, the to-dos in the tree's order. */
 const TodoDirectionSection = memo(function TodoDirectionSection({
   direction,
-  manager,
   title,
   todos,
   views,
@@ -1870,7 +1877,6 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   onMenu,
 }: {
   direction: Direction;
-  manager: string;
   title: string;
   todos: readonly Todo[];
   views: ReadonlyMap<string, TodoRowView>;
@@ -1885,7 +1891,6 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
   const [folded, toggle] = useFolded(`todos-direction:${direction.id}`, false, { holds });
   return (
     <div className="mt-1 first:mt-0" data-testid="todo-group" data-group={`direction:${direction.secretary ? "secretary" : direction.id}`}>
-      <div className="flex min-w-0 items-center">
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <Icon name={direction.secretary ? "person" : "target"} size={12} stroke={2} className="shrink-0 text-ink-3" />
@@ -1893,9 +1898,6 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
         {folded && <OwnerMarkCount count={ownerCount(todos, views)} />}
         <DirectionCountsText direction={direction} />
       </button>
-      {!direction.secretary && <IconButton icon="info" label={t("external-sources.direction_details")}
-        onClick={() => navigate({ name: "todos", direction: direction.id, manager })} />}
-      </div>
       {!folded && (
         <div className="flex flex-col gap-1 pl-2 pt-0.5">
           {todos.map((todo) => (

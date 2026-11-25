@@ -11,15 +11,14 @@ import {
 export const externalFieldClass = cx(settingsInputClass, "min-h-11 min-w-0 text-meta");
 
 export function ExternalField({ label, hint, children }: {
-  label: string; hint?: ReactNode; children: ReactElement<{ "aria-describedby"?: string }>;
+  label: string; hint?: ReactNode; children: ReactElement<{ id?: string; "aria-describedby"?: string }>;
 }) {
-  const hintId = useId();
+  const id = useId();
+  const hintId = `${id}-hint`;
   return (
-    <div className="min-w-0 space-y-1">
-      <label className="flex min-w-0 flex-col gap-1 text-meta font-medium text-ink-2">
-        <span>{label}</span>
-        {cloneElement(children, { "aria-describedby": hint ? hintId : undefined })}
-      </label>
+    <div className="flex min-w-0 flex-col gap-1">
+      <label htmlFor={id} className="text-meta font-medium text-ink-2">{label}</label>
+      {cloneElement(children, { id, "aria-describedby": hint ? hintId : undefined })}
       {hint && <div id={hintId} className="text-submeta leading-snug text-ink-3 [overflow-wrap:anywhere]">{hint}</div>}
     </div>
   );
