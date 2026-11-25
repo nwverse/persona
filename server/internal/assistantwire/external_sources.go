@@ -1,8 +1,10 @@
 package assistantwire
 
 import (
+	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"time"
 )
 
 const (
@@ -171,4 +173,36 @@ type ExternalBindingLookup struct {
 
 type ExternalSourceSummary struct {
 	Bindings []ExternalBindingMatch `json:"bindings"`
+}
+
+type ExternalEventID string
+type ExternalInboxItemID string
+
+// ExternalInboxEvent is the durable routing input for one observed source event.
+type ExternalInboxEvent struct {
+	Key      string              `json:"key"`
+	Ref      ExternalRef         `json:"ref"`
+	EventID  ExternalEventID     `json:"event_id"`
+	Path     []ExternalRef       `json:"path"`
+	InboxID  ExternalInboxItemID `json:"inbox_id"`
+	Cursor   string              `json:"cursor"`
+	Title    string              `json:"title"`
+	Summary  string              `json:"summary"`
+	Senders  []string            `json:"senders,omitempty"`
+	Mentions []string            `json:"mentions,omitempty"`
+	URL      string              `json:"url,omitempty"`
+}
+
+// ExternalInboxWork pairs an event with the outbox's clock and resumable decision.
+type ExternalInboxWork struct {
+	ExternalInboxEvent
+	ReceivedAt time.Time
+	Plan       json.RawMessage
+}
+
+// ExternalRoutingConfiguration reads lookup matches and policy inputs from one snapshot.
+type ExternalRoutingConfiguration struct {
+	Lookup   ExternalBindingLookup
+	Policies []ExternalScopedPolicy
+	Bindings []ExternalBinding
 }

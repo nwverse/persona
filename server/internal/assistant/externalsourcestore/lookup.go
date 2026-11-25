@@ -20,35 +20,39 @@ func (s *Store) LookupExternalBindings(ctx context.Context, path []assistantwire
 		return out, errors.New("external reference path is empty")
 	}
 	err := db.ReadSnapshot(ctx, s.database, func(tx pgx.Tx) error {
-		matches, err := explicitMatches(ctx, tx, `
-			SELECT b.external_ref, b.target_kind, b.target_id, b.id
-			FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS path(ref, rank)
-			JOIN assistant_external_bindings b ON b.external_ref = path.ref
-			ORDER BY path.rank, b.target_kind, b.target_id`, path)
-		if err != nil {
-			return err
-		}
+		matches, err := lookupMatches(ctx, tx, path)
 		out.Matches = matches
-		item := path[0]
-		if item.Provider != assistantwire.ExternalProviderGitHub || item.Item == (assistantwire.ExternalRefNode{}) {
-			return nil
-		}
-		repo, link, err := externalbindingadapt.RepositoryLinkIdentity(item)
-		if err != nil {
-			return err
-		}
-		projected, err := projectedMatches(ctx, tx, &repo.InstanceURL, &repo.Path, &link)
-		if err != nil {
-			return err
-		}
-		afterItem := 0
-		for afterItem < len(matches) && matches[afterItem].ExternalRef == item {
-			afterItem++
-		}
-		out.Matches = slices.Insert(matches, afterItem, projected...)
-		return nil
+		return err
 	})
 	return out, err
+}
+
+func lookupMatches(ctx context.Context, tx pgx.Tx, path []assistantwire.ExternalRef) ([]assistantwire.ExternalBindingMatch, error) {
+	matches, err := explicitMatches(ctx, tx, `
+		SELECT b.external_ref, b.target_kind, b.target_id, b.id
+		FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY AS path(ref, rank)
+		JOIN assistant_external_bindings b ON b.external_ref = path.ref
+		ORDER BY path.rank, b.target_kind, b.target_id`, path)
+	if err != nil {
+		return nil, err
+	}
+	item := path[0]
+	if item.Provider != assistantwire.ExternalProviderGitHub || item.Item == (assistantwire.ExternalRefNode{}) {
+		return matches, nil
+	}
+	repo, link, err := externalbindingadapt.RepositoryLinkIdentity(item)
+	if err != nil {
+		return nil, err
+	}
+	projected, err := projectedMatches(ctx, tx, &repo.InstanceURL, &repo.Path, &link)
+	if err != nil {
+		return nil, err
+	}
+	afterItem := 0
+	for afterItem < len(matches) && matches[afterItem].ExternalRef == item {
+		afterItem++
+	}
+	return slices.Insert(matches, afterItem, projected...), nil
 }
 
 // ExternalSourceSummary describes saved data flows, including read-only repository projections.
