@@ -1,6 +1,6 @@
 # Lock Screen / Dynamic Island Live Activity (Fleet)
 
-The whole phone has a single Live Activity, "Fleet": it rolls up every Agent that needs you, is working, or finished unseen onto the Lock Screen and the Dynamic Island. The manager that talks to computers computes the content (`server/internal/assistant/fleet_live.go`, delivered to the hub over the bus as `fleet.live`); the hub fills in each device's fields and pushes over APNs at a set pace.
+The whole phone has a single Live Activity, "Fleet": it rolls up every Agent that needs you, is working, or finished unseen onto the Lock Screen and the Dynamic Island. The manager that talks to computers computes the content (`server/internal/assistant/fleet_live.go`, which agents and cards need you decided in `server/internal/assistant/fleetcount`; delivered to the hub over the bus as `fleet.live`); the hub fills in each device's fields and pushes over APNs at a set pace.
 The App starts the activity and reports tokens; the Widget extension (source `apple/PersonaWidgets`, module still `PersonaWidgets`) draws it. The design rationale is in the lane notes (an analysis of the ChatGPT Codex / Sand activities);
 this page covers only implementation and conventions.
 
@@ -324,7 +324,7 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
 ## Buttons (`apple/LiveActivity/FleetIntents.swift`)
 
 - The first request actionable with buttons (permission, plan) has them: permission Deny / Allow; plan View (opens chat) / Approve. Rejecting a plan requires feedback, so that's left to the App.
-  A card with fields (the password card, adding a mail account) is filled in in the App: the manager leaves its row's `interaction` empty (`server/internal/assistant/fleet_live.go`), so it is not actionable (`FleetState.firstActionable`): another agent's permission or plan behind it takes the buttons, and with none the row shows without them and a tap opens its conversation.
+  A card with fields (the password card, adding a mail account) is filled in in the App: the manager leaves its row's `interaction` empty (`needItem` in `server/internal/assistant/fleetcount/fleetcountadapt/render.go`), so it is not actionable (`FleetState.firstActionable`): another agent's permission or plan behind it takes the buttons, and with none the row shows without them and a tap opens its conversation.
   The Lock Screen and expanded view only show this item + buttons + "+N" (a second item won't fit vertically).
 - Allow and Approve use `authenticationPolicy = .requiresAuthentication` (Face ID first on the Lock Screen), Deny uses `.alwaysAllowed`, as with notification buttons.
   Approving a plan from the Lock Screen uses `acceptEdits` (you haven't read the full plan, so commands still require individual permission).
@@ -335,7 +335,7 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
   #12982 the stale Lock Screen draws only the persona and "Waiting for hub…": no counts and no rows, which are no longer known to be true.
 - **Buttons only with context** (#12982): Allow / Deny or Approve appear only when the card can say who asks, what, and what
   approving does. The manager leaves `interaction` empty for a permission without a summary (a bare tool name), a plan without a
-  title and a private ("Just me") permission or plan (`decidable` in `server/internal/assistant/fleet_live.go`); with Lock Screen
+  title and a private ("Just me") permission or plan (`decidable` in `server/internal/assistant/fleetcount/fleetcountadapt/render.go`); with Lock Screen
   details off (rows read "A permission request is waiting") both the hub (`forDevice`) and the app (`FleetState.tailored`) drop it
   from every permission and plan row. Questions and terminal cards never have buttons and keep their `interaction`. Without buttons a tap on the request opens it in the app.
 

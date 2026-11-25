@@ -138,7 +138,7 @@ CountsView {                       // per manager; schema/wire, generated for Go
 
 The first schema is only what today's rules and section 6 say. `held` lists the muted rows that `AgentsNeedsYou.rows`
 keeps and the badge leaves out, and the held cards (D11); the header draws them in uncounted groups (D6). Quiet rows are
-not in it: fleetInputsInto drops them before any input is built (`assistant/fleet_live.go:173`), so listing them would
+not in it: fleetInputsInto drops them before any input is built (its quiet line in `assistant/fleet_live.go`), so listing them would
 mean widening that function inside the repair PRs' hunks (and still keeping them out of FleetState and Link) or reading
 the lists a second time. So the header's quiet rows (D6) come from the client's own list, until a later optional
 `why: quiet` comes with that cost stated. There is no `surfaces: {<surface>: <id>}` map (D5): each client names the ids
