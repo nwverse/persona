@@ -41,7 +41,10 @@ func TestAsyncAgentTitleBudgetCoversColdStart(t *testing.T) {
 func TestAsyncAgentTabNameSlowModelRenames(t *testing.T) {
 	oldSync, oldAsync := tabNameSyncTimeout, agentTitleAsyncTimeout
 	tabNameSyncTimeout = 30 * time.Millisecond
-	agentTitleAsyncTimeout = time.Second
+	// Generous next to the 2 s entry watchdog: on an oversubscribed -race box the fake handler can be
+	// slow to enter, and this compressed budget must not expire before the 120 ms release fires. The
+	// test stays fast because the answer (and release) still happens ~120 ms in.
+	agentTitleAsyncTimeout = 5 * time.Second
 	t.Cleanup(func() {
 		tabNameSyncTimeout, agentTitleAsyncTimeout = oldSync, oldAsync
 	})
@@ -60,7 +63,7 @@ func TestAsyncAgentTabNameSlowModelRenames(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the naming model was not called")
 	}
-	// Past the compressed 30 ms synchronous cap, far inside the 1 s background budget.
+	// Past the compressed 30 ms synchronous cap, far inside the 5 s background budget.
 	time.AfterFunc(120*time.Millisecond, release)
 	waitAgentTabNaming(t, s)
 
