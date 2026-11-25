@@ -249,6 +249,7 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/extensions/{id}/-/{$}
 -                    GET /api/v1/fleet
 -                    GET /api/v1/health
+-                    GET /api/v1/hub/recovery
 -                    GET /api/v1/hub/update
 -                    GET /api/v1/hub/update/backups
 -                    GET /api/v1/hub/update/history
@@ -587,6 +588,8 @@ market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/extensions/{id}/-/ui/{ui}
 -                    POST /api/v1/extensions/{id}/-/upgrade
 -                    POST /api/v1/extensions/{id}/-/widget/{ui}
+-                    POST /api/v1/hub/recovery/bundles/{id}/inspect
+-                    POST /api/v1/hub/recovery/bundles/{id}/verify
 -                    POST /api/v1/hub/update
 -                    POST /api/v1/hub/update/backups/{id}/apply
 -                    POST /api/v1/hub/update/check
