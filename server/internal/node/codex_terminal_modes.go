@@ -10,11 +10,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -62,8 +66,13 @@ type codexTerminal struct {
 // codexOnTerminal says whether session id is a live Codex on the terminal route: in a pane that takes keys (botmux's
 // takes whole messages), not joined on an app-server (codex_effort.go drives that one), not a subagent (its parent drives
 // it). Then t is where to type /model, or why is the coded refusal of a session whose change could not be made or
-// confirmed that way: an older Codex started it, or it has no rollout yet.
+// confirmed that way: the running Codex is older than 0.169 (falling back to the rollout's cli_version when the running
+// process cannot be read), or it has no rollout yet.
 func (n *Node) codexOnTerminal(id string) (t codexTerminal, why error, ok bool) {
+	return n.codexOnTerminalCtx(context.Background(), id, false)
+}
+
+func (n *Node) codexOnTerminalCtx(ctx context.Context, id string, fresh bool) (t codexTerminal, why error, ok bool) {
 	n.mu.Lock()
 	a, live := n.agents[id]
 	n.mu.Unlock()
@@ -81,7 +90,7 @@ func (n *Node) codexOnTerminal(id string) (t codexTerminal, why error, ok bool) 
 	if path == "" {
 		return codexTerminal{}, refusal(proto.CodeModesCodexNoRollout, i18n.T(i18n.Default, "rpc-errors.modes_codex_no_rollout"), nil), true
 	}
-	if !versionAtLeast(codexSessionVersion(path), codexModelArgsMinVersion) {
+	if !versionAtLeast(n.codexTerminalVersion(ctx, a, path, fresh), codexModelArgsMinVersion) {
 		return codexTerminal{}, refusal(proto.CodeModesCodexVersion, i18n.T(i18n.Default, "rpc-errors.modes_codex_version"), nil), true
 	}
 	return codexTerminal{pane: a.PaneID, rollout: path, home: codexHomeOf(path)}, nil, true
@@ -341,8 +350,259 @@ func codexHomeOf(rollout string) string {
 	return filepath.Dir(sessions)
 }
 
+// codexPanePID caches the running Codex PID found for a terminal pane between session-list passes while the same
+// process keeps running (procStartMark).
+type codexPanePID struct {
+	pid     int
+	start   string
+	checked time.Time
+}
+
+var (
+	// codexBinaryVersionTimeout bounds one `<exe> --version` for a pane's running Codex.
+	codexBinaryVersionTimeout = 2 * time.Second
+	// codexBinaryVersionRetry: after `<exe> --version` fails or outputs no version, do not rerun on every list tick
+	// until this passes (or the binary's mtime, size, or file identity changes).
+	codexBinaryVersionRetry = time.Minute
+	// codexPanePIDTTL bounds how long a live Codex pane's PID is reused between list passes while its start mark holds.
+	codexPanePIDTTL   = 15 * time.Second
+	codexPanePIDRetry = 5 * time.Second
+
+	// Test hooks for resolving a pane process's executable and reading its `--version`.
+	codexProcessExecPath = func(pid int) string { return processExecutable(pid) }
+	codexProcessArgv     = func(pid int) ([]string, error) { return processArgv(pid) }
+	codexRunVersion      = runCodexBinaryVersion
+)
+
+func runCodexBinaryVersion(ctx context.Context, exe string) ([]byte, error) {
+	run, cancel := context.WithTimeout(ctx, codexBinaryVersionTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(run, exe, "--version")
+	cmd.WaitDelay = time.Second // a wrapper's child holding stdout open does not stall past the timeout
+	return cmd.Output()
+}
+
+type codexBinaryVersionEntry struct {
+	info    os.FileInfo
+	mod     time.Time
+	size    int64
+	version string
+	read    bool
+	retryAt time.Time
+}
+
+// codexBinaryVersions caches `<exe> --version` by executable path and modification time (plus size and file identity)
+// so a machine with multiple Codex binaries does not thrash a single slot or re-run `--version` on every refresh.
+var codexBinaryVersions = struct {
+	sync.Mutex
+	byPath map[string]codexBinaryVersionEntry
+	flight singleflight.Group
+}{byPath: map[string]codexBinaryVersionEntry{}}
+
+// codexTerminalVersion is the Codex version running in pane a (from its executable's `--version`, cached by path and
+// mtime), falling back to the rollout's first session_meta cli_version when the pane process cannot be read (#13290).
+func (n *Node) codexTerminalVersion(ctx context.Context, a host.Agent, rollout string, fresh bool) string {
+	if exe := n.codexPaneExecutable(ctx, a, fresh); exe != "" {
+		if v := codexBinaryVersion(ctx, exe); v != "" {
+			return v
+		}
+	}
+	return codexSessionVersion(rollout)
+}
+
+// codexPaneExecutable finds the executable path of the Codex running in pane a, "" when the process cannot be read
+// (another user, a remote pane, or a host without process info).
+func (n *Node) codexPaneExecutable(ctx context.Context, a host.Agent, fresh bool) string {
+	if a.ForegroundPID > 0 {
+		if _, exe := codexExecutableOfPIDs([]int{a.ForegroundPID}); exe != "" {
+			return exe
+		}
+	}
+	if !fresh {
+		n.mu.Lock()
+		cached, ok := n.codexPanePIDs[a.PaneID]
+		n.mu.Unlock()
+		if ok {
+			if cached.pid > 0 && cached.start != "" && time.Since(cached.checked) < codexPanePIDTTL && procStartMark(cached.pid) == cached.start {
+				if _, exe := codexExecutableOfPIDs([]int{cached.pid}); exe != "" {
+					return exe
+				}
+			}
+			if cached.pid == 0 && time.Since(cached.checked) < codexPanePIDRetry {
+				return ""
+			}
+		}
+	}
+	var pid int
+	var exe string
+	if n.hosts != nil {
+		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		pids, err := n.paneProcesses(lookupCtx, a.PaneID)
+		cancel()
+		if err == nil {
+			pid, exe = codexExecutableOfPIDs(pids)
+		}
+	}
+	if exe == "" && n.codices != nil {
+		n.codices.mu.Lock()
+		rpid := n.codices.byPanePID[a.PaneID]
+		n.codices.mu.Unlock()
+		if rpid > 0 {
+			pid, exe = codexExecutableOfPIDs([]int{rpid})
+		}
+	}
+	if ctx.Err() == nil {
+		var start string
+		if pid > 0 {
+			start = procStartMark(pid)
+		}
+		n.mu.Lock()
+		if n.codexPanePIDs == nil {
+			n.codexPanePIDs = map[string]codexPanePID{}
+		}
+		n.codexPanePIDs[a.PaneID] = codexPanePID{pid: pid, start: start, checked: time.Now()}
+		n.mu.Unlock()
+	}
+	return exe
+}
+
+// codexExecutableOfPIDs picks the running Codex executable from a pane's foreground PIDs: an exact "codex" binary
+// first, then a prefixed binary ("codex-*", "codex_*"), else an interpreter wrapper whose script is codex (or
+// codex.js). Unrelated programs (shells, editors, child tools) are skipped so `--version` is never run on an arbitrary
+// process in the pane.
+func codexExecutableOfPIDs(pids []int) (int, string) {
+	type readable struct {
+		pid int
+		exe string
+	}
+	var prefixed readable
+	var seen []readable
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		exe := codexProcessExecPath(pid)
+		if exe == "" {
+			continue
+		}
+		if filepath.IsAbs(exe) && progName(exe) == "codex" {
+			return pid, exe
+		}
+		if prefixed.exe == "" && isCodexExecutablePath(exe) {
+			prefixed = readable{pid: pid, exe: exe}
+		}
+		seen = append(seen, readable{pid: pid, exe: exe})
+	}
+	if prefixed.exe != "" {
+		return prefixed.pid, prefixed.exe
+	}
+	for _, p := range seen {
+		args, err := codexProcessArgv(p.pid)
+		if err != nil {
+			continue
+		}
+		if script := codexScriptInArgv(args); script != "" {
+			return p.pid, script
+		}
+	}
+	return 0, ""
+}
+
+func isCodexExecutablePath(path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	name := progName(path)
+	return name == "codex" || strings.HasPrefix(name, "codex-") || strings.HasPrefix(name, "codex_")
+}
+
+func codexScriptInArgv(argv []string) string {
+	if len(argv) < 2 {
+		return ""
+	}
+	switch progName(argv[0]) {
+	case "sh", "bash", "zsh", "dash", "ash", "ksh", "node", "bun":
+	default:
+		return ""
+	}
+	var script string
+	for _, arg := range argv[1:] {
+		if arg == "--" {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if arg == "-c" || arg == "-e" || arg == "--eval" || arg == "-p" || arg == "--print" {
+				return ""
+			}
+			continue
+		}
+		script = arg
+		break
+	}
+	if !filepath.IsAbs(script) {
+		return ""
+	}
+	if !isCodexExecutablePath(script) && !strings.EqualFold(filepath.Base(script), "codex.js") {
+		return ""
+	}
+	st, err := os.Stat(script)
+	if err != nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	return script
+}
+
+// codexBinaryVersion returns the version reported by `<exe> --version`, cached by executable path and modification time
+// (along with size and file identity so in-place writes, atomic replacements, and repointed symlinks all invalidate).
+// Returns "" when exe cannot be stated, fails to run, times out, or outputs no version.
+func codexBinaryVersion(ctx context.Context, exe string) string {
+	if exe == "" || ctx.Err() != nil {
+		return ""
+	}
+	st, err := os.Stat(exe)
+	if err != nil || !st.Mode().IsRegular() {
+		return ""
+	}
+	now := time.Now()
+	codexBinaryVersions.Lock()
+	cached, ok := codexBinaryVersions.byPath[exe]
+	codexBinaryVersions.Unlock()
+	if ok && os.SameFile(cached.info, st) && cached.mod.Equal(st.ModTime()) && cached.size == st.Size() {
+		if cached.read {
+			return cached.version
+		}
+		if now.Before(cached.retryAt) {
+			return ""
+		}
+	}
+	key := exe + "\x00" + strconv.FormatInt(st.ModTime().UnixNano(), 10) + "\x00" + strconv.FormatInt(st.Size(), 10)
+	v, _, _ := codexBinaryVersions.flight.Do(key, func() (any, error) {
+		out, runErr := codexRunVersion(ctx, exe)
+		if runErr != nil && ctx.Err() != nil {
+			return "", nil // caller cancelled: keep nothing so a healthy caller can read it
+		}
+		var version string
+		if runErr == nil {
+			version = parseCodexVersion(string(out))
+		}
+		entry := codexBinaryVersionEntry{info: st, mod: st.ModTime(), size: st.Size(), version: version, read: version != ""}
+		if !entry.read {
+			entry.retryAt = time.Now().Add(codexBinaryVersionRetry)
+		}
+		codexBinaryVersions.Lock()
+		if len(codexBinaryVersions.byPath) >= 256 {
+			codexBinaryVersions.byPath = map[string]codexBinaryVersionEntry{}
+		}
+		codexBinaryVersions.byPath[exe] = entry
+		codexBinaryVersions.Unlock()
+		return version, nil
+	})
+	s, _ := v.(string)
+	return s
+}
+
 // codexSessionVersions caches the Codex version each rollout's session_meta names (codexRolloutVersion): it never
-// changes, and the session list asks for it on every refresh of a terminal-route Codex row.
+// changes, and serves as fallback when the pane process's executable cannot be read.
 var codexSessionVersions = struct {
 	sync.Mutex
 	byPath map[string]string
@@ -358,6 +618,9 @@ func codexSessionVersion(path string) string {
 	}
 	if v = codexRolloutVersion(path); v != "" { // none yet is not kept: a new rollout may not have its session_meta yet
 		codexSessionVersions.Lock()
+		if len(codexSessionVersions.byPath) >= 1024 {
+			codexSessionVersions.byPath = map[string]string{}
+		}
 		codexSessionVersions.byPath[path] = v
 		codexSessionVersions.Unlock()
 	}

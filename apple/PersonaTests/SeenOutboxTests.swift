@@ -317,4 +317,23 @@ import PersonaWire
         #expect(state(o.land([machine: [session(state: "unread")]], at: late)) == .unread)
         #expect(o.marks.isEmpty)
     }
+
+    @Test func partialLandingKeepsPendingSideMarksAndLandRowsAppliesThem() {
+        var o = SeenOutbox()
+        let sideKey = SessionKey(machineID: "m", sessionID: "side1")
+        let side = session("side1", state: "unread", updated: 100)
+        o.mark(sideKey, side, at: t0)
+        #expect(o.marks[sideKey]?.wasUnread == true)
+
+        // A paged root landing (dropMissing: false) does not contain folded sides and must not drop their marks.
+        _ = o.land([machine: [session("parent", state: "idle")]], at: t0 + 1, dropMissing: false)
+        #expect(o.marks[sideKey] != nil)
+
+        // Landing fetched child/side rows applies the pending seen mark without dropping unrelated marks.
+        let otherKey = SessionKey(machineID: "m", sessionID: "other")
+        o.mark(otherKey, session("other", state: "unread", updated: 100), at: t0)
+        let landed = o.landRows([side], at: t0 + 2)
+        #expect(landed.first?.state == .idle)
+        #expect(o.marks[sideKey] != nil && o.marks[otherKey] != nil)
+    }
 }

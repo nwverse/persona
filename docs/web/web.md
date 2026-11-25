@@ -796,8 +796,8 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
     number fields request a numeric keypad only when the value cannot be negative (phone numeric keypads have no minus sign); while a card is unanswered, entered values (except passwords) and opened links are kept in memory by id,
     so on narrow screens, when the previous card is answered and this one is redrawn in a new position, they are still there; they are dropped when the card ends.
     The hub pushes these cards only when the WebSocket's `client_hello.features` includes `elicitation`, and REST `/interactions` is matched to that connection by the same `X-Persona-Client` ([protocol.md](../protocol/protocol.md) "MCP elicitation").
-    The assistant's password card (`SecretRunCard`, [assistant.md](../assistant/assistant.md) "Password card"): the computer, the purpose and each command verbatim (the hub's summary when `tool_input` has no commands), a password input, **Decline** and **Run** (enabled once something other than spaces is typed, and only when the card shows what runs); no ×.
-    No `<form>`, and Enter only takes the focus off the input. The input has no name and `autocomplete="one-time-code"`: Chrome's password parser skips such fields, so it neither offers to save the password nor suggests a generated one (`new-password` would); the 1Password, LastPass and Bitwarden ignore attributes keep those extensions off it.
+    The assistant's password card (`SecretRunCard`, [assistant.md](../assistant/assistant.md) "Password card"): the computer, the purpose and each command verbatim (the hub's summary when `tool_input` has no commands), a password input, **Decline** and **Run** (enabled once something other than spaces is typed, and only when the card shows what runs); no ×. With explicit `delivery: "env"`, an orange warning after the commands says every listed command receives the typed password as `PERSONA_SECRET` and that encoded output may evade redaction. Omitted/`"stdin"` delivery has no such warning and keeps the original sudo-only behavior.
+    No `<form>`, and Enter only takes the focus off the input. The input has no name and `autocomplete="one-time-code"`: Chrome's password parser skips such fields, so it neither offers to save the password nor suggests a generated one (`new-password` would); the 1Password, LastPass and Bitwarden ignore attributes keep those extensions off it. Env Run also sends `X-Persona-Features: secret_run_env` on this card's own request; other entries are refused without it.
     The password lives only in the card's state: emptied as Run sends it, on Decline, when the card's id changes and before the input leaves the page (Firefox offers to save a removed formless password field that still holds a value).
     `answerCard` sends only `{allow: false}` or `{allow: true, values: {password}}` for it, and the answered receipt keeps each value only as `<redacted>`, as the hub's history does; quick answers, notifications and attention signals never allow it (`needsFieldValues`).
     Questions the assistant sees first (#544, [assistant.md](../assistant/assistant.md) "Assistant answers questions first"; `Delegated.tsx`, `lib/delegate.ts`): a card with `delegating: true` is drawn in gray under **Assistant is looking** and can still be answered (the first answer wins).
@@ -1408,6 +1408,17 @@ so the sidebar entry, the full page (`/extension/-pages/<id>`), the deep link, t
   three), after the extensions' places; `assistant_pages` (a page kept, pinned, unpinned, renamed, removed or restored, or
   the switch turned) asks for the list again (`lib/extension-slots.ts`). A page's content change is the ordinary
   `extension_ui {extension: "-pages", id, invalidate: true}`.
+- **Phase 2 watch pages and Overview cards (#13020)**: `uiPlaces` adds `?pages_overview=1` when asking for all slots or
+  `overview_card` (`lib/extension-ui.ts`), so kept watch pages marked **Show on Overview** are listed as ordinary
+  `overview_card` places (`id: g_<16 hex>`, `opens: pg_<16 hex>`). They render, arrange, resize and hide on Overview like
+  any other Overview card, reload on `assistant_pages` (places list) and `extension_ui {extension: "-pages", id: "g_…",
+  invalidate: true}` (card content), open `/extension/-pages/<pg id>` when tapped, and never appear in the sidebar or
+  Settings › Extensions. `uiContext` reports `context.platform` as `desktop` inside the Electron desktop app
+  (`window.personaDesktop`) and `web` in a browser so the watch page footer includes **Show on Overview**. In
+  `views/extensions/ViewBody.tsx`, a lone `metric` allows long watch questions and details to wrap instead of truncating,
+  a `row`'s `value` caps at `max-w-[45%]` so long status texts truncate instead of squeezing out the row's title, and
+  `views/settings/ExtensionView.tsx` reconciles view-returning row switch actions (`persona.alert`, `persona.overview`)
+  against concurrent `extension_ui` redraws so the switch never snaps back.
 - **Sidebar**: the index and pinned pages are extension pages in `useNavPages`. The hub puts their keys in the navigation
   record's `shown` on the first Keep and on a pin, so `EXTENSION_CAP` never sends them under More: they count toward the
   cap first, and with three extension nav pages installed the extensions' pages past it wait there instead (two of the
@@ -1422,11 +1433,14 @@ so the sidebar entry, the full page (`/extension/-pages/<id>`), the deep link, t
   the value the hub confirmed.
 - With the switch off, or on with nothing kept, nothing on the sidebar, the phone's page grid or Overview changes.
 
-To see it: the mock hub with `MOCK_DASHBOARDS=1` (`scripts/mock/dashboards_mock.py`; `off`, `empty`, `removed` and `pinned`
-for the other states) and `npx vite`. `node web/e2e/dashboards.mjs` (its header says how to start both) checks all of the
-above in light and dark at 1280 and 390 wide in each language, compares the sidebar with the switch off and on with
+To see it: the mock hub with `MOCK_DASHBOARDS=1` (`scripts/mock/dashboards_mock.py`; `off`, `empty`, `removed`, `pinned`
+and `watch` for the other states) and `npx vite`. `node web/e2e/dashboards.mjs` (its header says how to start both) checks
+phase 1 in light and dark at 1280 and 390 wide in each language, compares the sidebar with the switch off and on with
 nothing kept against a build of `origin/main` pixel by pixel (`--before`), and, with `--extensions`, that Dashboards stays
-in the list beside three extension nav pages.
+in the list beside three extension nav pages. `node web/e2e/dashboards-watch.mjs` checks phase 2 against
+`MOCK_DASHBOARDS=watch`: the four displays (empty, normal, alert), index rows, footer states, Overview watch cards,
+`zh-Hans` / `ja`, desktop platform context, and pixel-identical sidebar and Overview against `origin/main` in `off` and
+phase-1 (`1`) modes.
 
 ### Message sources (#2125)
 
@@ -2135,7 +2149,7 @@ Requests carry only these fields (anything else is dropped) and cannot specify a
   `../protocol/protocol.md`). If only the current context size is known, the composer shows the count and Session
   Insights gives the exact number of tokens. With only per-message usage, the composer shows the loaded messages' cumulative total.
   When off, this line is absent ("Needs you" and "Unread" rows have a separate line saying what it is asking / what it did; see "Second line on Agent rows" above, #3195).
-- **Command palette**: `lib/node-palette.ts` registers with `registerContextCommands` and lists the current node's menu items first in `>` command mode (sections named for what the node is and drawn as written: "Pane · <pane title>", "Tab · <tab name>" or "Space · <space name>");
+- **Command palette**: `lib/node-palette.ts` registers with `registerContextCommands` and lists the current node's menu items first in `>` command mode (sections named for what the node is and drawn as written: "Pane · <pane title>", "Tab · <tab name>" or "Space · <space name>"). It is off the first screen and the idle tier: `views/Palette.tsx` imports it the first time the palette opens and lists its commands once it is in, and the sidebar's rename and confirm dialogs (`views/NodePrompt.tsx`) read only `lib/node-ask.ts` (`views/Palette.node-commands.test.tsx`);
   rename opens a small dialog asking for the name, dangerous items ask for confirmation once more, and failures show a toast. The current node comes from the session page's chat (`ctx.pane`) or the terminal page's pane (the terminal page hands it the tree it read).
 - Tests: `ui/menu-model.test.ts` (keys, letters, confirm, rename, right-click position), `ui/menu-tab.test.tsx` (Tab closes, the focus moves on), `ui/menu-rename-esc.test.tsx` (Esc out of a rename: the menu stays open on its Rename row, the focus back on what opened it), `ui/menu-scroll-fade.test.tsx` (the fades at cut edges, the keys scrolling a row into view), `ui/dialog-focus.test.tsx` (a dialog opened from a row gives the focus back to the menu's button), `ui/atoms.test.tsx`, `ui/overlay.test.ts`, `lib/node-actions.test.ts`, `lib/node-palette.test.ts`. In a browser use the mock hub with
   `MOCK_TERMINAL_STREAM=1 MOCK_TERMINAL_CONTROL=1 MOCK_TERMINAL_PANES=1` (optionally `MOCK_SPLIT_TAB=1`, which adds a two-pane tab to the sidebar); actions are recorded at `/mock/node_actions`.

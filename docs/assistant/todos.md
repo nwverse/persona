@@ -1858,3 +1858,20 @@ activity until explicitly enabled.
     window, and falling back cleanly to the direct remote path whenever no
     mirror is enabled, an older Node lacks `repo.mirror.ensure`, or a ref is
     unavailable in the mirror.
+
+### Auditable context handoff across providers and launchers (#12980)
+
+When a coding Agent cannot continue a to-do on its current provider or launcher (for example Claude Code → Codex, a Claude profile whose config directory lacks the latest transcript, gateway 503s, expired sign-in, or exhausted quota), the Manager builds and persists a deterministic, size-capped `TodoContextHandoff` record in `todo_context_handoffs` (`server/internal/db/todo_context_handoffs.go`, `server/internal/assistant/todo_context_handoff.go`, template `server/internal/prompts/agents/todo_context_handoff.md`).
+
+- **Inputs and auditability (no model call)**: assembled deterministically from the to-do brief (with exact `brief_revision`), effective recorded decisions, bounded predecessor transcript (`session.items`, anchored to `source_ranges`), and a scoped Git workspace snapshot (`git.review` against `HEAD`, labeled with `diff_ref`). Unreadable or truncated sources are labeled explicitly in `missing_sources`. Regeneration creates a new handoff record with `supersedes_id` pointing to the prior artifact while preserving earlier artifacts for audit.
+- **Prompt order and delivery tracking**: the exact persisted `summary` text is injected as the first context block before the replacement Agent's task prompt. Delivery status is tracked explicitly (`pending` → `accepted` with `target_session` and `delivered_at`, `rejected` on definite startup refusal while preserving recoverable task state, or `unknown` when launch confirmation is lost — unknown deliveries remain pending and are never auto-replayed).
+- **Idempotency and concurrency**: `(todo_id, operation_id)` is unique and combined with the per-to-do single-flight start claim so retrying the same operation or racing two requests cannot start two active workers or inject context twice.
+- **Safety refusal, approval, permission, and quiescence guards**:
+  - A provider safety refusal stays a recorded blocker and never triggers a provider switch (`agent_switch`, `agents_switch`, `task_plan.continues`, or `POST /api/v1/todos/{id}/handoff`) or replays the refused action.
+  - Unresolved owner approvals or pending interactions stay visible and are never dismissed, granted, or replayed.
+  - A provider/launcher switch never raises permissions above the predecessor's permission mode and always requires explicit owner approval (`task_plan.continues` onto a different launcher waits on the plan card).
+  - If the predecessor execution cannot safely relinquish the workspace (offline machine or refused stop), the handoff defers without releasing links or starting a replacement.
+- **Inspection and direct owner continuation (full credentials only; no extension scopes)**:
+  - `GET /api/v1/todos/{id}` includes an optional `handoff` field (the latest handoff record; omitted for extensions and ignored safely by legacy clients).
+  - `GET /api/v1/todos/{id}/handoffs` returns all recorded handoff artifacts for the to-do, newest first.
+  - `POST /api/v1/todos/{id}/handoff` lets the owner preview (`preview: true`), defer on missing sources (`defer_on_missing_sources: true`), or execute an auditable continuation onto an eligible target without requiring a response from the previous model.

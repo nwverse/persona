@@ -46,6 +46,7 @@ type codexRegistry struct {
 	stdioHomes        map[string]bool            // canonical home → a stdio app-server currently runs there
 	remoteDiags       map[string]codexRemoteDiag // resolved endpoint → last connection failure kind
 	byPane            map[string]string
+	byPanePID         map[string]int
 	threads           map[string]codexSource
 	remotes           map[string]*codexRemote
 	retries           map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
@@ -337,6 +338,7 @@ func (n *Node) discoverCodex() {
 	// an app-server subprocess must not override its terminal client.
 	found := scan()
 	byPane := map[string]string{}
+	byPanePID := map[string]int{}
 	for _, p := range found {
 		if n.herdrSessionBlocked(p.herdrSession) {
 			continue
@@ -361,9 +363,19 @@ func (n *Node) discoverCodex() {
 		if pane != "" && (p.endpoint == "" || byPane[pane] == "") {
 			byPane[pane] = home
 		}
+		if p.endpoint == "" && p.pid > 0 {
+			pidPane := pane
+			if pidPane == "" && p.orcaPane != "" {
+				pidPane = host.PaneRef{Kind: host.Orca, ID: p.orcaPane}.String()
+			}
+			if pidPane != "" {
+				byPanePID[pidPane] = p.pid
+			}
+		}
 	}
 	r.mu.Lock()
 	r.byPane = byPane
+	r.byPanePID = byPanePID
 	r.mu.Unlock()
 	claudeIDs := map[string]bool{}
 	for _, path := range n.globProjects("*", "*.jsonl") {

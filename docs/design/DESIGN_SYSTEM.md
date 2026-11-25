@@ -1140,7 +1140,7 @@ reply's) have it; Apple and HarmonyOS follow in their own issues and show these 
 
 #### Rows read during a visit
 
-Reading a queue of finished Agents is open, read, back, the next one (#12514). On iPhone and iPad every row the Agents
+Reading a queue of finished Agents is open, read, back, the next one (#12514; web #12585). On iPhone, iPad and the web every row the Agents
 list showed as Unread or Just finished during the visit keeps that place once it is seen, opened or marked there or
 seen elsewhere (`docs/protocol/agent-states.md` ("Seen")), in every grouping and under a quick filter, so the next one
 is still right below and nothing slides from under the finger. A chat that finished while it was open was never in that
@@ -1152,12 +1152,13 @@ place on the list: it is held while open only, as every opened row was before.
   badge and the Live Activity, which only know the hub's state.
 - **Clear Seen (N)**: a By Status section holding such rows has a text button between its title and its chevron
   (`FoldButton`'s `accessory`: a button of its own, the fold keeps the rest of the header), N the rows it lets go.
-- **When they go**: pull to refresh, Clear Seen, a quick filter chosen (again), another computer, hub or assistant, a
+- **When they go**: pull to refresh (on the web, reload), Clear Seen, a quick filter chosen (again), another computer, hub or assistant, a
   new launch. Going to the background is none of these: the visit lasts however long the app was away, until one of
   them. Mark All as Seen (a section's, a space's or a repository's) takes its rows at once, those already read there
   too: a batch says the user is done with them. A row that works, needs the user or finishes unseen again goes where
   its state puts it.
-- **The choice**: Settings › Appearance & Display › Agents List Layout › Seen Agents, **Stay Until Refresh** (the
+- **The choice**: Settings › Appearance & Display › Agents List Layout › Seen Agents (on the web, Settings › General ›
+  Agent preferences › Seen Agents), **Stay Until Refresh** (the
   default) or **Leave When the Chat Closes**, the behavior before #12514 (only the open row holds, #2213). It is this
   device's: a list behavior, not the assistant's (4.1.1). The first time a read row stays, a neutral `NoticeBanner` at
   the list's foot says so once, with **Change in Settings** (the page opens at the choice) and its ✕ (Principle 1: the
@@ -1168,9 +1169,9 @@ place on the list: it is held while open only, as every opened row was before.
 Why: one concept had two rules. The Unread filter kept a read row (`kept`) and the Assistant tray's Finished entry keeps
 a read task (#10922), but By Status moved it to the folded Seen section as soon as the chat was left, also on a tapped
 notification or a switch of tab (Principle 4). Rejected: a new filter chip (the bar is an approved layout, "List
-controls"); dimming the row (a new look); marking seen only after a delay (it still moves when the chat is left). The
-web (#12585), Android (#12584) and HarmonyOS with the shared core (#12583) keep the behavior before #12514 until then;
-the shared cases are in `spec/fixtures/sort/next/held_set.json`.
+controls"); dimming the row (a new look); marking seen only after a delay (it still moves when the chat is left).
+Android (#12584) and HarmonyOS with the shared core (#12583) keep the behavior before #12514 until then;
+the shared cases are in `spec/fixtures/sort/next/held_set.json` (replayed by iOS and the web).
 
 #### The work-item row
 
@@ -2557,6 +2558,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   card is the terminal's question as before); the rules in `apple/Shared/CommandAsk.swift`, `web/src/lib/command-ask.ts`
   and `web/src/lib/command-ask-lines.ts`.
 - **Buttons**: for a tool approval, in this order: Deny, Always Allow for This Session, Allow Once (primary). High-risk actions offer no "always" and ask twice.
+- **Password-card environment delivery (#11945)**: the default password card stays unchanged and delivers only to `sudo -S` stdin. An explicit `delivery: "env"` card adds the existing caution notice after its verbatim commands, saying every listed command receives the typed password as `PERSONA_SECRET` and encoded output may evade redaction. Apple uses `NoticeBanner`, Android `JNotice`, and the web the terminal command card's warning line; Watch and generic fallback views carry the same warning in the hub summary. The card's own Run declares `secret_run_env` on that request only. Older specialized clients that suppress the summary cannot show the warning and get 403 instead of running it; quick approvals and Watch never get the feature, so every env run needs a freshly typed password and Run on this card, and Watch still offers only Decline.
 - **Secret hand-off (#3962)**: the card that hands a provider's secret values to one Agent run is a permission card with the tool
   approval's title ("Waiting for your approval") and buttons (Deny, Always allow, Allow); its body names each variable with the
   item it comes from, the Agent and its computer, where it runs and what it is asked, never a reference or a value. Like the
