@@ -101,10 +101,12 @@ type inboxBook struct {
 
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 
-	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
-	externalCapture bool // the manager has the external routing store, under mu
+	// Scoped routing receives source arrivals under mu and wakes the outbox worker after persistence.
+	externalCapture bool
 	externalTriage  externalInboxTriager
 	externalWake    chan struct{}
+
+	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
 	forwarding      sync.Mutex
 	forwardAgain    atomic.Bool
 	forwardStoreMu  sync.Mutex // serializes ledger DB load and save (lock order: forwardStoreMu -> forwardMu)

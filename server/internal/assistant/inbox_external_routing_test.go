@@ -345,3 +345,39 @@ func TestExternalInboxDigestNewWorkAndChatter(t *testing.T) {
 		t.Fatalf("opt-in must create exactly one task in the direction, calls = %d, tasks = %+v", calls, todos)
 	}
 }
+
+func TestExternalInboxWorkerFindsAnItemCommittedByAnotherManager(t *testing.T) {
+	f := newExternalRoutingFixture(t)
+	target := f.todo(t, "todo_delivery", "delivery_agent")
+	f.bind(t, externalPushRef(), target, externalRealtime())
+	next := New(Options{Hub: f.hub, Store: func() Store { return f.store }, Logf: testLogf(t)})
+	if err := next.inboxReady(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	thing := externalPush("alert", "one", "A source update")
+	now := f.collect(t, w.InboxSource{ID: "push", Things: []connector.InboxThing{thing}})
+	if err := next.sweepExternalInbox(t.Context(), now); err != nil {
+		t.Fatal(err)
+	}
+	f.sweep(t, now)
+	if got := f.sent(); !slices.Equal(got, []string{"delivery_agent"}) {
+		t.Fatalf("a warm manager must recover a committed Inbox row and deliver it once, got %v", got)
+	}
+}
+
+func TestExternalInboxDirectionReusesTheSupervisorConversation(t *testing.T) {
+	f := newExternalRoutingFixture(t)
+	target := externalTarget{Kind: "direction", ID: "dir_source"}
+	f.bind(t, externalPushRef(), target, externalRealtime())
+	f.hub.mu.Lock()
+	f.hub.sessions["server"] = []proto.Session{{SessionID: "dir_source", Assistant: true, Status: proto.StatusWorking}}
+	f.hub.mu.Unlock()
+	now := f.collect(t, w.InboxSource{ID: "push", Things: []connector.InboxThing{
+		externalPush("alert", "one", "This goes to the direction"),
+	}})
+	f.sweep(t, now)
+	queued, ok := f.queuedRelays()
+	if !ok || len(queued["dir_source"]) != 1 || len(f.sent()) != 0 || len(f.feed(t, target)) != 1 {
+		t.Fatalf("direction update did not append once to its supervisor: %+v", queued)
+	}
+}

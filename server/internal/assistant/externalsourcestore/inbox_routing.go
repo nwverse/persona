@@ -159,3 +159,14 @@ func (s *Store) SaveExternalInboxProgress(ctx context.Context, key string, when 
 		return err
 	})
 }
+
+// LoadExternalInboxItem reads the Inbox row of a receipt discovered by a manager
+// whose Inbox was already loaded when another manager committed the round.
+func (s *Store) LoadExternalInboxItem(ctx context.Context, id assistantwire.ExternalInboxItemID) (json.RawMessage, error) {
+	var raw json.RawMessage
+	err := s.database.QueryRow(ctx, `SELECT data FROM inbox_items WHERE id = $1`, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return raw, err
+}

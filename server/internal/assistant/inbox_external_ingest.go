@@ -20,6 +20,7 @@ type externalInboxStore interface {
 	ExternalRoutingConfiguration(context.Context, []assistantwire.ExternalRef) (assistantwire.ExternalRoutingConfiguration, error)
 	WithExternalInboxSweep(context.Context, func() error) error
 	ReadyExternalInboxEvents(context.Context, time.Time, int) ([]assistantwire.ExternalInboxWork, error)
+	LoadExternalInboxItem(context.Context, assistantwire.ExternalInboxItemID) (json.RawMessage, error)
 	RecentExternalInboxOwners(context.Context, assistantwire.ExternalRef, string) ([]json.RawMessage, error)
 	SaveExternalInboxProgress(context.Context, string, time.Time, json.RawMessage, bool) error
 }

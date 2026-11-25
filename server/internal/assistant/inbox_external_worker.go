@@ -77,7 +77,12 @@ func (s *Service) routeReadyExternalInbox(ctx context.Context, store externalInb
 	var failures []error
 	for _, ev := range work {
 		ready := externalInboxReady{work: ev}
-		if !s.externalInboxVisible(ev, cfg.Visibility) {
+		visible, err := s.externalInboxVisible(ctx, store, ev, cfg.Visibility)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if !visible {
 			failures = append(failures, saveExternalPlan(ctx, store, ev.Key, now, externalPlan{}, true))
 			continue
 		}
@@ -188,14 +193,32 @@ func (s *Service) externalTargetBriefs(ctx context.Context, config w.ExternalRou
 	return out, nil
 }
 
-func (s *Service) externalInboxVisible(work w.ExternalInboxWork, cfg *w.InboxVisibilityConfig) bool {
+func (s *Service) externalInboxVisible(ctx context.Context, store externalInboxStore, work w.ExternalInboxWork, cfg *w.InboxVisibilityConfig) (bool, error) {
 	b := &s.inbox
+	id := string(work.InboxID)
 	b.mu.Lock()
+	it := b.items[id]
+	if it == nil {
+		b.mu.Unlock()
+		raw, err := store.LoadExternalInboxItem(ctx, work.InboxID)
+		if err != nil || len(raw) == 0 {
+			return false, err
+		}
+		var row InboxItem
+		if err := json.Unmarshal(raw, &row); err != nil {
+			return false, err
+		}
+		b.mu.Lock()
+		it = b.items[id]
+		if it == nil {
+			b.stored(&row)
+			b.items[id] = &row
+			it = &row
+		}
+	}
 	defer b.mu.Unlock()
-	it := b.items[string(work.InboxID)]
-	return it != nil && it.open() && !it.VisibilityExcluded && slices.Equal(it.ExternalPath, work.Path) &&
-		s.inboxVisibilityProviderAllowed(cfg, it.Source) &&
-		!inboxVisibilityWithMembersExcludedLocked(b, it, cfg)
+	return it.open() && !it.VisibilityExcluded && slices.Equal(it.ExternalPath, work.Path) &&
+		s.inboxVisibilityProviderAllowed(cfg, it.Source) && !inboxVisibilityWithMembersExcludedLocked(b, it, cfg), nil
 }
 
 func externalBriefs(selection externalSelection) []externalCandidateBrief {
@@ -241,7 +264,12 @@ func (s *Service) triageExternalInboxBatch(ctx context.Context, store externalIn
 	}
 	var failures []error
 	for i, ev := range group {
-		if !s.externalInboxVisible(ev.work, cfg.Visibility) {
+		visible, err := s.externalInboxVisible(ctx, store, ev.work, cfg.Visibility)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		if !visible {
 			failures = append(failures, saveExternalPlan(ctx, store, ev.work.Key, now, externalPlan{}, true))
 			continue
 		}

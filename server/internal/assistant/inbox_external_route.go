@@ -59,7 +59,6 @@ type externalInboxTriager func(context.Context, externalTriageInput) ([]external
 type externalDelivery struct {
 	Target    externalTarget `json:"target"`
 	Scope     externalTarget `json:"scope"` // authorizing target, including the direction of a created to-do
-	At        time.Time      `json:"at"`
 	AutoTodo  bool           `json:"auto_todo,omitempty"`
 	Method    string         `json:"method,omitempty"`
 	Machine   string         `json:"machine,omitempty"`
@@ -71,7 +70,7 @@ type externalDelivery struct {
 type externalPlan struct {
 	Owner *externalDelivery  `json:"owner,omitempty"`
 	FYI   []externalDelivery `json:"fyi,omitempty"`
-	AskAt *time.Time         `json:"ask_at,omitempty"`
+	Ask   bool               `json:"ask,omitempty"`
 }
 
 // selectExternalCandidates chooses the first scope with a live, eligible
@@ -195,7 +194,7 @@ func externalFilterMatches(filter *w.ExternalPreFilter, ev w.ExternalInboxEvent)
 }
 
 func (c externalCandidate) recipient() externalDelivery {
-	return externalDelivery{Target: c.externalTarget, Scope: c.externalTarget, At: c.at}
+	return externalDelivery{Target: c.externalTarget, Scope: c.externalTarget}
 }
 
 // deterministicExternalPlan handles exact matches and PR role disambiguation
@@ -203,7 +202,7 @@ func (c externalCandidate) recipient() externalDelivery {
 func deterministicExternalPlan(work w.ExternalInboxWork, sel externalSelection) (externalPlan, bool) {
 	var plan externalPlan
 	if sel.unmatched {
-		plan.AskAt = &sel.readyAt
+		plan.Ask = true
 		return plan, true
 	}
 	switch len(sel.candidates) {
@@ -264,7 +263,7 @@ func externalPlanFromVerdict(work w.ExternalInboxWork, sel externalSelection, v 
 		for _, candidate := range sel.candidates {
 			if candidate.owner && candidate.Kind == w.ExternalTargetDirection && *candidate.policy.NewItemPolicy == "auto_todo" {
 				if direction != nil {
-					plan.AskAt = &sel.readyAt
+					plan.Ask = true
 					return plan, nil
 				}
 				direction = new(candidate)
@@ -275,7 +274,7 @@ func externalPlanFromVerdict(work w.ExternalInboxWork, sel externalSelection, v 
 			plan.Owner.Target = externalTarget{ID: w.ExternalTargetID("todo_" + work.Key), Kind: w.ExternalTargetTodo}
 			plan.Owner.AutoTodo = true
 		} else {
-			plan.AskAt = &sel.readyAt
+			plan.Ask = true
 		}
 	case "assign":
 		if v.Owner == nil && len(v.FYI) == 0 {

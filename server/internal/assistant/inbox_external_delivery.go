@@ -47,12 +47,16 @@ func (s *Service) coalesceExternalOwner(ctx context.Context, store externalInbox
 			return candidate.externalTarget == prior.Scope && candidate.owner
 		})
 		if i < 0 {
-			ev.plan.AskAt = &ev.selection.readyAt
+			ev.plan.Ask = true
 			ev.plan.Owner = nil
 			return nil
 		}
 		coalesced := ev.selection.candidates[i].recipient()
 		coalesced.Target = prior.Target
+		if prior.AutoTodo && !prior.Delivered {
+			_, exists := s.todoNow(string(prior.Target.ID))
+			coalesced.AutoTodo = !exists
+		}
 		if prior.Method == "session" && s.externalSessionStillOwns(ctx, prior) {
 			coalesced.Method, coalesced.Machine, coalesced.Session = prior.Method, prior.Machine, prior.Session
 		}
@@ -68,7 +72,10 @@ func (s *Service) coalesceExternalOwner(ctx context.Context, store externalInbox
 func (s *Service) externalOwnerActive(ctx context.Context, prior externalDelivery) bool {
 	if prior.Target.Kind == w.ExternalTargetTodo {
 		t, ok := s.todoNow(string(prior.Target.ID))
-		if !ok || !taskOpen(t) {
+		if !ok {
+			return prior.AutoTodo && !prior.Delivered
+		}
+		if !taskOpen(t) {
 			return false
 		}
 		if prior.AutoTodo || prior.Method == "relay" || prior.Target != prior.Scope {
@@ -150,14 +157,14 @@ func (s *Service) deliverExternalPlan(ctx context.Context, store externalInboxSt
 		}
 		fyi.Delivered = true
 	}
-	if plan.AskAt != nil && !ev.selection.readyAt.IsZero() {
+	if plan.Ask && !ev.selection.readyAt.IsZero() {
 		at := ev.selection.readyAt
 		if at.After(now) {
 			waitFor(at)
 		} else if err := s.offerExternalTodo(ctx, ev.work); err != nil {
 			return retry(err)
 		} else {
-			plan.AskAt = nil
+			plan.Ask = false
 		}
 	}
 	return saveExternalPlan(ctx, store, ev.work.Key, when, *plan, when.IsZero())
@@ -228,7 +235,7 @@ func (s *Service) deliverExternalOwner(ctx context.Context, work w.ExternalInbox
 		From: string(dest.Target.ID), Tool: noticeTool, Text: text,
 		At: work.ReceivedAt, OnceID: "external-inbox-" + work.Key,
 	}); err != nil {
-		dest.Tried = false
+		// The queue write may have committed before its answer was lost.
 		return err
 	}
 	s.publish(ctx)
