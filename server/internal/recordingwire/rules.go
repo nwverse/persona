@@ -2,9 +2,11 @@ package recordingwire
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
@@ -230,3 +232,90 @@ const (
 	PurposeMeetingAnswer  = "meeting.answer"
 	PurposeMeetingRoom    = "meeting.room"
 )
+
+// RecordingID is id as stored (lowercase), false when it is not a UUID (8-4-4-4-12 hexadecimal digits).
+func RecordingID(id string) (string, bool) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if len(id) != 36 {
+		return id, false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return id, false
+			}
+		default:
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				return id, false
+			}
+		}
+	}
+	return id, true
+}
+
+var dayZones sync.Map // IANA name → *time.Location, loaded once
+
+// DayLocation is the IANA zone name ("Local" is not one).
+func DayLocation(name string) (*time.Location, error) {
+	if l, ok := dayZones.Load(name); ok {
+		return l.(*time.Location), nil
+	}
+	if name == "" || name == "Local" {
+		return nil, fmt.Errorf("unknown time zone %q", name)
+	}
+	l, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, err
+	}
+	dayZones.Store(name, l)
+	return l, nil
+}
+
+// RecordingZone is the zone r's clock times are in: a day recording's own (tz), else (and when it cannot be loaded)
+// user, the knowledge base's zone.
+func RecordingZone(r *Recording, user *time.Location) *time.Location {
+	if r.Kind == RecordingDay && r.TZ != "" {
+		if l, err := DayLocation(r.TZ); err == nil {
+			return l
+		}
+	}
+	return user
+}
+
+// DaySpan is the span day recording r covers as of now: from its start to the end of what it holds, or to its end
+// once it has one; one still being recorded reaches now, at most the midnight that ends its day (in its zone; user is
+// the knowledge base's zone, RecordingZone).
+func DaySpan(r *Recording, now time.Time, user *time.Location) (time.Time, time.Time) {
+	end := r.StartedAt.Add(time.Duration(CoverageTo(r) * float64(time.Second)))
+	switch {
+	case r.EndedAt != nil:
+		end = later(end, *r.EndedAt)
+	case !r.Complete:
+		if _, midnight, ok := DayStart(r.Day, RecordingZone(r, user)); ok {
+			end = later(end, earlier(now, midnight))
+		}
+	}
+	return r.StartedAt, end
+}
+
+// RecordedWithin: day recording r's span as of now (DaySpan) overlaps from–to.
+func RecordedWithin(r *Recording, now, from, to time.Time, user *time.Location) bool {
+	start, end := DaySpan(r, now, user)
+	return start.Before(to) && (end.After(from) || !start.Before(from))
+}
+
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+func earlier(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}

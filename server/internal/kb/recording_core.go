@@ -19,14 +19,11 @@ type recordingCore struct{ e *Engine }
 
 // The read group.
 
-func (c recordingCore) ReadOnly() bool                                  { return c.e.Store.ReadOnly() }
-func (c recordingCore) Zone() *time.Location                            { return c.e.Store.Zone() }
-func (c recordingCore) RecordingZone(r *Recording) *time.Location       { return c.e.Store.RecordingZone(r) }
-func (c recordingCore) DayLocation(name string) (*time.Location, error) { return dayLocation(name) }
-func (c recordingCore) RecordingID(raw string) (string, bool)           { return RecordingID(raw) }
-func (c recordingCore) Recording(id string) (*Recording, bool)          { return c.e.Store.Recording(id) }
-func (c recordingCore) Recordings() []*Recording                        { return c.e.Store.Recordings() }
-func (c recordingCore) RecordingName(r *Recording) string               { return c.e.recordingName(r) }
+func (c recordingCore) ReadOnly() bool                         { return c.e.Store.ReadOnly() }
+func (c recordingCore) Zone() *time.Location                   { return c.e.Store.Zone() }
+func (c recordingCore) Recording(id string) (*Recording, bool) { return c.e.Store.Recording(id) }
+func (c recordingCore) Recordings() []*Recording               { return c.e.Store.Recordings() }
+func (c recordingCore) RecordingName(r *Recording) string      { return c.e.recordingName(r) }
 func (c recordingCore) RecordingSnapshot(id string) (map[string][]byte, error) {
 	return c.e.Store.recordingSnapshot(id)
 }
@@ -36,14 +33,8 @@ func (c recordingCore) RecordSnapshot(id string) (map[string][]byte, *Meeting, H
 func (c recordingCore) TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
 	return TranscriptOfRecord(hubMode, device, hub)
 }
-func (c recordingCore) ReadMinutes(id string) (*Minutes, error) { return c.e.Store.ReadMinutes(id) }
-func (c recordingCore) ReadRecap(id string) (*DayRecap, error)  { return c.e.Store.readRecap(id) }
-func (c recordingCore) DaySpan(r *Recording, now time.Time) (time.Time, time.Time) {
-	return c.e.daySpan(r, now)
-}
-func (c recordingCore) RecordedWithin(r *Recording, now, from, to time.Time) bool {
-	return c.e.recordedWithin(r, now, from, to)
-}
+func (c recordingCore) ReadMinutes(id string) (*Minutes, error)     { return c.e.Store.ReadMinutes(id) }
+func (c recordingCore) ReadRecap(id string) (*DayRecap, error)      { return c.e.Store.readRecap(id) }
 func (c recordingCore) PhotoTexts(id string) []PhotoText            { return c.e.PhotoTexts(id) }
 func (c recordingCore) PhotoWords(p PhotoText, clipped bool) string { return photoWords(p, clipped) }
 func (c recordingCore) PhotoBook(id string) (recordingwire.PhotoBook, error) {

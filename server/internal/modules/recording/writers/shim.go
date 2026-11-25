@@ -203,23 +203,27 @@ func citedChanged(b photoBook, before, after map[int]bool) bool { return b.Cited
 
 // The store's members the writers call, each the port's.
 
-func (s *store) ReadOnly() bool                            { return s.core.ReadOnly() }
-func (s *store) Zone() *time.Location                      { return s.core.Zone() }
-func (s *store) RecordingZone(r *Recording) *time.Location { return s.core.RecordingZone(r) }
-func (s *store) Recording(id string) (*Recording, bool)    { return s.core.Recording(id) }
-func (s *store) Recordings() []*Recording                  { return s.core.Recordings() }
-func (s *store) Items(kind string) []*Item                 { return s.core.CalendarItems(kind) }
-func (s *store) ReadMinutes(id string) (*Minutes, error)   { return s.core.ReadMinutes(id) }
-func (s *store) readRecap(id string) (*DayRecap, error)    { return s.core.ReadRecap(id) }
-func (s *store) readPhotos(id string) (photoBook, error)   { return s.core.PhotoBook(id) }
-func (s *store) recordingName(r *Recording) string         { return s.core.RecordingName(r) }
-func (s *store) recoverRecordingLocked(id string) error    { return s.core.RecoverRecording(id) }
+func (s *store) ReadOnly() bool       { return s.core.ReadOnly() }
+func (s *store) Zone() *time.Location { return s.core.Zone() }
+func (s *store) RecordingZone(r *Recording) *time.Location {
+	return recordingwire.RecordingZone(r, s.core.Zone())
+}
+func (s *store) Recording(id string) (*Recording, bool)  { return s.core.Recording(id) }
+func (s *store) Recordings() []*Recording                { return s.core.Recordings() }
+func (s *store) Items(kind string) []*Item               { return s.core.CalendarItems(kind) }
+func (s *store) ReadMinutes(id string) (*Minutes, error) { return s.core.ReadMinutes(id) }
+func (s *store) readRecap(id string) (*DayRecap, error)  { return s.core.ReadRecap(id) }
+func (s *store) readPhotos(id string) (photoBook, error) { return s.core.PhotoBook(id) }
+func (s *store) recordingName(r *Recording) string       { return s.core.RecordingName(r) }
+func (s *store) recoverRecordingLocked(id string) error  { return s.core.RecoverRecording(id) }
 func (s *store) bumpPhotosRev(id string, start time.Time) error {
 	return s.core.BumpPhotosRev(id, start)
 }
-func (s *store) writeFile(p string, data []byte) error           { return s.core.WriteFile(p, data) }
-func (s *store) dayLocation(name string) (*time.Location, error) { return s.core.DayLocation(name) }
-func (s *store) RecordingID(raw string) (string, bool)           { return s.core.RecordingID(raw) }
+func (s *store) writeFile(p string, data []byte) error { return s.core.WriteFile(p, data) }
+func (s *store) dayLocation(name string) (*time.Location, error) {
+	return recordingwire.DayLocation(name)
+}
+func (s *store) RecordingID(raw string) (string, bool) { return recordingwire.RecordingID(raw) }
 func (s *store) photoWords(p recordingwire.PhotoText, clipped bool) string {
 	return s.core.PhotoWords(p, clipped)
 }
@@ -253,10 +257,10 @@ func (e *engine) dropAudio(id string, why error) error           { return e.Stor
 func (e *engine) meetingChanged(id string, parts []string)       { e.Store.core.MeetingChanged(id, parts) }
 func (e *engine) outputLang(r *Recording) i18n.Lang              { return i18n.Lang(e.Store.core.OutputLang(r)) }
 func (e *engine) daySpan(r *Recording, now time.Time) (time.Time, time.Time) {
-	return e.Store.core.DaySpan(r, now)
+	return recordingwire.DaySpan(r, now, e.Store.core.Zone())
 }
 func (e *engine) recordedWithin(r *Recording, now, from, to time.Time) bool {
-	return e.Store.core.RecordedWithin(r, now, from, to)
+	return recordingwire.RecordedWithin(r, now, from, to, e.Store.core.Zone())
 }
 func (e *engine) index(_, id, name string, t Tagging, one string, updated time.Time) {
 	e.Store.core.Index(id, name, t, one, updated)

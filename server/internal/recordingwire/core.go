@@ -25,13 +25,8 @@ type Core interface {
 type Reader interface {
 	// ReadOnly: the knowledge base was opened read-only; nothing is written.
 	ReadOnly() bool
-	// Zone is the knowledge base's zone; RecordingZone the zone r's clock times are in (a day recording's own);
-	// DayLocation the zone a day recording's upload names.
+	// Zone is the knowledge base's zone (the user's).
 	Zone() *time.Location
-	RecordingZone(r *Recording) *time.Location
-	DayLocation(name string) (*time.Location, error)
-	// RecordingID is raw as a recording's id; false when it is not one.
-	RecordingID(raw string) (string, bool)
 	// Recording is recording id as committed; Recordings every recording.
 	Recording(id string) (*Recording, bool)
 	Recordings() []*Recording
@@ -45,9 +40,6 @@ type Reader interface {
 	// ReadMinutes is recording id's minutes.json; ReadRecap its recap.json.
 	ReadMinutes(id string) (*Minutes, error)
 	ReadRecap(id string) (*DayRecap, error)
-	// DaySpan is the span day recording r covers as of now; RecordedWithin whether it overlaps from–to.
-	DaySpan(r *Recording, now time.Time) (time.Time, time.Time)
-	RecordedWithin(r *Recording, now, from, to time.Time) bool
 	// PhotoTexts is the photos of recording id with their words; PhotoWords one photo's words as a line has them;
 	// PhotoBook the photos as stored, for the two questions the minutes ask of them.
 	PhotoTexts(id string) []PhotoText

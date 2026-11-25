@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
@@ -61,10 +61,7 @@ var (
 )
 
 // RecordingID is id as stored (lowercase), false when it is not a UUID.
-func RecordingID(id string) (string, bool) {
-	id = strings.ToLower(strings.TrimSpace(id))
-	return id, uuidRe.MatchString(id)
-}
+func RecordingID(id string) (string, bool) { return recordingwire.RecordingID(id) }
 
 func badRecording(f string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrBadRecording, fmt.Sprintf(f, a...))

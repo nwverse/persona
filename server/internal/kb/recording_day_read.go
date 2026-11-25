@@ -5,44 +5,22 @@ package kb
 
 import (
 	"cmp"
-	"fmt"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 	"math"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 )
 
 func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
-var dayZones sync.Map // IANA name → *time.Location, loaded once
-
 // dayLocation is the IANA zone name ("Local" is not one).
-func dayLocation(name string) (*time.Location, error) {
-	if l, ok := dayZones.Load(name); ok {
-		return l.(*time.Location), nil
-	}
-	if name == "" || name == "Local" {
-		return nil, fmt.Errorf("unknown time zone %q", name)
-	}
-	l, err := time.LoadLocation(name)
-	if err != nil {
-		return nil, err
-	}
-	dayZones.Store(name, l)
-	return l, nil
-}
+func dayLocation(name string) (*time.Location, error) { return recordingwire.DayLocation(name) }
 
 // RecordingZone is the zone r's clock times are in: a day recording's own (tz), else (and when it cannot be loaded)
 // the user's.
 func (s *Store) RecordingZone(r *Recording) *time.Location {
-	if r.Kind == RecordingDay && r.TZ != "" {
-		if l, err := dayLocation(r.TZ); err == nil {
-			return l
-		}
-	}
-	return s.Zone()
+	return recordingwire.RecordingZone(r, s.Zone())
 }
 
 // SetClock gives the engine its clock (nil: time.Now): a test of the recordings' writers, here or in the recording
