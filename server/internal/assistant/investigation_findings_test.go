@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -43,6 +44,28 @@ func confirmTestFindings(s *Service, id string, version uint64, dispositions ...
 	return reviewErr(s, id, map[string]any{
 		"verdict": reviewFindings, "findings_review": findingReview{Version: version, Dispositions: dispositions},
 	})
+}
+
+func setFindingTestCriterion(t *testing.T, s *Service, id, criterion string) {
+	t.Helper()
+	if _, _, err := s.updateSupervision(context.Background(), id, func(v *Supervision) bool {
+		v.DoneWhen = append(v.DoneWhen, criterion)
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func completeTestFinding(t *testing.T, s *Service, id string, version uint64, finding investigationFinding, evidence string) {
+	t.Helper()
+	setFindingTestCriterion(t, s, id, finding.Next)
+	if _, err := reviewErr(s, id, map[string]any{
+		"verdict":         reviewFindings,
+		"findings_review": findingReview{Version: version, Dispositions: []findingDisposition{{ID: finding.ID, Done: evidence}}},
+		"checks":          []ReviewCheck{{Criterion: finding.Next, Met: true, Evidence: evidence}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 var (
@@ -98,9 +121,11 @@ func TestInvestigationFindingsParkAndAcceptRequireEveryDisposition(t *testing.T)
 	if got := todoNow(s, todo.ID); got.Supervision.state(got) != reviewParked || got.DoneAt != nil {
 		t.Fatalf("valid park did not stick: %+v", got.Supervision)
 	}
-	if _, err := confirmTestFindings(s, todo.ID, r.Version, findingDisposition{ID: "rollout", Done: "Observed the new rollout result."}); err != nil {
-		t.Fatal(err)
+	if _, err := confirmTestFindings(s, todo.ID, r.Version, findingDisposition{ID: "rollout", Done: "Done."}); err == nil {
+		t.Fatal("free-form text was accepted as completion evidence")
 	}
+	completeTestFinding(t, s, todo.ID, r.Version, investigateRollout, "Observed the new rollout result.")
+	accept["checks"] = completeReviewChecks(todoNow(s, todo.ID))
 	if _, err := reviewErr(s, todo.ID, accept); err != nil {
 		t.Fatal(err)
 	}
@@ -149,9 +174,7 @@ func TestInvestigationFindingsOwnerPassRemainsAnswerable(t *testing.T) {
 	if current := askOf(s, todo.ID); current == nil || !current.AcceptedAt.IsZero() {
 		t.Fatal("blocked Pass consumed the verification request")
 	}
-	if _, err := confirmTestFindings(s, todo.ID, r.Version, findingDisposition{ID: "logs", Done: "Verified request log exists."}); err != nil {
-		t.Fatal(err)
-	}
+	completeTestFinding(t, s, todo.ID, r.Version, investigateLogs, "Verified request log exists.")
 	if result, err := s.acceptTry(ctx, todo.ID, ask.MessageID); err != nil || !result.taken {
 		t.Fatalf("owner could not Pass after disposition: %+v, %v", result, err)
 	}
@@ -180,8 +203,11 @@ func TestInvestigationFindingsAutomaticParkAndClosure(t *testing.T) {
 	if _, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Done: &yes}); err == nil {
 		t.Fatal("manual completion ignored finding")
 	}
-	review := &findingReview{Version: 1, Dispositions: []findingDisposition{{ID: "logs", Done: "Found and verified the trace."}}}
-	if _, err := s.reviewInvestigationFindings(ctx, todo, review, func(Todo) bool { return true }); err != nil {
+	setFindingTestCriterion(t, s, todo.ID, investigateLogs.Next)
+	evidence := "Found and verified the trace."
+	review := &findingReview{Version: 1, Dispositions: []findingDisposition{{ID: "logs", Done: evidence}}}
+	checks := []ReviewCheck{{Criterion: investigateLogs.Next, Met: true, Evidence: evidence}}
+	if _, err := s.reviewInvestigationFindings(ctx, todo, review, checks, "conv1", func(Todo) bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	todo = todoNow(s, todo.ID)
@@ -210,7 +236,7 @@ func TestInvestigationFindingsFreshReportAndOwnerDrop(t *testing.T) {
 		t.Helper()
 		if _, err := s.insertDecision(ctx, d, db.TodoDecisionRow{
 			ID: id, TodoID: todo.ID, Question: "Drop investigation finding logs?", Choice: "Drop",
-			Reason: "This sample is no longer used.", Source: source, CreatedAt: decisionNow(),
+			Reason: "This sample is no longer used.", Source: source, SourceMachine: "box", SourceSession: "conv1", CreatedAt: decisionNow(),
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -219,8 +245,21 @@ func TestInvestigationFindingsFreshReportAndOwnerDrop(t *testing.T) {
 	if _, err := confirmTestFindings(s, todo.ID, next.Version, findingDisposition{ID: "logs", Drop: "dec_finding_by_agent"}); err == nil {
 		t.Fatal("an agent's decision dropped the finding")
 	}
-	writeDrop("dec_finding_by_owner", db.DecisionManual)
-	if _, err := confirmTestFindings(s, todo.ID, next.Version, findingDisposition{ID: "logs", Drop: "dec_finding_by_owner"}); err != nil {
+	writeDrop("dec_relayed_as_manual", db.DecisionManual)
+	if _, err := confirmTestFindings(s, todo.ID, next.Version, findingDisposition{ID: "logs", Drop: "dec_relayed_as_manual"}); err == nil {
+		t.Fatal("a model-attributed manual record dropped the finding")
+	}
+	request := httptest.NewRequest("POST", "/api/v1/todos/"+todo.ID+"/decisions",
+		strings.NewReader(`{"question":"Drop investigation finding logs?","choice":"Drop","reason":"This sample is no longer used."}`))
+	response := httptest.NewRecorder()
+	s.ServeHTTP(response, request)
+	var owner struct {
+		Decision db.TodoDecisionRow `json:"decision"`
+	}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &owner) != nil || owner.Decision.ID == "" {
+		t.Fatalf("owner manual decision was not recorded: %d %s", response.Code, response.Body)
+	}
+	if _, err := confirmTestFindings(s, todo.ID, next.Version, findingDisposition{ID: "logs", Drop: owner.Decision.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewAccepted, "note": "Report accepted."}); err != nil {

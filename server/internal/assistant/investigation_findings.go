@@ -13,7 +13,11 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-const maxInvestigationFindings = 30
+const (
+	maxInvestigationFindings   = 30
+	findingDropQuestionPrefix  = "Drop investigation finding "
+	findingOwnerDecisionPrefix = "owner-finding-drop:"
+)
 
 type investigationFinding struct {
 	ID      string `json:"id"`
@@ -198,14 +202,14 @@ func (s *Service) investigationActionCovered(parent Todo, f recordedFinding) boo
 	if target.DoneAt == nil {
 		return true
 	}
-	return findingActionMet(target, f.Next)
+	return findingActionMet(target.Supervision, f.Next)
 }
 
-func findingActionMet(t Todo, next string) bool {
-	if t.Supervision == nil {
+func findingActionMet(v *Supervision, next string) bool {
+	if v == nil {
 		return false
 	}
-	return slices.ContainsFunc(t.Supervision.Criteria, func(c db.TodoCriterion) bool {
+	return slices.ContainsFunc(v.Criteria, func(c db.TodoCriterion) bool {
 		return c.Criterion == next && c.State == criterionMet && strings.TrimSpace(c.Evidence) != "" &&
 			strings.HasPrefix(c.By, "supervisor:")
 	})
@@ -222,7 +226,8 @@ func (s *Service) investigationDropRecorded(ctx context.Context, id string, f re
 	}
 	return slices.ContainsFunc(decisions, func(d db.TodoDecisionRow) bool {
 		return d.ID == f.Disposition.Drop && d.Source == db.DecisionManual &&
-			d.Question == "Drop investigation finding "+f.ID+"?" && d.Choice == "Drop" &&
+			d.SourceMessage == findingOwnerDecisionPrefix+d.ID && d.SourceMachine == "" && d.SourceSession == "" &&
+			d.Question == findingDropQuestionPrefix+f.ID+"?" && d.Choice == "Drop" &&
 			strings.TrimSpace(d.Reason) != "" && !d.CreatedAt.Before(f.ReportedAt.Truncate(time.Microsecond))
 	})
 }
@@ -240,7 +245,7 @@ func (s *Service) investigationTransitionError(ctx context.Context, t Todo, v *S
 	for _, f := range r.Items {
 		d := f.Disposition
 		switch {
-		case d.Done != "":
+		case d.Done != "" && findingActionMet(v, f.Next):
 			continue
 		case d.FollowUp != "" && s.investigationActionCovered(t, f):
 			continue
@@ -261,7 +266,7 @@ func (s *Service) investigationTransitionError(ctx context.Context, t Todo, v *S
 
 const reviewFindings = "findings"
 
-func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *findingReview, allowed func(Todo) bool) (string, error) {
+func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *findingReview, checks []ReviewCheck, reviewer string, allowed func(Todo) bool) (string, error) {
 	var problem error
 	var current Todo
 	var report *investigationFindings
@@ -288,6 +293,19 @@ func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *f
 				target, exists := s.todoNow(d.FollowUp)
 				if !exists || target.DoneAt != nil || !s.investigationActionCovered(current, f) {
 					problem = fmt.Errorf("finding %q needs an open independent to-do with the exact next action as a supervised criterion", f.ID)
+					return false
+				}
+			}
+			if d := f.Disposition; d.Done != "" {
+				// The disposition itself is not evidence. Keep the concrete
+				// check and reviewer in the ordinary supervision ledger.
+				if slices.Contains(v.DoneWhen, f.Next) && slices.ContainsFunc(checks, func(c ReviewCheck) bool {
+					return c.Criterion == f.Next && c.Met && clip(oneLine(c.Evidence), 600) == d.Done
+				}) {
+					v.applyChecks([]ReviewCheck{{Criterion: f.Next, Met: true, Evidence: d.Done}}, time.Now().UTC(), "supervisor:"+reviewer)
+				}
+				if !findingActionMet(v, f.Next) {
+					problem = fmt.Errorf("finding %q needs an exact scoped next-action check with completion evidence", f.ID)
 					return false
 				}
 			}
@@ -338,7 +356,7 @@ func (s *Service) investigationReceivedFindings(id string) []recordedFinding {
 
 func (s *Service) receivedFindingsCloseError(t Todo, checks []ReviewCheck) error {
 	for _, f := range s.investigationReceivedFindings(t.ID) {
-		if findingActionMet(t, f.Next) || slices.ContainsFunc(checks, func(c ReviewCheck) bool {
+		if findingActionMet(t.Supervision, f.Next) || slices.ContainsFunc(checks, func(c ReviewCheck) bool {
 			return c.Criterion == f.Next && c.Met && strings.TrimSpace(c.Evidence) != ""
 		}) {
 			continue

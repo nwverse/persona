@@ -927,7 +927,7 @@ The supervisor reads the list using `task_review` with `verdict: "findings"`. Su
 `findings_review` and record dispositions by ID. This confirms the current report without moving the task. A follow-up
 must be an independent, open supervised to-do with the finding's exact `next` action in its `done_when`. A single finding
 may remain on the parked task when its `wait_target` matches the validated external park evidence. Resolved findings carry
-`done_evidence`. For a decision that only the owner can make, use `needs_user` on the open parent or an independently
+`done_evidence` backed by a supervisor check for that exact next action in the current `done_when`. Submit the same evidence in `checks` with the findings review if the check is new. For a decision that only the owner can make, use `needs_user` on the open parent or an independently
 tracked follow-up. An owner's explicit drop can be recorded in the to-do's decision history as question
 `Drop investigation finding <id>?`, choice `Drop`, and a reason, then referenced by `owner_drop_decision_id`.
 

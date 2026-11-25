@@ -764,7 +764,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		return "", fmt.Errorf("task %s is not one of your workers: you review the workers you handed out with task_plan, nothing else", t.ID)
 	}
 	if a.Verdict == reviewFindings {
-		return s.reviewInvestigationFindings(ctx, t, a.Findings, func(cur Todo) bool {
+		return s.reviewInvestigationFindings(ctx, t, a.Findings, a.Checks, lead.SessionID, func(cur Todo) bool {
 			supervisor, supervised, reachable := s.leaderSupervisor(cur)
 			return supervised && reachable && supervisor.MachineID == lead.MachineID && supervisor.SessionID == lead.SessionID
 		})

@@ -193,7 +193,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 	}
 	if a.Verdict == reviewFindings {
-		return s.reviewInvestigationFindings(ctx, t, a.Findings, func(cur Todo) bool {
+		return s.reviewInvestigationFindings(ctx, t, a.Findings, a.Checks, self, func(cur Todo) bool {
 			return s.canReviewLedger(ctx, self, cur, cur.Supervision)
 		})
 	}
