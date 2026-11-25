@@ -640,7 +640,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return beforeNodeWrite(method, err)
 		}
 	}
-	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" {
+	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" ||
+		method == proto.MethodSessionInputPreviews || method == proto.MethodSessionItemsWindow {
 		raw, err := json.Marshal(params)
 		if err != nil {
 			return err

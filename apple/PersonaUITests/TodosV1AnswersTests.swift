@@ -6,6 +6,7 @@ import XCTest
 /// - OK on Plan the Kyoto trip takes it out of N at once: the Needs you header, the Filter's Needs you, the drawer's
 ///   To-dos row and the folded Pages tally say the same lower number before the answer has gone, and after the hub has it.
 /// - A place draws the same answers (Today, a project), and OK there takes the to-do out of the place's N at once.
+/// - A search's result offers none, and they are back once the field is cleared (`testASearchResultOffersNoAnswers`).
 /// - With `PERSONA_TODOS_FRAMES=1` and `PERSONA_SHOTS=<dir>`, the V1 frames the answers draw, saved for review
 ///   (`PERSONA_TODOS_STYLES` and `PERSONA_TODOS_SCHEME`, comma lists; `PERSONA_TODOS_LANGUAGE`, `PERSONA_TODOS_COLOR`,
 ///   `PERSONA_TODOS_SIZE`, `PERSONA_TODOS_FRAMES_ONLY`, where `list` is the list as it opens), each from a fresh launch
@@ -124,6 +125,48 @@ final class TodosV1AnswersTests: XCTestCase {
         let after = headerN(n - 1, timeout: 3)
         XCTAssertTrue(after == n - 1 || (n == 1 && after == nil), "the place's Needs you kept \(String(describing: after))")
         XCTAssertEqual(try hubN(base, before - 1, timeout: 20), before - 1, "the hub has the answer")
+    }
+
+    /// A search's result offers no answers, as it offers no Mark Done (DESIGN_SYSTEM 3.4 "To-dos list", the search):
+    /// "Kyoto" finds Plan the Kyoto trip with no OK and no Options under it, and Cancel brings them back. That a result
+    /// still says an answer given here is `TodoSearchTests.aResultOffersNoAnswers`'s: the answer goes as its 4 s hold
+    /// ends and the mock takes it at once (`/mock/delay` does not hold the asks route), before a search typed after OK
+    /// has landed. Launched in English only because the system's search controls carry no identifier and are found by
+    /// their words; what the test checks of ours is by identifier.
+    @MainActor func testASearchResultOffersNoAnswers() throws {
+        guard let hub = env["PERSONA_TODOS_HUB"] else { throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_TODO_VIEW=1 (PERSONA_TODOS_HUB)") }
+        let base = try XCTUnwrap(URL(string: hub))
+        _ = try mock(base, "GET", "mock/reset")
+        defer { _ = try? mock(base, "GET", "mock/reset") }
+        launch(hub, ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"], layout: "separate")
+        XCTAssertTrue(element("todos.v1").waitForExistence(timeout: 60), "no V1 list:\n\(app.debugDescription)")
+        waitFor("todos.answer.ok.t01", timeout: 20)
+        waitFor("todos.answer.options.t01", timeout: 2)
+        search("Kyoto")
+        XCTAssertTrue(element("todos.row.t01").exists, "Plan the Kyoto trip found by its title:\n\(app.debugDescription)")
+        XCTAssertFalse(element("todos.answer.ok.t01").exists, "no OK on a result")
+        XCTAssertFalse(element("todos.answer.options.t01").exists, "no Options on a result")
+        cancelSearch()
+        // The answers again once the field is cleared.
+        waitFor("todos.answer.ok.t01", timeout: 10)
+        waitFor("todos.answer.options.t01", timeout: 2)
+    }
+
+    /// The list's search field opened, `words` typed, and the results drawn for them (Search Chats for …'s identifier
+    /// once they are the words', a look landing after the key).
+    @MainActor private func search(_ words: String) {
+        let field = todosSearchField(app)
+        field.tap()
+        field.typeText(words)
+        waitFor("todos.searchChats", timeout: 10)
+    }
+
+    /// Out of the search with the system's Cancel (or Close), found by its words.
+    @MainActor private func cancelSearch() {
+        let cancel = app.buttons.matching(NSPredicate(format: "label ==[c] 'cancel' OR label ==[c] 'close'")).allElementsBoundByIndex
+            .first(where: \.isHittable)
+        guard let cancel else { return XCTFail("no way out of the search:\n\(app.debugDescription)") }
+        cancel.tap()
     }
 
     /// Today's date as the mock's PATCH takes a due date (the device's calendar, as the mock's start reads it).

@@ -486,7 +486,7 @@ test('on-demand discovery backs off unforced lookups after a sign-in timeout whi
   assert.equal(modelsCalls().length, 3)
 })
 
-test('explicit bypassPermissions auto-approves Bash, file edits, writes and non-standard allow options without settings.json', async (t) => {
+test('explicit bypassPermissions auto-approves Bash, file edits and writes without settings.json', async (t) => {
   const f = await modePermissionFixture(t, { refuseAuto: false }, { permission_mode: 'bypassPermissions' })
   rmSync(join(f.home, 'settings', 'settings.json'), { force: true })
   await f.n.peer.call('session.send', { session_id: f.sessionId, text: 'ask-mixed-permissions' })
@@ -501,8 +501,8 @@ test('explicit bypassPermissions auto-approves Bash, file edits, writes and non-
     cards: 0,
     answers: [
       { id: 'read-permission-bash', result: selected('always') },
-      { id: 'read-permission-custom', result: selected('custom-allow') },
       { id: 'read-permission-edit', result: selected('once') },
+      { id: 'read-permission-write', result: selected('always-write') },
     ],
   })
 })

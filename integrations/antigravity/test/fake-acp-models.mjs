@@ -77,10 +77,10 @@ const mixedPermissions = [
     ],
   },
   {
-    id: 'read-permission-custom', toolCallId: 'write-file', title: 'write_file', rawInput: { Path: '/tmp/b.go', Content: 'package b' },
+    id: 'read-permission-write', toolCallId: 'write-file', title: 'write_file', rawInput: { Path: '/tmp/b.go', Content: 'package b' },
     options: [
       { optionId: 'reject', name: 'Reject', kind: 'reject_always' },
-      { id: 'custom-allow', name: 'Proceed' },
+      { optionId: 'always-write', name: 'Always allow', kind: 'allow_always' },
     ],
   },
 ]

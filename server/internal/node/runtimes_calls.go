@@ -17,12 +17,14 @@ import (
 // claimMethods are the calls that ask the connected runtimes about a session nobody claimed yet: what the apps do
 // with a session they show (open it, page it, send to it, stop it).
 var claimMethods = map[string]bool{"session.send": true, "session.items": true, "session.item": true, "session.image": true,
+	proto.MethodSessionInputPreviews: true, proto.MethodSessionItemsWindow: true,
 	"session.visualization": true, "session.fork": true,
 	"session.watch": true, "session.info": true, "session.interrupt": true}
 
 // awayReads are the calls the node answers itself for a session of a runtime that is away whose conversation is a
 // Claude transcript here (runtimeaway.go): its content, its info and the watch of its transcript.
 var awayReads = map[string]bool{"session.items": true, "session.item": true, "session.image": true, "session.visualization": true,
+	proto.MethodSessionInputPreviews: true, proto.MethodSessionItemsWindow: true,
 	"session.watch": true,
 	"session.info":  true}
 
@@ -151,6 +153,7 @@ type runtimeCallParams struct {
 	BeforeSeq      int                  `json:"before_seq"`
 	LazyImages     bool                 `json:"lazy_images"`
 	UserInputs     bool                 `json:"user_inputs"`
+	MetaOnly       bool                 `json:"meta_only"`
 	AfterSeq       *int                 `json:"after_seq"`
 	ThroughSeq     int                  `json:"through_seq"`
 	Title          *string              `json:"title"`
@@ -200,12 +203,14 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			}
 		}
 	}
+	readItems := func(params any) (json.RawMessage, error) { return call("session.items", params) }
 	switch method {
+	case proto.MethodSessionInputPreviews, proto.MethodSessionItemsWindow:
+		res, err := serveSessionNavigation(ctx, runtimeNavigation{node: n, read: readItems}, method, params)
+		return res, err, true
 	case "session.items":
 		if p.UserInputs {
-			index, err := n.runtimeUserInputs(ctx, p.SessionID, p.BeforeSeq, func(params any) (json.RawMessage, error) {
-				return call("session.items", params)
-			})
+			index, err := n.runtimeUserInputs(ctx, p.SessionID, p.BeforeSeq, p.MetaOnly, readItems)
 			return index, err, true
 		}
 		out, err := call("session.items", params)
