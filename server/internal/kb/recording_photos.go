@@ -359,7 +359,7 @@ func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
 		dropPhotos(e.RecordingProvider(), m, func(p int) bool { return p == n })
 		m.Version = max(m.Version, r.MinutesVersion) + 1
 		m.Markdown = e.RecordingProvider().RenderMinutes(m, r.StartedAt, st.Zone())
-		if wrote, err := e.RecordingProvider().PutMinutes(r.ID, m); err != nil {
+		if wrote, err := e.RecordingProvider().PutMinutes(recordingwire.ID(r.ID), m); err != nil {
 			return err
 		} else if !wrote {
 			return ErrNotFound
@@ -370,7 +370,7 @@ func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
 		// minutes.md or meta.json. Finish them from minutes.json, which no longer cites the photo.
 		md, _ := os.ReadFile(st.path(KindRecording, r.ID, "minutes.md"))
 		if string(md) != strings.TrimSpace(m.Markdown)+"\n" || r.MinutesVersion < m.Version {
-			if wrote, err := e.RecordingProvider().PutMinutes(r.ID, m); err != nil {
+			if wrote, err := e.RecordingProvider().PutMinutes(recordingwire.ID(r.ID), m); err != nil {
 				return err
 			} else if !wrote {
 				return ErrNotFound

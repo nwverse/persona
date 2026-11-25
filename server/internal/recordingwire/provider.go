@@ -43,7 +43,7 @@ type WritersInCore interface {
 type MinutesFromCore interface {
 	// PutMinutes writes minutes.json and minutes.md of recording id, unless it was deleted meanwhile (false then);
 	// the caller holds the recordings lock. RenderMinutes is minutes.md of m.
-	PutMinutes(id string, m *Minutes) (bool, error)
+	PutMinutes(id ID, m *Minutes) (bool, error)
 	RenderMinutes(m *Minutes, start time.Time, zone *time.Location) string
 	// RemakeMinutes has r's minutes made again at the next round; QuietMinutes: the ones being made now are made
 	// again only because a photo changed.
@@ -71,7 +71,7 @@ func (NoProvider) AfterPrune(time.Time)                         {}
 func (NoProvider) AudioDropped(string, error)                   {}
 func (NoProvider) AudioClosed(string)                           {}
 
-func (NoProvider) PutMinutes(string, *Minutes) (bool, error)                      { return false, nil }
+func (NoProvider) PutMinutes(ID, *Minutes) (bool, error)                          { return false, nil }
 func (NoProvider) RenderMinutes(m *Minutes, _ time.Time, _ *time.Location) string { return m.Markdown }
 func (NoProvider) RemakeMinutes(*Recording)                                       {}
 func (NoProvider) QuietMinutes(*Recording) bool                                   { return false }

@@ -50,8 +50,16 @@ func Of(p recordingwire.Provider) *Writers {
 // module's callbacks.
 func (w *Writers) engine() *engine {
 	e := &engine{Store: newStore(w.core), MinutesWritten: w.minutesWritten, DayRecapWritten: w.dayRecapWritten,
-		DayRecapClock: w.core.DayRecapClock(), jobLeft: w.jobLeft, minutesCall: w.minutesCall, minutesPart: w.minutesPart}
-	e.Model, e.ModelFor = w.core.Models()
+		jobLeft: w.jobLeft, minutesCall: w.minutesCall, minutesPart: w.minutesPart}
+	if w.core.HasModel() {
+		e.ModelFor = func(purpose string) Model { return w.core.Model(known(recordingwire.Purpose(purpose))) }
+	}
+	if _, ok := w.core.DayRecapClock(); ok {
+		e.DayRecapClock = func() (hour, minute int) {
+			c, _ := w.core.DayRecapClock()
+			return c.Hour, c.Minute
+		}
+	}
 	return e
 }
 
@@ -98,8 +106,8 @@ func (w *Writers) SetDayRecapTodos(id string, version int, confirmed []MinutesAc
 
 // What the writers still in the knowledge base call of these (recordingwire.MinutesFromCore).
 
-func (w *Writers) PutMinutes(id string, m *Minutes) (bool, error) {
-	return newStore(w.core).putMinutes(id, m)
+func (w *Writers) PutMinutes(id recordingwire.ID, m *Minutes) (bool, error) {
+	return newStore(w.core).putMinutes(string(id), m)
 }
 func (w *Writers) RenderMinutes(m *Minutes, start time.Time, zone *time.Location) string {
 	return renderMinutes(m, start, zone)

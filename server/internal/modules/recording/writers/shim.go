@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"slices"
@@ -27,7 +28,8 @@ import (
 // clock as the port has them when it is made (Writers.engine makes one a call), and the module's callbacks.
 type engine struct {
 	Store *store
-	// Model and ModelFor are the engine's model and its model per purpose (recordingwire.Writer.Models).
+	// ModelFor is the engine's model for a purpose (recordingwire.Writer.Model), nil when the engine has no model at
+	// all; Model is always nil here (the writers ask "is there any model" of the two together).
 	Model    Model
 	ModelFor func(string) Model
 	// MinutesWritten is told when a recording's minutes for its current revision are written; DayRecapWritten once a
@@ -61,7 +63,6 @@ func newStore(core recordingwire.Core) *store {
 // The types the writers name, under the names they had.
 type (
 	Model             = recordingwire.Model
-	Item              = recordingwire.CalendarItem
 	Tagging           = kbwire.Tagging
 	RecordingSegment  = kbwire.RecordingSegment
 	Recording         = recordingwire.Recording
@@ -84,6 +85,15 @@ type (
 	MinutesBullet     = recordingwire.MinutesBullet
 	photoBook         = recordingwire.PhotoBook
 )
+
+// calendarEntry is a calendar entry as the writers read it (recordingwire.CalendarItem, its kind and id as the text
+// the stored meeting reference keeps); the writers call it Item.
+type calendarEntry struct {
+	Kind, ID, Title string
+	At              time.Time
+}
+
+type Item = calendarEntry
 
 // The constants and errors the writers name.
 const (
@@ -203,26 +213,63 @@ func titleLine(s string) string {
 func dropUnlistedPhotos(m *Minutes, b photoBook)                { b.DropUnlisted(m) }
 func citedChanged(b photoBook, before, after map[int]bool) bool { return b.CitedChanged(before, after) }
 
-// The store's members the writers call, each the port's.
+// The store's members the writers call, each the port's. The writers name ids, files, kinds and changes as text,
+// as they did; here each becomes the port's type, and a text that is none of the port's values is a defect of this
+// package (known panics on it: the names are literals of the writers' code).
+
+func known[T interface{ Known() bool }](v T) T {
+	if !v.Known() {
+		panic(fmt.Sprintf("recording writers: %T %v is not one the storage port takes", v, v))
+	}
+	return v
+}
+
+func textFiles(files recordingwire.Files) map[string][]byte {
+	if files == nil {
+		return nil
+	}
+	out := make(map[string][]byte, len(files))
+	for f, data := range files {
+		out[string(f)] = data
+	}
+	return out
+}
 
 func (s *store) ReadOnly() bool       { return s.core.ReadOnly() }
 func (s *store) Zone() *time.Location { return s.core.Zone() }
 func (s *store) RecordingZone(r *Recording) *time.Location {
 	return recordingwire.RecordingZone(r, s.core.Zone())
 }
-func (s *store) Recording(id string) (*Recording, bool)  { return s.core.Recording(id) }
-func (s *store) Recordings() []*Recording                { return s.core.Recordings() }
-func (s *store) Items(kind string) []*Item               { return s.core.CalendarItems(kind) }
-func (s *store) ReadMinutes(id string) (*Minutes, error) { return s.core.ReadMinutes(id) }
-func (s *store) readRecap(id string) (*DayRecap, error)  { return s.core.ReadRecap(id) }
-func (s *store) readPhotos(id string) (photoBook, error) { return s.core.PhotoBook(id) }
+func (s *store) Recording(id string) (*Recording, bool) {
+	return s.core.Recording(recordingwire.ID(id))
+}
+func (s *store) Recordings() []*Recording { return s.core.Recordings() }
+func (s *store) Items(kind string) []*Item {
+	items := s.core.CalendarItems(known(recordingwire.CalendarKind(kind)))
+	out := make([]*Item, len(items))
+	for i, it := range items {
+		out[i] = &Item{Kind: string(it.Kind), ID: string(it.ID), Title: it.Title, At: it.At}
+	}
+	return out
+}
+func (s *store) ReadMinutes(id string) (*Minutes, error) {
+	return s.core.ReadMinutes(recordingwire.ID(id))
+}
+func (s *store) readRecap(id string) (*DayRecap, error) {
+	return s.core.ReadRecap(recordingwire.ID(id))
+}
+func (s *store) readPhotos(id string) (photoBook, error) {
+	return s.core.PhotoBook(recordingwire.ID(id))
+}
 
 // recordingName is r's name in lists. The knowledge base's store names a day recording without the module's name
 // for the day; the one caller here (matchRecordings) never has a day recording, so the engine's name is the same.
-func (s *store) recordingName(r *Recording) string      { return s.core.RecordingName(r) }
-func (s *store) recoverRecordingLocked(id string) error { return s.core.RecoverRecording(id) }
+func (s *store) recordingName(r *Recording) string { return s.core.RecordingName(r) }
+func (s *store) recoverRecordingLocked(id string) error {
+	return s.core.RecoverRecording(recordingwire.ID(id))
+}
 func (s *store) bumpPhotosRev(id string, start time.Time) error {
-	return s.core.BumpPhotosRev(id, start)
+	return s.core.BumpPhotosRev(recordingwire.ID(id), start)
 }
 func (s *store) writeFile(p string, data []byte) error { return s.core.WriteFile(p, data) }
 func (s *store) photoWords(p recordingwire.PhotoText, clipped bool) string {
@@ -232,31 +279,51 @@ func (s *store) TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment)
 	return s.core.TranscriptOfRecord(hubMode, device, hub)
 }
 func (s *store) recordingSnapshot(id string) (map[string][]byte, error) {
-	return s.core.RecordingSnapshot(id)
+	files, err := s.core.RecordingSnapshot(recordingwire.ID(id))
+	return textFiles(files), err
 }
 func (s *store) recordSnapshot(id string) (map[string][]byte, *recordingwire.Meeting, recordingwire.HubTranscript, error) {
-	return s.core.RecordSnapshot(id)
+	files, m, hub, err := s.core.RecordSnapshot(recordingwire.ID(id))
+	return textFiles(files), m, hub, err
 }
 
 // path, entityPath, notify, putEntity and putSummary take the entry's kind as the knowledge base's do; the writers
 // only ever name a recording.
-func (s *store) path(_, id string, parts ...string) string { return s.core.Path(id, parts...) }
-func (s *store) entityPath(_, id string) string            { return s.core.Path(id, "meta.json") }
-func (s *store) notify(_, id, what string)                 { s.core.Notify(id, what) }
+func (s *store) path(_, id string, file string) string {
+	return s.core.Path(recordingwire.ID(id), known(recordingwire.File(file)))
+}
+func (s *store) entityPath(_, id string) string {
+	return s.core.Path(recordingwire.ID(id), recordingwire.FileMeta)
+}
+func (s *store) notify(_, id, what string) {
+	s.core.Notify(recordingwire.ID(id), known(recordingwire.Change(what)))
+}
 func (s *store) putEntity(_, _ string, r *Recording, _ *Tagging, _ bool) error {
 	return s.core.PutMeta(r)
 }
-func (s *store) putSummary(_, id, text string, _ bool) error { return s.core.PutSummary(id, text) }
+func (s *store) putSummary(_, id, text string, _ bool) error {
+	return s.core.PutSummary(recordingwire.ID(id), text)
+}
 
 // The engine's members the writers call.
 
-func (e *engine) now() time.Time                                 { return e.Store.core.Now() }
-func (e *engine) logf(f string, a ...any)                        { e.Store.core.Logf(f, a...) }
-func (e *engine) recordingName(r *Recording) string              { return e.Store.core.RecordingName(r) }
-func (e *engine) PhotoTexts(id string) []recordingwire.PhotoText { return e.Store.core.PhotoTexts(id) }
-func (e *engine) dropAudio(id string, why error) error           { return e.Store.core.DropAudio(id, why) }
-func (e *engine) meetingChanged(id string, parts []string)       { e.Store.core.MeetingChanged(id, parts) }
-func (e *engine) outputLang(r *Recording) i18n.Lang              { return i18n.Lang(e.Store.core.OutputLang(r)) }
+func (e *engine) now() time.Time                    { return e.Store.core.Now() }
+func (e *engine) logf(f string, a ...any)           { e.Store.core.Logf(f, a...) }
+func (e *engine) recordingName(r *Recording) string { return e.Store.core.RecordingName(r) }
+func (e *engine) PhotoTexts(id string) []recordingwire.PhotoText {
+	return e.Store.core.PhotoTexts(recordingwire.ID(id))
+}
+func (e *engine) dropAudio(id string, why error) error {
+	return e.Store.core.DropAudio(recordingwire.ID(id), why)
+}
+func (e *engine) meetingChanged(id string, parts []string) {
+	typed := make([]recordingwire.MeetingPart, len(parts))
+	for i, p := range parts {
+		typed[i] = known(recordingwire.MeetingPart(p))
+	}
+	e.Store.core.MeetingChanged(recordingwire.ID(id), typed)
+}
+func (e *engine) outputLang(r *Recording) i18n.Lang { return i18n.Lang(e.Store.core.OutputLang(r)) }
 func (e *engine) daySpan(r *Recording, now time.Time) (time.Time, time.Time) {
 	return recordingwire.DaySpan(r, now, e.Store.core.Zone())
 }
@@ -264,11 +331,11 @@ func (e *engine) recordedWithin(r *Recording, now, from, to time.Time) bool {
 	return recordingwire.RecordedWithin(r, now, from, to, e.Store.core.Zone())
 }
 func (e *engine) index(_, id, name string, t Tagging, one string, updated time.Time) {
-	e.Store.core.Index(id, name, t, one, updated)
+	e.Store.core.Index(recordingwire.IndexEntry{ID: recordingwire.ID(id), Name: name, Tagging: t, OneLine: one, Updated: updated})
 }
 func (e *engine) writingOwner(lang i18n.Lang) prompts.KBOwner {
-	owner, language := e.Store.core.WritingOwner(string(lang))
-	return prompts.KBOwner{Owner: owner, Language: language}
+	o := e.Store.core.WritingOwner(recordingwire.Language(lang))
+	return prompts.KBOwner{Owner: o.Name, Language: o.Language}
 }
 
 // modelFor is the model for purpose id: the engine's model per purpose, else its model.

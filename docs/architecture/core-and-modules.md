@@ -534,15 +534,19 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`, `day_recap.go` and `day_recap_write.go`, moved from
   `internal/kb` with their bodies unchanged. They reach the store through the **storage port**, `recordingwire.Core`,
   which the knowledge base implements (`kb.RecordingCore`, `server/internal/kb/recording_core.go`) and hands to the
-  module in its hook (`recordinghost.Layer.Hook`). The port has two groups. `Reader` (20 methods) is the knowledge
-  base's own read path, the functions every other reader calls. `Writer` (16 methods) is the write primitives
+  module in its hook (`recordinghost.Layer.Hook`). The port has two groups. `Reader` (15 methods) is the knowledge
+  base's own read path, the functions every other reader calls. `Writer` (17 methods) is the write primitives
   (`PutMeta`, `PutSummary`, `WriteFile`, `RecoverRecording`, `BumpPhotosRev`), the change feed and the index, the
   engine's clock, log, models and output language, and `Locks`: the store's three locks the writers take themselves
   (recordings, then files, then meta; the order is the store's and did not change). It is wider than the plan's first
   sketch because the writers read and write the store in many places; the alternative was to leave them in Core. The
   package has its own `engine` and `store` over the port (`shim.go`), so that a writer's body reads as it did. The
   rules of a recording's stored state that both sides apply (`PlanMinutes`, `PlanRecap`, `RecordingEnd`, the hub
-  transcription checks) are pure functions in `recordingwire` (`rules.go`).
+  transcription checks) are pure functions in `recordingwire` (`rules.go`). **The port is strongly typed**: a
+  recording's id is `recordingwire.ID`, its files `recordingwire.File`, and what was a string with a few meanings is
+  a closed set (`Change`, `MeetingPart`, `CalendarKind`, `Purpose`, each with `Known`); derived values (the output
+  language, the owner's name for the model, a file's path) are computed by Core and handed out. The stored JSON and
+  the knowledge base's own call sites keep their text.
 - **The write side is a provider** (`recordingwire.Provider`): the four background rounds (`WriteMinutes`,
   `TitleRecordings`, `WriteDayRecaps`, `SummarizeRecordings`), `AfterPrune` (the module's part of the retention round)
   and the audio writers' two touch points with delete and retention (`AudioDropped`, `AudioClosed`). The module's

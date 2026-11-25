@@ -19,38 +19,58 @@ type recordingCore struct{ e *Engine }
 
 // The read group.
 
-func (c recordingCore) ReadOnly() bool                         { return c.e.Store.ReadOnly() }
-func (c recordingCore) Zone() *time.Location                   { return c.e.Store.Zone() }
-func (c recordingCore) Recording(id string) (*Recording, bool) { return c.e.Store.Recording(id) }
-func (c recordingCore) Recordings() []*Recording               { return c.e.Store.Recordings() }
-func (c recordingCore) RecordingName(r *Recording) string      { return c.e.recordingName(r) }
-func (c recordingCore) RecordingSnapshot(id string) (map[string][]byte, error) {
-	return c.e.Store.recordingSnapshot(id)
+func (c recordingCore) ReadOnly() bool       { return c.e.Store.ReadOnly() }
+func (c recordingCore) Zone() *time.Location { return c.e.Store.Zone() }
+func (c recordingCore) Recording(id recordingwire.ID) (*Recording, bool) {
+	return c.e.Store.Recording(string(id))
 }
-func (c recordingCore) RecordSnapshot(id string) (map[string][]byte, *Meeting, HubTranscript, error) {
-	return c.e.Store.recordSnapshot(id)
+func (c recordingCore) Recordings() []*Recording          { return c.e.Store.Recordings() }
+func (c recordingCore) RecordingName(r *Recording) string { return c.e.recordingName(r) }
+func (c recordingCore) RecordingSnapshot(id recordingwire.ID) (recordingwire.Files, error) {
+	files, err := c.e.Store.recordingSnapshot(string(id))
+	return portFiles(files), err
+}
+func (c recordingCore) RecordSnapshot(id recordingwire.ID) (recordingwire.Files, *Meeting, HubTranscript, error) {
+	files, m, hub, err := c.e.Store.recordSnapshot(string(id))
+	return portFiles(files), m, hub, err
 }
 func (c recordingCore) TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
 	return TranscriptOfRecord(hubMode, device, hub)
 }
-func (c recordingCore) ReadMinutes(id string) (*Minutes, error)     { return c.e.Store.ReadMinutes(id) }
-func (c recordingCore) ReadRecap(id string) (*DayRecap, error)      { return c.e.Store.readRecap(id) }
-func (c recordingCore) PhotoTexts(id string) []PhotoText            { return c.e.PhotoTexts(id) }
+func (c recordingCore) ReadMinutes(id recordingwire.ID) (*Minutes, error) {
+	return c.e.Store.ReadMinutes(string(id))
+}
+func (c recordingCore) ReadRecap(id recordingwire.ID) (*DayRecap, error) {
+	return c.e.Store.readRecap(string(id))
+}
+func (c recordingCore) PhotoTexts(id recordingwire.ID) []PhotoText  { return c.e.PhotoTexts(string(id)) }
 func (c recordingCore) PhotoWords(p PhotoText, clipped bool) string { return photoWords(p, clipped) }
-func (c recordingCore) PhotoBook(id string) (recordingwire.PhotoBook, error) {
-	b, err := c.e.Store.readPhotos(id)
+func (c recordingCore) PhotoBook(id recordingwire.ID) (recordingwire.PhotoBook, error) {
+	b, err := c.e.Store.readPhotos(string(id))
 	return storedPhotos{b, c.e.Store}, err
 }
-func (c recordingCore) CalendarItems(kind string) []*recordingwire.CalendarItem {
-	items := c.e.Store.Items(kind)
-	out := make([]*recordingwire.CalendarItem, len(items))
+func (c recordingCore) CalendarItems(kind recordingwire.CalendarKind) []recordingwire.CalendarItem {
+	items := c.e.Store.Items(string(kind))
+	out := make([]recordingwire.CalendarItem, len(items))
 	for i, it := range items {
-		out[i] = &recordingwire.CalendarItem{Kind: it.Kind, ID: it.ID, Title: it.Title, At: it.At}
+		out[i] = recordingwire.CalendarItem{Kind: recordingwire.CalendarKind(it.Kind), ID: recordingwire.ItemID(it.ID), Title: it.Title, At: it.At}
 	}
 	return out
 }
-func (c recordingCore) Path(id string, parts ...string) string {
-	return c.e.Store.path(KindRecording, id, parts...)
+func (c recordingCore) Path(id recordingwire.ID, f recordingwire.File) string {
+	return c.e.Store.path(KindRecording, string(id), string(f))
+}
+
+// portFiles is a snapshot's files under the port's type; nil stays nil.
+func portFiles(files map[string][]byte) recordingwire.Files {
+	if files == nil {
+		return nil
+	}
+	out := make(recordingwire.Files, len(files))
+	for name, data := range files {
+		out[recordingwire.File(name)] = data
+	}
+	return out
 }
 
 // storedPhotos is a photo book as the minutes' writer asks it (recordingwire.PhotoBook).
@@ -70,34 +90,55 @@ func (c recordingCore) Locks() recordingwire.Locks {
 	s := c.e.Store
 	return recordingwire.Locks{Recordings: &s.recMu, Files: &s.recFilesMu, Meta: &s.metaMu}
 }
-func (c recordingCore) RecoverRecording(id string) error         { return c.e.Store.recoverRecordingLocked(id) }
+func (c recordingCore) RecoverRecording(id recordingwire.ID) error {
+	return c.e.Store.recoverRecordingLocked(string(id))
+}
 func (c recordingCore) WriteFile(path string, data []byte) error { return writeFile(path, data) }
 func (c recordingCore) PutMeta(r *Recording) error {
 	return c.e.Store.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
 }
-func (c recordingCore) PutSummary(id, text string) error {
-	return c.e.Store.putSummary(KindRecording, id, text, false)
+func (c recordingCore) PutSummary(id recordingwire.ID, text string) error {
+	return c.e.Store.putSummary(KindRecording, string(id), text, false)
 }
-func (c recordingCore) BumpPhotosRev(id string, start time.Time) error {
-	return c.e.Store.bumpPhotosRev(id, start)
+func (c recordingCore) BumpPhotosRev(id recordingwire.ID, start time.Time) error {
+	return c.e.Store.bumpPhotosRev(string(id), start)
 }
-func (c recordingCore) Notify(id, what string) { c.e.Store.notify(KindRecording, id, what) }
-func (c recordingCore) Index(id, name string, t Tagging, oneLine string, updated time.Time) {
-	c.e.index(KindRecording, id, name, t, oneLine, updated)
+func (c recordingCore) Notify(id recordingwire.ID, what recordingwire.Change) {
+	c.e.Store.notify(KindRecording, string(id), string(what))
 }
-func (c recordingCore) MeetingChanged(id string, parts []string) { c.e.meetingChanged(id, parts) }
-func (c recordingCore) DropAudio(id string, why error) error     { return c.e.dropAudio(id, why) }
-func (c recordingCore) Now() time.Time                           { return c.e.now() }
-func (c recordingCore) Logf(format string, args ...any)          { c.e.logf(format, args...) }
-func (c recordingCore) Models() (recordingwire.Model, func(string) recordingwire.Model) {
-	if c.e.ModelFor == nil {
-		return c.e.Model, nil
+func (c recordingCore) Index(en recordingwire.IndexEntry) {
+	c.e.index(KindRecording, string(en.ID), en.Name, en.Tagging, en.OneLine, en.Updated)
+}
+func (c recordingCore) MeetingChanged(id recordingwire.ID, parts []recordingwire.MeetingPart) {
+	names := make([]string, len(parts))
+	for i, p := range parts {
+		names[i] = string(p)
 	}
-	return c.e.Model, func(purpose string) recordingwire.Model { return c.e.ModelFor(purpose) }
+	c.e.meetingChanged(string(id), names)
 }
-func (c recordingCore) OutputLang(r *Recording) string { return string(c.e.outputLang(r)) }
-func (c recordingCore) WritingOwner(lang string) (owner, language string) {
+func (c recordingCore) DropAudio(id recordingwire.ID, why error) error {
+	return c.e.dropAudio(string(id), why)
+}
+func (c recordingCore) Now() time.Time                  { return c.e.now() }
+func (c recordingCore) Logf(format string, args ...any) { c.e.logf(format, args...) }
+func (c recordingCore) Model(p recordingwire.Purpose) recordingwire.Model {
+	if m := c.e.modelFor(string(p)); m != nil {
+		return m
+	}
+	return nil
+}
+func (c recordingCore) HasModel() bool { return c.e.Model != nil || c.e.ModelFor != nil }
+func (c recordingCore) OutputLang(r *Recording) recordingwire.Language {
+	return recordingwire.Language(c.e.outputLang(r))
+}
+func (c recordingCore) WritingOwner(lang recordingwire.Language) recordingwire.Owner {
 	o := c.e.writingOwner(i18n.Lang(lang))
-	return o.Owner, o.Language
+	return recordingwire.Owner{Name: o.Owner, Language: o.Language}
 }
-func (c recordingCore) DayRecapClock() func() (hour, minute int) { return c.e.DayRecapClock }
+func (c recordingCore) DayRecapClock() (recordingwire.Clock, bool) {
+	if c.e.DayRecapClock == nil {
+		return recordingwire.Clock{}, false
+	}
+	h, m := c.e.DayRecapClock()
+	return recordingwire.Clock{Hour: h, Minute: m}, true
+}

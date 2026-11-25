@@ -287,7 +287,7 @@ func TestHubEchoIsKeptMarkedAndLeftOutOfTheMinutes(t *testing.T) {
 	if strings.Join(marks, "|") != "hub: We keep the cap for this release.|device: phone three" {
 		t.Fatalf("detail.segments' echo %q (%+v)", marks, d.Segments)
 	}
-	md, _ := os.ReadFile(ws(e.Store).path(KindRecording, recID, "transcript.md"))
+	md, _ := os.ReadFile(e.Store.Path(KindRecording, recID, "transcript.md"))
 	if !strings.Contains(string(md), "[Persona 回声] We keep the cap for this release.") || !strings.Contains(string(md), "[Persona 回声] phone three") {
 		t.Fatalf("transcript.md\n%s", md)
 	}
