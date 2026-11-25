@@ -4,18 +4,18 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 const maxLabsSeen = 64
 
 var (
-	labsID           = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+	labsID           = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	errLabsSeenLimit = i18n.Err("assistant-profile.too_many_labs_seen")
 )
 
