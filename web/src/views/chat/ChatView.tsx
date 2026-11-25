@@ -126,7 +126,7 @@ import { pickParts } from "./picking-parts";
 import type { MessagePick } from "../../lib/message-pick";
 import { foldHolding, lineItemIds, lineOfItem, loadEarlierForSearch, untilStill, type ChatSearchHit, type SearchLoadOutcome } from "../../lib/chat-search";
 import { chatFiles } from "../../lib/mentions";
-import { OutboxBubbles } from "./OutboxBubbles";
+import { dedupeQueuedOutbox, OutboxBubbles } from "./OutboxBubbles";
 import { MainRuntimeSlot } from "../assistant/MainRuntimeSlot";
 import { AssistantFace, CompactionStrip, useAssistantMenu } from "../assistant/AssistantChat";
 import { PageBoundary } from "../PageBoundary";
@@ -256,7 +256,7 @@ function queuesWhileWorking(row?: Session): boolean {
   return Boolean(row && stateOf(row) === "working" && !row.background_waiting && (
     (row.queued?.length ?? 0) > (row.queued_relayed ?? 0) || row.capabilities?.queue_edit || row.capabilities?.queue_send_now ||
     row.space_kind === "codex_app" ||
-    (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude"))
+    (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude" || row.agent === "agy"))
   ));
 }
 
@@ -523,10 +523,15 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   useLayoutEffect(() => {
     if (!hasQueue) queueMemory.current = undefined;
   }, [hasQueue]);
+  const visibleOutbox = useMemo(() => dedupeQueuedOutbox(outbox, session?.queued), [outbox, session?.queued]);
+  const queueCandidates = useMemo(() => [
+    ...pending,
+    ...outbox.filter((e) => e.state !== "failed").map((e) => ({ id: e.id, raw: e.text, images: e.images, before: [] as string[] })),
+  ], [pending, outbox]);
   // the owner's messages the assistant keeps after they could not go in, from the row: on every device (#10194)
   // (not one this page still draws as sending: the row can come before the send's answer)
   const keptUndelivered = shownUndelivered(session, tr.items, pending.map((p) => p.id));
-  const outgoing = shownPending.length + outbox.filter((e) => e.state !== "failed").length;
+  const outgoing = shownPending.length + visibleOutbox.filter((e) => e.state !== "failed").length;
   const persona = usePersona();
   // what the chat slots are told (core/ChatSlots.tsx): this page's own id (the same chat may be open twice, a page and a
   // side panel), and who answers here
@@ -1744,7 +1749,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   linesNow.current = lines;
   const limitOn = limitLine ? lines.reduce((id, line) => (line.kind === "apiError" ? line.id : id), "") : "";
   // failed messages where they were sent: before the first message written after them (lib/outbox.ts placeFailed)
-  const placed = useMemo(() => placeFailed(lines, outbox), [lines, outbox]);
+  const placed = useMemo(() => placeFailed(lines, visibleOutbox), [lines, visibleOutbox]);
   const failedBefore = (id: string) => {
     const list = placed.before.get(id);
     return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} canRetry={!refusedNoRow} />] : [];
@@ -2283,8 +2288,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const queue = useMemo(
-    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} pending={pending} optimistic={optimisticQueue} memory={queueMemory} onAccepted={queuedAccepted} cancelQueued={cancelQueued} /> : null),
-    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, pending, optimisticQueue, queuedAccepted, cancelQueued],
+    () => (session && hasQueue ? <QueueStrip session={session} draftKey={draftKey} canEdit={canCompose} compact={short} persona={assistant ? persona.name : undefined} pending={queueCandidates} optimistic={optimisticQueue} memory={queueMemory} onAccepted={queuedAccepted} cancelQueued={cancelQueued} /> : null),
+    [session, hasQueue, draftKey, canCompose, short, assistant, persona.name, queueCandidates, optimisticQueue, queuedAccepted, cancelQueued],
   );
   // with the plan's pill showing, "Jump to bottom" goes beside it (over the chat, they hid each other); the pill keeps
   // one wrapper either way, so a flyout pinned open on it stays when the reader scrolls
@@ -2859,7 +2864,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
           working={state === "working" || awaiting}
           needsYou={state === "needs_you"}
           onSend={send}
-          onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || (session.agent === "claude" && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
+          onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || ((session.agent === "claude" || session.agent === "agy") && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
           disabled={composerDisabled}
           onEditLastMessage={onEditLastMessage}
           editingLast={editProp}

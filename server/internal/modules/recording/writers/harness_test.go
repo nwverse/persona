@@ -59,12 +59,8 @@ func ws(s *kb.Store) *store {
 // What the knowledge base keeps to itself and these tests name: its files' names and a few limits, as they are on
 // disk and in internal/kb, and small helpers of its own tests.
 const (
-	meetingFile          = "meeting.json"
-	photosFile           = "photos.json"
-	minutesHubWait       = recordingwire.MinutesHubWait
-	maxCalendarTitle     = 200
-	maxCalendarAttendees = 100
-	maxCalendarName      = 100
+	photosFile     = "photos.json"
+	minutesHubWait = recordingwire.MinutesHubWait
 )
 
 // entryOf is the kind and id of the entry a path under the data directory belongs to (recordings/<id>/...).
@@ -76,7 +72,7 @@ func entryOf(rel string) (kind, id string, ok bool) {
 	return parts[0], parts[1], true
 }
 
-// summaryDue is the knowledge base's own rule (internal/kb/recordings.go): r's summary is to be made (again).
+// summaryDue is the knowledge base's own rule (internal/kb/recordings_summary.go): r's summary is to be made (again).
 func summaryDue(r *Recording) bool {
 	if !r.Complete || r.Chars == 0 || r.Trimmed() || r.Kind == RecordingDay {
 		return false
@@ -102,13 +98,13 @@ func forgetOnlyPhoto(path string, n int) error {
 	if err := json.Unmarshal(b["photos"], &photos); err != nil {
 		return err
 	}
-	var deleted []kb.PhotoRef
+	var deleted []recordingwire.PhotoRef
 	if b["deleted"] != nil {
 		if err := json.Unmarshal(b["deleted"], &deleted); err != nil {
 			return err
 		}
 	}
-	deleted = append(deleted, kb.PhotoRef{N: n, ID: photos[0].ID})
+	deleted = append(deleted, recordingwire.PhotoRef{N: n, ID: photos[0].ID})
 	b["deleted"], _ = json.Marshal(deleted)
 	delete(b, "photos")
 	out, err := json.MarshalIndent(b, "", "  ")
@@ -141,9 +137,7 @@ func trimRecording(t *testing.T, e *testEngine, id string, now time.Time) {
 // More of what the knowledge base keeps to itself and these tests name (internal/kb/recording_photos_read.go,
 // live.go), and small helpers of its own tests (internal/kb/meeting_test.go).
 const (
-	photosText       = "photos.md"
-	maxLivePositions = 20000
-	maxSpokenText    = recordingwire.MaxSpokenText
+	photosText = "photos.md"
 )
 
 // roomUploadJSON decodes an upload body as the HTTP layer does.
@@ -184,4 +178,33 @@ func markTrimmed(t *testing.T, e *testEngine, id string, now time.Time) {
 	if err := ws(e.Store).putEntity(KindRecording, id, r, &r.Tagging, false); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// More names of the contract these tests use, as they were in internal/kb.
+const (
+	PartRoom        = recordingwire.PartRoom
+	PartPrivate     = recordingwire.PartPrivate
+	RoomStarting    = recordingwire.RoomStarting
+	RoomReady       = recordingwire.RoomReady
+	RoomUnavailable = recordingwire.RoomUnavailable
+	RoomEnded       = recordingwire.RoomEnded
+	RoomDeleted     = recordingwire.RoomDeleted
+)
+
+type MeetingRoomLean = recordingwire.MeetingRoomLean
+
+// readOnlyEngine is a knowledge base opened read-only, as the module's routes reach one (the core never hooks it):
+// writers over its storage port for the request, the summary round left out.
+func readOnlyEngine(e *kb.Engine) *testEngine {
+	return &testEngine{Engine: e, Writers: New(kb.RecordingCore(e), nil)}
+}
+
+// recordingJournal is the name of a recording's undo journal and recordingUndo its content, as the knowledge base's
+// commit writes them (internal/kb/recording_commit_read.go): a test leaves one behind as a crash would.
+const recordingJournal = ".recording-undo.json"
+
+type recordingUndo struct {
+	Version int               `json:"version"`
+	ID      string            `json:"id"`
+	Files   map[string][]byte `json:"files"`
 }

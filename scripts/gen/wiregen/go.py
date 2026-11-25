@@ -52,6 +52,8 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
         if k == "number":
             return "*float64" if pointer else "float64"
         if k == "bool":
+            if t.ref:  # x-tristate: absent, true and false as one value
+                return t.ref
             return "*bool" if pointer else "bool"
         if k == "time":
             return "time.Time"
@@ -64,7 +66,7 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
         d = defs[t.ref]
         if d.kind == "enum" and not d.closed:
             return "string"
-        if d.kind in ("enum", "id"):
+        if d.kind in ("enum", "id", "text"):
             return ("*" if pointer else "") + t.ref
         if d.kind == "opaque":
             return t.ref
@@ -76,7 +78,8 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
         tag = f.name
         if optional:
             # x-go-pointer on a list: an empty one means something (replaces), only a nil one is left out.
-            tag += ",omitzero" if f.type.kind == "time" or f.type.kind == "array" and f.pointer else ",omitempty"
+            tag += ",omitzero" if f.type.kind == "time" or f.type.kind == "array" and f.pointer or \
+                f.type.kind == "bool" and f.type.ref else ",omitempty"
         return comment("\t// ", f.doc) + [f"\t{go_field(f.name)} {typ} `json:\"{tag}\"`"]
 
     # Preserve required native union fields only when reached from an explicitly preserving stream object.
@@ -182,6 +185,12 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
             out += [f"type {d.name} string", "",
                     f"// String returns the ID as it is on the wire.",
                     f"func (v {d.name}) String() string {{ return string(v) }}", ""]
+        elif d.kind == "text":
+            out += comment("// ", named(d.name, d.doc) or f"{d.name} is a label.")
+            out += comment("// ", "It is free text, not a closed set of values.")
+            out += [f"type {d.name} string", ""]
+        elif d.kind == "tristate":
+            out += tristate(d)
         elif d.kind == "opaque":
             out += comment("// ", named(d.name, d.doc) or f"{d.name} is JSON.")
             out += comment("// ", f"It stays opaque: {sentence(d.reason)}")
@@ -266,11 +275,40 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
     out += go_calls(calls or [])
     # Go refuses an unused import, and gofmt does not take one out: name encoding/json only when the code uses it.
     uses_json = any(re.search(r"\bjson\.", line) for line in out if not line.lstrip().startswith("//"))
-    imports = [f'\t"{p}"' for p, used in (("encoding/json", uses_json), ("time", uses_time)) if used]
+    uses_errors = any(re.search(r"\berrors\.", line) for line in out if not line.lstrip().startswith("//"))
+    imports = [f'\t"{p}"' for p, used in (("encoding/json", uses_json), ("errors", uses_errors), ("time", uses_time))
+               if used]
     head = [*(header or GO_HEADER), ""] + ([package_doc] if package_doc else []) + [f"package {package}", ""]
     if imports:
         head += ["import (", *imports, ")", ""]
     return "\n".join(head + out)
+
+
+def tristate(d: Def) -> list[str]:
+    """x-tristate: an optional boolean whose absence means something of its own, as one closed value. A field of it
+    is tagged omitzero, so the default stays absent on the wire; null reads as absent too, as a *bool did."""
+    n = d.name
+    out = comment("// ", named(n, d.doc) or f"{n} is an optional boolean.")
+    out += comment("// ", f"It has three values: {n}Default (absent from the JSON), {n}True and {n}False.")
+    out += [f"type {n} uint8", "", "const (", f"\t// {n}Default: absent.", f"\t{n}Default {n} = iota",
+            f"\t// {n}True: true.", f"\t{n}True", f"\t// {n}False: false.", f"\t{n}False", ")", "",
+            f"// IsZero reports {n}Default, which omitzero leaves out of the JSON.",
+            f"func (v {n}) IsZero() bool {{ return v == {n}Default }}", "",
+            "// Or is the boolean v says, or absent when v is the default.",
+            f"func (v {n}) Or(absent bool) bool {{", "\tswitch v {", f"\tcase {n}True:", "\t\treturn true",
+            f"\tcase {n}False:", "\t\treturn false", "\t}", "\treturn absent", "}", "",
+            *comment("// ", f"MarshalJSON writes true or false; {n}Default is null (a field tagged omitzero leaves it "
+                                 "out instead)."),
+            f"func (v {n}) MarshalJSON() ([]byte, error) {{", "\tswitch v {", f"\tcase {n}Default:",
+            '\t\treturn []byte("null"), nil', f"\tcase {n}True:", '\t\treturn []byte("true"), nil',
+            f"\tcase {n}False:", '\t\treturn []byte("false"), nil', "\t}",
+            f'\treturn nil, errors.New("{n}: not one of its three values")', "}", "",
+            "// UnmarshalJSON reads true or false, and null as absent; anything else fails.",
+            f"func (v *{n}) UnmarshalJSON(data []byte) error {{", '\tif string(data) == "null" {',
+            f"\t\t*v = {n}Default", "\t\treturn nil", "\t}", "\tvar b bool",
+            "\tif err := json.Unmarshal(data, &b); err != nil {", "\t\treturn err", "\t}",
+            f"\t*v = {n}False", "\tif b {", f"\t\t*v = {n}True", "\t}", "\treturn nil", "}", ""]
+    return out
 
 
 def closed_enum(d: Def, hook: str) -> list[str]:

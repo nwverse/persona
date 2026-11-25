@@ -100,10 +100,10 @@ async function load() {
   vi.resetModules();
   const { initI18n } = await import("../../i18n");
   await initI18n("en");
-  const persona = await import("./Persona");
+  const [persona, picker] = await Promise.all([import("./Persona"), import("./PersonaPicker")]);
   // the upload dialog is its own chunk (views/LazyOverlay.tsx): in before it is drawn, in this fresh module set
   await (await import("../../lib/lazy-page")).loadPages();
-  return { ...persona, t: (await import("../../i18n")).t };
+  return { ...persona, ...picker, t: (await import("../../i18n")).t };
 }
 
 async function draw() {
@@ -132,11 +132,9 @@ async function uploadBean(t: (key: string) => string) {
   });
   const send = [...dialog.querySelectorAll("button")].find((b) => b.textContent === t("assistant-lookupload.upload"))!;
   await act(async () => send.click());
-  await settle(60);
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull(), { timeout: 5_000 });
 }
 
-/** Lets timers and the reads they start run out. */
-const settle = (ms = 20) => act(async () => new Promise((r) => setTimeout(r, ms)));
 const push = (type: string, m: Record<string, unknown> = {}) => hub.listeners.get(type)!({ type, ...m });
 /** Another device chooses a look: the hub keeps it and pushes it. */
 const elsewhere = (id: string) => {
@@ -155,7 +153,7 @@ const letImagesLoad = async () => {
 };
 
 describe("uploaded looks in the picker", () => {
-  beforeAll(() => import("./Persona"), 60_000);
+  beforeAll(() => Promise.all([import("./Persona"), import("./PersonaPicker")]), 60_000);
   beforeEach(() => {
     localStorage.clear();
     vi.spyOn(Element.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
@@ -245,7 +243,9 @@ describe("uploaded looks in the picker", () => {
     const { t } = await draw();
     await act(async () => byLabel(t("assistant-persona.delete_label", { name: "Doudou" }))!.click());
     await act(async () => dialogButton(t("assistant-persona.delete")).click());
-    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe("Only avatars made from an uploaded image can be deleted here");
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe("Only avatars made from an uploaded image can be deleted here");
+    }, { timeout: 5_000 });
     expect(radios().some((r) => r.getAttribute("aria-label") === "Doudou")).toBe(true);
     expect(checked()).toBe("Doudou");
   });
@@ -274,9 +274,10 @@ describe("uploaded looks in the picker", () => {
     await act(async () => push("personas")); // the upload's own push joins the read on its way
     await act(async () => push("look", { id: "u-new00001", effective: "u-new00001" }));
     await letImagesLoad();
-    await settle();
-    expect(radios().map((r) => r.getAttribute("aria-label"))).toEqual(["Mochi, the default avatar", "Milk Frog", "Doudou", "Bean", "Aurora"]);
-    expect(checked()).toBe("Bean");
+    await vi.waitFor(() => {
+      expect(radios().map((r) => r.getAttribute("aria-label"))).toEqual(["Mochi, the default avatar", "Milk Frog", "Doudou", "Bean", "Aurora"]);
+      expect(checked()).toBe("Bean");
+    }, { timeout: 5_000 });
   });
 
   it("keeps a choice another device made while the upload's answer was on its way", async () => {
@@ -289,10 +290,11 @@ describe("uploaded looks in the picker", () => {
       await new Promise((r) => setTimeout(r, 20));
     };
     await uploadBean(t);
-    await settle();
-    expect(radios().some((r) => r.getAttribute("aria-label") === "Bean")).toBe(true);
-    expect(checked()).toBe("Milk Frog");
-    expect(localStorage.getItem("persona.persona")).toBe("nwverse");
+    await vi.waitFor(() => {
+      expect(radios().some((r) => r.getAttribute("aria-label") === "Bean")).toBe(true);
+      expect(checked()).toBe("Milk Frog");
+      expect(localStorage.getItem("persona.persona")).toBe("nwverse");
+    }, { timeout: 5_000 });
   });
 
   it("keeps a choice another device made while the delete's answer was on its way", async () => {
@@ -304,9 +306,10 @@ describe("uploaded looks in the picker", () => {
     };
     await act(async () => byLabel(t("assistant-persona.delete_label", { name: "Doudou" }))!.click());
     await act(async () => dialogButton(t("assistant-persona.delete")).click());
-    await settle();
-    expect(radios().map((r) => r.getAttribute("aria-label"))).toEqual(["Mochi, the default avatar", "Milk Frog", "Aurora"]);
-    expect(checked()).toBe("Milk Frog");
+    await vi.waitFor(() => {
+      expect(radios().map((r) => r.getAttribute("aria-label"))).toEqual(["Mochi, the default avatar", "Milk Frog", "Aurora"]);
+      expect(checked()).toBe("Milk Frog");
+    }, { timeout: 5_000 });
   });
 
   it("reads the list again after a read already on its way when the hub no longer has the look", async () => {
@@ -318,11 +321,55 @@ describe("uploaded looks in the picker", () => {
     hub.refuseDelete = { status: 404, body: { error: "That avatar is gone", code: "not_found" } };
     await act(async () => byLabel(t("assistant-persona.delete_label", { name: "Doudou" }))!.click());
     await act(async () => dialogButton(t("assistant-persona.delete")).click());
-    expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe("That avatar is gone");
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toBe("That avatar is gone");
+    }, { timeout: 5_000 });
     expect(hub.held!.length).toBeGreaterThan(0); // the old read still waits for Doudou's new files
     await act(async () => push("personas")); // the other device's delete, joining the read on its way
     await letImagesLoad();
-    await settle();
-    expect(radios().some((r) => r.getAttribute("aria-label") === "Doudou")).toBe(false);
+    await vi.waitFor(() => {
+      expect(radios().some((r) => r.getAttribute("aria-label") === "Doudou")).toBe(false);
+    }, { timeout: 5_000 });
+  });
+
+  it("hides Edit on uploaded cards without look_uploads_states and keeps Delete at its default size", async () => {
+    hub.features = ["look_uploads"];
+    const { t } = await draw();
+    const del = byLabel(t("assistant-persona.delete_label", { name: "Doudou" }))!;
+    expect(del).not.toBeNull();
+    expect(del.style.width).toBe("28px");
+    expect(del.style.height).toBe("28px");
+    expect(byLabel(t("assistant-persona.edit_label", { name: "Doudou" }))).toBeNull();
+  });
+
+  it("shows Edit beside Delete at matching default size with look_uploads_states and populates Match Avatar when uploaded avatar has colors", async () => {
+    hub.features = ["look_uploads", "look_uploads_states"];
+    const coloredDoudou: LookView = {
+      ...doudou,
+      manifest: {
+        ...doudou.manifest!,
+        colors: { light: { primary: "#3A7BD5", accent: "#2255A0" }, dark: { primary: "#3A7BD5", accent: "#6BA0E8" } },
+        source: { kind: "upload", color: { auto: false, seed: "#3A7BD5" }, states: { working: { mark: true } } },
+      },
+    };
+    hub.looks = [...builtins, frog, coloredDoudou, ext];
+    hub.current = { id: "u-demo0001", effective: "u-demo0001" };
+    const { t } = await draw();
+    const { savedPersonaAccent } = await import("../../ui/look");
+    expect(savedPersonaAccent()).toEqual({ light: "#2255a0", dark: "#6ba0e8" });
+    const edit = byLabel(t("assistant-persona.edit_label", { name: "Doudou" }))!;
+    const del = byLabel(t("assistant-persona.delete_label", { name: "Doudou" }))!;
+    expect(edit).not.toBeNull();
+    expect(edit.style.width).toBe("28px");
+    expect(edit.style.height).toBe("28px");
+    expect(del.style.width).toBe("28px");
+    expect(del.style.height).toBe("28px");
+    expect(byLabel(t("assistant-persona.edit_label", { name: "Milk Frog" }))).toBeNull();
+    // Clicking Edit opens the dialog prefilled with Doudou
+    await act(async () => byLabel(t("assistant-persona.edit_label", { name: "Doudou" }))!.click());
+    const dlg = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dlg.textContent).toContain(t("assistant-lookupload.edit_title"));
+    const nameInput = document.getElementById([...dlg.querySelectorAll("label")].find((l) => l.textContent === t("assistant-lookupload.name"))!.htmlFor) as HTMLInputElement;
+    expect(nameInput.value).toBe("Doudou");
   });
 });

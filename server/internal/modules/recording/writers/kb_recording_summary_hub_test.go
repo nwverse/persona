@@ -2,11 +2,10 @@ package writers
 
 import (
 	"context"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // hubCompleteMeeting stores a complete hub-mode meeting of the phone's lines (uploaded at *clock), its live hub
@@ -48,7 +47,7 @@ func TestHubSummaryMadeAgainAfterTheFinalPass(t *testing.T) {
 	race := true
 	m := &funcModel{f: func(n int, _, user string) (string, error) {
 		if race && n == 1 { // the final pass ends while the live text's summary is being made
-			finishTranscription(t, e, recID, kb.TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
+			finishTranscription(t, e, recID, recordingwire.TranscriptionFinal, []RecordingSegment{hseg(0, 8, "final words")})
 		}
 		return `{"title": "Design review", "summary": "A summary.", "one_line": "One line."}`, nil
 	}}
@@ -79,7 +78,10 @@ func TestHubSummaryMadeAgainAfterTheFinalPass(t *testing.T) {
 	if _, err := e.HubTranscriptPut(crashed, HubPassFinal, []RecordingSegment{hseg(0, 8, "crashed final words")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.TranscriptionUpdate(crashed, func(t *MeetingTranscription, _ Recording) error { t.State = kb.TranscriptionFinal; return nil }); err != nil {
+	if _, err := e.TranscriptionUpdate(crashed, func(t *MeetingTranscription, _ Recording) error {
+		t.State = recordingwire.TranscriptionFinal
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.SummarizeRecordings(ctx, 3); n != 1 || !strings.Contains(m.calls[len(m.calls)-1][1], "crashed final words") {

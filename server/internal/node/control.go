@@ -717,11 +717,18 @@ func (n *Node) workspaceFor(ctx context.Context, launch host.Launcher, cwd strin
 }
 
 func (n *Node) sessionFor(id string, a host.Agent) *proto.Session {
+	title := a.Title
+	if isStartScriptTitle(title) {
+		title = ""
+	}
 	s := &proto.Session{
 		SessionID: id, Cwd: a.Cwd, Status: a.AgentStatus, PaneID: a.PaneID, TabID: a.TabID,
-		WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: a.Title, Agent: a.Agent, UpdatedAt: time.Now().UTC(), // just started
+		WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: title, Agent: a.Agent, UpdatedAt: time.Now().UTC(), // just started
 	}
 	_ = n.refreshHosts(context.Background())
+	if a.Agent == agyAgent {
+		n.agyPaneTitle(s, n.agyConversation(id, a.PaneID))
+	}
 	n.placeIn(s, a)
 	n.decorate(s)
 	s.PermissionMode, s.Effort = n.modesOf(id)
