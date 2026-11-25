@@ -104969,6 +104969,75 @@
         }
       }
     },
+    "Meeting recording is off on this hub.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording is off on this hub."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このhubでは会議の録音がオフです。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 hub 关闭了会议录音。"
+          }
+        }
+      }
+    },
+    "Meeting recording is off on this hub, so new minutes aren't written. What's already here stays.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording is off on this hub, so new minutes aren't written. What's already here stays."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このhubでは会議の録音がオフのため、新しい議事録は作成されません。すでにある内容はそのまま残ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 hub 关闭了会议录音，不会再整理新的纪要。已有的内容都还在。"
+          }
+        }
+      }
+    },
+    "Meeting recording is off on this hub. The recordings you already have stay here to read or delete.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting recording is off on this hub. The recordings you already have stay here to read or delete."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このhubでは会議の録音がオフです。すでにある録音はここに残り、読むことも削除することもできます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 hub 关闭了会议录音。已有的录音都还在这里，可以查看，也可以删除。"
+          }
+        }
+      }
+    },
     "Meeting recording": {
       "extractionState": "manual",
       "localizations": {
@@ -107065,6 +107134,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "已复制纪要"
+          }
+        }
+      }
+    },
+    "Minutes paused": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minutes paused"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "議事録は一時停止中"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "纪要已暂停"
           }
         }
       }
@@ -126325,6 +126417,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "现在是关着的"
+          }
+        }
+      }
+    },
+    "Off on this hub": {
+      "comment": "the watch face's Record complication, second line, while the hub's recording module is off; very short",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off on this hub"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このhubではオフ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 hub 已关闭"
           }
         }
       }
@@ -237380,6 +237496,29 @@
         }
       }
     },
+    "Drop an image here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Drop an image here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "画像をここにドロップ"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将图片拖放到此处"
+          }
+        }
+      }
+    },
     "Edit Avatar" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -237468,6 +237607,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "現在の画像のままにする"
+          }
+        }
+      }
+    },
+    "Makes an avatar from an image of your own, or drop an image here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Makes an avatar from an image of your own, or drop an image here"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自分の画像からアバターを作成するか、画像をここにドロップします"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用你自己的图片制作形象，或将图片拖放到此处"
           }
         }
       }
@@ -238520,25 +238682,48 @@
         }
       }
     },
-    "Needs Admin Approval [Lark Sync]" : {
-      "extractionState" : "manual",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Needs Admin Approval"
+    "Knowledge sync permissions [Lark bot setup]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For knowledge sync, also approve these user scopes: offline_access, search:message, drive:drive:readonly, drive:drive.metadata:readonly, docx:document:readonly, docs:document.content:read, sheets:spreadsheet:readonly, bitable:app:readonly, wiki:wiki:readonly, wiki:node:retrieve, wiki:space:retrieve, minutes:minutes:readonly, minutes:minutes.transcript:export, im:chat:read, im:chat:readonly, im:message:readonly, im:message.group_msg:get_as_user, im:message.p2p_msg:get_as_user, drive:file:download, contact:user.base:readonly, contact:contact.base:readonly. Publish the permissions, get admin approval if required, then authorize again to add missing permissions. Sender-name repair retries automatically after authorization."
           }
         },
-        "ja" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "管理者の承認が必要"
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "如需知识同步，还要开通以下用户权限：offline_access, search:message, drive:drive:readonly, drive:drive.metadata:readonly, docx:document:readonly, docs:document.content:read, sheets:spreadsheet:readonly, bitable:app:readonly, wiki:wiki:readonly, wiki:node:retrieve, wiki:space:retrieve, minutes:minutes:readonly, minutes:minutes.transcript:export, im:chat:read, im:chat:readonly, im:message:readonly, im:message.group_msg:get_as_user, im:message.p2p_msg:get_as_user, drive:file:download, contact:user.base:readonly, contact:contact.base:readonly。发布权限并完成所需的管理员审批后，需要重新授权以补齐权限；人名补救会在授权后自动重跑。"
           }
         },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "需要管理员审批"
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ナレッジ同期には、次のユーザー権限も許可します：offline_access, search:message, drive:drive:readonly, drive:drive.metadata:readonly, docx:document:readonly, docs:document.content:read, sheets:spreadsheet:readonly, bitable:app:readonly, wiki:wiki:readonly, wiki:node:retrieve, wiki:space:retrieve, minutes:minutes:readonly, minutes:minutes.transcript:export, im:chat:read, im:chat:readonly, im:message:readonly, im:message.group_msg:get_as_user, im:message.p2p_msg:get_as_user, drive:file:download, contact:user.base:readonly, contact:contact.base:readonly。権限を公開し、必要な管理者承認を得た後、不足する権限を追加するため再認可してください。送信者名の補完は認可後に自動で再試行されます。"
+          }
+        }
+      }
+    },
+    "Reauthorize to Add Missing Permissions [Lark Sync]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reauthorize to add missing permissions"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要重新授权以补齐权限"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不足する権限の追加には再認可が必要"
           }
         }
       }
