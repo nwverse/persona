@@ -870,8 +870,10 @@ Each entry (`MemoryEntry`):
   field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
 - **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
   is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
-- **Bounds**: 5 seconds per call, at most 1 MB per answer, at most 5 pages and 1000 entries per assembly (past them the
-  rest are left, less important by the extension's own order). An entry that breaks a rule above (an unknown `status`
+- **Bounds**: 5 seconds per call and at most 1 MB per answer. The hub follows the existing cursors to the end, with
+  no page or entry-count cutoff, and caches the complete source. A complete read is bounded by 2 minutes and 128 MiB
+  of answers; exceeding either limit or repeating a cursor fails the read, never caches a truncated prefix. Scene
+  output budgets apply after relevance and visibility filtering. An entry that breaks a rule above (an unknown `status`
   included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
 - **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
   message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,

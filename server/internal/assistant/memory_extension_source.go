@@ -139,7 +139,7 @@ func (c *memoryExtensionCache) read(ctx context.Context, gen uint64, done chan s
 
 // memoryReadBounds are the bounds of memory_extension_wire.go, for the extensions' manager.
 func memoryReadBounds() extmgr.MemoryReadBounds {
-	return extmgr.MemoryReadBounds{PageLimit: memoryExtensionPageLimit, Pages: memoryExtensionPages, Entries: memoryExtensionMost,
+	return extmgr.MemoryReadBounds{PageLimit: memoryExtensionPageLimit, ReadTimeout: memoryExtensionReadTimeout, TotalMost: memoryExtensionTotalMost,
 		CallTimeout: memoryExtensionCallTimeout, AnswerMost: memoryExtensionAnswerMost}
 }
 

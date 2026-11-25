@@ -387,26 +387,7 @@ func (h larkHost) InboxMute(ctx context.Context, source, tag, value, name string
 }
 
 func (h larkHost) DraftReply(ctx context.Context, id, instruction string, expectedVersion int, strictVersion bool) (assistantwire.WorkbenchItem, string, error) {
-	publishedVersion := 0
-	text, err := h.s.draftReplyVersionMode(ctx, id, instruction, expectedVersion, strictVersion, &publishedVersion)
-	if hook := h.s.inbox.workbenchDraftHook; hook != nil {
-		hook()
-	}
-	live, liveOK := h.s.workbenchItem(id)
-	if publishedVersion > 0 && err == nil {
-		// Render only the exact text/version pair created by this generation. A replacement installed before this
-		// reload must never lend its newer version to the older generated text.
-		g := currentSuggestion(&live)
-		if !liveOK || g == nil || g.Kind != SuggestReply || g.Version != publishedVersion || g.Text != text {
-			err = errSuggestionStale
-		}
-	}
-	cardItem := workbenchItemOf(live)
-	if liveOK && publishedVersion == 0 && err == nil {
-		// A transient result has no publication version and must not borrow a mirror installed while it generated.
-		cardItem.ReplyVersion = 0
-	}
-	return cardItem, text, err
+	return h.s.draftWorkbenchReply(ctx, id, instruction, expectedVersion, strictVersion)
 }
 
 func (h larkHost) ReplyInbox(ctx context.Context, id, text, clientID string, expectedVersion int) (bool, error) {

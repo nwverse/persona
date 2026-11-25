@@ -683,8 +683,8 @@ type mainHandoff struct {
 	FromLauncher string `json:"from_launcher,omitempty"`
 	FromModel    string `json:"from_model,omitempty"`
 	Summary      string `json:"summary,omitempty"`
-	Partial bool   `json:"partial,omitempty"`
-	Recent  []struct {
+	Partial      bool   `json:"partial,omitempty"`
+	Recent       []struct {
 		Role string `json:"role"`
 		Text string `json:"text"`
 	} `json:"recent,omitempty"`
