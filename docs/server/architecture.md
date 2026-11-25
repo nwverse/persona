@@ -177,7 +177,7 @@ package fleetcount
 | `core shared` | a shared kernel: value objects and closed sets only | directly under `server/internal`, outside the managers', the node's and the hub's trees | as a core |
 | `adapter` | the only code that converts between a core and contracts, rows, prompt inputs or log text | `<core>/<core>adapt`, and the edge adapters such as the HTTP failure writer | its core, shared kernels and their adapters, the kit, contracts, libraries, the standard library, third-party code |
 | `application` | orchestration: the clock, ids, IO, locks, goroutines, routes, retries and model calls | package `assistant`, the hub, the node, `cmd/*`, the managers, `domainkit/clock` | every layer but `testkit` |
-| `application seam` | a typed registration seam between application modules | `assistant/kernel` and later seams | as application |
+| `application seam` | a typed registration seam between application modules | `assistant/kernel/seam` and later seams | as application |
 | `library` | technical code with no domain concept; its records and named primitives are counted as application code's | `lazyre`, `osproc`, `db`, `prompts`, `apierr`, `i18n` and the like | the standard library, third-party code, libraries, contracts |
 | `contract` | plain wire data | exactly the packages `server/internal/archguard/testdata/contracts.txt` lists | the standard library and contracts |
 | `testkit` | test support, never a program (`package main`) | `domainkit/domaintest`, `domainkit/clock/clocktest`, `*test` packages | anything; imported only by tests and other testkit |
@@ -493,9 +493,9 @@ func Write(w http.ResponseWriter, f fail.Fail) {
 ```
 
 A programmer error is a defect (`defect.Raise`), never a returned failure, and only listed sites recover one, through
-`defect.Catch` (`server/internal/archguard/testdata/catch_sites.txt`), and every production call of `recover()` is
-listed too (`server/internal/archguard/testdata/recover_sites.txt`; "Validated and sealed" below). A stored row that
-fails to restore is skipped and logged with its code, never rebuilt half-valid.
+`defect.Catch` (`server/internal/archguard/testdata/catch_sites.txt`, rule `catch-site`), and every production call of
+`recover()` is listed too (`server/internal/archguard/testdata/recover_sites.txt`, rule `recover-site`; "Validated and
+sealed" below). A stored row that fails to restore is skipped and logged with its code, never rebuilt half-valid.
 
 ### Data objects and adapters
 
@@ -742,9 +742,13 @@ stated above; #15088 lists the ones known.
 | `app-named-primitive` | named basic types, in undeclared, application and library packages and adapters | the package |
 | `app-lifecycle-write` | assignments to a `DoneAt` or `DoneBy` field, in undeclared, application and library packages | the package |
 | `app-bridge-call` | uses of an adapter's `Wire` function, called or passed on, in undeclared, application and library packages' production code | the package |
+| `recover-site` | every production `.go` file under `server/` that calls the builtin `recover()` has a line with its reason in `server/internal/archguard/testdata/recover_sites.txt`, and every line's file still calls it | fails at once |
+| `catch-site` | every production `.go` file under `server/` that refers to `defect.Catch` has a line with its reason in `server/internal/archguard/testdata/catch_sites.txt`, and every line's file still does | fails at once |
 
 The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and, given a
-base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.
+base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`. `recover-site` and
+`catch-site` run in archguard's `TestRecoverOnlyAtListedSites` and `TestCatchOnlyAtListedSites` ("Validated and
+sealed").
 
 ### The domain kit
 
@@ -796,10 +800,11 @@ of entry goes through the same design. The central lists keep the entries they h
   Package `kernel` itself hosts the built-in feature modules (`docs/architecture/core-and-modules.md`), which a build
   may leave out and the owner may switch off; the modules registered here are part of Persona Core.
 - **Two ways in, one registry**:
-  - A module in a subpackage is registered from `New`, where its central line was, and takes its own dependencies
-    through its own constructor: `reg.Register(saved.NewModule(store, events))`. `saved/module.go` builds `saved.Host`
-    from what `NewModule` was given and the `Kernel`'s services, so `saved.Host` stays saved's own adapter and no
-    kernel infrastructure feeds it.
+  - A module in a subpackage is registered from `New`, where its central line was, and takes its own dependencies,
+    typed port interfaces, through its own constructor: `reg.Register(saved.NewModule(store, events))`.
+    `saved/module.go` builds `saved.Host` from what `NewModule` was given and the `Kernel`'s services, so `saved.Host`
+    stays saved's own adapter and no kernel infrastructure feeds it. saved's own store and events are not typed yet
+    (#15222, "Validated and sealed" below); a new module does not copy them.
   - A domain inside package `assistant` calls a package-level front door from an `init()` in its own file, and its
     names are values, validated where they are made: `registerRoutes(seam.NewModuleName("x"), (*Service).xRoutes)`,
     `registerTools(after, …)` or `registerLoop(seam.NewLoopName("x"), (*Service).xLoop)`. `New` adds them to the same
@@ -832,6 +837,7 @@ implements in `server/internal/assistant/seam_ports.go`:
 ```go
 reg := s.newRegistry() // the typed seam the modules register through (seam_ports.go)
 defer reg.Seal()       // New returns it sealed: registering later is a defect
+// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
 reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
 ```
 
@@ -853,7 +859,12 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
 - **The Kernel.** Only `Registry.Register` makes one, for the module it registers, and any method of a zero `Kernel`
   is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and, with later steps, the
   slots that replace central lines; never a store, an untyped event or a domain method. A module takes its own
-  dependencies through its own constructor (`saved.NewModule`).
+  dependencies through its own constructor, as typed port interfaces `New` hands it: no `any`, no map of them and no
+  runtime assertion to get a port back ("Domain model", "Typed seams").
+- **saved's legacy ports.** `saved.NewModule` is the one exception, and not an example to copy: it takes saved's store
+  as `func() any` and its events as `func(context.Context, map[string]any)`, the shape `saved.Host` always had, and
+  saved asserts its ports back out of that store at run time. It stays only because open drafts edit `saved.go` and
+  the files that make those assertions; #15222 gives saved typed ports once they land.
 - **Sealed.** `New` seals the registry before it returns. `Register`, `Kernel.Route` or `Seal` after that is a
   defect; `Full` and `BodyError` stay open, because requests use them.
 - **One catch site.** Each route registered through the kernel is served under `defer defect.Catch(…)` in
@@ -862,8 +873,8 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
   panic, `http.ErrAbortHandler` included, goes on to net/http unchanged. archguard's `TestCatchOnlyAtListedSites`
   keeps `defect.Catch` to the files in `server/internal/archguard/testdata/catch_sites.txt`, and
   `TestRecoverOnlyAtListedSites` keeps every production call of `recover()` to the files in
-  `server/internal/archguard/testdata/recover_sites.txt`. Each line gives its reason; a file that is not listed fails,
-  and so does a line whose file no longer does what it permits.
+  `server/internal/archguard/testdata/recover_sites.txt` (rules `catch-site` and `recover-site`). Each line gives its
+  reason; a file that is not listed fails, and so does a line whose file no longer does what it permits.
 - **Its layer.** Package `seam` carries the `rules_test.go` hook, so it exports no field or variable and takes no
   `any` ("Domain model", "Typed seams"). Its parent, package `kernel`, the feature-module host, declares no layer yet
   (it is in `server/internal/archguard/testdata/domain_layers/undeclared.txt`): its `LoadOptions` fields, `New`'s

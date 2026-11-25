@@ -1,9 +1,9 @@
 # Every production .go file under server/ that calls the builtin recover(), with its reason
-# (TestRecoverOnlyAtListedSites; docs/server/architecture.md "Validated and sealed"). A permission list: a file that
-# calls recover() and has no line fails, and so does a line whose file no longer calls it. A programmer error is a
-# defect: raise it with defect.Raise and let a site in catch_sites.txt catch it, or return an error. Add a line only
-# for a boundary that must outlive a panic of code it does not own, and say which in the reason. Paths are relative to
-# server/; the reason follows the path on the same line.
+# (TestRecoverOnlyAtListedSites, rule recover-site; docs/server/architecture.md "Validated and sealed"). A permission
+# list: a file that calls recover() and has no line fails, and so does a line whose file no longer calls it. A
+# programmer error is a defect: raise it with defect.Raise and let a site in catch_sites.txt catch it, or return an
+# error. Add a line only for a boundary that must outlive a panic of code it does not own, and say which in the reason.
+# Paths are relative to server/; the reason follows the path on the same line.
 cmd/password-wasm/main.go the browser's password worker answers a failed OPAQUE step with its JSON error instead of ending the WASM program
 internal/agents/avatar.go the SVG rasterizer panics on some malformed images, and an avatar that cannot be drawn is an error
 internal/assistant/fleet.go guard answers a store that does not keep a fleet table, which panics on it, as errNoTable

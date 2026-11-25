@@ -19,6 +19,11 @@ type Module struct {
 
 // NewModule is saved with the assistant's store (store returns nil when there is none) and the events that tell the
 // apps what changed. A nil function is a defect.
+//
+// Its parameters are saved's legacy shape, not an example to copy: a new module takes typed port interfaces through
+// its NewModule (docs/server/architecture.md "Validated and sealed"). The store is untyped and the events are maps
+// because saved.Host always took them that way and open drafts edit saved.go and the files that assert saved's ports
+// back out of the store; #15222 gives saved typed ports once they land.
 func NewModule(store func() any, events func(ctx context.Context, ev map[string]any)) Module {
 	if store == nil {
 		defect.Raise("saved.NewModule", "the store is nil")

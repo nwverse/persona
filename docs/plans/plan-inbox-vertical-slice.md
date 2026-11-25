@@ -161,7 +161,8 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
 - **Hosts stay with their modules.** `saved.Host` and `saved.Register` stay as saved's adapter: a new saved/module.go
   holds the dependencies `saved.NewModule` was given and builds `saved.Host` from them and the Kernel's methods, so
   `server/internal/assistant/saved/saved.go` is untouched. saved's own untyped Host stays inside package saved until
-  its open drafts merge or idle 14 days; its typed ports then replace it.
+  its open drafts merge or idle 14 days; its typed ports then replace it (#15222). The Inbox module takes typed ports
+  through its NewModule from the start, never saved's `func() any` store or map events.
 - **One registry.** The same registry backs #7891's registry stage: in-package domains register routes, loops and tools
   from their own files through package-level front doors taking the same typed names, which New feeds in before the
   modules, so there is one duplicate rule and one tool placement function. `Kernel.Bus` is the seam for any domain's
