@@ -139,7 +139,7 @@ func TestRoomCompactionWaitsForAnIdleRoom(t *testing.T) {
 		t.Fatalf("compacted with a photo to go in: %d", n)
 	}
 	// Deleted: its withdrawal goes in first (it may have reached the room), and the compaction waits for that too.
-	if _, err := lr.engine().PhotoDelete(meetingRec, 1); err != nil {
+	if _, err := writersOf(lr.engine()).PhotoDelete(meetingRec, 1); err != nil {
 		t.Fatal(err)
 	}
 	lr.look()
@@ -368,7 +368,7 @@ func TestRoomCompactionAskedHoldsAsksAndPhotos(t *testing.T) {
 	lr.addPhoto(meetingRec, photoBody(t, photoTwo, 40, nil))
 	lr.advance(2 * time.Minute)
 	lr.look()
-	if _, err := lr.engine().PhotoDelete(meetingRec, 1); err != nil {
+	if _, err := writersOf(lr.engine()).PhotoDelete(meetingRec, 1); err != nil {
 		t.Fatal(err)
 	}
 	lr.upload(meetingRec, 2, map[string]any{"room": map[string]any{"attendance": "off"}, "started_at": lr.start.Format(time.RFC3339)})

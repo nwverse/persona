@@ -351,6 +351,11 @@ var rules = map[string]ruleText{
 		"pass the domain value on, or move the conversion into the adapter",
 		"server/internal/agentref/agentrefadapt",
 	},
+	"contract-bare-id": {
+		"a bare string id lets any id stand for any other, and a contract's types are what every client generates from",
+		"use a named ID type: the contract ID types from schema/wire/ids.schema.json once it lands (#15397), or a named `type XID string` in the contract package; a rename: add the new name to the baseline's exceptions with a PR reference (scripts/ci/wire_types_baseline.json)",
+		planted + "internal/assistantwire",
+	},
 	"app-lifecycle-write": {
 		"a done state written field by field takes its own meaning at every writer",
 		"call the item's own transition (its done or reopen behaviour), or move the lifecycle into a core",

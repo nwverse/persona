@@ -3288,6 +3288,7 @@ final class AppModel {
             // page open on the current hub reads again (`hubHellos`).
             DirectionFilings.shared.hello(group)
             if isHub { hubHellos += 1 }
+            ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
             // `assistant_pages` sent while the socket was down is gone: a hub with Dashboards has its places read again.
             if isHub, hubHellos > 1, hello.features.contains(DashboardsUI.feature) { extensionPlacesChanged() }
             #if os(iOS)
@@ -3422,7 +3423,10 @@ final class AppModel {
             // The kept Dashboards pages changed (#15017): the drawer's and the sidebar's places are read again. Only the
             // default manager of the hub shown has them (`ExtensionSlots.shared` names none).
             if isHub { extensionPlacesChanged() }
-        case .healthIntake:
+        case .healthStrength:
+            if isHub { healthIntakeRevision += 1 }
+            ExtensionUIRegistry.shared.invalidate(extension: HealthIntakeUI.id, ui: nil, group: group)
+        case .healthIntake, .healthItems:
             if isHub { healthIntakeRevision += 1 }
             #if os(iOS)
             if isHub { HomeWidgetData.shared.intakeChanged() }
@@ -3588,6 +3592,8 @@ final class AppModel {
         case .look: "look"
         case .managers: "managers"
         case .directions: "directions"
+        case .healthStrength: "health_strength"
+        case .healthItems: "health_items"
         case .healthIntake: "health_intake"
         case .assistantPages: "assistant_pages"
         case .assistantFeed: "assistant_feed"
@@ -4223,7 +4229,8 @@ final class AppModel {
 
     func keepSeen(in list: SessionListModel<Session>) {
         guard !seenOutbox.marks.isEmpty else { return }
-        list.keepSeen { seenOutbox.marks[$0] != nil }
+        let now = Date()
+        list.keepSeen { seenOutbox.holds($0, at: now) }
     }
 
     /// Retire marks and their held row when their pairing is forgotten. Reconnecting keeps both.
@@ -4244,6 +4251,9 @@ final class AppModel {
     /// Over the socket while it answers its pings, else over HTTP. Nothing says whether the socket's went through: an
     /// unread one not taken within `SeenOutbox.confirmWithin` goes again over HTTP (#1588).
     private func deliverSeen(_ key: SessionKey, overHTTP: Bool = false) {
+        // A recorded mark is settling for other lists, not waiting to be sent again (#12770). With no mark, an
+        // already-seen chat keeps the existing direct send on return.
+        guard seenOutbox.marks[key]?.recordedAt == nil else { return }
         if !overHTTP, let socket = socket(key.group), socket.state == .connected, !socket.stalled {
             seenOutbox.sent(key, .socket, at: Date())
             socket.send(["type": "seen", "machine_id": key.machineID, "session_id": key.sessionID])

@@ -625,7 +625,7 @@ final class AgentsListTests: XCTestCase {
             .prefix(n).map { $0.staticTexts.firstMatch.label }
     }
 
-    /// The agent row titled exactly `title` ("platform 任务 4" is also how "platform 任务 40" starts).
+    /// The agent row titled exactly `title`; its prefix must not match a longer row title.
     private func agentRow(_ title: String) -> XCUIElement {
         app.buttons.matching(identifier: "agents.row").containing(NSPredicate(format: "label == %@", title)).firstMatch
     }
@@ -644,7 +644,7 @@ final class AgentsListTests: XCTestCase {
         }
     }
 
-    /// The number in a section's header ("完成未看，已展开，40 个").
+    /// The number in a section's header, after the expanded-state marker.
     private func count(of section: String) -> Int? {
         let label = header(section).label
         guard let end = label.range(of: " 个", options: .backwards) else { return nil }

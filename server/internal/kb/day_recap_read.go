@@ -18,9 +18,9 @@ import (
 // persisted with the recording until a recap is written or the model failed at it; recap_state says which.
 
 const (
-	recapFile      = "recap.json"
-	recapMarkdown  = "recap.md"
-	recapNotesFile = "recap_notes.json"
+	recapFile      = recordingwire.RecapFile
+	recapMarkdown  = recordingwire.RecapMarkdown
+	recapNotesFile = recordingwire.RecapNotesFile
 )
 
 // DayRecap is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
@@ -85,3 +85,33 @@ func (e *Engine) dayDetail(id string, meta []byte) ([]byte, []byte) {
 	}
 	return meta, raw
 }
+
+// Re-exported from recordingwire.
+const (
+	RecapDueEvening  = recordingwire.RecapDueEvening
+	RecapDueComplete = recordingwire.RecapDueComplete
+	RecapDueCutoff   = recordingwire.RecapDueCutoff
+	RecapDueAsked    = recordingwire.RecapDueAsked
+	RecapDueRepair   = recordingwire.RecapDueRepair
+)
+
+// Re-exported from recordingwire.
+const (
+	FinalComplete = recordingwire.FinalComplete
+	FinalCutoff   = recordingwire.FinalCutoff
+)
+
+// RecapSpan is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type RecapSpan = recordingwire.RecapSpan
+
+// Re-exported from recordingwire.
+const (
+	RecapMeeting = recordingwire.RecapMeeting
+	RecapOutside = recordingwire.RecapOutside
+)
+
+// DayRecapEntry is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type DayRecapEntry = recordingwire.DayRecapEntry
+
+// RecapTodo is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
+type RecapTodo = recordingwire.RecapTodo

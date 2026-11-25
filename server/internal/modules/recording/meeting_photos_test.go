@@ -37,7 +37,7 @@ func TestMeetingPhotoSendInDoubt(t *testing.T) {
 		t.Fatalf("listed %v", ps)
 	}
 	e := r.engine()
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 2 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 2 {
 		t.Fatalf("queued %+v", queued)
 	}
 	if out := photoNoteTool(e, meetingRec, json.RawMessage(`{"photo":1,"text":"The Q3 budget"}`)); out.IsError {
@@ -48,7 +48,7 @@ func TestMeetingPhotoSendInDoubt(t *testing.T) {
 	if sent := r.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != "photo-"+photoOne {
 		t.Fatalf("sent again %v", sent)
 	}
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 2 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 2 {
 		t.Fatalf("queued %+v", queued)
 	}
 
@@ -56,7 +56,7 @@ func TestMeetingPhotoSendInDoubt(t *testing.T) {
 	r.photoNode(lost)
 	r.look(meetingRec)
 	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
-	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 2 {
+	if _, withdraw := writersOf(e).PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 2 {
 		t.Fatalf("withdraw %+v", withdraw)
 	}
 	r.photoNode(taken)
@@ -78,10 +78,10 @@ func TestMeetingPhotosInTheFollowup(t *testing.T) {
 	r.look(meetingRec)
 	r.look(meetingRec)
 	e := r.engine()
-	if err := e.PhotoNote(meetingRec, 1, "PHOTO-ONE-NOTE"); err != nil {
+	if err := writersOf(e).PhotoNote(meetingRec, 1, "PHOTO-ONE-NOTE"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.PhotoNote(meetingRec, 2, "PHOTO-TWO-NOTE"); err != nil {
+	if err := writersOf(e).PhotoNote(meetingRec, 2, "PHOTO-TWO-NOTE"); err != nil {
 		t.Fatal(err)
 	}
 	r.do("DELETE", photosPath(meetingRec)+"/2", "", nil, http.StatusOK)
@@ -516,7 +516,7 @@ func TestMeetingPhotoWithdrawn(t *testing.T) {
 	if len(r.photoSends()) != 3 {
 		t.Fatalf("sent again %v", r.photoSends()[3:])
 	}
-	if _, withdraw := r.engine().PhotosForRoom(meetingRec); len(withdraw) != 0 {
+	if _, withdraw := writersOf(r.engine()).PhotosForRoom(meetingRec); len(withdraw) != 0 {
 		t.Fatalf("still to withdraw %v", withdraw)
 	}
 	if ps := r.photosOf(meetingRec); len(ps) != 1 || ps[0]["id"] != photoTwo {
@@ -596,7 +596,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	if r.photoTries(one) != photoSendTries+1 || len(r.photoSends()) != 1 {
 		t.Fatalf("again: %d tries, %v", r.photoTries(one), r.photoSends())
 	}
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 1 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 1 || queued[0].N != 1 {
 		t.Fatalf("counted as sent: queued %+v", queued)
 	}
 	r.photoNode(func(string) (bool, error) { return false, nil })
@@ -604,7 +604,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	if sent := r.photoSends(); len(sent) != 2 || sent[1]["client_msg_id"] != one {
 		t.Fatalf("once the node takes it: %v", sent)
 	}
-	if queued, _ := e.PhotosForRoom(meetingRec); len(queued) != 0 {
+	if queued, _ := writersOf(e).PhotosForRoom(meetingRec); len(queued) != 0 {
 		t.Fatalf("queued %+v", queued)
 	}
 
@@ -614,7 +614,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	for range photoSendTries + 1 {
 		r.look(meetingRec)
 	}
-	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 1 || r.photoTries("photo-withdrawn-"+photoOne) != photoSendTries+1 {
+	if _, withdraw := writersOf(e).PhotosForRoom(meetingRec); len(withdraw) != 1 || withdraw[0].N != 1 || r.photoTries("photo-withdrawn-"+photoOne) != photoSendTries+1 {
 		t.Fatalf("withdrawal dropped: %+v after %d tries", withdraw, r.photoTries("photo-withdrawn-"+photoOne))
 	}
 	r.photoNode(func(string) (bool, error) { return false, nil })
@@ -622,7 +622,7 @@ func TestMeetingPhotoSendFailing(t *testing.T) {
 	if sent := r.photoSends(); len(sent) != 3 || sent[2]["client_msg_id"] != "photo-withdrawn-"+photoOne {
 		t.Fatalf("withdrawal %v", sent)
 	}
-	if _, withdraw := e.PhotosForRoom(meetingRec); len(withdraw) != 0 {
+	if _, withdraw := writersOf(e).PhotosForRoom(meetingRec); len(withdraw) != 0 {
 		t.Fatalf("still to withdraw %+v", withdraw)
 	}
 }

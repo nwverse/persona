@@ -11,7 +11,8 @@
 // ignore marker: code that predates the rules is held by the shrink-only counts and frozen names in
 // archguard/testdata/domain_layers.
 //
-// It imports only go/ast, go/parser, go/token, os, path/filepath, strings and testing, and only _test.go files import
+// It imports only encoding/json (the wire-types baseline), go/ast, go/parser, go/token, os, path/filepath, strings and
+// testing, and only _test.go files import
 // it (out-rules-import).
 //
 //persona:layer testkit

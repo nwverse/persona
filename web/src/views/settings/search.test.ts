@@ -171,6 +171,26 @@ describe("the settings search's index", () => {
     expect(searchSettings("effort").groups.map((g) => g.anchor)).toEqual(expect.arrayContaining(["settings-claude", "settings-codex", "settings-model-config"]));
   });
 
+  it.each(languages)("remaps Inbox Sources search entries to integrations -sources when integrations_v2 is on in $lang", ({ t, searchSettings }) => {
+    const label = t("settings-nav.tab_sources");
+    const off = searchSettings(label, false);
+    expect(off.tabs).toContain("sources");
+    expect(off.tabs).not.toContain("integrations");
+    expect(off.groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-sources" }));
+
+    const on = searchSettings(label, true);
+    expect(on.tabs).toContain("integrations");
+    expect(on.tabs).not.toContain("sources");
+    expect(on.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+
+    const flow = searchSettings(t("settings-integrations.view_sources"), true);
+    expect(flow.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+
+    const fwdLabel = t("settings-assistantsettings.inbox_todo_forward");
+    expect(searchSettings(fwdLabel, false).groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-todo-forward" }));
+    expect(searchSettings(fwdLabel, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-todo-forward", sub: "-sources" }));
+  });
+
   it("lands every entry on something a page draws, and lists each once", () => {
     const { SEARCH_INDEX } = english;
     // anchors a page writes from a value: each one's source, and the values it takes

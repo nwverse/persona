@@ -1298,10 +1298,12 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		renames := a.Title != "" && title != t.Title // the title is part of the rendered prompt
 		return t.PromptSelections && a.Prompt == "" && (changesRun || enables || renames)
 	}
+	unchangedRunIf := false
 	if a.ID != "" && (changesRun || a.Enabled != nil || a.Title != "") {
 		// Refuse before model validation or pre-run command approval. Recheck
 		// under the schedule lock in case the owner edits the task meanwhile.
 		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
+			unchangedRunIf = runIf != nil && sameRoutineCheck(prev.RunIf, runIf)
 			if requiresOwner(prev) {
 				return "", errTaskSelectionsOwner
 			}
@@ -1315,7 +1317,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			}
 		}
 	}
-	if runIf != nil {
+	if runIf != nil && !unchangedRunIf {
 		approved, err := s.approveRoutineCheck(ctx, machine, self, runIf)
 		if err != nil {
 			return "", err
@@ -1340,6 +1342,10 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		if requiresOwner(t) {
 			sc.mu.Unlock()
 			return "", errTaskSelectionsOwner
+		}
+		if unchangedRunIf && !sameRoutineCheck(t.RunIf, runIf) {
+			sc.mu.Unlock()
+			return "", errors.New("run_if changed while the routine was being updated; retry the update")
 		}
 		old = t
 	} else {
@@ -2323,7 +2329,7 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 // retry the unchanged parameters automatically.
 func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun, cause error) {
 	retry := !taskConfigurationRefusal(cause)
-	if t.Facts || t.Report {
+	if (t.Facts || t.Report) && s.briefingOn() {
 		s.briefNotStarted(ctx, t, run, retry)
 		return
 	}
@@ -2490,7 +2496,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	full := text
 	text = clip(oneLine(text), 300)
 	s.logf("task %s run %s failed: %s", t.ID, run.ID, text)
-	briefing := t.Facts || t.Report
+	briefing := (t.Facts || t.Report) && s.briefingOn()
 	streak := s.updateRun(run, runFailed, text, briefing)
 	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)
@@ -2539,7 +2545,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		w := delayedWait{ID: waitID, Kind: delayedScheduledRetry, At: now.Add(wait),
 			Retry: &scheduledLimitRetry{Run: retryRun, RunOf: run.of, MachineName: m.Name, LimitTurn: rec.turn}}
 		persisted := false
-		if s.store != nil && s.store() != nil {
+		if s.store() != nil {
 			pctx, cancel := context.WithTimeout(s.runCtx(), 5*time.Second)
 			err := s.persistScheduledRetry(pctx, w)
 			cancel()
@@ -3538,15 +3544,18 @@ func (s *Service) deleteTaskRoute(w http.ResponseWriter, r *http.Request) {
 	apierr.WriteJSON(w, map[string]any{"ok": true})
 }
 
-// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
-func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
-	sc, err := s.lockedSchedule(r.Context())
+// errTaskNotFound is returned by runTaskNow when no scheduled task has the given id.
+var errTaskNotFound = i18n.Err("assistant-schedule.gone")
+
+// runTaskNow starts scheduled task id immediately at now: a one-off is marked done, a repeating task keeps its
+// schedule. Returns errScheduleUnavailable / errScheduleSave on storage failure, errTaskNotFound when id is missing,
+// or errTaskBusy when the task's last run is still active.
+func (s *Service) runTaskNow(ctx context.Context, id string, now time.Time) (proto.Session, error) {
+	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, err)
-		return
+		return proto.Session{}, err
 	}
-	i := sc.indexLocked(r.PathValue("id"))
+	i := sc.indexLocked(id)
 	var t Task
 	if i >= 0 {
 		t = sc.tasks[i]
@@ -3559,22 +3568,31 @@ func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.saveLocked(sc, tasks); err != nil {
 			sc.mu.Unlock()
-			apierr.Write(w, http.StatusServiceUnavailable, err)
-			return
+			return proto.Session{}, err
 		}
 	}
 	sc.mu.Unlock()
 	if i < 0 {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
-		return
+		return proto.Session{}, errTaskNotFound
 	}
 	s.broadcastSchedule()
-	sess, err := s.runTask(t, now, now, true, false)
-	if errors.Is(err, errTaskBusy) {
+	return s.runTask(t, now, now, true, false)
+}
+
+// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
+func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.runTaskNow(r.Context(), r.PathValue("id"), time.Now())
+	switch {
+	case errors.Is(err, errScheduleUnavailable), errors.Is(err, errScheduleSave):
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	case errors.Is(err, errTaskNotFound):
+		apierr.Write(w, http.StatusNotFound, err)
+		return
+	case errors.Is(err, errTaskBusy):
 		apierr.Write(w, http.StatusConflict, i18n.Err("assistant-schedule.busy_wait"))
 		return
-	}
-	if err != nil {
+	case err != nil:
 		apierr.Call(w, err)
 		return
 	}

@@ -1,27 +1,30 @@
 import { Wire } from './Wire';
+import { TODO_LIST_SECTIONS, type TodoListSection } from './TodoViewWire';
 
 // GET /api/v1/todos, as specified by schema/wire/todo-view.schema.json. The
 // Hub owns the rank and counts. New reason and line keys leave the row readable.
-export const TODO_HUB_SECTIONS: string[] = ['needs_you', 'can_wait', 'working', 'waiting', 'todo', 'just_finished', 'someday', 'done'];
+export const TODO_HUB_SECTIONS: TodoListSection[] = [...TODO_LIST_SECTIONS];
 export const TODO_HUB_CHOICES: string[] = ['all', 'needs_you', 'in_progress', 'todo', 'done'];
 
-export function todoHubLabel(value: string): string {
+const [needsYou, canWait, working, waiting, todo, justFinished, someday, done] = TODO_LIST_SECTIONS;
+
+export function todoHubLabel(value: TodoListSection): string {
   switch (value) {
-    case 'can_wait': return 'flow_todo_can_wait';
-    case 'someday': return 'flow_todo_someday';
-    case 'just_finished': return 'agent_group_just_finished';
-    case 'todo': return 'flow_todo_plain';
+    case canWait: return 'flow_todo_can_wait';
+    case someday: return 'flow_todo_someday';
+    case justFinished: return 'agent_group_just_finished';
+    case todo: return 'flow_todo_plain';
     case 'in_progress': return 'flow_inbox_progress';
     default: return value;
   }
 }
 
-export function todoHubChoiceIncludes(choice: string, section: string): boolean {
+export function todoHubChoiceIncludes(choice: string, section: TodoListSection): boolean {
   switch (choice) {
-    case 'needs_you': return section === 'needs_you' || section === 'can_wait';
-    case 'in_progress': return ['working', 'waiting', 'just_finished'].includes(section);
-    case 'todo': return section === 'todo' || section === 'someday';
-    case 'done': return section === 'done';
+    case 'needs_you': return section === needsYou || section === canWait;
+    case 'in_progress': return [working, waiting, justFinished].includes(section);
+    case 'todo': return section === todo || section === someday;
+    case 'done': return section === done;
     default: return true;
   }
 }

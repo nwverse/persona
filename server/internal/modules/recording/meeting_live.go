@@ -112,7 +112,7 @@ func (s *Recordings) meetingRoutes() {
 			asks = append(asks, viewAsk(a))
 		}
 		view := s.liveView(r.Context(), l, rec, asks)
-		if rev := e.PhotosRev(rec.ID); rev > 0 { // photos has a revision and no field: GET …/photos reads them
+		if rev := writersOf(e).PhotosRev(rec.ID); rev > 0 { // photos has a revision and no field: GET …/photos reads them
 			view.Revs[kb.PartPhotos] = rev
 		}
 		if rec.HubTranscribed() { // the latest caption (meeting_transcribe.go), its revision its time in milliseconds

@@ -100,5 +100,8 @@
   "start_machine_busy": "「{machine}」は接続されたままですが、待機時間内に応答がありませんでした（混雑している可能性があります）：{reason}",
   "start_link_down": "「{machine}」との接続が切れ、しばらく待っても再接続できませんでした：{reason}",
   "codex_effort_terminal": "指定された推論レベルを使うため、Codex はターミナルで起動します。承認や質問はターミナル画面を通じて行います。",
-  "start_goal_skipped": "開始目標なしで開始しました：{reason}"
+  "start_goal_skipped": "開始目標なしで開始しました：{reason}",
+  "side_handover_title": "「{title}」をメイン会話に引き継ぎました",
+  "side_handover_archived": "元の会話「{origin}」がアーカイブされたため、タスク「{title}」のフォローをメイン会話に引き継ぎました。",
+  "side_handover_gone": "元の会話「{origin}」が利用できなくなったため、タスク「{title}」のフォローをメイン会話に引き継ぎました。"
 }

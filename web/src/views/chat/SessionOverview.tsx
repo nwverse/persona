@@ -5,9 +5,10 @@ import { t } from "../../i18n";
 import { formatTokens } from "../../lib/tokens";
 import { contextLabel, contextTier, contextTooltip, contextUsage } from "../../lib/context-usage";
 import { ago, shortPath } from "../../lib/format";
-import { credentialOwner } from "../../lib/api";
+import { api, credentialOwner, sessionPath } from "../../lib/api";
 import { openPanel } from "../../lib/panel";
 import { getSession, useStore } from "../../lib/store";
+import { stateName } from "../../lib/state-labels";
 import { taskLabel, taskPill, type TaskIndex } from "../../lib/tasks";
 import { finishedBackgroundTasks, type FinishedTask } from "../../lib/finished-tasks";
 import { tsMs, workDuration } from "../../lib/work-groups";
@@ -77,6 +78,7 @@ export function SessionOverview({ id, session, machineName, items, tasks, childr
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3">
         <Environment session={session} machineName={machineName} onInfo={() => setInfoOpen(true)} />
         <OverviewContext session={session} />
+        {!hidden && session.agent === "agy" && <SwarmRoster key={`${mid}/${sid}`} mid={mid} sid={sid} />}
         {subagents.length > 0 && (
           <SubagentsSection
             sectionRef={subagentsSection}
@@ -109,6 +111,51 @@ export function SessionOverview({ id, session, machineName, items, tasks, childr
       </div>
       <SessionInfoDialog session={session} machineName={machineName} open={infoOpen} onClose={() => setInfoOpen(false)} />
     </aside>
+  );
+}
+
+type SwarmWorker = { name: string; state: "working" | "waiting" | "stopped" | "unknown" };
+
+function SwarmRoster({ mid, sid }: { mid: string; sid: string }) {
+  const [workers, setWorkers] = useState<SwarmWorker[]>([]);
+  useEffect(() => {
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const info = await api<{ swarm_workers?: SwarmWorker[] }>(`${sessionPath(mid, sid)}/info`, { signal: abort.signal });
+        if (!abort.signal.aborted) setWorkers(info.swarm_workers ?? []);
+      } catch {
+        // Keep the displayed roster across a transient read failure.
+      } finally {
+        if (!abort.signal.aborted) timer = setTimeout(refresh, 3000);
+      }
+    };
+    void refresh();
+    return () => { abort.abort(); clearTimeout(timer); };
+  }, [mid, sid]);
+  if (!workers.length) return null;
+  const labels = {
+    working: stateName("working"), // one name for Working everywhere (lib/state-labels.ts, #3415)
+    waiting: t("chat-sessionoverview.swarm_waiting"),
+    stopped: t("chat-sessionoverview.swarm_stopped"),
+    unknown: t("chat-sessionoverview.swarm_unknown"),
+  };
+  return (
+    <details data-swarm-roster className="group border-t border-line py-2">
+      <summary className="flex min-h-11 w-full cursor-pointer list-none items-center gap-2 rounded-control px-1 text-left text-xs hover:bg-hover [&::-webkit-details-marker]:hidden">
+        <Icon name="agent" size={15} className="shrink-0 text-ink-3" />
+        <span className="flex-1 font-semibold text-ink-2">{t("chat-sessionoverview.swarm")}</span>
+        <span className="shrink-0 text-ink-3 tabular-nums">{t("chat-sessionoverview.swarm_workers", { count: workers.length })}</span>
+        <Icon name="chevron" size={13} className="shrink-0 text-ink-3 group-open:rotate-180" />
+      </summary>
+      <ul className="mt-1 flex flex-col gap-0.5">
+        {workers.map(({ name, state }) => <li key={name} className="flex min-h-9 items-center gap-2 px-2 py-1.5 text-xs">
+          <span className="min-w-0 flex-1 truncate text-ink" title={name}>{name}</span>
+          <span className={cx("shrink-0", state === "working" ? "text-accent-ink" : "text-ink-3")}>{labels[state] ?? labels.unknown}</span>
+        </li>)}
+      </ul>
+    </details>
   );
 }
 

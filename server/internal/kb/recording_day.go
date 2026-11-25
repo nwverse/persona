@@ -440,19 +440,8 @@ func (s *Store) daySegments(r *Recording) ([]RecordingSegment, error) {
 }
 
 // sortDaySegments orders a day recording's segments as segments.json keeps them: by start, then position.
-func sortDaySegments(segs []RecordingSegment) {
-	sort.SliceStable(segs, func(i, j int) bool {
-		if segs[i].Start != segs[j].Start {
-			return segs[i].Start < segs[j].Start
-		}
-		return segs[i].N < segs[j].N
-	})
-}
+func sortDaySegments(segs []RecordingSegment) { recordingwire.SortDaySegments(segs) }
 
 // hourStart is the start of t's clock hour in zone, by the zone's offset at t, so every hour is an hour of absolute
 // time: the hour a fall-back repeats is two of them, never one of two hours.
-func hourStart(t time.Time, zone *time.Location) time.Time {
-	_, off := t.In(zone).Zone()
-	shift := time.Duration(off) * time.Second
-	return t.Add(shift).Truncate(time.Hour).Add(-shift).In(zone)
-}
+func hourStart(t time.Time, zone *time.Location) time.Time { return recordingwire.HourStart(t, zone) }

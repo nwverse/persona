@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
@@ -35,7 +36,7 @@ const purposeMeetingAnswer = kb.PurposeMeetingAnswer
 const purposeMeetingMinutes = kb.PurposeMeetingMinutes
 
 // purposeMeetingTitle names a recording while it records (#8873).
-const purposeMeetingTitle = kb.PurposeMeetingTitle
+const purposeMeetingTitle = recordingwire.PurposeMeetingTitle
 
 // A question's states, how it was asked, and why it failed (the contract's; the errors are an open set).
 const (
