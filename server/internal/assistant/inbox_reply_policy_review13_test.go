@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-func replyPolicyReview13SetSnapshot(it *InboxItem, cfg assistantwire.InboxReplyPolicyConfig, reviewed bool) {
+func replyPolicyReview13SetSnapshot(it *InboxItem, cfg *assistantwire.InboxReplyPolicyConfig, reviewed bool) {
 	it.ReplyPolicy = &InboxReplyPolicySnapshot{
 		Category:       "ordinary_coordination",
 		Route:          ReplyRouteOwnerDraft,
