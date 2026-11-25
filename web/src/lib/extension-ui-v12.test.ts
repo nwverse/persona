@@ -10,7 +10,7 @@ const mapOf = (raw: unknown) => readView({ sections: [{ items: [raw] }] }).secti
 
 describe("UI 12: map component reading and validation", () => {
   it("bumps UI_VERSION to 12, reports unsupported scene in uiContext, and includes map icon", () => {
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
     expect(uiContext().ui_version).toBe(12);
     expect(uiContext().unsupported).toEqual(["scene"]);
     expect(UI_ICONS).toContain("map");

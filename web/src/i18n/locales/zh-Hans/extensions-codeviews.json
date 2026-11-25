@@ -19,6 +19,7 @@
   "load_diff": "加载改动",
   "load_rest": "加载其余部分",
   "markdown_hint": "支持 Markdown · ⌘↵ 发送",
+  "navigate_hint": "{mod}+点击或 {mod}+B：跳到定义 · {alt}+F7：查找引用 · {back}：后退",
   "no_changes": "没有改动",
   "no_comments": "还没有评论",
   "no_files": "没有文件",

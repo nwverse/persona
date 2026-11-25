@@ -403,7 +403,9 @@
         "truncated": {"type": "boolean"},
         "load": {"$ref": "#/$defs/Action"},
         "line_url": {"type": "string", "maxLength": 4096, "x-since": 5,
-          "description": "An https link to lines of this file on its site, {start} and {end} standing for the lines (…/blob/<sha>/a.go#L{start}-L{end})."}
+          "description": "An https link to lines of this file on its site, {start} and {end} standing for the lines (…/blob/<sha>/a.go#L{start}-L{end})."},
+        "navigate": {"$ref": "#/$defs/Action", "x-since": 13,
+          "description": "Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7 for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word, intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app leaves it out."}
       },
       "required": ["type", "text"]
     },

@@ -21,11 +21,11 @@ import { SUBSCRIPTIONS_UI } from "./subscriptions-ui";
 export { isHttps };
 
 /**
- * The UI version the web draws (context.ui_version): all of 12, the map canvas (views/extensions/ViewBody12.tsx), the
- * graph canvas (views/extensions/ViewBody10.tsx), the columns layout's (views/extensions/ViewBody8.tsx) and a tile's
- * gauge (views/extensions/ViewBody9.tsx) too.
+ * The UI version the web draws (context.ui_version): all of 13, a code's navigate (views/extensions/CodeViews.tsx),
+ * the map canvas (views/extensions/ViewBody12.tsx), the graph canvas (views/extensions/ViewBody10.tsx), the columns
+ * layout's (views/extensions/ViewBody8.tsx) and a tile's gauge (views/extensions/ViewBody9.tsx) too.
  */
-export const UI_VERSION = 12;
+export const UI_VERSION = 13;
 
 export type UITone = "neutral" | "positive" | "caution" | "danger";
 
@@ -138,6 +138,8 @@ export interface UIItem {
   suggestions?: boolean;
   /** code: a link to lines on the site, {start} and {end} filled in */
   line_url?: string;
+  /** UI version 13, code: go to definition, find usages and back (values path, line, column, word, intent) */
+  navigate?: UIAction;
   /** UI version 6: image */
   src?: UIImageSource;
   alt?: string;
@@ -1156,7 +1158,7 @@ function readItem(it: UIItem): UIItem {
     }
   }
   // UI version 4: the other places an action sits, each read the same way
-  for (const k of ["expand", "load", "comment", "reply", "context", "mark_viewed", "draft"] as const) if (k in raw) out[k] = readAction(raw[k]);
+  for (const k of ["expand", "load", "comment", "reply", "context", "mark_viewed", "draft", "navigate"] as const) if (k in raw) out[k] = readAction(raw[k]);
   // UI version 6: a row's control and extra actions, a grid's or a carousel's tiles
   readV6(out as unknown as Record<string, unknown>, raw);
   if ("line_url" in raw && !isHttps(String(raw.line_url).replaceAll("{start}", "1").replaceAll("{end}", "1"))) delete out.line_url;

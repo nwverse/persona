@@ -4,7 +4,7 @@ import { readAction } from "./extension-ui-read";
 
 describe("UI 版本 3：新组件", () => {
   it("asks for version 12, which has all of 3", () => {
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
     expect(uiContext().ui_version).toBe(12);
   });
 
