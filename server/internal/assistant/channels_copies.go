@@ -21,12 +21,15 @@ import (
 // background (each sender has its own 30 seconds).
 var notifyCopyWait = 5 * time.Second
 
-// How one copy went.
+// copyState is how one copy went: a closed set, so a new outcome is a new constant, not another string. Its values
+// are the words the report always used.
+type copyState string
+
 const (
-	copySent    = "sent"    // the first Feishu card landed (or a notifications companion took it); a channel took the text
-	copyFailed  = "failed"  // nothing of it went out
-	copyPending = "pending" // not known yet when the tool answered
-	copySkipped = "skipped" // the channel is not in this hub (its module is left out or switched off): not a failure, not told
+	copySent    copyState = "sent"    // the first Feishu card landed (or a notifications companion took it); a channel took the text
+	copyFailed  copyState = "failed"  // nothing of it went out
+	copyPending copyState = "pending" // not known yet when the tool answered
+	copySkipped copyState = "skipped" // the channel is not in this hub (its module is left out or switched off): not a failure, not told
 )
 
 // errNoCopy: the Feishu push returned without a first card that landed or failed (nothing to send).
@@ -36,7 +39,7 @@ var errNoCopy = errors.New("nothing was sent")
 type pushCopy struct {
 	channel string // channel.Feishu, or an extension channel's id
 	name    string // an extension channel's name; the Feishu bot is named in the answer's language
-	state   string // copySent, copyFailed or copyPending
+	state   copyState
 }
 
 // copyReport collects one notify_user call's copies. Its methods do nothing on a nil report: a push nobody waits for.
