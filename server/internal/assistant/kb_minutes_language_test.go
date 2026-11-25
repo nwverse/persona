@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"strings"
 	"sync"
 	"testing"
@@ -47,10 +48,10 @@ func TestMinutesFollowTheOwnersLanguage(t *testing.T) {
 		{id: "44444444-4444-4444-8444-444444444444", ask: "都用English写", want: "## Key points\n", never: "讨论要点"},
 		{id: "55555555-5555-4555-8555-555555555555", language: "zh-CN", ask: "用中文写", want: "## 讨论要点\n", never: "Key points"},
 	} {
-		u := kb.RecordingUpload{Revision: 1, StartedAt: start, Duration: 30, Device: "phone", Complete: true, Kind: kb.RecordingMeeting,
+		u := recordingwire.RecordingUpload{Revision: 1, StartedAt: start, Duration: 30, Device: "phone", Complete: true, Kind: kb.RecordingMeeting,
 			Language: tc.language, Segments: []kb.RecordingSegment{{Start: 0, End: 9, Text: "我们先看 export 的 bug"},
 				{Start: 10, End: 19, Text: "Keep the cap for now"}, {Start: 20, End: 29, Text: "上限はまだ決まっていません"}}}
-		if st, err := e.PutRecording(tc.id, u, time.Now()); err != nil || st.Status != kb.RecordingStored {
+		if st, err := recW(e).PutRecording(tc.id, u, time.Now()); err != nil || st.Status != recordingwire.RecordingStored {
 			t.Fatalf("put %s: %v %v", tc.id, st, err)
 		}
 		model.mu.Lock()

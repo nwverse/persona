@@ -206,7 +206,7 @@ func (f *File) refresh(strict bool) ([]proto.Item, Span, error) {
 	}
 	if f.offset == 0 && st.Size() > 2*windowBytes {
 		// A big file read cold: its end only (the batch continues from the lines not parsed).
-		fresh, ok, err := f.openWindow(fh, st.Size())
+		fresh, ok, err := f.openWindow(fh, st, strict)
 		if err != nil {
 			return nil, Span{}, err
 		}
