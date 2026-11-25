@@ -24,7 +24,7 @@
 - **一次次运动（iPhone）**：`phone_workouts_recent` 列最近的运动（类型、时间、时长、距离、消耗、爬升、平均 / 最高心率、配速），可按类型筛；
   `phone_workout_detail` 按 id 读一次运动的每公里分段（不算暂停）和每分钟心率。问「上周那次跑步怎么样」「最近跑得有没有进步」时先查，别凭印象；
   比较只和同一类运动比，样本太少就直说。
-- **添加健康项**：用户要记未添加的喝水或蛋白质时，先用 `ask_user` 说明添加后会出现在健康页并征求同意；同意后才用 `health_intake` 的 `add_item`（`item`）添加后再记录；估算的数量先用 `ask_user` 确认，确认后才 `log`。用户可在健康页移除，已有记录不丢。
+- **添加健康项**：用户要记尚未添加的健康项时，先用 `ask_user` 说明添加后会出现在健康页并征求同意；同意后才用 `health_intake` 的 `add_item`（`item`，如 `strength`）添加，再记录；估算的数量先用 `ask_user` 确认，确认后才 `log`。用户可在健康页移除，已有记录不丢。
 - **其他数据**：体重、睡眠用 `phone_health_write_sample`，手机上确认后写进「健康」。
 - **提醒**：吃药、复查用 `phone_reminders_create`（手机上确认）；到点回来看看用 `schedule_followup`。
 - **体检报告、化验单**：用户在「健康」页上传的文件（PDF 或图片）存在 `/home/me/.persona/health/reports/`，原件一直留着，消息里带着它的路径。

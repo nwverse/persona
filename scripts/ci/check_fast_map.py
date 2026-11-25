@@ -165,6 +165,13 @@ TABLE = (
          ("scripts/test/test_name_freezes.py",)),
         (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
     ),
+    # The domain slice scaffold (scripts/new_domain_slice.py, #15179): test_new_domain_slice.py compiles and tests what
+    # it writes against the domain kit and the rules, and compares the golden, so a change to any of them runs it.
+    (
+        (("server/internal/domainkit/*", "server/internal/archguard/domainrules/*",
+          "server/internal/archguard/testdata/scaffold/*", "server/internal/archguard/testdata/domain_layers/*",
+          "server/internal/agentref/*"), ("scripts/test/test_new_domain_slice.py",)),
+    ),
     # The Android modules where a dropped result is still a warning (#13024): test_android_return_values.py reads their
     # list in android/build-logic and the call sites it names in the modules' sources.
     (

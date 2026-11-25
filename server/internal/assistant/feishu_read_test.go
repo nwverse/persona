@@ -192,9 +192,10 @@ func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
 	needsLarkLayer(t) // the chat is the lark module's
 	e := readEnv(t)
 	e.read(readEvent("om_r4", "/read 看下", ""))
-	reply, to, note := e.s.interactionPlace(proto.Interaction{MachineID: "server", SessionID: "m1"})
-	if reply != "" || to.ChatID != "" || note != nil {
-		t.Fatalf("a question would go to %q in %+v (note %v)", reply, to, note)
+	// Where a question's card goes is the lark module's to say, from the runs the core names (ixRoute): none here, so
+	// the card goes to the owner's private chat on its own.
+	if r := e.s.ixRoute(context.Background(), proto.Interaction{MachineID: "server", SessionID: "m1"}); r.Private != nil || r.Topic != nil {
+		t.Fatalf("a question would go to %+v, with a line in %+v", r.Private, r.Topic)
 	}
 	e.deliver(privateEvent("om_p1", "另外帮我看下日程"))
 	runs := e.s.channelRuns(channel.Feishu)
@@ -206,9 +207,9 @@ func TestFeishuReadKeepsCardsAndPrivateRunsOutOfTheGroup(t *testing.T) {
 			t.Fatalf("a run was folded into another: %+v", r)
 		}
 	}
-	reply, to, _ = e.s.interactionPlace(proto.Interaction{MachineID: "server", SessionID: "m1"})
-	if reply != "om_p1" || to.ChatID != "" {
-		t.Fatalf("a question would go to %q in %+v", reply, to)
+	if r := e.s.ixRoute(context.Background(), proto.Interaction{MachineID: "server", SessionID: "m1"}); r.Private == nil ||
+		r.Private.ReplyTo != "om_p1" || r.Private.To.ChatID != "" || r.Topic != nil {
+		t.Fatalf("a question would go to %+v, with a line in %+v", r.Private, r.Topic)
 	}
 }
 
@@ -231,9 +232,8 @@ func TestFeishuReadCardsSkipAConcurrentTopic(t *testing.T) {
 	}
 	ix := proto.Interaction{ID: "ix_q", Kind: proto.IxQuestion, MachineID: "server", SessionID: "m1",
 		Questions: []proto.Question{{Question: "看哪段？", Options: []proto.QuestionOption{{Label: "今天"}, {Label: "昨天"}}}}}
-	reply, to, note := e.s.interactionPlace(ix)
-	if reply != "" || to.ChatID != "" || note != nil {
-		t.Fatalf("a question would go to %q in %+v (note %v)", reply, to, note)
+	if r := e.s.ixRoute(context.Background(), ix); r.Private != nil || r.Topic != nil {
+		t.Fatalf("a question would go to %+v, with a line in %+v", r.Private, r.Topic)
 	}
 	if private, topic := e.s.interactionRuns(ix); private != nil || topic != nil {
 		t.Fatalf("runs that decide the card: private %+v, topic %+v", private, topic)
