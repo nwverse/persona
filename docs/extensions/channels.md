@@ -35,7 +35,7 @@ The WeChat extension contributes a connector `wechat`, but that connector only h
 Conclusion: **there are three implementations of "outside messages go into a chat and the answer goes back"**: the Lark bot (then in the hub, bots_runs.go), the WeChat bot (then in a plugin, wechat/turns.go,
 whose comments say the rules follow the Lark bot), and Siri (in the App). `/agent` was a fourth shape (one replies as me with a new chat each time), and voice is a model itself. The host now also lets a `mention` channel opt into the unified pipeline with `target: {kind: "main"}`; without that explicit target its extension-owned new-chat behavior is unchanged.
 
-> The bots_runs.go and wechat/turns.go from the inventory have been deleted: since #1521 both the Lark bot and the WeChat bot use the unified pipeline (now in `assistant/channels_runs.go`; reading this turn's answer from the chat is in `channel/read.go`, #3497). Since #2079 the Lark bot's chat logic lives in the assistant (`assistant/feishu.go`), and the hub only sends and receives (`extmgr/bots.go`, `bots_chat.go`).
+> The bots_runs.go and wechat/turns.go from the inventory have been deleted: since #1521 both the Lark bot and the WeChat bot use the unified pipeline (now in `assistant/channels_runs.go`; reading this turn's answer from the chat is in `channel/read.go`, #3497). Since #2079 the Lark bot's chat logic lives in the assistant, since #13404 in its lark module (`modules/lark/chat_state.go`, `modules/lark/message.go`), and the hub only sends and receives (`extmgr/bots.go`, `bots_chat.go`).
 
 ## 2. Channel interface
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -160,6 +161,7 @@ func (s *Service) setArchived(ctx context.Context, machine, id string, on bool, 
 	}
 	if on {
 		_ = s.call(ctx, machine, "assistant.cache_clear", map[string]any{"session_id": id}, nil)
+		s.handOverArchivedSide(ctx, id)
 	}
 	s.publish(ctx) // the apps get the list with the flag now
 	return true, nil
@@ -231,8 +233,13 @@ type relayMsg struct {
 	// DoubtedAt is when a supervision send whose answer was lost began. It stays with the queued head across restart
 	// until that head is removed, so a late-visible original line can still acknowledge its remaining signals (#5732).
 	DoubtedAt time.Time `json:"doubted_at,omitzero"`
-	// State is a task notice's state (quiet.go: done | needs | interrupted | failed); "" for other relays.
+	// State is a task notice's state (quiet.go: done | needs | interrupted | failed) or an extension event's severity
+	// (extension_event.go: info | warning | critical); "" for other relays.
 	State string `json:"state,omitempty"`
+	// Key and Title are an extension event's key and title (extension_event.go; From is the extension's id and FromTitle
+	// its name); "" for other relays.
+	Key   string `json:"key,omitempty"`
+	Title string `json:"title,omitempty"`
 	// Card: the card a quiet task's needs notice stands for (quietCard), pushed if the notice is refused for good. A
 	// version that does not know it drops it on its next save: the task's newest waiting card is pushed then.
 	Card string `json:"card,omitempty"`
@@ -890,6 +897,10 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 				out[id] = append(out[id], msg.FromTitle+"的新消息") // i18n-ignore: the queue's label, as the task notices'
 				continue
 			}
+			if msg.Tool == extensionEventTool { // an extension's event (extension_event.go): who and what
+				out[id] = append(out[id], msg.FromTitle+": "+msg.Title)
+				continue
+			}
 			out[id] = append(out[id], "来自「"+msg.FromTitle+"」："+msg.Text)
 		}
 	}
@@ -904,6 +915,8 @@ func (msg relayMsg) source() *proto.MessageSource {
 		return &proto.MessageSource{Kind: proto.SourceSupervision}
 	case prFollowupTool, taskEndTool, relayRefusedTool, spawnNoticeTool, chatReplyTool:
 		return &proto.MessageSource{Kind: proto.SourceNotice, Title: "Persona"}
+	case extensionEventTool:
+		return &proto.MessageSource{Kind: proto.SourceExtension, Title: msg.FromTitle}
 	default:
 		return nil
 	}
@@ -937,7 +950,8 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	if strings.TrimSpace(text) != "" && relayWords(text) == "" {
 		text = prompts.RelayMessageText(text, source, onceID)
 	}
-	params := map[string]any{"session_id": to, "text": text, "message_source": source, "resume_only": true, holdPushesParam: msg.Tool == superviseTool,
+	hold := s.shouldHoldSupervisionPushes(ctx, to, msg)
+	params := map[string]any{"session_id": to, "text": text, "message_source": source, "resume_only": true, holdPushesParam: hold,
 		"once_id": onceID} // every try of it under one id: the node sends it once (relay_once.go)
 	if msg.Interject {
 		params["interject_background"] = true
@@ -958,8 +972,15 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	s.availInput(machine, to, relayKind(msg), time.Now())
 	if msg.Tool == superviseTool {
-		// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
-		s.holdPushes(ctx, to)
+		if hold {
+			// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
+			err = s.holdPushesFor(ctx, to, msg)
+		} else {
+			err = s.noteSideSupervisionPush(ctx, to, msg)
+		}
+		if err != nil {
+			return superviseRoundReply{}, false, beforeNodeWrite(DeviceAssistantSend, err)
+		}
 	}
 	// A supervision message rendered as a round starts from the first turn (supervise_round.go): what the text says
 	// and the switch now decide, also for one queued before a restart or a change of the switch, and whatever model runs it.
@@ -993,7 +1014,7 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 // are their own text; a message from another conversation says where it comes from.
 func relayDeliveryText(msg relayMsg) string {
 	if msg.Tool == noticeTool || msg.Tool == superviseTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool ||
-		msg.Tool == chatReplyTool || msg.Tool == relayRefusedTool {
+		msg.Tool == chatReplyTool || msg.Tool == relayRefusedTool || msg.Tool == extensionEventTool {
 		return msg.Text
 	}
 	return relayText(msg)
@@ -1005,6 +1026,9 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	if msg.Tool == superviseTool {
 		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
 		s.askRelayDelivered(to, msg)
+		if !s.shouldHoldSupervisionPushes(ctx, to, msg) {
+			s.noteReportTurn(to)
+		}
 		return
 	}
 	if msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool {
@@ -1016,6 +1040,12 @@ func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
 	}
 	if msg.Tool == noticeTool || msg.Tool == askAnswerTool {
 		s.noteReportTurn(to) // the answer to a task's notice (or to the owner's late call) is pushed however quick it was (#3438)
+		return
+	}
+	if msg.Tool == extensionEventTool { // not a hop of any chain; the answer to a warning or a critical one is pushed, an info one's goes by the device's setting
+		if msg.State != assistantwire.EventSeverityInfo {
+			s.noteReportTurn(to)
+		}
 		return
 	}
 	s.handoverWentIn(to, msg) // the hand-over of the owner's words it is, or answers (relay_handover.go)
@@ -1649,12 +1679,15 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 		return "", err
 	}
 	var preset ModelTier
+	var tierChoice tierPick
 	a.Tier = strings.TrimSpace(a.Tier)
 	if a.Tier != "" {
-		preset, err = s.tierModel(ctx, a.Tier)
+		// the conversation starts on the main chat's computer: the tier's candidate is picked for that one
+		tierChoice, err = s.pickTierCandidate(ctx, a.Tier, tierFacts{Machine: s.settings(ctx).MachineID})
 		if err != nil {
 			return "", err
 		}
+		preset = tierChoice.Tier
 	}
 	counted := time.Now()
 	hop, _, err := s.relayAllowedOn(s.relayRouteFor(ctx, self), self, relayNewKey, counted) // an opening message is a request, never an answer
@@ -1703,6 +1736,9 @@ func (s *Service) toolConversationNew(ctx context.Context, self string, args jso
 	if a.Tier != "" {
 		run := ModelTier{Launcher: c.Launcher, Model: c.Model, Effort: c.Effort}
 		note += " " + i18n.T(lang, "assistant-conversations.started_on", i18n.Args{"run": run.runs()})
+		row := modelRoutingOf(tierChoice, c.MachineID)
+		row.SessionID = c.SessionID
+		s.recordModelRouting(ctx, row)
 		pick := modelPick{MachineID: c.MachineID, Launcher: preset.Launcher, Model: preset.Model, Effort: preset.Effort, At: time.Now().UTC()}
 		if err := s.setModelPick(sctx, c.SessionID, &pick); err != nil {
 			note += " " + i18n.T(lang, "assistant-conversations.pick_save_failed", i18n.Args{"error": err.Error()})
@@ -1911,14 +1947,16 @@ func (s *Service) queuedFor(id string) int {
 }
 
 // selfSpace is the space of conversation self ("" the assistant's own, and for a caller that is no conversation), and
-// whether it could be told (the assistant's machine lists it).
+// whether it could be told (the assistant's machine lists it or attests its launch directory).
 func (s *Service) selfSpace(ctx context.Context, self string) (string, bool) {
 	if self == "" {
 		return "", true
 	}
-	c, ok := s.session(ctx, s.settings(ctx).MachineID, self)
+	machine := s.settings(ctx).MachineID
+	c, ok := s.callerSpaceSession(ctx, machine, self)
 	if !ok {
-		return "", false
+		cwd := s.callerCwd(ctx, machine, self)
+		return runSpace(proto.Session{Cwd: cwd}), cwd != ""
 	}
 	return spaceOf(c), true
 }

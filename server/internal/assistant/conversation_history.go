@@ -107,6 +107,7 @@ type historyParams struct {
 	FoldWork   bool   `json:"fold_work"`
 	Strict     bool   `json:"strict_read"`
 	UserInputs bool   `json:"user_inputs"`
+	MetaOnly   bool   `json:"meta_only"`
 }
 
 type historyPage struct {
@@ -648,6 +649,7 @@ func (s *Service) historyLoop(ctx context.Context) {
 	for {
 		s.logicalSweep(ctx)
 		s.wakeConversationSwitches()
+		s.machineFallbackSweep(ctx, time.Now())
 		if st := s.historyDB(ctx); st != nil {
 			s.historySweep(ctx, st)
 		} else if st, ok := s.store().(conversationHistoryStore); ok {

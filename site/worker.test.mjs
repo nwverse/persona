@@ -321,6 +321,26 @@ test("the catalog is fetched once while fresh, and a stale copy outlives GitHub"
   assert.equal(calls.length, 2);
 });
 
+test("a failed catalog cache read still tries the official upstream", async () => {
+  edge();
+  globalThis.caches.default.match = async () => { throw new Error("cache unavailable"); };
+  let fail = false;
+  const calls = upstream(() => fail
+    ? new Response("down", { status: 502 })
+    : Response.json(index([entry("github", "GitHub")])));
+
+  const fresh = await catalog();
+  assert.equal(fresh.status, 200);
+  assert.deepEqual((await fresh.json()).extensions.map((e) => e.id), ["github"]);
+  assert.equal(calls.length, 1);
+
+  fail = true;
+  const unavailable = await catalog();
+  assert.equal(unavailable.status, 503);
+  assert.equal(unavailable.headers.get("cache-control"), "no-store");
+  assert.equal(calls.length, 2);
+});
+
 test("catalog replacements and icons refresh after expiry without a site deployment", async () => {
   const store = edge();
   let current = index([

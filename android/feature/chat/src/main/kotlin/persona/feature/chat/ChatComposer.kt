@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +32,7 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.core.content.FileProvider
 import persona.core.contracts.ImageLimits
 import persona.core.contracts.SessionKey
@@ -584,46 +586,57 @@ fun ChatComposer(
             )
         },
         accessory = {
-            dictate?.let { DictationStatus(it) }
-            if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
-                color = PersonaTheme.palette.cautionText)
-            if (PersonaTheme.style == AppStyle.Glass && enabled && !sending && service != null && state.focused && clipboardImages.offered)
-                PasteImageChip(onPaste = ::pasteImages, onDismiss = clipboardImages::dismiss)
-            ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
-            if (fullToolbar && (hintChips != null || modeHint != null)) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
-                    verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
-                    itemVerticalAlignment = Alignment.CenterVertically,
-                ) {
-                    hintChips?.invoke(this)
-                    modeHint?.let { JChip(it, icon = PhIcons.SlidersHorizontal) }
-                }
-            }
-            if (fullToolbar) accessory?.invoke(this)
-            if (working && hasContent && enabled) Text(stringResource(R.string.chat_composer_will_queue), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-            ComposerSuggestions(slashItems,
-                onPick = { row ->
-                    when {
-                        row.key.startsWith("saved:") -> saved.firstOrNull { "saved:${it.id}" == row.key }?.let { state.fillSavedPrompt(it.text) }
-                        row.key.startsWith("extension:") -> quick.firstOrNull { "extension:${it.extension}/${it.id}" == row.key }?.let { state.fillQuickPrompt(it) }
-                        else -> suggestions.firstOrNull { it.word == row.key }?.let(::pick)
+            CompactAccessoryStack(gap = Tokens.Space.xs) {
+                dictate?.let { DictationStatus(it) }
+                if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.cautionText)
+                if (PersonaTheme.style == AppStyle.Glass && enabled && !sending && service != null && state.focused && clipboardImages.offered)
+                    PasteImageChip(onPaste = ::pasteImages, onDismiss = clipboardImages::dismiss)
+                ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
+                if (fullToolbar && (hintChips != null || modeHint != null)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                        verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        hintChips?.invoke(this)
+                        modeHint?.let {
+                            // Match clickable chip height so side-by-side hint pills align visually without growing row height.
+                            JChip(
+                                it,
+                                Modifier.heightIn(min = JChipTokens.height).testTag("chat-composer-mode-hint"),
+                                icon = PhIcons.SlidersHorizontal,
+                            )
+                        }
                     }
-                },
-                modifier = Modifier.padding(vertical = Tokens.Space.xs))
-            // The @ menu: Persona's open tasks, files this chat used, the session folder's entries, then other sessions; a word
-            // that matches nothing says so. On Glass it grows in and out in iOS's state motion, rising from the field, as the
-            // lines over New chat's composer step aside for it (`NeedsStepAside`).
-            Column(Modifier.fillMaxWidth().then(if (PersonaTheme.style == AppStyle.Glass && !PersonaTheme.reduceMotion)
-                Modifier.animateContentSize(PersonaTheme.motion.enter(), Alignment.BottomStart) else Modifier)) {
-                ComposerSuggestions(mentionItems, onPick = ::pickMention, modifier = Modifier.padding(vertical = Tokens.Space.xs))
-                if (mention != null && mentionItems.isEmpty()) Text(stringResource(when {
-                        browsing.reading -> R.string.chat_mention_reading_folder
-                        browsing.browse != null -> R.string.chat_mention_no_match_folder
-                        else -> R.string.chat_mention_no_match
-                    }), Modifier.padding(vertical = Tokens.Space.xs), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                }
+                if (fullToolbar && accessory != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) { accessory.invoke(this) }
+                }
+                if (working && hasContent && enabled) Text(stringResource(R.string.chat_composer_will_queue), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                ComposerSuggestions(slashItems,
+                    onPick = { row ->
+                        when {
+                            row.key.startsWith("saved:") -> saved.firstOrNull { "saved:${it.id}" == row.key }?.let { state.fillSavedPrompt(it.text) }
+                            row.key.startsWith("extension:") -> quick.firstOrNull { "extension:${it.extension}/${it.id}" == row.key }?.let { state.fillQuickPrompt(it) }
+                            else -> suggestions.firstOrNull { it.word == row.key }?.let(::pick)
+                        }
+                    },
+                    modifier = Modifier.padding(vertical = Tokens.Space.xs))
+                // The @ menu: Persona's open tasks, files this chat used, the session folder's entries, then other sessions; a word
+                // that matches nothing says so. On Glass it grows in and out in iOS's state motion, rising from the field, as the
+                // lines over New chat's composer step aside for it (`NeedsStepAside`).
+                Column(Modifier.fillMaxWidth().then(if (PersonaTheme.style == AppStyle.Glass && !PersonaTheme.reduceMotion)
+                    Modifier.animateContentSize(PersonaTheme.motion.enter(), Alignment.BottomStart) else Modifier)) {
+                    ComposerSuggestions(mentionItems, onPick = ::pickMention, modifier = Modifier.padding(vertical = Tokens.Space.xs))
+                    if (mention != null && mentionItems.isEmpty()) Text(stringResource(when {
+                            browsing.reading -> R.string.chat_mention_reading_folder
+                            browsing.browse != null -> R.string.chat_mention_no_match_folder
+                            else -> R.string.chat_mention_no_match
+                        }), Modifier.padding(vertical = Tokens.Space.xs), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                }
+                hint?.let { Text(it.text, style = PersonaTheme.type.caption, color = if (it.missing) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2) }
             }
-            hint?.let { Text(it.text, style = PersonaTheme.type.caption, color = if (it.missing) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2) }
         },
     ) {
         ReadingContent {
@@ -684,6 +697,33 @@ fun ChatComposer(
     if (cameraDenied) JDialog(onDismiss = { cameraDenied = false }, title = stringResource(R.string.chat_composer_camera_title),
         text = stringResource(R.string.chat_composer_camera_text, appLabel(context)),
         confirm = stringResource(R.string.chat_composer_open_settings) to { cameraDenied = false; openAppSettings(context) })
+}
+
+/** Stacks non-zero-height composer accessory items with [gap], skipping zero-height placeholders so empty slots add no gap. */
+@Composable
+private fun CompactAccessoryStack(
+    gap: Dp,
+    content: @Composable () -> Unit,
+) {
+    Layout(content = content) { measurables, constraints ->
+        val childConstraints = constraints.copy(minWidth = 0, minHeight = 0)
+        val visible = measurables.map { it.measure(childConstraints) }.filter { it.height > 0 }
+        if (visible.isEmpty()) {
+            layout(0, 0) {}
+        } else {
+            val gapPx = gap.roundToPx()
+            val width = visible.maxOf { it.width }.coerceIn(constraints.minWidth, constraints.maxWidth)
+            val height = (visible.sumOf { it.height } + gapPx * (visible.size - 1))
+                .coerceIn(constraints.minHeight, constraints.maxHeight)
+            layout(width, height) {
+                var y = 0
+                visible.forEach { placeable ->
+                    placeable.placeRelative(0, y)
+                    y += placeable.height + gapPx
+                }
+            }
+        }
+    }
 }
 
 /** True when [dispatchComposerSend] opens the permission picker instead of sending the draft. */

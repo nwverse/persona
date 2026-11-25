@@ -26,7 +26,7 @@ type memoryBoardStore struct {
 }
 
 func newMemoryBoardStore() *memoryBoardStore {
-	return &memoryBoardStore{state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
+	return &memoryBoardStore{Store: &memStore{}, state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
 }
 func (s *memoryBoardStore) WorkspaceBoard(context.Context) (workspaceboard.State, error) {
 	s.mu.Lock()
@@ -235,9 +235,6 @@ func directoryNode(_ context.Context, method string, raw json.RawMessage) (any, 
 		return nil, errors.New("unexpected operation: " + method)
 	}
 }
-
-// roleAnswer is an answer-only device (a watch): it may read the board, not change it.
-const roleAnswer = "answer"
 
 func TestWorkspaceBoardMetadataNeverExecutesSession(t *testing.T) {
 	store := newMemoryBoardStore()

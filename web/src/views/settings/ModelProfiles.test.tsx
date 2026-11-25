@@ -168,6 +168,9 @@ it("edits name, purposes, launchers, and tiers interactively via shared pickers 
    profileData = { ...profileData, ...body, changes: ["assistant"] };
    return Response.json({ revision, active: "economy", profiles: [profileData] });
   }
+  if (path.endsWith("/candidates")) {
+   return new Response(null, { status: 404 });
+  }
   if (path.endsWith("/launchers") && (!init?.method || init.method === "GET")) {
    return Response.json({
     launchers: [
@@ -911,6 +914,169 @@ it("offers Update from current configuration when re-applying an active profile 
   // Exits confirm back to detail view with 0 drift.
   expect(dialog.querySelector('[data-testid="model-profile-apply-confirm"]')).toBeNull();
   expect(dialog.querySelector('[data-testid="model-profile-changes"]')).toBeNull();
+ } finally {
+  await act(async () => root.unmount()); host.remove();
+ }
+});
+
+it("shows trial stats for inactive profiles and ordered candidates with aliases in inspect view", async () => {
+ await initI18n("en");
+ vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+  revision: 2,
+  active: "live",
+  profiles: [
+   { id: "live", name: "Live", active: true, changes: [], trial: { days: 7, dispatches: 10, would_switch: 2 }, tiers: {} },
+   {
+    id: "candidate-trial",
+    name: "Trial profile",
+    active: false,
+    changes: [],
+    trial: { days: 7, dispatches: 12, would_switch: 3 },
+    tiers: {
+     dev: {
+      launcher: "example-a",
+      model: "model-a",
+      description: "Development",
+      aliases: ["standard"],
+      candidates: [
+       { launcher: "example-a", model: "model-a" },
+       { launcher: "example-b", model: "model-b", effort: "high" },
+      ],
+     },
+    },
+   },
+  ],
+ })));
+ const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+ const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
+ try {
+  await act(async () => { root.render(<ModelProfiles onChanged={() => {}} />); }); await flush();
+  // List row shows trial summary only for inactive profile.
+  expect(host.textContent).toContain("Last 7 days: 12 dispatched, 3 would have switched");
+  expect(host.textContent).not.toContain("10 dispatched");
+
+  act(() => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Trial profile"))!.click()); await flush();
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  const trialBox = dialog.querySelector('[data-testid="model-profile-trial"]');
+  expect(trialBox?.textContent).toContain("Last 7 days: 12 dispatched, 3 would have switched");
+  expect(trialBox?.textContent).toContain(t("settings-modelprofiles.trial_definition"));
+
+  const tierText = dialog.querySelector('[data-testid="model-profile-tiers"]')?.textContent ?? "";
+  expect(tierText).toContain("Aliases: standard");
+  expect(tierText).toContain("1.example-a · model-a");
+  expect(tierText).toContain("2.example-b · model-b · high");
+ } finally {
+  await act(async () => root.unmount()); host.remove();
+ }
+});
+
+it("edits ordered candidates with add, reorder, remove and shows headroom/stats when supported", async () => {
+ await initI18n("en");
+ const puts: Record<string, unknown>[] = [];
+ const providers = [
+  { id: "launcher.example-a", name: "Example A", kind: "launcher" as const, agent: "claude", model: "model-a" },
+  { id: "launcher.example-b", name: "Example B", kind: "launcher" as const, agent: "claude", model: "model-b" },
+ ];
+ vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const path = String(input).split("?")[0];
+  if (path.endsWith("/model-profiles") && (!init?.method || init.method === "GET")) {
+   return Response.json({
+    revision: 1,
+    active: "routing",
+    profiles: [{
+     id: "routing",
+     name: "Routing",
+     active: true,
+     changes: [],
+     tiers: {
+      dev: {
+       launcher: "example-a",
+       model: "model-a",
+       aliases: ["standard"],
+       candidates: [{ launcher: "example-a", model: "model-a" }],
+      },
+     },
+    }],
+   });
+  }
+  if (path.endsWith("/model-profiles/routing/candidates")) {
+   return Response.json({
+    days: 14,
+    tiers: {
+     dev: [
+      {
+       index: 0,
+       launcher: "example-a",
+       model: "model-a",
+       headroom: { known: true, percent: 17.0, stale: true },
+       stats: { n: 5, minutes_p50: 18.4, first_pass: 0.6 },
+      },
+     ],
+    },
+   });
+  }
+  if (path.endsWith("/model-profiles/routing") && init?.method === "PUT") {
+   const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+   puts.push(body);
+   return Response.json({ revision: 2, active: "routing", profiles: [{ id: "routing", name: "Routing", active: true, changes: [], ...body }] });
+  }
+  if (path.endsWith("/launchers")) return Response.json({ launchers: [] });
+  if (path.endsWith("/models")) return Response.json({ agent: "claude", models: [{ id: "model-a", name: "Model A" }, { id: "model-b", name: "Model B" }] });
+  return new Response(null, { status: 404 });
+ }));
+ const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+ const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); };
+ const setSelect = (el: HTMLSelectElement, value: string) => {
+  act(() => {
+   Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(el, value);
+   el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+ };
+ const btn = (text: string, scope: ParentNode = document) => [...scope.querySelectorAll("button")].find((b) => b.textContent?.trim() === text)!;
+ try {
+  await act(async () => { root.render(<ModelProfiles providers={providers} purposes={[]} onChanged={() => {}} />); });
+  await flush();
+  act(() => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Routing"))!.click());
+  await flush();
+  const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')!;
+  await act(async () => btn(t("settings-modelprofiles.edit"), dialog()).click());
+  await vi.waitFor(() => {
+   expect(dialog().querySelector('[data-testid="model-profile-editor"]')).not.toBeNull();
+  });
+  await flush();
+
+  const tierCard = dialog().querySelector<HTMLElement>('[data-testid="profile-tier-edit-dev"]')!;
+  // Read-only alias and headroom/stats shown.
+  expect(tierCard.querySelector('[data-testid="tier-aliases"]')?.textContent).toContain("standard");
+  const status0 = tierCard.querySelector('[data-testid="tier-candidate-status-0"]');
+  expect(status0?.textContent).toContain("Headroom 17%");
+  expect(status0?.textContent).toContain("Stale");
+  expect(status0?.textContent).toContain("18.4m p50");
+  expect(status0?.textContent).toContain("60% first-pass");
+  expect(status0?.textContent).toContain("n=5");
+
+  // Add second candidate (no data yet), switch its launcher to example-b, then move it up to #1.
+  await act(async () => btn(t("settings-modelprofiles.add_candidate"), tierCard).click());
+  await flush();
+  const cand1 = tierCard.querySelector<HTMLElement>('[data-testid="tier-candidate-1"]')!;
+  expect(cand1.querySelector('[data-testid="tier-candidate-status-1"]')?.textContent).toContain(t("settings-modelprofiles.candidate_no_data"));
+  setSelect(cand1.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-modelprofiles.tier_launcher")}"]`)!, "example-b");
+  await flush();
+  await act(async () => cand1.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-modelprofiles.candidate_move_up_aria", { index: 2 })}"]`)!.click());
+  await flush();
+
+  // Save -> flat fields reflect new candidate #1 (example-b) and full candidates array is emitted.
+  await act(async () => btn(t("settings-modelprofiles.save"), dialog()).click());
+  await flush();
+  expect(puts).toHaveLength(1);
+  expect((puts[0].tiers as Record<string, unknown>).dev).toEqual({
+   launcher: "example-b",
+   aliases: ["standard"],
+   candidates: [
+    { launcher: "example-b" },
+    { launcher: "example-a", model: "model-a" },
+   ],
+  });
  } finally {
   await act(async () => root.unmount()); host.remove();
  }

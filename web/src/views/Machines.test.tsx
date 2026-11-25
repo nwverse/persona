@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Machine, MachineMetrics } from "../lib/types";
 import { chooseManager, resetManagerChoice } from "../lib/manager-choice";
 import { currentRoster, resetRoster, setRoster } from "../lib/managers";
+import { getState } from "../lib/store";
+import { t } from "../i18n";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -34,6 +36,7 @@ function hub(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   if (init?.method === "POST") posts.push(path);
   if (path.endsWith("/confirm") || path.endsWith("/reject")) return Promise.resolve(json({ ok: true }));
   if (path.endsWith("/reconnect")) return Promise.resolve(json({ ok: true }));
+  if (path.endsWith("/deploy")) return Promise.resolve(json({ ok: true }));
   if (path === "/api/v1/managers" && currentRoster()) return Promise.resolve(json(currentRoster()));
   if (path !== "/api/v1/metrics") return Promise.resolve(json({ error: "not found" }, 404));
   const reply = metricsReplies[String(input)];
@@ -142,6 +145,56 @@ describe("Machines", () => {
     await flush();
     expect(location.pathname).toBe("/machines");
     expect(vi.mocked(fetch).mock.calls.map(([u]) => String(u))).toContain("/api/v1/machines/mac/reconnect");
+  });
+
+  it("names every active phase and disables Redeploy on that card until the update ends", async () => {
+    const node: Machine = { id: "mac", name: "Example computer", online: true, can_deploy: true, node_mismatch: true };
+    const show = (deploy_phase?: Machine["deploy_phase"]) => {
+      fake.machines = [{ ...node, deploy_phase }];
+      act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    };
+    show();
+    await flush();
+    expect(buttons(t("lib-machine-deploy.redeploy"))[0]?.disabled).toBe(false);
+    for (const phase of ["waiting_idle", "transferring", "restarting", "confirming"] as const) {
+      show(phase); // phase alone is sufficient, including when an older hub omits `deploying`
+      const [redeploy] = buttons(t(`lib-machine-deploy.${phase}`));
+      expect(redeploy?.disabled).toBe(true);
+      redeploy!.click();
+      expect(posts).toEqual([]);
+      expect(location.pathname).toBe("/machines");
+    }
+    show();
+    expect(buttons(t("lib-machine-deploy.redeploy"))[0]?.disabled).toBe(false);
+  });
+
+  it("admits one Redeploy request even when two clicks arrive before the card renders", async () => {
+    fake.machines = [{ id: "mac", name: "Example computer", online: true, node_mismatch: true, can_deploy: true }];
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const [redeploy] = buttons(t("lib-machine-deploy.redeploy"));
+    expect(redeploy?.disabled).toBe(false);
+    act(() => { redeploy!.click(); redeploy!.click(); });
+    await flush();
+    expect(posts).toEqual(["/api/v1/machines/mac/deploy"]);
+  });
+
+  it("checks the hub's current phase before posting from a card that still shows Redeploy", async () => {
+    const node: Machine = { id: "mac", name: "Example computer", online: true, node_mismatch: true, can_deploy: true };
+    fake.machines = [node];
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const [redeploy] = buttons(t("lib-machine-deploy.redeploy"));
+    expect(redeploy?.disabled).toBe(false);
+    const before = getState().machines;
+    try {
+      getState().machines = [{ ...node, deploy_phase: "transferring" }];
+      act(() => redeploy!.click());
+      await flush();
+      expect(posts).toEqual([]);
+    } finally {
+      getState().machines = before;
+    }
   });
 
   it("does not open the machine while text on the card is being selected", async () => {
@@ -429,5 +482,46 @@ describe("Machines battery and temperature", () => {
     expect(cards[1].querySelector('[data-testid="machine-power-thermal"]')).toBeNull();
     expect(cards[1].querySelector('[data-testid="metric-battery"]')).toBeNull();
     expect(cards[1].querySelector('[data-testid="metric-temp"]')).toBeNull();
+  });
+});
+
+describe("Machines co-located managers (#14964)", () => {
+  it("shows hosted manager status, pending_restart and version lag directly on cards while leaving other cards unchanged", async () => {
+    setRoster({
+      default: "m-1",
+      managers: [
+        { id: "m-1", name: "工作助手", online: true, machine_uid: "uid-a", host: "work-box", deploy: "service", version: "v1-202611241200" },
+        { id: "m-2", name: "编译助手", online: true, machine_uid: "uid-b", host: "build-box", deploy: "service", version: "v1-202611201000", pending_restart: true },
+        { id: "m-3", name: "旧版助手", online: true, host: "legacy-box", deploy: "service", version: "v1-202611201000" },
+      ],
+    });
+    fake.machines = [
+      { id: "work", name: "Work Box", online: true, machine_uid: "uid-a", hostname: "work-box", node_version: "v1-202611241200", manager: "m-1" },
+      { id: "build", name: "Build Box", online: true, machine_uid: "uid-b", hostname: "build-box", node_version: "v1-202611241200", manager: "m-1" },
+      { id: "legacy", name: "Legacy Box", online: true, hostname: "LEGACY-BOX", node_version: "v1-202611241200", node_mismatch: true, can_deploy: true, manager: "m-1" },
+      { id: "plain", name: "Plain Node", online: true, machine_uid: "uid-plain", hostname: "plain-box", node_version: "v1-202611241200", manager: "m-1" },
+    ];
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const cardOf = (name: string) => [...host.querySelectorAll("section")].find((s) => s.querySelector("h2")?.textContent === name)!;
+
+    const workBadge = cardOf("Work Box").querySelector('[data-hosted-manager="m-1"]');
+    expect(workBadge?.getAttribute("data-manager-state")).toBe("online");
+    expect(workBadge?.textContent).toContain("工作助手");
+    expect(workBadge?.textContent).toContain("在线");
+
+    const buildBadge = cardOf("Build Box").querySelector('[data-hosted-manager="m-2"]');
+    expect(buildBadge?.getAttribute("data-manager-state")).toBe("pending_restart");
+    expect(buildBadge?.textContent).toContain("编译助手");
+    expect(buildBadge?.textContent).toContain("待空闲重启");
+
+    const legacyBadge = cardOf("Legacy Box").querySelector('[data-hosted-manager="m-3"]');
+    expect(legacyBadge?.getAttribute("data-manager-state")).toBe("version_lag");
+    expect(legacyBadge?.textContent).toContain("旧版助手");
+    expect(legacyBadge?.textContent).toContain("版本落后");
+    expect(cardOf("Legacy Box").querySelector('[data-testid="deploy-co-located-note"]')?.textContent).toContain("旧版助手");
+
+    // Card without hosted managers stays clean with no hosted-managers container
+    expect(cardOf("Plain Node").querySelector('[data-testid="hosted-managers"]')).toBeNull();
   });
 });

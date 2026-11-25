@@ -96,11 +96,11 @@ func (n *Node) runtimeAssistantCwd(id, cwd string, st sessionState) string {
 }
 
 // assistantEnvForRuntime returns nil unless the local runtime explicitly accepts dedicated-worker environments.
-func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd string) map[string]string {
+func (n *Node) assistantEnvForRuntime(h *runtimeConn, cwd, session string) map[string]string {
 	if h == nil || !h.assistantEnvironment() {
 		return nil
 	}
-	entries := n.assistantRuntimeEnv(cwd)
+	entries := n.assistantRuntimeEnv(cwd, session)
 	env := make(map[string]string, len(entries))
 	for _, entry := range entries {
 		if name, value, ok := strings.Cut(entry, "="); ok {
@@ -154,6 +154,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		return "", errRuntimeAway(launcher)
 	}
 	supportsPolicy := h.supervisionPolicy()
+	remote := h.remoteAgent()
+	wasRemote := st.RemoteAgent
 	if !supportsPolicy && policy != "" {
 		if err := n.runtimePolicyDropped(ctx, id); err != nil {
 			return "", err
@@ -167,7 +169,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		n.assistantRuntimeSkills(cwd)
 	}
 	memDir := n.memoryForUse(cwd)
-	environment := n.assistantEnvForRuntime(h, cwd)
+	environment := n.assistantEnvForRuntime(h, cwd, id)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if environment != nil {
 		turn["env"] = environment
@@ -206,11 +208,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			st.SupervisionInstructions = policy
 		}
 	}
+	if remote {
+		st.RemoteAgent = true
+		n.gates().markRemote(id)
+	}
 	n.noteModes(id, mode, pickedEffort)
 	if m := n.assistantModeOf(id); m != "" {
 		turn["mode"] = m
 	}
-	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") {
+	if !known || st.Launcher != launcher || st.Cwd != cwd || hasInput && st.TaskExecution != strict || (startedNew && supportsPolicy && policy != "") || (remote && !wasRemote) {
 		if st.StartedAt.IsZero() {
 			st.StartedAt = time.Now().UTC()
 		}
@@ -245,7 +251,8 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			live = joinInstructionRemainderAndPolicy(remainder, live)
 		}
 		if st.AwaitingFirstMessage {
-			live = strings.TrimSpace(n.runtimeInstructions(cwd, memDir) + "\n" + live)
+			memoryTools := h.remoteAgent() && n.guestOf(id) == nil && cwd != "" && identity.IsAssistantDir(filepath.Clean(cwd))
+			live = strings.TrimSpace(n.runtimeInstructionsWithTools(cwd, memDir, memoryTools) + "\n" + live)
 		}
 	}
 	if len(selected) > 0 {
@@ -398,7 +405,11 @@ func (n *Node) runtimeStartWith(ctx context.Context, h *runtimeConn, params map[
 // runtimeInstructions is the first message's instructions for an assistant on a runtime: the memory it shares with
 // Claude and Codex (memory.go), and the skills' gated commands it runs as tools here.
 func (n *Node) runtimeInstructions(cwd, memDir string) string {
-	r := prompts.RuntimeInstructions{Dir: memDir}
+	return n.runtimeInstructionsWithTools(cwd, memDir, false)
+}
+
+func (n *Node) runtimeInstructionsWithTools(cwd, memDir string, memoryTools bool) string {
+	r := prompts.RuntimeInstructions{Dir: memDir, MemoryTools: memoryTools}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, g := range n.assistantLark(ctx).Gates {
@@ -530,7 +541,7 @@ const gateOutputNotice = "\n…（输出太长，后面的没有放进来；用 
 func runGateScript(ctx context.Context, name, script string, args []string, cwd string, env []string) proto.ToolResult {
 	cmd := exec.CommandContext(ctx, "bash", append([]string{script}, args...)...)
 	cmd.Dir = cwd
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(withoutEnv(os.Environ(), []string{categoriesEnv}), env...)
 	killGroupOnCancel(cmd)
 	out := &cappedBuffer{max: gateOutputCap}
 	cmd.Stdout, cmd.Stderr = out, out // the same comparable writer: exec calls it from one goroutine at a time

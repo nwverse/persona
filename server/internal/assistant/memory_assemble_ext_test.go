@@ -83,7 +83,7 @@ func TestMemoryExtensionEntryUses(t *testing.T) {
 
 // A standing channel takes the memory extension's entries as it takes the ledger's: in the main conversation the
 // main space's and general ones from elsewhere, never a finance one; in qa-finance its own space's. The ledger's come
-// after the extension's, so a budget goes to them first.
+// after the extension's, each spending its own budget (memory_assemble_budget_test.go).
 func TestMemoryExtensionStanding(t *testing.T) {
 	ctx := context.Background()
 	s, src := memoryExtensionService(t, true)
