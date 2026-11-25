@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A supervision transcript fixture must not use push policy as its write switch (#15498). Side conversations can
+  receive user-level supervision with `hold_pushes=false`; it still writes a user item. Select fake writes by message
+  source, keep missing-item injection independent, and name push-held fixtures explicitly. Test both notification
+  policies without relaxing transcript confirmation, once-ID or retry assertions.
+
 - A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
   appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
   Near their due time, a catalog test can count both the workout report and a briefing, while waiting for only the

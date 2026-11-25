@@ -840,7 +840,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
 		}
-		if !f.omitSentItems && a[holdPushesParam] == true {
+		source, _ := a["message_source"].(map[string]any)
+		if !f.omitSentItems && source["kind"] == proto.SourceSupervision {
 			if text, _ := a["text"].(string); text != "" {
 				target, _ := out["session_id"].(string)
 				if target == "" {
