@@ -356,10 +356,10 @@ func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
 	m, err := st.ReadMinutes(r.ID)
 	switch {
 	case err == nil && minutesPhotos(m)[n]:
-		dropPhotos(m, func(p int) bool { return p == n })
+		dropPhotos(e.RecordingProvider(), m, func(p int) bool { return p == n })
 		m.Version = max(m.Version, r.MinutesVersion) + 1
-		m.Markdown = renderMinutes(m, r.StartedAt, st.Zone())
-		if wrote, err := st.putMinutes(r.ID, m); err != nil {
+		m.Markdown = e.RecordingProvider().RenderMinutes(m, r.StartedAt, st.Zone())
+		if wrote, err := e.RecordingProvider().PutMinutes(recordingwire.ID(r.ID), m); err != nil {
 			return err
 		} else if !wrote {
 			return ErrNotFound
@@ -370,7 +370,7 @@ func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
 		// minutes.md or meta.json. Finish them from minutes.json, which no longer cites the photo.
 		md, _ := os.ReadFile(st.path(KindRecording, r.ID, "minutes.md"))
 		if string(md) != strings.TrimSpace(m.Markdown)+"\n" || r.MinutesVersion < m.Version {
-			if wrote, err := st.putMinutes(r.ID, m); err != nil {
+			if wrote, err := e.RecordingProvider().PutMinutes(recordingwire.ID(r.ID), m); err != nil {
 				return err
 			} else if !wrote {
 				return ErrNotFound
@@ -419,7 +419,7 @@ func (e *Engine) remakeQuiet(r *Recording) bool {
 	switch r.MinutesState {
 	case MinutesPending:
 		// Only so that minutes read before the change don't settle them: their failures and waits stay as they are.
-		quiet := quietMinutes(r)
+		quiet := e.RecordingProvider().QuietMinutes(r)
 		r.MinutesAsks++
 		if quiet {
 			r.MinutesQuiet = r.MinutesAsks
@@ -428,7 +428,7 @@ func (e *Engine) remakeQuiet(r *Recording) bool {
 		if !e.Store.hasMinutes(r.ID) {
 			return false // never written: nothing to make again
 		}
-		remakeMinutes(r)
+		e.RecordingProvider().RemakeMinutes(r)
 		r.MinutesQuiet = r.MinutesAsks
 	default:
 		return false
@@ -577,20 +577,20 @@ func (e *Engine) PhotoNote(rawID string, n int, text string) error {
 
 // dropUnlistedPhotos takes out of m the items citing a photo that is not listed (deleted, or trimmed away, while the
 // model wrote them); the actions are numbered again.
-func dropUnlistedPhotos(m *Minutes, b photoBook) {
-	dropPhotos(m, func(n int) bool { return b.index(n) < 0 })
+func (s *Store) dropUnlistedPhotos(m *Minutes, b photoBook) {
+	dropPhotos(s.recordingAudio(), m, func(n int) bool { return b.index(n) < 0 })
 }
 
 // dropPhotos takes out of m the items citing a photo gone says goes (all four sections), and the overview's bullets
 // and conclusions citing it (an empty topic and group go with them, the overview once no topic is left); the actions
 // are numbered again, each keeping its to-do. Not for a trimmed recording, whose minutes stay as they are.
-func dropPhotos(m *Minutes, gone func(n int) bool) {
+func dropPhotos(w recordingwire.Provider, m *Minutes, gone func(n int) bool) {
 	cites := func(n int) bool { return n > 0 && gone(n) }
 	m.Points = slices.DeleteFunc(m.Points, func(x MinutesPoint) bool { return cites(x.Photo) })
 	m.Decisions = slices.DeleteFunc(m.Decisions, func(x MinutesItem) bool { return cites(x.Photo) })
 	m.Actions = slices.DeleteFunc(m.Actions, func(x MinutesAction) bool { return cites(x.Photo) })
 	m.Open = slices.DeleteFunc(m.Open, func(x MinutesItem) bool { return cites(x.Photo) })
-	dropOverviewPhotos(m, cites)
+	w.DropOverviewPhotos(m, cites)
 	for i := range m.Actions {
 		m.Actions[i].ID = "a" + strconv.Itoa(i+1)
 	}

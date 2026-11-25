@@ -621,11 +621,14 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 	}
 	userInputs := q.Get("user_inputs") == "1"
 	if userInputs {
-		params["user_inputs"] = true // only a count/position projection, never message bodies
+		params["user_inputs"] = true // the index carries positions and bounded excerpts
 	}
 	// Only the paging the app gave: one it left out or sent empty (iOS's latest page has before_seq=) is not 0 to a
 	// runtime, which may take before_seq 0 as a bad value and refuse every page, and the app's sync then asks again.
 	for _, k := range []string{"before_seq", "limit", "turns"} {
+		if userInputs && k == "before_seq" {
+			continue // the public index spans the conversation independently of page cursors
+		}
 		if v := q.Get(k); v != "" {
 			params[k] = atoi(v)
 		}

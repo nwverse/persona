@@ -415,8 +415,14 @@ func (s *Service) logicalSweep(ctx context.Context) {
 			defer func() { s.logical.mu.Lock(); delete(s.logical.running, key); s.logical.mu.Unlock() }()
 			run, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
+			if s.expireLogicalSwitch(run, st, &c, time.Now()) {
+				return
+			}
 			if err := s.advanceLogicalConversation(run, st, &c); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, db.ErrConversationEpoch) {
 				s.logf("assistant: segment operation awaits reconciliation: %v", err)
+				if op := c.Switch; op != nil {
+					_ = st.NoteConversationSwitchError(ctx, c.MachineID, c.SessionID, op.OperationID, logicalSwitchErrorText(err))
+				}
 			}
 		}(c)
 	}
@@ -432,6 +438,132 @@ func (s *Service) logicalSweep(ctx context.Context) {
 			_ = st.ConversationClosureDone(ctx, key[0], key[1])
 		}
 	}
+}
+
+// logicalSwitchPrepareLimit bounds a switch that has not activated its target yet: past it, counted from the
+// switch's start and so kept across retries and restarts, the switch is rejected and its conversation stays on
+// its source (#15317). A variable so tests can shorten it.
+var logicalSwitchPrepareLimit = 30 * time.Minute
+
+// logicalSwitchErrorLimit caps the error kept on a switch, which a batch item may show as its reason.
+const logicalSwitchErrorLimit = 512
+
+func logicalSwitchErrorText(err error) string {
+	text := err.Error()
+	if len(text) > logicalSwitchErrorLimit {
+		text = strings.ToValidUTF8(text[:logicalSwitchErrorLimit], "")
+	}
+	return text
+}
+
+// logicalSwitchExpiredReason says what a switch that ran out of time was still waiting for, with its latest error.
+func logicalSwitchExpiredReason(op *db.ConversationSwitch) string {
+	limit := logicalSwitchPrepareLimit.Round(time.Second).String()
+	var reason string
+	switch op.Phase {
+	case "in_doubt":
+		reason = "the new conversation's preparation could not be confirmed within " + limit
+	case "prepared":
+		reason = "the prepared conversation could not take over within " + limit
+	default:
+		reason = "the new conversation was not ready within " + limit
+	}
+	if op.Error != "" {
+		reason += "; last error: " + op.Error
+	}
+	return reason + "; the conversation kept its original settings"
+}
+
+// logicalSourceMayBeRetired: c's active segment may carry the node's retirement mark, which a send must lift first.
+// An activation retires its source before switching, so any switched conversation may; so may one whose prepared
+// switch was cancelled after that retirement (its abandoned target is a second segment at the first epoch).
+func logicalSourceMayBeRetired(c *db.LogicalConversation) bool {
+	return c.Epoch > 1 || len(c.Segments) > 1
+}
+
+// expireLogicalSwitch rejects c's switch when it is still before activation (preparing, prepared, or an unconfirmed
+// preparation) past logicalSwitchPrepareLimit, so the switch ends with a reason instead of retrying for good and
+// a batch item waiting on it ends refused. An activated switch, its first-turn delivery and an ambiguous input
+// delivery are never timed out. It reports whether it handled this pass: a cancel that could not take the lock is
+// retried on the next sweep rather than racing a new attempt.
+func (s *Service) expireLogicalSwitch(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation, now time.Time) bool {
+	op := c.Switch
+	if op == nil || op.ExpectedEpoch != c.Epoch || op.CreatedAt.IsZero() || now.Sub(op.CreatedAt) < logicalSwitchPrepareLimit {
+		return false
+	}
+	if op.Phase != "preparing" && op.Phase != "prepared" && op.Phase != "in_doubt" {
+		return false
+	}
+	reason := logicalSwitchExpiredReason(op)
+	cancelled, err := st.CancelConversationSwitch(ctx, c.MachineID, c.SessionID, op.OperationID, op.ExpectedEpoch, reason)
+	if err != nil {
+		s.logf("assistant: switch %s past its limit: cancel: %v", op.OperationID, err)
+		return true
+	}
+	if !cancelled {
+		return true
+	}
+	s.logf("assistant: switch %s of %s/%s ended: %s", op.OperationID, c.MachineID, short(c.SessionID), reason)
+	s.afterLogicalSwitchCancel(ctx, st, c.MachineID, c.SessionID)
+	return true
+}
+
+// afterLogicalSwitchCancel rebinds a conversation whose switch was cancelled before activation: it stops following
+// an abandoned target and lifts a retirement its source may already carry.
+func (s *Service) afterLogicalSwitchCancel(ctx context.Context, st logicalSwitchStore, machine, id string) {
+	if next, err := st.LogicalConversation(ctx, machine, id); err == nil && next != nil {
+		rebind, cancel := context.WithTimeout(ctx, 5*time.Second)
+		s.restoreLogicalSource(rebind, next, 3)
+		s.logicalRebind(rebind, next)
+		cancel()
+	}
+	s.logicalChanged()
+	s.historyWake()
+}
+
+// restoreAfterCancelledRetire runs where a prepared switch's own retire of its source has returned but the switch
+// did not activate. If the switch was cancelled meanwhile (its source still active), it lifts the retirement again:
+// the cancel's own restore can run before that retire lands on the node, or meet the node busy with it, and nothing
+// else lifts the mark at the first epoch until the next send.
+func (s *Service) restoreAfterCancelledRetire(ctx context.Context, st logicalSwitchStore, machine, id, operation string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	op, err := st.ConversationSwitch(ctx, machine, id, operation)
+	if err != nil || op == nil || op.Phase != "rejected" {
+		return
+	}
+	c, err := st.LogicalConversation(ctx, machine, id)
+	if err != nil || c == nil {
+		return
+	}
+	if a, ok := c.Active(); !ok || a.ID != op.SourceSegment {
+		return
+	}
+	s.restoreLogicalSource(ctx, c, 5)
+	s.logicalRebind(ctx, c)
+}
+
+// restoreLogicalSource lifts the node's retirement mark from c's active segment, trying up to attempts times: the
+// node refuses it while another call on that conversation holds its lock.
+func (s *Service) restoreLogicalSource(ctx context.Context, c *db.LogicalConversation, attempts int) {
+	a, ok := c.Active()
+	if !ok || !logicalSourceMayBeRetired(c) {
+		return
+	}
+	var err error
+	for try := range attempts {
+		if try > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		if _, err = s.logicalPhysical(ctx, a.MachineID, "assistant.segment.restore", map[string]any{"session_id": a.SessionID}); err == nil {
+			return
+		}
+	}
+	s.logf("assistant: %s/%s keeps its retirement until its next send: %v", c.MachineID, short(c.SessionID), err)
 }
 
 func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwitchStore, c *db.LogicalConversation) error {
@@ -603,10 +735,15 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		if source, ok := c.Active(); ok {
 			_, err := s.logicalPhysical(ctx, source.MachineID, "assistant.segment.retire", map[string]any{"session_id": source.SessionID})
 			if err != nil && !errors.Is(err, apierr.ErrOffline) && !errors.Is(busError(err), apierr.ErrOffline) && !errors.Is(busError(err), rpc.ErrClosed) {
+				// The retire may still have landed on the node.
+				s.restoreAfterCancelledRetire(ctx, st, c.MachineID, c.SessionID, op.OperationID)
 				return err
 			}
 		}
 		if err := st.ActivateConversationSegment(ctx, c.MachineID, c.SessionID, op.OperationID, c.Epoch); err != nil {
+			if errors.Is(err, db.ErrConversationEpoch) {
+				s.restoreAfterCancelledRetire(ctx, st, c.MachineID, c.SessionID, op.OperationID)
+			}
 			return err
 		}
 		var err error
@@ -742,7 +879,7 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		if !ok || active.ID != a.ID {
 			return db.ErrConversationEpoch
 		}
-		if current.Epoch > 1 {
+		if logicalSourceMayBeRetired(current) {
 			if _, err := s.logicalPhysical(ctx, a.MachineID, "assistant.segment.restore", map[string]any{"session_id": a.SessionID}); err != nil {
 				return err
 			}

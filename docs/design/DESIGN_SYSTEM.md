@@ -875,6 +875,10 @@ sending identity or confirmation behavior.
 
 The web Agent conversation header's **Session overview** list button toggles a panel from the right side of the toolbar (`web/src/views/chat/ChatView.tsx`, `web/src/views/chat/SessionOverview.tsx`). The panel uses the app's surface and keeps its own scroll. It sits beside the conversation when there is room and above the transcript in a narrow conversation. The reader can keep it open while working in the chat. The environment and context sections use the current session's metadata. The subagent row shows running and ended counts and opens the tree on demand. Background activity uses the Background tasks panel's list rows, workflow details, output viewer and loop controls. A detail opened from the overview hides the mounted overview instead of squeezing it; Back or Escape closes the detail and restores the overview's scroll and originating row's focus. While the overview stays open, Cmd+B can close and reopen its detail. Turning the overview off or leaving its conversation closes the dependent detail and removes it from Cmd+B memory, so a later toggle cannot expose a stale origin. List-origin details keep ordinary Cmd+B memory. The finished task disclosure counts distinct terminal notices in the loaded transcript. The overview and its disclosures start closed.
 
+Antigravity sessions with a Swarm roster (#13749) show a **Swarm** disclosure in Session overview. Its count is the
+number of workers in the native roster. Expanding it shows read-only worker names and activity states in the
+existing overview list style.
+
 ### 3.4 Lists and rows
 
 - Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
@@ -1162,10 +1166,11 @@ the shared cases are in `spec/fixtures/sort/next/held_set.json`.
 The Agents list, the Inbox's Agent section, the Assistant home and history show a session with the same content, in every Agents row style (Avatar, Two Lines, State Cards, Compact List; iOS's ⋯ › Display and Settings › Appearance › Agents List Layout, Android's ⋯ › Display and Settings › Interface style on Glass, where the parts each style draws come from `rowParts` in core/domain, #4338 A9):
 
 - Leading: one source mark, the Agent's brand or a contact's avatar. The row's one state sits on its corner, chosen by the order in section 5.6. iOS (`AgentAvatar`) and Android's Glass row put the mark in a round well with the state's dot on its corner, rimmed apart from the well.
-- Line 1: the session's title, with the time on the right, localized ("6 min ago").
+- Line 1: the session's title, with the time on the right, localized ("6 min ago"). The compact Web sidebar uses that space for the title and preview. It keeps attention and unread badges, terminal tab identity and pinned direction counts visible at rest.
 - Line 2: when the session needs the user, what it waits for (the plan's title, the command, or the question itself); otherwise its latest line, in the secondary color. For a failed run, what failed, in red.
 - Line 3, optional: computer · project, leaving out what the grouping already shows, then the model's short name. iOS's Avatar row and Android's Glass row (#4338 A9) draw it as the source tag, the tab (space › tab outside the tree), the computer only while the list mixes computers, the model, the to-do as an outlined chip and the muted mark; Android's words come from `rowContent` in core/domain, its model's short name from `modelShortName` (the web's `modelChipLabel`; iOS's row still shows the raw string). On the web, an associated terminal tab is secondary metadata too: a localized **Tab {name}** chip in the complete Agents list, and a visible part of the sidebar row's secondary text even when age, source or to-do marks would hide an ordinary hint. When the tab is primary, it takes the title line without a duplicate chip. The localized **Tab {name}** prefix reads `slot_name` only beside a `slot_id` / `tab_id`; without that association it can be a workspace name and never gains the prefix. Existing structural tab fallback text is unchanged. Search reads the same `slot_name`, so a rename changes both recognition and the words that find the row.
 - Never in a row: raw model IDs, session IDs or engine badges. At most one count badge.
+- **Web sidebar details** (#15342): after a 250 ms fine-pointer dwell, show the full title, up to three lines of preview and secondary metadata on a `surface` with a `line` border and `nav-preview` shadow. Use the session title as stored, including its date and kind. The card opens beside the sidebar and clamps to the viewport. Leaving the row, clicking, opening a menu, pressing Escape or scrolling the sidebar closes it. Keep the opt-in Agent details line from Appearance in the row. This gives compact rows more room for their words and preserves access to the details on demand.
 - Answers in the row: a question's choices, and a tool approval whose full command is shown and whose action is low-risk (Deny, Allow Once). Plans, high-risk actions and Always Allow for This Session open the session, where the context is.
 - Views grouped by location draw these rows too (#3753): By Repository's computer, repository and worktree are lines of their own, each worktree's sessions in these rows under its line. The Mac's By Repository cards (frozen) keep their rows (`WorkspaceAgentRow`). On iOS and on Android's Glass style each repository is a card: its header has the folder, the bold name and the chevron, no counts, with its actions in its long press (`RepoCardHeader`, Android `AgentRepoHeader`); a worktree's line has its mark, its name, a Primary chip on the main checkout, the branch when the name is not it or Detached HEAD as a caution, "N agents" or Idle at the end, dimmed while its computer is offline (`RepoWorktreeLine`, Android `AgentWorktreeLine`, #4338 A7). A computer's repositories with nothing going on follow its busy ones under Idle Repositories with their count, one card with a row each: the folder, the name, "N agents · tab names", when it last moved and a chevron, a tap opening its agents under it (`QuietSpaceRow`, Android `AgentIdleRepoRow`). A busy worktree's idle agents fold behind one line, "2 idle · review · research", and once opened "Hide N Idle" after them folds them again (`RepoIdleLine`, Android `AgentRepoIdleLine`, #4338 A8). By Project's spaces fold theirs behind one "N more idle" row the same way: it opens them and, once open, "Hide N Idle" follows them and folds them again (`collapseRow`, Android `AgentIdleRow`'s `open`, Glass).
 
@@ -1840,6 +1845,7 @@ The watch widget extension doesn't build `Theme`, so complications take their fo
   bar; inline keeps the name, amount and unit. They share the phone's blue/amber `HealthIntakePalette`, system accent
   grouping, and the `.xxxLarge` text cap with shrinking. VoiceOver reads name, total, goal and unit. On a failed read,
   cached values remain, identified in the rectangle and VoiceOver; an old hub's 403 says Update the hub instead.
+  An intake response whose `items` omits this kind says **Add Water in Health** or **Add Protein in Health** (#14715); a missing field preserves the older behavior.
   No watch app page or Health permission is added. Hub choice lives on the complication; the default is the default
   paired group, or the only available group. Data and 15-minute refresh rules are in `docs/apple/home-widgets.md`.
 
@@ -2025,16 +2031,18 @@ still opens it directly (principle 2).
 
 Every gesture-only action needs a plain alternative for VoiceOver and Switch Control (see the audit).
 
-The web user-input navigator (#4836) initially exposes the latest 50 genuine inputs, or all inputs in a shorter
-conversation. Upward transcript loading extends that range when it reaches earlier inputs; global ordinal labels
-still count from the full history. Reuse the existing rail, hover preview, keyboard controls and mark geometry.
-This requested pagination correction does not add a setting or change placement. Android has no corresponding
-navigator on current main and is outside this fix's scope; it must not use its two-turn body window as a global count.
+The web user-input navigator (#4836, #15336) uses the chat pane's existing left gutter so the marks stay separate from
+the native scrollbar. It stays visible when the gutter fits and hides when the transcript needs the space.
+A mark expands to the right and opens a query-and-reply preview there on hover or keyboard focus. The rail initially
+exposes the latest 50 genuine inputs, or all inputs in a shorter conversation, with at most 28 marks rendered at once.
+Wheel and keyboard navigation move within that range. Upward transcript loading extends it, and global ordinal labels
+count from the full history. Android has no corresponding navigator and must not use its two-turn body window as a global count.
 When a web selection needs older messages, keep its loading status at the rail while the current transcript stays in
 place. Only the latest selection can move the transcript. If it fails, keep the marks available so it can be selected again.
 In Persona chats each mark also carries its question's state (#13021): not started (fainter), in progress (accent,
 pulsing, slowly under reduced motion like other busy indicators), unread (strong, with a red dot) or read (the plain mark); a follow-up's mark is
-shorter. The state is part of the mark's accessible label, and a tap jumps on touch screens. The geometry lives with the
+shorter. The state is part of the mark's accessible label and preview title row. A tap jumps on touch screens with a
+wide enough gutter. The geometry lives with the
 rail's other metrics (`web/src/ui/nav-rail-metrics.ts`); details in `docs/web/web.md` ("User-input rail (#1739, #2060)").
 
 The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
@@ -2420,6 +2428,11 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   are To Decide (the pager's cards), Needs you (its rows) and, in an Agent's chat, "N pending". An Agent's chat keeps the
   stack; the wrap-up chips stay chips after the entries. The two paragraphs below are the web and Android, and iOS
   before #12831.
+  Android command-input requests (#14568) show the command and its linkable output in the existing chat card and Agents
+  request sheet. The field starts masked when the request calls for it, offers Show / Hide, and stays out of Autofill.
+  Send hands the line to the command and clears the field. Not now replies without a line. At standard text sizes the
+  existing decision footer keeps both actions visible while the command, output and field scroll. At large sizes they
+  scroll with the form. The keyboard action puts the keyboard away. A refusal stays attached to the pending request.
   What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions` until #12831, #4339 C10): the oldest
   question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
   "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
@@ -2861,6 +2874,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Haptics | 4 kinds, 443 sites | none | 4 kinds, every copy plus some actions | thin on Android beyond copy |
 | Icons | SF Symbols | custom strokes | Phosphor, by meaning (`spec/icons/meanings.json`) | web has no map |
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
+| Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## HarmonyOS native structure

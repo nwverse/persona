@@ -187,7 +187,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
 | `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
-| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module |
+| `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module; the core's pushes to the chat return `nil` without a log or a retry, and `notify_user`'s copy report records the Feishu copy as `skipped` (told nowhere in its answer) |
 | `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
 | `server/internal/healthhost` | `health` | No layer: the intake and items routes answer 404, no `health_intake` tool, no `health_intake` or `health_items` capability, no water reminders |
 | `server/internal/recordinghost` | `recording` | No layer: the recording routes answer 404, no audio socket, room tools, final passes or meeting capabilities |
@@ -528,11 +528,34 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   record, minutes and recap readers, the search view with the undo-journal overlay) and `<file>_keep.go` the writes
   that exist without the module (delete, retention with the trim, the undo-journal commit and the recovery in
   `NewStore`, the `meeting.json` update primitive, the photo book the trim needs): both are Core. `<file>.go` keeps
-  the writers (uploads, appends, audio, photos, live log, meeting writers, transcription, minutes, recaps, titles,
-  summaries), which later PRs move into the module. Reads, delete, retention and recovery call no writer.
+  the writers (uploads, appends, audio, photos, live log, meeting writers, transcription, titles, summaries), which
+  later PRs move into the module. Reads, delete, retention and recovery call no writer.
+- **The minutes and day-recap writers are in the module** (PR 3): `server/internal/modules/recording/writers` holds
+  `minutes.go`, `minutes_overview.go`, `minutes_timeout.go`, `day_recap.go` and `day_recap_write.go`, moved from
+  `internal/kb` with their bodies unchanged. They reach the store through the **storage port**, `recordingwire.Core`,
+  which the knowledge base implements (`kb.RecordingCore`, `server/internal/kb/recording_core.go`) and hands to the
+  module in its hook (`recordinghost.Layer.Hook`). The port has two groups. `Reader` (15 methods) is the knowledge
+  base's own read path, the functions every other reader calls. `Writer` (17 methods) is the write primitives
+  (`PutMeta`, `PutSummary`, `WriteFile`, `RecoverRecording`, `BumpPhotosRev`), the change feed and the index, the
+  engine's clock, log, models and output language, and `Locks`: the store's three locks the writers take themselves
+  (recordings, then files, then meta; the order is the store's and did not change). It is wider than the plan's first
+  sketch because the writers read and write the store in many places; the alternative was to leave them in Core. The
+  package has its own `engine` and `store` over the port (`shim.go`), so that a writer's body reads as it did. The
+  rules of a recording's stored state that both sides apply (`PlanMinutes`, `PlanRecap`, `RecordingEnd`, the hub
+  transcription checks) are pure functions in `recordingwire` (`rules.go`). **The port is strongly typed**: a
+  recording's id is `recordingwire.ID`, its files `recordingwire.File`, and what was a string with a few meanings is
+  a closed set (`Change`, `MeetingPart`, `CalendarKind`, `Purpose`, each with `Known`); derived values (the output
+  language, the owner's name for the model, a file's path) are computed by Core and handed out. The stored JSON and
+  the knowledge base's own call sites keep their text.
 - **The write side is a provider** (`recordingwire.Provider`): the four background rounds (`WriteMinutes`,
   `TitleRecordings`, `WriteDayRecaps`, `SummarizeRecordings`), `AfterPrune` (the module's part of the retention round)
   and the audio writers' two touch points with delete and retention (`AudioDropped`, `AudioClosed`). The module's
+  provider is `writers.Writers`: the minutes and recap rounds are its own code, and the others are carried to the
+  knowledge base's remaining writers (`recordingwire.WritersInCore`, `kb.RecordingWriters`) until they move. While
+  the upload and the photo writers are still in `internal/kb`, they call the eight functions of the minutes and
+  recap writers they need through the provider too (`recordingwire.MinutesFromCore`: `PutMinutes`, `RenderMinutes`,
+  `RemakeMinutes`, `QuietMinutes`, `DropOverviewPhotos`, `RepairDayRecap`, `RebaseRecap`, `PruneRecapNotes`); each
+  goes when its caller moves. The module's
   `Hook` gives it to the knowledge base (`kb.Engine.SetRecordingProvider`); without the module the knowledge base
   holds `recordingwire.NoProvider`, a value whose methods do nothing, so no call site checks for the module. The
   assistant's lanes and its retention tick call the rounds through `kb.Engine.RecordingProvider()`
@@ -543,8 +566,9 @@ manifest declares `feature: module.recording`, which the kernel announces while 
   `paused: "module_off"` for such a recording (`Detail.Paused`, `Entry.Paused`; `kb.Engine.recordingPaused`), computed
   when read and never written, so the files do not change and the module resumes from the stored state.
 - **Checked** by `TestRecordingsStayReadableWithoutTheModule`, `TestRecordingInFlightIsPausedWithoutTheModule` and
-  `TestRecordingDeleteAndRetentionWithoutTheModule` (`internal/kb`), `TestStoredRecordingsOutliveTheirModule`
-  (`internal/assistant`, in every build), and on running hubs by the two gates above, which compare every file under
+  `TestRecordingDeleteAndRetentionWithoutTheModule` (`internal/kb`, black-box over the stored files with no
+  provider), `TestMinutesResumeWhenTheModuleIsBack` (`internal/modules/recording/writers`),
+  `TestStoredRecordingsOutliveTheirModule` (`internal/assistant`, in every build), and on running hubs by the two gates above, which compare every file under
   `recordings/` before and after the module is off.
 
 ### Health

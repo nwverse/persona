@@ -169,6 +169,7 @@ type Service struct {
 	humanSent      humanSends
 	storeApprovals storeApprovals
 	ownerWaits     ownerActionWaits
+	routineChecks  routineCheckApprovalBook
 
 	hub         Hub
 	store       func() Store

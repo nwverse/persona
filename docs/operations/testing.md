@@ -727,8 +727,8 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
   makes it a failure.
 - **What the user already has stays** (#13430, `docs/architecture/core-and-modules.md` "A module that is off keeps
-  what the user has"): for `recording`, two recordings written by the knowledge base's own writers
-  (`TestWriteRecordingFixture` in `server/internal/kb`, run with `PERSONA_RECORDING_FIXTURE_DIR`) are in the temporary
+  what the user has"): for `recording`, two recordings written by the knowledge base and the recording module's writers
+  (`TestWriteRecordingFixture` in `server/internal/modules/recording/writers`, run with `PERSONA_RECORDING_FIXTURE_DIR`) are in the temporary
   home's knowledge base before the hub first starts: a meeting with its transcript and minutes, and one whose minutes
   were still to be written. In every phase they are listed, opened and found by search through the knowledge base's
   own routes; while off, the opened recording's detail equals the `on` phase's, the one in flight says

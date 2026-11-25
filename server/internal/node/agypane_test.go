@@ -92,14 +92,21 @@ func TestAgyPaneUserImagesAndCheckpoints(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
 	seedAgents(t, node, herdr, agyTestAgent(agyTestPane, home, agyTestID))
 	const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB9sAAAAASUVORK5CYII="
-	agyTestFile(t, node.agyDataRoot(), agyTestID, fmt.Sprintf(`{"step_index":0,"type":"USER_INPUT","content":"Look\n<attached_images>\nuser.png\n</attached_images>","media":[{"mime_type":"image/png","uri":"./user.png"},{"mime_type":"image/png","data":%q}]}
-{"step_index":1,"type":"PLANNER_RESPONSE","content":"Done"}
+	agyTestFile(t, node.agyDataRoot(), agyTestID, fmt.Sprintf(`{"step_index":0,"type":"USER_INPUT","content":"<USER_REQUEST>\n<persona-context>snapshot</persona-context>\n> a quote\nLook\n<attached_images>\nuser.png\n</attached_images>\n</USER_REQUEST><ADDITIONAL_METADATA>hidden time</ADDITIONAL_METADATA>","media":[{"mime_type":"image/png","uri":"./user.png"},{"mime_type":"image/png","data":%q}]}
+{"step_index":1,"type":"PLANNER_RESPONSE","thinking":"Private thinking","content":"<!-- Private note -->\n**Done**."}
 {"step_index":2,"type":"USER_INPUT","client_msg_id":"photo-only","media":[{"mime_type":"image/png","data":%q},{"mime_type":"image/png","data":%q}]}
 {"step_index":3,"type":"CHECKPOINT"}
 `, png, png, png))
 	index := agyTestCall(t, node, "session.items", agyTestRow, map[string]any{"user_inputs": true}).(proto.UserInputIndex)
-	if index.Total != 2 || index.Inputs[0].Seq != 1 || index.Inputs[1].Seq != 3 {
+	if index.Total != 2 || index.Inputs[0].Seq != 1 || index.Inputs[0].Preview != "Look" || index.Inputs[0].Answer != "Done." ||
+		index.Inputs[0].Attachments != 0 || index.Inputs[1].Seq != 3 || index.Inputs[1].Attachments != 2 ||
+		index.Inputs[1].Preview != "" || index.Inputs[1].Answer != "" {
 		t.Fatalf("user inputs: %+v", index)
+	}
+	frozen := agyTestCall(t, node, "session.items", agyTestRow, map[string]any{"user_inputs": true, "before_seq": 2}).(proto.UserInputIndex)
+	wantFrozen := proto.UserInputPosition{ID: index.Inputs[0].ID, Seq: 1, Preview: "Look"}
+	if frozen.Total != 1 || frozen.Inputs[0] != wantFrozen || frozen.History != index.History {
+		t.Fatalf("frozen user inputs: %+v", frozen)
 	}
 	recent, page := agyTestItems(t, node, agyTestRow, map[string]any{"turns": 1})
 	if page["has_more"] != true || len(recent) != 3 || index.Inputs[1].ID != recent[0].ID {
@@ -119,7 +126,7 @@ func TestAgyPaneUserImagesAndCheckpoints(t *testing.T) {
 		t.Fatalf("checkpoint: %+v", notice)
 	}
 	older, page := agyTestItems(t, node, agyTestRow, map[string]any{"turns": 1, "before_seq": 3})
-	if page["has_more"] != false || len(older) != 3 || older[0].Kind != proto.KindText || older[1].Kind != proto.KindImage ||
+	if page["has_more"] != false || len(older) != 4 || older[0].Kind != proto.KindText || older[1].Kind != proto.KindImage ||
 		older[0].Seq != older[1].Seq || !strings.HasSuffix(older[1].ID, "#media1") {
 		t.Fatalf("earlier turn did not suppress the duplicate path: %+v", page)
 	}

@@ -124,6 +124,7 @@ func replyPolicyReview8OrdinaryItemLegacy(h *inboxHub, it *InboxItem) {
 }
 
 func TestInboxReplyPolicyWorkbenchDraftCardBindsGeneratedTextAndVersionLegacySchema(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	h, lark, it := handledHub(t)
 	replyPolicyReview8OrdinaryItemLegacy(h, it)
 	_ = replyPolicyEnableWorkbench(h)
@@ -411,6 +412,7 @@ func TestInboxReplyPolicyOmittedSourcesNonLarkCoverAllStagesLegacySchema(t *test
 }
 
 func TestInboxReplyPolicyWorkbenchPublishedCardSendLegacySchema(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
@@ -448,6 +450,7 @@ func TestInboxReplyPolicyWorkbenchPublishedCardSendLegacySchema(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchFeishuActionDispatchLegacySchema(t *testing.T) {
+	needsLarkLayer(t) // the Workbench action arrives through the lark module's real card handler
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
