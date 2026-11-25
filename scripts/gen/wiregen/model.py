@@ -57,7 +57,8 @@ class Def:
     unknown_policy: str = "skip"  # stream operations recover; lifecycle requests reject
     # Opt-in keywords (#15397). Each is off unless a schema names it, so every schema without them generates the
     # same bytes as before.
-    closed: bool = False  # x-enum "closed": a real enum whose unknown values decode to an explicit Unknown(raw)
+    closed: bool = False  # x-enum "closed": a real enum whose unknown values decode to an explicit Unknown(raw); on a
+    # union, Go's discriminator is a named type of its tags (the other languages' unions are closed already)
     count_unknown: bool = False  # x-unknown "count": decoding an unknown value calls the file's defect hook
     strict: bool = False  # x-decode "strict": decoding throws on a missing or mistyped field instead of defaulting
     reason: str = ""  # x-opaque: why this JSON stays open
@@ -183,8 +184,11 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
     defs: dict[str, Def] = {}
     for name, (f, s) in raw.items():
         doc = s.get("description", "")
-        if ("x-enum" in s or "x-unknown" in s) and not (s.get("type") == "string" and "enum" in s):
+        union = "oneOf" in s and s.get("type") != "object" and not s.get("x-untagged")
+        if "x-unknown" in s and not (s.get("type") == "string" and "enum" in s):
             raise SchemaError(f"{name}: x-enum and x-unknown go on a string enum")
+        if "x-enum" in s and not (s.get("type") == "string" and "enum" in s) and not union:
+            raise SchemaError(f"{name}: x-enum goes on a string enum or a discriminated union")
         if "x-id" in s:
             if s["x-id"] != name or s.get("type") != "string" or "enum" in s:
                 raise SchemaError(f"{name}: x-id goes on a string definition and repeats its name")
@@ -220,6 +224,10 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
                 raise SchemaError(f"{name}: a oneOf needs x-discriminator (or x-untagged for free JSON)")
             variants = [resolve(v["$ref"], name) for v in s["oneOf"]]
             defs[name] = Def(name, "union", doc, variants=variants, discriminator=disc)
+            if "x-enum" in s:  # a closed union: Go types its discriminator (the other languages already close it)
+                if s["x-enum"] not in ENUM_MODES:
+                    raise SchemaError(f"{name}: x-enum {s['x-enum']!r}: only {', '.join(ENUM_MODES)}")
+                defs[name].closed = True
         elif s.get("type") == "string" and "enum" in s:
             defs[name] = Def(name, "enum", doc, values=list(s["enum"]))
             closed_enum(defs[name], s)

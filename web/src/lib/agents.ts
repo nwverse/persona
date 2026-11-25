@@ -385,7 +385,7 @@ export function useAgentList(): ListState {
 export type GroupBy = "date" | "provider" | "none";
 export type SortBy = "updated" | "unread" | "name";
 export type ShowMode = "all" | "unread" | "sendable";
-export interface AgentView {
+export interface AgentListView {
   group?: GroupBy;
   sort?: SortBy;
   show?: ShowMode;
@@ -397,15 +397,15 @@ export interface AgentSectionDef {
 }
 export interface AgentPrefs {
   pins: string[];
-  view: AgentView;
+  view: AgentListView;
   sections: AgentSectionDef[];
   assign: Record<string, string>; // session id → section id
   /** Removed from the list: session id → when (ms). Changed only through hide / unhide; the hub keeps it on a save. */
   hidden?: Record<string, number>;
 }
-export const DEFAULT_VIEW: Required<AgentView> = { group: "date", sort: "updated", show: "all", providers: [] };
+export const DEFAULT_VIEW: Required<AgentListView> = { group: "date", sort: "updated", show: "all", providers: [] };
 export const emptyPrefs = (): AgentPrefs => ({ pins: [], view: {}, sections: [], assign: {} });
-export const viewOf = (p: AgentPrefs): Required<AgentView> => ({ ...DEFAULT_VIEW, ...Object.fromEntries(Object.entries(p.view ?? {}).filter(([, v]) => v !== undefined && v !== "")) }) as Required<AgentView>;
+export const viewOf = (p: AgentPrefs): Required<AgentListView> => ({ ...DEFAULT_VIEW, ...Object.fromEntries(Object.entries(p.view ?? {}).filter(([, v]) => v !== undefined && v !== "")) }) as Required<AgentListView>;
 export const isDefaultView = (p: AgentPrefs) => {
   const v = viewOf(p);
   return v.group === DEFAULT_VIEW.group && v.sort === DEFAULT_VIEW.sort && v.show === DEFAULT_VIEW.show && !v.providers.length;
@@ -501,7 +501,7 @@ export function removeSection(p: AgentPrefs, id: string): AgentPrefs {
 }
 // "Reset to default" resets the view only; pins and sections stay.
 export const resetView = (p: AgentPrefs): AgentPrefs => ({ ...p, view: {} });
-export function setView(p: AgentPrefs, patch: AgentView): AgentPrefs {
+export function setView(p: AgentPrefs, patch: AgentListView): AgentPrefs {
   return { ...p, view: { ...p.view, ...patch } };
 }
 export function toggleProvider(p: AgentPrefs, provider: string): AgentPrefs {
