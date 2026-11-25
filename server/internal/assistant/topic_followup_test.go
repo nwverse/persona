@@ -22,6 +22,7 @@ import (
 func linkedFollowupTask(t *testing.T, database *db.DB, store Store) (*Service, *fakeHub, Todo, time.Time) {
 	t.Helper()
 	s, f, task := newSupervisedServiceOn(t, store)
+	stopSupervisionTimers(s)
 	holdDigest(s)
 	now := time.Now().UTC().Truncate(time.Second)
 	th := TodoThread{Channel: "feishu", ChatID: "oc_example", ThreadID: "omt_example", Title: "Example questions"}
@@ -70,6 +71,7 @@ func TestLinkedTopicFollowupReachesAgentAndCurrentSupervisor(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				database := taskRecoveryDatabase(t)
 				s, f, task, now := linkedFollowupTask(t, database, database)
+				setSettings(t, s, func(cfg *Settings) { cfg.Leaders = []string{"current"} })
 				if parked {
 					parkFor(t, s, task.ID, "Waiting for the upstream result", parkExternalEvent, "2d")
 				}
@@ -100,7 +102,6 @@ func TestLinkedTopicFollowupReachesAgentAndCurrentSupervisor(t *testing.T) {
 				f.setSessions("server",
 					proto.Session{SessionID: "conv1", Assistant: true, Status: proto.StatusIdle},
 					proto.Session{SessionID: "current", Assistant: true, Status: proto.StatusIdle})
-				setSettings(t, s, func(cfg *Settings) { cfg.Leaders = []string{"current"} })
 				if _, _, err := s.updateSupervision(context.Background(), task.ID, func(v *Supervision) bool {
 					v.Supervisor, v.SupervisorSource = "current", "explicit"
 					return true
@@ -250,8 +251,15 @@ func TestLinkedTopicFollowupPersistsAndRecovers(t *testing.T) {
 	if len(sentToAgent(f)) != before+1 || !slices.Contains(pendingKinds(s, task.ID), "topic_followup") {
 		t.Fatal("failed source receipt was not retried")
 	}
-	again, hub := restartedOn(t, store)
+	again, hub := newTaskServiceOn(t, store)
+	stopSupervisionTimers(again)
 	holdDigest(again)
+	hub.mu.Lock()
+	hub.hello.Assistant.MachineID = "server"
+	hub.known["conv1"] = true
+	hub.mu.Unlock()
+	hub.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, again, func(cfg *Settings) { cfg.Main = "conv1" })
 	if err := again.ensureTodosLoaded(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -268,6 +276,7 @@ func TestLinkedTopicFollowupPersistsAndRecovers(t *testing.T) {
 	}
 	again.sweepDeploys(now.Add(3 * time.Minute))
 	final, last := restartedOn(t, store)
+	stopSupervisionTimers(final)
 	holdDigest(final)
 	last.answerApp(AppConnectors, "connectors.lark_topic", answer)
 	final.sweepDeploys(now.Add(4 * time.Minute))
