@@ -96,8 +96,27 @@ function relayNote(noWake: boolean) {
 
 export function QueuePanel(props: QueuePanelProps) {
   const sessionKey = JSON.stringify([props.session.machine_id, props.session.session_id, props.draftKey]);
-  return <QueuePanelBody key={sessionKey} {...props} />;
+  const prevSessionKey = useRef(sessionKey);
+  const sessionGen = useRef(0);
+  if (prevSessionKey.current !== sessionKey) {
+    prevSessionKey.current = sessionKey;
+    sessionGen.current += 1;
+  }
+  return <QueuePanelBody key={sessionKey} {...props} sessionGen={sessionGen} />;
 }
+
+interface RunContext {
+  /** True while this exact QueuePanelBody instance is mounted and owns the active request token. */
+  isMountedRun: () => boolean;
+  /** True while the enclosing QueuePanel has not switched to another session (remains true on same-session queue-clear unmount). */
+  isSameSession: () => boolean;
+  /** Emits a notification through the action's captured handler only when the panel has not switched sessions. */
+  notifyIfSameSession: (message: string, tone?: "ok" | "error") => void;
+}
+
+type QueueEditOutcome =
+  | { sent: true; result: QueueEditResult | undefined }
+  | { sent: false };
 
 function QueuePanelBody({
   session,
@@ -118,7 +137,8 @@ function QueuePanelBody({
   resolveDownloadURL,
   getSendFeedback,
   offline,
-}: QueuePanelProps) {
+  sessionGen,
+}: QueuePanelProps & { sessionGen: RefObject<number> }) {
   const queued = useMemo(() => session.queued ?? [], [session.queued]);
   const { rows: confirmed, accepted, planEdit } = useQueueEntries(session, pending, memory, onAccepted);
   const optimistic = local.filter((p) => !accepted.includes(p.id));
@@ -217,28 +237,35 @@ function QueuePanelBody({
     };
   }, []);
 
-  const notify = (message: string, tone?: "ok" | "error") => {
-    if (onNotify) onNotify(message, tone);
-    else toast(message, tone);
-  };
-  const isCurrentSession = (mid: string, sid: string, key: string) =>
-    mounted.current && sessionRef.current.mid === mid && sessionRef.current.sid === sid && sessionRef.current.draftKey === key;
-
-  const run = async (id: string, work: (isCurrent: () => boolean) => Promise<boolean | void>): Promise<boolean> => {
+  const run = async (id: string, work: (ctx: RunContext) => Promise<boolean | void>): Promise<boolean> => {
     if (inFlight.current !== null) return false;
     const token = ++nextToken.current;
+    const targetGen = sessionGen.current;
     const targetMid = session.machine_id;
     const targetSid = session.session_id;
     const targetDraftKey = draftKey;
-    const isCurrent = () => isCurrentSession(targetMid, targetSid, targetDraftKey) && inFlight.current === token;
+    const targetNotify = onNotify;
+    const isSameSession = () => sessionGen.current === targetGen;
+    const isMountedRun = () =>
+      mounted.current &&
+      isSameSession() &&
+      sessionRef.current.mid === targetMid &&
+      sessionRef.current.sid === targetSid &&
+      sessionRef.current.draftKey === targetDraftKey &&
+      inFlight.current === token;
+    const notifyIfSameSession = (message: string, tone?: "ok" | "error") => {
+      if (!isSameSession()) return;
+      if (targetNotify) targetNotify(message, tone);
+      else toast(message, tone);
+    };
     inFlight.current = token;
     setBusy(id);
     try {
-      const outcome = await work(isCurrent);
-      if (!isCurrent()) return false;
+      const outcome = await work({ isMountedRun, isSameSession, notifyIfSameSession });
+      if (!isMountedRun()) return false;
       return outcome !== false;
     } catch (e) {
-      if (isCurrent()) notify(t("chat-queuepanel.failed", { error: errorText(e) }), "error");
+      notifyIfSameSession(t("chat-queuepanel.failed", { error: errorText(e) }), "error");
       return false;
     } finally {
       if (inFlight.current === token) {
@@ -254,11 +281,12 @@ function QueuePanelBody({
     if (!hasFinePointer() || !(always || !at || at === document.body || region.current?.contains(at))) return;
     region.current?.closest("[data-composer-top]")?.parentElement?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
-  const editQueue = (keep: number[], isCurrent: () => boolean): Promise<QueueEditResult | undefined> => {
+  const editQueue = (keep: number[], isMountedRun: () => boolean): Promise<QueueEditOutcome> => {
     const targetMid = session.machine_id;
     const targetSid = session.session_id;
-    const execute = async (): Promise<QueueEditResult | undefined> => {
-      if (!isCurrent()) return undefined;
+    const targetEdit = onEditQueue;
+    const execute = async (): Promise<QueueEditOutcome> => {
+      if (!isMountedRun()) return { sent: false };
       // A send whose queue row arrived before its HTTP reply can still hold the turn. Recheck indexes when the
       // edit starts, and keep later sends behind it so the keep list cannot drop one of them.
       if (current.current.length !== own || ownRows.some((r, i) => r.id !== current.current[i].id)) {
@@ -267,19 +295,19 @@ function QueuePanelBody({
       const finish = planEdit(keep);
       let matched = false;
       try {
-        const r = onEditQueue
-          ? ((await onEditQueue(keep)) ?? undefined)
+        const result = targetEdit
+          ? ((await targetEdit(keep)) ?? undefined)
           : await api<QueueEditResult>(`${sessionPath(targetMid, targetSid)}/queue`, { method: "POST", json: { keep } });
-        if (!isCurrent()) return undefined;
-        matched = r?.queue !== undefined
-          ? r.queue.length === own && r.queue.every((raw, i) => raw === ownRows[i].raw)
-          : Boolean(onEditQueue);
-        return r;
+        // Return the accepted edit result even if a queue-emptying push unmounted QueuePanel before HTTP resolved.
+        matched = result?.queue !== undefined
+          ? result.queue.length === own && result.queue.every((raw, i) => raw === ownRows[i].raw)
+          : Boolean(targetEdit);
+        return { sent: true, result };
       } finally {
         if (mounted.current) finish(matched);
       }
     };
-    if (onEditQueue) return execute();
+    if (targetEdit) return execute();
     return inSendOrder(outboxKey(targetMid, targetSid), execute);
   };
   const act = (row: Row, del: boolean) => {
@@ -289,19 +317,37 @@ function QueuePanelBody({
       setWithdraw({ id: row.id, del });
       return;
     }
+    // Snapshot the target session, draft key, row, and handlers when the action starts so pull-back
+    // restoration still writes back to the originating draft after queue-clear unmount and never writes to a newer session.
     const targetSession = session;
     const targetDraftKey = draftKey;
-    void run(row.id, async (isCurrent) => {
-      const r = local ? undefined : await editQueue(keepAllBut(own, row.i), isCurrent);
-      if (!isCurrent()) return false;
-      const raw = local ? row.raw : r?.queue !== undefined ? r.queue[row.i] : (onEditQueue ? row.raw : undefined);
-      const images = (local ? row.images : r?.images?.[row.i] ?? (onEditQueue && r?.queue === undefined ? row.images : undefined)) ?? [];
-      notify(del ? t("chat-queuepanel.deleted") : t("chat-queuepanel.pulled_back"), "ok");
+    const targetRestore = onRestoreQueued;
+    const targetEdit = onEditQueue;
+    const targetIndex = row.i;
+    const targetRaw = row.raw;
+    const targetImages = row.images;
+    void run(row.id, async (ctx) => {
+      let r: QueueEditResult | undefined;
+      if (!local) {
+        const edited = await editQueue(keepAllBut(own, targetIndex), ctx.isMountedRun);
+        if (!edited.sent) return false;
+        r = edited.result;
+      }
+      const raw = local
+        ? targetRaw
+        : r?.queue !== undefined
+          ? r.queue[targetIndex]
+          : (targetEdit ? targetRaw : undefined);
+      const images = (local
+        ? targetImages
+        : r?.images?.[targetIndex] ?? (targetEdit && r?.queue === undefined ? targetImages : undefined)) ?? [];
+      ctx.notifyIfSameSession(del ? t("chat-queuepanel.deleted") : t("chat-queuepanel.pulled_back"), "ok");
       if (!del && raw !== undefined) {
         const parsed = parseQueued(raw, images.length);
-        if (onRestoreQueued) await onRestoreQueued(targetDraftKey, targetSession, parsed, images);
+        if (targetRestore) await targetRestore(targetDraftKey, targetSession, parsed, images);
         else await restoreQueued(targetDraftKey, targetSession, parsed, images);
       }
+      return ctx.isMountedRun();
     }).then((ok) => ok && toBox(!del));
   };
   useEffect(() => {
@@ -314,8 +360,9 @@ function QueuePanelBody({
     if (!keep) return;
     const mine = { order: keep, queue: queueKey };
     setHeld(mine);
-    void run(id, async (isCurrent) => {
-      await editQueue(keep, isCurrent);
+    void run(id, async (ctx) => {
+      const edited = await editQueue(keep, ctx.isMountedRun);
+      return edited.sent && ctx.isMountedRun();
     }).then((ok) => {
       if (!mounted.current) return;
       if (!ok || keep.every((i, at) => ownRows[i].raw === ownRows[at].raw)) {
@@ -331,13 +378,18 @@ function QueuePanelBody({
   };
   // at one press, with no dialog: it loses nothing (the messages go now rather than at the next step), and Stop, which
   // cuts the whole turn, and Delete beside it act at one press too (DESIGN_SYSTEM.md 4.4)
-  const sendNow = (row: Row) =>
-    void run(row.id, async (isCurrent) => {
-      if (onSendNow) await onSendNow();
-      else await api(`${sessionPath(session.machine_id, session.session_id)}/queue/send-now`, { method: "POST", json: {} });
-      if (!isCurrent()) return false;
-      notify(t("chat-queuepanel.sent_now", { agent }), "ok");
+  const sendNow = (row: Row) => {
+    const targetMid = session.machine_id;
+    const targetSid = session.session_id;
+    const targetSendNow = onSendNow;
+    const targetAgent = agent;
+    void run(row.id, async (ctx) => {
+      if (targetSendNow) await targetSendNow();
+      else await api(`${sessionPath(targetMid, targetSid)}/queue/send-now`, { method: "POST", json: {} });
+      ctx.notifyIfSameSession(t("chat-queuepanel.sent_now", { agent: targetAgent }), "ok");
+      return ctx.isMountedRun();
     }).then((ok) => ok && toBox(false));
+  };
   // what the dialog used to say, now the button's tooltip and description
   const sendNowTip = t(runtimeSource ? "chat-queuepanel.send_now_tip_runtime" : "chat-queuepanel.send_now_tip", { agent });
   const explain = t(runtimeSource ? "chat-queuepanel.send_now_body_runtime" :

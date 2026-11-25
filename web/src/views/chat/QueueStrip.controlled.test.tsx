@@ -241,11 +241,62 @@ describe("QueueStrip and QueuePanel with controlled props", () => {
     expectNoDefaultSingletons();
   });
 
-  it("isolates in-flight delete/edit/send-now across session switches and ABA transitions without leaking locks, restores or notifications", async () => {
-    let resolveA1!: (res: { queue: string[] }) => void;
+  it("restores text and images via controlled onRestoreQueued when unmounting after the last queued item empties before onEditQueue resolves", async () => {
+    let resolvePull!: (res: { queue: string[]; images: { mime: string; data: string }[][] }) => void;
+    const onEditQueue = vi.fn(() => new Promise<{ queue: string[]; images: { mime: string; data: string }[][] }>((res) => { resolvePull = res; }));
+    const onRestoreQueued = vi.fn(async () => {});
+    const onNotify = vi.fn();
+    const single = makeSession("host-a", "s-last", ["Final controlled message"]);
+
+    await renderPanel({
+      session: single,
+      draftKey: "draft-last-controlled",
+      canEdit: true,
+      onEditQueue,
+      onSendNow: vi.fn(async () => {}),
+      onRestoreQueued,
+      onNotify,
+      resolveThumbURL: vi.fn(() => ""),
+      resolveDownloadURL: vi.fn(() => ""),
+      getSendFeedback: vi.fn(() => "sending" as const),
+      offline: false,
+    });
+
+    click(within(0, "[data-queue-edit]"));
+    expect(onEditQueue).toHaveBeenCalledWith([]);
+
+    // Queue-emptying push unmounts QueuePanel before onEditQueue settles.
+    await act(async () => { root.render(null); });
+    expect(host.innerHTML).toBe("");
+
+    await act(async () => {
+      resolvePull({
+        queue: ["Final controlled message"],
+        images: [[{ mime: "image/png", data: "CCCC" }]],
+      });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(onRestoreQueued).toHaveBeenCalledTimes(1);
+    expect(onRestoreQueued).toHaveBeenCalledWith(
+      "draft-last-controlled",
+      single,
+      expect.objectContaining({ text: "Final controlled message" }),
+      [{ mime: "image/png", data: "CCCC" }],
+    );
+    expect(onNotify).toHaveBeenCalledTimes(1);
+    expect(onNotify).toHaveBeenCalledWith(t("chat-queuepanel.pulled_back"), "ok");
+    expectNoDefaultSingletons();
+  });
+
+  it("isolates in-flight delete/edit/send-now across session switches and ABA transitions without writing to B or leaking locks/notifications", async () => {
+    let resolveA1!: (res: { queue: string[]; images?: { mime: string; data: string }[][] }) => void;
     let resolveA2!: (res: { queue: string[] }) => void;
     const onEditQueue = vi.fn(() => {
-      if (onEditQueue.mock.calls.length === 1) return new Promise<{ queue: string[] }>((res) => { resolveA1 = res; });
+      if (onEditQueue.mock.calls.length === 1) {
+        return new Promise<{ queue: string[]; images?: { mime: string; data: string }[][] }>((res) => { resolveA1 = res; });
+      }
       return new Promise<{ queue: string[] }>((res) => { resolveA2 = res; });
     });
     const onRestoreQueued = vi.fn(async () => {});
@@ -284,13 +335,24 @@ describe("QueueStrip and QueuePanel with controlled props", () => {
     expect(onEditQueue).toHaveBeenCalledTimes(2);
     expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(true);
 
-    // Stale A1 edit resolves late: must NOT notify, must NOT call onRestoreQueued, and must NOT unlock A2.
+    // Stale A1 edit resolves late: restores strictly to captured (draft-a, sessionA), NEVER to B,
+    // does NOT emit stale notifications on B/A2, and does NOT unlock A2.
     await act(async () => {
-      resolveA1({ queue: ["Alpha 1", "Alpha 2"] });
+      resolveA1({
+        queue: ["Alpha 1", "Alpha 2"],
+        images: [[{ mime: "image/png", data: "DDDD" }]],
+      });
       await Promise.resolve();
     });
     await flush();
-    expect(onRestoreQueued).not.toHaveBeenCalled();
+    expect(onRestoreQueued).toHaveBeenCalledTimes(1);
+    expect(onRestoreQueued).toHaveBeenCalledWith(
+      "draft-a",
+      sessionA,
+      expect.objectContaining({ text: "Alpha 1" }),
+      [{ mime: "image/png", data: "DDDD" }],
+    );
+    expect(onRestoreQueued).not.toHaveBeenCalledWith("draft-b", expect.anything(), expect.anything(), expect.anything());
     expect(onNotify).not.toHaveBeenCalled();
     expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(true);
 
@@ -302,7 +364,7 @@ describe("QueueStrip and QueuePanel with controlled props", () => {
     await flush();
     expect(onNotify).toHaveBeenCalledTimes(1);
     expect(onNotify).toHaveBeenCalledWith(t("chat-queuepanel.deleted"), "ok");
-    expect(onRestoreQueued).not.toHaveBeenCalled();
+    expect(onRestoreQueued).toHaveBeenCalledTimes(1);
     expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(false);
     expectNoDefaultSingletons();
   });
@@ -397,5 +459,44 @@ describe("QueueStrip and QueuePanel default compatibility", () => {
     await flush();
     expect(mocks.api).toHaveBeenLastCalledWith("/sessions/host-a/s-1/queue/send-now", { method: "POST", json: {} });
     expect(mocks.toast).toHaveBeenLastCalledWith(t("chat-queuepanel.sent_now", { agent: "Claude" }), "ok");
+  });
+
+  it("still calls default restoreQueued with captured draftKey and session when QueueStrip unmounts before the last pull-back HTTP resolves", async () => {
+    let resolvePull!: (v: unknown) => void;
+    mocks.api.mockReturnValue(new Promise((r) => { resolvePull = r; }));
+    const lastSession = makeSession("host-a", "s-last-default", ["Last default item"]);
+
+    await renderStrip({
+      session: lastSession,
+      draftKey: "draft-last-default",
+      canEdit: true,
+    });
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await flush();
+
+    click(within(0, "[data-queue-edit]"));
+    expect(mocks.api).toHaveBeenCalledWith("/sessions/host-a/s-last-default/queue", { method: "POST", json: { keep: [] } });
+
+    // Unmount QueueStrip before HTTP resolves (simulating queued becoming empty).
+    await act(async () => { root.render(null); });
+    expect(host.innerHTML).toBe("");
+
+    await act(async () => {
+      resolvePull({
+        queue: ["Last default item"],
+        images: [[{ mime: "image/png", data: "EEEE" }]],
+      });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(mocks.restoreQueued).toHaveBeenCalledTimes(1);
+    expect(mocks.restoreQueued).toHaveBeenCalledWith(
+      "draft-last-default",
+      lastSession,
+      expect.objectContaining({ text: "Last default item" }),
+      [{ mime: "image/png", data: "EEEE" }],
+    );
+    expect(mocks.toast).toHaveBeenCalledWith(t("chat-queuepanel.pulled_back"), "ok");
   });
 });
