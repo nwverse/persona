@@ -118,7 +118,7 @@ func TestConfirmationMetricsUnavailable(t *testing.T) {
 	s := newFleetTest(t).s
 	noDirectionsTimers(s)
 	base := s.store()
-	s.store = func() Store { return unavailableConfirmationStore{Store: base} }
+	s.setStore(func() Store { return unavailableConfirmationStore{Store: base} })
 	c := s.briefConfirmationsAt(context.Background(), time.Now(), time.UTC)
 	if !c.Unknown || !strings.Contains(c.summary(i18n.Lang("en")), "unknown") {
 		t.Fatalf("read failure became a zero count: %+v", c)

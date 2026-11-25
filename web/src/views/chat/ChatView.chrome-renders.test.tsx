@@ -193,6 +193,17 @@ const serve = (exchanges: number) => {
   fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
 };
 
+it("shows the latest finished reply's actions at rest when replies share a timestamp", async () => {
+  serve(2);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const bars = () => [...host.querySelectorAll<HTMLElement>('[data-reply-bar]:not([data-reply-bar="loading"])')];
+  await vi.waitFor(() => expect(bars()).toHaveLength(2));
+  const [earlier, latest] = bars();
+  expect(earlier.querySelector("time")?.closest(".opacity-0")).toBe(earlier);
+  expect(latest.querySelector("time")?.closest(".opacity-0")).toBeNull();
+  expect(latest.querySelector("button")?.closest(".opacity-0")).toBeNull();
+});
+
 it("a turn starting or ending renders the message actions of its own exchange only", async () => {
   const flip = async (sid: string, exchanges: number) => {
     serve(exchanges);

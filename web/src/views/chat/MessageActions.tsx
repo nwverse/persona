@@ -13,7 +13,7 @@
 // While the chat picks messages to forward at once (#3838, Forward to's Select messages…), a message with a Forward has a
 // checkbox over it (Picking.tsx PickRow, which comes with Forward to): a click anywhere on it picks it or unpicks it, the
 // tick before it; its menus and bars are off. Not picking, the row is drawn as it always was.
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { clock } from "../../lib/format";
 import { sendDraft, type QuotedTask } from "../../lib/drafts";
@@ -27,19 +27,18 @@ import { NO_HOVER, useMedia } from "../../ui/media-query";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { useChatActions, type ChatActions } from "./chat-actions";
 import { pickParts } from "./picking-parts";
-import { useIsLatestMessage } from "./latest-message-time";
+import { LatestReplyId, useIsLatestMessage } from "./latest-message-time";
 import { useReplyTranslation, type ReplyTranslationSource } from "../../lib/reply-translation";
 import { Markdown } from "../../ui/Markdown";
 import { ReplyTranslationButton } from "./ReplyTranslationButton";
 import { lazyDialog, lazyOverlay } from "../LazyOverlay";
 
-// Hidden until the pointer comes, so it is not part of the first screen (startup-preload.ts): its row is kept while it
-// loads, so nothing moves when it comes.
+// Keep the reply controls in a separate chunk, with a reserved row while they load under a finished reply.
 const replyBar = () => import("./ReplyBar");
 const StarAvailability = lazy(() => replyBar().then((m) => ({ default: m.StarAvailability })));
 const StarBadge = lazy(() => replyBar().then((m) => ({ default: m.StarBadge })));
 const ReplyBar = lazy(() => replyBar().then((m) => ({ default: m.ReplyBar })));
-// what the exchange cost, at the end of a touch screen's row (the reply bar has it on hover)
+// What the exchange cost, at the end of a touch screen's row or the desktop reply bar.
 const TurnUsage = lazy(() => replyBar().then((m) => ({ default: m.TurnUsage })));
 const SelectMessageText = lazyDialog(() => replyBar().then((m) => m.SelectMessageText));
 const MessageMenu = lazyOverlay(() => replyBar().then((m) => m.MessageMenu));
@@ -82,8 +81,8 @@ export function messageContextActions(text: string, chat: ChatActions | null, fo
 /** Wraps a message: right-click / long press opens its menu. A hover bar goes beside it (`side`, your own bubbles: they had
  *  no row under them, so the layout does not move; the time leads that bar, #5285), over its top right corner (`corner`, a
  *  task's card: no row under it either), or under it (`bar`, a finished turn's last reply: ReplyBar). Without any of those
- *  it has the menus only. `task`: "Quote" quotes it as that task. The chat's last message keeps its time on screen
- *  (#5285): a last reply's in its bar (ReplyBar `pinned`) and the touch row, your own bubble's under it (UserBubble). */
+ *  it has the menus only. `task`: "Quote" quotes it as that task. The latest finished reply keeps its bar visible on
+ *  desktop (#15428) and shows its time in the touch row. Your last user bubble keeps its time under it (#5285). */
 export function MessageActions({
   text,
   editText,
@@ -140,6 +139,8 @@ export function MessageActions({
   const canTranslate = bar && !isUser && Boolean(text.trim());
   const touch = useMedia(NO_HOVER);
   const latest = useIsLatestMessage(ts);
+  const latestReplyId = useContext(LatestReplyId);
+  const pinned = Boolean(itemId && itemId === latestReplyId);
   const forwarded = itemId ?? messageId;
   const pick: ForwardPick | undefined = forwarded ? { itemId: forwarded, text, isUser: Boolean(isUser), ts, images, photos } : undefined;
   const chat = useChatActions();
@@ -267,7 +268,7 @@ export function MessageActions({
       {canTranslate && translation.error && <p role="alert" className="mt-1 text-xs text-red">{translation.error}</p>}
       {picking ? null : bar ? (
         <Suspense fallback={<div data-reply-bar="loading" className="mt-1.5 hidden h-6 [@media(hover:hover)]:block" />}>
-          <ReplyBar text={text} ts={ts} pinned={latest} itemId={itemId} more={actions} star={starAvailable ? starSource : undefined} loadStar={translationSource?.load} usage={usage} usageMs={usageMs} ttftMs={ttftMs} persona={chat?.assistant} translation={canTranslate ? translation : undefined} />
+          <ReplyBar text={text} ts={ts} pinned={pinned} itemId={itemId} more={actions} star={starAvailable ? starSource : undefined} loadStar={translationSource?.load} usage={usage} usageMs={usageMs} ttftMs={ttftMs} persona={chat?.assistant} translation={canTranslate ? translation : undefined} />
         </Suspense>
       ) : (side || corner) && (
       <div
@@ -351,7 +352,7 @@ export function MessageActions({
           >
             <Icon name="more" size={14} />
           </button>
-          {latest && ts && <span data-latest-time className="-ml-3 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
+          {pinned && ts && <span data-latest-time className="-ml-3 text-[12px] whitespace-nowrap text-ink-3 tabular-nums">{clock(ts)}</span>}
           {usage && (
             <Suspense fallback={null}>
               <TurnUsage usage={usage} ms={usageMs} ttftMs={ttftMs} persona={chat?.assistant} touch />

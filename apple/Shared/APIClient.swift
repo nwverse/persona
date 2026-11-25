@@ -199,6 +199,8 @@ nonisolated struct APIClient: Sendable {
     var sessionLookup = false
     /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
     var sessionList = false
+    /// The hub's hello has `sessions_page_counts`: a windowed row answer can carry its own aggregates.
+    var sessionsPageCounts = false
     /// The hub's hello has `sessions_hierarchy`: windowed lists and counts send `roots=1`. Older hubs do not, so a
     /// child stays a row of its own. A parent-session page is a separate request and never sends `roots`.
     var sessionsHierarchy = false

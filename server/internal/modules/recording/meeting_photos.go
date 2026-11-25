@@ -25,6 +25,7 @@ import (
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Meeting photos (docs/assistant/meeting-minutes.md "Phase 3: photos"): the phone adds the photos taken during a
@@ -63,7 +64,7 @@ func (s *Recordings) meetingPhotoRoutes() {
 		if e == nil {
 			return
 		}
-		photos, _, err := e.Photos(r.PathValue("id"))
+		photos, _, err := writersOf(e).Photos(r.PathValue("id"))
 		if err != nil {
 			writeMeetingError(w, err)
 			return
@@ -83,7 +84,7 @@ func (s *Recordings) meetingPhotoRoutes() {
 		id := r.PathValue("id")
 		// The knowledge base checks the recording and the photo before it refuses a read-only store, as the contract
 		// orders them.
-		deleted, err := e.PhotoDelete(id, photoNumber(r.PathValue("n")))
+		deleted, err := writersOf(e).PhotoDelete(id, photoNumber(r.PathValue("n")))
 		if err != nil {
 			writeMeetingError(w, err)
 			return
@@ -122,7 +123,7 @@ func (s *Recordings) photoAddRoute(w http.ResponseWriter, r *http.Request) {
 	// The knowledge base answers a retry (its photo, or 409 op_id_reused) and an id the owner deleted before it refuses
 	// a read-only store, so a retry is answered on one too; then not_meeting, transcript_expired and photos_full. The
 	// engine is read-only whenever the settings say so (kbGet opens it again when they change).
-	p, created, err := e.PhotoAdd(id, u, photoQueued(rec, l, time.Now()))
+	p, created, err := writersOf(e).PhotoAdd(id, u, photoQueued(rec, l, time.Now()))
 	if err != nil {
 		writeMeetingError(w, err)
 		return
@@ -164,10 +165,11 @@ func parsePhoto(raw []byte) (kb.PhotoUpload, error) {
 	if json.Unmarshal(in.ID, &id) != nil {
 		return u, i18n.Err("assistant-meeting.bad_ask_id")
 	}
-	var ok bool
-	if u.ID, ok = kb.RecordingID(id); !ok {
+	id, ok := kb.RecordingID(id)
+	if !ok {
 		return u, i18n.Err("assistant-meeting.bad_ask_id")
 	}
+	u.ID = recordingwire.PhotoID(id)
 	if !given(in.At) || json.Unmarshal(in.At, &u.At) != nil {
 		return u, i18n.Err("assistant-meeting.bad_photo_at")
 	}
@@ -277,10 +279,10 @@ func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r 
 	}
 	var msgs []roomMsg
 	for i := range withdraw {
-		msgs = append(msgs, roomMsg{msgID: "photo-withdrawn-" + withdraw[i].ID, w: &withdraw[i]})
+		msgs = append(msgs, roomMsg{msgID: "photo-withdrawn-" + string(withdraw[i].ID), w: &withdraw[i]})
 	}
 	for i := range queued {
-		msgs = append(msgs, roomMsg{msgID: "photo-" + queued[i].ID, p: &queued[i]})
+		msgs = append(msgs, roomMsg{msgID: "photo-" + string(queued[i].ID), p: &queued[i]})
 	}
 	tries := func(m roomMsg) int {
 		if n := s.room.photoTriesOf(m.msgID); n >= photoSendTries {
@@ -300,7 +302,7 @@ func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r 
 			if err == nil {
 				// Forwarded before it goes: a send whose answer is lost leaves a photo the room may have, which a delete
 				// withdraws there and the room may note.
-				err = e.PhotoSending(id, p.N)
+				err = writersOf(e).PhotoSending(id, p.N)
 			}
 			switch {
 			case errors.Is(err, kb.ErrPhotoNotFound):
@@ -315,11 +317,11 @@ func (s *Recordings) roomPhotos(ctx context.Context, e *kb.Engine, id string, r 
 		sent, n := s.roomSendPhoto(ctx, target.ref, m.msgID, text, src, images)
 		switch {
 		case sent && m.w != nil:
-			if err := e.PhotoWithdrawn(id, m.w.N); err != nil {
+			if err := writersOf(e).PhotoWithdrawn(id, m.w.N); err != nil {
 				s.logf("meeting %s: photo %d withdrawn: %v", short(id), m.w.N, err)
 			}
 		case sent:
-			if err := e.PhotoForwarded(id, m.p.N); err != nil {
+			if err := writersOf(e).PhotoForwarded(id, m.p.N); err != nil {
 				s.logf("meeting %s: photo %d forwarded: %v", short(id), m.p.N, err)
 			}
 		case n < photoSendTries:
@@ -401,7 +403,7 @@ func photoNoteTool(e *kb.Engine, recording string, args json.RawMessage) proto.T
 	if c := utf8.RuneCountInString(text); c > kb.MaxPhotoNote {
 		return proto.TextResult(fmt.Sprintf("text is %d characters, over the %d a note may have: make it shorter", c, kb.MaxPhotoNote), true)
 	}
-	switch err := e.PhotoNote(recording, int(n), text); {
+	switch err := writersOf(e).PhotoNote(recording, int(n), text); {
 	case err == nil:
 		return proto.TextResult("Noted. Write nothing in reply.", false)
 	case errors.Is(err, kb.ErrPhotoNotFound):

@@ -353,7 +353,7 @@ func TestNorthStarUnreadableIsUnknown(t *testing.T) {
 	s := newFleetTest(t).s
 	noDirectionsTimers(s)
 	base := s.store()
-	s.store = func() Store { return failingNorthStarStore{Store: base} }
+	s.setStore(func() Store { return failingNorthStarStore{Store: base} })
 	b := s.briefNorthStarAt(context.Background(), time.Now(), time.UTC)
 	if !b.Unknown || strings.Join(b.lines(i18n.Lang("en")), "") != "North star: today's numbers could not be read; they are unknown." {
 		t.Fatalf("a read failure became numbers: %+v", b)
@@ -581,9 +581,9 @@ func TestNorthStarRecordingStartIsSavedByTheFirstRecord(t *testing.T) {
 	s, database, _ := northStarDB(t)
 	s.build = "b9"
 	base := s.store()
-	s.store = func() Store { return failingNorthStarStore{Store: base} }
+	s.setStore(func() Store { return failingNorthStarStore{Store: base} })
 	s.northStarStarted(ctx) // the database could not be read at startup
-	s.store = func() Store { return base }
+	s.setStore(func() Store { return base })
 	before := time.Now()
 	if _, err := s.runTool(ctx, "pc", "dot-chat", "notify_user", json.RawMessage(`{"title":"Done","body":"PR merged"}`)); err != nil {
 		t.Fatal(err)

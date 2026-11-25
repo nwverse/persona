@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Hub transcription (#3862 phase 5, docs/assistant/meeting-minutes.md "Phase 5: hub transcription"): a meeting uploaded
-// with transcription hub streams its audio to the hub (meeting_audio.go), which stores it (kb.AudioWriter) and hands
+// with transcription hub streams its audio to the hub (meeting_audio.go), which stores it (writers.AudioWriter) and hands
 // it to a transcription contribution's live job (meeting_transcribe_job.go). Each recording being transcribed has a
 // hubRun: it holds a sentence back while Persona speaks and then marks it Persona's echo or not by the echo rule
 // (kb.EchoHeld, kb.EchoOf: kb/echo.go, against the speaking spans and the answers said in them), puts every sentence in
@@ -225,7 +226,7 @@ func newHubRun(s *Recordings, e *kb.Engine, id string) *hubRun {
 			r.filledTo = max(r.filledTo, sg.End)
 		}
 	}
-	if segs, err := e.RecordOf(id); err == nil {
+	if segs, err := writersOf(e).RecordOf(id); err == nil {
 		for _, sg := range segs {
 			if sg.Source == kb.SourceDevice {
 				r.device = append(r.device, sg)
@@ -520,7 +521,7 @@ func (r *hubRun) mergeTimelineLocked(t kb.Timeline) {
 	if !r.timeline.Merge(t) {
 		return
 	}
-	if _, err := r.e.TranscriptionUpdate(r.id, func(m *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := writersOf(r.e).TranscriptionUpdate(r.id, func(m *kb.MeetingTranscription, _ kb.Recording) error {
 		var tl kb.Timeline
 		if m.Timeline != nil {
 			tl = *m.Timeline
@@ -579,7 +580,7 @@ func (r *hubRun) acceptLocked(s hubSentence, echo bool) {
 	if echo || r.timeline.RoleAt(s.End, r.role) == kb.AttendanceOff {
 		return // in the hub's transcript only (Persona's echo marked there)
 	}
-	if kb.CoveredShare(s.Start, s.End, r.filled) > 0.5 {
+	if recordingwire.CoveredShare(s.Start, s.End, r.filled) > 0.5 {
 		return // the phone's text said it already
 	}
 	n, err := r.e.LiveAppendHub(r.id, []kb.LiveSegment{{Start: s.Start, End: s.End, Text: text}})
@@ -626,7 +627,7 @@ func (r *hubRun) putHubLocked() {
 		return
 	}
 	r.hubPutAt = time.Now()
-	if _, err := r.e.HubTranscriptPut(r.id, kb.HubPassLive, r.hub); err != nil {
+	if _, err := writersOf(r.e).HubTranscriptPut(r.id, kb.HubPassLive, r.hub); err != nil {
 		switch {
 		case errors.Is(err, kb.ErrReadOnly):
 			return // kept until it can be written
@@ -672,7 +673,7 @@ func (r *hubRun) tellProblemLocked() {
 		code = p
 	}
 	r.phoneSendLocked(map[string]any{"type": "problem", "code": code})
-	if _, err := r.e.TranscriptionUpdate(r.id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := writersOf(r.e).TranscriptionUpdate(r.id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.Problem = p
 		return nil
 	}); err != nil && !errors.Is(err, kb.ErrNotFound) && !errors.Is(err, kb.ErrRecordingDeleted) {

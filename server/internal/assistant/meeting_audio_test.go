@@ -58,7 +58,7 @@ func TestAudioSocketRefusalsAreTheFirstFrame(t *testing.T) {
 
 	final := "99999999-9999-4999-8999-999999999999"
 	h.hubUpload(final, 1, nil)
-	if _, err := h.engine().TranscriptionUpdate(final, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := recWrites(h.engine()).TranscriptionUpdate(final, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.FinalFrom = time.Now()
 		return nil
 	}); err != nil {
@@ -79,7 +79,7 @@ func TestAudioSocketTrimmed(t *testing.T) {
 	h.hubUpload(meetingRec, 1, map[string]any{"complete": true, "duration": 60.0, "ended_at": time.Now().UTC().Format(time.RFC3339),
 		"segments": []map[string]any{{"start": 0, "end": 9, "text": "We keep the cap."}}})
 	e := h.engine()
-	if _, err := e.TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := recWrites(e).TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.State = kb.TranscriptionFailed
 		return nil
 	}); err != nil {
@@ -284,7 +284,7 @@ func TestAudioPut(t *testing.T) {
 	}
 	h.upload(meetingOther, 1, nil)
 	wantCode(t, put(meetingOther, "0", second, "", http.StatusConflict), codeNotHub)
-	if _, err := h.engine().TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := recWrites(h.engine()).TranscriptionUpdate(meetingRec, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.FinalFrom = time.Now()
 		return nil
 	}); err != nil {

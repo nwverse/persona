@@ -180,6 +180,13 @@ TABLE = (
     (
         (("android/*",), ("scripts/test/test_android_return_values.py",)),
     ),
+    # The client domain guard (docs/server/architecture.md "Domain model", 'Client modules') finds the domain modules
+    # by name anywhere under android/ and apple/, and reads every Android and Swift source outside them for opt-ins,
+    # SPI imports and visitors; RuleTests reads its planted trees, apple.sh's domain package step and the doc's examples.
+    (
+        (("android/*", "apple/*", "scripts/test/fixtures/client_domain/*", "scripts/ci/apple.sh",
+          "docs/server/architecture.md"), ("scripts/test/test_client_domain_modules.py",)),
+    ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
         (("server/*", "web/src/*", "web/e2e/*", "scripts/*", "sdk/*", "apple/*", "android/*", "integrations/*",
