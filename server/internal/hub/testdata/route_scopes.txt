@@ -82,6 +82,7 @@ inbox.write          DELETE /api/v1/inbox/mutes/{id}
 inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/kb/projects/{id}
 -                    DELETE /api/v1/kb/projects/{id}/lessons/{lesson}
+-                    DELETE /api/v1/kb/recordings/{id}
 -                    DELETE /api/v1/launchers/{name}
 -                    DELETE /api/v1/looks/uploads/{id}
 -                    DELETE /api/v1/machines/{mid}/browser/cookies

@@ -51,10 +51,10 @@ func (e *Engine) DeleteRecording(rawID string, now time.Time) (bool, error) {
 		return false, nil
 	}
 	st.recFilesMu.Lock()
-	st.audioDroppedLocked(id, ErrRecordingDeleted)
+	st.recordingAudio().AudioDropped(id, ErrRecordingDeleted)
 	err := os.RemoveAll(st.path(KindRecording, id))
 	st.recFilesMu.Unlock()
-	st.audioFileClosed(id)
+	st.recordingAudio().AudioClosed(id)
 	if err != nil {
 		return false, err
 	}
@@ -77,14 +77,16 @@ func (e *Engine) unlinkRecording(id string, projects []string) {
 // PruneRecordings applies retention to files and the index. Past recording_days, minutes are kept forever or within
 // a finite minutes_days window, and the recording is trimmed to them (recording_trim.go); other recordings go.
 // Interrupted trims finish whatever the window. Tombstones older than recording_days go too.
-// It returns how many recordings were deleted, not counting trimmed ones. Then it deletes the hub-mode audio that
-// should be gone and mends what a crash left of a hub transcript (sweepTranscriptions).
+// It returns how many recordings were deleted, not counting trimmed ones. Then the recording module, when there is
+// one, deletes the hub-mode audio that should be gone and mends what a crash left of a hub transcript
+// (Provider.AfterPrune: sweepTranscriptions). Whether it runs at all without the module is retentionRuns' call
+// (RetentionWithoutRecordingModule, recording_port.go).
 func (e *Engine) PruneRecordings(now time.Time) int {
-	if e.Store.ReadOnly() {
+	if e.Store.ReadOnly() || !e.retentionRuns() {
 		return 0
 	}
 	n := e.pruneRecordings(now)
-	e.sweepTranscriptions()
+	e.afterPrune(now)
 	if n > 0 {
 		e.Store.SearchIndexPurge() // their summaries, minutes and recaps leave the search index at its next update
 	}
@@ -132,10 +134,10 @@ func (e *Engine) pruneRecordings(now time.Time) int {
 			continue
 		}
 		st.recFilesMu.Lock()
-		st.audioDroppedLocked(r.ID, ErrNotFound)
+		st.recordingAudio().AudioDropped(r.ID, ErrNotFound)
 		err := os.RemoveAll(st.path(KindRecording, r.ID))
 		st.recFilesMu.Unlock()
-		st.audioFileClosed(r.ID)
+		st.recordingAudio().AudioClosed(r.ID)
 		if err == nil {
 			e.unlinkRecording(r.ID, r.Projects)
 			st.notify(KindRecording, r.ID, "metadata")
