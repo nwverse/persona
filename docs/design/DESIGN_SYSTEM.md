@@ -992,12 +992,28 @@ existing overview list style.
     is spoken with its action ("3 more need you, Show All"). In a place it also counts what needs the owner outside
     the place, one line for both, naming the place when that is all it counts ("2 more need you, not in Today"), and
     its Show All opens All To-dos (3.5 "To-dos places").
-  - **Search**: the system's field, scoped to the list. It looks through the titles and notes of the open to-dos on
-    the device as the words are typed (case and accents aside), keeps the sections with every fold open (and unfoldable
-    until the field is cleared), counts what matches on the headings in plain numbers, Needs you's too, so the blue
-    badge only ever says N (the drawer's number stays N), and sets the Filter's choice aside until the field is
-    cleared. Its last row, "⌕ Search Chats for “kyoto” ›", takes the words to the app's search over Persona's chats
-    (no Agents scope on an everyday page). Closed to-dos and the hub's own matches come with the search's next step.
+  - **Search**: the system's field, scoped to the list. It looks through the titles and notes of every to-do of the
+    current assistant on the device, open and closed (case and accents aside), as the words are typed (off the main
+    thread, a newer key taking over; a cleared field is the list again at once), and sets the place and the Filter's
+    choice aside until the field is cleared, when they come back. The results keep the list's sections with every fold
+    open (and unfoldable until the field is cleared), Needs you first; what closed comes last, from any day, under the
+    days the Filter's Done lists (their headings naming Done: "Done today", "Done yesterday", "Done this week", "Done
+    earlier"), the newest first. The headings count what matches in plain numbers, Needs you's too, so the blue badge
+    only ever says N (the drawer's number stays N). A to-do found by its notes says the sentence that matched as its
+    line 2, the words on the accent tint ("List controls"), on up to two lines as a hub's line 2 may take, cut only
+    when the words sit further in than about a line's worth; one found by its title keeps its line. A result keeps its
+    tick, the row's one deliberate control, but offers nothing beside its half-read words: it is found to be opened,
+    which pushes the to-do as usual (a notes match lights nothing on its page yet), and Back is the results again with
+    the words in the field. While the field has words a row draws no "· Mark Done" and no answers (no OK or Retry, no
+    Options ⌄ or its card, no Undo) and VoiceOver's actions offer none of them, until the field is cleared; an answer
+    given here still says so in line 2's place ("✓ You chose …", "Not sure your answer went through") without its Undo,
+    which is the row's again if the field is cleared while the hold lasts. Steps a to-do carries are no rows, and are
+    not searched here yet. With nothing found, the search's empty state says what it looked through ("Search looks
+    through the titles and notes of all your to-dos, including done ones."). Its last row,
+    "⌕ Search Chats for “kyoto” ›", takes the words to the app's search over Persona's chats (no Agents scope on an
+    everyday page). It is on the device only: the phone holds every to-do (`GET /api/v1/todos` returns them all), so the
+    hub has nothing to add; a merge of the hub's matches ("List controls") waits for content the phone does not hold (a
+    to-do's rounds, results and recap).
   - **⋯** (on All To-dos, Today and a project; Upcoming's holds Show as Calendar alone) arranges the list, kept on the
     device; what the list shows starts fresh each visit. **Sort By**, a section with the current order checked:
     Suggested (推荐顺序, the hub's order inside each section, the default), Recently Changed (最近更新, the old page's default
@@ -1248,7 +1264,7 @@ On the web a list keeps no standing search field of its own beside the app's one
 
 - **HarmonyOS Agents groups** (#8966): the existing native grouping Select offers By Status (default), By Machine and By Project. It reuses the native list, Select and 48 vp control tokens, not a new style or a second flat/repository/worktree taxonomy. The shared Rust projection owns pinned, quiet, folded and filtered rows and their counts. Group headers expose the current localized state/machine/space title, state counts and a 48 vp Expand/Collapse control; quiet projects have an explicit idle-projects heading. Default idle sections stay folded; the header expands them and their rows with the core's `folded`, `expanded_idle` and `expanded_quiet` settings. A folded header still exposes Needs You. All labels ship in en, zh-Hans and ja. The previous native sorter and debug shadow are deleted; no release-only platform-specific sorter remains. These rules serve people monitoring Agents and follow iOS, rather than adding an independent HarmonyOS presentation.
 
-A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete.
+A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete. A search over what the device already holds whole has no server pass and no such line: the iOS To-dos list's (3.4; iOS, hubs with `todo_view`, from #10465's switch-on), since the phone holds every to-do; it opens a to-do found by its notes as usual, its page lighting nothing yet.
 
 - Section headers (`JSectionHeader`) measure the complete title, count and ordinary actions in one layout pass. Only when they do not fit, the actions move into a `JMenu` and the title wraps as needed so the title and count stay fully visible; fitting layouts stay pixel-identical. The overflow decision is made during measurement, never by switching after a truncated frame. Button labels still never wrap.
 - Command rows in the composer's "/" list (`ComposerSuggestions`) measure the complete command and detail. Only when they do not fit, the detail moves below the command and wraps without a line limit; fitting rows stay pixel-identical. Quick-message and @ rows keep their single-line layout (#7322).
@@ -1311,8 +1327,9 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
     "without a due date" line and no Show Done, an empty slot opening New To-Do at that day and hour); a project, its
     to-dos, line 3 leaving its name out of every row. A step whose parent the place holds counts with its parent; one
     whose parent Today or Upcoming leaves out (a dated step of an undated to-do) is a row there. Search To-dos sets the
-    place aside as it sets the choice aside: while the field has words the list is every open to-do that matches,
-    whatever the place (places pick where, search finds any to-do).
+    place aside as it sets the choice aside: while the field has words the list is every to-do that matches, open or
+    closed, whatever the place (places pick where, search finds any to-do), and opening a result never changes the
+    place.
   - **What needs the owner elsewhere** (3.4 "Sessions that need the user"): the list's one guard line, its first line
     over the first card (`TodosGuardLine`), in every place but All To-dos also counts what needs the owner outside the
     place, and names the place when nothing it counts is the place's own: "● 2 more need you, not in Today · Show All".
@@ -1837,6 +1854,15 @@ Toasts: error, success or info; one slot, so a new toast replaces the old. Durat
 **Failed-start remedies** (web #10365, Android #10452): a terminal `launcher_missing` and a `worktree_path_taken` use their coded short line before raw-text classification; on detail surfaces the full hub failure stays behind Details, never as the primary text. When `task_retry_launcher` and the failed plan task's `retry_with` offer an alternative, **Use <launcher> instead** precedes ordinary **Retry**, then the surface's existing destructive/other actions; ordinary Retry still works without `plan_id`. Android shares `ShellQuestionCard` (`core/designsystem`, `StartRemedies.kt`) across the failed Needs-you row, shared task detail, standalone to-do and session chat. It is a neutral `JCard`, not a red error fill: terminal icon, actual question, kind-specific help and kept-until time, then the hub's answers in order in a wrapping row of one-line `JButton`s. Secret prompts offer only Cancel; SSH host-key prompts offer no trust answer. Terminal output stays behind Details in `JCodeBlock`, never showing the pane ID. One answer is busy at a time, a refusal remains inline, and only confirmed success lets the caller clear the failure. Session confirmation precedes requeueing only exact-session, exact-`shell_waiting` refused outbox entries in persisted order. Feature absence, another error code and an expired kept tab show no answer controls. Every style, light/dark and default/largest-text JVM capture must show the whole question and reachable actions without overlapping or clipping.
 
 The hub's link while it is down (Waiting for network, Connecting…, Updating…, or what only the user can fix) is said once: in the title of a page that has one (an Agent's chat), else by a pill floating under the home bar on the home pages (iOS `ShellLinkPill`, `docs/apple/shell.md` "Connection status and toasts"; Android `JLinkPill`, #4339). It moves nothing, takes no touches and is announced; a spinner while it retries, a caution mark when it cannot.
+
+**Computer updates in Assistant** (web, #15687). This serves people who need to know why their assistant may briefly go away.
+Under the chat header, a quiet inset status strip uses `Spinner`, the shared clock icon, and the existing ink and meta
+text tokens. It names the live update phase in plain language and says the assistant will reconnect automatically.
+When the assistant is waiting to restart after the update, the strip says the new version is ready and will start once
+the assistant is idle. The computer running the conversation and the assistant's own host can each report an update.
+The assistant's host matches by machine UID first and by hostname for older data. An active update takes priority over
+the waiting state. The strip announces changes politely, wraps at narrow widths, and loads only for an active state.
+An ordinary chat has no strip.
 
 ### Web skill mentions (#5357)
 
@@ -2959,6 +2985,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
 | Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
+| Assistant update status | Outside scope of #15687 | Live update and idle-restart notice in Assistant | Outside scope of #15687 | web change |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
 ## HarmonyOS native structure
