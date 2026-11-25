@@ -137,7 +137,7 @@ domain code follows the rules from its first line. Code that predates them is he
 names in `server/internal/archguard/testdata/domain_layers`, which only fall: copy the domain kit
 (`server/internal/domainkit`), the first shared kernel (`server/internal/agentref` and its adapter) and the planted
 twins, never the packages those lists hold. A new domain package starts from the scaffold,
-`python3 scripts/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
+`python3 scripts/gen/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
 its black-box tests and its hook; its output with every flag but `--shared` is the golden
 `server/internal/archguard/testdata/scaffold`, which archguard's `TestScaffoldGoldenPasses` holds to the rules and
 `scripts/test/test_new_domain_slice.py` writes again and compares byte for byte, then compiles, vets and tests in a

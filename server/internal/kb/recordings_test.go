@@ -288,3 +288,41 @@ func TestRecordingListKind(t *testing.T) {
 		t.Fatalf("kinds %v", kinds)
 	}
 }
+
+func TestRecordingConfirmedFactsConditionalWrite(t *testing.T) {
+	e := goldenEngine(t, nil)
+	now := time.Now()
+	if _, err := e.PutRecording(recID, recUpload(1, now.Add(-time.Hour), true, "minutes"), now); err != nil {
+		t.Fatal(err)
+	}
+	previous := "original"
+	if _, err := e.ApplyUser(KindRecording, recID, UserUpdate{Update: Update{Pinned: &previous}}); err != nil {
+		t.Fatal(err)
+	}
+	first, second := "one", "two"
+	write := func(value, expected string) error {
+		_, err := e.ApplyUser(KindRecording, recID, UserUpdate{Update: Update{Pinned: &value}, ExpectedPinned: &expected})
+		return err
+	}
+	results := make(chan error, 2)
+	go func() { results <- write(first, previous) }()
+	go func() { results <- write(second, previous) }()
+	a, b := <-results, <-results
+	if !(a == nil && errors.Is(b, ErrConflict) || b == nil && errors.Is(a, ErrConflict)) {
+		t.Fatalf("two concurrent saves: %v / %v", a, b)
+	}
+	rec, ok := e.Store.Recording(recID)
+	if !ok || rec.Pinned != first && rec.Pinned != second {
+		t.Fatalf("lost stored facts: %#v", rec)
+	}
+	if err := write("", previous); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale deletion: %v", err)
+	}
+	if err := write("", rec.Pinned); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = e.Store.Recording(recID)
+	if rec.Pinned != "" {
+		t.Fatal(rec.Pinned)
+	}
+}

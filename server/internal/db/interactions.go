@@ -335,12 +335,13 @@ func (d *DB) InteractionRecord(ctx context.Context, id string) (*InteractionReco
 // The startup statements of ExpireStaleInteractions. Both must stay answerable from the interactions_pending
 // partial index (migration 0393); TestPendingInteractionsIndexed checks the plans of these exact constants.
 const (
-	resumablePendingSQL = `SELECT payload FROM interactions WHERE status = 'pending'
-		AND (payload->>'resumable')::boolean IS TRUE
+	resumableAtStartupSQL = `(payload->>'resumable')::boolean IS TRUE
 		AND ((payload->>'expires_at')::timestamptz > now()
 			OR ((payload->>'owner_proposal')::boolean IS TRUE AND (payload->>'no_expiry')::boolean IS TRUE))`
+	startupPendingSQL = `SELECT id, CASE WHEN ` + resumableAtStartupSQL + ` THEN payload END
+		FROM interactions WHERE status = 'pending'`
 	cancelPendingSQL = `UPDATE interactions SET status = 'cancelled', resolved_at = now(), ended_by = 'cleared'
-		WHERE status = 'pending' AND NOT (id = ANY($1))
+		WHERE status = 'pending' AND id = ANY($1) AND (` + resumableAtStartupSQL + `) IS NOT TRUE
 		AND id NOT IN (SELECT interaction_id FROM session_work WHERE interaction_id <> '')
 		AND id NOT IN (SELECT protected.id FROM settings,
 			jsonb_array_elements(CASE WHEN jsonb_typeof(value) = 'array' THEN value ELSE '[]'::jsonb END) AS item,
@@ -355,26 +356,34 @@ const (
 // them under the same id and ends cards it no longer needs. cancelled are the ids it marked: the apps may still show
 // them (#4568).
 func (d *DB) ExpireStaleInteractions(ctx context.Context) (kept []proto.Interaction, cancelled []string, err error) {
-	rows, err := d.pool.Query(ctx, resumablePendingSQL)
+	rows, err := d.pool.Query(ctx, startupPendingSQL)
 	if err != nil {
 		return nil, nil, err
 	}
-	kept, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (proto.Interaction, error) {
-		var payload []byte
-		var ix proto.Interaction
-		if err := r.Scan(&payload); err != nil {
-			return ix, err
+	var stale []string
+	var id string
+	var payload []byte
+	_, err = pgx.ForEachRow(rows, []any{&id, &payload}, func() error {
+		if payload == nil {
+			stale = append(stale, id)
+			return nil
 		}
-		return ix, json.Unmarshal(payload, &ix)
+		var ix proto.Interaction
+		if err := json.Unmarshal(payload, &ix); err != nil {
+			return err
+		}
+		kept = append(kept, ix)
+		return nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	ids := make([]string, len(kept))
-	for i, ix := range kept {
-		ids[i] = ix.ID
+	if len(stale) == 0 {
+		return kept, nil, nil
 	}
-	rows, err = d.pool.Query(ctx, cancelPendingSQL, ids)
+	// Another manager can publish or reclaim a card during recovery. Cancel only
+	// rows we saw as stale, provided they are still pending and not resumable.
+	rows, err = d.pool.Query(ctx, cancelPendingSQL, stale)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -926,7 +926,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false
 		}
 	case sigReview:
-		if st != reviewPending || v.handoffResult() != nil {
+		if st != reviewPending || v.handoffResult() != nil || g.Recipient != "" && g.Recipient != v.Supervisor {
 			return prompts.SuperviseEntry{}, false
 		}
 		if g.externalPRReview() {
