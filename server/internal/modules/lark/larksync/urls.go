@@ -82,8 +82,10 @@ func leadingToken(s string) string {
 // MessageFingerprint identifies a chat message by what any reader of it sees, for lining up the same message read
 // through two ways that know it by different ids (this sync and the Lark gateway): the sha256 hex of the normalized
 // chat name, the normalized sender, the send time in two-second buckets (at.Unix()/2) and the sha256 hex of the
-// normalized body, joined by NUL. Normalized: whitespace runs collapsed to one space, trimmed, lower case. The
-// knowledge base computes the same (internal/kb, which cannot import this module): change both or neither.
+// normalized body, joined by NUL. Normalized: whitespace runs collapsed to one space, trimmed, lower case. An empty
+// sender yields the senderless fallback key used when one side has no display name (for example a bot/app sender or a
+// binding without contact scope). The knowledge base computes the same (internal/kb, which cannot import this module):
+// change both or neither.
 func MessageFingerprint(chatName, sender string, at time.Time, body string) string {
 	bodySum := sha256.Sum256([]byte(normalizeText(body)))
 	s := normalizeText(chatName) + "\x00" + normalizeText(sender) + "\x00" + strconv.FormatInt(at.Unix()/2, 10) + "\x00" + hex.EncodeToString(bodySum[:])

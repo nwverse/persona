@@ -437,7 +437,7 @@ class RealTableTests(unittest.TestCase):
                        "AppIconBadge.count", "WatchPet.status", "IntentPicker.waiting", "VisionShell",
                        "ShellCounts.agentRows", "agentNeedsYouRows", "inboxUnreadCount", "ShellCounts.todos",
                        "ShellCounts.waiting", "assistantRequests", "stateCounts", "useScopedCounts", "badgeCount",
-                       "ownerBadge", "waitingAgents", "setBadge", "islandState", "needsYou", "linkAttention",
+                       "ownerBadge", "waitingAgents", "setBadge", "islandState", "AgentsNeedsYou", "linkAttention",
                        "tellInboxNeedsYou", "Counts", "treeCounts", "counts"):
             self.assertIn(symbol, symbols)
 

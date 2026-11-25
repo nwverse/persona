@@ -31,6 +31,9 @@ nonisolated struct SeenOutbox {
         var route: Route = .socket
         /// The hub answered the HTTP request: nothing more to send, only the list to wait for.
         var answered = false
+        /// Whether this session was `.unread` (not merely `just_finished`) when marked, so paged Unread counts know
+        /// what the hub counted before local seen marks (#13524).
+        var wasUnread = false
         /// The first list row that proved recording. Nothing is resent after this; only older rows are held.
         var recordedAt: Date?
     }
@@ -42,7 +45,8 @@ nonisolated struct SeenOutbox {
     mutating func mark(_ key: SessionKey, _ session: Session, at now: Date) {
         guard session.needsSeen() else { return }
         nextID &+= 1
-        marks[key] = Mark(id: nextID, seenBefore: session.seenAt, updatedBefore: session.updatedAt, markedAt: now, sentAt: now)
+        marks[key] = Mark(id: nextID, seenBefore: session.seenAt, updatedBefore: session.updatedAt, markedAt: now, sentAt: now,
+                          wasUnread: session.state == .unread)
     }
 
     @discardableResult mutating func sent(_ key: SessionKey, _ route: Route, at now: Date) -> UInt64? {
@@ -90,8 +94,10 @@ nonisolated struct SeenOutbox {
     }
 
     /// Lists from the hub landing: new activity ends a mark; the first proof of recording starts its settling window;
-    /// rows with the pre-open `seen_at` stay seen. Lists of other machines leave their marks alone.
-    mutating func land(_ lists: [MachineRef: [Session]], at now: Date) -> [MachineRef: [Session]] {
+    /// rows with the pre-open `seen_at` stay seen. Lists of other machines leave their marks alone. `dropMissing` is
+    /// false for partial/paged landings (e.g. `roots=1` or child fetches) so marks on folded side sessions are not
+    /// wiped by a root page (#13524).
+    mutating func land(_ lists: [MachineRef: [Session]], at now: Date, dropMissing: Bool = true) -> [MachineRef: [Session]] {
         guard !marks.isEmpty else { return lists }
         var pending: [MachineRef: [String: (key: SessionKey, mark: Mark)]] = [:]
         for (key, mark) in marks {
@@ -119,9 +125,20 @@ nonisolated struct SeenOutbox {
                 }
             }
             if changed { out[machine] = list }
-            for entry in remaining.values { marks[entry.key] = nil } // gone from this machine's list
+            if dropMissing {
+                for entry in remaining.values { marks[entry.key] = nil } // gone from this machine's list
+            }
         }
         return out
+    }
+
+    /// Apply and settle pending marks onto a partial list of rows (e.g. a parent's fetched child/side sessions) without
+    /// dropping marks for unrelated sessions on the same machine (#13524).
+    mutating func landRows(_ rows: [Session], at now: Date) -> [Session] {
+        guard !marks.isEmpty, !rows.isEmpty else { return rows }
+        let landed = land(Dictionary(grouping: rows, by: \.machineRef), at: now, dropMissing: false)
+        let byKey = Dictionary(landed.values.flatMap { $0 }.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
+        return rows.map { byKey[$0.key] ?? $0 }
     }
 
     private func expired(_ m: Mark, _ now: Date) -> Bool {

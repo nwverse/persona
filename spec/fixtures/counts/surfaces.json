@@ -199,9 +199,10 @@
       "count": ["agents_needs_you"],
       "scope": "default_manager",
       "code": [
-        {"file": "server/internal/assistant/fleet_live.go", "symbol": "needsYou"},
-        {"file": "server/internal/assistant/fleet_live.go", "symbol": "liveCounts"},
-        {"file": "server/internal/assistant/fleet_live.go", "symbol": "cardStands"}
+        {"file": "server/internal/assistant/fleetcount/tally.go", "symbol": "AgentsNeedsYou"},
+        {"file": "server/internal/assistant/fleetcount/agent.go", "symbol": "Counts"},
+        {"file": "server/internal/assistant/fleetcount/tally.go", "symbol": "stands"},
+        {"file": "server/internal/assistant/fleetcount/fleetcountadapt/render.go", "symbol": "LiveActivity"}
       ],
       "tests": [{"file": "server/internal/assistant/fleet_attention_test.go", "symbol": "TestLiveActivityKeepsItsOwnCount"}],
       "status": "differs",

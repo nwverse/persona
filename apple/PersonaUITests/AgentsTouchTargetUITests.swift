@@ -3,7 +3,7 @@ import XCTest
 /// Every row, heading and fold control a finger taps in the Agents list is at least 44 pt tall (#3753), in every grouping
 /// and display, and a tap just inside a row's or a heading's edge lands on it (a plain button takes taps on its label
 /// alone: the label has to be the whole row). Against the long mock list with worktrees and a Codex chat's subagents:
-///   PORT=<port> MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 python3 scripts/mock/mock_hub.py
+///   PORT=<port> MOCK_AGENTS=1 MOCK_MANAGERS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 python3 scripts/mock/mock_hub.py
 ///   TEST_RUNNER_PERSONA_TOUCH_HUB=http://127.0.0.1:<port>
 /// TEST_RUNNER_PERSONA_TOUCH_GROUPINGS=repo,state and TEST_RUNNER_PERSONA_TOUCH_DISPLAYS=avatar,list narrow the matrix;
 /// TEST_RUNNER_PERSONA_SHOTS=<dir> keeps each one's first screen, and TEST_RUNNER_PERSONA_TEXT_SIZE=<UIContentSizeCategory
@@ -27,7 +27,7 @@ final class AgentsTouchTargetUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = true
         guard let h = ProcessInfo.processInfo.environment["PERSONA_TOUCH_HUB"] else {
-            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_AGENTS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 (PERSONA_TOUCH_HUB)")
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_AGENTS=1 MOCK_MANAGERS=1 MOCK_WORKTREES=1 MOCK_ORCA_CHILDREN=1 MOCK_DESKTOP_APPS=1 (PERSONA_TOUCH_HUB)")
         }
         hub = h
     }

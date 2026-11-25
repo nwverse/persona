@@ -513,7 +513,8 @@ func (h *Manager) extensionUIRoutes(api *http.ServeMux) {
 			}
 		}
 		places := h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base))
-		places = append(places, h.pagesPlaces(r, placement)...) // the assistant's pages, after the extensions' own (pages_hook.go)
+		pagesOverview := r.URL.Query().Get("pages_overview") == "1"
+		places = append(places, h.pagesPlaces(r, placement, pagesOverview)...) // the assistant's pages, after the extensions' own (pages_hook.go)
 		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, places)})
 	})
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/ui/{ui}", func(w http.ResponseWriter, r *http.Request) {
