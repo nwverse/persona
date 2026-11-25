@@ -52,7 +52,7 @@ type InboxSuggestion struct {
 	SessionID   string      `json:"session_id,omitempty"`
 	TargetTitle string      `json:"target_title,omitempty"`
 	Changes     []DocChange `json:"changes,omitempty"`
-	At        time.Time   `json:"at"`
+	At          time.Time   `json:"at"`
 	// Cwd is where an agent suggestion's Agent starts (the tool's cwd; "" home): kept, not listed.
 	Cwd string `json:"cwd,omitempty"`
 	// MailTarget is the message a reply suggestion answered when it was created: kept, not listed. Reading that mail
