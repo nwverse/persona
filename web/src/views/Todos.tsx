@@ -106,8 +106,15 @@ import type { MenuItem } from "../ui/menu-model";
 import { foldGoalTasks, type GoalFoldResult, type GoalSummary } from "../lib/todo-goal-fold";
 import { findSelectedBlocker, matchesSharedBlocker, parseSharedBlockers } from "../lib/todo-shared-blockers";
 import { SharedBlockersStrip } from "../components/SharedBlockersStrip";
-import { reorganizeDirectionOptions, reorganizeTodos, type TodoReorganizeRequest } from "../lib/todo-reorganize";
+import {
+  reorganizeDirectionOptions,
+  reorganizeTodos,
+  resolveDirectionSections,
+  type ReorganizeDirectionOption,
+  type TodoReorganizeRequest,
+} from "../lib/todo-reorganize";
 import { BatchReorganizeBar } from "../components/BatchReorganizeBar";
+import { TodoDirectionPicker } from "../components/TodoDirectionPicker";
 import {
   classifyTodoDetailTemplate,
   resolveWorkGoalActions,
@@ -458,6 +465,23 @@ export function TodosView({
     }
   }, []);
 
+  // Single-item direction change from TodoDetail under todos_v2 (#15653).
+  const applyDetailReorganize = useCallback(async (req: TodoReorganizeRequest): Promise<void> => {
+    const res = await reorganizeTodos(req);
+    await refreshTodos();
+    if (req.direction_id !== undefined) {
+      void refreshDirectionTree().catch(() => {});
+    }
+    const updatedCount = res.updated?.length ?? req.ids.length;
+    const transferredCount = res.transferred_ids?.length ?? 0;
+    toast(
+      transferredCount > 0
+        ? t("todos.reorganize_success_transferred", { count: updatedCount, transferred: transferredCount })
+        : t("todos.reorganize_success", { count: updatedCount }),
+      "ok",
+    );
+  }, []);
+
   const chooseFilter = (f: TodoListFilter) => {
     setPref(FILTER_KEY, f);
     setListFilter(f);
@@ -609,14 +633,19 @@ export function TodosView({
   );
   // The tree lists only open to-dos (server/internal/assistant/direction_tree.go, the same countsAsOpen rule), so a
   // direction holds the open ones it lists: one ticked here leaves at once, not when the tree's push comes.
+  // Under todos_v2 (#15653), explicit `todo.direction_id` takes precedence over runtime supervision membership so
+  // reorganizing updates the direction grouping immediately without interrupting running Agents.
   const directionSections = useMemo(() => {
     if (grouping !== "direction" || !byDirection) return [];
-    const open = new Map(filteredUncompleted.filter((td) => placed.open.has(td.id)).map((td) => [td.id, td]));
-    return directionTree.directions
-      .map((d) => ({ d, todos: (d.tasks ?? []).map((task) => open.get(task.id)).filter((td): td is Todo => !!td) }))
-      .filter((g) => g.todos.length > 0)
-      .map(({ d, todos }) => ({ d, todos, title: directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title) }));
-  }, [grouping, byDirection, directionTree, filteredUncompleted, placed, leaderTitles]);
+    const openTodos = filteredUncompleted.filter((td) => placed.open.has(td.id));
+    return resolveDirectionSections({
+      tree: directionTree,
+      openTodos,
+      todosV2,
+      resolveDirectionName: (d) => directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title),
+      resolveFallbackName: directionLabel,
+    });
+  }, [grouping, byDirection, directionTree, filteredUncompleted, placed, todosV2, leaderTitles, directionLabel]);
   // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it
   // (server/internal/assistant/direction_tree.go), so the page says how many and where to see them rather than hide them
   const directionUnlisted = useMemo(() => {
@@ -1487,6 +1516,8 @@ export function TodosView({
                     activeTodo.direction_id
                   : undefined
               }
+              directions={todosV2 ? reorganizeDirections : undefined}
+              onReorganizeDirection={todosV2 ? applyDetailReorganize : undefined}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -3447,6 +3478,8 @@ function TodoDetail({
   parentTodo,
   childTodos = [],
   directionName,
+  directions = [],
+  onReorganizeDirection,
 }: {
   todo: Todo;
   owner: string;
@@ -3468,6 +3501,8 @@ function TodoDetail({
   parentTodo?: Todo;
   childTodos?: readonly Todo[];
   directionName?: string;
+  directions?: readonly ReorganizeDirectionOption[];
+  onReorganizeDirection?: (req: TodoReorganizeRequest) => Promise<void>;
 }) {
   const title = useTodoField({
     remote: todo.title, owner, allowEmpty: false,
@@ -3486,6 +3521,13 @@ function TodoDetail({
   // Under todos_v2 (#14851), all right-pane sections including participated history start expanded by default.
   const [releasedOpenV2, setReleasedOpenV2] = useState(true);
   const releasedVisible = todosV2 === true ? releasedOpenV2 : showReleased;
+  // Single-item direction picker strictly gated behind todos_v2 (#15653).
+  const [directionPickerOpen, setDirectionPickerOpen] = useState(false);
+  const canChangeDirection =
+    todosV2 === true &&
+    Boolean(onReorganizeDirection) &&
+    (directions.length > 0 || Boolean(todo.direction_id));
+  const showDirectionPicker = canChangeDirection && directionPickerOpen;
 
   const template = useMemo(
     () => (todosV2 === true ? classifyTodoDetailTemplate(todo, childTodos.length, { repositoryCount }) : undefined),
@@ -3637,7 +3679,32 @@ function TodoDetail({
                 </span>
               </>
             )}
+            {canChangeDirection && (
+              <Button
+                tone="quiet"
+                size="sm"
+                icon="folder"
+                expanded={showDirectionPicker}
+                testId="todo-detail-change-direction"
+                onClick={() => setDirectionPickerOpen((v) => !v)}
+                className="ml-auto h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+              >
+                {t("todos.detail_change_direction")}
+              </Button>
+            )}
           </div>
+          {showDirectionPicker && onReorganizeDirection && (
+            <TodoDirectionPicker
+              key={`${todo.id}:${todo.direction_id ?? ""}`}
+              todoId={todo.id}
+              currentDirectionId={todo.direction_id}
+              currentDirectionLabel={directionName}
+              childCount={childTodos.length}
+              directions={directions}
+              onApply={onReorganizeDirection}
+              onClose={() => setDirectionPickerOpen(false)}
+            />
+          )}
           <div
             data-testid="todo-detail-status-summary"
             aria-label={t("todos.detail_status_summary_region")}
@@ -3703,6 +3770,19 @@ function TodoDetail({
           placeholder={t("todos.title_placeholder")}
           className="min-w-0 flex-1 bg-transparent text-[22px] font-bold text-ink outline-none transition-colors focus:border-b focus:border-accent"
         />
+        {!isWorkGoalV2 && canChangeDirection && (
+          <Button
+            tone="quiet"
+            size="sm"
+            icon="folder"
+            expanded={showDirectionPicker}
+            testId="todo-detail-change-direction"
+            onClick={() => setDirectionPickerOpen((v) => !v)}
+            className="h-7 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+          >
+            {t("todos.detail_change_direction")}
+          </Button>
+        )}
         <IconButton icon="more" label={t("todos.more_options")} onClick={menu.open} active={Boolean(menu.anchor)} />
         {menu.anchor && (
           <Menu
@@ -3721,6 +3801,20 @@ function TodoDetail({
           />
         )}
       </div>
+      {!isWorkGoalV2 && showDirectionPicker && onReorganizeDirection && (
+        <div className="mt-2.5">
+          <TodoDirectionPicker
+            key={`${todo.id}:${todo.direction_id ?? ""}`}
+            todoId={todo.id}
+            currentDirectionId={todo.direction_id}
+            currentDirectionLabel={directionName}
+            childCount={childTodos.length}
+            directions={directions}
+            onApply={onReorganizeDirection}
+            onClose={() => setDirectionPickerOpen(false)}
+          />
+        </div>
+      )}
 
       {/* Meta Line */}
       <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
