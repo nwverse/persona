@@ -36,7 +36,7 @@ export function SpaceMenu({
   fold?: MenuNode["fold"];
   onClose: () => void;
   onRename: (s: Session) => void;
-  onMarkSeen: (list: Session[]) => void;
+  onMarkSeen: (list: Session[], release?: Session[]) => void;
   onLinkTodo?: (sp: SpaceLike) => void;
   /** "Open space page" (/space/…) leads the menu; the space's own page leaves it out. */
   openPage?: boolean;
@@ -68,7 +68,7 @@ export function SpaceMenu({
   const page = { name: "space" as const, mid: sp.machineId, space: sp.name };
   const items: MenuItem[] = [
     ...(openPage && first?.space_id ? [{ key: "open", label: t("agentmenus.open_space"), icon: "layers" as const, onSelect: () => navigate(page) }] : []),
-    ...(unread.length ? [{ key: "seen", label: markAllSeenLabel(unread.length), icon: "check" as const, onSelect: () => onMarkSeen(unread) }] : []),
+    ...(unread.length ? [{ key: "seen", label: markAllSeenLabel(unread.length), icon: "check" as const, onSelect: () => onMarkSeen(unread, sp.sessions) }] : []),
     ...(first?.space_id && (!first.source_kind || renamesRuntimeSpace(first, catalog)) ? [{ key: "rename", label: t("agentmenus.rename_space"), icon: "pencil" as const, onSelect: () => onRename(first) }] : []),
     ...(supportSpaces
       ? linkedTodo

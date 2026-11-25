@@ -41,6 +41,7 @@ func (s *Service) sendDigestLocked(ctx context.Context) {
 		s.logf("supervise: could not restore deferred failed starts: %v", err)
 	}
 	s.revalidateFailedStartDeferrals(ctx)
+	s.recheckOutageHolds(ctx, time.Now())
 	b := &s.supervise
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		b.mu.Lock()
@@ -83,7 +84,7 @@ func (s *Service) sendDigestLocked(ctx context.Context) {
 		return
 	}
 	list = slices.DeleteFunc(list, func(g superviseSignal) bool {
-		return g.NotBefore.After(now.Add(time.Second)) || gating && supervisionBatchDeferred(g, now)
+		return signalNotBeforePending(g, now) || gating && supervisionBatchDeferred(g, now)
 	})
 	if len(list) == 0 {
 		s.scheduleDigestLocked(now)
@@ -160,7 +161,7 @@ func (s *Service) sendDigestLocked(ctx context.Context) {
 	list = list[:0]
 	held := map[string]superviseSignal{}
 	for id, g := range b.pending { // as they are now: one may have come or gone meanwhile
-		if waits[id] || g.NotBefore.After(now.Add(time.Second)) || gating && supervisionBatchDeferred(g, now) {
+		if waits[id] || signalNotBeforePending(g, now) || gating && supervisionBatchDeferred(g, now) {
 			held[id] = g
 			continue
 		}
@@ -177,8 +178,8 @@ func (s *Service) sendDigestLocked(ctx context.Context) {
 	prev := b.last
 	b.last = now
 	b.mu.Unlock()
-	if gating {
-		defer s.schedulePendingSupervision() // an early return must not strand another batch or override delivery backoff
+	if gating || len(held) > 0 {
+		defer s.schedulePendingSupervision() // an early return must not strand another batch or held outage signal
 	}
 
 	list = s.screenMechanicalSignals(ctx, list, now, prev)
@@ -678,6 +679,8 @@ func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, a
 			b.pending[id] = joinReports(g, cur) // both reports are told, this one first
 		} else if g.Kind == sigInbox && cur.Key != g.Key {
 			b.pending[id] = joinInbox(g, cur) // the newer item, with the messages of both
+		} else if g.Kind == sigOutageRecovery {
+			b.pending[id] = joinOutageRecovery(g, cur)
 		}
 	}
 	s.updateSupervisePending(func(pending map[string]superviseSignal) {
@@ -701,6 +704,9 @@ func mergeSignals(a, b []superviseSignal) []superviseSignal {
 			}
 			if g.Kind == sigInbox && out[i].Key != g.Key {
 				g = joinInbox(out[i], g)
+			}
+			if g.Kind == sigOutageRecovery {
+				g = joinOutageRecovery(out[i], g)
 			}
 			g = preserveIdleHandoff(out[i], g)
 			out[i] = g
@@ -867,6 +873,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
 	var estimateBrief *TaskBrief
+	var outageRecoveryText string
 	switch g.Kind {
 	case sigParkedSummary:
 		r := v.parking()
@@ -997,6 +1004,12 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		if st == reviewParked || st == reviewClosing || st == reviewTimedOut || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false // a hold or its handoff result superseded the old stop
 		}
+	case sigOutageRecovery:
+		current, agents, valid := s.outageHoldStillValid(ctx, g)
+		if !valid {
+			return prompts.SuperviseEntry{}, false // closed, reviewed, resumed, or recovered while held (#13158)
+		}
+		outageRecoveryText = s.renderOutageRecovery(ctx, current, agents, g.Outage)
 	case sigCheck:
 		if g.Report == checkNoProgressReport && st == reviewParked {
 			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
@@ -1100,6 +1113,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	}
 	e := prompts.SuperviseEntry{ID: t.ID, Title: t.Title, Kind: g.Kind, Detail: g.Detail, Minutes: g.Minutes, DoneWhen: v.DoneWhen,
 		Round: v.Round, Link: todoLink(web, t.ID), Quiet: t.Quiet}
+	if g.Kind == sigOutageRecovery {
+		e.Detail = ""
+		e.OutageRecovery = outageRecoveryText
+	}
 	s.setEntryOrigin(ctx, t, web, &e)
 	if note := breakerNote(g, answerLanguage(string(s.botLang(ctx)))); note != "" && g.Kind != sigAllStopped {
 		if e.Detail != "" {
@@ -1230,7 +1247,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		text := strings.TrimSpace(last.LastText)
 		if g.Kind == sigReport {
 			text = "" // it said what it had to in the report
-		} else if g.Kind == sigReview || g.Kind == sigIdle || g.Kind == sigUnjudged {
+		} else if g.Kind == sigReview || g.Kind == sigIdle || g.Kind == sigUnjudged || g.Kind == sigOutageRecovery {
 			if answer := s.lastTurnAnswer(ctx, last.MachineID, last.SessionID); answer != "" {
 				text = answer
 			}
@@ -1260,7 +1277,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
-	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOrphaned: 4, sigRecovered: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOutageRecovery: 4, sigOrphaned: 4, sigRecovered: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

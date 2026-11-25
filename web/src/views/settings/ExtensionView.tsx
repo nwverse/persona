@@ -593,14 +593,15 @@ export function LegacyExtensionUI({
     if (entry.queued) void sendControl(entry.queued.c, entry.queued.value);
     else if (!r) setControls((x) => without(x, c.name)); // failed: the extension's last value again
     if (!r) return;
+    const applied = (!!r.view && at === asked.current) || !!r.items;
     if (r.view && at === asked.current) show(r.view, true);
     if (r.items) setView((v) => (v ? patchView(v, r.items) : v));
-    if ((r.view || r.items) && !entry.queued) setControls((x) => without(x, c.name));
+    if (applied && !entry.queued) setControls((x) => without(x, c.name));
     if (r.toast) toast(r.toast, "ok");
     if (r.url) openLink(r.url, undefined, linkManager);
     if (r.push) push(r.push);
     if (r.pop) pop();
-    if (r.reload) load(true);
+    if (r.reload || (r.view && at !== asked.current && !inFlightRef.current)) load(true);
   };
   const applyControl = (c: UIRowControl, value: string) => {
     setControls((x) => ({ ...x, [c.name]: value }));

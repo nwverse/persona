@@ -209,6 +209,7 @@ type Node struct {
 	goneDirs            map[string]time.Time              // cwd -> newest mtime of a deleted transcript pruned from metas (dirsByUse)
 	bgScans             map[string]*bgScan                // transcript path -> incremental background-task scan
 	panePIDs            map[string]panePID                // pane -> its claude pid (machines without herdr's claude integration)
+	codexPanePIDs       map[string]codexPanePID           // pane -> its running codex pid (codex_terminal_modes.go)
 	paneSeen            map[string]time.Time              // claude pane without a host session id -> first seen (zero: there when node started)
 	modes               map[string]sessionModes           // session id -> mode / effort set from the app (modes.go)
 	terms               map[string]*termStream            // session id -> its terminal streaming to the hub (terminal.go)
@@ -982,6 +983,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		// HTTP is a quota plugin's request to send to a launcher's gateway (launchers.http); nil asks for the gateway.
 		HTTP             *quota.Request                `json:"http,omitempty"`
 		Async            bool                          `json:"async"`
+		DeferMCP         bool                          `json:"defer_mcp"` // a supervised agy start links its role before MCP and the first prompt
 		Title            *string                       `json:"title"`
 		PermissionMode   string                        `json:"permission_mode"`
 		PlanThen         string                        `json:"plan_then"`     // session.start in plan mode: the mode after its plan (planthen.go)
@@ -1814,7 +1816,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			tab = *p.TabName
 		}
 		rp := runtimeStartParams{Cwd: p.Cwd, Prompt: taskFallback(taskFallback(p.Prompt, p.TaskInstructions), p.TaskAttachments), Launcher: p.Launcher, Model: p.Model, PermissionMode: p.PermissionMode,
-			Effort: p.Effort, WorkspaceID: p.WorkspaceID, DesktopProjectID: p.DesktopProjectID, Resume: p.ResumeSessionID, AgentType: p.AgentType, ClientMsgID: p.ClientMsgID, Images: runtimeImages, RequireLauncher: p.RequireLauncher}
+			Effort: p.Effort, WorkspaceID: p.WorkspaceID, DesktopProjectID: p.DesktopProjectID, Resume: p.ResumeSessionID, AgentType: p.AgentType, ClientMsgID: p.ClientMsgID, Images: runtimeImages, RequireLauncher: p.RequireLauncher, DeferMCP: p.DeferMCP}
 		if (isDesktopLauncher(p.Launcher) || isCodexAppLauncher(p.Launcher)) &&
 			strings.TrimSpace(p.Prompt) == "" && strings.TrimSpace(p.TaskAttachments) == "" {
 			// Platform instructions configure a task; they are not a desktop conversation's first message.
