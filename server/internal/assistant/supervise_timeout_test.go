@@ -304,12 +304,12 @@ func TestSupervisorTimeoutKeepsSourceWhenCheckpointFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed.failPut = errors.New("synthetic checkpoint failure")
-	s.store = func() Store { return failed }
+	s.setStore(func() Store { return failed })
 	s.drainHeldRelays(context.Background(), time.Now())
 	if s.queuedFor("conv2") != 1 || s.queuedFor("conv1") != 0 || len(f.notices()) != 0 {
 		t.Fatal("a failed atomic move lost the source or exposed a destination copy")
 	}
-	s.store = oldStore
+	s.setStore(oldStore)
 	s.drainHeldRelays(context.Background(), time.Now())
 	if s.queuedFor("conv2") != 0 {
 		t.Fatalf("the durable source did not recover after the checkpoint failure: side=%d main=%d notices=%q", s.queuedFor("conv2"), s.queuedFor("conv1"), f.notices())

@@ -438,7 +438,7 @@ func TestInboxReplyPolicyDraftDoesNotReturnUnpersistedText(t *testing.T) {
 		it.Agent.State, it.Agent.Draft = AgentSkipped, ""
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	text, err := h.draftReply(t.Context(), it.ID, "")
 	if err == nil || text != "" {
 		t.Fatalf("failed publication returned sendable obsolete text: text=%q err=%v", text, err)
