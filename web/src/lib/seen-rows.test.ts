@@ -345,6 +345,28 @@ describe("visit state machine and store integration", () => {
     expect(getSeenVisit().seen).toEqual({});
   });
 
+  it("releases a currently open held row immediately on Clear seen and keeps it released on updates", () => {
+    const sock = online([session("open", "unread")]);
+    noteShownUnseen({ "m/open": "unread" });
+    const close = open("m", "open");
+    expect(getSeenVisit().seen["m/open"]).toBe("unread");
+    expect(getSeenVisit().open["m/open"]).toBe("unread");
+    expect(getSeenVisit().snapshots["m/open"]).toBeDefined();
+
+    releaseSeen(["m/open"]);
+    expect(getSeenVisit().seen["m/open"]).toBeUndefined();
+    expect(getSeenVisit().open["m/open"]).toBeUndefined();
+    expect(getSeenVisit().snapshots["m/open"]).toBeUndefined();
+    expect(heldOrderFor("stay", getSeenVisit()).heldSeen?.["m/open"]).toBeUndefined();
+
+    // Subsequent store updates while the chat remains open do not re-hold the cleared row.
+    sock.push({ type: "sessions_delta", machine_id: "m", upsert: [session("open", "idle")], remove: [] });
+    expect(getSeenVisit().open["m/open"]).toBeUndefined();
+    expect(getSeenVisit().seen["m/open"]).toBeUndefined();
+    expect(heldOrderFor("stay", getSeenVisit()).heldSeen?.["m/open"]).toBeUndefined();
+    close();
+  });
+
   it("does not hold a chat that finished while already open once it closes", () => {
     const sock = online([session("chat", "working")]);
     const close = open("m", "chat");
