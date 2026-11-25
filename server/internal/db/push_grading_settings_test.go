@@ -138,6 +138,9 @@ func putGradingTestLayer(d *DB, source string, out any) (bool, error) {
 
 func TestPushGradingBaseAndLayerMirror(t *testing.T) {
 	d, ctx := openPushGradingHubStore(t)
+	if err := d.PutSetting(ctx, gradingTestMirrorKey, false); err != nil {
+		t.Fatal(err)
+	}
 	if err := putGradingTestBase(d, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +149,7 @@ func TestPushGradingBaseAndLayerMirror(t *testing.T) {
 	if ok, err := putGradingTestLayer(d, "extension:one", &layer); err != nil || !ok || layer["revision"] != float64(1) {
 		t.Fatalf("layer claim: ok=%v layer=%v err=%v", ok, layer, err)
 	}
-	assertGradingTestMirror(t, d, true)
+	assertGradingTestMirror(t, d, false)
 	if err := putGradingTestBase(d, false, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +157,7 @@ func TestPushGradingBaseAndLayerMirror(t *testing.T) {
 	if err := putGradingTestBase(d, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	assertGradingTestMirror(t, d, true)
+	assertGradingTestMirror(t, d, false)
 	if ok, err := d.DeletePushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", 1); err != nil || !ok {
 		t.Fatalf("delete layer: ok=%v err=%v", ok, err)
 	}
@@ -173,6 +176,9 @@ func TestPushGradingBaseAndLayerMirror(t *testing.T) {
 
 func TestPushGradingLayerConflictLeavesMirrorUntouched(t *testing.T) {
 	d, ctx := openPushGradingHubStore(t)
+	if err := d.PutSetting(ctx, gradingTestMirrorKey, true); err != nil {
+		t.Fatal(err)
+	}
 	if ok, err := putGradingTestLayer(d, "extension:one", nil); err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
 	}
@@ -273,11 +279,15 @@ func TestPushGradingMirrorFailureRollsBack(t *testing.T) {
 	if err := putGradingTestBase(d, true, nil); err == nil {
 		t.Fatal("base write unexpectedly crossed the failing mirror")
 	}
-	if ok, err := putGradingTestLayer(d, "extension:one", nil); err == nil || ok {
-		t.Fatalf("layer renewal unexpectedly crossed the failing mirror: ok=%v err=%v", ok, err)
+	if ok, err := putGradingTestLayer(d, "extension:one", nil); err != nil || !ok {
+		t.Fatalf("layer renewal touched the failing legacy mirror: ok=%v err=%v", ok, err)
 	}
-	if ok, err := d.DeletePushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", 1); err == nil || ok {
-		t.Fatalf("delete unexpectedly crossed the failing mirror: ok=%v err=%v", ok, err)
+	var layer map[string]any
+	if found, err := d.Setting(ctx, gradingTestLayerKey, &layer); err != nil || !found || layer["revision"] != float64(2) {
+		t.Fatalf("layer renewal did not persist independently: %+v found=%v err=%v", layer, found, err)
+	}
+	if ok, err := d.DeletePushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", 2); err != nil || !ok {
+		t.Fatalf("delete touched the failing legacy mirror: ok=%v err=%v", ok, err)
 	}
 	var base struct {
 		Enabled bool `json:"enabled"`
@@ -285,9 +295,45 @@ func TestPushGradingMirrorFailureRollsBack(t *testing.T) {
 	if found, err := d.Setting(ctx, gradingTestBaseKey, &base); err != nil || !found || base.Enabled {
 		t.Fatalf("base changed after rollback: %+v found=%v err=%v", base, found, err)
 	}
-	var layer map[string]any
-	if found, err := d.Setting(ctx, gradingTestLayerKey, &layer); err != nil || !found || layer["revision"] != float64(1) {
-		t.Fatalf("layer changed after rollback: %+v found=%v err=%v", layer, found, err)
+	if found, err := d.Setting(ctx, gradingTestLayerKey, &layer); err != nil || found {
+		t.Fatalf("layer was not deleted independently: %+v found=%v err=%v", layer, found, err)
 	}
 	assertGradingTestMirror(t, d, false)
+}
+
+func TestPushGradingLayerWritesPreserveLegacySwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		initial bool
+	}{{"disabled", false}, {"enabled", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, ctx := openPushGradingHubStore(t)
+			if err := d.PutSetting(ctx, gradingTestMirrorKey, tc.initial); err != nil {
+				t.Fatal(err)
+			}
+			var base map[string]any
+			if found, err := d.Setting(ctx, gradingTestBaseKey, &base); err != nil || found {
+				t.Fatalf("test needs no base row: found=%v base=%v err=%v", found, base, err)
+			}
+			ok, err := d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", gradingLayerTestValue("extension:one", "manager-a"), nil)
+			if err != nil || !ok {
+				t.Fatalf("claim: ok=%v err=%v", ok, err)
+			}
+			assertGradingTestMirror(t, d, tc.initial)
+			ok, err = d.PutPushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", gradingLayerTestValue("extension:one", "manager-a"), nil)
+			if err != nil || !ok {
+				t.Fatalf("renewal: ok=%v err=%v", ok, err)
+			}
+			assertGradingTestMirror(t, d, tc.initial)
+			ok, err = d.DeletePushGradingLayer(ctx, gradingTestBaseKey, gradingTestLayerKey, gradingTestMirrorKey, "manager-a", "extension:one", 2)
+			if err != nil || !ok {
+				t.Fatalf("delete: ok=%v err=%v", ok, err)
+			}
+			assertGradingTestMirror(t, d, tc.initial)
+			if err := putGradingTestBase(d, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			assertGradingTestMirror(t, d, tc.initial)
+		})
+	}
 }

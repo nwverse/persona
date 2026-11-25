@@ -37,9 +37,9 @@ func (d *DB) Settings(ctx context.Context, keys ...string) (map[string]json.RawM
 
 var errPushGradingOwnerConflict = errors.New("push grading layer owner conflict")
 
-// pushGradingWrite serializes every base/layer/mirror mutation, including a
-// first insert or a delete where no row exists to lock. The mirror is derived
-// from rows inside this transaction, never from a caller's older snapshot.
+// pushGradingWrite serializes every base/layer mutation, including a first
+// insert or a delete where no row exists to lock. Extension layer mutations
+// never read or write the owner-controlled legacy switch.
 func (d *DB) pushGradingWrite(ctx context.Context, write func(pgx.Tx) error) error {
 	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "push_grading:hub_settings"); err != nil {
@@ -49,49 +49,19 @@ func (d *DB) pushGradingWrite(ctx context.Context, write func(pgx.Tx) error) err
 	})
 }
 
-func (d *DB) mirrorPushGrading(ctx context.Context, tx pgx.Tx, baseKey, layerKey, mirrorKey string) error {
-	rows, err := tx.Query(ctx, `SELECT key, value FROM `+d.settingsTable()+` WHERE key = ANY($1)`, []string{baseKey, layerKey})
-	if err != nil {
-		return err
-	}
-	values := map[string]json.RawMessage{}
-	for rows.Next() {
-		var key string
-		var value json.RawMessage
-		if err := rows.Scan(&key, &value); err != nil {
-			rows.Close()
-			return err
-		}
-		values[key] = value
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	_, layerExists := values[layerKey]
-	enabled := layerExists
-	if raw, ok := values[baseKey]; ok {
-		var base struct {
-			Enabled *bool `json:"enabled"`
-		}
-		if err := json.Unmarshal(raw, &base); err != nil {
-			return err
-		}
-		if base.Enabled != nil {
-			enabled = *base.Enabled
-		}
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO `+d.settingsTable()+` (key, value, updated_at) VALUES ($1, $2::jsonb, now())
-		ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = now()`, mirrorKey, enabled)
-	return err
-}
-
-// PutPushGradingBase stores the owner's complete base configuration and the
-// effective legacy switch in one transaction, including when enabled stays the
-// same while another configuration field changes.
-func (d *DB) PutPushGradingBase(ctx context.Context, baseKey, layerKey, mirrorKey string, value any) error {
+// PutPushGradingBase stores the owner's complete base configuration. Only an
+// explicit true or false enabled value updates the legacy switch, in the same
+// transaction. Omitted or null enabled preserves the existing switch, and layer
+// presence never contributes to this owner-controlled mirror.
+func (d *DB) PutPushGradingBase(ctx context.Context, baseKey, _, mirrorKey string, value any) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
+		return err
+	}
+	var base struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &base); err != nil {
 		return err
 	}
 	return d.pushGradingWrite(ctx, func(tx pgx.Tx) error {
@@ -99,13 +69,18 @@ func (d *DB) PutPushGradingBase(ctx context.Context, baseKey, layerKey, mirrorKe
 			ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = now()`, baseKey, raw); err != nil {
 			return err
 		}
-		return d.mirrorPushGrading(ctx, tx, baseKey, layerKey, mirrorKey)
+		if base.Enabled == nil {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO `+d.settingsTable()+` (key, value, updated_at) VALUES ($1, $2::jsonb, now())
+			ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = now()`, mirrorKey, *base.Enabled)
+		return err
 	})
 }
 
-// PutPushGradingLayer claims or renews the layer and mirrors the resulting
-// effective switch atomically. A different owner changes neither row.
-func (d *DB) PutPushGradingLayer(ctx context.Context, baseKey, layerKey, mirrorKey, manager, source string, value any, out any) (bool, error) {
+// PutPushGradingLayer claims or renews only the extension layer. A different
+// owner changes no row. Neither success nor conflict touches the legacy switch.
+func (d *DB) PutPushGradingLayer(ctx context.Context, _, layerKey, _, manager, source string, value any, out any) (bool, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return false, err
@@ -126,11 +101,9 @@ func (d *DB) PutPushGradingLayer(ctx context.Context, baseKey, layerKey, mirrorK
 			return err
 		}
 		if out != nil {
-			if err := json.Unmarshal(stored, out); err != nil {
-				return err
-			}
+			return json.Unmarshal(stored, out)
 		}
-		return d.mirrorPushGrading(ctx, tx, baseKey, layerKey, mirrorKey)
+		return nil
 	})
 	if errors.Is(err, errPushGradingOwnerConflict) {
 		return false, nil
@@ -138,9 +111,9 @@ func (d *DB) PutPushGradingLayer(ctx context.Context, baseKey, layerKey, mirrorK
 	return err == nil, err
 }
 
-// DeletePushGradingLayer deletes only the still-matching owner/revision and
-// mirrors the post-delete effective switch in the same transaction.
-func (d *DB) DeletePushGradingLayer(ctx context.Context, baseKey, layerKey, mirrorKey, manager, source string, revision int64) (bool, error) {
+// DeletePushGradingLayer deletes only the still-matching owner/revision. It
+// never changes the legacy switch, including when no base row exists.
+func (d *DB) DeletePushGradingLayer(ctx context.Context, _, layerKey, _, manager, source string, revision int64) (bool, error) {
 	deleted := false
 	err := d.pushGradingWrite(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM `+d.settingsTable()+`
@@ -150,10 +123,7 @@ func (d *DB) DeletePushGradingLayer(ctx context.Context, baseKey, layerKey, mirr
 			return err
 		}
 		deleted = tag.RowsAffected() == 1
-		if !deleted {
-			return nil
-		}
-		return d.mirrorPushGrading(ctx, tx, baseKey, layerKey, mirrorKey)
+		return nil
 	})
 	if err != nil {
 		return false, err

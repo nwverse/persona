@@ -20,36 +20,29 @@ func (s *settingsStore) Settings(_ context.Context, keys ...string) (map[string]
 	return out, nil
 }
 
-func (s *settingsStore) mirrorPushGradingLocked(baseKey, layerKey, mirrorKey string) {
-	_, layerExists := s.vals[layerKey]
-	enabled := layerExists
-	if raw, ok := s.vals[baseKey]; ok {
-		var base struct {
-			Enabled *bool `json:"enabled"`
-		}
-		_ = json.Unmarshal(raw, &base)
-		if base.Enabled != nil {
-			enabled = *base.Enabled
-		}
-	}
-	raw, _ := json.Marshal(enabled)
-	s.vals[mirrorKey] = raw
-}
-
-func (s *settingsStore) PutPushGradingBase(_ context.Context, baseKey, layerKey, mirrorKey string, value any) error {
+func (s *settingsStore) PutPushGradingBase(_ context.Context, baseKey, _, mirrorKey string, value any) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
+		return err
+	}
+	var base struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &base); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.vals[baseKey] = raw
-	s.mirrorPushGradingLocked(baseKey, layerKey, mirrorKey)
+	if base.Enabled != nil {
+		raw, _ := json.Marshal(*base.Enabled)
+		s.vals[mirrorKey] = raw
+	}
 	s.puts++
 	return nil
 }
 
-func (s *settingsStore) PutPushGradingLayer(_ context.Context, baseKey, key, mirrorKey, manager, source string, value any, out any) (bool, error) {
+func (s *settingsStore) PutPushGradingLayer(_ context.Context, _, key, _, manager, source string, value any, out any) (bool, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return false, err
@@ -79,7 +72,6 @@ func (s *settingsStore) PutPushGradingLayer(_ context.Context, baseKey, key, mir
 		return false, err
 	}
 	s.vals[key] = raw
-	s.mirrorPushGradingLocked(baseKey, key, mirrorKey)
 	s.puts++
 	if out != nil {
 		return true, json.Unmarshal(raw, out)
@@ -87,7 +79,7 @@ func (s *settingsStore) PutPushGradingLayer(_ context.Context, baseKey, key, mir
 	return true, nil
 }
 
-func (s *settingsStore) DeletePushGradingLayer(_ context.Context, baseKey, key, mirrorKey, manager, source string, revision int64) (bool, error) {
+func (s *settingsStore) DeletePushGradingLayer(_ context.Context, _, key, _, manager, source string, revision int64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	raw, ok := s.vals[key]
@@ -102,7 +94,6 @@ func (s *settingsStore) DeletePushGradingLayer(_ context.Context, baseKey, key, 
 		return false, nil
 	}
 	delete(s.vals, key)
-	s.mirrorPushGradingLocked(baseKey, key, mirrorKey)
 	return true, nil
 }
 
@@ -154,5 +145,49 @@ func TestPushGradingLayerStoreRoundTripAndOwnership(t *testing.T) {
 	snapshot, err = readPushGradingSnapshot(ctx, store)
 	if err != nil || snapshot.Layer != nil || snapshot.Effective.Enabled {
 		t.Fatalf("layer survived physical deletion: %+v err=%v", snapshot, err)
+	}
+}
+
+func TestPushGradingLayerStorePreservesLegacySwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		initial bool
+	}{{"disabled", false}, {"enabled", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			raw, _ := json.Marshal(tc.initial)
+			store := &settingsStore{vals: map[string][]byte{gradingSwitchSettingKey: raw}}
+			layer := pushGradingLayer{
+				Source: "extension:one", Manager: "manager-a", UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				Config: parseGradingTestConfig(t, `{"version":1,"actions":{"P2":"push"}}`, true),
+			}
+			if _, err := writePushGradingLayer(ctx, store, layer); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(store.vals[gradingSwitchSettingKey]); got != string(raw) {
+				t.Fatalf("claim changed legacy switch: got=%s want=%s", got, raw)
+			}
+			stored, err := writePushGradingLayer(ctx, store, layer)
+			if err != nil || stored.Revision != 2 {
+				t.Fatalf("renewal: stored=%+v err=%v", stored, err)
+			}
+			if got := string(store.vals[gradingSwitchSettingKey]); got != string(raw) {
+				t.Fatalf("renewal changed legacy switch: got=%s want=%s", got, raw)
+			}
+			deleted, err := deletePushGradingLayer(ctx, store, "manager-a", "extension:one", 2)
+			if err != nil || !deleted {
+				t.Fatalf("delete: deleted=%v err=%v", deleted, err)
+			}
+			if got := string(store.vals[gradingSwitchSettingKey]); got != string(raw) {
+				t.Fatalf("delete changed legacy switch: got=%s want=%s", got, raw)
+			}
+			base := parseGradingTestConfig(t, `{"version":1,"enabled":null}`, false)
+			if err := writePushGradingBase(ctx, store, base); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(store.vals[gradingSwitchSettingKey]); got != string(raw) {
+				t.Fatalf("null base enabled changed legacy switch: got=%s want=%s", got, raw)
+			}
+		})
 	}
 }
