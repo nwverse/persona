@@ -3538,6 +3538,7 @@ final class AppModel {
             if announces { Haptics.attention() }
             summariesChanged()
         case .interactionResolved(let id, let assistant):
+            if withdrawTodoAsk(id, group: group) { return }
             let uid = group.isEmpty ? id : group + "|" + id
             endedInteractionIDs.insert(uid)
             answering.hubEnded(uid)
