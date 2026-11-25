@@ -117,8 +117,8 @@ type countsTodos struct {
 	gen     uint64 // the {"type":"todos"} gone out when the kept counts' to-dos were read (todoViewGen)
 	failing bool   // the last recount could not read the list: its failure is logged once, until a count is kept
 
-	armed bool                            // a recount waits for todosCountSettle
-	timer *time.Timer                     // its real-clock timer
+	armed bool                            // a recount waits for todosCountSettle or reads the list: one at a time
+	timer *time.Timer                     // its real-clock timer, while it waits
 	runs  sync.WaitGroup                  // the recount scheduled or running: the tests' drain waits for it
 	after func(d time.Duration, f func()) // tests: a fake clock's timers
 }
@@ -153,8 +153,8 @@ func (s *Service) todosCounted(gen uint64, p todoProjection) {
 }
 
 // todosCountSoon has the manager count the to-dos itself once todosCountSettle passed (todosRecount), unless a recount
-// waits already. Only a running manager that carries the fleet counts them: one without it tells no view, and before
-// Run (a test on the real clock) nothing would stop the timer.
+// waits or reads already. Only a running manager that carries the fleet counts them: one without it tells no view, and
+// before Run (a test on the real clock) nothing would stop the timer.
 func (s *Service) todosCountSoon() {
 	if !s.fleetOn() {
 		return
@@ -180,23 +180,37 @@ func (s *Service) todosCountSoon() {
 }
 
 // todosRecount reads the whole to-do list as GET /api/v1/todos does (todosViewed), which keeps its counts, unless a
-// read of the to-dos since the last {"type":"todos"} counted them already or the manager stopped.
+// read of the to-dos since the last {"type":"todos"} counted them already or the manager stopped. It stays armed until
+// its read ends: on a slow store that read takes up to its 30 s, and a round or a {"type":"todos"} meanwhile starts no
+// second one. A {"type":"todos"} that went out while it waited or read found it armed, so it arms the next recount
+// itself once it is done; a round that asked meanwhile asks again the next round.
 func (s *Service) todosRecount() {
 	gen := s.todoViewGen()
 	t := &s.fleet.live.counts.todos
 	t.mu.Lock()
-	t.armed, t.timer = false, nil
+	t.timer = nil
 	counted := !t.counts.IsNone() && t.gen >= gen
 	t.mu.Unlock()
-	if counted || s.runCtx().Err() != nil {
-		return
+	if !counted && s.runCtx().Err() == nil {
+		s.todosRead()
 	}
+	t.mu.Lock()
+	t.armed = false
+	t.mu.Unlock()
+	if s.todoViewGen() > gen { // read once armed is let go: a push from here on arms its own recount
+		s.todosCountSoon()
+	}
+}
+
+// todosRead is a recount's read of the whole list; its failure is logged once, until a count is kept.
+func (s *Service) todosRead() {
 	ctx, cancel := context.WithTimeout(s.runCtx(), 30*time.Second)
 	defer cancel()
 	_, _, err := s.todosViewed(ctx, false)
 	if err == nil {
 		return
 	}
+	t := &s.fleet.live.counts.todos
 	t.mu.Lock()
 	logged := t.failing
 	t.failing = true

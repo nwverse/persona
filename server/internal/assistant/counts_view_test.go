@@ -325,6 +325,13 @@ func (c *todosClock) run(kind string) int {
 	return len(due)
 }
 
+// waiting says how many of kind's are scheduled and not run yet.
+func (c *todosClock) waiting(kind string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.until[kind])
+}
+
 // The view's to-dos follow the list GET /api/v1/todos answers: absent until the manager has counted them, then the
 // list's counts.needs_you. A read of the list keeps the number; once a {"type":"todos"} went out that no read
 // followed, the manager reads the list itself when todosCountSettle passed, and a recount after a read since does not.
@@ -411,4 +418,88 @@ func TestCountsViewFollowsTheToDoList(t *testing.T) {
 		t.Fatalf("GET /api/v1/todos says needs_you %d, the view %d", n, needsYou(v))
 	}
 	last(3) // the read since changed nothing
+}
+
+// todosSlowStore holds the first read of the decision reviews' dismissals, which every whole-list read loads, until
+// release is closed: a store slow enough that a recount's read is still running when the next rounds come.
+type todosSlowStore struct {
+	*fleetMem
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *todosSlowStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if key == taskReviewDismissalsKey {
+		s.once.Do(func() { close(s.entered) })
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	return s.fleetMem.Setting(ctx, key, out)
+}
+
+// The manager reads its to-do list one read at a time. While a recount's read waits on a slow store, the rounds that
+// still have no count and a {"type":"todos"} that goes out start no second read; once it ends, the push has the
+// manager read the list once more, and that read, with nothing pushed since, arms nothing.
+func TestCountsViewRecountsOneReadAtATime(t *testing.T) {
+	ft := newFleetTest(t)
+	s := ft.s
+	slow := &todosSlowStore{fleetMem: ft.st, entered: make(chan struct{}), release: make(chan struct{})}
+	s.setStore(func() Store { return slow })
+	clock := &todosClock{until: map[string][]func(){}}
+	s.tpush.after, s.fleet.live.counts.todos.after, s.tview.after = clock.on("push"), clock.on("recount"), clock.on("view")
+	var r fleetRound
+
+	countsRound(s, &r) // nothing counted yet: the round asks for a count
+	if n := clock.waiting("recount"); n != 1 {
+		t.Fatalf("%d recounts after the first round, want 1", n)
+	}
+	read := make(chan struct{})
+	go func() {
+		defer close(read)
+		clock.run("recount")
+	}()
+	select {
+	case <-slow.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the recount did not read the list")
+	}
+
+	for range 3 {
+		countsRound(s, &r) // still no count: each round asks
+	}
+	s.todosPushSoon()
+	if clock.run("push") != 1 {
+		t.Fatal("no {\"type\":\"todos\"} was waiting")
+	}
+	if n := clock.waiting("recount"); n != 0 {
+		t.Fatalf("%d recounts were armed while the first read was still running, want none", n)
+	}
+
+	close(slow.release)
+	select {
+	case <-read:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the recount's read did not end")
+	}
+	if n := clock.waiting("recount"); n != 1 {
+		t.Fatalf("%d recounts after the read the push went out during, want 1", n)
+	}
+	if n := clock.run("recount"); n != 1 {
+		t.Fatalf("ran %d recounts, want 1", n)
+	}
+	if n := clock.waiting("recount"); n != 0 {
+		t.Fatalf("%d recounts after a read nothing was pushed during, want none", n)
+	}
+	countsRound(s, &r)
+	if n := clock.waiting("recount"); n != 0 {
+		t.Fatalf("a round with the to-dos counted asked for %d recounts", n)
+	}
+	told, raw := countsTold(t, ft)
+	if v := told[len(told)-1]; v.Counts.TodosNeedsYou == nil || v.Counts.TodosNeedsYou.N != 0 {
+		t.Fatalf("the last view %s; want the empty list's todos_needs_you 0", raw[len(raw)-1])
+	}
 }
