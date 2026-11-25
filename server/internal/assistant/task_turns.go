@@ -731,6 +731,29 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 	return false
 }
 
+// retargetTurnSignalRecipient updates an in-flight handed-over sigReview receipt in the turn ledger when an explicit
+// transfer moves the task to a new supervisor before the earlier handover has been delivered.
+func (s *Service) retargetTurnSignalRecipient(ctx context.Context, todoID, recipient string) {
+	if todoID == "" || recipient == "" {
+		return
+	}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.loaded {
+		return
+	}
+	e, ok := b.doc.Turns[todoID]
+	if !ok || e.Signal == nil || e.Signal.Kind != sigReview || e.Signal.Told != nil || e.Signal.Recipient == "" || e.Signal.Recipient == recipient {
+		return
+	}
+	next := *e.Signal
+	next.Recipient = recipient
+	e.Signal = &next
+	b.doc.Turns[todoID] = e
+	s.saveTurnsLocked(ctx)
+}
+
 // turnsTold keeps on the ledger that the turn signals in list need no telling any more: a supervision message carried
 // them (sent, or queued where a restart keeps it), said the same within the deduplication window, or they no longer
 // hold. A manager started again does not tell them a second time; until then it tells them from the ledger. An ordinary

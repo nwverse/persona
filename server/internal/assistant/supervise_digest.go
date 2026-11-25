@@ -708,7 +708,9 @@ func mergeSignals(a, b []superviseSignal) []superviseSignal {
 			if g.Kind == sigOutageRecovery {
 				g = joinOutageRecovery(out[i], g)
 			}
-			if g.Recipient == "" && out[i].Key == g.Key {
+			if g.Recipient == "" && out[i].Recipient != "" && out[i].Key == g.Key &&
+				(g.To == "" || g.To == out[i].Recipient) &&
+				(out[i].To == "" || g.To == "" || out[i].To == g.To) {
 				g.Recipient = out[i].Recipient
 			}
 			g = preserveIdleHandoff(out[i], g)

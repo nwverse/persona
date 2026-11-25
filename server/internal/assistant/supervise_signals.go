@@ -1016,6 +1016,12 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 	if g.Kind != sigAsk {
 		g = s.currentSupervisorSignal(g)
 	}
+	currentSupervisor := ""
+	if g.Kind == sigReview && g.Recipient == "" {
+		if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil {
+			currentSupervisor = t.Supervision.Supervisor
+		}
+	}
 	if g.At.IsZero() {
 		g.At = time.Now()
 	}
@@ -1056,7 +1062,10 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
 		}
-		if g.Recipient == "" && cur.Key == g.Key {
+		if g.Recipient == "" && cur.Recipient != "" && cur.Key == g.Key &&
+			(g.To == "" || g.To == cur.Recipient) &&
+			(cur.To == "" || g.To == "" || cur.To == g.To) &&
+			(currentSupervisor == "" || currentSupervisor == cur.Recipient) {
 			g.Recipient = cur.Recipient
 		}
 		g = preserveIdleHandoff(cur, g)

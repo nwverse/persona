@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -558,5 +560,214 @@ func TestSideHandoverSameMicrosecondTurnReceiptDeliversToMain(t *testing.T) {
 	flushSuperviseDigest(ctx, s)
 	if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
 		t.Fatalf("repeat same-microsecond handover delivered %d sigReview notice(s) to conv1, want 1", n)
+	}
+}
+
+func TestSideHandoverExternalPRSecondaryTransferToLeadDeliversOnce(t *testing.T) {
+	for _, stage := range []string{"pending_in_outbox", "queued_untried_on_main"} {
+		t.Run(stage, func(t *testing.T) {
+			st := &memStore{}
+			s, f := newQuietServiceOn(t, st)
+			setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+			ctx := context.Background()
+			f.known["side1"] = true
+			f.known["lead1"] = true
+			setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+			f.setSessions("server",
+				proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+				proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+				proto.Session{
+					SessionID:    "side1",
+					MachineID:    "server",
+					Assistant:    true,
+					Status:       proto.StatusIdle,
+					SourceKind:   proto.SourceRuntime,
+					Capabilities: &proto.SessionCapabilities{SupervisionPolicy: true},
+				},
+			)
+			todo, err := s.createTodo(ctx, "Wait on upstream PR", "Wait for PR #12", "side1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.superviseTodo(ctx, todo.ID, "side1", []string{"PR merged"}, 30, "plan"); err != nil {
+				t.Fatal(err)
+			}
+			args := externalPRParkArgs(externalPRSource)
+			args["todo_id"] = todo.ID
+			if _, err := runJSON(t, s, "side1", "task_review", args); err != nil {
+				t.Fatal(err)
+			}
+			s.deploy.forge = &externalPRForge{terminal: "merged"}
+			now := time.Now()
+			s.sweepPRStatuses(ctx, now)
+			flushSuperviseDigest(ctx, s)
+			if n := reviewSignalsTold(f, "side1", todo.ID); n != 1 {
+				t.Fatalf("side1 received %d external-PR review notice(s), want 1", n)
+			}
+			origKey := reviewKey(todoNow(s, todo.ID).Supervision)
+
+			// First handover: side1 archived -> main (conv1), holding the review before conv1 receives it.
+			if _, err := s.setArchived(ctx, "server", "side1", true, titleByUser); err != nil {
+				t.Fatal(err)
+			}
+			if stage == "queued_untried_on_main" {
+				// Simulate conv1 busy so the handed-over review is admitted untried into conv1's relay queue
+				// and populates supervise.sent[todo|review] == origKey.
+				f.setSessions("server",
+					proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking},
+					proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+				)
+				flushSuperviseDigest(ctx, s)
+				if n := reviewSignalsTold(f, "conv1", todo.ID); n != 0 {
+					t.Fatalf("busy conv1 unexpectedly received %d review notice(s)", n)
+				}
+			}
+
+			// Second handover (explicit Move to / agent_transfer): conv1 -> direction lead1.
+			s.supervise.routingMu.Lock()
+			_, blockedBy, terr := s.transferTaskLocked(ctx, todoNow(s, todo.ID), "lead1", "conv1")
+			s.supervise.routingMu.Unlock()
+			if terr != nil || blockedBy != "" {
+				t.Fatalf("transferTaskLocked(conv1 -> lead1): blockedBy=%q err=%v", blockedBy, terr)
+			}
+
+			// A same-key watch pass before flushing must not resurrect stale Recipient=conv1.
+			s.superviseWatch(ctx, now.Add(time.Minute))
+			s.supervise.mu.Lock()
+			pendingReview, hasPending := s.supervise.pending[todo.ID+"|"+sigReview]
+			s.supervise.mu.Unlock()
+			if !hasPending || pendingReview.Key != origKey || pendingReview.To != "lead1" || pendingReview.Recipient != "lead1" {
+				t.Fatalf("after secondary transfer, pending sigReview = (%+v, ok=%v), want Key=%q To=lead1 Recipient=lead1", pendingReview, hasPending, origKey)
+			}
+
+			flushSuperviseDigest(ctx, s)
+			if n := reviewSignalsTold(f, "lead1", todo.ID); n != 1 {
+				t.Fatalf("lead1 received %d external-PR review notice(s) after secondary transfer, want 1", n)
+			}
+			if n := reviewSignalsTold(f, "conv1", todo.ID); n != 0 {
+				t.Fatalf("conv1 received %d review notice(s) after transfer to lead1, want 0", n)
+			}
+
+			// Subsequent watches must stay deduplicated for lead1.
+			s.superviseWatch(ctx, now.Add(2*time.Minute))
+			flushSuperviseDigest(ctx, s)
+			if n := reviewSignalsTold(f, "lead1", todo.ID); n != 1 {
+				t.Fatalf("repeat watch delivered %d review notice(s) to lead1, want 1", n)
+			}
+		})
+	}
+
+	// Unit check: mergeSignals must not inherit an old Recipient when a same-key signal targets a different To.
+	merged := mergeSignals(
+		[]superviseSignal{{Todo: "todo_1", Kind: sigReview, Key: "external-pr@1", To: "conv1", Recipient: "conv1"}},
+		[]superviseSignal{{Todo: "todo_1", Kind: sigReview, Key: "external-pr@1", To: "lead1"}},
+	)
+	if len(merged) != 1 || merged[0].To != "lead1" || merged[0].Recipient != "" {
+		t.Fatalf("mergeSignals kept stale Recipient across target change: %+v", merged)
+	}
+}
+
+func TestExternalPRDedupUpgradeCompatibilityPreservesLegacyReceipt(t *testing.T) {
+	st := &memStore{}
+	s, f := newQuietServiceOn(t, st)
+	setSuperviseTimingsForTest(s, superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour})
+	ctx := context.Background()
+	f.known["lead1"] = true
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lead1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+	)
+	todo, err := s.createTodo(ctx, "Wait on upstream PR", "Wait for PR #12", "lead1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.superviseTodo(ctx, todo.ID, "lead1", []string{"PR merged"}, 30, "plan"); err != nil {
+		t.Fatal(err)
+	}
+	args := externalPRParkArgs(externalPRSource)
+	args["todo_id"] = todo.ID
+	if _, err := runJSON(t, s, "lead1", "task_review", args); err != nil {
+		t.Fatal(err)
+	}
+	s.deploy.forge = &externalPRForge{terminal: "merged"}
+	now := time.Now()
+	s.sweepPRStatuses(ctx, now)
+	origKey := reviewKey(todoNow(s, todo.ID).Supervision)
+	if !strings.HasPrefix(origKey, externalPRReviewPrefix) {
+		t.Fatalf("reviewKey = %q, want prefix %q", origKey, externalPRReviewPrefix)
+	}
+
+	// Simulate a pre-upgrade persistent receipt stored under the legacy 3-element key [todo, "review", "external_pr"]
+	// (no recipient/To element), with an empty in-memory cache as right after an upgrade restart.
+	legacyKeyBytes, _ := json.Marshal([]string{todo.ID, sigReview, "external_pr"})
+	sum := sha256.Sum256([]byte(origKey))
+	legacyHistory := map[string]superviseFingerprint{
+		string(legacyKeyBytes): {
+			Hash: hex.EncodeToString(sum[:]),
+			At:   now.Add(-time.Minute).UTC(),
+			Key:  "",
+			Todo: todo.ID,
+		},
+	}
+	if err := st.PutSetting(ctx, superviseDedupKey, legacyHistory); err != nil {
+		t.Fatal(err)
+	}
+	// Clear pending/sent/in-memory dedup to mimic a post-upgrade restart.
+	s.supervise.mu.Lock()
+	s.supervise.pending = map[string]superviseSignal{}
+	s.supervise.sent = map[string]string{}
+	s.supervise.mu.Unlock()
+	s.supervise.dedupMu.Lock()
+	s.supervise.dedup = nil
+	s.supervise.dedupMu.Unlock()
+	s.ackSupervisePending([]superviseSignal{{Todo: todo.ID, Kind: sigReview, Key: origKey}})
+
+	// Ordinary post-upgrade watch for the same assigned supervisor (sets To=lead1, Recipient="") must hit the legacy
+	// receipt and NOT re-wake lead1.
+	s.superviseWatch(ctx, now.Add(time.Minute))
+	flushSuperviseDigest(ctx, s)
+	if n := reviewSignalsTold(f, "lead1", todo.ID); n != 0 {
+		t.Fatalf("post-upgrade watch re-delivered %d external-PR review notice(s) to lead1, want 0", n)
+	}
+
+	// An explicit handover to a new supervisor (conv1, Recipient=conv1) must still deliver once.
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.Supervisor = "conv1"
+		v.SupervisorSource = "explicit"
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.signalHandedOverReview(todo.ID, "conv1", origKey, "handed over to main")
+	flushSuperviseDigest(ctx, s)
+	if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
+		t.Fatalf("explicit handover to conv1 delivered %d external-PR review notice(s), want 1", n)
+	}
+
+	// After a restart where only conv1's recipient-scoped receipt exists, an ordinary watch for conv1 (To=conv1,
+	// Recipient="") must still be deduplicated.
+	delete(legacyHistory, string(legacyKeyBytes))
+	convKeyBytes, _ := json.Marshal([]string{todo.ID, sigReview, "external_pr", "conv1"})
+	legacyHistory[string(convKeyBytes)] = superviseFingerprint{
+		Hash: hex.EncodeToString(sum[:]),
+		At:   now.UTC(),
+		Key:  "",
+		Todo: todo.ID,
+	}
+	if err := st.PutSetting(ctx, superviseDedupKey, legacyHistory); err != nil {
+		t.Fatal(err)
+	}
+	s.supervise.mu.Lock()
+	s.supervise.pending = map[string]superviseSignal{}
+	s.supervise.sent = map[string]string{}
+	s.supervise.mu.Unlock()
+	s.supervise.dedupMu.Lock()
+	s.supervise.dedup = nil
+	s.supervise.dedupMu.Unlock()
+	s.superviseWatch(ctx, now.Add(2*time.Minute))
+	flushSuperviseDigest(ctx, s)
+	if n := reviewSignalsTold(f, "conv1", todo.ID); n != 1 {
+		t.Fatalf("post-restart watch after handover delivered %d total review notice(s) to conv1, want 1", n)
 	}
 }
