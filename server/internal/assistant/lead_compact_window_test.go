@@ -13,8 +13,9 @@ import (
 // messages carry the window on every path the manager sends them by: the apps' messages and the node's own
 // (sendModel, assistant.model), a relay, and the manager's own messages such as a supervision digest (session.send,
 // session.send_once). The value is 400000 while the setting is unset and the saved value otherwise (0 too: the node then
-// follows the launcher), and the value a caller set is replaced by it. Another side conversation and the background
-// supervisor carry none, and a lead that no longer leads carries none from its next message.
+// follows the launcher), and a value a caller set is replaced by it: the node applies whatever window comes with a
+// conversation. Another side conversation and the background supervisor carry none, a value a caller set for them
+// included, and a lead that no longer leads carries none from its next message.
 func TestMainCompactWindowGoesWithLeaderConversations(t *testing.T) {
 	ctx := context.Background()
 	f := newFakeHub().withMachine()
@@ -68,7 +69,7 @@ func TestMainCompactWindowGoesWithLeaderConversations(t *testing.T) {
 		}
 		got["relay"] = f.lastSend(t)["main_compact_window"]
 		for _, method := range []string{DeviceSessionSend, DeviceSessionSendOnce} {
-			if err := s.call(ctx, "server", method, map[string]any{"session_id": id, "text": "A task needs your review."}, nil); err != nil {
+			if err := s.call(ctx, "server", method, map[string]any{"session_id": id, "text": "A task needs your review.", "main_compact_window": 1}, nil); err != nil {
 				t.Fatal(err)
 			}
 			got[method] = lastCall(method)["main_compact_window"]
