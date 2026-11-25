@@ -66,8 +66,8 @@ describe("a parked task in the Assistant's entries", () => {
     agents: [{ machine_id: "box", session_id: "s1", linked_at: at }],
     supervision: { supervisor: "main", state, ...(state === "parked" ? { parked } : {}), reviews: [], updated_at: at },
   } as unknown as Todo);
-  const entries = (t: Todo, at: string) => assistantEntries({
-    conversation: "main", main: "main", todos: [t], sessions: [], interactions: [], plans: {}, feed: [], now,
+  const entries = (t: Todo, at: string, sessions: Session[] = []) => assistantEntries({
+    conversation: "main", main: "main", todos: [t], sessions, interactions: [], plans: {}, feed: [], now,
     cards: [{ id: "plan:plan_1:0", todo_id: t.id, plan_id: "plan_1", index: 0, at, updated_at: at, state: "working" }],
   });
   const keys = (got: ReturnType<typeof assistantEntries>) => ({ needsYou: got.needsYou.map((i) => i.key), running: got.running.map((i) => i.key), parked: got.parked.map((i) => i.key), shelved: got.shelved.map((i) => i.key) });
@@ -83,6 +83,15 @@ describe("a parked task in the Assistant's entries", () => {
     const at = "2026-11-05T08:00:00Z";
     expect(keys(entries(todo("parked", at), at))).toEqual({ needsYou: [], running: [], parked: ["task:todo_1"], shelved: [] });
     expect(keys(entries(todo("", at), at)).running).toEqual([]);
+  });
+
+  it("keeps a timed recheck with background work in In progress", () => {
+    const at = "2026-11-10T08:00:00Z";
+    const task = todo("parked", at);
+    task.supervision!.parked = { reason: "Check background work", until: "2026-11-10T09:00:00Z", waiting_on: "date", count: 1 };
+    const session = { machine_id: "box", session_id: "s1", title: "Review", cwd: "/work", state: "idle", status: "idle", updated_at: at,
+      background_working: true, background_tasks_count: 1 } as Session;
+    expect(keys(entries(task, at, [session]))).toEqual({ needsYou: [], running: ["task:todo_1"], parked: [], shelved: [] });
   });
 });
 
@@ -462,4 +471,85 @@ it("keeps Health plans out of Main while retaining them in their own conversatio
  const input = {main:"main",plans,todos:[],sessions:[],interactions:[],feed:[]};
  expect(assistantEntries({...input,conversation:"main"}).needsYou).toEqual([]);
  expect(assistantEntries({...input,conversation:"health-chat"}).needsYou.map((item)=>item.key)).toEqual(["plan:health"]);
+});
+
+describe("multi-manager scoping (#15645)", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const now = Date.parse("2026-11-10T09:00:00Z");
+  const makeTodo = (id: string, manager: string | undefined, extra: Partial<Todo> = {}): Todo => ({
+    id,
+    title: id,
+    origin: manager ? `${manager}-main` : "default-main",
+    created_at: at,
+    updated_at: at,
+    ...(manager ? { manager } : {}),
+    ...extra,
+  } as Todo);
+  const makeSession = (machine: string, id: string, manager: string | undefined, state: "working" | "needs_you" = "working"): Session => ({
+    machine_id: machine,
+    session_id: id,
+    ...(manager ? { manager } : {}),
+    title: id,
+    cwd: "/work",
+    state,
+    status: state === "needs_you" ? "blocked" : "working",
+    updated_at: at,
+  } as Session);
+
+  it("keeps other managers' todos, standalone agents, interactions, and plans out of a secondary manager's Main", () => {
+    const defaultTodo = makeTodo("todo-default", "assistant", {
+      agents: [{ machine_id: "box-a", session_id: "s-def-task", linked_at: at }],
+    });
+    const unstampedDefaultTodo = makeTodo("todo-unstamped", undefined, {
+      supervision: { supervisor: "default-main", state: "needs_user", reviews: [], updated_at: at },
+    });
+    const secondTodo = makeTodo("todo-second", "m-second", {
+      agents: [{ machine_id: "box-b", session_id: "s-sec-task", linked_at: at }],
+    });
+    const sessions = [
+      makeSession("box-a", "s-def-task", "assistant", "working"),
+      makeSession("box-a", "s-def-solo", "assistant", "working"),
+      makeSession("box-a", "s-unstamped-solo", undefined, "needs_you"),
+      makeSession("box-b", "s-sec-task", "m-second", "working"),
+      makeSession("box-b", "s-sec-solo", "m-second", "working"),
+    ];
+    const interactions: Interaction[] = [
+      { id: "ix-def", manager: "assistant", machine_id: "box-a", session_id: "s-def-solo", kind: "question", created_at: at } as Interaction,
+      { id: "ix-unstamped", machine_id: "box-a", session_id: "s-unstamped-solo", kind: "question", created_at: at } as Interaction,
+      { id: "ix-sec", manager: "m-second", machine_id: "box-b", session_id: "s-sec-solo", kind: "question", created_at: at } as Interaction,
+    ];
+    const plans: Record<string, TaskPlan> = {
+      pDef: { id: "pDef", conversation: "assistant-main", state: "open", created_at: at, tasks: [] },
+      pSec: { id: "pSec", manager: "m-second", conversation: "m-second-main", state: "open", created_at: at, tasks: [] },
+    };
+
+    const second = assistantEntries({
+      conversation: "m-second-main",
+      main: "m-second-main",
+      manager: "m-second",
+      todos: [defaultTodo, unstampedDefaultTodo, secondTodo],
+      sessions,
+      interactions,
+      plans,
+      feed: [],
+      now,
+    });
+    expect(second.running.map((item) => item.key)).toEqual(["task:todo-second", "agent:box-b/s-sec-solo"]);
+    expect(second.needsYou.map((item) => item.key)).toEqual(["plan:pSec"]);
+
+    // Default manager still includes both explicitly stamped "assistant" items and unstamped legacy items, excluding m-second.
+    const primary = assistantEntries({
+      conversation: "assistant-main",
+      main: "assistant-main",
+      manager: "assistant",
+      todos: [defaultTodo, unstampedDefaultTodo, secondTodo],
+      sessions,
+      interactions,
+      plans,
+      feed: [],
+      now,
+    });
+    expect(primary.running.map((item) => item.key)).toEqual(["task:todo-default", "agent:box-a/s-def-solo"]);
+    expect(primary.needsYou.map((item) => item.key)).toEqual(["agent:box-a/s-unstamped-solo", "plan:pDef", "task:todo-unstamped"]);
+  });
 });

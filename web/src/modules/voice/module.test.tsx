@@ -107,14 +107,26 @@ describe("the voice module", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it("hub off: every chat slot stays empty and its code is never requested", async () => {
+    registerModule({ ...voice, load });
+    Object.assign(getState(), { loaded: true, features: [MODULES_FEATURE] });
+    act(() => root.render(<Chat />));
+    await flush();
+    expect(seen).toEqual({ action: undefined, taken: false });
+    expect(host.innerHTML).toBe("");
+    expect(load).not.toHaveBeenCalled();
+    await expect(loadModule("voice")).rejects.toThrow(/not enabled/);
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it("follows the hub: off on a hub that publishes module flags without it, on with its flag or with an older hub", () => {
     registerModule(voice);
     Object.assign(getState(), { loaded: true, features: [MODULES_FEATURE] });
-    expect(chatSlotFillers("composer.trailingAction")).toEqual([]);
+    for (const slot of CHAT_SLOTS) expect(chatSlotFillers(slot), slot).toEqual([]);
     Object.assign(getState(), { features: [MODULES_FEATURE, "module.voice"] });
-    expect(chatSlotFillers("composer.trailingAction").map((f) => f.id)).toEqual(["voice"]);
+    for (const slot of CHAT_SLOTS) expect(chatSlotFillers(slot).map((f) => f.id), slot).toEqual(["voice"]);
     Object.assign(getState(), { features: ["terminal_stream"] });
-    expect(chatSlotFillers("composer.trailingAction").map((f) => f.id)).toEqual(["voice"]);
+    for (const slot of CHAT_SLOTS) expect(chatSlotFillers(slot).map((f) => f.id), slot).toEqual(["voice"]);
   });
 
   it("turned off while a page is open: the button goes", async () => {

@@ -5,14 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // The core's types the module names, as the seam (internal/healthhost) declares them.
@@ -42,6 +43,10 @@ type Host interface {
 	Logf(format string, args ...any)
 	Settings() settingsStore
 	IntakeStore() healthIntakeStore
+	StrengthStore() strengthStore
+	CardShown(context.Context, assistantwire.StrengthCard)
+	CardChanged(context.Context, assistantwire.StrengthCard)
+	PageLink(context.Context, string, string) string
 	ImportStore() healthWaterImportStore
 	WaterExtensions() waterExtensions
 	Event(ctx context.Context, ev map[string]any)
@@ -58,19 +63,30 @@ type Host interface {
 // Service is the module's layer on one manager (internal/healthhost.Layer).
 type Service struct {
 	h Host
-	// intakeMu serializes intake settings, reminder state and local intake mutations.
-	intakeMu sync.Mutex
+	// intakeMu serializes health items, intake settings, reminder state and local intake mutations.
+	intakeMu   sync.Mutex
+	strengthMu sync.Mutex
 }
 
 // New makes the module's layer on h.
 func New(h Host) *Service { return &Service{h: h} }
 
 // Routes registers the module's HTTP routes through handle.
-func (s *Service) Routes(handle func(pattern string, fn http.HandlerFunc)) { s.intakeRoutes(handle) }
+func (s *Service) Routes(handle func(pattern string, fn http.HandlerFunc)) {
+	s.intakeRoutes(handle)
+	handle("GET /api/v1/assistant/health/items", s.getHealthItems)
+	handle("PUT /api/v1/assistant/health/items", s.putHealthItems)
+}
 
 // Tool runs the health_intake tool; the core has checked the caller's space.
-func (s *Service) Tool(ctx context.Context, args json.RawMessage) (string, error) {
-	return s.toolHealthIntake(ctx, args)
+func (s *Service) Tool(ctx context.Context, call assistantwire.HealthToolCall) (string, error) {
+	switch call.Name {
+	case assistantwire.CapabilityHealthIntake:
+		return s.toolHealthIntake(ctx, call.Args)
+	case assistantwire.CapabilityHealthStrength:
+		return s.toolHealthStrength(ctx, call)
+	}
+	return "", errors.New("unknown Health tool")
 }
 
 // ReminderLoop sends the water reminders until ctx ends.
@@ -91,10 +107,30 @@ func fullRole(r *http.Request) bool {
 }
 
 // intakeUUIDPattern is an entry's id.
-var intakeUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var intakeUUIDPattern = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+type strengthStore = interface {
+	HealthStrengthExercises(context.Context, bool) ([]assistantwire.StrengthExercise, error)
+	HealthStrengthExerciseSave(context.Context, assistantwire.StrengthExercise) (assistantwire.StrengthExercise, bool, error)
+	HealthStrengthExerciseDelete(context.Context, string) (bool, error)
+	HealthStrengthSetAdd(context.Context, []assistantwire.StrengthSet) ([]assistantwire.StrengthSet, error)
+	HealthStrengthSetUndo(context.Context, string) (*assistantwire.StrengthSet, bool, error)
+	HealthStrengthSets(context.Context, assistantwire.StrengthSetFilter) ([]assistantwire.StrengthSet, error)
+	HealthStrengthWorkoutAdd(context.Context, assistantwire.StrengthWorkout) (int, error)
+	HealthStrengthWorkout(context.Context, string) (*assistantwire.StrengthWorkout, error)
+	HealthStrengthWorkoutLatest(context.Context, time.Time, time.Time) (*assistantwire.StrengthWorkout, error)
+	HealthStrengthDraftCreate(context.Context, assistantwire.StrengthDraft, assistantwire.StrengthCard) error
+	HealthStrengthDraft(context.Context, string) (*assistantwire.StrengthDraft, error)
+	HealthStrengthDraftByCard(context.Context, string) (*assistantwire.StrengthDraft, error)
+	HealthStrengthDrafts(context.Context, string) ([]assistantwire.StrengthDraft, error)
+	HealthStrengthDraftEdit(context.Context, string, int64, json.RawMessage, json.RawMessage, time.Time) (assistantwire.StrengthDraft, assistantwire.StrengthCard, error)
+	HealthStrengthDraftConfirm(context.Context, string, int64, []assistantwire.StrengthSet, json.RawMessage, json.RawMessage, time.Time) (assistantwire.StrengthDraft, assistantwire.StrengthCard, []assistantwire.StrengthSet, error)
+	HealthStrengthDraftDiscard(context.Context, string, int64, json.RawMessage, json.RawMessage, time.Time) (assistantwire.StrengthDraft, assistantwire.StrengthCard, error)
+	HealthStrengthDraftMove(context.Context, string, int64, json.RawMessage, assistantwire.StrengthCard) (assistantwire.StrengthDraft, error)
 }

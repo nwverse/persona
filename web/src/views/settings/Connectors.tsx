@@ -9,6 +9,7 @@ import { useEffect, useId, useState } from "react";
 import { otherManager, parseOwnedSub, useChosenManager } from "../../lib/manager-choice";
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, mailSummary, signsInOnPhone, type MailAccount, type MailForm, type MicrosoftConfig } from "../../lib/agent-settings";
 import { t } from "../../i18n";
+import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { listConnectors, setConnector, type HubConnector } from "../../lib/connectors";
 import { ago } from "../../lib/format";
@@ -20,7 +21,7 @@ import { Icon, type IconName } from "../../ui/icons";
 import { Count, LarkAvatar } from "../inbox/InboxParts";
 import { ConnectorDetail, ConnectorList } from "./HubConnector";
 import { LarkDisplaySettings } from "./LarkDisplaySettings";
-import { LarkHomeSwitch } from "./LarkHomeSwitch";
+import { SettingsRows } from "../../core/SettingsRows";
 import { Group, Pill, Row, RowConfirm, Switch } from "./SettingsParts";
 import { SentSettings } from "./SentSettings";
 import { SENT_SUB } from "./nav";
@@ -77,7 +78,7 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
 
 // ── Mail ────────────────────────────────────────────────
 
-function Mail() {
+export function Mail({ hideInboxSwitch = false, manager }: { hideInboxSwitch?: boolean; manager?: string } = {}) {
   const [accounts, setAccounts] = useState<MailAccount[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -153,8 +154,10 @@ function Mail() {
             />
           </div>
         ))}
-        {accounts && accounts.length > 0 && <MailInboxSwitch />}
+        {!hideInboxSwitch && accounts && accounts.length > 0 && <MailInboxSwitch />}
       </Group>
+      {!!accounts?.length && <ExternalSourceSettingsEntry provider="mail" manager={manager}
+        accounts={accounts.map((account) => ({ channel: account.id, name: account.email }))} />}
       <AddMail
         open={adding}
         onClose={() => setAdding(false)}
@@ -170,7 +173,7 @@ function Mail() {
 
 /** Mail's Add to Inbox (#5307): the same switch as Settings › Inbox Sources' mail page; off, no account's mail comes into
  *  the Inbox (search, replies and the knowledge base go on). Only a hub that has the switch lists it (`inbox`). */
-function MailInboxSwitch() {
+export function MailInboxSwitch() {
   const [on, setOn] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -506,7 +509,7 @@ function LarkAccountRow({ a, isDefault }: { a: LarkAccount; isDefault: boolean }
   );
 }
 
-function Feishu() {
+export function Feishu({ manager }: { manager?: string } = {}) {
   const [st, setSt] = useState<LarkStatus | null>(null);
   const [accounts, setAccounts] = useState<LarkAccountList | null>(null);
   const [error, setError] = useState("");
@@ -529,6 +532,7 @@ function Feishu() {
   const last = st?.last_event_at ? ago(new Date(st.last_event_at * 1000).toISOString()) : "";
 
   return (
+    <>
     <Group
       anchor="lark"
       title={t("settings-connectors.lark")}
@@ -561,7 +565,8 @@ function Feishu() {
           <p className="px-4 pt-1 pb-2.5 text-[11.5px] leading-snug text-ink-3">{t("settings-connectors.accounts_note")}</p>
         </>
       )}
-      <LarkHomeSwitch />
+      {/* the lark module's rows (Show messages on home, #13404): core/module-host.ts `settingsRows` */}
+      <SettingsRows place="connectors.lark" />
       {!absent && <LarkDisplaySettings />}
       <div className="px-4 pt-2.5 pb-1 text-[11.5px] font-medium text-ink-3">{t("settings-connectors.lark_uses")}</div>
       {USES.map((u) => (
@@ -574,5 +579,8 @@ function Feishu() {
         </div>
       ))}
     </Group>
+    {st?.configured && <ExternalSourceSettingsEntry provider="lark" manager={manager}
+      accounts={accounts?.accounts.map((account) => ({ channel: account.id > 1 ? String(account.id) : "", name: accountTitle(account) }))} />}
+    </>
   );
 }

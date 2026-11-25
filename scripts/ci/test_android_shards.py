@@ -112,7 +112,11 @@ class ShardTests(unittest.TestCase):
         self.assertIn("actions/cache/save@v4", save)
         cached_paths = re.findall(r"^\s+(~/.m2/\S+)$", workflow, re.M)
         self.assertEqual(set(cached_paths), {"~/.m2/repository/org/robolectric/android-all",
-                                            "~/.m2/repository/org/robolectric/android-all-instrumented"})
+                                            "~/.m2/repository/org/robolectric/android-all-instrumented",
+                                            "~/.m2/repository/org/robolectric/nativeruntime-dist-compat"})
+        # Both steps include the native runtime: Maven Central's HTTP 429 must not make each uncached run fail (#14693).
+        for step in (restore, save):
+            self.assertIn("~/.m2/repository/org/robolectric/nativeruntime-dist-compat", step)
         self.assertNotIn("continue-on-error", workflow)
         self.assertIn("timeout-minutes: 90", workflow)
 
@@ -147,6 +151,9 @@ class ShellLaneTests(unittest.TestCase):
         (self.root / "scripts/assets").mkdir()
         (self.root / "scripts/assets/gen_tokens.py").write_text("pass\n")  # the generated-tokens check (#4209)
         (self.root / "scripts/assets/gen_icon_meanings.py").write_text("pass\n")  # the icon meanings check (#4209)
+        (self.root / "scripts/test").mkdir()
+        # The client domain guard's Android scan (docs/server/architecture.md "Domain model", 'Client modules').
+        (self.root / "scripts/test/test_client_domain_modules.py").write_text("pass\n")
         (self.root / "android/settings.gradle.kts").write_text(SETTINGS)
         (self.root / "android/gradle/libs.versions.toml").write_text('[versions]\njdk = "21"\ncompileSdk = "37"\nbuildTools = "37.0.0"\n')
         (self.root / "android/gradle/wrapper/gradle-wrapper.jar").touch()
