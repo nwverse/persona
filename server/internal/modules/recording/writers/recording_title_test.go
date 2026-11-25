@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"context"
@@ -8,7 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // titleModel answers each call with the next reply and keeps what it was asked; an error reply is returned instead.
@@ -44,17 +45,17 @@ func TestLiveTitleNeverOverTheOwnersOrTheCalendars(t *testing.T) {
 	e := goldenEngine(t, m)
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	now := start.Add(5 * time.Minute)
-	e.clock = func() time.Time { return now }
+	e.SetClock(func() time.Time { return now })
 	ctx := context.Background()
 
 	u := recUpload(1, start, false, talk(0, 20)...)
-	u.Calendar = &RecordingCalendar{Title: "周会"}
+	u.Calendar = &kb.RecordingCalendar{Title: "周会"}
 	u.Title = "周会"
-	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "周会" || put.NameSource != NamedByCalendar {
+	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "周会" || put.NameSource != kb.NamedByCalendar {
 		t.Fatalf("calendar: %+v", put)
 	}
 	u.Revision, u.Title = 2, "我的标题"
-	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "我的标题" || put.NameSource != NamedByTitle {
+	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "我的标题" || put.NameSource != kb.NamedByTitle {
 		t.Fatalf("the owner's: %+v", put)
 	}
 	if n := e.TitleRecordings(ctx, 2); n != 0 {
@@ -68,7 +69,7 @@ func TestLiveTitleNeverOverTheOwnersOrTheCalendars(t *testing.T) {
 	}
 	u = recUpload(2, start, false, talk(0, 20)...)
 	u.Title = "改过的名字"
-	if put, _ := e.PutRecording(other, u, now); put.Name != "改过的名字" || put.NameSource != NamedByTitle || put.TitleDue {
+	if put, _ := e.PutRecording(other, u, now); put.Name != "改过的名字" || put.NameSource != kb.NamedByTitle || put.TitleDue {
 		t.Fatalf("renamed: %+v", put)
 	}
 	// An all-day recording keeps its day's name.
@@ -88,7 +89,7 @@ func TestGoldenLiveTitle(t *testing.T) {
 	e := goldenEngine(t, m)
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	now := start.Add(3 * time.Minute)
-	e.clock = func() time.Time { return now }
+	e.SetClock(func() time.Time { return now })
 	u := recUpload(1, start, false, "大家好，今天评审导出", "Ada 说导出超过 4 MB 的条目会被丢掉", strings.Repeat("上限这一版先保留，", 50))
 	u.Duration = 180
 	putRecording(t, e, recID, u, now)
@@ -113,8 +114,11 @@ func TestGoldenLiveTitle(t *testing.T) {
 	// A paused connection puts it off without counting a call.
 	const paused = "2f8fad5b-d9cb-469f-a165-70867728950e"
 	putRecording(t, e, paused, recUpload(1, start, false, talk(0, 20)...), now)
-	e.Model = &titleModel{errs: []error{&ai.PausedError{Pause: ai.Pause{Reason: ai.ReasonBusy, Until: now.Add(time.Minute)}}}}
-	e.TitleRecordings(context.Background(), 2)
+	// The model client's paused connection is the knowledge base's to tell (recordingwire.Writer.Deferred; its own
+	// test is TestRecordingCoreDefersAPausedModel): here the port says so of this error.
+	errPaused := errors.New("paused until the quota is back")
+	e.Model = &titleModel{errs: []error{errPaused}}
+	New(deferring{Core: kb.RecordingCore(e.Engine), err: errPaused}, nil).TitleRecordings(context.Background(), 2)
 	if r := recordingNow(t, e, paused); r.LiveTitles != 0 || !liveTitleDue(r, now) {
 		t.Errorf("after a pause: %d calls, due %v", r.LiveTitles, liveTitleDue(r, now))
 	}
@@ -137,7 +141,7 @@ func TestWebRename(t *testing.T) {
 	e := goldenEngine(t, &titleModel{replies: []string{`{"title":"导出上限","keep":false}`}})
 	start := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	now := start.Add(5 * time.Minute)
-	e.clock = func() time.Time { return now }
+	e.SetClock(func() time.Time { return now })
 	if _, err := e.RenameRecording(recID, "网页名", now); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("no recording: %v", err)
 	}
@@ -151,23 +155,23 @@ func TestWebRename(t *testing.T) {
 		}
 	}
 	r, err := e.RenameRecording(recID, " 网页名 ", now)
-	if err != nil || r.Name != "网页名" || r.NameSource() != NamedByRename || r.RenamedAt == nil {
+	if err != nil || r.Name != "网页名" || r.NameSource() != kb.NamedByRename || r.RenamedAt == nil {
 		t.Fatalf("renamed: %+v %v", r, err)
 	}
 	if liveTitleDue(recordingNow(t, e, recID), now) {
 		t.Error("a renamed recording is due a live title")
 	}
-	if states, _ := e.RecordingStates(); states[0].Name != "网页名" || states[0].NameSource != NamedByRename {
+	if states, _ := e.RecordingStates(); states[0].Name != "网页名" || states[0].NameSource != kb.NamedByRename {
 		t.Errorf("states %+v", states)
 	}
 	// The phone's title as it was: the web's name stays.
-	if put, _ := e.PutRecording(recID, recUpload(2, start, false, talk(0, 20)...), now); put.Name != "网页名" || put.NameSource != NamedByRename {
+	if put, _ := e.PutRecording(recID, recUpload(2, start, false, talk(0, 20)...), now); put.Name != "网页名" || put.NameSource != kb.NamedByRename {
 		t.Fatalf("an upload with the title as it was: %+v", put)
 	}
 	// The phone renamed it since: its name wins and the web's goes.
 	u := recUpload(3, start, false, talk(0, 20)...)
 	u.Title = "手机名"
-	if put, _ := e.PutRecording(recID, u, now); put.Name != "手机名" || put.NameSource != NamedByTitle {
+	if put, _ := e.PutRecording(recID, u, now); put.Name != "手机名" || put.NameSource != kb.NamedByTitle {
 		t.Fatalf("the phone's newer name: %+v", put)
 	}
 	if r := recordingNow(t, e, recID); r.Renamed != "" || r.RenamedAt != nil {
@@ -186,4 +190,14 @@ func TestWebRename(t *testing.T) {
 	if _, err := e.RenameRecording(recID, "网页名", now); !errors.Is(err, ErrRecordingDeleted) {
 		t.Fatalf("deleted: %v", err)
 	}
+}
+
+// deferring is the storage port that also says of err that it puts the work off.
+type deferring struct {
+	recordingwire.Core
+	err error
+}
+
+func (c deferring) Deferred(ctx context.Context, err error) bool {
+	return errors.Is(err, c.err) || c.Core.Deferred(ctx, err)
 }

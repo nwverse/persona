@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"fmt"
@@ -9,44 +9,17 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/nwverse/persona/server/internal/recordingwire"
 )
-
-// Re-exported from recordingwire.
-var (
-	ErrPhotoNotFound = recordingwire.ErrPhotoNotFound
-	ErrPhotoDeleted  = recordingwire.ErrPhotoDeleted
-	ErrPhotosFull    = recordingwire.ErrPhotosFull
-	ErrOpIDReused    = recordingwire.ErrOpIDReused
-	ErrBadPhoto      = recordingwire.ErrBadPhoto
-)
-
-// PhotoUpload is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type PhotoUpload = recordingwire.PhotoUpload
-
-// index is the position of the listed photo n, -1 when none is.
-func (b *photoBook) index(n int) int {
-	return slices.IndexFunc(b.Photos, func(p storedPhoto) bool { return p.N == n })
-}
 
 // refIndex is the position of photo n in refs, -1 when it is not there.
 func refIndex(refs []PhotoRef, n int) int {
 	return slices.IndexFunc(refs, func(r PhotoRef) bool { return r.N == n })
 }
 
-// readPhotos is readPhotosLocked for a reader, also on a read-only knowledge base.
-func (s *Store) readPhotos(id string) (photoBook, error) {
-	s.recFilesMu.RLock()
-	defer s.recFilesMu.RUnlock()
-	b, _, err := s.readPhotosLocked(id)
-	return b, err
-}
-
 // photosHereLocked: recording id may get photo files: not deleted, its meta.json there (a write must never bring a
 // deleted recording's directory back). The caller holds recFilesMu.
-func (s *Store) photosHereLocked(id string) bool {
-	if _, gone := s.tombstones()[id]; gone {
+func (s *store) photosHereLocked(id string) bool {
+	if gone := s.tombstoned(id); gone {
 		return false
 	}
 	_, err := os.Stat(s.path(KindRecording, id, "meta.json"))
@@ -68,12 +41,12 @@ func photoAt(r *Recording, at float64, now time.Time) float64 {
 
 // photosRecording is the recording rawID names, for the photo routes: ErrRecordingDeleted after a delete, ErrNotFound
 // with no upload of it.
-func (s *Store) photosRecording(rawID string) (*Recording, error) {
+func (s *store) photosRecording(rawID string) (*Recording, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
 	}
-	if _, gone := s.tombstones()[id]; gone {
+	if gone := s.tombstoned(id); gone {
 		return nil, ErrRecordingDeleted
 	}
 	r, ok := s.Recording(id)
@@ -107,7 +80,7 @@ func checkPhoto(u PhotoUpload) error {
 // another body ErrOpIDReused, an id the owner deleted ErrPhotoDeleted, ErrReadOnly, ErrNotMeeting (its kind is not
 // meeting), ErrTranscriptExpired (trimmed), ErrPhotosFull. Minutes already written are made again, without a second
 // push; MeetingChanged hears of PartPhotos. The manager wakes the minutes' writer after a created photo.
-func (e *Engine) PhotoAdd(rawID string, u PhotoUpload, queue bool) (Photo, bool, error) {
+func (e *engine) PhotoAdd(rawID string, u PhotoUpload, queue bool) (Photo, bool, error) {
 	r, err := e.Store.photosRecording(rawID)
 	if err != nil {
 		return Photo{}, false, err
@@ -122,12 +95,12 @@ func (e *Engine) PhotoAdd(rawID string, u PhotoUpload, queue bool) (Photo, bool,
 	return p, created, err
 }
 
-func (e *Engine) photoAdd(id string, u PhotoUpload, queue bool, now time.Time) (Photo, bool, error) {
+func (e *engine) photoAdd(id string, u PhotoUpload, queue bool, now time.Time) (Photo, bool, error) {
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
 	// Again under recMu: a delete or a trim may have come first.
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return Photo{}, false, ErrRecordingDeleted
 	}
 	r, ok := st.Recording(id)
@@ -142,7 +115,7 @@ func (e *Engine) photoAdd(id string, u PhotoUpload, queue bool, now time.Time) (
 		if b.Photos[i].Digest != u.Digest {
 			return Photo{}, false, ErrOpIDReused
 		}
-		return b.Photos[i].photo(st.citedPhotos(id)), false, nil
+		return b.Photos[i].Photo(st.citedPhotos(id)), false, nil
 	}
 	switch {
 	case slices.ContainsFunc(b.Deleted, func(d PhotoRef) bool { return d.ID == u.ID }):
@@ -172,12 +145,12 @@ func (e *Engine) photoAdd(id string, u PhotoUpload, queue bool, now time.Time) (
 	if err := e.photosRemakeMinutes(r); err != nil {
 		e.logf("recording %s: minutes after a photo: %v", id, err)
 	}
-	return p.photo(st.citedPhotos(id)), true, nil
+	return p.Photo(st.citedPhotos(id)), true, nil
 }
 
 // putPhotoLocked writes photo p's image, then photos.json and photos.md of b (which lists it): a crash between leaves
 // an unlisted file, which the next photo of that number replaces. The caller holds recFilesMu.
-func (s *Store) putPhotoLocked(id string, p storedPhoto, data []byte, b *photoBook, start time.Time, zone *time.Location) error {
+func (s *store) putPhotoLocked(id string, p storedPhoto, data []byte, b *photoBook, start time.Time, zone *time.Location) error {
 	if !s.photosHereLocked(id) {
 		return ErrNotFound
 	}
@@ -185,7 +158,7 @@ func (s *Store) putPhotoLocked(id string, p storedPhoto, data []byte, b *photoBo
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := writeRecordingFile(s.path(KindRecording, id, photosDir, p.fileName()), data); err != nil {
+	if err := s.writeRecordingFile(s.path(KindRecording, id, photosDir, p.FileName()), data); err != nil {
 		return err
 	}
 	return s.putPhotosLocked(id, b, start, zone)
@@ -193,7 +166,7 @@ func (s *Store) putPhotoLocked(id string, p storedPhoto, data []byte, b *photoBo
 
 // Photos are recording rawID's listed photos, oldest first, each cited as its current minutes say, and PartPhotos'
 // revision; also on a read-only knowledge base. ErrRecordingDeleted after a delete, ErrNotFound with no upload of it.
-func (e *Engine) Photos(rawID string) ([]Photo, int64, error) {
+func (e *engine) Photos(rawID string) ([]Photo, int64, error) {
 	// Under recMu, as the minutes are stored: their writer moves the revision before the minutes it is for, and a list
 	// read between the two would take the new revision with the old cited.
 	e.Store.recMu.Lock()
@@ -209,13 +182,13 @@ func (e *Engine) Photos(rawID string) ([]Photo, int64, error) {
 	cited := e.Store.citedPhotos(r.ID)
 	out := make([]Photo, 0, len(b.Photos))
 	for _, p := range b.Photos {
-		out = append(out, p.photo(cited))
+		out = append(out, p.Photo(cited))
 	}
 	return out, b.Rev, nil
 }
 
 // PhotosRev is PartPhotos' revision of recording rawID: 0 while it has no photos (or can't be read).
-func (e *Engine) PhotosRev(rawID string) int64 {
+func (e *engine) PhotosRev(rawID string) int64 {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return 0
@@ -231,7 +204,7 @@ func (e *Engine) PhotosRev(rawID string) int64 {
 
 // PhotoTexts are the words of recording rawID's listed photos, oldest first (a photo with none has all three ""):
 // what the minutes, kb_get, the follow-up's seed and meeting.answer read of them. None for an unknown recording.
-func (e *Engine) PhotoTexts(rawID string) []PhotoText {
+func (e *engine) PhotoTexts(rawID string) []PhotoText {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil
@@ -242,7 +215,7 @@ func (e *Engine) PhotoTexts(rawID string) []PhotoText {
 	}
 	var out []PhotoText
 	for _, p := range b.Photos {
-		out = append(out, p.text())
+		out = append(out, p.Words())
 	}
 	return out
 }
@@ -253,7 +226,7 @@ func (e *Engine) PhotoTexts(rawID string) []PhotoText {
 // repeat), once what its delete left undone is done (an error while its file can't be removed). Errors in the
 // contract's order: ErrRecordingDeleted, ErrNotFound, ErrPhotoNotFound (no such n, or one a trim removed), ErrReadOnly.
 // MeetingChanged hears of PartPhotos; the manager wakes the minutes' writer after a deletion.
-func (e *Engine) PhotoDelete(rawID string, n int) (bool, error) {
+func (e *engine) PhotoDelete(rawID string, n int) (bool, error) {
 	r, err := e.Store.photosRecording(rawID)
 	if err != nil {
 		return false, err
@@ -265,11 +238,11 @@ func (e *Engine) PhotoDelete(rawID string, n int) (bool, error) {
 	return deleted, err
 }
 
-func (e *Engine) photoDelete(id string, n int) (bool, error) {
+func (e *engine) photoDelete(id string, n int) (bool, error) {
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return false, ErrRecordingDeleted
 	}
 	r, ok := st.Recording(id)
@@ -280,7 +253,7 @@ func (e *Engine) photoDelete(id string, n int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	i := b.index(n)
+	i := b.Index(n)
 	again := refIndex(b.Deleted, n) >= 0
 	switch {
 	case i < 0 && !again:
@@ -331,9 +304,9 @@ func (e *Engine) photoDelete(id string, n int) (bool, error) {
 
 // removePhotoFileLocked removes photo n's image from recording id's attachments/, of either type (a repeat of its
 // delete no longer has its entry; no other photo gets its number). The caller holds recFilesMu.
-func (s *Store) removePhotoFileLocked(id string, n int) error {
+func (s *store) removePhotoFileLocked(id string, n int) error {
 	for _, mime := range []string{PhotoJPEG, PhotoPNG} {
-		name := storedPhoto{N: n, Mime: mime}.fileName()
+		name := storedPhoto{N: n, Mime: mime}.FileName()
 		if err := os.Remove(s.path(KindRecording, id, photosDir, name)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -347,7 +320,7 @@ func (s *Store) removePhotoFileLocked(id string, n int) error {
 // kb_get, the searches, meeting.answer) has its words; then they are made again as for any photo change
 // (photosRemake), without a push. listed: the photo is still listed; a repeat of its delete makes them again only
 // when they still cite it. A trimmed recording's minutes stay as they are (their item shows the photo removed).
-func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
+func (e *engine) photoUncite(r *Recording, n int, listed bool) error {
 	if r.Trimmed() {
 		return nil
 	}
@@ -356,10 +329,10 @@ func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
 	m, err := st.ReadMinutes(r.ID)
 	switch {
 	case err == nil && minutesPhotos(m)[n]:
-		dropPhotos(e.RecordingProvider(), m, func(p int) bool { return p == n })
+		dropPhotos(m, func(p int) bool { return p == n })
 		m.Version = max(m.Version, r.MinutesVersion) + 1
-		m.Markdown = e.RecordingProvider().RenderMinutes(m, r.StartedAt, st.Zone())
-		if wrote, err := e.RecordingProvider().PutMinutes(recordingwire.ID(r.ID), m); err != nil {
+		m.Markdown = renderMinutes(m, r.StartedAt, st.Zone())
+		if wrote, err := st.putMinutes(r.ID, m); err != nil {
 			return err
 		} else if !wrote {
 			return ErrNotFound
@@ -370,7 +343,7 @@ func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
 		// minutes.md or meta.json. Finish them from minutes.json, which no longer cites the photo.
 		md, _ := os.ReadFile(st.path(KindRecording, r.ID, "minutes.md"))
 		if string(md) != strings.TrimSpace(m.Markdown)+"\n" || r.MinutesVersion < m.Version {
-			if wrote, err := e.RecordingProvider().PutMinutes(recordingwire.ID(r.ID), m); err != nil {
+			if wrote, err := st.putMinutes(r.ID, m); err != nil {
 				return err
 			} else if !wrote {
 				return ErrNotFound
@@ -395,7 +368,7 @@ func (e *Engine) photoUncite(r *Recording, n int, listed bool) error {
 
 // photosRemakeMinutes has recording r's minutes made again after a photo was added (photosRemake), and writes r. The
 // caller holds recMu, r read under it.
-func (e *Engine) photosRemakeMinutes(r *Recording) error {
+func (e *engine) photosRemakeMinutes(r *Recording) error {
 	if !e.photosRemake(r) {
 		return nil
 	}
@@ -404,7 +377,7 @@ func (e *Engine) photosRemakeMinutes(r *Recording) error {
 
 // photosRemake has recording r's minutes made again after a photo was added or deleted (remakeQuiet); whether r
 // changed (the caller writes it).
-func (e *Engine) photosRemake(r *Recording) bool { return e.remakeQuiet(r) }
+func (e *engine) photosRemake(r *Recording) bool { return e.remakeQuiet(r) }
 
 // remakeQuiet has recording r's minutes made again from what it has now (a photo added or deleted, its final
 // transcript stored); whether r changed (the caller writes it). Minutes written are made again quietly: that
@@ -412,14 +385,14 @@ func (e *Engine) photosRemake(r *Recording) bool { return e.remakeQuiet(r) }
 // only invalidated, so that a model call running now does not settle it, and it is pushed as it would have been.
 // Nothing for a trimmed recording (no transcript to make them from) or before the transcript is complete (the first
 // minutes read it then).
-func (e *Engine) remakeQuiet(r *Recording) bool {
+func (e *engine) remakeQuiet(r *Recording) bool {
 	if r.Trimmed() || !r.Complete || r.Chars == 0 || !isMeeting(r) {
 		return false
 	}
 	switch r.MinutesState {
 	case MinutesPending:
 		// Only so that minutes read before the change don't settle them: their failures and waits stay as they are.
-		quiet := e.RecordingProvider().QuietMinutes(r)
+		quiet := quietMinutes(r)
 		r.MinutesAsks++
 		if quiet {
 			r.MinutesQuiet = r.MinutesAsks
@@ -428,7 +401,7 @@ func (e *Engine) remakeQuiet(r *Recording) bool {
 		if !e.Store.hasMinutes(r.ID) {
 			return false // never written: nothing to make again
 		}
-		e.RecordingProvider().RemakeMinutes(r)
+		remakeMinutes(r)
 		r.MinutesQuiet = r.MinutesAsks
 	default:
 		return false
@@ -439,7 +412,7 @@ func (e *Engine) remakeQuiet(r *Recording) bool {
 // photoUpdate changes recording rawID's photos.json with fn under recMu, for the room's bookkeeping: fn says whether
 // to write it and whether PartPhotos' revision moves (MeetingChanged hears of it then). ErrRecordingDeleted,
 // ErrNotFound, ErrReadOnly, or fn's error.
-func (e *Engine) photoUpdate(rawID string, fn func(b *photoBook, r *Recording) (write, rev bool, err error)) error {
+func (e *engine) photoUpdate(rawID string, fn func(b *photoBook, r *Recording) (write, rev bool, err error)) error {
 	r, err := e.Store.photosRecording(rawID)
 	if err != nil {
 		return err
@@ -451,11 +424,11 @@ func (e *Engine) photoUpdate(rawID string, fn func(b *photoBook, r *Recording) (
 	return err
 }
 
-func (e *Engine) photoUpdateLocked(id string, fn func(b *photoBook, r *Recording) (write, rev bool, err error)) (bool, error) {
+func (e *engine) photoUpdateLocked(id string, fn func(b *photoBook, r *Recording) (write, rev bool, err error)) (bool, error) {
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return false, ErrRecordingDeleted
 	}
 	r, ok := st.Recording(id)
@@ -488,7 +461,7 @@ func (e *Engine) photoUpdateLocked(id string, fn func(b *photoBook, r *Recording
 // PhotosForRoom is what the room of recording rawID is still to get (the feeder, meeting_room.go): the photos queued
 // for it, oldest first (Cited not set), and the photos deleted after they went into it, which it is to be told of.
 // Nothing for an unknown recording; a trimmed one has neither.
-func (e *Engine) PhotosForRoom(rawID string) (queued []Photo, withdraw []PhotoRef) {
+func (e *engine) PhotosForRoom(rawID string) (queued []Photo, withdraw []PhotoRef) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, nil
@@ -499,7 +472,7 @@ func (e *Engine) PhotosForRoom(rawID string) (queued []Photo, withdraw []PhotoRe
 	}
 	for _, p := range b.Photos {
 		if p.Queued {
-			queued = append(queued, p.photo(nil))
+			queued = append(queued, p.Photo(nil))
 		}
 	}
 	return queued, slices.Clone(b.Withdraw)
@@ -510,9 +483,9 @@ func (e *Engine) PhotosForRoom(rawID string) (queued []Photo, withdraw []PhotoRe
 // restart, leaves a photo the room may have: a delete withdraws it there, the room may note it, and it is sent again
 // under its id (the hub's once-only guard answers delivered, or in doubt). ErrPhotoNotFound when it is not listed
 // (deleted since: it never goes in).
-func (e *Engine) PhotoSending(rawID string, n int) error {
+func (e *engine) PhotoSending(rawID string, n int) error {
 	return e.photoUpdate(rawID, func(b *photoBook, _ *Recording) (bool, bool, error) {
-		i := b.index(n)
+		i := b.Index(n)
 		if i < 0 {
 			return false, false, ErrPhotoNotFound
 		}
@@ -527,9 +500,9 @@ func (e *Engine) PhotoSending(rawID string, n int) error {
 // PhotoForwarded records that photo n of recording rawID went into the room (PhotoSending before it): no longer
 // queued; its revision stays. Nothing for one the owner deleted meanwhile (forwarded already, so withdrawn there);
 // ErrPhotoNotFound for any other.
-func (e *Engine) PhotoForwarded(rawID string, n int) error {
+func (e *engine) PhotoForwarded(rawID string, n int) error {
 	return e.photoUpdate(rawID, func(b *photoBook, _ *Recording) (bool, bool, error) {
-		if i := b.index(n); i >= 0 {
+		if i := b.Index(n); i >= 0 {
 			if !b.Photos[i].Queued {
 				return false, false, nil
 			}
@@ -544,7 +517,7 @@ func (e *Engine) PhotoForwarded(rawID string, n int) error {
 }
 
 // PhotoWithdrawn records that the room was told photo n of recording rawID was withdrawn; its revision stays.
-func (e *Engine) PhotoWithdrawn(rawID string, n int) error {
+func (e *engine) PhotoWithdrawn(rawID string, n int) error {
 	return e.photoUpdate(rawID, func(b *photoBook, _ *Recording) (bool, bool, error) {
 		i := refIndex(b.Withdraw, n)
 		if i < 0 {
@@ -557,13 +530,13 @@ func (e *Engine) PhotoWithdrawn(rawID string, n int) error {
 
 // PhotoNote sets the room's note on photo n of recording rawID (meeting_photo_note): only a listed photo that went into
 // the room, ErrPhotoNotFound otherwise. Its revision moves; the minutes are not made again for it.
-func (e *Engine) PhotoNote(rawID string, n int, text string) error {
+func (e *engine) PhotoNote(rawID string, n int, text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" || utf8.RuneCountInString(text) > MaxPhotoNote {
 		return fmt.Errorf("%w: a note is 1 to %d characters", ErrBadPhoto, MaxPhotoNote)
 	}
 	return e.photoUpdate(rawID, func(b *photoBook, _ *Recording) (bool, bool, error) {
-		i := b.index(n)
+		i := b.Index(n)
 		if i < 0 || !b.Photos[i].Forwarded {
 			return false, false, ErrPhotoNotFound
 		}
@@ -577,20 +550,20 @@ func (e *Engine) PhotoNote(rawID string, n int, text string) error {
 
 // dropUnlistedPhotos takes out of m the items citing a photo that is not listed (deleted, or trimmed away, while the
 // model wrote them); the actions are numbered again.
-func (s *Store) dropUnlistedPhotos(m *Minutes, b photoBook) {
-	dropPhotos(s.recordingAudio(), m, func(n int) bool { return b.index(n) < 0 })
+func dropUnlistedPhotos(m *Minutes, b photoBook) {
+	dropPhotos(m, func(n int) bool { return b.Index(n) < 0 })
 }
 
 // dropPhotos takes out of m the items citing a photo gone says goes (all four sections), and the overview's bullets
 // and conclusions citing it (an empty topic and group go with them, the overview once no topic is left); the actions
 // are numbered again, each keeping its to-do. Not for a trimmed recording, whose minutes stay as they are.
-func dropPhotos(w recordingwire.Provider, m *Minutes, gone func(n int) bool) {
+func dropPhotos(m *Minutes, gone func(n int) bool) {
 	cites := func(n int) bool { return n > 0 && gone(n) }
 	m.Points = slices.DeleteFunc(m.Points, func(x MinutesPoint) bool { return cites(x.Photo) })
 	m.Decisions = slices.DeleteFunc(m.Decisions, func(x MinutesItem) bool { return cites(x.Photo) })
 	m.Actions = slices.DeleteFunc(m.Actions, func(x MinutesAction) bool { return cites(x.Photo) })
 	m.Open = slices.DeleteFunc(m.Open, func(x MinutesItem) bool { return cites(x.Photo) })
-	w.DropOverviewPhotos(m, cites)
+	dropOverviewPhotos(m, cites)
 	for i := range m.Actions {
 		m.Actions[i].ID = "a" + strconv.Itoa(i+1)
 	}
@@ -610,21 +583,4 @@ func citedChanged(b photoBook, before, after map[int]bool) bool {
 		}
 	}
 	return false
-}
-
-// bumpPhotosRev moves recording id's PartPhotos revision (its minutes changed which photos they cite). The caller holds
-// recMu.
-func (s *Store) bumpPhotosRev(id string, start time.Time) error {
-	zone := s.Zone()
-	s.recFilesMu.Lock()
-	defer s.recFilesMu.Unlock()
-	if !s.photosHereLocked(id) {
-		return nil
-	}
-	b, _, err := s.readPhotosLocked(id)
-	if err != nil {
-		return err
-	}
-	b.Rev++
-	return s.putPhotosLocked(id, &b, start, zone)
 }

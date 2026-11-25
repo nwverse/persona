@@ -3,10 +3,11 @@ package writers
 import (
 	"context"
 	"errors"
-	"github.com/nwverse/persona/server/internal/kb"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // A recording nobody named gets a live title once it has enough text, another only when the text has doubled and ten
@@ -40,7 +41,7 @@ func TestLiveTitleWrittenRefreshedAndSettled(t *testing.T) {
 		t.Fatalf("calls %d, want 1", n)
 	}
 	r := recordingNow(t, e, recID)
-	if r.Name != "导出上限" || r.AITitleFrom != kb.AITitleLive || r.NameSource() != kb.NamedByModel || r.LiveTitles != 1 {
+	if r.Name != "导出上限" || r.AITitleFrom != AITitleLive || r.NameSource() != kb.NamedByModel || r.LiveTitles != 1 {
 		t.Fatalf("after the first title: %q from %q (%s), %d calls", r.Name, r.AITitleFrom, r.NameSource(), r.LiveTitles)
 	}
 	if !strings.Contains(m.calls[0][1], "一场会议") || strings.Contains(m.calls[0][1], "现在的标题") {

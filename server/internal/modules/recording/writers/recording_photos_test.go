@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"errors"
@@ -8,18 +8,20 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // photoUpload is photo i (its id made of i) taken at seconds into the recording: a JPEG, its digest covering the body.
 func photoUpload(i int, at float64, caption, text string) PhotoUpload {
 	id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", i)
 	data := []byte(fmt.Sprintf("image bytes %d", i))
-	return PhotoUpload{ID: id, At: at, Mime: PhotoJPEG, Data: data, Width: 1600, Height: 1200, Text: text, Caption: caption,
+	return PhotoUpload{ID: recordingwire.PhotoID(id), At: at, Mime: PhotoJPEG, Data: data, Width: 1600, Height: 1200, Text: text, Caption: caption,
 		Digest: fmt.Sprintf("%s|%v|%s|%s|%s", id, at, caption, text, data)}
 }
 
-func addPhoto(t *testing.T, e *Engine, id string, u PhotoUpload, queue bool) Photo {
+func addPhoto(t *testing.T, e *testEngine, id string, u PhotoUpload, queue bool) Photo {
 	t.Helper()
 	p, created, err := e.PhotoAdd(id, u, queue)
 	if err != nil || !created {
@@ -29,7 +31,7 @@ func addPhoto(t *testing.T, e *Engine, id string, u PhotoUpload, queue bool) Pho
 }
 
 // photoMeeting stores a complete meeting recording of three lines, 10 seconds apart, that ended 50 seconds after start.
-func photoMeeting(t *testing.T, e *Engine, id string, start time.Time) {
+func photoMeeting(t *testing.T, e *testEngine, id string, start time.Time) {
 	t.Helper()
 	u := meetingUpload(1, start, "第一句", "第二句", "第三句")
 	end := start.Add(50 * time.Second)
@@ -38,7 +40,7 @@ func photoMeeting(t *testing.T, e *Engine, id string, start time.Time) {
 }
 
 // photosTold counts MeetingChanged's PartPhotos per recording.
-func photosTold(e *Engine) map[string]int {
+func photosTold(e *testEngine) map[string]int {
 	told := map[string]int{}
 	e.MeetingChanged = func(id string, parts []string) {
 		if slices.Contains(parts, PartPhotos) {
@@ -49,7 +51,7 @@ func photosTold(e *Engine) map[string]int {
 }
 
 // readFile is the text of a file of recording id.
-func readFile(t *testing.T, e *Engine, id, name string) string {
+func readFile(t *testing.T, e *testEngine, id, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile(e.Store.Path(KindRecording, id, name))
 	if err != nil {
@@ -131,7 +133,7 @@ func TestPhotosStoredAndListed(t *testing.T) {
 	// While it records, a photo's time stops at now.
 	const live = "1a8fad5b-d9cb-469f-a165-70867728950e"
 	liveStart := time.Now().Add(-time.Minute)
-	putRecording(t, e, live, attendedUpload(1, liveStart, AttendanceListener), time.Now())
+	putRecording(t, e, live, attendedUpload(1, liveStart, kb.AttendanceListener), time.Now())
 	p := addPhoto(t, e, live, photoUpload(4, 3600, "", ""), false)
 	if p.At < 59 || p.At > time.Since(liveStart).Seconds() || p.N != 1 {
 		t.Fatalf("recording now: %+v", p)
@@ -191,11 +193,11 @@ func TestPhotoDelete(t *testing.T) {
 		}
 	}
 
-	ro, err := OpenReadOnly(e.Store.Dir)
+	ro, err := kb.OpenReadOnly(e.Store.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	roe := &Engine{Store: ro}
+	roe := newTestEngine(&kb.Engine{Store: ro})
 	for n, want := range map[int]error{9: ErrPhotoNotFound, 1: ErrReadOnly, 2: ErrReadOnly} {
 		if _, err := roe.PhotoDelete(recID, n); !errors.Is(err, want) {
 			t.Errorf("read-only, photo %d: %v, want %v", n, err, want)
@@ -262,9 +264,6 @@ func TestPhotosSearched(t *testing.T) {
 		if found := e.Find(word, 10); len(found) != 0 {
 			t.Errorf("%s found: %+v", word, found)
 		}
-	}
-	if searchable("recordings/"+recID+"/"+photosFile) || !searchable("recordings/"+recID+"/"+photosText) {
-		t.Fatal("searchable")
 	}
 	// Deleted: no longer found, and photos.md goes with the last photo.
 	if _, err := e.PhotoDelete(recID, 1); err != nil {
@@ -520,13 +519,7 @@ func TestPhotosTrimFinished(t *testing.T) {
 	if err := os.WriteFile(e.Store.Path(KindRecording, broken, photosFile), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r := recordingNow(t, e, recID)
-	e.Store.recFilesMu.Lock()
-	err := e.Store.putTrimmedMeta(r, now)
-	e.Store.recFilesMu.Unlock()
-	if err != nil {
-		t.Fatal(err)
-	}
+	markTrimmed(t, e, recID, now)
 	days = 60
 	e.PruneRecordings(now)
 	if ps, _, _ := e.Photos(recID); len(ps) != 1 || ps[0].N != 1 {
@@ -559,24 +552,6 @@ func TestMeetingMaterialPhotos(t *testing.T) {
 	m, err := e.MeetingMaterial(recID, "预算多少")
 	if err != nil || len(m.Photos) != 1 || m.Photos[0] != (PhotoText{N: 1, At: 5, Caption: "白板", Text: "预算"}) {
 		t.Fatalf("material photos %+v %v", m.Photos, err)
-	}
-	long := []PhotoText{{N: 1, Text: "old"}, {N: 2, Caption: "ab", Text: "cdefgh"}, {N: 3, Text: "xyz"}}
-	if got := latestPhotos(long, 7); len(got) != 2 || got[0] != (PhotoText{N: 2, Caption: "ab", Text: "cd"}) || got[1].N != 3 {
-		t.Fatalf("latest %+v", got)
-	}
-	// The bound holds for captions and notes too: the older photo is cut to what is left, caption first.
-	full := []PhotoText{{N: 1, Caption: strings.Repeat("c", MaxPhotoCaption), Text: "t", Note: strings.Repeat("n", MaxPhotoNote)},
-		{N: 2, Text: strings.Repeat("x", materialPhotoRunes-1)}}
-	got := latestPhotos(full, materialPhotoRunes)
-	words := 0
-	for _, p := range got {
-		words += utf8.RuneCountInString(p.Caption + p.Text + p.Note)
-	}
-	if words != materialPhotoRunes || len(got) != 2 || got[0] != (PhotoText{N: 1, Caption: "c"}) {
-		t.Fatalf("%d runes: %+v", words, got[0])
-	}
-	if got := latestPhotos([]PhotoText{{N: 1, Caption: "ab", Text: "cd", Note: "ef"}}, 5); got[0] != (PhotoText{N: 1, Caption: "ab", Text: "cd", Note: "e"}) {
-		t.Fatalf("cut %+v", got)
 	}
 }
 
@@ -615,18 +590,15 @@ func TestPhotosTrimProjectionFinished(t *testing.T) {
 	if err := os.Mkdir(obstacle, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	st := e.Store
-	r := recordingNow(t, e, bare)
-	st.recFilesMu.Lock()
-	err := st.putTrimmedMeta(r, now)
+	markTrimmed(t, e, bare, now)
+	st := ws(e.Store)
+	b, err := st.readPhotos(bare)
 	if err == nil {
-		var b photoBook
-		if b, _, err = st.readPhotosLocked(bare); err == nil {
-			b.Photos, b.Rev = nil, b.Rev+1
-			err = writeRecordingFile(st.Path(KindRecording, bare, photosFile), []byte(jsonOf(t, b)))
-		}
+		b.Photos, b.Rev = nil, b.Rev+1
+		st.recFilesMu.Lock()
+		err = st.writeRecordingFile(e.Store.Path(KindRecording, bare, photosFile), []byte(jsonOf(t, b)))
+		st.recFilesMu.Unlock()
 	}
-	st.recFilesMu.Unlock()
 	if err != nil {
 		t.Fatal(err)
 	}

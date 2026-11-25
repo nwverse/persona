@@ -2,9 +2,9 @@ import Foundation
 
 /// The finished agents marked seen here that the hub has not taken yet (#1588). A `seen` over a socket that still says
 /// connected but is gone (the hub restarted, the phone just came back) was lost without a word, and the next list from
-/// the hub put every one of them back to Unread: Mark All as Read looked like it failed. A mark stays here until a list
-/// from the hub shows it recorded (a later `seen_at`), or the agent moved on; until then the session is shown seen and
-/// the mark goes again (`AppModel.sendSeen`).
+/// the hub put every one of them back to Unread: Mark All as Read looked like it failed. A mark waits for a list to
+/// prove recording (a later `seen_at`), then settles briefly so independently paged lists with the row from before the
+/// look cannot flash Unread again. It is not resent after recording, and a new turn, work or a question ends it at once.
 ///
 /// Only the hub's own times are compared with each other (its `seen_at`, the machine's `updated_at`): the phone's
 /// clock only says when to try again and when to give up.
@@ -13,6 +13,8 @@ nonisolated struct SeenOutbox {
     static let confirmWithin: TimeInterval = 5
     /// Given up after this: the hub was out of reach all along.
     static let keepFor: TimeInterval = 10 * 60
+    /// Once one list proves recording, older rows from independently paged lists stay held for this long (#12770).
+    static let settleFor: TimeInterval = 15
     /// The machine touched the finished agent's transcript without a new turn (the hub's own slack is 2 s).
     static let sameTurn: TimeInterval = 2
 
@@ -29,6 +31,8 @@ nonisolated struct SeenOutbox {
         var route: Route = .socket
         /// The hub answered the HTTP request: nothing more to send, only the list to wait for.
         var answered = false
+        /// The first list row that proved recording. Nothing is resent after this; only older rows are held.
+        var recordedAt: Date?
     }
 
     private(set) var marks: [SessionKey: Mark] = [:]
@@ -64,23 +68,29 @@ nonisolated struct SeenOutbox {
     /// Sent over the socket and not taken within `confirmWithin`: for HTTP now.
     func due(at now: Date) -> [SessionKey] {
         Array(marks.filter { _, m in
-            m.route == .socket && !m.answered && now.timeIntervalSince(m.sentAt) >= Self.confirmWithin && !expired(m, now)
+            m.recordedAt == nil && m.route == .socket && !m.answered && now.timeIntervalSince(m.sentAt) >= Self.confirmWithin && !expired(m, now)
         }.keys)
     }
 
     /// When the next one sent over the socket is due, if any.
     func nextDue(at now: Date) -> Date? {
-        marks.values.filter { $0.route == .socket && !$0.answered && !expired($0, now) }
+        marks.values.filter { $0.recordedAt == nil && $0.route == .socket && !$0.answered && !expired($0, now) }
             .map { $0.sentAt.addingTimeInterval(Self.confirmWithin) }.min()
     }
 
     /// Not answered yet in this group: sent again once its socket is back (an HTTP request that failed waits for that).
     func unanswered(group: String, at now: Date) -> [SessionKey] {
-        Array(marks.filter { key, m in key.group == group && !m.answered && !expired(m, now) }.keys)
+        Array(marks.filter { key, m in key.group == group && m.recordedAt == nil && !m.answered && !expired(m, now) }.keys)
     }
 
-    /// Lists from the hub landing: marks it has recorded, or that no longer matter, go; the sessions still waiting are
-    /// shown seen. Lists of other machines leave their marks alone.
+    /// Whether this row still carries the pre-open `seen_at` and its mark has not expired.
+    func holds(_ session: Session, at now: Date) -> Bool {
+        guard let mark = marks[session.key], !expired(mark, now) else { return false }
+        return session.seenAt == mark.seenBefore
+    }
+
+    /// Lists from the hub landing: new activity ends a mark; the first proof of recording starts its settling window;
+    /// rows with the pre-open `seen_at` stay seen. Lists of other machines leave their marks alone.
     mutating func land(_ lists: [MachineRef: [Session]], at now: Date) -> [MachineRef: [Session]] {
         guard !marks.isEmpty else { return lists }
         var pending: [MachineRef: [String: (key: SessionKey, mark: Mark)]] = [:]
@@ -99,9 +109,11 @@ nonisolated struct SeenOutbox {
                 let s = list[i]
                 let recorded = (s.seenAt ?? .distantPast) > (mark.seenBefore ?? .distantPast)
                 let newTurn = (s.updatedAt ?? .distantPast) > (mark.updatedBefore ?? .distantPast).addingTimeInterval(Self.sameTurn)
-                if recorded || newTurn || s.state == .working || s.state == .needsYou {
+                if newTurn || s.state == .working || s.state == .needsYou {
                     marks[key] = nil
-                } else if s.needsSeen() {
+                } else if recorded {
+                    if marks[key]?.recordedAt == nil { marks[key]?.recordedAt = now }
+                } else if s.needsSeen(), s.seenAt == mark.seenBefore {
                     list[i].markLocallySeen()
                     changed = true
                 }
@@ -112,5 +124,8 @@ nonisolated struct SeenOutbox {
         return out
     }
 
-    private func expired(_ m: Mark, _ now: Date) -> Bool { now.timeIntervalSince(m.markedAt) > Self.keepFor }
+    private func expired(_ m: Mark, _ now: Date) -> Bool {
+        if let recordedAt = m.recordedAt { return now.timeIntervalSince(recordedAt) > Self.settleFor }
+        return now.timeIntervalSince(m.markedAt) > Self.keepFor
+    }
 }

@@ -46,7 +46,7 @@ const (
 	// MaxLiveRequest is how many sentences one POST …/live carries at most (the HTTP layer answers 400 above it;
 	// LiveAppend refuses them too).
 	MaxLiveRequest   = 200
-	maxLiveText      = 4000 // bytes of one sentence: longer ones are cut at a character boundary
+	maxLiveText      = recordingwire.MaxLiveText
 	maxLivePositions = 20000
 	maxLiveBytes     = 4 << 20 // of live text in all
 	// What MeetingMaterial gives of the live sentences, of the photos' words, and of earlier meetings.
@@ -234,16 +234,7 @@ func (s *Store) liveEnded(id string, attending bool, now time.Time) error {
 // cleanLive is a sentence as the live log keeps it: a bad one is mended, never refused, since positions stay
 // contiguous. A negative start is 0, an end before the start the start; the text is one line, cut to maxLiveText bytes
 // at a character boundary.
-func cleanLive(sg LiveSegment) LiveSegment {
-	if math.IsNaN(sg.Start) || math.IsInf(sg.Start, 0) || sg.Start < 0 {
-		sg.Start = 0
-	}
-	if math.IsNaN(sg.End) || math.IsInf(sg.End, 0) || sg.End < sg.Start {
-		sg.End = sg.Start
-	}
-	sg.Text = cutBytes(strings.Join(strings.Fields(strings.ToValidUTF8(sg.Text, "�")), " "), maxLiveText)
-	return sg
-}
+func cleanLive(sg LiveSegment) LiveSegment { return recordingwire.CleanLive(sg) }
 
 // cutBytes is s within n bytes, cut at a character boundary.
 func cutBytes(s string, n int) string {
