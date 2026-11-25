@@ -6,9 +6,9 @@ import PersonaWire
 
 /// The To-dos list's search (#10465; DESIGN_SYSTEM 3.4 "To-dos list", "List controls"): the titles and notes of every
 /// to-do of the current assistant the device holds, open and closed; a title match keeps the row's line 2, a notes match
-/// says the sentence that matched with its words on the accent tint ("List controls"); results offer no Mark Done; the
-/// model looks off the main actor, a newer key taking over, a cleared field is the list again at once, and a push while
-/// it searches looks through the to-dos it changed.
+/// says the sentence that matched with its words on the accent tint ("List controls"); results offer no Mark Done and no
+/// answers; the model looks off the main actor, a newer key taking over, a cleared field is the list again at once, and
+/// a push while it searches looks through the to-dos it changed.
 struct TodoSearchTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let words = TodoWords(locale: Locale(identifier: "en_US"))
@@ -50,13 +50,13 @@ struct TodoSearchTests {
         let view = TodoSummary(phase: "ready", section: TodoListSection.justFinished, reason: "finished_seen",
                                line: TodoLine(key: TodoLineKey.finishedSeen), rank: 0)
         let c = TodoRowContentLogic.content(filed("a", TodoListSection.justFinished), item: item, view: view, now: now, words: words)
-        #expect(c.offersMarkDone(nil) && c.found(by: nil) == nil && c.spoken(found: nil) == c.spoken, "outside the search")
+        #expect(c.offersMarkDone(nil) && c.found(by: nil) == nil && c.spoken(nil) == c.spoken, "outside the search")
         let byTitle = try #require(TodoSearch.hit(item, words: "dentist"))
         #expect(!c.offersMarkDone(byTitle) && c.found(by: byTitle) == nil, "found by its name: its line kept, no Mark Done")
         let byNotes = try #require(TodoSearch.hit(item, words: "card"))
         let found = try #require(c.found(by: byNotes))
         #expect(!c.offersMarkDone(byNotes) && found.text == "Bring the card.")
-        let spoken = c.spoken(found: found)
+        let spoken = c.spoken(byNotes)
         #expect(spoken.hasPrefix("Book the dentist" + words.listSeparator) && spoken.contains("Bring the card.")
                 && spoken == [c.spokenAround.head, "Bring the card.", c.spokenAround.tail].filter { !$0.isEmpty }
                     .joined(separator: words.listSeparator), "the sentence in the line's place: \(spoken)")
@@ -77,6 +77,38 @@ struct TodoSearchTests {
         #expect(cut.hasPrefix("…") && cut.count == 1 + 32 + 5 && cut.hasSuffix(" a ryokan near Gion."), "\(cut)")
         #expect(TodoFoundText.lead(for: .large) == 32 && TodoFoundText.lead(for: .xxLarge) == 20
                 && TodoFoundText.lead(for: .accessibility5) == 10)
+    }
+
+    /// A result offers no answers, as it offers no Mark Done: the row draws neither its answers' line nor an answer
+    /// given here, and VoiceOver's actions take them from the same `answers(_:)`; it is said with the hub's line (a
+    /// notes match, the sentence) where outside the search the answer given here is said. The row's words are worked
+    /// out once: only `row.search` tells them apart.
+    @MainActor @Test func aResultOffersNoAnswers() throws {
+        let ask = OwnerAsk(id: "a", kind: OwnerAskKind.decision, home: OwnerAskHome.todo, round: "r", recommend: "Ryokan Hanami",
+                           options: [.init(label: "Ryokan Hanami"), .init(label: "Kaede")], risk: OwnerAskRisk.safe)
+        let view = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "owner_decides",
+                               line: TodoLine(key: TodoLineKey.decision, args: ["recommend": "Ryokan Hanami"]), asks: [ask])
+        let item = TodoItem(id: "a", title: "Book a room in Kyoto", notes: "Two of us. A ryokan near Gion.")
+        let row = filed("a", TodoListSection.needsYou)
+        let open = TodoRowContentLogic.content(row, item: item, view: view, now: now, words: words)
+        let answers = try #require(open.answers, "OK and Options outside the search")
+        #expect(answers.primary == .ok(option: "Ryokan Hanami") && answers.options)
+        #expect(open.answers(nil) == answers && open.spoken(nil) == open.spoken)
+        let byTitle = try #require(TodoSearch.hit(item, words: "kyoto"))
+        let byNotes = try #require(TodoSearch.hit(item, words: "gion"))
+        #expect(open.answers(byTitle) == nil && open.answers(byNotes) == nil, "a result: no OK, no Options, no card")
+        #expect(open.spoken(byTitle) == open.spoken, "found by its name: said as outside the search, its line kept")
+
+        // An answer given here: line 2 says it, with Undo, outside the search; a result says the hub's line instead.
+        let chosen = "You chose Kaede"
+        let answered = TodoRowContentLogic.content(row, item: item, view: view, now: now, words: words,
+                                                   answered: .chosen(chosen, undo: true))
+        #expect(answered.answers(nil)?.mark == .chosen(chosen, undo: true) && answered.spoken(nil).contains(chosen))
+        #expect(answered.answers(byTitle) == nil && answered.answers(byNotes) == nil, "no answer, no Undo on a result")
+        #expect(answered.spoken(byTitle) == open.spoken && !answered.spoken(byTitle).contains(chosen), "\(answered.spoken(byTitle))")
+        let sentence = try #require(answered.found(by: byNotes))
+        #expect(answered.spoken(byNotes) == [answered.spokenAround.head, sentence.text, answered.spokenAround.tail]
+                    .filter { !$0.isEmpty }.joined(separator: words.listSeparator) && !answered.spoken(byNotes).contains(chosen))
     }
 
     /// 2,000 to-dos with notes looked through, as the list does off the main actor at each key, and the list laid out

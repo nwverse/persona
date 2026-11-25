@@ -4,15 +4,16 @@ import SwiftUI
 /// One to-do on the V1 list (#10465; docs/design/proposals/todos-redesign.md 3.4, "Row anatomy"; DESIGN_SYSTEM 3.4 "The
 /// work-item row" with the tick in the source mark's slot), compact as Reminders' rows: one 12-pt padding above and
 /// below; the tick; the semibold title ("!" before it on a high-priority one) with its time in words ("Due Fri", "16m
-/// ago"); line 2, the mark and the hub's line in words (a search's result found by its notes says the sentence that
-/// matched, `TodoFoundText`, and a result offers no Mark Done); line 3, what the grouping does not already say; then, on
-/// one line at its foot, its answers (`TodoRowAnswersLine`: OK or Retry, and Options ⌄, which unfolds the ask's
-/// `AskCard` under it). An answer given here says so in line 2's place ("✓ You chose … · Undo"). No door and no chevron:
-/// the row is its own way to its asks. It reads its own cell only (`TodosListModel.Row`), so a run's new line draws this
-/// row alone (P5), and takes the list's model, not closures, so a list update that leaves it alone does not draw it
-/// again (P6). The tick is a button of its own (a 22-pt ring hit as a finger's square without growing the row, spoken as
-/// the title with Done or Not done, HIG-006 and HIG-007); the rest of the row opens the to-do and is spoken as one
-/// element, with its answers, the swipe's actions and Delete… as its own; the answers' buttons follow it.
+/// ago"); line 2, the mark and the hub's line in words; line 3, what the grouping does not already say; then, on one
+/// line at its foot, its answers (`TodoRowAnswersLine`: OK or Retry, and Options ⌄, which unfolds the ask's `AskCard`
+/// under it). An answer given here says so in line 2's place ("✓ You chose … · Undo"). A search's result found by its
+/// notes says the sentence that matched in line 2's place (`TodoFoundText`), and a result offers no Mark Done and no
+/// answers. No door and no chevron: the row is its own way to its asks. It reads its own cell only
+/// (`TodosListModel.Row`), so a run's new line draws this row alone (P5), and takes the list's model, not closures, so
+/// a list update that leaves it alone does not draw it again (P6). The tick is a button of its own (a 22-pt ring hit as
+/// a finger's square without growing the row, spoken as the title with Done or Not done, HIG-006 and HIG-007); the rest
+/// of the row opens the to-do and is spoken as one element, with its answers, the swipe's actions and Delete… as its
+/// own; the answers' buttons follow it.
 struct TodoListRow: View {
     var row: TodosListModel.Row
     /// What the tick, Mark Done and the row's actions do (`TodosListModel.tapTick`).
@@ -22,8 +23,10 @@ struct TodoListRow: View {
 
     var body: some View {
         let c = row.content
-        // A search's result (`row.search`): a notes match says its sentence; no Mark Done (`offersMarkDone`).
+        // A search's result (`row.search`): a notes match says its sentence; no Mark Done (`offersMarkDone`) and no
+        // answers (`answers(_:)`), neither drawn nor among its actions.
         let found = c.found(by: row.search)
+        let answers = c.answers(row.search)
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
             tickButton(c)
             // Facts first, then the actions, `Space.s` under the words; the card unfolds the same under them.
@@ -33,7 +36,7 @@ struct TodoListRow: View {
                     if let found {
                         foundLine(found, mark: c.mark)
                     } else {
-                        switch c.answers?.mark {
+                        switch answers?.mark {
                         case .chosen(let label, let undo)?:
                             AskChosenLine(text: label, undo: undo ? { model.undoAnswer(row.id) } : nil)
                         case .elsewhere?:
@@ -54,11 +57,11 @@ struct TodoListRow: View {
                     }
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(c.spoken(found: found))
+                .accessibilityLabel(c.spoken(row.search))
                 .accessibilityAddTraits(.isButton)
-                .accessibilityActions { spokenActions(c) }
+                .accessibilityActions { spokenActions(c, answers: answers) }
                 .accessibilityIdentifier("todos.row." + row.todoID)
-                if let answers = c.answers, Self.answersShown(answers) {
+                if let answers, Self.answersShown(answers) {
                     TodoRowAnswersLine(row: row, answers: answers, model: model)
                     if row.optionsOpen, let item = model.item(row.id) {
                         AskCard(ask: answers.ask, todo: item, model: model.asks, showsTitle: false, done: {
@@ -84,9 +87,9 @@ struct TodoListRow: View {
     /// The swipe's actions and Delete… (`TodoRowActionList.spoken`), and, while VoiceOver or Switch Control runs, the
     /// Undo of the list's latest held write, whose toast they cannot reach (HIG-005): read only then, so no other row
     /// follows it.
-    @ViewBuilder private func spokenActions(_ c: TodoRowContent) -> some View {
+    @ViewBuilder private func spokenActions(_ c: TodoRowContent, answers: TodoRowAnswers?) -> some View {
         // Its answers first, in their own words: the choice, Options (which unfolds the card, read next), Undo.
-        if let answers = c.answers {
+        if let answers {
             switch answers.mark {
             case .chosen(_, true)?:
                 Button(String(localized: "Undo")) { model.undoAnswer(row.id) }

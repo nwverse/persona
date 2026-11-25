@@ -1002,9 +1002,11 @@ existing overview list style.
     only ever says N (the drawer's number stays N). A to-do found by its notes says the sentence that matched as its
     line 2, the words on the accent tint ("List controls"), on up to two lines as a hub's line 2 may take, cut only
     when the words sit further in than about a line's worth; one found by its title keeps its line. A result keeps its
-    tick, the row's one deliberate control, but offers nothing beside its half-read words (no "· Mark Done", no
-    answers): it is found to be opened, which pushes the to-do as usual (a notes match lights nothing on its page yet),
-    and Back is the results again with the words in the field. Steps a to-do carries are no rows, and are not searched
+    tick, the row's one deliberate control, but offers nothing beside its half-read words: it is found to be opened,
+    which pushes the to-do as usual (a notes match lights nothing on its page yet), and Back is the results again with
+    the words in the field. While the field has words a row draws no "· Mark Done" and no answers (no OK or Retry, no
+    Options ⌄ or its card, no "✓ You chose … · Undo", the hub's line said in its place) and VoiceOver's actions offer
+    none of them, until the field is cleared. Steps a to-do carries are no rows, and are not searched
     here yet. With nothing found, the search's empty state says what it looked through ("Search looks through the
     titles and notes of all your to-dos, including done ones."). Its last row, "⌕ Search Chats for “kyoto” ›", takes
     the words to the app's search over Persona's chats (no Agents scope on an everyday page). It is on the device only:
