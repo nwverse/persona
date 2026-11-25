@@ -137,7 +137,7 @@ func applyModelProbeEffort(body map[string]any, api, model, effort string) bool 
 	// This diagnostic must verify the requested off wire format, not the runtime's model-specific low-effort fallback.
 	// In particular, an off result always means Messages sent thinking.type=disabled and Chat sent reasoning_effort=none.
 	if api == "messages" && ai.ChatNoThinking(effort) {
-		body["thinking"] = map[string]any{"type": "disabled"}
+		body["thinking"] = ai.DisabledThinking()
 		delete(body, "output_config")
 	}
 	return true
