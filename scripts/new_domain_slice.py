@@ -262,16 +262,12 @@ class Slice:
             taken.add(c.name + "Visitor")
         if self.entity:
             taken |= {self.entity + "Visitor", self.entity + "Builder"}
-            taken |= {self.entity + self.part_type(p) + "Step" for p in self.parts}
+            taken |= {self.entity + p.name + "Step" for p in self.parts}
         if self.decider:
             taken |= {"Command", "Event", "EventVisitor", "Decided", "DecidedVisitor"}
         clash = sorted(taken & set(self.names))
         if clash:
             raise Refused(f"{', '.join(clash)}: the scaffold declares that name itself; name the type otherwise")
-
-    @staticmethod
-    def part_type(p):
-        return p.name
 
     def value(self, spec, zero_is):
         name, _, kind = spec.partition("=")
@@ -547,6 +543,7 @@ class Writer:
         width = max(len(raw) for raw, _, _ in p.raws)
         fields = "".join(f"\t{raw.ljust(width)} {v.name}\n" for raw, _, v in p.raws)
         src.need(self.kit("outcome"), self.kit("fail"))
+        self.used_wrong = True
         src.add(comment(f"{n} is {article(thing)} as {s.name} knows it: {names}. It is comparable, so it keys maps. "
                         f"The zero {n} is no {thing}; Parse{n} never makes one.") + f"type {n} struct {{\n{fields}}}\n")
         visit = ", ".join(f"{raw} {v.name}" for raw, _, v in p.raws)
@@ -556,7 +553,6 @@ class Writer:
         body = "\tvar parts []fail.Invalid\n"
         for raw, _, v in p.raws:
             if self.rule(v) is not None:
-                self.used_wrong = True
                 body += f"\tparts = {lower_camel(v.name)}Rule(parts, {raw})\n"
         body += "\tif len(parts) > 0 {\n\t\treturn out.Err(invalidParts(parts))\n\t}\n"
         build = ", ".join(f"{raw}: {v.name}{{{v.field}: {raw}}}" for raw, _, v in p.raws)
@@ -1046,7 +1042,7 @@ class Tests:
         return f"{self.chain()}.\n\t\tBuild()" if self.s.builder else self.chain()
 
     def entity_tests(self):
-        s, p, e = self.s, self.p, s_entity(self.s)
+        s, p, e = self.s, self.p, self.s.entity
         idt = s.id
         out = []
         maker = "Build" if s.builder else f"New{e}"
@@ -1143,10 +1139,6 @@ def go_string(literal):
         return literal
     pieces = text.split("; ")
     return " +\n\t\t".join(f'"{p}; "' for p in pieces[:-1]) + f' +\n\t\t"{pieces[-1]}"'
-
-
-def s_entity(s):
-    return s.entity
 
 
 def bad_input(v):
