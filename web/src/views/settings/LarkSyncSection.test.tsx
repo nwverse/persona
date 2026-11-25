@@ -14,6 +14,7 @@ const api = vi.hoisted(() => ({
   removeSyncBinding: vi.fn(),
   removeSyncBot: vi.fn(),
   setSyncSchedule: vi.fn(),
+  setSyncIMPoll: vi.fn(),
   createSyncBot: vi.fn(),
   addSyncScopes: vi.fn(),
   registerSyncBot: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock("../../lib/lark-sync", async (original) => ({
   removeSyncBinding: (...a: unknown[]) => api.removeSyncBinding(...a),
   removeSyncBot: (...a: unknown[]) => api.removeSyncBot(...a),
   setSyncSchedule: (...a: unknown[]) => api.setSyncSchedule(...a),
+  setSyncIMPoll: (...a: unknown[]) => api.setSyncIMPoll(...a),
   createSyncBot: (...a: unknown[]) => api.createSyncBot(...a),
   addSyncScopes: (...a: unknown[]) => api.addSyncScopes(...a),
   registerSyncBot: (...a: unknown[]) => api.registerSyncBot(...a),
@@ -344,5 +346,22 @@ describe("Lark daily sync section", () => {
     await click(t("settings-larksync.upgrade_to_full"));
     expect(api.addSyncScopes).toHaveBeenCalledWith("s2", "full_with_im");
     expect(text()).toContain(t("settings-larksync.step_bot_scopes"));
+  });
+
+  it("shows and toggles the 15-minute chat sync switch when the hub supports it, and hides it on older hubs", async () => {
+    await draw();
+    expect(host.querySelector(`[aria-label="${t("settings-larksync.im_poll_label")}"]`)).toBeNull();
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    await draw(view({ im_poll: true }));
+    const sw = host.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${t("settings-larksync.im_poll_label")}"]`)!;
+    expect(sw).not.toBeNull();
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+
+    api.setSyncIMPoll.mockResolvedValue(view({ im_poll: false }));
+    await act(async () => sw.click());
+    expect(api.setSyncIMPoll).toHaveBeenCalledWith(false);
+    expect(host.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${t("settings-larksync.im_poll_label")}"]`)!.getAttribute("aria-checked")).toBe("false");
   });
 });

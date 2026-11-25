@@ -430,6 +430,12 @@ func TestScheduleFailedGoesToSupervisorOrMainAndBriefFallbackStillPushes(t *test
 		ScheduleRun{ID: "run_3", RefID: briefTask.ID, Due: now, Error: "machine offline"},
 		false,
 	)
+	if !s.modules.Loaded("briefing") {
+		if c := cardsToday(t, s)[cardBriefFallback]; c.N != 0 || len(f.pushed()) != 0 || s.briefTaskRunCount() != 0 {
+			t.Fatalf("briefing hooks without their module produced a fallback: ledger=%+v pushes=%d runs=%d", c, len(f.pushed()), s.briefTaskRunCount())
+		}
+		return
+	}
 	waitFor(t, "brief_fallback pushed to owner", func() bool {
 		return cardsToday(t, s)[cardBriefFallback].N == 1
 	})

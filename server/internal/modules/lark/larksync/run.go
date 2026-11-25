@@ -45,9 +45,11 @@ type run struct {
 	docs          map[string]*docState
 	docOrder      []string
 	chats         map[string]chatInfo
-	readChats     map[string]bool   // chat ids whose history readChat already attempted this run
-	p2pChats      map[string]string // known p2p chat_id -> peer display name (persisted in im:p2p_chats)
-	chatMetaTried map[string]bool   // p2p chat ids already queried via GET /open-apis/im/v1/chats/:chat_id this run
+	readChats     map[string]bool         // chat ids whose history readChat already attempted this run
+	p2pChats      map[string]string       // known p2p chat_id -> peer display name (persisted in im:p2p_chats)
+	chatMetaTried map[string]bool         // p2p chat ids already queried via GET /open-apis/im/v1/chats/:chat_id this run
+	wikiNodes     map[string]wikiNodeInfo // wiki node_token -> resolved object info learned during this run
+	docLeads      []docLead
 	leads         []minuteLead
 	// names are the senders' display names read this run (open id -> name); namesOff stops asking after a missing
 	// contact scope: names are a help for matching the gateway's copy, never a reason to fail.
@@ -98,6 +100,17 @@ type chatInfo struct {
 	id, name, kind string
 }
 
+// docLead is a cloud document or wiki link found in a synced message.
+type docLead struct {
+	token, objType, url, resource, entry string
+}
+
+// wikiNodeInfo caches a resolved wiki node (node_token -> underlying cloud object).
+type wikiNodeInfo struct {
+	objToken, objType, title string
+	edited                   int64
+}
+
 // minuteLead is a minutes token found in this run, in a resource's content.
 type minuteLead struct {
 	token, url, resource, entry string
@@ -124,6 +137,7 @@ func newRun(s *Syncer, b larksyncwire.Binding, token func(context.Context) (stri
 		readChats:     map[string]bool{},
 		p2pChats:      map[string]string{},
 		chatMetaTried: map[string]bool{},
+		wikiNodes:     map[string]wikiNodeInfo{},
 	}
 }
 

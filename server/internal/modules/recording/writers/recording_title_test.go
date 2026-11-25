@@ -49,13 +49,13 @@ func TestLiveTitleNeverOverTheOwnersOrTheCalendars(t *testing.T) {
 	ctx := context.Background()
 
 	u := recUpload(1, start, false, talk(0, 20)...)
-	u.Calendar = &kb.RecordingCalendar{Title: "周会"}
+	u.Calendar = &recordingwire.RecordingCalendar{Title: "周会"}
 	u.Title = "周会"
-	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "周会" || put.NameSource != kb.NamedByCalendar {
+	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "周会" || put.NameSource != recordingwire.NamedByCalendar {
 		t.Fatalf("calendar: %+v", put)
 	}
 	u.Revision, u.Title = 2, "我的标题"
-	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "我的标题" || put.NameSource != kb.NamedByTitle {
+	if put, _ := e.PutRecording(recID, u, now); put.TitleDue || put.Name != "我的标题" || put.NameSource != recordingwire.NamedByTitle {
 		t.Fatalf("the owner's: %+v", put)
 	}
 	if n := e.TitleRecordings(ctx, 2); n != 0 {
@@ -69,7 +69,7 @@ func TestLiveTitleNeverOverTheOwnersOrTheCalendars(t *testing.T) {
 	}
 	u = recUpload(2, start, false, talk(0, 20)...)
 	u.Title = "改过的名字"
-	if put, _ := e.PutRecording(other, u, now); put.Name != "改过的名字" || put.NameSource != kb.NamedByTitle || put.TitleDue {
+	if put, _ := e.PutRecording(other, u, now); put.Name != "改过的名字" || put.NameSource != recordingwire.NamedByTitle || put.TitleDue {
 		t.Fatalf("renamed: %+v", put)
 	}
 	// An all-day recording keeps its day's name.
@@ -155,23 +155,23 @@ func TestWebRename(t *testing.T) {
 		}
 	}
 	r, err := e.RenameRecording(recID, " 网页名 ", now)
-	if err != nil || r.Name != "网页名" || r.NameSource() != kb.NamedByRename || r.RenamedAt == nil {
+	if err != nil || r.Name != "网页名" || r.NameSource() != recordingwire.NamedByRename || r.RenamedAt == nil {
 		t.Fatalf("renamed: %+v %v", r, err)
 	}
 	if liveTitleDue(recordingNow(t, e, recID), now) {
 		t.Error("a renamed recording is due a live title")
 	}
-	if states, _ := e.RecordingStates(); states[0].Name != "网页名" || states[0].NameSource != kb.NamedByRename {
+	if states, _ := e.RecordingStates(); states[0].Name != "网页名" || states[0].NameSource != recordingwire.NamedByRename {
 		t.Errorf("states %+v", states)
 	}
 	// The phone's title as it was: the web's name stays.
-	if put, _ := e.PutRecording(recID, recUpload(2, start, false, talk(0, 20)...), now); put.Name != "网页名" || put.NameSource != kb.NamedByRename {
+	if put, _ := e.PutRecording(recID, recUpload(2, start, false, talk(0, 20)...), now); put.Name != "网页名" || put.NameSource != recordingwire.NamedByRename {
 		t.Fatalf("an upload with the title as it was: %+v", put)
 	}
 	// The phone renamed it since: its name wins and the web's goes.
 	u := recUpload(3, start, false, talk(0, 20)...)
 	u.Title = "手机名"
-	if put, _ := e.PutRecording(recID, u, now); put.Name != "手机名" || put.NameSource != kb.NamedByTitle {
+	if put, _ := e.PutRecording(recID, u, now); put.Name != "手机名" || put.NameSource != recordingwire.NamedByTitle {
 		t.Fatalf("the phone's newer name: %+v", put)
 	}
 	if r := recordingNow(t, e, recID); r.Renamed != "" || r.RenamedAt != nil {

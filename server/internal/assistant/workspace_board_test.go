@@ -26,7 +26,7 @@ type memoryBoardStore struct {
 }
 
 func newMemoryBoardStore() *memoryBoardStore {
-	return &memoryBoardStore{state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
+	return &memoryBoardStore{Store: &memStore{}, state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
 }
 func (s *memoryBoardStore) WorkspaceBoard(context.Context) (workspaceboard.State, error) {
 	s.mu.Lock()
