@@ -95,6 +95,12 @@ func (r *reading) seenSince(at time.Time) bool {
 	return r.f.SeenAt != nil && !r.f.SeenAt.Before(at)
 }
 
+// supervised: a conversation (main or a direction leader) supervises this task and handles its operational failures
+// (failed starts, transient/model interruptions, supervisor-held cards) until it explicitly escalates to the owner.
+func (r *reading) supervised() bool {
+	return r.f.Supervision != nil && r.f.Supervision.Supervisor != ""
+}
+
 // line is a line 2 with the arguments that have a value (name, value pairs); an empty args map is left out.
 func line(key string, args ...string) *assistantwire.TodoLine {
 	l := &assistantwire.TodoLine{Key: key}
@@ -215,7 +221,7 @@ func (r *reading) failedStart() placement {
 		}
 		return r.rest()
 	}
-	if f.Supervision != nil && f.Supervision.Supervisor != "" {
+	if r.supervised() {
 		// A supervised task's failed start is its supervisor's to retry, remedy or give up on (the start remedies and
 		// the failed signal go there): Persona works on it, and only the supervisor's needs_user brings it to the owner.
 		p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
@@ -253,11 +259,13 @@ func (r *reading) runAsks() (placement, bool) {
 		r.withOwnAsk(&p)
 		return p, true
 	}
-	if rn, ok := firstRun(r.runs, runInterrupted); ok {
-		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonInterrupted)
-		p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
-		r.withOwnAsk(&p)
-		return p, true
+	if !r.supervised() {
+		if rn, ok := firstRun(r.runs, runInterrupted); ok {
+			p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonInterrupted)
+			p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
+			r.withOwnAsk(&p)
+			return p, true
+		}
 	}
 	return placement{}, false
 }
@@ -496,6 +504,16 @@ func (r *reading) working() (placement, bool) {
 		p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
 		p.Line, p.Since = line(assistantwire.TodoLineKeyPersonaWorking), utc(pendingReviewSince(r.f))
 		return p, true
+	}
+	// A supervised task whose agent stopped on a model error (e.g. 503) is its supervisor's to recover or escalate,
+	// just like a supervised failed start: keep it in Working / persona_working unless the task is already settled,
+	// parked, or awaiting optional owner verification (user_check).
+	if r.supervised() && !r.settled() && reviewState(r.f) != reviewParked && reviewState(r.f) != reviewUserCheck {
+		if rn, ok := firstRun(r.runs, runInterrupted); ok {
+			p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
+			p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
+			return p, true
+		}
 	}
 	return placement{}, false
 }
