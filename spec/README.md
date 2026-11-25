@@ -24,6 +24,7 @@ spec/
     sync-driver/      one hub group's reconnect, event cursor and lifecycle decisions
     fold-changes/     the files a run of work changed, counted by the hub and the web alike
     fold-sources/     the web pages a run of work used, read by the hub and the web alike
+    dashboards/       Dashboards watch pages (#13020): how the manager draws a watch, when its alert rule trips and pushes
     graph-layout/     an extension graph's layout, reading order and folds, checked by the web, iOS, Android and the hub
     input-clip/       the whole-input bound after the hub and runtime SDK's two string passes
     attention/        Persona Link's "Needs you" summary against the web badge

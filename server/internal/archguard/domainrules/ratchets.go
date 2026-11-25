@@ -3,7 +3,6 @@ package domainrules
 import (
 	"go/ast"
 	"go/token"
-	"strings"
 )
 
 // A Count is one shrink-only count of an application package: how many of a habit the domain model replaces its
@@ -100,84 +99,7 @@ func Ratchets(pkgs []*Pkg, idx Index) ([]Count, error) {
 			}
 		}
 	}
-	ids, err := bareIDs(pkgs, idx)
-	return append(out, ids...), err
-}
-
-// contractKey is the key of contract-bare-id's one count: the whole contract layer, no package. Core slimming moves
-// types between contract packages, and a move must change no count, so the count is kept for the layer, never per
-// package (testdata/domain_layers/baseline.txt: "contracts contract-bare-id <n>").
-const contractKey = "contracts"
-
-// bareIDs is the contract-bare-id count: the struct fields of the contract packages (contracts.txt, production files)
-// whose type is plain string or []string and whose name ends in ID, Id or IDs, as the wire-types ratchet's bare-id
-// counts them (internal/archguard/wirecount): each name of a field, nested anonymous structs included.
-func bareIDs(pkgs []*Pkg, idx Index) ([]Count, error) {
-	c := Count{Key: contractKey, Rule: "contract-bare-id"}
-	for _, p := range pkgs {
-		if !idx.contracts[p.Path] {
-			continue
-		}
-		for _, f := range p.Files {
-			if f.Test {
-				continue
-			}
-			if err := f.parse(); err != nil {
-				return nil, err
-			}
-			if c.Pos.Filename == "" {
-				c.Pos = first(p)
-			}
-			for _, d := range f.ast.Decls {
-				gen, ok := d.(*ast.GenDecl)
-				if !ok || gen.Tok != token.TYPE {
-					continue
-				}
-				for _, spec := range gen.Specs {
-					if ts, ok := spec.(*ast.TypeSpec); ok {
-						if st, ok := ts.Type.(*ast.StructType); ok {
-							countBareIDs(&c, ts.Name.Name, st)
-						}
-					}
-				}
-			}
-		}
-	}
-	if c.N == 0 {
-		return nil, nil
-	}
-	sortStrings(c.Names)
-	return []Count{c}, nil
-}
-
-func countBareIDs(c *Count, prefix string, st *ast.StructType) {
-	for _, field := range st.Fields.List {
-		for _, id := range field.Names {
-			name := prefix + "." + id.Name
-			if inner, ok := field.Type.(*ast.StructType); ok {
-				countBareIDs(c, name, inner)
-			}
-			if !bareID(field.Type) {
-				continue
-			}
-			for _, suffix := range []string{"ID", "Id", "IDs"} {
-				if strings.HasSuffix(id.Name, suffix) {
-					c.N++
-					c.Names = append(c.Names, name)
-					break
-				}
-			}
-		}
-	}
-}
-
-// bareID says whether t is string or []string.
-func bareID(t ast.Expr) bool {
-	if at, ok := t.(*ast.ArrayType); ok && at.Len == nil {
-		t = at.Elt
-	}
-	id, ok := t.(*ast.Ident)
-	return ok && id.Name == "string"
+	return out, nil
 }
 
 // exportedField says whether a struct type has an exported field, an embedded exported type included.

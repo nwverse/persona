@@ -108,6 +108,11 @@ func Run(pkgs []*Pkg, idx Index, scope string) ([]Finding, Stats, error) {
 	}
 	var all []Finding
 	all = append(all, Layers(pkgs, idx)...)
+	var ids findings
+	if err := bareIDs(&ids, pkgs, idx); err != nil {
+		return nil, st, err
+	}
+	all = append(all, ids.list...)
 	for _, p := range pkgs {
 		if p.decls != nil {
 			all = append(all, Core(p, idx)...)
@@ -165,7 +170,7 @@ func Strict(rule string) bool { return strict(rule) }
 // strict are the rules that take no count: what they report fails at once, frozen lists aside.
 func strict(rule string) bool {
 	switch rule {
-	case "core-hook", "core-importers", "out-rules-import", "adapter-no-application", "adapter-import":
+	case "core-hook", "core-importers", "out-rules-import", "adapter-no-application", "adapter-import", "contract-bare-id":
 		return true
 	}
 	return strings.HasPrefix(rule, "layer-")
@@ -198,7 +203,7 @@ type Measure struct {
 func Measured(findings []Finding, counts []Count) Measure {
 	m := Measure{Counts: Tally(findings, counts), Names: map[string]map[string]bool{}}
 	for _, c := range counts {
-		if !allowable(c.Rule) && c.Rule != "contract-bare-id" {
+		if !allowable(c.Rule) {
 			continue
 		}
 		id := c.Key + " " + c.Rule
@@ -354,22 +359,8 @@ func Judge(findings []Finding, counts []Count, pkgs []*Pkg, lists Lists, base *B
 		}
 		if c, ok := byID[id]; ok {
 			what := c.Key + " adds " + countWhat(rule) + " (count " + itoa(n) + " > " + itoa(top) + ")"
-			names, counted := c.Names, ". Counted: "
-			if rule == "contract-bare-id" {
-				// The layer holds hundreds: name those the merge base's tree lacks, when there is one.
-				counted = ". Counted: "
-				if base != nil {
-					names = nil
-					for _, name := range c.Names {
-						if !base.Measure.Names[id][name] {
-							names = append(names, name)
-						}
-					}
-					counted = ". New since the merge base: "
-				}
-			}
-			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+counted+
-				strings.Join(names, ", ")+". If its code only moved here, "+movesHint+" carries its lines.")
+			v.Failures = append(v.Failures, c.Pos.Filename+":1: "+message(rule, what)+". Counted: "+
+				strings.Join(c.Names, ", ")+". If its code only moved here, "+movesHint+" carries its lines.")
 			continue
 		}
 		for _, f := range groupsByID[id] {
@@ -452,8 +443,6 @@ func countWhat(rule string) string {
 		return "an exported-field record"
 	case "app-named-primitive":
 		return "a named primitive type"
-	case "contract-bare-id":
-		return "a struct field of plain string or []string named *ID, *Id or *IDs"
 	case "app-bridge-call":
 		return "a use of an adapter's Wire, which unwraps a domain value in application code"
 	}
@@ -487,7 +476,7 @@ func Check(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx := NewIndex(module, pkgs, lists.Contracts)
+	idx := NewIndex(module, pkgs, lists.Contracts).WithBareIDs(lists.BareIDs)
 	if p := idx.pkg(module + "/" + scope); p == nil || p.Layer == "" {
 		t.Fatalf("%s declares no layer: the hook runs in a package whose package comment has a //persona:layer line", scope)
 	}

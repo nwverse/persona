@@ -7,90 +7,82 @@ import (
 	"github.com/nwverse/persona/server/internal/archguard/domainrules"
 )
 
-// contract-bare-id counts the contract layer's plain string and []string fields named *ID, *Id and *IDs under one key,
-// "contracts", so a type that moves between contract packages changes no count and a new bare ID field anywhere in
-// the layer raises it.
+// contract-bare-id is a hard rule with no count: a plain string or []string field named *ID, *Id or *IDs of a
+// contract package fails unless its "<Type>.<Field>" is in the wire-types baseline's bare-id names ("metrics", "wide"
+// or "exceptions"), so a field that moves or is lifted into a contract package keeps passing and one written anew fails.
 func TestContractBareID(t *testing.T) {
-	contracts := []string{"internal/awire", "internal/bwire"}
-	wire := func(pkg, body string) map[string]string {
-		files := pkgFiles("internal/"+pkg, "contract", body)
-		delete(files, "internal/"+pkg+"/rules_test.go")
-		return files
+	baseline := `{"metrics": {"bare-id": {"Row.OwnerID": 1}},
+		"wide": {"bare-id": {"Row.OwnerID": 1, "Lifted.CoreID": 1}},
+		"exceptions": {"bare-id": {"Kept.KeepID": {"count": 1, "pr": "#15397", "why": "test"}}}}`
+	names, err := domainrules.ParseBareIDs(baseline)
+	if err != nil {
+		t.Fatal(err)
 	}
-	const row = "// Row is a row.\ntype Row struct {\n\tOwnerID string\n\tPeerIDs []string\n\tName    string\n}\n"
-	const named = "// PeerID names a peer.\ntype PeerID string\n\n// Link is a link.\ntype Link struct{ PeerID PeerID }\n"
-	run := func(files map[string]string, baseFiles map[string]string, baseline, baseBaseline string) domainrules.Verdict {
-		t.Helper()
-		measure := func(f map[string]string) ([]domainrules.Finding, []domainrules.Count) {
-			_, findings, counts := domainCase(t, f, contracts)
-			return findings, counts
+	for _, n := range []string{"Row.OwnerID", "Lifted.CoreID", "Kept.KeepID"} {
+		if !names[n] {
+			t.Fatalf("the baseline reader lacks %s: %v", n, names)
 		}
-		findings, counts := measure(files)
+	}
+	run := func(body string) []domainrules.Finding {
+		t.Helper()
+		files := pkgFiles("internal/awire", "contract", body)
+		delete(files, "internal/awire/rules_test.go")
 		pkgs, err := domainrules.LoadFiles(serverModule, merged(plantedKit(t), files))
 		if err != nil {
 			t.Fatal(err)
 		}
-		lists := domainrules.ParseLists("", "", "", baseline)
-		var base *domainrules.Base
-		if baseFiles != nil {
-			bf, bc := measure(baseFiles)
-			base = &domainrules.Base{Measure: domainrules.Measured(bf, bc), Lists: domainrules.ParseLists("", "", "", baseBaseline)}
+		idx := domainrules.NewIndex(serverModule, pkgs, []string{"internal/awire"}).WithBareIDs(names)
+		all, _, err := domainrules.Run(pkgs, idx, "")
+		if err != nil {
+			t.Fatal(err)
 		}
-		return domainrules.Judge(findings, counts, pkgs, lists, base, "")
+		var out []domainrules.Finding
+		for _, f := range all {
+			if f.Rule == "contract-bare-id" {
+				out = append(out, f)
+			}
+		}
+		return out
 	}
-	const line = "contracts contract-bare-id 3\n"
-	two := merged(wire("awire", row), wire("bwire", named))
-
-	// The count is the string and []string fields named like an id: OwnerID and PeerIDs, not Name, not a named type.
-	if v := run(two, nil, "contracts contract-bare-id 2\n", ""); len(v.Failures) != 0 {
-		t.Errorf("a layer at its count: %q", v.Failures)
-	}
-
-	// A new bare ID field fails with what is wrong and the fix, naming the field; no ignore marker exists.
-	more := merged(wire("awire", row+"\n// Extra is a record.\ntype Extra struct{ MachineID string }\n"), wire("bwire", named))
-	v := run(more, two, "contracts contract-bare-id 2\n", "contracts contract-bare-id 2\n")
-	if len(v.Failures) != 1 {
-		t.Fatalf("a new bare ID field: %q", v.Failures)
-	}
-	for _, want := range []string{"RULE contract-bare-id contracts adds a struct field of plain string or []string named *ID",
-		"(count 3 > 2)", "FIX use a named ID type: the contract ID types from schema/wire/ids.schema.json once it lands (#15397), " +
-			"or a named `type XID string` in the contract package", "New since the merge base: Extra.MachineID."} {
-		if !strings.Contains(v.Failures[0], want) {
-			t.Errorf("the failure lacks %q:\n%s", want, v.Failures[0])
+	// A name in metrics, in wide only (a lift from a Core package or a module) or in exceptions passes.
+	for name, body := range map[string]string{
+		"metrics":    "// Row is a row.\ntype Row struct{ OwnerID string }\n",
+		"wide only":  "// Lifted was a Core type.\ntype Lifted struct{ CoreID string }\n",
+		"exceptions": "// Kept stays.\ntype Kept struct{ KeepID string }\n",
+		"named type": "// PeerID names a peer.\ntype PeerID string\n\n// Link is a link.\ntype Link struct {\n\tPeerID  PeerID\n\tPeerIDs []PeerID\n\tName    string\n}\n",
+	} {
+		if got := run(body); len(got) != 0 {
+			t.Errorf("%s passes: %v", name, got)
 		}
 	}
-	if strings.Contains(v.Failures[0], "persona:ignore") || strings.Contains(strings.ToLower(v.Failures[0]), "ignore") {
-		t.Errorf("the rule offers an ignore marker: %s", v.Failures[0])
+	// A new name fails at its file and line with the fix, and the rule offers no ignore marker.
+	got := run("// Row is a row.\ntype Row struct {\n\tOwnerID string\n\tPeerIDs []string\n\tName    string\n}\n\n// Extra is new.\ntype Extra struct{ MachineID string }\n")
+	if len(got) != 2 {
+		t.Fatalf("new names: %v", got)
 	}
-
-	// A named ID type passes: the field is no longer plain string.
-	namedExtra := merged(wire("awire", row+"\n// MachineID names a machine.\ntype MachineID string\n\n// Extra is a record.\n"+
-		"type Extra struct{ MachineID MachineID }\n"), wire("bwire", named))
-	if v := run(namedExtra, two, "contracts contract-bare-id 2\n", "contracts contract-bare-id 2\n"); len(v.Failures) != 0 {
-		t.Errorf("a named ID type: %q", v.Failures)
+	for i, want := range []string{"Row.PeerIDs", "Extra.MachineID"} {
+		f := got[i]
+		for _, w := range []string{"RULE contract-bare-id " + want + " is a plain", "FIX use a named ID type: the contract ID types from " +
+			"schema/wire/ids.schema.json once it lands (#15397), or a named `type XID string` in the contract package; a rename: " +
+			"add the new name to the baseline's exceptions with a PR reference"} {
+			if !strings.Contains(f.Msg, w) {
+				t.Errorf("the finding for %s lacks %q: %s", want, w, f.Msg)
+			}
+		}
+		if f.Pos.Filename != "internal/awire/awire.go" && !strings.HasPrefix(f.Pos.Filename, "internal/awire/") || f.Pos.Line == 0 {
+			t.Errorf("the finding for %s has no file:line: %v", want, f.Pos)
+		}
+		if strings.Contains(strings.ToLower(f.Msg), "persona:ignore") {
+			t.Errorf("the rule offers an ignore marker: %s", f.Msg)
+		}
 	}
-
-	// A type moving between two contract packages keeps the count: the key is the layer, not the package.
-	moved := merged(wire("awire", ""), wire("bwire", named+"\n"+row))
-	if v := run(moved, two, "contracts contract-bare-id 2\n", "contracts contract-bare-id 2\n"); len(v.Failures) != 0 {
-		t.Errorf("a move between contract packages: %q", v.Failures)
+	// A rename is a new name, and a field with the same name in another type is one too.
+	if got := run("// Row is a row.\ntype Row struct{ OwnerRefID string }\n"); len(got) != 1 {
+		t.Errorf("a renamed field: %v", got)
 	}
-
-	// The rule landing: the merge base's baseline has no line yet, and its tree measures 2, so the line may start there
-	// and no higher.
-	if v := run(two, two, "contracts contract-bare-id 2\n", ""); len(v.Failures) != 0 {
-		t.Errorf("the line a landing rule starts: %q", v.Failures)
-	}
-	if v := run(two, two, line, ""); len(v.Failures) != 1 || !strings.Contains(v.Failures[0], "gives room for 3, more than the 2") {
-		t.Errorf("a first line above what the merge base measures: %q", v.Failures)
-	}
-	// Once the line is on the merge base, a raise fails as every count's does.
-	if v := run(two, two, line, "contracts contract-bare-id 2\n"); len(v.Failures) != 1 {
-		t.Errorf("a raised line: %q", v.Failures)
-	}
-	// Fields that take a named type lower the count, and the baseline notices.
-	if v := run(wire("awire", named), two, "contracts contract-bare-id 2\n", "contracts contract-bare-id 2\n"); len(v.Failures) != 0 ||
-		len(v.Notices) == 0 || !strings.Contains(v.Notices[0], "contracts contract-bare-id is 0, under its baseline 2") {
-		t.Errorf("a falling count: failures %q notices %q", v.Failures, v.Notices)
+	// The rule takes no count: a baseline line for it is refused.
+	lists := domainrules.ParseLists("", "", "", "contracts contract-bare-id 1\n")
+	if v := domainrules.Judge(nil, nil, nil, lists, nil, ""); len(v.Failures) != 1 || !strings.Contains(v.Failures[0], "takes no count") {
+		t.Errorf("a count line for a hard rule: %q", v.Failures)
 	}
 }

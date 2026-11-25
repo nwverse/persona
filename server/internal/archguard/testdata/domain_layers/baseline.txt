@@ -7,13 +7,6 @@
 # python3 scripts/ci/lower_baselines.py --only domain-rules. Code that moves takes its lines along:
 # python3 scripts/test/name_freezes.py moves.
 #
-# "contracts contract-bare-id <count>" is the one count kept for a whole layer, not a package: the struct fields of the
-# contract packages (testdata/contracts.txt) of plain string or []string type whose names end in ID, Id or IDs, counted
-# as the wire-types ratchet's bare-id is. Core slimming moves types between contract packages, and a move must change
-# nothing, so its key is the layer: only a new bare ID field anywhere in it raises the count. It falls as fields take
-# a named ID type. The server module's contract packages only: the SDK's wire package (another module) is counted by
-# the wire-types ratchet.
-#
 # "<key> <rule> <Type> #PR ..." is an allowance, made the day the rules landed, for a type an open PR was adding to an
 # app-exported-record or app-named-primitive count. It adds one to that count's limit only while the type is in the
 # package, so the room is that PR's alone. Once the type is on main, lower_baselines.py takes it into the count and
@@ -27,7 +20,6 @@
 # python3 scripts/gen/new_domain_slice.py. assistant/chatsearch depends on impure packages (prompts, transcript, lazyre, compat, proto, the
 # SDK's wire and golang.org/x/text): its imports stay frozen here until it is converted.
 cmd/persona-link app-named-primitive 1
-contracts contract-bare-id 573
 internal/agents app-exported-record 23
 internal/agentsend app-named-primitive 1
 internal/ai app-exported-record 6

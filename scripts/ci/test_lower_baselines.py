@@ -74,17 +74,6 @@ class DomainCountsTests(unittest.TestCase):
         self.assertEqual(only_lowers(old, lower_baselines.domain_counts(b"internal/a core-any 3\ninternal/c core-any 1\n")),
                          ["internal/c core-any: added"])
 
-    def test_the_contract_layer_count_is_one_global_line(self):
-        # contract-bare-id is kept for the whole contract layer ("contracts"), so a field moving between contract
-        # packages changes no count; only a new bare ID field raises it.
-        old = lower_baselines.domain_counts(b"contracts contract-bare-id 573\ninternal/a core-any 3\n")
-        self.assertEqual(old["contracts contract-bare-id"], 573)
-        self.assertEqual(only_lowers(old, lower_baselines.domain_counts(b"contracts contract-bare-id 570\ninternal/a core-any 3\n")), [])
-        self.assertEqual(only_lowers(old, lower_baselines.domain_counts(b"contracts contract-bare-id 574\ninternal/a core-any 3\n")),
-                         ["contracts contract-bare-id: 573 -> 574"])
-        self.assertEqual(only_lowers(old, lower_baselines.domain_counts(b"contracts contract-bare-id 573\ninternal/a core-any 3\n")), [])
-        self.assertEqual(only_lowers(old, lower_baselines.domain_counts(b"internal/a core-any 3\n")), [])
-
 
 class LowerTests(unittest.TestCase):
     def setUp(self):
