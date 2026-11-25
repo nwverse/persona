@@ -153,7 +153,12 @@ func (c recordingCore) WritingOwner(lang recordingwire.Language) recordingwire.O
 	return recordingwire.Owner{Name: o.Owner, Language: o.Language}
 }
 func (c recordingCore) Deferred(ctx context.Context, err error) bool { return deferred(ctx, err) }
-func (c recordingCore) Provider() recordingwire.Provider             { return c.e.Store.recordingAudio() }
+func (c recordingCore) Provider() recordingwire.Provider {
+	if c.e.Store == nil { // an engine with no store yet has no writers to share with (SetRecordingProvider allows one)
+		return recordingwire.NoProvider{}
+	}
+	return c.e.Store.recordingAudio()
+}
 func (c recordingCore) DayRecapClock() (recordingwire.Clock, bool) {
 	if c.e.DayRecapClock == nil {
 		return recordingwire.Clock{}, false

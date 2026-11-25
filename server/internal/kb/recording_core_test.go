@@ -49,3 +49,11 @@ func TestRecordingPortSetsAreTheStores(t *testing.T) {
 		t.Error("a closed set of the port is open, or misses a value")
 	}
 }
+
+// An engine with no store yet can be hooked (the manager's tests do; SetRecordingProvider allows it): the port answers
+// that it had no writers before.
+func TestRecordingCoreOfAnEngineWithoutAStore(t *testing.T) {
+	if _, none := RecordingCore(&Engine{}).Provider().(recordingwire.NoProvider); !none {
+		t.Fatal("an engine without a store had writers")
+	}
+}
