@@ -496,10 +496,67 @@ type gateApprovalSeen struct {
 	Audience  string    `json:"audience"`
 }
 
+func TestGateProxyRestoresGrantForOutsideDecisionRetry(t *testing.T) {
+	var calls atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("x-persona-decision") == "" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"AGENT_APPROVAL_REQUIRED"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer api.Close()
+	n, h, _ := ledgerNode(t, api.URL)
+	h.approveFail = true
+	n.larkCfg.Gates[0].PathPrefix = "/agent/v1"
+	p := n.gates()
+	base, release, err := p.open("ex", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	call := larkCall{Method: "POST", Path: "/conversations/F1/messages", Body: `{}`}
+	p.grant("ex", "session-1", call, proto.LarkLetThrough{Kind: proto.LarkThroughCard})
+	target := base + "/agent/v1/conversations/F1/messages"
+	if code, _ := send(t, "POST", target, `{}`); code != http.StatusForbidden {
+		t.Fatalf("the failed action approval did not reach the enforcing API: %d", code)
+	}
+	code, body := send(t, "POST", target, `{}`,
+		"x-persona-decision", "odc_outside12345",
+		"x-persona-decision-expires", time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano))
+	if code != http.StatusOK || calls.Load() != 2 {
+		t.Fatalf("the outside-decision retry did not reuse its grant: %d %s, upstream calls %d", code, body, calls.Load())
+	}
+}
+
+func TestGateProxyRelaySkipsDirectUpstreamApproval(t *testing.T) {
+	n, h, _ := ledgerNode(t, "http://unused.example")
+	n.larkCfg.Gates[0].Relay = true
+	n.larkCfg.Gates[0].Auth = &proto.GateAuth{}
+	p := n.gates()
+	base, release, err := p.open("ex", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if code, body := send(t, "GET", base+"/agent/v1/me", ""); code != http.StatusOK || body != `{"relayed":true}` {
+		t.Fatalf("the relayed read: %d %s", code, body)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.approvals) != 0 {
+		t.Fatalf("a relay registered a direct upstream approval: %+v", h.approvals)
+	}
+}
+
 func TestGateProxyTurnsItsGrantIntoOneAgentAPIApproval(t *testing.T) {
 	api := newFakeAPI(t)
 	n, h, _ := ledgerNode(t, api.URL)
 	n.larkCfg.Gates[0].PathPrefix = "/agent/v1"
+	n.larkCfg.Gates[0].Auth.Value = "Bearer  ${EXAMPLE_TOKEN}"
 	p := n.gates()
 	base, release, err := p.open("ex", "session-1")
 	if err != nil {
@@ -558,13 +615,36 @@ func TestGateProxyDoesNotExposeAgentApprovalsToOtherAPIs(t *testing.T) {
 	}
 }
 
+func TestGateProxyDoesNotExposeApprovalToSamePathGenericGate(t *testing.T) {
+	api := newFakeAPI(t)
+	n, h, _ := ledgerNode(t, api.URL)
+	p := n.gates()
+	base, release, err := p.open("ex", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	call := larkCall{Method: "POST", Path: "/agent/v1/conversations/F1/messages", Body: `{}`}
+	p.grant("ex", "session-1", call, proto.LarkLetThrough{Kind: proto.LarkThroughCard})
+	if code, body := send(t, "POST", base+"/agent/v1/conversations/F1/messages", `{}`); code != http.StatusOK {
+		t.Fatalf("the generic same-path gate write: %d %s", code, body)
+	}
+	seen := api.requests()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(seen) != 1 || seen[0].Decision != "" || seen[0].DecisionExpires != "" || len(h.approvals) != 0 {
+		t.Fatalf("a generic gate received an Agent capability: upstream=%+v manager=%+v", seen, h.approvals)
+	}
+}
+
 // ledgerHub is the manager as the gate proxy meets it: it takes lark.sent and keeps what it was told.
 type ledgerHub struct {
-	mu        sync.Mutex
-	got       []proto.LarkSent
-	approvals []gateApprovalSeen
-	hold      chan struct{} // when set, a report waits for it to close before it is answered
-	fail      bool          // the manager answers with an error
+	mu          sync.Mutex
+	got         []proto.LarkSent
+	approvals   []gateApprovalSeen
+	approveFail bool
+	hold        chan struct{} // when set, a report waits for it to close before it is answered
+	fail        bool          // the manager answers with an error
 }
 
 // lockedLog is a log the test reads while the node writes it.
@@ -598,13 +678,19 @@ func ledgerNode(t *testing.T, api string, user ...proto.LarkRule) (*Node, *ledge
 	n.peer = rpc.New("n", n2hW)
 	hub := rpc.New("h", h2nW)
 	hub.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
+		if method == proto.MethodGateRelay {
+			return proto.GateRelayAnswer{Status: http.StatusOK, Body: []byte(`{"relayed":true}`)}, nil
+		}
 		if method == "lark.approve" {
 			var approval gateApprovalSeen
 			_ = json.Unmarshal(params, &approval)
 			h.mu.Lock()
-			h.approvals = append(h.approvals, approval)
+			fail := h.approveFail
+			if !fail {
+				h.approvals = append(h.approvals, approval)
+			}
 			h.mu.Unlock()
-			return map[string]any{"ok": true}, nil
+			return map[string]any{"ok": !fail}, nil
 		}
 		if method != proto.MethodLarkSent {
 			return nil, nil

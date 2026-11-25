@@ -58,7 +58,7 @@ func (b *actionApprovalBook) clock() time.Time {
 
 func (b *actionApprovalBook) pruneLocked(now time.Time) {
 	for id, entry := range b.entries {
-		if entry.expires.Before(now.Add(-24 * time.Hour)) {
+		if !entry.expires.After(now) {
 			delete(b.entries, id)
 		}
 	}

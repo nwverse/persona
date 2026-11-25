@@ -246,11 +246,13 @@ func (p *gateProxy) close() {
 	}
 }
 
-func gateAgentAudience(path, authValue string) string {
-	if !strings.HasPrefix(path, "/agent/v1/") {
+func gateAgentAudience(g proto.CommandGate, path string) string {
+	if g.PathPrefix != "/agent/v1" || g.Auth == nil ||
+		!strings.EqualFold(g.Auth.Header, "Authorization") || !strings.HasPrefix(path, "/agent/v1/") {
 		return ""
 	}
-	token, ok := strings.CutPrefix(authValue, "Bearer ")
+	token, ok := strings.CutPrefix(gateAuthValue(g.Auth.Value, g.Env), "Bearer ")
+	token = strings.TrimSpace(token)
 	if !ok || token == "" {
 		return ""
 	}
@@ -294,6 +296,22 @@ func (p *gateProxy) grant(command, session string, c larkCall, through proto.Lar
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.pruneLocked()
+	p.grants = append(p.grants, g)
+	if len(p.grants) > gateGrantsMax {
+		p.grants = p.grants[len(p.grants)-gateGrantsMax:]
+	}
+}
+
+// restore returns a consumed grant only when an enforcing Agent API refused
+// the request before its write handler because no action approval could be
+// registered. The caller's one-use outside decision may then retry it.
+func (p *gateProxy) restore(g gateGrant) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pruneLocked()
+	if time.Now().After(g.until) {
+		return
+	}
 	p.grants = append(p.grants, g)
 	if len(p.grants) > gateGrantsMax {
 		p.grants = p.grants[len(p.grants)-gateGrantsMax:]
@@ -433,12 +451,14 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// How the call was let through, for the ledger once the API has taken it.
 	session, through := gk.session, proto.LarkLetThrough{}
+	var consumed *gateGrant
 	switch larkDecision(cfg, c) {
 	case "allow":
 		// A call larkCheck confirmed and a rule allows too (a space or remote runtime conversation confirms what a rule allows)
 		// was let through by the card: it uses up its grant, as a confirmed call does. In a space or remote runtime conversation
 		// a write goes only so: a rule's allow is not the phone's yes.
 		if gr, ok := p.take(gk, c.Method, c.Path, c.Query, body, isJSON); ok {
+			consumed = &gr
 			session, through = firstNonEmpty(gr.session, session), gr.through
 		} else if (gk.space || gk.remote || n.isRemoteRuntimeSession(session)) && !larkRead(c) {
 			gateNeedsPhone(w, command, c)
@@ -455,11 +475,11 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			gateNeedsPhone(w, command, c)
 			return
 		}
+		consumed = &gr
 		session, through = firstNonEmpty(gr.session, session), gr.through
 	}
-	upstreamPath := strings.TrimSuffix(up.Path, "/") + restPath
-	approval := gateActionApproval(r.Context(), n, !g.Relay && !larkRead(c) && through.Kind != "",
-		gateAgentAudience(upstreamPath, gateAuthValue(g.Auth.Value, g.Env)))
+	var needsApproval bool
+	var approval proto.LarkActionApproval
 	sw := &statusWriter{ResponseWriter: w}
 	if !larkRead(c) {
 		sw.reply = &replyCopy{}
@@ -468,6 +488,10 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// http.ErrAbortHandler then): the API had taken the write by the time it answered 2xx. A client that went away
 	// before the API answered leaves no 2xx, and whether the API executed the call is not known: nothing is told.
 	defer func() {
+		if consumed != nil && needsApproval && approval.ID == "" && sw.status == http.StatusForbidden &&
+			sw.reply.hasErrorCode("AGENT_APPROVAL_REQUIRED") {
+			p.restore(*consumed)
+		}
 		if sw.status/100 == 2 && !larkRead(c) {
 			p.reportSent(n, proto.LarkSent{Command: command, Method: c.Method, Path: c.Path, SessionID: session, LetThrough: through}, body, isJSON, sw.reply)
 		}
@@ -476,6 +500,10 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.relay(r.Context(), n, sw, r, command, restPath, g.Headers)
 		return
 	}
+	upstreamPath := strings.TrimSuffix(up.Path, "/") + restPath
+	audience := gateAgentAudience(g, upstreamPath)
+	needsApproval = !larkRead(c) && through.Kind != "" && audience != ""
+	approval = gateActionApproval(r.Context(), n, needsApproval, audience)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			out := pr.Out
@@ -495,6 +523,12 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if approval.ID != "" {
 				out.Header.Set("x-persona-decision", approval.ID)
 				out.Header.Set("x-persona-decision-expires", approval.ExpiresAt.Format(time.RFC3339Nano))
+			} else if audience != "" {
+				// An enforcing API may have refused the first attempt when the
+				// manager could not register an action approval. Its own outside
+				// decision is safe to forward only to this bound Agent API.
+				out.Header.Set("x-persona-decision", r.Header.Get("x-persona-decision"))
+				out.Header.Set("x-persona-decision-expires", r.Header.Get("x-persona-decision-expires"))
 			}
 		},
 		FlushInterval: -1, // streams (events, long polls) go as they come
@@ -551,10 +585,11 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-// answered notes the status the API answered with, and starts copying the body when it is a 2xx JSON one of a write.
+// answered notes the status the API answered with, and starts copying the body when it is a 2xx JSON one of a write or
+// the 403 that can make its one-use grant retryable through an outside decision.
 func (s *statusWriter) answered(code int) {
 	s.status = code
-	if s.reply != nil && code/100 == 2 && gateJSON(s.Header().Get("Content-Type")) {
+	if s.reply != nil && (code/100 == 2 || code == http.StatusForbidden) && gateJSON(s.Header().Get("Content-Type")) {
 		s.reply.on = true
 		s.reply.encoding = strings.ToLower(strings.TrimSpace(s.Header().Get("Content-Encoding")))
 	}
@@ -567,7 +602,7 @@ func gateJSON(contentType string) bool {
 }
 
 // replyCopy is the start of an answer's body, as it went to the command: at most gateReplyMax bytes, and whether there
-// was more. Nothing is kept for an answer that is not a 2xx JSON one.
+// was more. Nothing is kept for an answer that is not a write's 2xx or approval-refusal 403 JSON one.
 type replyCopy struct {
 	on       bool
 	encoding string // the answer's Content-Encoding
@@ -584,6 +619,29 @@ func (r *replyCopy) add(b []byte) {
 		b, r.over = b[:max(room, 0)], true
 	}
 	r.buf = append(r.buf, b...)
+}
+
+func (r *replyCopy) hasErrorCode(want string) bool {
+	if r == nil || !r.on || r.over || len(r.buf) == 0 {
+		return false
+	}
+	body := r.buf
+	switch r.encoding {
+	case "", "identity":
+	case "gzip", "x-gzip":
+		var ok bool
+		if body, ok = gunzipCapped(body, gateReplyMax); !ok {
+			return false
+		}
+	default:
+		return false
+	}
+	var answer struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(body, &answer) == nil && answer.Error.Code == want
 }
 
 // messageRef is the id of the message the API's answer says the write made: the first non-empty string among

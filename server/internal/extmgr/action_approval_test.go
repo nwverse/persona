@@ -66,6 +66,23 @@ func TestActionApprovalBookConsumesOnceAndChecksExpiry(t *testing.T) {
 	}
 }
 
+func TestActionApprovalBookPrunesEntriesAtExpiry(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	book := actionApprovalBook{now: func() time.Time { return now }}
+	expired := connector.ActionApprovalID("action:short-retention")
+	if err := book.register(expired, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	current := connector.ActionApprovalID("action:current-retention")
+	if err := book.register(current, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := book.entries[expired]; ok || len(book.entries) != 1 {
+		t.Fatalf("expired approvals remain in the book: %+v", book.entries)
+	}
+}
+
 func TestActionApprovalHTTPRequiresDecisionRole(t *testing.T) {
 	h := &Manager{}
 	mux := http.NewServeMux()
