@@ -6,7 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -84,7 +83,7 @@ func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced
 	c.announced[p.Interaction.ID] = true
 	c.announcedOccurrence[p.Interaction.ID] = p.Interaction.CreatedAt
 	c.mu.Unlock()
-	go s.feishuInteraction(p.Interaction)
+	go s.larkModule().AskAnnounced(p.Interaction)
 	go s.channelInteraction(p.Interaction)
 	go s.taskAsks(p.Interaction)
 	s.boardChanged()
@@ -140,7 +139,7 @@ func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	}
 	// Taken back because the user wrote in the conversation: what they write next is not a late answer to it.
 	inChat := p.Resolution != nil && p.Resolution.Dismiss && p.Resolution.Reason == proto.DismissedInChat && p.Resolution.AnsweredBy == ""
-	s.feishuInteractionEnded(p.Interaction, how, inChat)
+	s.larkModule().AskEnded(p.Interaction, how, inChat)
 	s.channelInteractionEnded(p.Interaction, inChat)
 	s.boardChanged()
 }
@@ -321,49 +320,5 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 	for _, a := range gone {
 		s.channelInteractionDone(proto.Interaction{ID: a.ID, MachineID: a.MachineID, SessionID: a.SessionID, Kind: a.Kind, CreatedAt: a.CreatedAt})
 	}
-	s.closeEndedBotCards(ctx, pending, true)
-}
-
-// closeEndedBotCards closes the bot's cards whose interaction is over. Not being in pending is not enough: right
-// after a restart the manager's table is empty or partial (interactions are restored, screen and Codex cards rebuilt,
-// after this runs), so each is closed only once the history says it ended for good (botCardOver). One that may still
-// be waiting is looked at again a little later, once (again).
-func (s *Service) closeEndedBotCards(ctx context.Context, pending map[string]proto.Interaction, again bool) {
-	type candidate struct {
-		card     botCard
-		replaced bool
-	}
-	var maybe []candidate
-	s.larkModule().Book(ctx, func(b assistantwire.ChatBook) { // cards posted before a restart are in the chat's state
-		for id, card := range b.Cards() {
-			current, ok := pending[id]
-			replaced := ok && !card.Ix.CreatedAt.IsZero() && !current.CreatedAt.IsZero() && card.Ix.CreatedAt.Before(current.CreatedAt)
-			if (!ok || replaced) && card.MessageID != "" {
-				maybe = append(maybe, candidate{card: card, replaced: replaced})
-			}
-		}
-	})
-	var unsure []botCard
-	for _, candidate := range maybe {
-		card := candidate.card
-		if candidate.replaced {
-			// A live same-ID replacement proves this older posted occurrence is over;
-			// its history can be pending under the replacement's occurrence instead.
-			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
-			continue
-		}
-		switch s.botCardOver(ctx, card.Ix.ID) {
-		case cardOver:
-			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
-		case cardUnsure:
-			unsure = append(unsure, card)
-		}
-	}
-	if again && len(unsure) > 0 {
-		time.AfterFunc(botCardRecheck, func() {
-			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			s.closeEndedBotCards(cctx, nil, false)
-		})
-	}
+	s.larkModule().AsksCatchUp(ctx, pending)
 }

@@ -16,6 +16,7 @@ import (
 )
 
 func TestFeishuInteractionActionsCarryOccurrence(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newFleetTestNoStore(t)
 	at := time.Date(2026, 11, 21, 1, 2, 3, 456789123, time.UTC)
 	honored := true
@@ -99,6 +100,7 @@ func TestEarlierOccurrenceEndKeepsReplacementAnnouncement(t *testing.T) {
 }
 
 func TestFeishuReplacementPostsAfterEarlierOccurrenceEnds(t *testing.T) {
+	needsLarkLayer(t)
 	e := newThreadEnv(t, nil)
 	first := proto.Interaction{ID: "ix_feishu_delayed_old_end", Kind: proto.IxPermission, MachineID: "server", SessionID: "m1",
 		ToolName: "Bash", CreatedAt: time.Now().UTC()}
@@ -122,6 +124,7 @@ func TestFeishuReplacementPostsAfterEarlierOccurrenceEnds(t *testing.T) {
 }
 
 func TestFeishuReplacementReplacesEarlierLedger(t *testing.T) {
+	needsLarkLayer(t)
 	e := newThreadEnv(t, nil)
 	first := proto.Interaction{ID: "ix_feishu_old_ledger", Kind: proto.IxPermission, MachineID: "server", SessionID: "m1",
 		ToolName: "Bash", CreatedAt: time.Now().UTC()}
@@ -146,6 +149,7 @@ func TestFeishuReplacementReplacesEarlierLedger(t *testing.T) {
 }
 
 func TestChannelsCatchUpAnnouncesReplacementOccurrence(t *testing.T) {
+	needsLarkLayer(t)
 	st := &memStore{}
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
@@ -185,6 +189,7 @@ func TestChannelsCatchUpAnnouncesReplacementOccurrence(t *testing.T) {
 }
 
 func TestCatchUpCannotDowngradeNewerAnnouncement(t *testing.T) {
+	needsLarkLayer(t)
 	f, posts := feishuHub("ou_a", time.Unix(100, 0))
 	f.settings = &Settings{MachineID: "server", Main: "m1"}
 	s := newServiceOn(t, f, &memStore{})
@@ -218,6 +223,7 @@ func TestCatchUpCannotDowngradeNewerAnnouncement(t *testing.T) {
 }
 
 func TestOlderInFlightPostCannotReplaceNewerLedger(t *testing.T) {
+	needsLarkLayer(t)
 	e := newThreadEnv(t, nil)
 	first := proto.Interaction{ID: "ix_feishu_in_flight_order", Kind: proto.IxPermission, MachineID: "server", SessionID: "m1",
 		ToolName: "Bash", CreatedAt: time.Now().UTC()}
@@ -297,6 +303,7 @@ func TestEarlierTerminalCannotDowngradeCurrentEndMarker(t *testing.T) {
 }
 
 func TestCatchUpClosesEarlierBotCardWithPendingReplacement(t *testing.T) {
+	needsLarkLayer(t)
 	e := newThreadEnv(t, nil)
 	first := proto.Interaction{ID: "ix_catchup_bot_occurrence", Kind: proto.IxPermission, MachineID: "server", SessionID: "m1",
 		ToolName: "Bash", CreatedAt: time.Now().UTC()}
@@ -304,7 +311,7 @@ func TestCatchUpClosesEarlierBotCardWithPendingReplacement(t *testing.T) {
 	replacement.CreatedAt = first.CreatedAt.Add(time.Second)
 	e.f.withQueue(replacement)
 	keepChatCard(e.s, first.ID, &botCard{MessageID: "om_first", Ix: first})
-	e.s.closeEndedBotCards(context.Background(), map[string]proto.Interaction{first.ID: replacement}, false)
+	e.s.larkModule().AsksCatchUp(context.Background(), map[string]proto.Interaction{first.ID: replacement})
 	waitFor(t, "the earlier Feishu card to close with a pending replacement", func() bool {
 		for _, p := range e.f.appParams(AppFeishu, FeishuUpdateCard) {
 			if p["message_id"] == "om_first" {
@@ -338,16 +345,14 @@ func TestCatchUpRemovesEarlierTextAskWithPendingReplacement(t *testing.T) {
 }
 
 func TestEarlierOccurrenceCannotDeleteReplacementBotCard(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newFleetTestNoStore(t)
 	first := proto.Interaction{ID: "ix_bot_ledger_occurrence", MachineID: "mac", SessionID: "s1",
 		Kind: proto.IxPermission, CreatedAt: time.Now().UTC()}
 	replacement := first
 	replacement.CreatedAt = first.CreatedAt.Add(time.Second)
 	keepChatCard(ft.s, first.ID, &botCard{MessageID: "om_replacement", Ix: replacement})
-	if _, _, same := ft.s.takeBotCardOccurrence(first.ID, first); same {
-		t.Fatal("an earlier occurrence removed the replacement ledger entry")
-	}
-	ft.s.feishuInteractionEnded(first, "ended", false)
+	ft.s.feishuInteractionDone(first, "ended")
 	got, _ := chatCard(ft.s, first.ID)
 	if got.MessageID != "om_replacement" || !got.Ix.CreatedAt.Equal(replacement.CreatedAt) {
 		t.Fatalf("an earlier terminal event damaged the replacement ledger: %+v", got)
@@ -355,6 +360,7 @@ func TestEarlierOccurrenceCannotDeleteReplacementBotCard(t *testing.T) {
 }
 
 func TestFeishuStaleCallbackCannotActOnReplacement(t *testing.T) {
+	needsLarkLayer(t)
 	for _, action := range []string{"resolve", "clarify"} {
 		for _, swapAfterGet := range []bool{false, true} {
 			name := action

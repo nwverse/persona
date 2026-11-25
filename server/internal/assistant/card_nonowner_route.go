@@ -100,7 +100,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	defer cancel()
 	// The direct bot route is an explicit owner-decision path, not a non-owner
 	// delegation. Do not park an eligible write before tellUser announces it.
-	if ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.feishuCardWanted(ctx, ix) {
+	if ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
 		return false
 	}
 	to, ok := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)

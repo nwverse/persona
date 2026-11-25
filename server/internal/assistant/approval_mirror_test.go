@@ -222,14 +222,24 @@ func TestApprovalMirrorRoutesOnlyWriteTools(t *testing.T) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0),
 			Features: FeishuFeatures{Main: true, Cards: true, AllCards: false}}, nil
 	})
+	direct := func(t *testing.T, ix proto.Interaction, want bool) {
+		t.Helper()
+		t.Run("direct owner chat", func(t *testing.T) {
+			needsLarkLayer(t)
+			if got := ft.s.feishuCardWanted(ctx, ix); got != want {
+				t.Fatalf("direct owner chat route = %v, want %v", got, want)
+			}
+		})
+	}
 	for _, name := range []string{"Read", "lark_messages", "mcp__persona__lark_messages", "kb_get", "inbox_suggest"} {
 		t.Run("read "+name, func(t *testing.T) {
 			ix := mirrorTestCard("ix_read_" + name)
 			ix.ToolName = name
 			ix.WriteOperation = false
-			if ft.s.nonMainAssistantPermission(ctx, ix) || ft.s.feishuCardWanted(ctx, ix) {
+			if ft.s.nonMainAssistantPermission(ctx, ix) {
 				t.Fatalf("read-only tool %q entered a new route", name)
 			}
+			direct(t, ix, false)
 			if _, ok := ft.s.mainApprovalMirror(ctx, ix); ok {
 				t.Fatalf("read-only tool %q gained a main copy", name)
 			}
@@ -260,9 +270,10 @@ func TestApprovalMirrorRoutesOnlyWriteTools(t *testing.T) {
 		t.Run("write "+tc.name, func(t *testing.T) {
 			ix := mirrorTestCard("ix_write_" + tc.name)
 			ix.ToolName, ix.ToolInput = tc.name, json.RawMessage(tc.input)
-			if !ft.s.nonMainAssistantPermission(ctx, ix) || !ft.s.feishuCardWanted(ctx, ix) {
+			if !ft.s.nonMainAssistantPermission(ctx, ix) {
 				t.Fatalf("write tool %q missed a new route", tc.name)
 			}
+			direct(t, ix, true)
 			if _, ok := ft.s.mainApprovalMirror(ctx, ix); !ok {
 				t.Fatalf("write tool %q has no main copy", tc.name)
 			}
@@ -272,16 +283,18 @@ func TestApprovalMirrorRoutesOnlyWriteTools(t *testing.T) {
 	gated.ToolName = "Configured external action"
 	gated.WriteOperation = true
 	gated.AlwaysKeys = nil // bypass-mode writes have no remembered route keys
-	if !ft.s.nonMainAssistantPermission(ctx, gated) || !ft.s.feishuCardWanted(ctx, gated) {
+	if !ft.s.nonMainAssistantPermission(ctx, gated) {
 		t.Fatal("a classified command-gate external write was not admitted")
 	}
+	direct(t, gated, true)
 	gatedRead := mirrorTestCard("ix_gated_external_read")
 	gatedRead.ToolName = "Configured external action"
 	gatedRead.WriteOperation = false
 	gatedRead.AlwaysKeys = []string{"lark:GET /messages"}
-	if ft.s.nonMainAssistantPermission(ctx, gatedRead) || ft.s.feishuCardWanted(ctx, gatedRead) {
+	if ft.s.nonMainAssistantPermission(ctx, gatedRead) {
 		t.Fatal("a GET confirmation entered a write-only route through its Always key")
 	}
+	direct(t, gatedRead, false)
 	unknownBash := mirrorTestCard("ix_unknown_bash")
 	unknownBash.WriteOperation = false
 	if ft.s.nonMainAssistantPermission(ctx, unknownBash) {
@@ -713,6 +726,7 @@ func TestDetachedReplayRestoresRecordedMirrorIntent(t *testing.T) {
 }
 
 func TestJustMeCodexApprovalHasNoMainOrDirectChatCopy(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newMirrorFleetTest(t)
 	ft.s.justMeSent("mac", "side")
 	ft.s.justMeStarted("mac", "side", true, false)
@@ -738,6 +752,7 @@ func TestJustMeCodexApprovalHasNoMainOrDirectChatCopy(t *testing.T) {
 }
 
 func TestFeishuAssistantApprovalWithTopicRunUsesDirectChat(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newMirrorFleetTest(t)
 	setSettings(t, ft.s, func(v *Settings) { v.ApprovalMirrorMain = new(false) })
 	ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
@@ -774,6 +789,7 @@ func TestFeishuAssistantApprovalWithTopicRunUsesDirectChat(t *testing.T) {
 }
 
 func TestFeishuSensitiveAssistantApprovalDoesNotUseDirectChat(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newMirrorFleetTest(t)
 	ft.f.fakeModel(t)
 	ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
@@ -801,6 +817,7 @@ func TestFeishuSensitiveAssistantApprovalDoesNotUseDirectChat(t *testing.T) {
 }
 
 func TestFeishuDirectWriteApprovalPassesNonOwnerRouting(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newMirrorFleetTest(t)
 	ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a", PairedAt: time.Unix(100, 0),
@@ -855,6 +872,7 @@ func TestFeishuDirectWriteApprovalPassesNonOwnerRouting(t *testing.T) {
 }
 
 func TestFeishuAssistantApprovalUsesDirectChatWithoutAllCards(t *testing.T) {
+	needsLarkLayer(t)
 	ft := newMirrorFleetTest(t)
 	setSettings(t, ft.s, func(v *Settings) { v.ApprovalMirrorMain = new(false) }) // bot routing has its own existing switch
 	ft.f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {

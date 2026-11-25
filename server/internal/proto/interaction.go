@@ -102,19 +102,23 @@ type Interaction struct {
 	MirrorOf string `json:"mirror_of,omitempty"`
 	// MirrorMain is manager-owned intent on the authoritative card: it has a main-conversation display copy.
 	// It lets reconnects preserve that copy after the preference changes. Nodes cannot declare either mirror field.
-	MirrorMain   bool       `json:"mirror_main,omitempty"`
-	MachineID    string     `json:"machine_id"`
-	SessionID    string     `json:"session_id"`
-	SessionTitle string     `json:"session_title,omitempty"`
-	TaskTitle    string     `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
-	Cwd          string     `json:"cwd,omitempty"`
-	Kind         string     `json:"kind"`
-	CreatedAt    time.Time  `json:"created_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	ToolName     string     `json:"tool_name,omitempty"`
-	ToolUseID    string     `json:"tool_use_id,omitempty"`
-	Questions    []Question `json:"questions,omitempty"`
-	Plan         string     `json:"plan,omitempty"`
+	MirrorMain   bool      `json:"mirror_main,omitempty"`
+	MachineID    string    `json:"machine_id"`
+	SessionID    string    `json:"session_id"`
+	SessionTitle string    `json:"session_title,omitempty"`
+	TaskTitle    string    `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
+	Cwd          string    `json:"cwd,omitempty"`
+	Kind         string    `json:"kind"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	// SeenAt is when the user first viewed an owner-only timed card in an app; nil while unseen.
+	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// SeenTTLSeconds is the countdown length (in seconds) that starts once SeenAt is recorded.
+	SeenTTLSeconds int        `json:"seen_ttl_seconds,omitempty"`
+	ToolName       string     `json:"tool_name,omitempty"`
+	ToolUseID      string     `json:"tool_use_id,omitempty"`
+	Questions      []Question `json:"questions,omitempty"`
+	Plan           string     `json:"plan,omitempty"`
 	// An explicit independent session review (tool persona_session_review) keeps the report beside its ordinary
 	// question-card fallback. Older clients ignore these additive fields and retain every other card's decoding.
 	ReviewReport      string          `json:"review_report,omitempty"`

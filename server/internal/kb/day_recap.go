@@ -15,19 +15,6 @@ import (
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
-// The daily recap (docs/assistant/day-recap.md "What the hub stores and returns"): a day recording's recap.json
-// (DayRecap, what detail.recap is) and recap.md (the same as Markdown with clock times, what the searches and kb_get
-// read) in its directory, beside summary.md (the recap's summary, what detail.summary shows). Like minutes they survive
-// the trim (recording_trim.go) until minutes_days; recap_notes.json, the notes the recap is merged from
-// (day_recap_write.go), is made of the transcript and goes with it. A recap becomes due for a reason (RecapTarget),
-// persisted with the recording until a recap is written or the model failed at it; recap_state says which.
-
-const (
-	recapFile      = "recap.json"
-	recapMarkdown  = "recap.md"
-	recapNotesFile = "recap_notes.json"
-)
-
 // Re-exported from recordingwire.
 const (
 	RecapDueEvening  = recordingwire.RecapDueEvening
@@ -43,19 +30,8 @@ const (
 	FinalCutoff   = recordingwire.FinalCutoff
 )
 
-// RecapTarget is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type RecapTarget = recordingwire.RecapTarget
-
-// recapFailed: the model could not write it after the minutes' tries.
-func recapFailed(t *RecapTarget) bool {
-	return t.Fails >= minutesTries || t.Timeouts >= minutesTimeoutTries
-}
-
 // recapWaiting: a try ran out of time and the next is not due yet.
 func recapWaiting(t *RecapTarget, now time.Time) bool { return now.Before(t.RetryAt) }
-
-// DayRecap is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type DayRecap = recordingwire.DayRecap
 
 // RecapSpan is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type RecapSpan = recordingwire.RecapSpan
@@ -68,28 +44,6 @@ const (
 
 // DayRecapEntry is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type DayRecapEntry = recordingwire.DayRecapEntry
-
-// planRecap sets a day recording's RecapState from the rest: pending while a recap is due, failed once the model could
-// not write it, ready once one was written and none is due, absent before any. A trimmed one is due no more: its
-// recap kept is all there will be.
-func planRecap(r *Recording) {
-	if r.Kind != RecordingDay {
-		return
-	}
-	if r.Trimmed() {
-		r.RecapDue = nil
-	}
-	switch {
-	case r.RecapDue != nil && recapFailed(r.RecapDue):
-		r.RecapState = MinutesFailed
-	case r.RecapDue != nil:
-		r.RecapState = MinutesPending
-	case r.RecapVersion > 0:
-		r.RecapState = MinutesReady
-	default:
-		r.RecapState = ""
-	}
-}
 
 // armRecap makes a recap of r due for reason, as r is now; one still due is settled by the same recap, so it gives
 // way (the newer reason says what kind of recap it is: a final one's is complete or cutoff).
@@ -113,34 +67,6 @@ func (e *Engine) askDayRecap(r *Recording) error {
 	r.RecapAsks++
 	armRecap(r, RecapDueAsked, e.now())
 	return e.Store.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
-}
-
-// hasRecap: recording id has a recap that can be read.
-func (s *Store) hasRecap(id string) bool {
-	_, err := s.readRecap(id)
-	return err == nil
-}
-
-// readRecap is recording id's (a stored id) recap.json, ErrNotFound without one.
-func (s *Store) readRecap(id string) (*DayRecap, error) {
-	raw, err := os.ReadFile(s.path(KindRecording, id, recapFile))
-	if err != nil {
-		return nil, ErrNotFound
-	}
-	var rc DayRecap
-	if err := json.Unmarshal(raw, &rc); err != nil {
-		return nil, err
-	}
-	return &rc, nil
-}
-
-// ReadDayRecap is day recording id's recap, ErrNotFound when it has none (or there is no such recording).
-func (e *Engine) ReadDayRecap(rawID string) (*DayRecap, error) {
-	id, ok := RecordingID(rawID)
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return e.Store.readRecap(id)
 }
 
 // putRecap writes recap.md of recording id, summary.md from its summary (none while it is blank), then recap.json,
@@ -545,36 +471,4 @@ func renderDayRecap(rc *DayRecap, start time.Time, zone *time.Location) string {
 		b.WriteString("\n> " + i18n.T(l, "kb-day-recap.partial") + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-
-// dayDetail is detail.meta and detail.recap of recording id, given its meta.json: a day recording's meta always says
-// next and base (0 included, as reconciliation does), and its recap.json is read once it has one; nil for any other
-// recording.
-func (e *Engine) dayDetail(id string, meta []byte) ([]byte, []byte) {
-	var head struct {
-		Kind string           `json:"kind"`
-		Next *json.RawMessage `json:"next"`
-		Base *json.RawMessage `json:"base"`
-	}
-	if json.Unmarshal(meta, &head) != nil || head.Kind != RecordingDay {
-		return meta, nil
-	}
-	if head.Next == nil || head.Base == nil {
-		var m map[string]json.RawMessage
-		if json.Unmarshal(meta, &m) == nil && m != nil {
-			for _, k := range []string{"next", "base"} {
-				if _, ok := m[k]; !ok {
-					m[k] = json.RawMessage("0")
-				}
-			}
-			if out, err := json.Marshal(m); err == nil {
-				meta = out
-			}
-		}
-	}
-	raw, err := os.ReadFile(e.Store.path(KindRecording, id, recapFile))
-	if err != nil || !json.Valid(raw) {
-		return meta, nil
-	}
-	return meta, raw
 }

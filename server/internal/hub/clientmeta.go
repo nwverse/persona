@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // clientMeta is what a client says about itself in client_hello. A zero value is a legacy iOS client.
@@ -69,6 +70,7 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 	wasElicitation := c.has("elicitation")
 	wasApprovalMirrors := c.wants(featureApprovalMirrors)
 	wasDesktopsLink := c.wants(featureDesktopsLink)
+	wasLiveTools := c.wants(proto.FeatureSessionLiveTools)
 	wasLang := c.lang()
 	c.mu.Lock()
 	hb := c.meta.heartbeat
@@ -119,6 +121,10 @@ func (h *Hub) onClientHello(c *client, data []byte) {
 	if wasDesktopsLink != c.wants(featureDesktopsLink) {
 		// The list it has left the Persona Link desktops out, or holds ones it will not hear end.
 		defer h.sendDesktops(c)
+	}
+	if !wasLiveTools && c.wants(proto.FeatureSessionLiveTools) {
+		// The hello may follow a subscribe. Send the ack before replaying any current snapshots.
+		defer h.replaySubscribedLiveTools(c)
 	}
 	if updates == nil {
 		c.helloAck(hb)

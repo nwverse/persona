@@ -96,20 +96,6 @@ func (s *Service) turnPending(machine, session string) bool {
 	return false
 }
 
-// stopConversation is typed /stop: it targets the conversation's current turn, independently of any progress card.
-// The progress-card path checks its own exact ownership before using the same interrupt call.
-func (s *Service) stopConversation(ctx context.Context, f FeishuFeatures, t botTarget) stopOutcome {
-	l := s.botLang(ctx)
-	if err := botAllowed(l, f, t); err != nil {
-		return stopOutcome{kind: "error", message: err.Error()}
-	}
-	rt, err := s.resolveBotTarget(ctx, t)
-	if err != nil || rt.isNew || (turnOver(rt.session) && !s.turnPending(rt.machine, rt.session.SessionID)) {
-		return stopOutcome{kind: "info", message: i18n.T(l, "assistant-feishu_cards.nothing_running")}
-	}
-	return s.interruptBotConversation(ctx, rt)
-}
-
 func (s *Service) interruptBotConversation(ctx context.Context, rt resolvedTarget) stopOutcome {
 	l := s.botLang(ctx)
 	if err := s.call(ctx, rt.machine, "session.interrupt", map[string]any{"session_id": rt.session.SessionID}, nil); err != nil {
