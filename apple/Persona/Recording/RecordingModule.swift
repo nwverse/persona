@@ -32,3 +32,22 @@ enum RecordingModule {
     /// cheap in `body`: docs/apple/performance.md P4, P5).
     @MainActor static var allowance: RecordingAllowance { RecordingAllowance(hub: ModuleState.shared.registry.hub) }
 }
+
+extension RecordingAllowance {
+    /// The allowance as the Apple Watch is told (`PhoneRecordingAllowance`): the phone only ever says allowed or off.
+    nonisolated var forWatch: PhoneRecordingAllowance { self == .on ? .allowed : .off }
+}
+
+#if canImport(WatchConnectivity)
+extension RecordingModule {
+    /// Tells the Apple Watch what the hub the app follows says now (#15214): after each hello of that hub, when
+    /// another hub is picked, and once the watch session is up. Before any hello it is the remembered answer, else
+    /// allowed. Skipped by `WatchSync` when the watch already has the same word.
+    @MainActor static func tellWatch() {
+        WatchSync.shared.pushRecording(allowance.forWatch)
+        #if os(iOS)
+        MinutesRelay.shared.recordingChanged()
+        #endif
+    }
+}
+#endif
