@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"bytes"
@@ -9,8 +9,6 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // The summary card (#6563, docs/assistant/meeting-minutes.md "Summary card (#6563)"): besides the legacy lists the
@@ -18,21 +16,6 @@ import (
 // headline and the core conclusions. buildOverview turns that into Minutes.Overview, or leaves it out (and the
 // minutes are written exactly as before); normalizeOverview keeps it whole once items leave it (a photo deleted);
 // renderOverview is its Markdown.
-
-// MinutesOverview is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesOverview = recordingwire.MinutesOverview
-
-// MinutesConclusion is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesConclusion = recordingwire.MinutesConclusion
-
-// MinutesGroup is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesGroup = recordingwire.MinutesGroup
-
-// MinutesTopic is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesTopic = recordingwire.MinutesTopic
-
-// MinutesBullet is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
-type MinutesBullet = recordingwire.MinutesBullet
 
 const (
 	minutesTopics          = 12  // topics of one overview, after same-titled ones are merged; more leaves it out

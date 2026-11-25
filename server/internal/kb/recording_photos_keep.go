@@ -146,13 +146,8 @@ func (s *Store) putPhotosTextLocked(id string, b *photoBook, start time.Time, zo
 	return true, writeRecordingFile(md, []byte(out.String()))
 }
 
-// photoLabel marks a photo's line in photos.md and in the minutes' input.
-const photoLabel = "photo:"
-
 // photoLine is a photo as photos.md and the minutes' input have it: "[P3] 14:32:05 photo: caption · text · note".
-func photoLine(n int, clock, words string) string {
-	return strings.TrimRight("[P"+strconv.Itoa(n)+"] "+clock+" "+photoLabel+" "+words, " ")
-}
+func photoLine(n int, clock, words string) string { return recordingwire.PhotoLine(n, clock, words) }
 
 // photoWords is a photo's caption, recognized text and note on one line, " · " between those it has; clipped, each
 // at most what the minutes' input reads of it (the text as long as a transcript line). Other people's words: nothing
@@ -176,42 +171,7 @@ func photoWords(p PhotoText, clipped bool) string {
 
 // minutesPhotos are the photos m cites (all four sections, and the overview's bullets and conclusions, which cite only
 // photos an item cites too); empty without minutes.
-func minutesPhotos(m *Minutes) map[int]bool {
-	out := map[int]bool{}
-	if m == nil {
-		return out
-	}
-	add := func(n int) {
-		if n > 0 {
-			out[n] = true
-		}
-	}
-	for _, p := range m.Points {
-		add(p.Photo)
-	}
-	for _, d := range m.Decisions {
-		add(d.Photo)
-	}
-	for _, a := range m.Actions {
-		add(a.Photo)
-	}
-	for _, o := range m.Open {
-		add(o.Photo)
-	}
-	if o := m.Overview; o != nil {
-		for _, c := range o.Conclusions {
-			add(c.Photo)
-		}
-		for _, g := range o.Groups {
-			for _, t := range g.Topics {
-				for _, b := range t.Bullets {
-					add(b.Photo)
-				}
-			}
-		}
-	}
-	return out
-}
+func minutesPhotos(m *Minutes) map[int]bool { return recordingwire.MinutesPhotos(m) }
 
 // citedPhotos are the photos recording id's current minutes cite.
 func (s *Store) citedPhotos(id string) map[int]bool {

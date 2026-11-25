@@ -144,8 +144,9 @@ func restartedOn(t *testing.T, st Store) (*Service, *fakeHub) {
 	f.hello.Assistant.MachineID = "server"
 	f.known["conv1"] = true
 	f.mu.Unlock()
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	// Settings changes can deliver a restored digest at once, so list main before they can look it up (#13418).
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	return s, f
 }
 

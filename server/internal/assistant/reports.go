@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -53,9 +52,9 @@ const reportDelay = time.Minute
 const (
 	reportRetryDelay = 30 * time.Second
 	reportMaxRetries = 3
-	// reportCardMaxBytes/Elements bound one card; each item's real marshaled JSON is measured against them.
-	reportCardMaxBytes    = 24000
-	reportCardMaxElements = 50
+	// Keep the existing card-budget names for the assistant's other card builders.
+	reportCardMaxBytes    = botcard.MaxBytes
+	reportCardMaxElements = botcard.MaxElements
 	reportFallbackMax     = 1500 // runes of a card's rich-text fallback (PostMarkdown clips neither)
 )
 
@@ -861,16 +860,8 @@ func (s *Service) reportCards(ctx context.Context, items []*reportItem) ([]*botc
 	return cards, fallbacks
 }
 
-// feishuElBytes is the JSON length of add()'s elements; json.Marshal escapes &<>, Card.JSON does not, so it errs high.
 func feishuElBytes(add func(*botcard.Card)) int {
-	c := botcard.NewCard("", "", "")
-	add(c)
-	n := 0
-	for _, el := range c.Body.Elements {
-		b, _ := json.Marshal(el)
-		n += len(b) + 1 // its joining comma inside the body's element array
-	}
-	return n
+	return botcard.ElementBytes(add)
 }
 
 // Several tasks may share a report. Name the tasks on this card in delivery
@@ -903,26 +894,15 @@ func reportCardHeads(l i18n.Lang, needs, total int) (head1, headN int) {
 	return len(c1.JSON()) + titleBudget, len(cN.JSON()) + titleBudget
 }
 
-// reportCardSegments packs entries within the budgets; an item is never cut, one always fits on an empty card.
+// reportCardSegments keeps the report entry API on botcard's generic packer.
 func reportCardSegments(es []reportEntry, head1, headN, hr int) [][]reportEntry {
-	segs := [][]reportEntry{{}}
-	ne, nb := 2, head1 // the first card reserves two element slots for the section labels
-	for _, e := range es {
-		ie, ib := 1, e.bytes
+	return botcard.Segments(es, head1, headN, hr, func(e reportEntry) (bytes, elements int) {
+		elements = 1
 		if len(e.buttons) > 0 {
-			ie++ // its button row
+			elements++ // its button row
 		}
-		cur := &segs[len(segs)-1]
-		if len(*cur) > 0 {
-			ie, ib = ie+1, ib+hr // HR before a later item
-			if ne+ie > reportCardMaxElements || nb+ib > reportCardMaxBytes {
-				segs = append(segs, nil)
-				cur, ne, nb, ie, ib = &segs[len(segs)-1], 1, headN, ie-1, ib-hr
-			}
-		}
-		*cur, ne, nb = append(*cur, e), ne+ie, nb+ib
-	}
-	return segs
+		return e.bytes, elements
+	})
 }
 
 // reportCardOne builds one segment; k is its 0-based index of n, off its first item's global position.

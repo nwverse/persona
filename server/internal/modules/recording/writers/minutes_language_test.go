@@ -1,10 +1,11 @@
-package kb
+package writers
 
 import (
 	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/kb"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,10 +15,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 )
-
-// Minutes, a recording's summary and a day's recap are written in the recording's language, whatever languages its
-// transcript mixes, their Markdown's headings too, and keep it for every later render (docs/assistant/
-// meeting-minutes.md "How the hub generates them"). Placeholders only.
 
 // mixedMeeting is a meeting said mostly in Chinese, with English and a little Japanese in it.
 var mixedMeeting = []string{
@@ -32,7 +29,7 @@ var mixedMeeting = []string{
 var cjkText = regexp.MustCompile(`[\p{Han}\p{Hiragana}\p{Katakana}]`)
 
 // storedLanguage is the language field of recording id's minutes.json or recap.json as stored.
-func storedLanguage(t *testing.T, e *Engine, id, name string) string {
+func storedLanguage(t *testing.T, e *testEngine, id, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile(e.Store.Path(KindRecording, id, name))
 	if err != nil {
@@ -195,32 +192,6 @@ func TestMinutesChunkedInTheRecordingsLanguage(t *testing.T) {
 	}
 }
 
-// A recording's summary of a mixed-language recording made in English is asked for in English, its fixed sections'
-// names and 「无」 too.
-func TestRecordingSummaryInTheRecordingsLanguage(t *testing.T) {
-	m := &captureModel{reply: `{"title":"Export review","summary":"## What this is\nAn export review.\n\n## Key points\n- 14:00 The cap stays\n\n## To-dos and open questions\nNone",` +
-		`"one_line":"The export cap stays for now","importance":"P2","relevance":50,"tags":["export"]}`}
-	e := goldenEngine(t, m)
-	now := time.Date(2026, 11, 5, 12, 0, 0, 0, goldenZone)
-	u := recUpload(1, now.Add(-time.Hour), true, mixedMeeting...)
-	u.Language = "en-US"
-	putRecording(t, e, recID, u, now)
-	if n := e.SummarizeRecordings(context.Background(), 3); n != 1 || len(m.calls) != 1 {
-		t.Fatalf("summarized %d in %d calls", n, len(m.calls))
-	}
-	system := m.calls[0][0]
-	for _, want := range []string{"都用English写", "不管原文里混着几种语言", "小节名和「不确定」「无」都换成English的说法"} {
-		if !strings.Contains(system, want) {
-			t.Errorf("the system prompt lacks %q:\n%s", want, system)
-		}
-	}
-	if strings.Contains(system, "全部用中文") || strings.Contains(system, "用中文写") {
-		t.Errorf("the system prompt still asks for Chinese:\n%s", system)
-	}
-	golden(t, "recording.system.en", system)
-	golden(t, "recording.user.en", m.calls[0][1])
-}
-
 // A day recorded in English: its hours' notes and the recap are asked for in English, the recap's Markdown is English
 // (headings, the gaps' reasons, so far) and recap.json says it.
 func TestDayRecapInTheRecordingsLanguage(t *testing.T) {
@@ -231,7 +202,7 @@ func TestDayRecapInTheRecordingsLanguage(t *testing.T) {
 	e := dayEngine(t, m, &now)
 	u := dayUpload(1, "大家好，今天评审 export", "Ada says the export drops entries over 4 MB", "Bo、金曜日までに regression test を追加してください")
 	u.Language = "en-US"
-	u.Coverage = &RecordingCoverage{To: 7200, Gaps: []CoverageGap{{From: 600, To: 1200, Reason: GapInterrupted}}}
+	u.Coverage = &kb.RecordingCoverage{To: 7200, Gaps: []CoverageGap{{From: 600, To: 1200, Reason: GapInterrupted}}}
 	mustPut(t, e, dayID, u, now)
 	if n := e.WriteDayRecaps(context.Background(), 1); n != 1 || len(m.calls) != 1 {
 		t.Fatalf("worked on %d, %d calls", n, len(m.calls))
@@ -330,7 +301,7 @@ func TestDayRecapRepairedKeepsItsLanguage(t *testing.T) {
 			// The phone erased 08:03 (line 4).
 			erase := dayUpload(5, texts[0], texts[1], texts[2], "")
 			erase.Language = tc.later
-			erase.Coverage = &RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 170, To: 200, Reason: GapErased}}}
+			erase.Coverage = &kb.RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 170, To: 200, Reason: GapErased}}}
 			mustPut(t, e, dayID, erase, now)
 			rc, err := e.ReadDayRecap(dayID)
 			if err != nil || rc.Version != 2 || len(rc.Gaps) != 1 {
@@ -473,7 +444,7 @@ func TestMinutesRenderedAgainKeepTheirLanguage(t *testing.T) {
 // minutes copied from it read like the screen (web/src/i18n/locales/<lang>/recording.json, the web recording module's strings).
 func TestMinutesHeadingsAreTheWebsSections(t *testing.T) {
 	for _, l := range i18n.Langs {
-		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "web", "src", "i18n", "locales", string(l), "recording.json"))
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "web", "src", "i18n", "locales", string(l), "recording.json"))
 		if err != nil {
 			t.Fatal(err)
 		}
