@@ -139,9 +139,20 @@ func (s *Service) AgentResumeParams(ctx context.Context, p AgentResumeParams) (m
 	return params, nil
 }
 
-// tabName is a short name for the herdr tab of a new agent, from its first message (purpose agent.title, a few
-// seconds at most). "" when there is no message or the model fails: the node names it agent-<n>.
+// tabNameSyncTimeout is the agent.title budget on the paths that still answer a caller: the
+// agents.tab_name bus method and the autonameTabs batch. It stays at the original eight seconds;
+// only the detached start-naming job uses the longer agentTitleAsyncTimeout. A var so tests can
+// compress it.
+var tabNameSyncTimeout = 8 * time.Second
+
+// tabName is tabNameWithTimeout with the short synchronous budget.
 func (s *Service) tabName(ctx context.Context, prompt string) string {
+	return s.tabNameWithTimeout(ctx, prompt, tabNameSyncTimeout)
+}
+
+// tabNameWithTimeout asks agent.title for a short herdr tab name using the given model budget. ""
+// when there is no message or the model fails: the node names it agent-<n>.
+func (s *Service) tabNameWithTimeout(ctx context.Context, prompt string, timeout time.Duration) string {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return ""
@@ -149,7 +160,7 @@ func (s *Service) tabName(ctx context.Context, prompt string) string {
 	if r := []rune(prompt); len(r) > 1500 {
 		prompt = string(r[:1500])
 	}
-	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// Reasoning models think first: 20 tokens came back empty.
 	text, err := s.purposeModel("agent.title").Complete(cctx, prompts.RenderTabName(), prompt, 200)

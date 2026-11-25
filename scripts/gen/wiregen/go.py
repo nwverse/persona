@@ -34,10 +34,14 @@ def go_calls(calls: list[Call]) -> list[str]:
 
 def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: list[str] | None = None,
            package: str = "wire", package_doc: str = GO_PACKAGE_DOC, registry: str = "newDef",
-           defects: str = "ExtensionWire") -> str:
+           defects: str = "ExtensionWire", packages: dict[str, tuple[str, str]] | None = None) -> str:
     """Go for one package. A schema/wire file shares its package with hand-written code, so it gets no package doc
     (package_doc "") and its own registry name; it imports encoding/json only when its types use it. defects names the
-    hook closed enums with x-unknown "count" call (<defects>UnknownEnum), one per file."""
+    hook closed enums with x-unknown "count" call (<defects>UnknownEnum), one per file. packages: the import path and
+    package name each shared file's IDs (Def.external) come from."""
+    for d in defs.values():
+        if d.external and d.external not in (packages or {}):
+            raise SchemaError(f"{d.name} of {d.external}: no Go package to import it from")
     uses_time = any(f.type.kind == "time" for d in defs.values() for f in d.fields)
     out: list[str] = []
 
@@ -67,7 +71,8 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
         if d.kind == "enum" and not d.closed:
             return "string"
         if d.kind in ("enum", "id", "text"):
-            return ("*" if pointer else "") + t.ref
+            qualified = f"{packages[d.external][1]}.{t.ref}" if d.external else t.ref
+            return ("*" if pointer else "") + qualified
         if d.kind == "opaque":
             return t.ref
         return ("*" if optional else "") + t.ref
@@ -176,7 +181,7 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
                 f"var {hook} func(enum, raw string)", ""]
 
     for d in defs.values():
-        if d.union:
+        if d.union or d.external:
             continue
         if d.kind == "enum" and d.closed:
             out += closed_enum(d, hook)
@@ -246,16 +251,29 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
             disc = d.discriminator
             out += comment("// ", named(d.name, d.doc) + f" One struct for every variant: {disc} says which fields "
                                   "mean something.")
+            tag_type = d.name + go_field(disc) if d.closed else "string"  # x-enum "closed": a named tag type
             out.append(f"type {d.name} struct {{")
-            out.append(f"\t{go_field(disc)} string `json:\"{disc}\"`")
+            out.append(f"\t{go_field(disc)} {tag_type} `json:\"{disc}\"`")
             for f in flat_fields(defs, d):
                 out += field_line(f, force_optional=True)
-            out += ["}", "", f"// {d.name} {disc}s.", "const ("]
+            out += ["}", ""]
+            if d.closed:
+                out += comment("// ", f"{tag_type} is which variant a {d.name} is. A {disc} this side does not know "
+                                      "keeps its raw string and is not Valid.")
+                out += [f"type {tag_type} string", ""]
+            out += [f"// {d.name} {disc}s.", "const ("]
             for v in d.variants:
-                out.append(f'\t{d.name}{camel(defs[v].tag)} = "{defs[v].tag}"')
+                typed = f" {tag_type}" if d.closed else ""
+                out.append(f'\t{d.name}{camel(defs[v].tag)}{typed} = "{defs[v].tag}"')
             out += [")", "", f"// {d.name}{plural(go_field(disc))} are the {disc}s of {d.name}, in order.",
-                    f"var {d.name}{plural(go_field(disc))} = []string{{"
-                    + ", ".join(json.dumps(defs[v].tag) for v in d.variants) + "}", ""]
+                    f"var {d.name}{plural(go_field(disc))} = []{tag_type}{{"
+                    + ", ".join((f"{d.name}{camel(defs[v].tag)}" if d.closed else json.dumps(defs[v].tag))
+                                for v in d.variants) + "}", ""]
+            if d.closed:
+                consts = ", ".join(f"{d.name}{camel(defs[v].tag)}" for v in d.variants)
+                out += [f"// Valid reports whether v is one of {d.name}{plural(go_field(disc))}.",
+                        f"func (v {tag_type}) Valid() bool {{", "\tswitch v {", f"\tcase {consts}:", "\t\treturn true",
+                        "\t}", "\treturn false", "}", ""]
             if d.preserve_required:
                 out += marshaler(d, d.name)
             if any(defs[v].since for v in d.variants):
@@ -278,6 +296,9 @@ def gen_go(defs: dict[str, Def], calls: list[Call] | None = None, *, header: lis
     uses_errors = any(re.search(r"\berrors\.", line) for line in out if not line.lstrip().startswith("//"))
     imports = [f'\t"{p}"' for p, used in (("encoding/json", uses_json), ("errors", uses_errors), ("time", uses_time))
                if used]
+    shared = sorted({packages[d.external][0] for d in defs.values() if d.external})
+    if shared:
+        imports += [""] * bool(imports) + [f'\t"{p}"' for p in shared]
     head = [*(header or GO_HEADER), ""] + ([package_doc] if package_doc else []) + [f"package {package}", ""]
     if imports:
         head += ["import (", *imports, ")", ""]

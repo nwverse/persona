@@ -78,6 +78,14 @@
       "oneOf": [{"$ref": "#/$defs/Changed"}, {"$ref": "#/$defs/Gone"}],
       "x-discriminator": "type"
     },
+    "Cause": {
+      "oneOf": [{"$ref": "#/$defs/Late"}, {"$ref": "#/$defs/Lost"}],
+      "x-discriminator": "kind",
+      "x-enum": "closed",
+      "description": "Why a view went stale: a closed union, whose Go tag is a named type."
+    },
+    "Late": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "late"}, "by": {"type": "integer"}}},
+    "Lost": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "lost"}}},
     "Changed": {
       "type": "object",
       "required": ["type", "view"],

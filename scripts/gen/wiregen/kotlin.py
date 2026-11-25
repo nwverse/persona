@@ -143,6 +143,8 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
         return lines
 
     for d in defs.values():
+        if d.external:
+            continue  # a shared file's ID: its own file, in this package, declares it
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
         elif d.kind in ("id", "text"):
@@ -191,7 +193,16 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
                 if d.extra:
                     out += ["    /** Extra keys stay at this object's level on the wire; declared fields always win. */",
                             "    val additionalProperties: Map<String, JsonElement> = emptyMap(),"]
-                out.append(f"){suffix}")
+                if d.keyed:
+                    # A struct made from an enum-keyed map, read by its key: an unknown one has the zero value.
+                    key = kname(d.keyed)
+                    out.append(f"){suffix} {{")
+                    out += kdoc(f"The field of one {d.keyed}: an unknown one reads {zero(d.fields[0].type)}.", "    ")
+                    out.append(f"    operator fun get(key: {key}): {ktype(d.fields[0].type)} = when (key) {{")
+                    out += [f"        {key}.{kt_case(f.name)} -> {kt_ident(lower_camel(f.name))}" for f in d.fields]
+                    out += [f"        is {key}.Unknown -> {zero(d.fields[0].type)}", "    }", "}"]
+                else:
+                    out.append(f"){suffix}")
             else:
                 out.append(f"class {name}{suffix}")
             out.append("")

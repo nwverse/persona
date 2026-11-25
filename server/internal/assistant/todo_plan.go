@@ -42,6 +42,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.Responsible = cloneResponsible(row.Responsible)
 	t.Audience = row.Audience
 	t.DirectionID = row.DirectionID
+	t.ItemType = row.ItemType
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -63,6 +64,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.Responsible = cloneResponsible(t.Responsible)
 	row.Audience = t.Audience
 	row.DirectionID = t.DirectionID
+	row.ItemType = t.ItemType
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -111,6 +113,7 @@ type todoPlanIn struct {
 	Priority    *string         `json:"priority"`
 	Audience    *string         `json:"audience"`
 	DirectionID *string         `json:"direction_id"`
+	ItemType    *string         `json:"item_type"`
 }
 
 // edit puts the plan into e; an error says which field could not be read.
@@ -274,6 +277,11 @@ func (s *Service) createPieceTodo(ctx context.Context, conversation, title, note
 func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo, error) {
 	if e.Audience != nil {
 		if err := db.ValidateTodoAudience(*e.Audience); err != nil {
+			return Todo{}, err
+		}
+	}
+	if e.ItemType != nil {
+		if err := db.ValidateTodoItemType(strings.TrimSpace(*e.ItemType)); err != nil {
 			return Todo{}, err
 		}
 	}
