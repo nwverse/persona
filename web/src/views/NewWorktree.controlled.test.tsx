@@ -493,6 +493,344 @@ describe("NewWorktree controlled mode", () => {
     expect(onStartAgent).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "wks-2", host: "paseo" }));
     expectNoDefaultSingletons();
   });
+
+  it("blocks synchronous create when controlled admission is revoked before re-render", async () => {
+    const req = makeRequest();
+    const onSubmit = vi.fn();
+    const session = makeMemorySession(req, onSubmit);
+    const onPrepare = vi.fn().mockResolvedValue(advancedPrepare);
+    let admitted = true;
+
+    await act(async () => root.render(
+      <NewWorktree
+        request={req}
+        onClose={onClose}
+        session={session}
+        owner={OWNER}
+        machines={sampleMachines}
+        catalog={sampleCatalog}
+        isAdmitted={() => admitted}
+        onPrepare={onPrepare}
+      />,
+    ));
+    await flush();
+
+    // Revoke admission synchronously without re-rendering NewWorktree.
+    admitted = false;
+    await act(async () => {
+      button(t("worktree-composer.create"))!.click();
+      document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    expectNoDefaultSingletons();
+  });
+
+  it("blocks synchronous preset save when controlled admission is revoked before re-render", async () => {
+    const req = makeRequest();
+    const session = makeMemorySession(req);
+    const onPrepare = vi.fn().mockResolvedValue(advancedPrepare);
+    const onSavePreset = vi.fn().mockResolvedValue({
+      preset: { id: "preset-blocked", name: "Blocked", directories: ["web"] } satisfies SparsePreset,
+    });
+    let admitted = true;
+
+    await act(async () => root.render(
+      <NewWorktree
+        request={req}
+        onClose={onClose}
+        session={session}
+        owner={OWNER}
+        machines={sampleMachines}
+        catalog={sampleCatalog}
+        isAdmitted={() => admitted}
+        onPrepare={onPrepare}
+        onSavePreset={onSavePreset}
+      />,
+    ));
+    await flush();
+
+    await setField(t("worktree-composer.preset_name"), "Blocked");
+    await setField(t("worktree-composer.directories"), "web");
+
+    // Revoke admission synchronously without re-rendering NewWorktree.
+    admitted = false;
+    await act(async () => {
+      button(t("worktree-composer.save_preset"))!.click();
+    });
+    await flush();
+
+    expect(onSavePreset).not.toHaveBeenCalled();
+    expect(repositoryDraft(session.getSnapshot().draft).preset).toBe("");
+    expectNoDefaultSingletons();
+  });
+
+  it("blocks synchronous provider search when controlled admission is revoked before re-render", async () => {
+    const req = makeRequest();
+    const session = makeMemorySession(req);
+    const onPrepare = vi.fn().mockResolvedValue(advancedPrepare);
+    const onSearchSources = vi.fn().mockResolvedValue({
+      items: [{ type: "issue", number: 12, title: "Should not run", url: "https://github.com/example/demo/issues/12" }],
+    } satisfies WorktreeSourcesResult);
+    let admitted = true;
+
+    await act(async () => root.render(
+      <NewWorktree
+        request={req}
+        onClose={onClose}
+        session={session}
+        owner={OWNER}
+        machines={sampleMachines}
+        catalog={sampleCatalog}
+        isAdmitted={() => admitted}
+        onPrepare={onPrepare}
+        onSearchSources={onSearchSources}
+      />,
+    ));
+    await flush();
+
+    await setField(t("worktree-composer.search_source"), "auth");
+
+    // Revoke admission synchronously without re-rendering NewWorktree.
+    admitted = false;
+    await act(async () => {
+      button(t("worktree-composer.search"))!.click();
+      field(t("worktree-composer.search_source")).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(onSearchSources).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("Should not run");
+    expectNoDefaultSingletons();
+  });
+
+  it("prevents wrong-owner POSTs across create, preset save, search and created actions on owner A to B switch", async () => {
+    const OWNER_A = "owner-a";
+    const OWNER_B = "owner-b";
+    let liveAuth = { owner: OWNER_A, token: "token-a" };
+    const dispatched: { op: string; workspaceId: string; owner?: string; token: string }[] = [];
+
+    const reqA: WorktreeRequest = {
+      target: { mid: "computer", workspaceId: "source-a", host: "orca", cwd: "/projects/source-a", label: "source-a", owner: OWNER_A, manager: MANAGER },
+      changed: vi.fn(),
+      onCreated: vi.fn(),
+    };
+    const createdA: WorktreeCreated = { workspace_id: "wt-a", path: "/worktrees/wt-a", branch: "feat/a", terminal: "pane:a1" };
+    const sessionA = makeMemorySession(reqA, async (draft) => {
+      dispatched.push({ op: "create", workspaceId: draft.source.workspaceId, owner: draft.source.owner, token: liveAuth.token });
+      return {
+        id: "op-a",
+        body: { workspace_id: draft.source.workspaceId, kind: draft.source.host, composer: true },
+        target: draft.source,
+        phase: "created",
+        created: createdA,
+      };
+    });
+    const onPrepare = vi.fn().mockResolvedValue(advancedPrepare);
+    const onSearchSources = vi.fn(async (source) => {
+      dispatched.push({ op: "search", workspaceId: source.workspaceId, owner: source.owner, token: liveAuth.token });
+      return { items: [{ type: "issue", number: 31, title: "Wrong owner issue", url: "https://github.com/example/demo/issues/31" }] } satisfies WorktreeSourcesResult;
+    });
+    const onSavePreset = vi.fn(async (source) => {
+      dispatched.push({ op: "preset", workspaceId: source.workspaceId, owner: source.owner, token: liveAuth.token });
+      return { preset: { id: "preset-wrong-owner", name: "Wrong", directories: ["web"] } satisfies SparsePreset };
+    });
+    const onOpenCreated = vi.fn();
+    const onStartAgent = vi.fn();
+
+    await act(async () => root.render(
+      <NewWorktree
+        request={reqA}
+        onClose={onClose}
+        session={sessionA}
+        owner={OWNER_A}
+        machines={sampleMachines}
+        catalog={{ owner: OWNER_A, manager: MANAGER, workspaces: sampleWorkspaces }}
+        isAdmitted={(target) => target.owner === liveAuth.owner}
+        onPrepare={onPrepare}
+        onSearchSources={onSearchSources}
+        onSavePreset={onSavePreset}
+        onOpenCreated={onOpenCreated}
+        onStartAgent={onStartAgent}
+      />,
+    ));
+    await flush();
+
+    await setField(t("worktree-composer.search_source"), "leak");
+    await setField(t("worktree-composer.preset_name"), "Leak");
+    await setField(t("worktree-composer.directories"), "web");
+
+    // Switch live auth owner A -> B before React re-renders NewWorktree with owner B.
+    liveAuth = { owner: OWNER_B, token: "token-b" };
+    await act(async () => {
+      button(t("worktree-composer.create"))!.click();
+      document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      button(t("worktree-composer.save_preset"))!.click();
+      button(t("worktree-composer.search"))!.click();
+    });
+    await flush();
+
+    expect(dispatched).toEqual([]);
+    expect(onSavePreset).not.toHaveBeenCalled();
+    expect(onSearchSources).not.toHaveBeenCalled();
+
+    // Preserve Start/Open live-admission boundary on created stage too.
+    liveAuth = { owner: OWNER_A, token: "token-a" };
+    await act(async () => {
+      sessionA.setSnapshot({
+        draft: makeDraft(reqA),
+        intent: { id: "op-a-created", body: { workspace_id: "source-a", kind: "orca", composer: true }, target: reqA.target, phase: "created", created: createdA },
+      });
+    });
+    await flush();
+
+    liveAuth = { owner: OWNER_B, token: "token-b" };
+    await act(async () => {
+      button(t("worktree-composer.open"))!.click();
+      button(t("worktree-composer.start_agent"))!.click();
+    });
+    expect(onOpenCreated).not.toHaveBeenCalled();
+    expect(onStartAgent).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expectNoDefaultSingletons();
+  });
+
+  it("rejects stale in-flight provider results and preset completions after admission revoke/restore ABA", async () => {
+    const req = makeRequest();
+    const session = makeMemorySession(req);
+    const onPrepare = vi.fn().mockResolvedValue(advancedPrepare);
+    const pSearch1 = deferred<WorktreeSourcesResult>();
+    const pSearch2 = deferred<WorktreeSourcesResult>();
+    const pSearchFresh = deferred<WorktreeSourcesResult>();
+    const pPreset1 = deferred<{ preset: SparsePreset }>();
+    const signals: Array<AbortSignal | undefined> = [];
+    const onSearchSources = vi.fn((_source, _query, signal?: AbortSignal) => {
+      signals.push(signal);
+      if (signals.length === 1) return pSearch1.promise;
+      if (signals.length === 2) return pSearch2.promise;
+      return pSearchFresh.promise;
+    });
+    const onSavePreset = vi.fn().mockReturnValueOnce(pPreset1.promise);
+    let admitted = true;
+
+    const mountWith = async () => {
+      await act(async () => root.render(
+        <NewWorktree
+          request={req}
+          onClose={onClose}
+          session={session}
+          owner={OWNER}
+          machines={sampleMachines}
+          catalog={sampleCatalog}
+          isAdmitted={() => admitted}
+          onPrepare={onPrepare}
+          onSearchSources={onSearchSources}
+          onSavePreset={onSavePreset}
+        />,
+      ));
+      await flush();
+    };
+
+    await mountWith();
+    await setField(t("worktree-composer.search_source"), "before-revoke");
+    await act(async () => { button(t("worktree-composer.search"))!.click(); });
+    await setField(t("worktree-composer.preset_name"), "Before revoke");
+    await setField(t("worktree-composer.directories"), "web");
+    await act(async () => { button(t("worktree-composer.save_preset"))!.click(); });
+    expect(signals[0]?.aborted).toBe(false);
+
+    // Revoke admission and re-render.
+    admitted = false;
+    await mountWith();
+    expect(document.body.textContent).toContain(t("worktree.owner_changed"));
+    expect(signals[0]?.aborted).toBe(true);
+
+    // Restore admission (ABA) and re-render.
+    admitted = true;
+    await mountWith();
+    expect(document.body.textContent).not.toContain(t("worktree.owner_changed"));
+
+    // Late resolution of pre-revoke search & preset must not populate the restored scope.
+    await act(async () => {
+      pSearch1.resolve({
+        items: [{ type: "issue", number: 88, title: "Stale revoked issue", url: "https://github.com/example/demo/issues/88" }],
+      });
+      pPreset1.resolve({
+        preset: { id: "stale-preset", name: "Stale preset", directories: ["web"] },
+      });
+    });
+    await flush();
+    expect(document.body.textContent).not.toContain("Stale revoked issue");
+    expect(repositoryDraft(session.getSnapshot().draft).preset).toBe("");
+
+    // Late error from a revoked search must also be ignored after revoke/restore ABA.
+    await setField(t("worktree-composer.search_source"), "second-before-revoke");
+    await act(async () => { button(t("worktree-composer.search"))!.click(); });
+    admitted = false;
+    await mountWith();
+    admitted = true;
+    await mountWith();
+    await act(async () => { pSearch2.reject(new Error("stale search error")); });
+    await flush();
+    expect(document.body.textContent).not.toContain("stale search error");
+
+    // A fresh search in the restored scope still works normally.
+    await setField(t("worktree-composer.search_source"), "fresh-after-restore");
+    await act(async () => { button(t("worktree-composer.search"))!.click(); });
+    await act(async () => {
+      pSearchFresh.resolve({
+        items: [{ type: "issue", number: 101, title: "Fresh restored issue", url: "https://github.com/example/demo/issues/101" }],
+      });
+    });
+    await flush();
+    expect(document.body.textContent).toContain("Fresh restored issue");
+    expectNoDefaultSingletons();
+  });
+
+  it("blocks stale source A actions when the live session snapshot switches source before re-render", async () => {
+    const reqA = makeRequest("source-a");
+    const reqB = makeRequest("source-b");
+    const onSubmit = vi.fn();
+    const session = makeMemorySession(reqA, onSubmit);
+    const onPrepare = vi.fn().mockResolvedValue(advancedPrepare);
+    const onSearchSources = vi.fn().mockResolvedValue({ items: [] } satisfies WorktreeSourcesResult);
+    const onSavePreset = vi.fn().mockResolvedValue({ preset: { id: "p-b", name: "P", directories: ["web"] } satisfies SparsePreset });
+
+    await act(async () => root.render(
+      <NewWorktree
+        request={reqA}
+        onClose={onClose}
+        session={session}
+        owner={OWNER}
+        machines={sampleMachines}
+        catalog={sampleCatalog}
+        isAdmitted={() => true}
+        onPrepare={onPrepare}
+        onSearchSources={onSearchSources}
+        onSavePreset={onSavePreset}
+      />,
+    ));
+    await flush();
+
+    await setField(t("worktree-composer.search_source"), "query-a");
+    await setField(t("worktree-composer.preset_name"), "Preset A");
+    await setField(t("worktree-composer.directories"), "web");
+
+    // Mutate session snapshot to source-b synchronously right before dispatching clicks on the source-a DOM.
+    await act(async () => {
+      session.setSnapshot({ draft: makeDraft(reqB) });
+      button(t("worktree-composer.create"))!.click();
+      button(t("worktree-composer.save_preset"))!.click();
+      button(t("worktree-composer.search"))!.click();
+    });
+    await flush();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSavePreset).not.toHaveBeenCalled();
+    expect(onSearchSources).not.toHaveBeenCalled();
+    expectNoDefaultSingletons();
+  });
 });
 
 describe("NewWorktree default compatibility", () => {
@@ -538,5 +876,33 @@ describe("NewWorktree default compatibility", () => {
 
     await act(async () => { button(t("worktree-composer.start_agent"))!.click(); });
     expect(mocks.openNewAgent).toHaveBeenCalledWith({ workspace: expect.objectContaining({ workspaceId: "default-wt" }) });
+  });
+
+  it("revalidates live default credentialOwner and worktreeAdmission before synchronous create, preset save and search", async () => {
+    const request = makeRequest();
+    const onSubmit = vi.fn();
+    const defaultSession = makeMemorySession(request, onSubmit);
+    mocks.creationSession.mockResolvedValueOnce(defaultSession);
+
+    await act(async () => root.render(<NewWorktree request={request} onClose={onClose} />));
+    await flush();
+
+    await setField(t("worktree-composer.search_source"), "default-q");
+    await setField(t("worktree-composer.preset_name"), "Default P");
+    await setField(t("worktree-composer.directories"), "web");
+
+    // Simulate synchronous credential owner rotation before React re-renders.
+    mocks.credentialOwner.mockReturnValue("other-owner");
+    mocks.worktreeAdmission.mockReturnValue(false);
+    await act(async () => {
+      button(t("worktree-composer.create"))!.click();
+      button(t("worktree-composer.save_preset"))!.click();
+      button(t("worktree-composer.search"))!.click();
+    });
+    await flush();
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(mocks.saveWorktreePreset).not.toHaveBeenCalled();
+    expect(mocks.worktreeSources).not.toHaveBeenCalled();
   });
 });
