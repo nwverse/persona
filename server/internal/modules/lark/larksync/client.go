@@ -219,7 +219,7 @@ func classify(op string, a answer, raw bool, out any) *larksyncwire.Error {
 		if msg == "" {
 			msg = "HTTP " + strconv.Itoa(a.status)
 		}
-		return &larksyncwire.Error{Kind: kind, Op: op, Code: env.Code, Msg: msg, RetryAfter: after}
+		return &larksyncwire.Error{Kind: kind, Op: op, Code: env.Code, HTTPStatus: a.status, Msg: msg, RetryAfter: after}
 	}
 	switch {
 	case a.status == http.StatusUnauthorized || tokenGoneCodes[env.Code]:

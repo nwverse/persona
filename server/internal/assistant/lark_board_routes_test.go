@@ -62,7 +62,7 @@ func TestSwitchingTheModuleOffKeepsTheStoredChatState(t *testing.T) {
 	off := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), ModulesOff: []string{"lark"}}))
 	off.boardChanged() // what the core does when a card opens or a to-do closes
 	off.boardFleetUp()
-	if off.workbenchStamp(ctx, nil) != nil || off.divertNotices(ctx, "push", nil, nil) {
+	if off.workbenchStamp(ctx, nil) != nil || off.divertNotices(ctx, assistantwire.NoticePush(), nil, nil) {
 		t.Fatal("the module is off: no stamp, no notices")
 	}
 	for _, r := range companionRoutes {

@@ -105,5 +105,7 @@
   "start_goal_skipped": "started without a start goal: {reason}",
   "side_handover_title": "“{title}” moved to main chat",
   "side_handover_archived": "Task “{title}” moved to the main conversation because “{origin}” was archived.",
-  "side_handover_gone": "Task “{title}” moved to the main conversation because “{origin}” is no longer available."
+  "side_handover_gone": "Task “{title}” moved to the main conversation because “{origin}” is no longer available.",
+  "placement_waiting": "Waiting for automatic computer placement.",
+  "placement_no_match": "No online computer currently matches this task's placement constraints and capacity limits."
 }
