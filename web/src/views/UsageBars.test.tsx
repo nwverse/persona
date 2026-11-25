@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { initI18n } from "../i18n";
 import { onDraftEvent, type DraftEvent } from "../lib/drafts";
 import { PINNED_USAGE_ACCOUNTS_KEY, remainingTone, resetPinnedUsageAccounts, timelinePosition, type UsageAccount } from "../lib/usage-windows";
+import { resetUsageTimelineOpen, resetUsageViewMode, USAGE_TIMELINE_OPEN_KEY, USAGE_VIEW_MODE_KEY } from "../lib/usage-popover-model";
 import { UsageBars } from "./UsageBars";
 import { compactResetText, computeUsagePopoverLayout, packedColumnHeight, POPOVER_HYSTERESIS_PX, providerHue, UsagePopover, visibleTimelineTickHours } from "./UsagePopover";
 import { unconnectedUsageProviders } from "./UsageUnconnected";
@@ -646,18 +647,21 @@ describe("provider cards and single unified reset timeline (V2)", () => {
     const codex = account("c1", 10, 20, { provider: "codex", name: "Codex #alpha", plan: "Plus" });
 
     const host = document.createElement("div");
-    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[claude("1", "Claude #later", 100), claude("2", "Claude #sooner", 30, true), agy, codex]} now={NOW} />);
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[claude("1", "Claude #later", 100), claude("2", "Claude #sooner", 30, true), agy, codex]} now={NOW} defaultTimelineOpen />);
 
-    // 3 provider cards, NONE containing a timeline; exactly 1 unified timeline at bottom with column-span: all class
+    // 3 provider cards, NONE containing a timeline or repeated sort subtitle; 1 popover-level sort subtitle + 1 unified timeline section
     const cards = [...host.querySelectorAll("[data-usage-provider]")];
     expect(cards).toHaveLength(3);
     for (const card of cards) {
       expect(card.querySelector("[data-usage-timeline]")).toBeNull();
+      expect(card.querySelector("[data-usage-sort-subtitle]")).toBeNull();
       expect(card.classList.contains("usage-popover-card")).toBe(true);
     }
+    expect(host.querySelectorAll("[data-usage-sort-subtitle]")).toHaveLength(1);
+    const section = host.querySelector("[data-usage-timeline-section]")!;
+    expect(section.classList.contains("usage-popover-span")).toBe(true);
     const timelines = [...host.querySelectorAll("[data-usage-timeline]")];
     expect(timelines).toHaveLength(1);
-    expect(timelines[0].classList.contains("usage-popover-span")).toBe(true);
 
     // Row order: claude(2 sooner), claude(1 later), agy(ag1), codex(c1)
     const rows = [...timelines[0].querySelectorAll("[data-timeline-row]")];
@@ -711,7 +715,7 @@ describe("provider cards and single unified reset timeline (V2)", () => {
       a.windows[1].resets_at = iso(112 * H);
       a.windows.push({ label: "30d", window_minutes: 43200, used_percent: 10, resets_at: iso(167.75 * H) });
       const host = document.createElement("div");
-      host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
+      host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} defaultTimelineOpen />);
 
       const card = host.querySelector('[data-usage-provider="claude"]')!;
       expect(card.classList.contains("@container")).toBe(true);
@@ -721,7 +725,8 @@ describe("provider cards and single unified reset timeline (V2)", () => {
       expect(providerHue("codex")).toBe("var(--hue-green)");
       expect(providerHue("agy")).toBe("var(--hue-blue)");
       expect(providerHue("unknown-provider")).toBe("var(--hue-gray)");
-      expect(card.querySelector("[data-usage-sort-subtitle]")?.textContent).toBe(subtitle);
+      expect(card.querySelector("[data-usage-sort-subtitle]")).toBeNull();
+      expect(host.querySelector("[data-usage-header] [data-usage-sort-subtitle]")?.textContent).toBe(subtitle);
 
       const axis = host.querySelector("[data-timeline-axis]")!;
       const tickEls = [...axis.querySelectorAll("[data-timeline-tick]")];
@@ -789,11 +794,11 @@ describe("provider cards and single unified reset timeline (V2)", () => {
     try {
       const noReset = account("a", 10, 20);
       noReset.windows.forEach((w) => delete w.resets_at);
-      await act(async () => root.render(<UsagePopover accounts={[noReset]} now={NOW} />));
+      await act(async () => root.render(<UsagePopover accounts={[noReset]} now={NOW} defaultTimelineOpen />));
       expect(host.querySelector("[data-timeline-axis]")).toBeNull();
       expect(axisObserved).toBe(0);
 
-      await act(async () => root.render(<UsagePopover accounts={[account("a", 10, 20)]} now={NOW} />));
+      await act(async () => root.render(<UsagePopover accounts={[account("a", 10, 20)]} now={NOW} defaultTimelineOpen />));
       expect(axisObserved).toBe(1);
       const ticks = () => [...host.querySelectorAll("[data-timeline-tick]")].map((el) => el.textContent);
       expect(ticks()).toEqual(["现在", "6h", "12h", "1d", "3d", "5d", "7d"]);
@@ -826,7 +831,7 @@ describe("provider cards and single unified reset timeline (V2)", () => {
       windows: [{ label: "1d", window_minutes: 1440, used_percent: 30, resets_at: iso(12 * H) }],
     };
     const host = document.createElement("div");
-    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[dayOnly]} now={NOW} />);
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[dayOnly]} now={NOW} defaultTimelineOpen />);
     const items = [...host.querySelectorAll<HTMLElement>("[data-legend-item]")].map((el) => el.textContent);
     expect(items).toEqual(["1d 窗口恢复", "现在", "保护线"]);
   });
@@ -1264,6 +1269,298 @@ describe("popover keyboard focus, Back on narrow screens, and a fresh clock on r
       await act(async () => root.unmount());
       host.remove();
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("grouped windows, extension metadata, compact views, and collapsible timeline (#15848)", () => {
+  afterEach(() => {
+    resetUsageViewMode();
+    resetUsageTimelineOpen();
+    resetPinnedUsageAccounts();
+    localStorage.removeItem(USAGE_VIEW_MODE_KEY);
+    localStorage.removeItem(USAGE_TIMELINE_OPEN_KEY);
+    localStorage.removeItem(PINNED_USAGE_ACCOUNTS_KEY);
+  });
+
+  const multiAccounts = (): UsageAccount[] => [
+    account("codex-a", 15, 38, {
+      provider: "codex",
+      name: "Codex #alpha",
+      plan: "plus",
+      local: true,
+      machines: ["Workstation"],
+    }),
+    {
+      id: "claude-work",
+      provider: "claude",
+      name: "Claude #work",
+      plan: "max",
+      sampled_at: iso(-25_000),
+      sources: ["Gateway"],
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 32, resets_at: iso(2 * H) },
+        { label: "7d", window_minutes: 10080, used_percent: 58, resets_at: iso(30 * H), protect_percent: 90 },
+        { label: "7d", window_minutes: 10080, used_percent: 82, resets_at: iso(30 * H), model: "Fable" },
+      ],
+    },
+    {
+      id: "agy-main",
+      provider: "antigravity",
+      name: "Antigravity · Main",
+      plan: "ultra",
+      sampled_at: iso(-15_000),
+      local: true,
+      machines: ["Workstation"],
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 20, resets_at: iso(1.5 * H), model: "Claude and GPT models" },
+        { label: "5h", window_minutes: 300, used_percent: 35, resets_at: iso(2.5 * H), model: "Gemini Models" },
+        { label: "7d", window_minutes: 10080, used_percent: 45, resets_at: iso(60 * H), model: "Claude and GPT models" },
+        { label: "7d", window_minutes: 10080, used_percent: 60, resets_at: iso(72 * H), model: "Gemini Models" },
+      ],
+    },
+  ];
+
+  it("aggregates Antigravity multi-model windows so each model group heading renders exactly once", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={multiAccounts()} now={NOW} />);
+
+    const agyCard = host.querySelector('[data-usage-provider="antigravity"]')!;
+    const groupTitles = [...agyCard.querySelectorAll("[data-usage-group-title]")].map((el) => el.textContent);
+    expect(groupTitles).toEqual(["Claude and GPT models", "Gemini Models"]);
+    expect(agyCard.querySelectorAll("[data-usage-model]")).toHaveLength(2);
+
+    const groups = [...agyCard.querySelectorAll("[data-usage-window-group]")];
+    expect(groups).toHaveLength(2);
+    expect([...groups[0].querySelectorAll("[data-window-row]")].map((el) => el.getAttribute("data-window-row"))).toEqual(["5h", "7d"]);
+    expect([...groups[1].querySelectorAll("[data-window-row]")].map((el) => el.getAttribute("data-window-row"))).toEqual(["5h", "7d"]);
+  });
+
+  it("renders single-model sub-windows (Fable) inline without a stacked heading, normalizes plans, and shows one popover-level sort subtitle", () => {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={multiAccounts()} now={NOW} />);
+
+    // Sort subtitle appears once in popover header, never repeated inside cards
+    expect(host.querySelectorAll("[data-usage-sort-subtitle]")).toHaveLength(1);
+    for (const card of host.querySelectorAll("[data-usage-provider]")) {
+      expect(card.querySelector("[data-usage-sort-subtitle]")).toBeNull();
+    }
+
+    // Plan labels normalized: "plus" -> "Plus", "max" -> "Max", "ultra" -> "Ultra"
+    const plans = [...host.querySelectorAll("[data-usage-plan]")].map((el) => el.textContent);
+    expect(plans).toEqual(["Plus", "Max", "Ultra"]);
+
+    // Claude Fable renders inline inside its single row with zero group headings
+    const claudeCard = host.querySelector('[data-usage-provider="claude"]')!;
+    expect(claudeCard.querySelectorAll("[data-usage-group-title]")).toHaveLength(0);
+    const inlineRow = claudeCard.querySelector('[data-window-inline-model="true"]')!;
+    expect(inlineRow).not.toBeNull();
+    expect(inlineRow.getAttribute("data-window-row")).toBe("7d");
+    expect(inlineRow.querySelector("[data-usage-model]")?.textContent).toBe("Fable");
+  });
+
+  it("consumes and renders extension group, title, and note fields in both Cards and Table views", () => {
+    const extAccount: UsageAccount = {
+      id: "ext-pool",
+      provider: "claude",
+      name: "Shared Pool",
+      plan: "claude_max_20x",
+      sampled_at: iso(-20_000),
+      sources: ["Pool Extension"],
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 25, resets_at: iso(2 * H), group: "Coding Pool", title: "Burst", note: "Shared across IDE and CLI" },
+        { label: "7d", window_minutes: 10080, used_percent: 40, resets_at: iso(48 * H), group: "Coding Pool", title: "Weekly" },
+        { label: "7d", window_minutes: 10080, used_percent: 85, resets_at: iso(72 * H), group: "Reasoning Pool", note: "Reserves 10% for interactive turns", protect_percent: 90 },
+      ],
+    };
+
+    const cardsHost = document.createElement("div");
+    cardsHost.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[extAccount]} now={NOW} />);
+    expect([...cardsHost.querySelectorAll("[data-usage-group-title]")].map((el) => el.textContent)).toEqual(["Coding Pool", "Reasoning Pool"]);
+    expect([...cardsHost.querySelectorAll("[data-usage-window-title]")].map((el) => el.textContent)).toEqual(["Burst", "Weekly"]);
+    expect([...cardsHost.querySelectorAll("[data-usage-window-note]")].map((el) => el.textContent)).toEqual([
+      "Shared across IDE and CLI",
+      "Reserves 10% for interactive turns",
+    ]);
+    expect(cardsHost.querySelector("[data-usage-plan]")?.textContent).toBe("Claude Max 20x");
+
+    const tableHost = document.createElement("div");
+    tableHost.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[extAccount]} now={NOW} defaultViewMode="table" />);
+    expect(tableHost.querySelector("[data-usage-table]")).not.toBeNull();
+    expect(tableHost.textContent).toContain("Burst");
+    expect(tableHost.textContent).toContain("Weekly");
+    expect(tableHost.textContent).toContain("Shared across IDE and CLI");
+    expect(tableHost.textContent).toContain("Reserves 10% for interactive turns");
+  });
+
+  it("shows a non-destructive overlap hint when a local-only row and an external row share reset times", () => {
+    const localRow: UsageAccount = {
+      id: "cl-local",
+      provider: "claude",
+      name: "Claude",
+      sampled_at: iso(-10_000),
+      local: true,
+      machines: ["Workstation"],
+      windows: [{ label: "7d", window_minutes: 10080, used_percent: 40, resets_at: iso(48 * H) }],
+    };
+    const extRow: UsageAccount = {
+      id: "cl-ext",
+      provider: "claude",
+      name: "Claude #work",
+      plan: "max",
+      sampled_at: iso(-12_000),
+      sources: ["Gateway"],
+      windows: [{ label: "7d", window_minutes: 10080, used_percent: 41, resets_at: iso(48 * H + 10_000) }],
+    };
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[localRow, extRow]} now={NOW} />);
+    expect(host.querySelectorAll('[data-usage-provider="claude"] section[aria-label]')).toHaveLength(2);
+    const hint = host.querySelector("[data-usage-overlap-hint]")!;
+    expect(hint).not.toBeNull();
+    expect(hint.textContent).toContain("Claude #work");
+  });
+
+  it("defaults the reset timeline to collapsed with a next-reset summary and expands/persists on toggle", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsagePopover accounts={multiAccounts()} now={NOW} />));
+      const toggle = host.querySelector<HTMLButtonElement>("[data-usage-timeline-toggle]")!;
+      expect(toggle).not.toBeNull();
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(host.querySelector("[data-usage-timeline]")).toBeNull();
+      const summary = host.querySelector("[data-usage-timeline-summary]")!;
+      expect(summary.textContent).toContain("Main");
+      expect(summary.textContent).toContain("5h");
+      expect(summary.textContent).toContain("1.5 小时");
+
+      // Expand timeline: grid layout with adaptive name column mounts and persists
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(localStorage.getItem(USAGE_TIMELINE_OPEN_KEY)).toBe("1");
+      const timeline = host.querySelector("[data-usage-timeline]")!;
+      expect(timeline).not.toBeNull();
+      expect(timeline.querySelector(".usage-timeline-grid")).not.toBeNull();
+      expect(timeline.querySelectorAll("[data-timeline-row]")).toHaveLength(3);
+      // Normalized plan in timeline row subtitle
+      expect(timeline.textContent).toContain("Max");
+      expect(timeline.textContent).not.toContain(">max<");
+
+      // Collapse again
+      await act(async () => toggle.click());
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(localStorage.getItem(USAGE_TIMELINE_OPEN_KEY)).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("switches between Cards and Magpie-style Table view with column sorting, pinning, narrow clamping, and token typography", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const accounts = [...multiAccounts(), balanceAccount("ds-1", "18.50")];
+    try {
+      await act(async () => root.render(<UsagePopover accounts={accounts} now={NOW} />));
+      expect(host.querySelector("[data-usage-popover]")?.getAttribute("data-view")).toBe("cards");
+      expect(host.querySelector("[data-usage-table]")).toBeNull();
+
+      // Switch to Table view
+      const tableBtn = host.querySelector<HTMLButtonElement>('[data-usage-view="table"]')!;
+      await act(async () => tableBtn.click());
+      expect(host.querySelector("[data-usage-popover]")?.getAttribute("data-view")).toBe("table");
+      expect(localStorage.getItem(USAGE_VIEW_MODE_KEY)).toBe("table");
+      const table = host.querySelector("[data-usage-table]")!;
+      expect(table).not.toBeNull();
+      // Named typography tokens only (no arbitrary pixel classes in Table view either)
+      expect(table.innerHTML).not.toMatch(/text-\[(?:length:)?\d+(?:\.\d+)?px\]/);
+
+      // Columns: Account, 5h, 7d
+      expect([...table.querySelectorAll("thead th")].map((th) => th.textContent?.trim())).toEqual(["账号", "5h", "7d"]);
+      expect([...table.querySelectorAll("[data-usage-table-row]")].map((r) => r.getAttribute("data-usage-table-row"))).toEqual([
+        "codex-a",
+        "claude-work",
+        "agy-main",
+        "ds-1",
+      ]);
+
+      // Sort by 7d (ascending tightest headroom first -> descending -> default)
+      const sort7d = table.querySelector<HTMLButtonElement>('[data-table-sort="m:10080"]')!;
+      await act(async () => sort7d.click());
+      expect(sort7d.closest("th")?.getAttribute("aria-sort")).toBe("ascending");
+      expect([...table.querySelectorAll("[data-usage-table-row]")].map((r) => r.getAttribute("data-usage-table-row"))).toEqual([
+        "claude-work",
+        "agy-main",
+        "codex-a",
+        "ds-1",
+      ]);
+      await act(async () => sort7d.click());
+      expect(sort7d.closest("th")?.getAttribute("aria-sort")).toBe("descending");
+      expect([...table.querySelectorAll("[data-usage-table-row]")].map((r) => r.getAttribute("data-usage-table-row"))).toEqual([
+        "codex-a",
+        "agy-main",
+        "claude-work",
+        "ds-1",
+      ]);
+      await act(async () => sort7d.click());
+      expect(sort7d.closest("th")?.getAttribute("aria-sort")).toBe("none");
+
+      // Pin button works inside Table view too
+      const pinAgy = table.querySelector<HTMLButtonElement>('[data-usage-pin="agy-main"]')!;
+      await act(async () => pinAgy.click());
+      expect(pinAgy.getAttribute("aria-pressed")).toBe("true");
+
+      // Switch back to Cards view
+      const cardsBtn = host.querySelector<HTMLButtonElement>('[data-usage-view="cards"]')!;
+      await act(async () => cardsBtn.click());
+      expect(host.querySelector("[data-usage-table]")).toBeNull();
+      expect(localStorage.getItem(USAGE_VIEW_MODE_KEY)).toBeNull();
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+
+    // Table layout geometry: wide single-column width on desktop, clamped safely on narrow mobile viewports
+    const desktopTable = computeUsagePopoverLayout({
+      viewMode: "table",
+      tableColCount: 2,
+      viewportWidth: 1440,
+      viewportHeight: 900,
+      anchorRect: { left: 12, top: 800 },
+    });
+    expect(desktopTable.cols).toBe(1);
+    expect(desktopTable.width).toBeGreaterThanOrEqual(600);
+    expect(desktopTable.width).toBeLessThanOrEqual(820);
+
+    const narrowTable = computeUsagePopoverLayout({
+      viewMode: "table",
+      tableColCount: 3,
+      viewportWidth: 375,
+      viewportHeight: 667,
+      anchorRect: { left: 10, top: 600 },
+    });
+    expect(narrowTable.cols).toBe(1);
+    expect(narrowTable.width).toBeLessThanOrEqual(375 - 16 - 10);
+  });
+
+  it.each([
+    ["en", "Cards", "Table", "Account", "Next:"],
+    ["zh-Hans", "卡片", "表格", "账号", "最近："],
+    ["ja", "カード", "テーブル", "アカウント", "次回："],
+  ])("localizes view switcher, table headings, and collapsed timeline summary in %s", async (lang, cardsLabel, tableLabel, acctHead, nextPrefix) => {
+    await initI18n(lang);
+    try {
+      const cardsHtml = renderToStaticMarkup(<UsagePopover accounts={multiAccounts()} now={NOW} />);
+      expect(cardsHtml).toContain(cardsLabel);
+      expect(cardsHtml).toContain(tableLabel);
+      expect(cardsHtml).toContain(nextPrefix);
+
+      const tableHtml = renderToStaticMarkup(<UsagePopover accounts={multiAccounts()} now={NOW} defaultViewMode="table" />);
+      expect(tableHtml).toContain(acctHead);
+    } finally {
+      await initI18n("zh-Hans");
     }
   });
 });

@@ -119,12 +119,49 @@
   column-span: all;
 }
 
+.usage-popover-header {
+  margin-bottom: 10px;
+}
+
 .usage-popover-pinned {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .usage-popover-unconnected {
-  margin-top: 12px;
+  margin-top: 10px;
+}
+
+.usage-timeline-grid {
+  display: grid;
+  grid-template-columns: clamp(6.75rem, 34%, 11rem) minmax(0, 1fr);
+}
+
+.usage-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.usage-table {
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.usage-table-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.usage-table-head-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--inset);
 }
 
 /* Override the global 1ms reduced-motion rule in styles.css so reduced motion keeps a 120ms opacity-only fade. */

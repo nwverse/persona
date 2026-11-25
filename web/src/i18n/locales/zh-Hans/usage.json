@@ -56,5 +56,17 @@
   "unpin_title": "取消固定",
   "pinned_summary": "侧栏已固定 {count} 个账号",
   "pinned_fallback": "固定账号暂不可用 · 已自动展示",
-  "reset_pinned": "恢复默认"
+  "reset_pinned": "恢复默认",
+  "view_label": "视图切换",
+  "view_cards": "卡片",
+  "view_table": "表格",
+  "table_account": "账号",
+  "table_other": "其他",
+  "table_plan_window": "通用",
+  "table_sort_by": "按{column}排序",
+  "timeline_next": "最近：{name} · {window}（{remaining}）",
+  "timeline_toggle_show": "展开额度重置时间线",
+  "timeline_toggle_hide": "收起额度重置时间线",
+  "overlap_hint": "可能与 {name} 为同一账号",
+  "overlap_hint_title": "本机采样与 {name} 的重置时间一致，可能对应同一订阅账号；两者均保留展示"
 }

@@ -12,6 +12,12 @@ export interface UsageWindow {
   resets_at?: string;
   /** An allowance a provider keeps for one model next to the plan's own (#2595); absent for the plan's window. */
   model?: string;
+  /** Optional group heading from a usage extension; windows sharing a group render together under one heading. */
+  group?: string;
+  /** Optional row display name from a usage extension. */
+  title?: string;
+  /** Optional short remark under the window row from a usage extension. */
+  note?: string;
   /** Where scheduling stops using this window's account, 0-100; it can differ per account and per window. Absent
    *  when the hub (older, or no such rule) does not say: nothing is drawn then (#13173). */
   protect_percent?: number;
@@ -241,13 +247,37 @@ export function sourceNames(a: UsageAccount): string[] {
   return [...machines, ...(a.sources ?? [])];
 }
 
-/** The plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
-export function planNote(a: UsageAccount): string {
-  const plan = (a.plan ?? "").trim();
-  return plan && !a.name.toLowerCase().includes(plan.toLowerCase()) ? plan : "";
+const PLAN_ACRONYMS = new Set(["api", "ai", "vip", "gpt", "llm", "mcp", "sso", "cli", "ide"]);
+
+/** Normalize a subscription plan label for display (e.g. "max" -> "Max", "api" -> "API", "claude_max_20x" -> "Claude Max 20x")
+ *  while preserving intentional mixed-case tokens such as "Pro+" or "xAI". */
+export function formatPlanLabel(raw: string | undefined): string {
+  const cleaned = (raw ?? "").trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  if (!cleaned) return "";
+  return cleaned
+    .split(" ")
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (PLAN_ACRONYMS.has(lower)) return lower.toUpperCase();
+      if (/^\d+x$/i.test(word)) return lower;
+      const hasUpper = word !== lower;
+      const isAllUpper = word === word.toUpperCase() && hasUpper;
+      if (hasUpper && !isAllUpper) return word;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
 }
 
-export const windowKey = (w: UsageWindow) => `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
+/** The normalized plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
+export function planNote(a: UsageAccount): string {
+  const plan = formatPlanLabel(a.plan);
+  if (!plan) return "";
+  const raw = (a.plan ?? "").trim().toLowerCase();
+  const nameLower = a.name.toLowerCase();
+  return !nameLower.includes(plan.toLowerCase()) && (!raw || !nameLower.includes(raw)) ? plan : "";
+}
+
+export const windowKey = (w: UsageWindow) => `${w.label}:${w.window_minutes}:${w.group ?? ""}:${w.model ?? ""}:${w.title ?? ""}`;
 
 /** The usage provider ID shared by older node samples, gateways and visibility settings. */
 export function canonicalUsageProvider(provider: string): string {
@@ -416,14 +446,45 @@ export function selectSidebarUsageAccounts(
 /** The longest stretch the reset timeline shows: windows resetting later are drawn to its end. */
 export const TIMELINE_CAP_MS = 7 * 24 * 3600_000;
 
-/** The windows of one account, in the order a card lists them: the plan's own 5h, then 7d, then the other plan windows
- *  by length, and last the per-model allowances (by length too). */
+const windowSpanRank = (w: UsageWindow) => {
+  const m = windowMinutes(w);
+  return m === 300 ? 0 : m === 10080 ? 1 : 2 + m;
+};
+
+/** The windows of one account, grouped so related windows stay together: ungrouped plan windows first (5h, then 7d,
+ *  then other lengths ascending), then explicit extension `group` blocks (preserving extension group and window order),
+ *  then per-model allowances aggregated by normalized model name (5h, 7d, then other lengths within each model). */
 export function sortedWindows(a: Pick<UsageAccount, "windows">): UsageWindow[] {
-  const rank = (w: UsageWindow) => {
-    const m = windowMinutes(w);
-    return (w.model ? 2e6 : 0) + (m === 300 ? 0 : m === 10080 ? 1 : 2 + m);
-  };
-  return [...a.windows].sort((x, y) => rank(x) - rank(y));
+  const plain: UsageWindow[] = [];
+  const byGroup = new Map<string, UsageWindow[]>();
+  const byModel = new Map<string, UsageWindow[]>();
+  for (const w of a.windows) {
+    const group = w.group?.trim();
+    if (group) {
+      const k = group.toLowerCase();
+      const list = byGroup.get(k);
+      if (list) list.push(w);
+      else byGroup.set(k, [w]);
+      continue;
+    }
+    const model = w.model?.trim();
+    if (model) {
+      const k = model.toLowerCase();
+      const list = byModel.get(k);
+      if (list) list.push(w);
+      else byModel.set(k, [w]);
+      continue;
+    }
+    plain.push(w);
+  }
+  plain.sort((x, y) => windowSpanRank(x) - windowSpanRank(y));
+  const out: UsageWindow[] = [...plain];
+  for (const groupWins of byGroup.values()) out.push(...groupWins);
+  for (const modelWins of byModel.values()) {
+    modelWins.sort((x, y) => windowSpanRank(x) - windowSpanRank(y));
+    out.push(...modelWins);
+  }
+  return out;
 }
 
 /** When an account's plan 7d window resets, in ms; Infinity without one (or without a reset time): those sort last. */
