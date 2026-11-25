@@ -40,20 +40,20 @@ import PersonaWire
     @Test func mutedLiveAgentsGoBelowTheRestButNeedsYouStaysFirst() {
         let list = [session("a", "unread"), session("b", "working"), session("c", "needs_you"), session("d", "idle")]
         let o = order(muted: ["a", "c"])
-        #expect(o.rank(list[0]) == AgentListOrder.stateKeys.firstIndex(of: "muted"), "muted and unread ranks as 已屏蔽")
-        #expect(o.rank(list[2]) == 0, "muted but needs you stays first")
+        #expect(o.rank(list[0]) == 39 && o.section(list[0]) == AgentListOrder.stateKeys.firstIndex(of: "done"), "muted and unread sorts last in Done")
+        #expect(o.rank(list[2]) == 1, "muted but needs you stays first, not counted")
         #expect(o.ordered(list).map(\.sessionID) == ["c", "b", "a", "d"])
     }
 
     @Test func justFinishedRankPrecedenceFoldsAndHeldPlace() throws {
         var done = session("done", "idle")
         done.work = try JSON.decoder.decode(WorkState.self, from: Data(#"{"phase":"done","just_finished":true}"#.utf8))
-        let index = AgentListOrder.stateKeys.firstIndex(of: "just_finished")
-        #expect(index == 5 && order().rank(done) == index)
+        let index = AgentListOrder.stateKeys.firstIndex(of: "done")
+        #expect(index == 3 && order().section(done) == index && order().rank(done) == 32)
         #expect(order().stays(done))
         #expect(try !order().isQuiet(#require(SpaceGroup.build([done]).first)))
         let muted = order(muted: ["done"])
-        #expect(muted.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
+        #expect(muted.rank(done) == 39, "a muted one sorts last in Done, and folds")
         #expect(!muted.stays(done))
         #expect(try muted.isQuiet(#require(SpaceGroup.build([done]).first)))
         var settings = AgentListProjection.Settings(grouping: "repo")
@@ -69,19 +69,19 @@ import PersonaWire
         #expect(mutedRepo.quiet && mutedRepo.unread.isEmpty)
         var waiting = done
         waiting.listWaiting = true
-        #expect(order().rank(waiting) == AgentListOrder.stateKeys.firstIndex(of: "waiting"))
+        #expect(order().section(waiting) == AgentListOrder.stateKeys.firstIndex(of: "done"), "its view's phase, whatever brings it back")
         #expect(!waiting.showsJustFinished(muted: false))
         let held = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }, held: done.key, heldJustFinished: true)
         done.seenByTheHub()
-        #expect(held.rank(done) == index && held.stays(done))
+        #expect(held.section(done) == index && held.stays(done))
         var mutedWhileOpen = held
         mutedWhileOpen.isMuted = { _ in true }
         #expect(!mutedWhileOpen.stays(done))
         #expect(try mutedWhileOpen.isQuiet(#require(SpaceGroup.build([done]).first)))
-        #expect(mutedWhileOpen.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
-        #expect(!order().stays(done) && order().rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
+        #expect(mutedWhileOpen.section(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
+        #expect(!order().stays(done) && order().section(done) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
         done.state = .working
-        #expect(held.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "working"))
+        #expect(held.section(done) == AgentListOrder.stateKeys.firstIndex(of: "working"))
     }
 
     @Test func sameRankNewestFirstThenById() {
@@ -195,20 +195,20 @@ import PersonaWire
         #expect(!awaiting("u", state: "unread").awaitsYourReply(muted: false), "完成未看 is its own state")
     }
 
-    @Test func awaitingAReplyRanksBetweenUnreadAndWorking() {
+    @Test func awaitingAReplyRanksAfterUnreadInDone() {
         let list = [session("idle", "idle", updated: 50), session("work", "working", updated: 40), awaiting("ask", updated: 1),
                     session("unread", "unread", updated: 20), session("needs", "needs_you", updated: 1)]
-        #expect(order().rank(list[2]) == AgentListOrder.stateKeys.firstIndex(of: "awaiting"))
-        #expect(order().ordered(list).map(\.sessionID) == ["needs", "unread", "ask", "work", "idle"])
+        #expect(order().rank(list[2]) == 31 && order().section(list[2]) == AgentListOrder.stateKeys.firstIndex(of: "done"))
+        #expect(order().ordered(list).map(\.sessionID) == ["needs", "work", "unread", "ask", "idle"], "Working sorts ahead of Done (docs/protocol/agent-states.md \"Rank\")")
         #expect(order(byRank: false).ordered(list).map(\.sessionID) == ["idle", "work", "unread", "ask", "needs"],
                 "最近更新 keeps time-only ordering")
-        #expect(order().sectionIDs(list, byMachine: false) == ["state/needs", "state/unread", "state/awaiting", "state/working", "state/idle"])
+        #expect(order().sectionIDs(list, byMachine: false).sorted() == ["state/done", "state/idle", "state/needs", "state/working"])
     }
 
     @Test func awaitingAReplyStaysOutOfTheIdleFoldUnlessMuted() {
         let ask = awaiting("ask")
         #expect(order().stays(ask))
-        #expect(!order(muted: ["ask"]).stays(ask) && order(muted: ["ask"]).rank(ask) == AgentListOrder.stateKeys.firstIndex(of: "idle"), "a muted one folds as 已看")
+        #expect(!order(muted: ["ask"]).stays(ask) && order(muted: ["ask"]).rank(ask) == 39, "a muted one folds, last in Done")
         let g = SpaceGroup(id: "s", machineID: "m", spaceID: "w1", group: "", name: "app", index: 0, sessions: [ask, session("q", "idle")])
         #expect(!order().isQuiet(g), "a space with one is not in 空闲的空间")
         #expect(order(muted: ["ask"]).isQuiet(g))
@@ -275,10 +275,10 @@ import PersonaWire
 
     @Test func waitingInTheBackgroundHasItsOwnSectionAndSaysSo() {
         let list = [session("idle", "idle", updated: 50), waiting("bg", updated: 40), session("work", "working", updated: 1)]
-        #expect(order().rank(list[1]) == AgentListOrder.stateKeys.firstIndex(of: "background"))
+        #expect(order().rank(list[1]) == 22 && order().section(list[1]) == AgentListOrder.stateKeys.firstIndex(of: "working"))
         #expect(order().ordered(list).map(\.sessionID) == ["work", "bg", "idle"])
         #expect(order().stays(list[1]), "it stays out of the idle fold")
-        #expect(order(muted: ["bg"]).rank(list[1]) == AgentListOrder.stateKeys.firstIndex(of: "muted"))
+        #expect(order(muted: ["bg"]).rank(list[1]) == 29)
         let w = waiting("w")
         #expect(w.stateLabel == "后台等待中" && w.stateLabel(muted: false) == "后台等待中")
         #expect(w.stateTone.text == StatusPalette.backgroundWaiting.text && w.stateTone(muted: true).text == StatusPalette.backgroundWaiting.text)
@@ -292,10 +292,10 @@ import PersonaWire
         let list = [session("work", "working", updated: 10), read, session("old", "idle", updated: 40)]
         let held = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }, held: read.key)
         #expect(held.stays(read), "out of 还有 N 个空闲 while it is open")
-        #expect(held.rank(read) == 1, "still 完成未看's place")
-        #expect(held.ordered(list).map(\.sessionID) == ["read", "work", "old"])
+        #expect(held.rank(read) == 30, "still Done's unseen place")
+        #expect(held.ordered(list).map(\.sessionID) == ["work", "read", "old"])
         let left = order()
-        #expect(!left.stays(read) && left.rank(read) == AgentListOrder.stateKeys.firstIndex(of: "idle"), "folds as soon as it is left")
+        #expect(!left.stays(read) && left.section(read) == AgentListOrder.stateKeys.firstIndex(of: "idle"), "folds as soon as it is left")
     }
 
     @Test func aQuietSpaceWithTheHeldAgentIsNotQuiet() {
@@ -307,7 +307,7 @@ import PersonaWire
 
     @Test func aHeldAgentThatIsWorkingAgainRanksAsWorking() {
         let s = session("again", "working")
-        #expect(AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }, held: s.key).rank(s) == 3)
+        #expect(AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }, held: s.key).rank(s) == 20)
     }
 
     // MARK: Rows read during a visit (#12514)
@@ -323,9 +323,9 @@ import PersonaWire
         let one = session("one", "idle", updated: 50), two = session("two", "idle", updated: 30)
         let open = session("open", "unread", updated: 40), old = session("old", "idle", updated: 60)
         let o = visit(["one": .unread, "two": .unread, "open": .unread])
-        let unread = AgentListOrder.stateKeys.firstIndex(of: "unread")
-        #expect([one, two, open].allSatisfy { o.rank($0) == unread }, "held in 完成未看")
-        #expect(o.rank(old) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
+        let unread = AgentListOrder.stateKeys.firstIndex(of: "done")
+        #expect([one, two, open].allSatisfy { o.section($0) == unread && o.rank($0) == 30 }, "held in Done's unseen place")
+        #expect(o.section(old) == AgentListOrder.stateKeys.firstIndex(of: "idle"))
         #expect(o.ordered([one, two, open, old]).map(\.sessionID) == ["one", "open", "two", "old"], "their places: by time, as before")
         #expect(o.isHeldSeen(one) && o.isHeldSeen(two), "drawn as Seen, not counted")
         #expect(!o.isHeldSeen(open) && !o.isHeldSeen(old), "still unseen; never held")
@@ -337,22 +337,22 @@ import PersonaWire
     /// A row read from Just finished keeps that section, unless it is muted (a muted one is plain Seen everywhere).
     @Test func aRowReadFromJustFinishedKeepsThatPlace() {
         let done = session("done", "idle")
-        let justFinished = AgentListOrder.stateKeys.firstIndex(of: "just_finished")
-        #expect(visit(["done": .justFinished]).rank(done) == justFinished)
+        let justFinished = AgentListOrder.stateKeys.firstIndex(of: "done")
+        #expect(visit(["done": .justFinished]).section(done) == justFinished && visit(["done": .justFinished]).rank(done) == 32)
         #expect(visit(["done": .justFinished]).isHeldSeen(done))
         let muted = visit(["done": .justFinished], muted: ["done"])
-        #expect(muted.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "idle") && !muted.isHeldSeen(done) && !muted.stays(done))
+        #expect(muted.section(done) == AgentListOrder.stateKeys.firstIndex(of: "idle") && !muted.isHeldSeen(done) && !muted.stays(done))
         // A muted one read from Unread stays among the muted ones, as the open one does.
         let mutedUnread = visit(["done": .unread], muted: ["done"])
-        #expect(mutedUnread.rank(done) == AgentListOrder.stateKeys.firstIndex(of: "muted") && mutedUnread.isHeldSeen(done))
+        #expect(mutedUnread.rank(done) == 39 && mutedUnread.isHeldSeen(done))
     }
 
     /// What the row does next wins: working again is Working, a new turn unseen is Unread and counted again.
     @Test func aHeldRowThatMovesOnIsNoLongerHeldSeen() {
         let o = visit(["again": .unread])
         let working = session("again", "working"), unseen = session("again", "unread")
-        #expect(o.rank(working) == AgentListOrder.stateKeys.firstIndex(of: "working") && !o.isHeldSeen(working))
-        #expect(o.rank(unseen) == AgentListOrder.stateKeys.firstIndex(of: "unread") && !o.isHeldSeen(unseen))
+        #expect(o.section(working) == AgentListOrder.stateKeys.firstIndex(of: "working") && !o.isHeldSeen(working))
+        #expect(o.rank(unseen) == 30 && !o.isHeldSeen(unseen))
         #expect(o.rank(session("again", "needs_you")) == 0)
     }
 

@@ -270,6 +270,19 @@ import PersonaWire
             }
             #expect(native.unread == (expected["unread_shown"]?.array?.compactMap(\.string) ?? []), "\(fixture.name): unread_shown")
             let groups = expected["groups"]?.array ?? []
+            // iOS goes first with the five phases (#15397, P5b): a By Status list's sections are the view's phases, while
+            // these shared cases still pin the six-state sections. Its rows and the rows held as Seen are the same.
+            if input.settings.grouping == "state" {
+                func paths(_ key: String) -> Set<String> { Set(groups.flatMap { $0[key]?.array?.compactMap(\.string) ?? [] }) }
+                #expect(Set(native.groups.flatMap(\.rows)) == paths("rows"), "\(fixture.name): rows")
+                #expect(native.groups.allSatisfy { g in AgentListOrder.stateKeys.contains { "state/" + $0 == g.id } || g.id == "pinned" },
+                        "\(fixture.name): the five phases' sections")
+                let heldSeen = native.groups.flatMap(\.rows).filter { path in
+                    SessionKey(path: path).flatMap { projection.sessionsByKey[$0] }.map(order.isHeldSeen) == true
+                }
+                #expect(Set(heldSeen) == paths("held_seen"), "\(fixture.name): held_seen")
+                continue
+            }
             #expect(native.groups.map(\.id) == groups.compactMap { $0.text("id") }, "\(fixture.name): groups")
             for (group, want) in zip(native.groups, groups) {
                 #expect(group.rows == (want["rows"]?.array?.compactMap(\.string) ?? []), "\(fixture.name): \(group.id) rows")

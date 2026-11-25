@@ -163,6 +163,6 @@ import PersonaWire
         let s = try session(#""workflows":[{"task_id":"wf","running":true}]"#, state: "idle")
         let order = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false })
         #expect(order.stays(s))
-        #expect(order.rank(s) == AgentListOrder.stateKeys.firstIndex(of: "waiting"))
+        #expect(order.section(s) == AgentListOrder.stateKeys.firstIndex(of: "idle"), "its view's phase; it stays out of the idle folds")
     }
 }

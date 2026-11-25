@@ -158,7 +158,7 @@ Colors are written light/dark. iOS sizes are at the default text size.
 
 #### Agent state colors
 
-Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, watch and Live Activity. State colors never follow style.
+Defined once in `apple/Shared/StatusPalette.swift:19-39` and shared by the app, watch and Live Activity. State colors never follow style.
 
 | State | Dot | Text | Notes |
 | --- | --- | --- | --- |
@@ -166,6 +166,7 @@ Defined once in `apple/Shared/StatusPalette.swift:19-36` and shared by the app, 
 | Working | `#E8890C`/`#FFB224` | `#A35A00`/`#FFB224` | amber |
 | Unread / awaiting reply / just finished | `#30A46C`/`#4CC38A` | `#1D7A4C`/`#4CC38A` | green; awaiting reply and just finished are a plain dot on the web, not Unread's glow |
 | Waiting in the background | working dot at 0.6 | secondary | clock mark; its soft fill the working dot at 0.08 |
+| Error | `#D1342C`/`#FF6961` | `#B3261E`/`#FF6961` | red; the `error` phase of `Session.view` (a model error, a usage limit, a refused start, an interrupted run; `docs/protocol/agent-states.md` "Five phases"), Apple only so far (`StatusPalette.error`, P5b of #15397) |
 | Idle / Offline | secondary at 0.55 / 0.3 | secondary | gray |
 
 Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android reads these values from the generated tokens (`spec/tokens/color.status.json`); the web still uses amber (`web/src/styles.css:233`), DS-01. Waiting in the background is `status.<mode>.backgroundWaiting` there; Android Glass draws it as iOS does (`PersonaPalette.backgroundWaiting`, picked by `PersonaPalette.status(status, waitsInBackground)` as iOS's `Session.stateTone`), and Brief and Board keep Working's colors for it. It is also a count of its own, on every client and in every style: the quick filters and a heading's state counts (`StateCounts`: a computer's or a space's) leave such an agent out of Working and show it with the clock.

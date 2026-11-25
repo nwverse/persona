@@ -19,7 +19,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 
 A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
-List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running. `Session.view.rank` ("Five phases" below) replaces these as each client moves to it.
+List order (each client's rank: web `lib/format.ts`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running. `Session.view.rank` ("Five phases" below) replaces these as each client moves to it; iOS / Mac `AgentListOrder.rank` reads it already (P5b).
 
 Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
@@ -367,7 +367,19 @@ ahead of Unread and Awaiting reply, since done asks nothing of the owner that Ne
 
 Older hubs send no `view` (no `agent_view` in the features) and a hub's older manager may send rows without one. The
 fallback, inferring a view from `state`, `status` and the fields above, is written once, in the Rust core
-(`native/app-core`, `state.rs`) with its TypeScript output for the web, never per client (the plan's 2.4).
+(`native/app-core`, `state.rs`) with its TypeScript output for the web, never per client (the plan's 2.4). Until the
+core has it, the Apple clients (P5b) keep theirs in one place, `apple/Shared/AgentViewFallback.swift`, whose rows come
+from the app's Needs you (`AgentsNeedsYou.fallbackRows`) and which `PersonaTests/AgentViewFallbackFixtureTests` replays
+against `spec/fixtures/agent-view`; it goes when the core's does.
+
+**The Apple clients (P5b).** Every Apple screen reads `Session.agentView` (the hub's `view`, else the fallback): the
+Agents list's By Status has the five phases as its sections (muted rows last in their phase, Idle folded at first),
+each row says its reason under the phase (`AgentView.reasonText`: Unread, Awaiting Reply, Just finished, Model error,
+Usage limit reached, Couldn't start, Interrupted, Seen, Not Running, Status unknown…), rows sort by `rank`, and an
+error has its own red (`StatusPalette.error`). The Agents tab's Needs you counts a row exactly when its session's view
+is `counted` (a sessionless card, and a hub without views, keep `TabBadges.place`). Marking a row seen sends it and
+holds the row's place; the row keeps the hub's state until the hub's next list (no optimistic state). The legacy
+six-state `AgentState` is read off the view (`AgentView.legacyState`) by the screens not yet moved.
 
 ## Spaces / slots (multi-tab collaboration)
 

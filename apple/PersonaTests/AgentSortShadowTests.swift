@@ -6,6 +6,9 @@ import PersonaCoreTestSupport
 import PersonaWire
 
 @MainActor struct AgentSortShadowTests {
+    /// What By Status's five phases change against the core's six-state sections (#15397, P5b).
+    private static let fivePhaseSections: Set<String> = ["grouping", "active-groups", "rank", "folding", "folded-state"]
+
     private func session(_ json: ContinuityJSON) throws -> Session {
         try JSON.decoder.decode(Session.self, from: Data(json.encoded().utf8))
     }
@@ -72,7 +75,13 @@ import PersonaWire
                 let native = AgentSortComparable(native: input, presentation: snapshot.presentation, now: snapshot.now)
                 let core = try ProjectionFixture.project(fixture.input, fixture.name, using: PersonaCoreProjections.sort)
                 let coreComparable = try AgentSortComparable(core: try JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input, presentation: snapshot.presentation, now: snapshot.now)).utf8)), input: input, presentation: snapshot.presentation)
-                let differences = AgentSortComparable.differences(native: native, core: coreComparable)
+                var differences = AgentSortComparable.differences(native: native, core: coreComparable)
+                // iOS goes first with the five phases (#15397, P5b): By Status's sections and their order are the view's
+                // (`AgentView.rank`), while the core and these shared cases still draw the six-state sections. Only how
+                // a By Status list is sectioned and ordered may differ; what it filters, pins, counts and marks may not.
+                if input.settings.grouping == "state" {
+                    differences.removeAll { Self.fivePhaseSections.contains($0) }
+                }
                 let known: [String: Set<String>] = [:]
                 if let expected = known[fixture.name], expected == Set(differences) {
                     withKnownIssue("Tracked core discrepancy for \(fixture.name)") {
@@ -105,15 +114,16 @@ import PersonaWire
         #expect(AgentSortComparable.differences(native: native, core: core) == [])
     }
 
+    /// The open row seen while it was Just finished keeps Done's place until it is left (#2213), in By Status's five
+    /// phases (#15397, P5b); the core, still on the six-state sections, agrees on everything but the sections.
     @Test func holdingASeenJustFinishedRowKeepsItsRankThroughTheRealCABI() throws {
         let fixture = try #require(ProjectionFixture.cases(in: "sort", operation: "agents_list")
             .first { $0.name == "just_finished_rank_and_precedence" })
         var input = try nativeInput(fixture)
         let i = try #require(input.sessions.firstIndex { $0.sessionID == "finished" })
-        let sharedGroups = try #require(fixture.expected["groups"]?.array)
+        let path = input.sessions[i].key.path
         let original = AgentSortComparable(native: input)
-        #expect(original.groups.map(\.id) == sharedGroups.compactMap { $0.text("id") })
-        #expect(original.groups.map(\.rows) == sharedGroups.map { $0["rows"]?.array?.compactMap(\.string) ?? [] })
+        #expect(original.groups.first { $0.rows.contains(path) }?.id == "state/done")
         input.settings.held = input.sessions[i].key
         input.settings.heldJustFinished = true
         input.sessions[i].seenByTheHub()
@@ -122,8 +132,8 @@ import PersonaWire
             let native = AgentSortComparable(native: input)
             let output = try PersonaCoreProjections.sort(inputJSON: AgentSortProjectionAdapter.coreInput(input))
             let core = try AgentSortComparable(core: JSONDecoder().decode(AgentSortCoreProjection.self, from: Data(output.utf8)), input: input)
-            #expect(AgentSortComparable.differences(native: native, core: core).isEmpty)
-            #expect(native.groups.contains { $0.id == "state/just_finished" } == held)
+            #expect(AgentSortComparable.differences(native: native, core: core).filter { !Self.fivePhaseSections.contains($0) }.isEmpty)
+            #expect(native.groups.first { $0.rows.contains(path) }?.id == (held ? "state/done" : "state/idle"))
             #expect(native.unread.isEmpty)
         }
     }
