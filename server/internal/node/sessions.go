@@ -291,6 +291,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
 						s.OutputTokens = runtimeRow.OutputTokens
 					}
+					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
+						s.UpdatedAt = runtimeRow.UpdatedAt
+					}
+					if s.LastText == "" && runtimeRow.LastText != "" {
+						s.LastText = runtimeRow.LastText
+					}
 					if bd := runtimeRow.ContextBreakdown(); bd != nil {
 						if existing := s.ContextBreakdown(); existing == nil || existing.Source != proto.ContextBreakdownExact {
 							s.SetContextBreakdown(bd)
