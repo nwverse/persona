@@ -287,7 +287,8 @@ def global_failures(change):
         candidate = wire_types_ratchet.parse_baseline(merged.decode("utf-8"), "the merge's " + rel)
     except wire_types_ratchet.WireTypesError as error:
         raise CheckError(str(error))
-    return wire_types_ratchet.raised_against(candidate[0], previous[0], change.base[:12], candidate[2], previous[2]), []
+    return (wire_types_ratchet.raised_against(candidate[0], previous[0], change.base[:12], candidate[2], previous[2])
+            + wire_types_ratchet.exceptions_grow(candidate[0], candidate[1], previous[0], previous[1], change.base[:12])), []
 
 
 def check(root, base, head):

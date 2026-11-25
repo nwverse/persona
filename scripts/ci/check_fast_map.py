@@ -253,7 +253,7 @@ TABLE = (
           "scripts/ci/test_web_module_boundary_ratchet.py", "scripts/ci/test_wire_types_ratchet.py")),
         (("scripts/ci/prompt_language_ratchet.py",), ("scripts/test/test_prompt_language_ratchet.py",)),
         (("scripts/ci/web_module_boundary_ratchet.py",), ("scripts/ci/test_web_module_boundary_ratchet.py",)),
-        (("scripts/ci/wire_types_ratchet.py", "scripts/ci/wire_types_baseline.json",
+        (("scripts/ci/wire_types_ratchet.py", "scripts/ci/merge_wire_types.py", "scripts/ci/wire_types_baseline.json",
           "server/internal/archguard/wirecount/*"), ("scripts/ci/test_wire_types_ratchet.py",)),
         (("scripts/test/go_trimpath.sh",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py")),
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),

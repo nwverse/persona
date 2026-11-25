@@ -11,8 +11,6 @@ export GOFLAGS
 
 if [ "$lane" = all ] || [ "$lane" = build ]; then
   ci_run 'Go formatting' 120 python3 scripts/ci/gofmt.py server sdk/go
-  # Weak types in the contract packages and handlers may stay or fall, never rise (docs/operations/testing.md "Count ratchets").
-  ci_run 'Wire types ratchet' 300 python3 scripts/ci/wire_types_ratchet.py
   ci_run 'Server vet' 600 bash -c 'cd server && go vet -ldflags= ./...'
   ci_run 'Server build' 600 bash -c 'cd server && go build ./...'
   ci_run 'Windows node build and vet' 600 bash -c 'cd server && GOOS=windows GOARCH=amd64 go build ./... && GOOS=windows GOARCH=amd64 go vet -ldflags= ./...'

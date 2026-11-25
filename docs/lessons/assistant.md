@@ -1,8 +1,22 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A supervision transcript fixture must not use push policy as its write switch (#15498). Side conversations can
+  receive user-level supervision with `hold_pushes=false`; it still writes a user item. Select fake writes by message
+  source, keep missing-item injection independent, and name push-held fixtures explicitly. Test both notification
+  policies without relaxing transcript confirmation, once-ID or retry assertions.
+
 - Mixed core/module fixtures must keep testing the core when a module is absent (#15500). Check generic scheduled
   failure routing first, then make the optional briefing hook assert absence or its normal fallback. Do not skip the
   whole test, weaken the default-build assertion or wait for a notification from a module that is not loaded.
+
+- Timer completion accounting belongs to the registered callback wrapper (#15499). A direct call of a stopped
+  callback guard has no matching `WaitGroup.Add`; decrementing there can panic and strand teardown on a negative
+  counter. Keep the real timer's Add/Done pairing and prove shutdown drains an in-flight callback without rearming.
+
+- A single-reviewer guard must preserve conversationless supervisor fallbacks (#15497). A legacy reporting-only
+  direction can retain its recorded assignment while its review reminder goes to main. Authorize that same reviewer
+  without authorizing an unrelated conversation or taking over a real supervisor's offline queue; test direct, busy
+  and restart-restored delivery with the assignment unchanged.
 
 - A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
   appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
