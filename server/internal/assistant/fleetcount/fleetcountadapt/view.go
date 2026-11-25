@@ -50,22 +50,23 @@ func (f *Fleet) View(needsYou fleetcount.Tally, todos opt.Option[assistantwire.T
 	count := r.count()
 	r.f = nil
 	n := count.N
-	view := assistantwire.CountsView{
-		Counts: assistantwire.CountsViewCounts{AgentsNeedsYou: count},
-		Totals: &assistantwire.CountsViewTotals{AgentsNeedsYou: &n},
+	counts := assistantwire.CountsViewCounts{AgentsNeedsYou: count}
+	totals := &assistantwire.CountsViewTotals{AgentsNeedsYou: &n}
+	todos.Match(func(c assistantwire.TodoCounts) { writeTodos(&counts, totals, c) }, todosUncounted)
+	return assistantwire.CountsView{
+		Counts: counts,
+		Totals: totals,
 	}
-	todos.Match(func(counts assistantwire.TodoCounts) { writeTodos(&view, counts) }, todosUncounted)
-	return view
 }
 
-// writeTodos writes the to-do list's counts into v as counts.todos_needs_you and its total, in one allocation: their
+// writeTodos writes the to-do list's counts as counts.todos_needs_you and its total, in one allocation: their
 // needs_you, with no row listed, so all of n is more.
-func writeTodos(v *assistantwire.CountsView, todos assistantwire.TodoCounts) {
+func writeTodos(counts *assistantwire.CountsViewCounts, totals *assistantwire.CountsViewTotals, todos assistantwire.TodoCounts) {
 	part := &struct {
 		count assistantwire.CountsViewCount
 		n     int
 	}{count: assistantwire.CountsViewCount{N: todos.NeedsYou, More: todos.NeedsYou}, n: todos.NeedsYou}
-	v.Counts.TodosNeedsYou, v.Totals.TodosNeedsYou = &part.count, &part.n
+	counts.TodosNeedsYou, totals.TodosNeedsYou = &part.count, &part.n
 }
 
 // todosUncounted leaves counts.todos_needs_you out: the manager has not counted its to-dos, so the count is unknown,

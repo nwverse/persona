@@ -66,7 +66,9 @@ func (s *Service) tellCounts(v assistantwire.CountsView) {
 	t := &l.counts
 	if t.enc == nil {
 		t.epoch, t.enc = assistantwire.CountsEpoch(rand.Text()), json.NewEncoder(&t.next)
-		s.todosCountSoon() // this run's to-dos, counted before any change pushes them
+	}
+	if t.todos.kept().IsNone() {
+		s.todosCountSoon() // this run has not counted its to-dos yet, or could not: no change may push them for a while
 	}
 	t.next.Reset()
 	t.part = countsPart{Counts: v.Counts, Totals: v.Totals}
@@ -107,11 +109,13 @@ func (s *Service) tellCounts(v assistantwire.CountsView) {
 // manager last worked it out. Every whole-list read keeps its counts (todosCounted). Every {"type":"todos"} has each
 // app read the list again; once todosCountSettle passed after one that no such read followed, the manager reads the
 // list itself (todosCountSoon), so the number follows the list while no app is open too. None until the to-dos are
-// first counted: the view then leaves the count out, which reads as unknown, never 0.
+// first counted: the view then leaves the count out, which reads as unknown, never 0, and each round asks for a count
+// until one is kept.
 type countsTodos struct {
-	mu     sync.Mutex
-	counts opt.Option[assistantwire.TodoCounts]
-	gen    uint64 // the {"type":"todos"} gone out when the kept counts' to-dos were read (todoViewGen)
+	mu      sync.Mutex
+	counts  opt.Option[assistantwire.TodoCounts]
+	gen     uint64 // the {"type":"todos"} gone out when the kept counts' to-dos were read (todoViewGen)
+	failing bool   // the last recount could not read the list: its failure is logged once, until a count is kept
 
 	armed bool                            // a recount waits for todosCountSettle
 	timer *time.Timer                     // its real-clock timer
@@ -140,7 +144,7 @@ func (s *Service) todosCounted(gen uint64, p todoProjection) {
 	t.mu.Lock()
 	older := gen < t.gen
 	if !older {
-		t.counts, t.gen = opt.Some(counts), gen
+		t.counts, t.gen, t.failing = opt.Some(counts), gen, false
 	}
 	t.mu.Unlock()
 	if !older {
@@ -189,7 +193,15 @@ func (s *Service) todosRecount() {
 	}
 	ctx, cancel := context.WithTimeout(s.runCtx(), 30*time.Second)
 	defer cancel()
-	if _, _, err := s.todosViewed(ctx, false); err != nil {
+	_, _, err := s.todosViewed(ctx, false)
+	if err == nil {
+		return
+	}
+	t.mu.Lock()
+	logged := t.failing
+	t.failing = true
+	t.mu.Unlock()
+	if !logged {
 		s.logf("counts: the to-dos could not be counted: %v", err)
 	}
 }

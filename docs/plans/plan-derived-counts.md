@@ -469,8 +469,8 @@ Persona tab, the app icon and the switchers' Persona-conversation part after D9;
 `Fleet.View`, which `surfaces.json` names as its `producer`. Package assistant hands `Fleet.View` the counts of its last
 read of the whole to-do list, the `Counts()` `GET /api/v1/todos` answers with (`server/internal/assistant/counts_view.go`):
 every read of the list, of one to-do or of the places keeps them; when no read follows a `{"type":"todos"}` within a
-second, the manager reads the list itself; a run counts its to-dos at its first view, and until then the count is
-absent. `TestCountsViewCountsTheToDosAsTheListDoes` holds the view's number to the list's `counts.needs_you` on every
+second, the manager reads the list itself; until a run has counted its to-dos, each round asks for a count, and the
+view leaves it out. `TestCountsViewCountsTheToDosAsTheListDoes` holds the view's number to the list's `counts.needs_you` on every
 `spec/fixtures/todo-counts` case, and `TestCountsViewFollowsTheToDoList` to `GET /api/v1/todos` on a manager's own list.
 What differs, and why: the count lists no rows (`keys` absent, all of `n` is `more`), since `Counts()` gives numbers
 only; the to-do projection (`todo/projection`) is neither declared nor given a record or an exported field while #9823,
