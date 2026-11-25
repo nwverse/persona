@@ -3,7 +3,7 @@
 // while the comment waits there, its words stay lit in the transcript with the card's number beside them. The marks
 // are drawn in the scroller's own content, so they scroll with it; they are measured again when the transcript
 // re-renders or resizes (streaming, a fold opening), and go with the card when it is removed or sent.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { anchorOf, onJumpToComment, rangeFor } from "../../lib/comment-marks";
 import { textQuote, type TextAnchor } from "../../lib/comments";
@@ -23,13 +23,49 @@ interface Box {
   rects: { x: number; y: number; w: number; h: number }[];
 }
 
+interface HighlightBucket {
+  base: Range[];
+  pulsed: Range[];
+}
+
 const DOT = 16;
 const FLASH_MS = 1400;
 const HIGHLIGHT_NAME = "persona-comment";
 const HIGHLIGHT_FLASH_NAME = "persona-comment-flash";
 
+// CSS.highlights is document-global while CommentMarks mounts per chat scroller (e.g. main chat + SidePanel).
+// Track each mounted instance's ranges separately and publish their union so panes never wipe each other.
+const highlightBuckets = new Map<symbol, HighlightBucket>();
+
 function supportsCustomHighlight(): boolean {
-  return typeof CSS !== "undefined" && "highlights" in CSS && typeof Highlight !== "undefined";
+  return typeof CSS !== "undefined" && Boolean(CSS.highlights) && typeof Highlight !== "undefined";
+}
+
+function publishCustomHighlights(): void {
+  if (!supportsCustomHighlight()) return;
+  const base: Range[] = [];
+  const pulsed: Range[] = [];
+  for (const bucket of highlightBuckets.values()) {
+    for (const r of bucket.base) base.push(r);
+    for (const r of bucket.pulsed) pulsed.push(r);
+  }
+  if (base.length) CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...base));
+  else CSS.highlights.delete(HIGHLIGHT_NAME);
+  if (pulsed.length) CSS.highlights.set(HIGHLIGHT_FLASH_NAME, new Highlight(...pulsed));
+  else CSS.highlights.delete(HIGHLIGHT_FLASH_NAME);
+}
+
+function setInstanceHighlights(owner: symbol, base: Range[], pulsed: Range[]): void {
+  if (base.length || pulsed.length) {
+    highlightBuckets.set(owner, { base, pulsed });
+    publishCustomHighlights();
+  } else if (highlightBuckets.delete(owner)) {
+    publishCustomHighlights();
+  }
+}
+
+function clearInstanceHighlights(owner: symbol): void {
+  if (highlightBuckets.delete(owner)) publishCustomHighlights();
 }
 
 /** `jump`: brings words into view `topOffset` px from the top and keeps them there while the exchanges around them are
@@ -140,7 +176,11 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
   const boxesNow = useRef(boxes);
   boxesNow.current = boxes;
   const [flash, setFlash] = useState<string | null>(null);
+  const flashNow = useRef(flash);
+  flashNow.current = flash;
+  const flashTimer = useRef<number | undefined>(undefined);
   const nativeHighlight = useMemo(() => supportsCustomHighlight(), []);
+  const [highlightOwner] = useState(() => Symbol());
   const rangesNow = useRef(new Map<string, Range>());
 
   const syncCustomHighlights = useCallback(
@@ -152,12 +192,9 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
         if (id === activeFlash) pulsed.push(range);
         else base.push(range);
       }
-      if (base.length) CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...base));
-      else CSS.highlights.delete(HIGHLIGHT_NAME);
-      if (pulsed.length) CSS.highlights.set(HIGHLIGHT_FLASH_NAME, new Highlight(...pulsed));
-      else CSS.highlights.delete(HIGHLIGHT_FLASH_NAME);
+      setInstanceHighlights(highlightOwner, base, pulsed);
     },
-    [nativeHighlight],
+    [highlightOwner, nativeHighlight],
   );
 
   const measure = useCallback(() => {
@@ -176,25 +213,30 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
       if (rects.length) out.push({ id: m.id, n: m.n, rects });
     }
     rangesNow.current = nextRanges;
-    syncCustomHighlights(flash);
+    syncCustomHighlights(flashNow.current);
     setBoxes((prev) => (JSON.stringify(prev) === JSON.stringify(out) ? prev : out));
-  }, [marks, scroller, syncCustomHighlights, flash]);
+  }, [marks, scroller, syncCustomHighlights]);
 
   useEffect(() => {
     syncCustomHighlights(flash);
   }, [flash, syncCustomHighlights]);
 
   useEffect(() => {
-    if (!nativeHighlight) return;
     return () => {
-      CSS.highlights.delete(HIGHLIGHT_NAME);
-      CSS.highlights.delete(HIGHLIGHT_FLASH_NAME);
+      window.clearTimeout(flashTimer.current);
+      flashTimer.current = undefined;
+      rangesNow.current = new Map();
+      if (nativeHighlight) clearInstanceHighlights(highlightOwner);
     };
-  }, [nativeHighlight]);
+  }, [highlightOwner, nativeHighlight]);
 
-  useLayoutEffect(() => {
+  // Passive effect so ancestor refs (ChatView's ref={scrollRef} wrapping CommentMarks) are attached before measuring.
+  useEffect(() => {
     if (!marks.length) {
       rangesNow.current = new Map();
+      window.clearTimeout(flashTimer.current);
+      flashTimer.current = undefined;
+      setFlash((f) => (f ? null : f));
       syncCustomHighlights(null);
       setBoxes((prev) => (prev.length ? [] : prev));
       return;
@@ -218,11 +260,13 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
       mutations.disconnect();
       sizes.disconnect();
     };
-  }, [marks, measure, scroller]);
+  }, [marks, measure, scroller, syncCustomHighlights]);
 
   // the card's click: scroll to the words and pulse them
   const marksNow = useRef(marks);
   marksNow.current = marks;
+  const jumpNow = useRef(jump);
+  jumpNow.current = jump;
   useEffect(
     () =>
       onJumpToComment((id) => {
@@ -230,14 +274,19 @@ export function CommentMarks({ scroller, jump }: { scroller: RefObject<HTMLDivEl
         const el = scroller.current;
         if (!box || !el) return false;
         const anchor = marksNow.current.find((m) => m.id === id)?.anchor;
-        const words = jump && anchor ? rangeFor(el, anchor) : null;
-        if (words && jump) jump(words, -el.clientHeight / 3);
+        const jumpFn = jumpNow.current;
+        const words = jumpFn && anchor ? rangeFor(el, anchor) : null;
+        if (words && jumpFn) jumpFn(words, -el.clientHeight / 3);
         else el.scrollTo({ top: Math.max(0, box.rects[0].y - el.clientHeight / 3), behavior: scrollBehavior() });
+        window.clearTimeout(flashTimer.current);
         setFlash(id);
-        window.setTimeout(() => setFlash((f) => (f === id ? null : f)), FLASH_MS);
+        flashTimer.current = window.setTimeout(() => {
+          flashTimer.current = undefined;
+          setFlash((f) => (f === id ? null : f));
+        }, FLASH_MS);
         return true;
       }),
-    [scroller, jump],
+    [scroller],
   );
 
   return (

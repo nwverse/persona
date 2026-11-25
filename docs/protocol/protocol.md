@@ -2644,7 +2644,7 @@ exist on the selected manager. Use the IDs from its direction and to-do APIs.
 | PUT | `/api/v1/assistant/external-source-bindings/{id}` | Replaces the binding using the same body and returns it with the same ID. |
 | DELETE | `/api/v1/assistant/external-source-bindings/{id}` | Deletes the explicit binding and returns 204. |
 | GET | `/api/v1/assistant/external-source-bindings/lookup` | Takes `external_ref` and returns `{path,matches}`. Matches include all ancestors in most-specific-first order. |
-| GET | `/api/v1/assistant/external-source-bindings/summary` | Returns the read-only `{"bindings":[…]}` data-flow list with explicit and projected connections. Filter by `provider` and optionally by its `channel`. An empty `channel` selects that provider's default channel. |
+| GET | `/api/v1/assistant/external-source-bindings/summary` | Returns the read-only `{"bindings":[…]}` data-flow list with explicit connections and repository projections. Filter by `provider` and optionally by its `channel`. An empty `channel` selects that provider's default channel. |
 | GET | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and returns `{external_ref,policy}` with saved overrides for that exact node. An unset node returns an empty policy. |
 | PUT | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and replaces that node's policy with the JSON body. Send `{}` to restore inheritance. Returns the saved scope and policy. |
 | GET | `/api/v1/assistant/external-source-policies/effective` | Takes `external_ref` and optional `binding_id` and returns `{external_ref,policy,provenance}`. The binding must be on that reference path. |
@@ -2670,12 +2670,35 @@ Lookup and summary entries have `external_ref`, `target_kind`, `target_id`, and 
 `source: "explicit"` and its `binding_id`. A saved GitHub repository link gives a separate read-only
 `source: "repository_link"` entry with `repository_role` of `delivery` or `reference`. Omitted roles on old links
 mean `delivery`. Projected links match only their exact GitHub item and coexist with explicit matches for that item.
+An existing Lark bot to-do thread can also appear in the exact topic lookup as `source: "lark_topic"` with
+`target_kind: "todo"` and its `target_id`. Its source is the native chat link, so it has no `binding_id`.
 The lookup lists explicit entries first at the same node and returns empty arrays when there are no matches.
 
 A duplicate explicit reference and target pair returns 409 `external_binding_exists`. Missing or unrelated
 bindings and missing targets return 404 with `external_binding_not_found` or `external_target_not_found`.
 Invalid references, targets, policies and malformed JSON return 400. An unavailable store returns 503
 `external_sources_unavailable`.
+
+### Assistant tool contract
+
+The main conversation on its configured computer gets `external_sources_read` and `external_sources_write`.
+Both tools use the same canonical references, policies and stored bindings as the HTTP routes. Availability is
+independent of Labs.
+
+| Tool action | Arguments and result |
+| --- | --- |
+| Read `list` | Optional exact `external_ref` and a `target_kind` / `target_id` pair filter explicit bindings. Returns `bindings`. |
+| Read `inspect` | Requires `external_ref`. An optional `binding_id` selects a binding on that source's path. Returns the path, matches, saved scoped overrides and effective policy with provenance. |
+| Write `create_binding` | Requires `external_ref`, `target_kind`, `target_id` and optionally `policy`. |
+| Write `update_binding` | Takes `binding_id` and the same full replacement fields as create. |
+| Write `delete_binding` | Takes the explicit `binding_id`. |
+| Write `set_policy` | Takes `external_ref` and a replacement `policy`. Use an empty object to clear the override. |
+
+Reads return without a card. All writes require a fresh owner Allow through the existing approval interaction.
+This includes changes that can enable automatic work through inheritance, such as linking a new target under an
+automatic rule or clearing an override that previously asked the owner. Confirmation records the exact edit and any
+previous value. A concurrent edit to the binding or scoped override makes the pending approval stale. A saved
+write returns `saved` and `previous` so the owner can restore the prior value. A delete returns `saved: null`.
 
 ### Inbox routing
 
@@ -2722,6 +2745,29 @@ uses the same receipt. A new update for an already owned object goes to its acti
 that owner is authorized. When the owner is still active but its policy no longer allows delivery, the update waits
 for the owner of Persona to decide. FYI copies are activity entries and do not wake an Agent. An uncertain live
 delivery stays tied to its original recipient and is recorded in the work activity for the owner to check.
+
+### Legacy routing compatibility
+
+- **Lark topics.** Existing bot registration and to-do thread links stay in place. The manager reads a legacy
+  link as a projection of the exact topic on the default Lark channel. The projection enables no routing by
+  itself. A scoped forwarding mode can use it for incoming Inbox updates. An explicit binding of the same topic
+  to the same target supplies the binding override and has one routing candidate. The registered bot still
+  handles the owner's new topics, commands and replies. Native collectors exclude the owner's messages from
+  incoming Inbox updates, and the routing path also excludes self-authored items and bot handoffs. Removing a
+  scoped override leaves the to-do's native topic link and the bot's reply path available.
+- **Legacy Inbox forwarding.** When `inbox.todo_forward.enabled` is on, the existing deterministic PR and issue
+  forwarding applies to updates without a scoped mode. It keeps its existing match rules, including older
+  associations and URLs found in Inbox content. Scoped routing uses canonical source metadata. Before opting in,
+  inspect the lookup and save an explicit binding when the intended target is missing. A configured mode takes
+  precedence for a newly received update, including `off` and `on_demand`. Clear the mode overrides on the path
+  to return future updates to legacy behavior. The original switch and associations remain available.
+- **Cutover and retries.** For newly forwarded events with a canonical identity, both Inbox paths use the same
+  Postgres receipt key. An update reserved by either path cannot be sent through the other, even if it reappears
+  in another Inbox row after a settings change. The legacy path keeps its original version and recipient for
+  retry. Changing routing rules does not replay the existing Inbox. Deduplication across delivery paths depends
+  on matching canonical provider identity. For example, a copy delivered as email and a separate notification
+  from GitHub can have different provider event IDs. Both routing paths must run on a manager with this
+  compatibility support for the shared receipt check to apply.
 
 ## Organization runtime snapshot (#11774)
 

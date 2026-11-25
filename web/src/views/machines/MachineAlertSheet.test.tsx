@@ -298,6 +298,22 @@ describe("the version sheet", () => {
     expect(state("done")).toBe("done");
   });
 
+  it("withdraws an open Redeploy confirmation when the computer starts updating elsewhere", async () => {
+    const show = (machine: Machine) => render({ machine, kind: "mismatch", agents: [] });
+    show(studio);
+    await flush();
+    await click($("[data-testid=redeploy]"));
+    const confirm = $("[data-testid=redeploy-confirm]") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+
+    show({ ...studio, deploy_phase: "restarting" });
+    await flush();
+    expect($('[data-step="restarting"]')?.getAttribute("data-state")).toBe("current");
+    expect(confirm.isConnected && !confirm.disabled).toBe(false);
+    await act(async () => { confirm.click(); });
+    expect(posts("/deploy")).toHaveLength(0);
+  });
+
   it("gives the hub's reason when it can't update the computer", async () => {
     render({ machine: { ...studio, kind: "link", can_deploy: false, deploy_reason: "Update this computer's Persona Link first." }, kind: "mismatch", alerts: [] });
     await flush();
