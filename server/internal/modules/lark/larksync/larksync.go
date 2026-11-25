@@ -39,8 +39,9 @@ type Syncer struct {
 }
 
 var (
-	_ larksyncwire.Syncer       = (*Syncer)(nil)
-	_ larksyncwire.NameResolver = (*Syncer)(nil)
+	_ larksyncwire.Syncer                = (*Syncer)(nil)
+	_ larksyncwire.NameResolver          = (*Syncer)(nil)
+	_ larksyncwire.PendingLinkBackfiller = (*Syncer)(nil)
 )
 
 // NewSyncer is a binding's reader. httpClient nil uses a client with a 60 s timeout; now nil is time.Now.

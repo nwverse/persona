@@ -359,3 +359,203 @@ func TestLarkSyncBackfillSenderNamesIdempotentAndScoped(t *testing.T) {
 		t.Fatalf("unexpected extra outbox rows after idempotent rerun: %d", len(rowsAfter))
 	}
 }
+
+// One-time dropped-links remediation scans already-synced chat outbox messages owned by a binding, skips links whose
+// document already has body content in lark_sync_index (or a synced wiki alias with body content in the doc outbox),
+// skips other bindings' messages, merges missing links into PendingLinksCursor without duplicating already-queued
+// tokens, passes AuthorizedAt/GrantedScopes to the Syncer, sets LinksBackfillVersion, and is idempotent on reruns.
+func TestLarkSyncBackfillDroppedLinksIdempotentAndScoped(t *testing.T) {
+	w := newLarkWorld(t)
+	ctx := context.Background()
+
+	w.addSyncBot(t, "bsyncA", "cli_a", larksyncwire.TierFull)
+	w.addSyncBot(t, "bsyncB", "cli_b", larksyncwire.TierFull)
+	keyA, accA := w.adopt(t, "bsyncA", "ou_owner_a", "acc-a", "ref-a", 24*time.Hour)
+	keyB, _ := w.adopt(t, "bsyncB", "ou_owner_b", "acc-b", "ref-b", 24*time.Hour)
+	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
+		st.binding(keyA).Tier = larksyncwire.TierFull
+		st.binding(keyA).BackfillVersion = larkSyncBackfillVersion // isolate dropped-links remediation
+		st.binding(keyB).Tier = larksyncwire.TierFull
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	seedChat := func(cb connector.ChatBatch) db.LarkSyncOutbox {
+		raw, err := json.Marshal(cb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return db.LarkSyncOutbox{Kind: db.LarkSyncChat, CanonicalKey: "chat:" + cb.Chat.ID, Payload: raw}
+	}
+	seedDoc := func(it kbwire.Item) db.LarkSyncOutbox {
+		raw, err := json.Marshal(it)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return db.LarkSyncOutbox{Kind: db.LarkSyncDoc, CanonicalKey: it.CanonicalKey, Payload: raw}
+	}
+	at := w.now().Add(-2 * time.Hour)
+	if err := w.store.CommitLarkSyncRun(ctx, keyA, map[string]string{
+		larksyncwire.PendingLinksCursor: `["doxAlreadyQueued"]`,
+	}, []larksyncwire.IndexRecord{
+		{Key: larksyncwire.KeyMessage + "om_a1", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: keyA, Entry: larksyncwire.EntryChat}}},
+		{Key: larksyncwire.KeyMessage + "om_b1", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: keyB, Entry: larksyncwire.EntryChat}}},
+		{Key: larksyncwire.KeyDoc + "doxFetched", Kind: "doc", Revision: 3, BodyHash: "body-hash-1"},
+		{Key: larksyncwire.KeyDoc + "doxStub", Kind: "doc", Revision: 0, BodyHash: ""},
+	}, []db.LarkSyncOutbox{
+		seedChat(connector.ChatBatch{
+			Chat: kbwire.SourceChat{ID: "oc_1", Name: "Example Group", Kind: "group"},
+			Messages: []kbwire.SourceMessage{
+				{
+					ID: "om_a1", SenderID: "ou_peer", SenderName: "Peer", At: at,
+					Text: "https://my.feishu.cn/docx/doxFetched " +
+						"https://my.feishu.cn/docx/doxStub " +
+						"https://my.feishu.cn/docx/doxDropped " +
+						"https://my.feishu.cn/wiki/wikFetched " +
+						"https://my.feishu.cn/wiki/wikDropped " +
+						"https://my.feishu.cn/docx/doxAlreadyQueued",
+				},
+				{
+					ID: "om_b1", SenderID: "ou_other", SenderName: "Other", At: at.Add(time.Minute),
+					Text: "https://my.feishu.cn/docx/doxOtherTenant",
+				},
+			},
+		}),
+		seedDoc(kbwire.Item{
+			Kind:         "docs",
+			CanonicalKey: larksyncwire.KeyDoc + "doxFromWikFetched",
+			Aliases:      []string{"wikFetched"},
+			Revision:     2,
+			BodyHash:     "wiki-body-hash",
+			Content:      "already synced wiki doc",
+		}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var extractCalls, mergeCalls atomic.Int32
+	w.mu.Lock()
+	w.extractDocLinks = func(text string) []larksyncwire.PendingLinkCandidate {
+		extractCalls.Add(1)
+		var out []larksyncwire.PendingLinkCandidate
+		for _, field := range splitSpaces(text) {
+			switch {
+			case hasPrefix(field, "https://my.feishu.cn/docx/"):
+				tok := field[len("https://my.feishu.cn/docx/"):]
+				out = append(out, larksyncwire.PendingLinkCandidate{Token: tok, ObjType: "docx", URL: field})
+			case hasPrefix(field, "https://my.feishu.cn/wiki/"):
+				tok := field[len("https://my.feishu.cn/wiki/"):]
+				out = append(out, larksyncwire.PendingLinkCandidate{Token: tok, ObjType: "wiki", URL: field})
+			}
+		}
+		return out
+	}
+	w.mergePendingLinks = func(existingCursor string, add []larksyncwire.PendingLinkCandidate) (string, int) {
+		mergeCalls.Add(1)
+		var list []string
+		_ = json.Unmarshal([]byte(existingCursor), &list)
+		have := map[string]bool{}
+		for _, tok := range list {
+			have[tok] = true
+		}
+		added := 0
+		for _, c := range add {
+			if have[c.Token] {
+				continue
+			}
+			have[c.Token] = true
+			list = append(list, c.Token)
+			added++
+		}
+		if added == 0 {
+			return existingCursor, 0
+		}
+		slices.Sort(list)
+		raw, _ := json.Marshal(list)
+		return string(raw), added
+	}
+	w.mu.Unlock()
+
+	var seenCursor string
+	var seenAuthAt time.Time
+	var seenScopes []string
+	w.script("bsyncA", accA, func(_ context.Context, b larksyncwire.Binding, _ func(context.Context) (string, error), cursors map[string]string, _ larksyncwire.Index) (larksyncwire.Result, error) {
+		seenCursor = cursors[larksyncwire.PendingLinksCursor]
+		seenAuthAt = b.AuthorizedAt
+		seenScopes = slices.Clone(b.GrantedScopes)
+		return larksyncwire.Result{}, nil
+	})
+
+	// Run 1: remediates missing links (doxDropped, doxStub, wikDropped), skipping doxFetched, wikFetched,
+	// doxAlreadyQueued (no duplicate), and binding B's doxOtherTenant.
+	if err := w.h.larkSyncRunMode(ctx, keyA, larksyncwire.ModeIM); err != nil {
+		t.Fatal(err)
+	}
+	if seenAuthAt.IsZero() || len(seenScopes) == 0 {
+		t.Fatalf("binding auth metadata not passed to Syncer: AuthorizedAt=%v Scopes=%v", seenAuthAt, seenScopes)
+	}
+	wantQueue := `["doxAlreadyQueued","doxDropped","doxStub","wikDropped"]`
+	if seenCursor != wantQueue {
+		t.Fatalf("run 1 received links_queue = %s, want %s", seenCursor, wantQueue)
+	}
+	if got := w.store.cursorsOf(keyA)[larksyncwire.PendingLinksCursor]; got != wantQueue {
+		t.Fatalf("persisted links_queue = %s, want %s", got, wantQueue)
+	}
+	if got := w.binding(t, keyA).LinksBackfillVersion; got != larkSyncLinksBackfillVersion {
+		t.Fatalf("LinksBackfillVersion = %d, want %d", got, larkSyncLinksBackfillVersion)
+	}
+	extractAfterRun1 := extractCalls.Load()
+	mergeAfterRun1 := mergeCalls.Load()
+
+	// Run 2: LinksBackfillVersion already set -> skips remediation completely.
+	if err := w.h.larkSyncRunMode(ctx, keyA, larksyncwire.ModeIM); err != nil {
+		t.Fatal(err)
+	}
+	if extractCalls.Load() != extractAfterRun1 || mergeCalls.Load() != mergeAfterRun1 {
+		t.Fatalf("run 2 re-ran remediation despite LinksBackfillVersion=%d", larkSyncLinksBackfillVersion)
+	}
+
+	// Run 3: even if LinksBackfillVersion is manually reset to 0 after doxDropped is indexed with body content,
+	// remediation is completely idempotent (zero duplicates added, queue unchanged).
+	if err := w.store.CommitLarkSyncRun(ctx, keyA, nil, []larksyncwire.IndexRecord{
+		{Key: larksyncwire.KeyDoc + "doxDropped", Kind: "doc", Revision: 1, BodyHash: "now-has-body"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
+		st.binding(keyA).LinksBackfillVersion = 0
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.h.larkSyncRunMode(ctx, keyA, larksyncwire.ModeIM); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.store.cursorsOf(keyA)[larksyncwire.PendingLinksCursor]; got != wantQueue {
+		t.Fatalf("after idempotent reset rerun: links_queue = %s, want %s", got, wantQueue)
+	}
+}
+
+func splitSpaces(s string) []string {
+	var out []string
+	cur := ""
+	for i := 0; i < len(s); i++ {
+		if s[i] == ' ' || s[i] == '\n' || s[i] == '\t' {
+			if cur != "" {
+				out = append(out, cur)
+				cur = ""
+			}
+			continue
+		}
+		cur += string(s[i])
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+func hasPrefix(s, p string) bool {
+	return len(s) >= len(p) && s[:len(p)] == p
+}
