@@ -112,6 +112,16 @@ function ConnOnlyStoreConnectionPill({ link, deps }: { link: ConnLink; deps: Con
   return <ConnectionPillBody conn={conn} link={link} deps={deps} />;
 }
 
+function sameConnLink(a: ConnLink, b: ConnLink): boolean {
+  return a === b || (
+    a.lastOnline === b.lastOnline
+    && a.nextTry === b.nextTry
+    && a.restarting === b.restarting
+    && a.networkUp === b.networkUp
+    && a.lastError === b.lastError
+  );
+}
+
 function SubscribedConnectionPill({
   read, subscribe, deps,
 }: { read: () => ConnectionState; subscribe: (listener: () => void) => () => void; deps: ConnectionPillDeps }) {
@@ -119,7 +129,7 @@ function SubscribedConnectionPill({
   const getSnapshot = useCallback(() => {
     const next = read();
     const prev = cache.current;
-    if (prev && prev.conn === next.conn && prev.link === next.link) return prev;
+    if (prev && prev.conn === next.conn && sameConnLink(prev.link, next.link)) return prev;
     cache.current = next;
     return next;
   }, [read]);

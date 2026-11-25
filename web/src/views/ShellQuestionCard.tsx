@@ -236,21 +236,35 @@ function DefaultSessionShellQuestion(props: SessionShellQuestionProps) {
 }
 
 function SessionShellQuestionBody({ mid, sid, args, onAnswered, className, deps, can }: SessionShellQuestionProps & { can: boolean }) {
+  const sessionId = JSON.stringify([mid, sid]);
   const question = shellQuestion(args);
+  const targetKey = question ? questionScopeKey(question, sessionId) : null;
+  const [target, setTarget] = useState<{ sessionId: string; key: string | null; epoch: number }>(() => ({ sessionId, key: targetKey, epoch: 1 }));
+  if (target.sessionId !== sessionId || target.key !== targetKey) {
+    const sameSessionHide = target.sessionId === sessionId && targetKey === null;
+    setTarget({ sessionId, key: targetKey, epoch: sameSessionHide ? target.epoch : target.epoch + 1 });
+  }
+  const targetEpochRef = useRef(target.epoch);
+  const runResendRef = useRef(deps?.resendRefused ?? resendRefused);
+  useLayoutEffect(() => { targetEpochRef.current = target.epoch; }, [target.epoch]);
+  useLayoutEffect(() => { runResendRef.current = deps?.resendRefused ?? resendRefused; }, [deps?.resendRefused]);
   if (!can || !question) return null;
   const runContinue = deps?.continueStart ?? continueStart;
-  const runResend = deps?.resendRefused ?? resendRefused;
+  const runEpoch = target.epoch;
   return (
     <ShellQuestionCard
       scopeKey={JSON.stringify(["session", mid, sid])}
       question={question}
       className={className}
       deps={deps}
-      answer={(choice) => runContinue(mid, sid, choice)}
-      onAnswered={() => {
-        try { void Promise.resolve(runResend(mid, sid)).catch(() => {}); } catch { /* resend failure stays non-blocking */ }
-        onAnswered?.();
+      answer={async (choice) => {
+        const result = await runContinue(mid, sid, choice);
+        if (targetEpochRef.current === runEpoch) {
+          try { void Promise.resolve(runResendRef.current(mid, sid)).catch(() => {}); } catch { /* resend failure stays non-blocking */ }
+        }
+        return result;
       }}
+      onAnswered={onAnswered ? () => onAnswered() : undefined}
     />
   );
 }
@@ -340,10 +354,39 @@ function DefaultLaunchShellQuestion(props: StartShellQuestionProps & { mid: stri
   return <StartShellQuestionBody {...props} row={row} />;
 }
 
+function sameRecord(a: Record<string, unknown> | undefined, b: Record<string, unknown> | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const k of keys) {
+    if (!Object.prototype.hasOwnProperty.call(b, k) || !Object.is(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+function sameLaunchSessionRow(a: Session | undefined, b: Session | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.machine_id === b.machine_id
+    && a.session_id === b.session_id
+    && a.start_error_code === b.start_error_code
+    && sameRecord(a.start_error_args, b.start_error_args);
+}
+
 function SubscribedLaunchShellQuestion({
   getSession, subscribe, ...props
 }: StartShellQuestionProps & { mid: string; sid: string; getSession: (mid: string, sid: string) => Session | undefined; subscribe: (listener: () => void) => () => void }) {
-  const getSnapshot = useCallback(() => getSession(props.mid, props.sid), [getSession, props.mid, props.sid]);
+  const cache = useRef<{ mid: string; sid: string; row: Session | undefined } | null>(null);
+  const getSnapshot = useCallback(() => {
+    const next = getSession(props.mid, props.sid);
+    const prev = cache.current;
+    if (prev && prev.mid === props.mid && prev.sid === props.sid && sameLaunchSessionRow(prev.row, next)) {
+      return prev.row;
+    }
+    cache.current = { mid: props.mid, sid: props.sid, row: next };
+    return next;
+  }, [getSession, props.mid, props.sid]);
   const row = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return <StartShellQuestionBody {...props} row={row} />;
 }

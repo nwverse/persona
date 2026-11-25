@@ -432,18 +432,146 @@ describe("ShellQuestionCard controlled deps, view separation, and race guards", 
     expect(card()!.textContent).toContain(LINE_B);
     expect(alertText()).toBe("");
 
-    // Submit on renewed question, then unmount before settlement -> late resolve is ignored.
+    // Submit on renewed question, then unmount before settlement -> card UI callback is fenced while accepted resend still completes.
     await act(async () => choiceBtn("y")!.click());
     await act(async () => root.render(null));
     await act(async () => req2.resolve());
     await flush();
-    expect(resendFn).not.toHaveBeenCalled();
+    expect(resendFn).toHaveBeenCalledTimes(1);
+    expect(resendFn).toHaveBeenCalledWith("mac", "sess-a");
     expect(onAnswered).not.toHaveBeenCalled();
 
     // Expired controlled now hides the card without starting timers.
     clock = Date.parse(FUTURE_ISO) + 1_000;
     await act(async () => root.render(<ShellQuestion launch={launch} deps={deps} />));
     expect(card()).toBeNull();
+    expectNoDefaultSingletons();
+  });
+
+  it("still calls resendRefused when continueStart clears shell_waiting and unmounts the card, while fencing target switches and hide-then-reappear", async () => {
+    // 1. Default path mirroring ChatView: continueStart clears start_error_code/args synchronously before resolving, unmounting ShellQuestion.
+    let liveSession: Session = makeSession();
+    const storeState = {
+      features: [START_CONTINUE_FEATURE],
+      sessions: { mac: [liveSession] },
+    };
+    mocks.useStore.mockImplementation((sel: (s: typeof storeState) => unknown) => sel(storeState));
+    const renderChatHost = () => root.render(
+      liveSession.start_error_code === SHELL_WAITING ? <ShellQuestion session={liveSession} /> : null,
+    );
+    mocks.continueStart.mockImplementationOnce(async () => {
+      liveSession = { ...liveSession, starting: true, start_error: undefined, start_error_code: undefined, start_error_args: undefined };
+      act(() => renderChatHost());
+      return liveSession;
+    });
+
+    await act(async () => renderChatHost());
+    expect(card()).not.toBeNull();
+    await act(async () => choiceBtn("n")!.click());
+    await flush();
+    expect(card()).toBeNull();
+    expect(mocks.continueStart).toHaveBeenCalledWith("mac", "sess-a", "n");
+    expect(mocks.resendRefused).toHaveBeenCalledTimes(1);
+    expect(mocks.resendRefused).toHaveBeenCalledWith("mac", "sess-a");
+
+    // 2. Controlled same-session hide (args -> undefined) before resolve still runs resendRefused once.
+    const reqHide = deferred();
+    const resendControlled = vi.fn();
+    const deps: ShellQuestionDeps = {
+      canContinueStart: true,
+      continueStart: vi.fn(() => reqHide.promise),
+      resendRefused: resendControlled,
+      now: FIXED_NOW,
+    };
+    await act(async () => root.render(<SessionShellQuestion mid="mac" sid="sess-a" args={makeArgs()} deps={deps} />));
+    await act(async () => choiceBtn("y")!.click());
+    await act(async () => root.render(<SessionShellQuestion mid="mac" sid="sess-a" args={undefined} deps={deps} />));
+    expect(card()).toBeNull();
+    await act(async () => reqHide.resolve());
+    await flush();
+    expect(resendControlled).toHaveBeenCalledTimes(1);
+    expect(resendControlled).toHaveBeenCalledWith("mac", "sess-a");
+
+    // 3. Switching to another session with undefined args (real target switch) fences stale resendRefused.
+    const reqOther = deferred();
+    const resendOther = vi.fn();
+    const otherDeps: ShellQuestionDeps = {
+      canContinueStart: true,
+      continueStart: vi.fn(() => reqOther.promise),
+      resendRefused: resendOther,
+      now: FIXED_NOW,
+    };
+    await act(async () => root.render(<SessionShellQuestion mid="mac" sid="sess-a" args={makeArgs()} deps={otherDeps} />));
+    await act(async () => choiceBtn("y")!.click());
+    await act(async () => root.render(<SessionShellQuestion mid="mac" sid="sess-b" args={undefined} deps={otherDeps} />));
+    await act(async () => reqOther.resolve());
+    await flush();
+    expect(resendOther).not.toHaveBeenCalled();
+
+    // 4. Hiding and reappearing on the same session before stale settlement fences stale resendRefused.
+    const reqReappear = deferred();
+    const resendReappear = vi.fn();
+    const reappearDeps: ShellQuestionDeps = {
+      canContinueStart: true,
+      continueStart: vi.fn(() => reqReappear.promise),
+      resendRefused: resendReappear,
+      now: FIXED_NOW,
+    };
+    await act(async () => root.render(<SessionShellQuestion mid="mac" sid="sess-a" args={makeArgs()} deps={reappearDeps} />));
+    await act(async () => choiceBtn("y")!.click());
+    await act(async () => root.render(<SessionShellQuestion mid="mac" sid="sess-a" args={undefined} deps={reappearDeps} />));
+    await act(async () => root.render(<SessionShellQuestion mid="mac" sid="sess-a" args={makeArgs()} deps={reappearDeps} />));
+    await act(async () => reqReappear.resolve());
+    await flush();
+    expect(resendReappear).not.toHaveBeenCalled();
+  });
+
+  it("caches semantically unchanged fresh session objects in subscribed launch getSession without infinite re-renders and updates on scope/row changes", async () => {
+    const rows = new Map<string, Session>([
+      ["mac/sess-a", makeSession({ session_id: "sess-a", start_error_args: makeArgs({ line: LINE_A }) })],
+      ["mac/sess-b", makeSession({ session_id: "sess-b", start_error_args: makeArgs({ line: LINE_B, kind: "compinit", choices: "y,n", default: "" }) })],
+    ]);
+    const listeners = new Set<() => void>();
+    const emit = () => { listeners.forEach((l) => l()); };
+    const subscribe = (l: () => void) => {
+      listeners.add(l);
+      return () => { listeners.delete(l); };
+    };
+    const deps: ShellQuestionDeps = {
+      features: [START_CONTINUE_FEATURE],
+      // Return a fresh shallow+nested object on every snapshot read.
+      getSession: (mid, sid) => {
+        const row = rows.get(`${mid}/${sid}`);
+        return row ? { ...row, start_error_args: row.start_error_args ? { ...row.start_error_args } : undefined } : undefined;
+      },
+      subscribe,
+      continueStart: vi.fn(async () => {}),
+      resendRefused: vi.fn(),
+      formatError: (e) => (e instanceof Error ? e.message : String(e)),
+      now: FIXED_NOW,
+    };
+
+    const launchA = makeLaunch({ session: { machine_id: "mac", session_id: "sess-a" } as AgentLaunch["session"] });
+    const launchB = makeLaunch({ id: "launch-2", session: { machine_id: "mac", session_id: "sess-b" } as AgentLaunch["session"] });
+
+    await act(async () => root.render(<StrictMode><ShellQuestion launch={launchA} deps={deps} /></StrictMode>));
+    expect(card()!.textContent).toContain(LINE_A);
+
+    // Emitting with unchanged semantic values must not loop or alter rendered question.
+    await act(async () => emit());
+    expect(card()!.textContent).toContain(LINE_A);
+
+    // Updating row args updates the rendered question immediately.
+    rows.set("mac/sess-a", makeSession({ session_id: "sess-a", start_error_args: makeArgs({ line: LINE_B, kind: "compinit", choices: "y,n", default: "" }) }));
+    await act(async () => emit());
+    expect(card()!.textContent).toContain(LINE_B);
+
+    // Switching launch scope (sess-a -> sess-b -> sess-a) renders cleanly without stale cache leakage.
+    rows.set("mac/sess-a", makeSession({ session_id: "sess-a", start_error_args: makeArgs({ line: LINE_A }) }));
+    await act(async () => root.render(<StrictMode><ShellQuestion launch={launchB} deps={deps} /></StrictMode>));
+    expect(card()!.textContent).toContain(LINE_B);
+    await act(async () => root.render(<StrictMode><ShellQuestion launch={launchA} deps={deps} /></StrictMode>));
+    expect(card()!.textContent).toContain(LINE_A);
     expectNoDefaultSingletons();
   });
 

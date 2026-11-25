@@ -67,8 +67,8 @@ describe("ConnectionPill controlled deps, view separation, popover close, and re
     };
     const reconnect = vi.fn();
     const deps: ConnectionPillDeps = {
-      // Return a fresh object literal on every read to verify snapshot caching in useSyncExternalStore.
-      connection: () => ({ conn: current.conn, link: current.link }),
+      // Return a fresh outer object AND a fresh nested ConnLink object on every read to verify value-based snapshot caching.
+      connection: () => ({ conn: current.conn, link: { ...current.link } }),
       subscribe: (l) => {
         listeners.add(l);
         return () => { listeners.delete(l); };
@@ -82,11 +82,14 @@ describe("ConnectionPill controlled deps, view separation, popover close, and re
     expect(pill().getAttribute("aria-expanded")).toBe("false");
     expect(details()).toBeNull();
 
-    // Open details and verify facts + live phase updates through subscribe.
+    // Open details and verify facts + live phase updates through subscribe, including lastError-only link changes.
     await act(async () => pill().click());
     expect(pill().getAttribute("aria-expanded")).toBe("true");
     expect(details()?.textContent).toContain(t("lib-connection.retry_in", { count: 5 }));
     expect(retryBtn()).not.toBeNull();
+
+    await act(async () => emit({ conn: "offline", link: { ...current.link, lastError: "HTTP 502" } }));
+    expect(details()?.textContent).toContain("HTTP 502");
 
     await act(async () => emit({ conn: "offline", link: { ...NO_LINK, restarting: true } }));
     expect(pill().textContent).toBe(t("lib-connection.restarting"));
@@ -100,6 +103,30 @@ describe("ConnectionPill controlled deps, view separation, popover close, and re
     expect(retryBtn()).toBeNull();
     expect(details()?.querySelector("ul")).toBeNull();
 
+    // Emitting again with identical values in fresh nested objects stays stable (no infinite loop).
+    await act(async () => emit({ conn: "online", link: { ...NO_LINK } }));
+    expect(pill().textContent).toBe(t("lib-connection.online"));
+
+    expectNoDefaultSingletons();
+  });
+
+  it("caches nested fresh NO_LINK snapshots without hitting Maximum update depth exceeded", async () => {
+    const listeners = new Set<() => void>();
+    const subscribe = (l: () => void) => {
+      listeners.add(l);
+      return () => { listeners.delete(l); };
+    };
+    const deps: ConnectionPillDeps = {
+      connection: () => ({ conn: "offline", link: { ...NO_LINK } }),
+      subscribe,
+      reconnectNow: vi.fn(),
+      now: NOW,
+    };
+
+    await act(async () => root.render(<StrictMode><ConnectionPill deps={deps} /></StrictMode>));
+    expect(pill().textContent).toBe(t("app.reconnecting"));
+    await act(async () => { listeners.forEach((l) => l()); });
+    expect(pill().textContent).toBe(t("app.reconnecting"));
     expectNoDefaultSingletons();
   });
 
