@@ -318,8 +318,13 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 		rows, chats, docs = larkSyncOutboxRows(binding, res, h.bots.sync.clock())
 		commitErr = store.CommitLarkSyncRun(ctx, key, moved, idx.records(), rows)
 		if commitErr == nil && tier == larksyncwire.TierFull && b.BackfillVersion < larkSyncBackfillVersion {
-			repaired, done := h.larkSyncBackfillSenderNames(ctx, store, binding, &st, reader, token, handed)
+			repaired, done, repairErr := h.larkSyncBackfillSenderNames(ctx, store, binding, &st, reader, token, handed)
 			chats += repaired
+			if repairErr != nil {
+				res.Errors = append(res.Errors, larksyncwire.ResourceError{
+					Resource: "sender_names", Kind: larkSyncKindOf(repairErr), Detail: larkSyncDetail(repairErr),
+				})
+			}
 			if done {
 				backfillVer = larkSyncBackfillVersion
 			}
@@ -370,10 +375,10 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	reader larksyncwire.Syncer,
 	token func(ctx context.Context) (string, error),
 	handed func() string,
-) (repairedChats int, done bool) {
+) (repairedChats int, done bool, repairErr error) {
 	resolver, ok := reader.(larksyncwire.NameResolver)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	type candidate struct {
 		chat kbwire.SourceChat
@@ -386,7 +391,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		rows, err := store.LarkSyncOutboxAfter(ctx, db.LarkSyncChat, after, 100)
 		if err != nil {
 			h.logf("lark sync: %s: sender-name backfill scan: %v", binding.Key, err)
-			return 0, false
+			return 0, false, err
 		}
 		for _, row := range rows {
 			after = row.Seq
@@ -416,7 +421,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		}
 	}
 	if len(candidates) == 0 {
-		return 0, true
+		return 0, true, nil
 	}
 
 	// Count authorized chat-enabled bindings so a single-binding setup can still repair legacy outbox rows whose
@@ -450,7 +455,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		got, err := store.LarkSyncIndex(ctx, keys[start:end])
 		if err != nil {
 			h.logf("lark sync: %s: sender-name backfill index: %v", binding.Key, err)
-			return 0, false
+			return 0, false, err
 		}
 		for k, v := range got {
 			indexMap[k] = v
@@ -471,7 +476,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		}
 	}
 	if len(owned) == 0 {
-		return 0, true
+		return 0, true, nil
 	}
 
 	uniqueSenders := map[string]bool{}
@@ -500,7 +505,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	}
 	if len(names) == 0 {
 		// Complete when every lookup finished without a fatal/scope/deadline error (e.g. only deleted/external users).
-		return 0, err == nil
+		return 0, err == nil, err
 	}
 
 	byChat := map[string]*connector.ChatBatch{}
@@ -538,10 +543,10 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	if len(repairRows) > 0 {
 		if cerr := store.CommitLarkSyncRun(ctx, binding.Key, nil, nil, repairRows); cerr != nil {
 			h.logf("lark sync: %s: sender-name backfill commit: %v", binding.Key, cerr)
-			return 0, false
+			return 0, false, cerr
 		}
 	}
-	return len(repairRows), err == nil
+	return len(repairRows), err == nil, err
 }
 
 // larkSyncMovedCursors are the cursors of res to save: none of a resource that failed (the reader should not have
