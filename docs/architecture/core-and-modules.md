@@ -396,6 +396,21 @@ The modules of this kind:
 
 ### Guards
 
+**Controlling changes to the core (#14916).** Persona Core has no UI: it is the hub API and data model for Agents, sessions,
+tasks and to-dos, with the clients' headless code and the foundation interfaces. The clients' interface code is the default
+panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict: label + reason, owner review, no module
+references) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
+more pieces control changes to tier core itself, in this order of strength. The merge check: `scripts/hooks/core-change-check.py`, run by
+`scripts/hooks/merge-pr.sh`, refuses a PR that changes a tier-core path of `schema/core-paths.txt` (read by `scripts/test/core_paths.py`:
+the server units this file's classification calls `core`, the clients' headless directories and the foundation interfaces
+and guards named one by one; panel files and tests-only changes do not count) unless it has the label `core-change` and a `## Why this must change the core` section. CODEOWNERS:
+the core block of `.github/CODEOWNERS` is generated from tier core of the same list (`scripts/hooks/codeowners.py --write`) and requests
+the owners' review; whether the review is required is a branch ruleset the administrator sets. The reference guard:
+`scripts/test/test_core_references_no_module.py` needs no toolchain and checks on every platform that the four guards'
+baselines stay empty and that no core or panel Go, web or Kotlin file imports a module (the Apple ratchet is called as it is). A PR
+that edits the list, the check or the guards is itself a core change. The contributor steps are in `CONTRIBUTING.md`,
+"Changing Persona Core".
+
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
 `server/` (testdata left out), whatever its build constraint or GOOS, so a file only a `persona_core_only` build or one
 platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` proves it on a fixture).
@@ -745,12 +760,14 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   edited (the settle timer and its lock), how it is sent and replaced, the workbench's pin, its loop and the button
   every card carries, and the notices a notifications companion long-polls. The core tells them through
   `larkhost.Board` (`BoardChanged`, `WorkbenchOn`, `WorkbenchStamp`, `DivertNotices`: nothing, the card unchanged and
-  `false` without the module). The rows (what waits and for how long, `board_rows.go`) and the waiting list as a card
-  stay the core's, since the briefing and the acceptance rounds read them too; the module asks for the card as of a
-  time (`Host.BoardCard`) and for whether the pending cards are read (`Host.FleetReady`). The four routes the companions
-  use (`PUT …/feishu/companions`, `GET …/feishu/notices`, `POST …/feishu/notices/action`, `POST …/feishu/workbench`)
-  are the module's `hub_routes`, served through the kernel only while it is on: with the module off or built out they
-  answer 404 (before, an off bot answered from the core). The request tells the module which manager's layer it is for
+  `false` without the module). `DivertNotices` takes `assistantwire.NoticeKind`, with `report`, `push` and `task` as
+  its JSON values. An unknown kind raises a defect even when no companion is available.
+  The rows (what waits and for how long, `board_rows.go`) and the waiting list as a card stay the core's, since the
+  briefing and the acceptance rounds read them too. The module asks for the card as of a time (`Host.BoardCard`) and
+  for whether the pending cards are read (`Host.FleetReady`). The four routes the companions use (`PUT
+  …/feishu/companions`, `GET …/feishu/notices`, `POST …/feishu/notices/action`, `POST …/feishu/workbench`) are the
+  module's `hub_routes`, served through the kernel only while it is on. With the module off or built out they answer
+  404 (before, an off bot answered from the core). The request tells the module which manager's layer it is for
   (`larkhost.WithLayer`, put on it where the core registers a module's routes). The stored chat state
   (`bots.feishu.state`: the board's message, the companions) is only ever written by the module's code; switching it
   off neither rewrites nor deletes it, and it is read again when the module comes back. Locks, the same before and after the move: the board's `run` (one send or edit at a time) is the outermost; under it

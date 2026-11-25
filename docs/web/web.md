@@ -1445,6 +1445,33 @@ in the list beside three extension nav pages. `node web/e2e/dashboards-watch.mjs
 `zh-Hans` / `ja`, desktop platform context, and pixel-identical sidebar and Overview against `origin/main` in `off` and
 phase-1 (`1`) modes.
 
+### External sources (#15518)
+
+People who follow work in Inbox can connect updates from a chat, repository, mail account or subscription to a
+direction or to-do. On To-dos, **Direction details** opens any current direction, including one with no to-dos.
+The Pinned conversation's sidebar menu reaches the same detail. Directions and both to-do layouts show
+**External sources**. The section lists explicit connections and uses **Repositories and work** for the to-do's
+projected pull requests and issues, so each saved repository link appears once and keeps its work role.
+
+**Connect external source** opens the same editor from work and Inbox. Work preselects its destination. Inbox
+preselects the hub's most specific source on the message's `external_path`. The scope picker offers its parents
+and the same editable fields are available from each entry. A source already in Inbox can be picked by name.
+Expanding **Source details** shows the exact identity when needed. Older or internal Inbox items without a
+canonical path have no direct connect action.
+
+Forwarding is off until the owner opts in. The editor shows the inherited value and its source for each policy
+field when the hub supplies one. Choosing **Inherit** clears the override. The digest interval can be set while
+inheriting the forwarding mode, and choosing custom filters with their three lists empty clears an inherited
+filter. Explicit connections can be edited or disconnected on the destination. Use **Manage links** for saved
+repository links.
+
+Legacy Sources, Channels and Extensions and unified Integrations detail and Data Flow offer **Channel defaults**
+and **Connected work** links. The settings editor writes only the service and account scope, and **Restore defaults**
+followed by Save sends an empty policy. Connected work includes repository projections and opens the matching
+direction or to-do for the same assistant. The browser uses `/todos?direction=<id>` for a direction and can
+carry `manager` on either work link. The capability works in both presentations. The binding editor, channel
+policy panel and HTTP client load on demand. See [External source bindings](../protocol/protocol.md#external-source-bindings).
+
 ### Message sources (#2125)
 
 Relayed conversations, scheduled patrols, follow-ups and supervision use the optional `Item.source` contract in
@@ -3631,6 +3658,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connector items (GitHub, Telegram, Messages, extensions): source filter, chat page, reply or "Open in X", hand to AI | Yes | #1324, #2990 | GitHub timelines and Telegram bubbles are read-only plus reply; images in chats open in the image viewer (#2990); reactions, forwarding, and downloading attachments are not done |
 | Mute this repository / chat / sender, a "Muted" list and unmute | Yes | #2968 | The App uses long press on a row; the web uses right click on a row, or the mute button next to the item page title (for touch); "Muted" is in the list's ⋯ menu, as a dialog |
 | Rule for this repository / chat / sender (tier and AI twin), a "Rules" list with edit and remove | Yes | #2140 | The App's entries sit after the mute options: long press on a row (iOS, Android), right click (Mac), the item page's ⋯ (iOS); "Rules" is in the list's ⋯ menu (Mac: the toolbar and the Inbox menu). The App lists the default manager's rules only |
+| Connect an Inbox source to a direction or to-do | Web first | #15518 | Inbox and work details share the same editor. Legacy and unified Settings show channel defaults and read-only links to work. |
 
 ### Machines and settings
 

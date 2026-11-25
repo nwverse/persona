@@ -67,11 +67,11 @@ func companionValid(b CompanionBot) bool {
 
 // notice is one card for the notifications companion: the bot's card as Lark card JSON, and its fallback.
 type notice struct {
-	Seq  int             `json:"seq"`
-	Kind string          `json:"kind"` // push | task | report
-	Card json.RawMessage `json:"card"`
-	Text string          `json:"text,omitempty"` // the fallback, for a card Lark refuses
-	At   time.Time       `json:"at"`
+	Seq  int                      `json:"seq"`
+	Kind assistantwire.NoticeKind `json:"kind"`
+	Card json.RawMessage          `json:"card"`
+	Text string                   `json:"text,omitempty"` // the fallback, for a card Lark refuses
+	At   time.Time                `json:"at"`
 }
 
 // companionState is the notices waiting for the notifications companion and when it last polled. boot changes when the
@@ -120,7 +120,8 @@ func (s core) noticesTaken(ctx context.Context) bool {
 }
 
 // divertNotices hands cards to the notifications companion when it takes them; false: they go to the bot's chat.
-func (s core) divertNotices(ctx context.Context, kind string, cards []*botcard.Card, fallbacks []string) bool {
+func (s core) divertNotices(ctx context.Context, kind assistantwire.NoticeKind, cards []*botcard.Card, fallbacks []string) bool {
+	kind.RequireKnown()
 	if len(cards) == 0 || !s.noticesTaken(ctx) {
 		return false
 	}
