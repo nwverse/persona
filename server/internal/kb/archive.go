@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
@@ -69,23 +70,10 @@ type Engine struct {
 	// PartFollowup, PartPhotos, PartLines, PartTopics, PartHighlights): the manager's meeting_live event. Called
 	// outside the store's locks; optional.
 	MeetingChanged func(id string, parts []string)
-	// MinutesWritten is told when a recording's minutes for its current revision are written (minutes.go): the
-	// assistant pushes them. Not for minutes made again only because a photo was added or deleted. Called from the
-	// loop, outside the store's locks.
-	MinutesWritten func(ctx context.Context, r Recording, m Minutes)
 	// LiveChanged is told of recording id when what the attending feeder does may have changed (live.go): a stored
 	// upload of a recording that attends or attended until then, and sentences LiveAppend stored. Called outside the
 	// store's locks; optional.
 	LiveChanged func(id string)
-	// DayRecapWritten is told once a day (Recording.Day, across the day's parts) of the recap the day's push goes with
-	// (day_recap_write.go "The push"): one ready at the recap time, else the day's first recap after it, or the final
-	// recap of a day that had none; never one asked for before the recap time. The assistant pushes it, to the
-	// destinations not in r.RecapPushTook, and returns those that took it now. Called from the recap lane
-	// (WriteDayRecaps), outside the store's locks; the push is persisted as due before, so it is told again after a
-	// restart, and after an error (the push not taken by all: the next round tells it again, after a short wait that
-	// grows with each one failed, with those that took it kept in RecapPushTook), until a call returned nil or a day
-	// went by since it became due. Optional: without it the push stays due, told once it is set.
-	DayRecapWritten func(ctx context.Context, r Recording, d DayRecap) (took []string, err error)
 	// DayRecapClock is the evening routine's time of day (whether or not the routine is on); the recap time is 30
 	// minutes before it, in the owner's zone (Store.Zone, the routine's). Nil, or a time that is not one: 21:30.
 	DayRecapClock func() (hour, minute int)
@@ -139,12 +127,9 @@ type Engine struct {
 
 	// clock is what the day recordings take for now (tests); nil: time.Now.
 	clock func() time.Time
-	// jobLeft is how long a recap job has left (tests); nil: until its context's deadline.
-	jobLeft func(ctx context.Context) time.Duration
-	// minutesCall and minutesPart are the transcript runes the minutes read in one call and in one part of a long
-	// meeting (tests; zero: minutesOneCall and minutesChunk): the behaviour check sends a short meeting through the
-	// merging call.
-	minutesCall, minutesPart int
+	// recordings is the recording module's write side (recording_port.go: RecordingProvider, SetRecordingProvider); nil
+	// without the module.
+	recordings recordingwire.Provider
 }
 
 // Retries are the knowledge base steps' failures and when each may be tried again (retrySet, one per step).
@@ -619,7 +604,7 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		}
 		e.addHandles(pid, m.SenderHandles)
 		// Only write when something a reader cares about changed (not on every message of a busy group).
-		return !p.persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
+		return !p.Persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
 	})
 	if linked {
 		c.People = addUnique(c.People, pid)

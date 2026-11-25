@@ -104,6 +104,8 @@ export interface State {
   /** Messages other pages sent for a conversation (`mid/sid`), shown there until the transcript has them (lib/outbox.ts). */
   outbox: Record<string, OutboxEntry[]>;
   todos: Todo[];
+  /** Optional `shared_blockers` summary from GET /todos under todos_v2 (#14728); parsed lazily by the To-dos view. */
+  sharedBlockers: unknown[];
   todosSupported: boolean;
   todosLoaded: boolean;
   todosError: string | null;
@@ -150,6 +152,7 @@ let state: State = {
   launches: {},
   outbox: {},
   todos: [],
+  sharedBlockers: [],
   todosSupported: true,
   todosLoaded: false,
   todosError: null,
@@ -883,7 +886,7 @@ export function connect() {
     if (stopped) return;
     // an attempt that never got a hello carries no status: ask the hub once whether a sign-in layer in front of it has
     // expired (lib/edge-auth.ts); a socket that was live just dropped, and its reconnect attempt is the one to ask about
-    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential);
+    if (!wasLive && !restartNotice && ev.code !== 1001) void probeEdge(undefined, probeCredential, setLinkError);
     const now = Date.now();
     const restart = restartNotice || ev.code === 1001;
     // the drop starts while online; a restart announced on a later attempt stretches its grace
@@ -907,11 +910,24 @@ export function connect() {
   };
 }
 
+const setLinkError = (reason: string) => {
+  const msg = reason.trim();
+  if (msg && msg !== state.link.lastError) set({ link: { ...state.link, lastError: msg } });
+};
+
 // The hub answered while it refused the socket: a browser can't read why a WebSocket handshake failed, so one ordinary
 // read asks. A credential it no longer takes (removed in Settings › Devices, or the hub forgot it) answers 401, which
 // api() hands to the sign-in page with "signed out" (App.tsx handleUnauthorized) instead of retrying as if the hub were
-// out of reach. The read's own failures change nothing: the socket keeps retrying.
-const probeCredential = () => api("/machines", { timeout: 15_000 }).catch(() => {});
+// out of reach. Other HTTP/API rejections surface their error detail in ConnectionDetails; network errors change nothing.
+const probeCredential = () =>
+  api("/machines", { timeout: 15_000 }).then(
+    () => {
+      if (state.link.lastError) set({ link: { ...state.link, lastError: undefined } });
+    },
+    (e: unknown) => {
+      if (e instanceof ApiError && e.status >= 400 && e.message) setLinkError(e.message);
+    },
+  );
 
 // The grace is over and the socket is still not back: show it as before.
 function showDrop() {
@@ -1023,7 +1039,7 @@ function onMessage(msg: Record<string, unknown>) {
       setSideFold(Array.isArray(msg.features) && (msg.features as unknown[]).includes(SESSIONS_SIDE_FOLD_FEATURE));
       set({
         conn: "online",
-        link: { ...state.link, nextTry: 0, restarting: false, networkUp: true },
+        link: { ...state.link, nextTry: 0, restarting: false, networkUp: true, lastError: undefined },
         version: String(msg.server_version ?? ""),
         features: Array.isArray(msg.features) ? (msg.features as string[]) : [],
         pushGrading: msg.push_grading === true,
@@ -1590,14 +1606,14 @@ function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) 
 // no body. Most {"type":"todos"} pushes change nothing the list holds, and the whole list is hundreds of KB on a busy
 // hub, so a read sends the tag and a 304 applies the kept answer again, as a 200 with those same bytes would. Memory
 // only, one login's: reset() drops it, and a tag kept under another login is not sent.
-let keptTodos: { owner: string; etag: string; revision: string; answer: { todos: Todo[] } } | null = null;
+let keptTodos: { owner: string; etag: string; revision: string; answer: { todos: Todo[]; shared_blockers?: unknown[] } } | null = null;
 
-async function readTodos(): Promise<{ todos: Todo[] }> {
+async function readTodos(): Promise<{ todos: Todo[]; shared_blockers?: unknown[] }> {
   const owner = credentialOwner();
   const kept = keptTodos?.owner === owner ? keptTodos : null;
   let status = 0;
   let reply: Headers | undefined;
-  const answer = await api<{ todos: Todo[] }>("/todos", {
+  const answer = await api<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", {
     headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
     onResponse: (headers, code) => { status = code; reply = headers; },
   });
@@ -1612,7 +1628,7 @@ async function readTodos(): Promise<{ todos: Todo[] }> {
   return answer;
 }
 
-const todosAsked = numbered<{ todos: Todo[] }>("/todos", readTodos);
+const todosAsked = numbered<{ todos: Todo[]; shared_blockers?: unknown[] }>("/todos", readTodos);
 const assistantAsked = numbered<AssistantInfo>("/assistant");
 
 // refresh() calls, numbered the same way: one that started before the last one applied, or before reset(), is older
@@ -1678,20 +1694,21 @@ export async function refresh() {
 }
 
 /** Both refresh paths share the list, error and unsupported-hub (404) handling; only a fresh answer finishes loading. */
-function applyTodos(todos: PromiseSettledResult<{ todos: Todo[] }>, fresh: () => boolean) {
+function applyTodos(todos: PromiseSettledResult<{ todos: Todo[]; shared_blockers?: unknown[] }>, fresh: () => boolean) {
   if (!fresh()) return; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
     const list = todos.value.todos ?? [];
+    const sharedBlockers = Array.isArray(todos.value.shared_blockers) ? todos.value.shared_blockers : [];
     for (const t of list) {
       if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
     }
-    set({ todos: list, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    set({ todos: list, sharedBlockers, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
     keepTaskRows([]);
     void lookUpTaskAgents();
     return;
   }
   const reason = todos.reason;
-  if (reason instanceof ApiError && reason.status === 404) return set({ todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+  if (reason instanceof ApiError && reason.status === 404) return set({ sharedBlockers: [], todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
   set({ todosLoaded: true, todosError: errorText(reason) });
 }
 
@@ -2038,6 +2055,7 @@ export function reset() {
     mutes: { spaces: [], sessions: [], allowed: [] },
     pins: NO_PINS,
     todos: [],
+    sharedBlockers: [],
     todosSupported: true,
     todosLoaded: false,
     todosError: null,

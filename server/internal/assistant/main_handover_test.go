@@ -50,6 +50,9 @@ func TestNewMainConversationTakesOverOpenTasks(t *testing.T) {
 	s, f, todo, led, side, closed := handoverFixture(t)
 	ctx := context.Background()
 	before := *todo.Supervision
+	// The former main can already have been told this very review.
+	s.sendDigest(ctx)
+	waitFor(t, "the review told to the former main", func() bool { return reviewsTold(f, "conv1", todo.ID) == 1 })
 	if old, _, err := s.newMain(ctx, false, "conv1"); err != nil || old != "conv1" {
 		t.Fatalf("new main: %q %v", old, err)
 	}
@@ -58,8 +61,14 @@ func TestNewMainConversationTakesOverOpenTasks(t *testing.T) {
 		t.Fatalf("started: %+v %v", sess, err)
 	}
 	next := sess.SessionID
+	// The review may go into the relay queue before the node lists the newly started session.
+	s.sendDigest(ctx)
+	f.mu.Lock()
 	f.known[next] = true
-	f.setSessions("server", proto.Session{SessionID: next, MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	f.mu.Unlock()
+	listed := []proto.Session{{SessionID: next, MachineID: "server", Assistant: true, Status: proto.StatusIdle}}
+	f.setSessions("server", listed...)
+	s.SessionsChanged(ctx, DeviceSessions{MachineID: "server", Sessions: listed})
 
 	got := todoNow(s, todo.ID)
 	if got.Origin != next || got.Supervision == nil || got.Supervision.Supervisor != next {
@@ -73,8 +82,12 @@ func TestNewMainConversationTakesOverOpenTasks(t *testing.T) {
 		t.Fatalf("no card in the new conversation: %s", feedKinds(s, next))
 	}
 	waitFor(t, "the review told to the new main conversation", func() bool {
-		return strings.Contains(strings.Join(f.noticesTo(next), "\n"), todo.ID)
+		return reviewsTold(f, next, todo.ID) == 1
 	})
+
+	if _, valid := s.digestEntry(ctx, superviseSignal{Todo: todo.ID, Kind: sigReview, Recipient: "conv1"}, s.webBase(ctx)); valid {
+		t.Fatal("the former review recipient still admitted a delivery after the handover")
+	}
 
 	if l := todoNow(s, led.ID); l.Origin != next || l.Supervision.Supervisor != "lead1" {
 		t.Fatalf("the leader's task: origin %q, supervisor %q", l.Origin, l.Supervision.Supervisor)

@@ -5,7 +5,7 @@ import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionHistoryNotFo
 import { sessionLoadError } from "../../lib/session-link";
 import { getState, listenSession, markConversationDeleted, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
-import { mergeItems, withoutFolded } from "../../lib/turns";
+import { insideFold, mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
 import { discardFeedCache, discardMemoryPage, feedCacheScope, readFeedCache, readMemoryPage, writeFeedCache, writeMemoryPage, type FeedCache } from "../../lib/feed-cache";
 import type { Item, ItemsPage } from "../../lib/types";
@@ -14,6 +14,7 @@ import { unlandedLive } from "../../lib/live-text";
 import { clearLive } from "../../lib/live";
 import { endPull, pullKey as gateKeyOf, resetPullGatesForTests, startPull } from "../../lib/pull-gate";
 import { archivedNow } from "../../lib/agent-archives";
+import { createItemCoalescer } from "../../lib/item-coalescer";
 
 const PAGE = "turns=2&fold_work=1&lazy_images=1";
 /** How often a page checks whether it is behind (a pure comparison; nothing is asked unless it is, lib/stale-page.ts). */
@@ -208,6 +209,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     };
     replacing.current = false;
     const ctl = new AbortController();
+    const itemCoalescer = createItemCoalescer(apply);
     // Older pages and folds still on their way were asked for from what is shown now: they must not land on what replaces it.
     const disownReads = () => {
       invalidateHistoryReads();
@@ -220,6 +222,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       cancelSave();
       clearTimeout(handoffTimer);
       ctl.abort();
+      itemCoalescer.cancel();
       disownReads();
       snapshot.current = null;
       setItems([]);
@@ -508,6 +511,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       let visible = batch;
       const replay = e.has_more !== undefined && authoritative;
       if (e.has_more !== undefined) {
+        itemCoalescer.cancel();
         latestMore = e.has_more;
         recovered();
         // The first replay can stand in for a failed read. Later replays describe only the newest two turns.
@@ -528,7 +532,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         tally = afterPush(tally); // the stream works
         setNotLive(false);
       }
-      apply(visible);
+      itemCoalescer.push(visible, e.has_more !== undefined);
       if (!gap && e.to_seq) covered.current = Math.max(covered.current, e.to_seq);
       if (gap || e.more_after) queueGapFill();
     };
@@ -553,6 +557,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     });
 
     function commitPage(p: ItemsPage) {
+      itemCoalescer.cancel();
       const batch = p.items ?? [];
       const changed = Boolean(p.history && history.current && p.history !== history.current);
       const active = authoritative && !replacing.current && !changed;
@@ -643,6 +648,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       off();
       clearTimeout(refused);
       clearTimeout(handoffTimer);
+      itemCoalescer.cancel();
       deltas.current.cancel();
       clearTimeout(gapTimer.current);
       gapTimer.current = undefined; // the next session's first gap starts its own
@@ -728,7 +734,8 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         from = batch[batch.length - 1].seq + 1;
       }
       if (complete) expanded.current.set(fold.id, fold.fold);
-      apply(out);
+      // from_seq..through_seq is line-granular, so boundary lines can carry blocks of an adjacent fold (#13859).
+      apply(out.filter((i) => insideFold(i, fold)));
       // The closeout's evidence reader needs to know a capped or superseded read; existing fold UI keeps the partial steps.
       return complete;
     },

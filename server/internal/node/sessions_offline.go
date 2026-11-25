@@ -222,7 +222,7 @@ func (n *Node) scanOffline() []proto.Session {
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
-		setContext(&s, m)
+		n.setSessionContext(&s, m)
 		m.turnErr.set(&s) // Preserve the full gateway error and its reset after the terminal Agent exits.
 		s.ModelFallback = m.modelFallback
 		n.setModelRestore(&s, c.path, m)
@@ -240,6 +240,10 @@ func (n *Node) scanOffline() []proto.Session {
 // scanOffline reads only Claude's projects and codexSessions keeps the assistant's out of Agents, so such a conversation
 // had no row at all, and every client turned its composer off, with nothing left to send the message that resumes it (#2126).
 func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
+	return n.codexAssistantsAtRestIn(seen, nil)
+}
+
+func (n *Node) codexAssistantsAtRestIn(seen map[string]bool, pass *codexListPass) []proto.Session {
 	if n.state == nil || n.codices == nil {
 		return nil
 	}
@@ -258,7 +262,7 @@ func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
 	}
 	var cands []cand
 	for id := range cwds {
-		path := n.codexPath(id)
+		path := n.codexPathIn(id, pass)
 		if path == "" {
 			continue
 		}

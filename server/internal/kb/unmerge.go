@@ -12,6 +12,8 @@ import (
 // kbwire.Update, so the extension protocol (kb.update) has no way to send it.
 type UserUpdate struct {
 	Update
+	// ExpectedPinned guards a recording correction; omission keeps the original unconditional update.
+	ExpectedPinned *string `json:"expected_pinned,omitempty"`
 	// ProjectMode and SourceURLs are the owner's project settings. An empty SourceURLs list clears the pointers.
 	ProjectMode *string  `json:"project_mode,omitempty"`
 	SourceURLs  []string `json:"source_urls,omitempty"`
@@ -34,6 +36,10 @@ type UserUpdate struct {
 
 // ApplyUser is Apply, or Unmerge when u asks for it.
 func (e *Engine) ApplyUser(kind, id string, u UserUpdate) (string, error) {
+	if u.ExpectedPinned != nil && (kind != KindRecording || u.Pinned == nil) {
+		return "", fmt.Errorf("expected_pinned requires a recording pinned update")
+	}
+
 	if !u.Unmerge {
 		return e.applyUser(kind, id, u)
 	}
@@ -168,7 +174,7 @@ func (e *Engine) unmergeProject(drop *Project) error {
 				}
 			}
 			for list, ids := range rec.Excluded {
-				keep.include(list, ids...)
+				taggingInclude(&keep.Tagging, list, ids...)
 			}
 		} else {
 			names := map[string]bool{normName(drop.Name): true}
