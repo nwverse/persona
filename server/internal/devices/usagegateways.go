@@ -330,14 +330,25 @@ func (g *usageGateways) accounts(now time.Time) []proto.UsageAccount {
 		if !s.on() || st == nil {
 			continue
 		}
+		extensionIDs := make(map[[2]string]int)
+		for _, a := range st.samples {
+			if a.Pass && a.Ref != "" {
+				extensionIDs[[2]string{canonicalUsageProvider(a.Provider), a.Ref}]++
+			}
+		}
 		for n, a := range st.samples {
 			if now.Sub(a.SampledAt) > usageHubMaxAge {
 				continue
 			}
 			a.Windows = slices.Clone(a.Windows)
 			a.Sources = []string{s.Name}
-			if a.Pass { // an extension's row: its own, never merged; the id says which source and which row
-				a.Ref, a.Origin = "", s.ID+"#"+strconv.Itoa(n)
+			if a.Pass {
+				// Extension rows never merge. Prefer their own account ID so a reorder does not retarget a pin.
+				a.Origin = s.ID + "#" + strconv.Itoa(n)
+				if a.Ref != "" && extensionIDs[[2]string{canonicalUsageProvider(a.Provider), a.Ref}] == 1 {
+					a.Origin = s.ID + ":account:" + a.Ref
+				}
+				a.Ref = ""
 			} else if a.Ref != "" {
 				a.Ref = s.ID + ":" + a.Ref
 				a.Origin = a.Ref
