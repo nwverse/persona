@@ -7,6 +7,7 @@ import {
   instantiateScenario,
   scenarioProblem,
   scenarioSources,
+  withScenarioRepeat,
   withScenarioSource,
   type ScenarioCatalog,
   type ScenarioDefinition,
@@ -21,8 +22,9 @@ import { Field, inputClass, SectionTitle } from "./parts";
 
 const HINT = "mt-1.5 px-1 text-submeta leading-relaxed text-ink-3";
 
-export function ScenarioTemplateDialog({ template, onClose, onReview }: {
+export function ScenarioTemplateDialog({ template, readOptions, onClose, onReview }: {
   template: ScenarioDefinition;
+  readOptions?: Parameters<typeof api>[1];
   onClose: () => void;
   onReview: (task: Task) => void;
 }) {
@@ -33,7 +35,7 @@ export function ScenarioTemplateDialog({ template, onClose, onReview }: {
 
   useEffect(() => {
     let live = true;
-    api<{ catalogs?: ScenarioCatalog[] }>("/subscriptions/catalog").then((reply) => {
+    api<{ catalogs?: ScenarioCatalog[] }>("/subscriptions/catalog", readOptions).then((reply) => {
       if (live) setCatalogs(reply.catalogs ?? []);
     }, () => {
       if (live) {
@@ -42,7 +44,7 @@ export function ScenarioTemplateDialog({ template, onClose, onReview }: {
       }
     });
     return () => { live = false; };
-  }, []);
+  }, [readOptions]);
 
   useEffect(() => {
     if (catalogs === null || edited) return;
@@ -65,6 +67,10 @@ export function ScenarioTemplateDialog({ template, onClose, onReview }: {
   const chooseSource = (source: ScenarioSourceKey) => {
     setEdited(true);
     setDraft((current) => withScenarioSource(current, source));
+  };
+  const chooseRepeat = (repeat: ScenarioDraft["repeat"]) => {
+    setEdited(true);
+    setDraft((current) => withScenarioRepeat(current, repeat));
   };
   const review = () => {
     const task = instantiateScenario(draft, catalogs);
@@ -124,7 +130,7 @@ export function ScenarioTemplateDialog({ template, onClose, onReview }: {
         <SectionTitle>{t("assistant-scenario-templates.section_schedule")}</SectionTitle>
         <div className="grid grid-cols-1 gap-3 rounded-card bg-inset p-3 shadow-hairline sm:grid-cols-2">
           <Field label={t("assistant-scenario-templates.schedule_kind")}>
-            <select className={inputClass} value={draft.repeat} onChange={(event) => edit({ repeat: event.target.value as ScenarioDraft["repeat"] })}>
+            <select className={inputClass} value={draft.repeat} onChange={(event) => chooseRepeat(event.target.value as ScenarioDraft["repeat"])}>
               <option value="daily">{t("assistant-taskeditor.repeat_daily")}</option>
               <option value="interval">{t("assistant-taskeditor.repeat_interval")}</option>
             </select>

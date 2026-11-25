@@ -94,7 +94,7 @@ function definition(key: ScenarioKey): ScenarioDefinition {
 }
 
 function connected(catalog: ScenarioCatalog): boolean {
-  return !catalog.error && (!catalog.status || catalog.status === "ok" || catalog.status === "rate_limited");
+  return !catalog.error && (!catalog.status || catalog.status === "ok");
 }
 
 function connectorSource(key: ScenarioKey, connector: ScenarioSourceKey, catalogs: readonly ScenarioCatalog[] | null): { tools: string[]; ready: boolean } {
@@ -161,6 +161,27 @@ export function defaultScenarioDraft(key: ScenarioKey, catalogs: readonly Scenar
 /** Changes source and resets only its scope; schedule choices remain the user's. */
 export function withScenarioSource(draft: ScenarioDraft, source: ScenarioSourceKey): ScenarioDraft {
   return { ...draft, source, scope: defaultScope(draft.key, source) };
+}
+
+/** Changes schedule kind and normalizes its fields while clearing hidden fields from the previous kind. */
+export function withScenarioRepeat(draft: ScenarioDraft, repeat: ScenarioDraft["repeat"]): ScenarioDraft {
+  if (repeat === draft.repeat) return draft;
+  if (repeat === "daily") {
+    return {
+      ...draft,
+      repeat,
+      time: HHMM.test(draft.time) ? draft.time : "09:00",
+      every_minutes: 0,
+    };
+  }
+  const validInterval = Number.isInteger(draft.every_minutes) && draft.every_minutes >= MIN_EVERY && draft.every_minutes <= MAX_EVERY;
+  return {
+    ...draft,
+    repeat,
+    time: "",
+    weekdays: [],
+    every_minutes: validInterval ? draft.every_minutes : 30,
+  };
 }
 
 function selectedSource(draft: ScenarioDraft, catalogs: readonly ScenarioCatalog[] | null): ScenarioSource | undefined {

@@ -406,6 +406,7 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
       {scenario && <ScenarioTemplateDialog
         key={scenario.key}
         template={scenario}
+        readOptions={readOptions}
         onClose={() => setScenario(null)}
         onReview={(task) => {
           setScenario(null);

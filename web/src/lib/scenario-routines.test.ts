@@ -7,6 +7,7 @@ import {
   SCENARIO_TEMPLATES,
   scenarioProblem,
   scenarioSources,
+  withScenarioRepeat,
   withScenarioSource,
   type ScenarioCatalog,
   type ScenarioDraft,
@@ -127,18 +128,32 @@ describe("scenario routine templates", () => {
     expect(instantiateScenario(fallback, [])?.prompt).toContain(t("assistant-scenario-templates.read_only_safety"));
   });
 
-  it("rejects write-capable, partially capable, and disconnected catalogs", () => {
+  it("rejects write-capable, partially capable, rate-limited, and disconnected catalogs", () => {
     const unsafe = catalog("github", ["search", "read", "diff", "checks"], {
       sources: [{ id: "github", name: "GitHub", tools: tools(["search", "read", "diff", "checks"], false) }],
     });
     const partial = catalog("github", ["search"]);
     const disconnected = { ...github, status: "not_signed_in" };
-    for (const candidate of [unsafe, partial, disconnected]) {
+    const rateLimited = { ...github, status: "rate_limited" };
+    for (const candidate of [unsafe, partial, disconnected, rateLimited]) {
       const input = withScenarioSource(draft("pr-review"), "github");
       input.scope = "example/project";
       expect(scenarioProblem(input, [candidate])).toContain("GitHub");
       expect(instantiateScenario(input, [candidate])).toBeNull();
     }
+    expect(defaultScenarioDraft("pr-review", [rateLimited]).source).toBe("conversation");
+  });
+
+  it("normalizes daily and interval schedules across repeat switches", () => {
+    for (const key of ["inbox-triage", "pr-review"] as const) {
+      const daily = withScenarioRepeat(draft(key), "daily");
+      expect(daily).toMatchObject({ repeat: "daily", time: "09:00", every_minutes: 0 });
+      const backToInterval = withScenarioRepeat(daily, "interval");
+      expect(backToInterval).toMatchObject({ repeat: "interval", time: "", weekdays: [], every_minutes: 30 });
+    }
+    const clearedDaily = withScenarioRepeat(draft("daily-digest", { time: "", weekdays: WORKDAYS }), "interval");
+    expect(clearedDaily).toMatchObject({ repeat: "interval", time: "", weekdays: [], every_minutes: 30 });
+    expect(withScenarioRepeat(clearedDaily, "daily")).toMatchObject({ repeat: "daily", time: "09:00", every_minutes: 0 });
   });
 
   it("validates scope, repository shape, source ownership, and schedule", () => {

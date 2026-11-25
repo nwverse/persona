@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import { setToken } from "../../lib/api";
-import { resetManagerChoice } from "../../lib/manager-choice";
+import { chooseManager, MANAGER_HEADER, resetManagerChoice } from "../../lib/manager-choice";
 import type { Task } from "../../lib/routines";
 import type { ScenarioCatalog, ScenarioKey } from "../../lib/scenario-routines";
 import { getState } from "../../lib/store";
@@ -33,7 +33,7 @@ let root: Root;
 let catalogsReply: () => Response;
 let writes: Record<string, unknown>[];
 let created: Task[];
-let requests: { path: string; method: string }[];
+let requests: { path: string; method: string; manager: string | null }[];
 
 beforeEach(() => {
   resetManagerChoice();
@@ -46,7 +46,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     const method = init?.method ?? "GET";
-    requests.push({ path, method });
+    const headers = new Headers(init?.headers);
+    requests.push({ path, method, manager: headers.get(MANAGER_HEADER) });
     if (path === "/api/v1/assistant") return Promise.resolve(json({ conversations: [] }));
     if (path === "/api/v1/assistant/runs") return Promise.resolve(json({ runs: [] }));
     if (path === "/api/v1/subscriptions/catalog") return Promise.resolve(catalogsReply());
@@ -196,4 +197,35 @@ describe("scenario template UI", () => {
     expect(writes).toEqual([]);
     expect(requests.filter((request) => request.method !== "GET")).toEqual([]);
   });
+
+  it("scopes the capability catalog request to the same non-default manager as task creation", async () => {
+    chooseManager("m-2");
+    await act(async () => root.render(<Routines onToggleSidebar={() => {}} />));
+    await flush();
+    await openScenario("pr-review");
+    await change(t("assistant-scenario-templates.scope_label"), "example/project");
+    await review();
+    await add();
+    const catalogRead = requests.find((request) => request.path === "/api/v1/subscriptions/catalog" && request.method === "GET");
+    const taskWrite = requests.find((request) => request.path === "/api/v1/assistant/tasks" && request.method === "POST");
+    expect(catalogRead?.manager).toBe("m-2");
+    expect(taskWrite?.manager).toBe("m-2");
+  });
+
+  it.each(["inbox-triage", "pr-review"] as const)(
+    "normalizes interval minutes after switching %s to Daily and back to Interval",
+    async (key) => {
+      await act(async () => root.render(<Routines onToggleSidebar={() => {}} />));
+      await flush();
+      await openScenario(key);
+      if (key === "pr-review") await change(t("assistant-scenario-templates.source_label"), "conversation");
+      await change(t("assistant-scenario-templates.schedule_kind"), "daily");
+      await change(t("assistant-scenario-templates.schedule_kind"), "interval");
+      expect(field(t("assistant-scenario-templates.interval_label"))?.value).toBe("30");
+      await review();
+      await add();
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toMatchObject({ repeat: "interval", time: "", every_minutes: 30 });
+    },
+  );
 });
