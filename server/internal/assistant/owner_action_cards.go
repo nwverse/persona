@@ -177,22 +177,8 @@ func (s *Service) toolOwnerActionPrepare(ctx context.Context, machine, self stri
 			_ = s.syncOwnerActionBatch(context.Background(), batch.ID)
 		}
 	}()
-	// Register the batch and every item before projecting decisions. A second
-	// resumable waiter below is the original tool caller; the background waiter
-	// retains timeout cleanup if that caller goes away.
-	ready := make(chan struct{})
-	go func() { _, _ = s.waitInteractionReady(context.Background(), batchIX, nil, ready) }()
-	<-ready
-	// Close the registration race in either direction: an item decision may
-	// complete before the batch card exists, or a batch decision before an item
-	// card exists. Durable state is authoritative in both cases.
-	// Decision projection belongs to the durable proposal, not to the lifetime
-	// of whichever tool caller happens to be waiting for it.
 	syncCtx := context.WithoutCancel(ctx)
-	if err := s.syncOwnerActionBatch(syncCtx, batch.ID); err != nil && !errors.Is(err, errNotPending) {
-		return "", err
-	}
-	resolution, err := s.waitInteraction(ctx, batchIX)
+	resolution, err := s.waitOwnerActionBatch(ctx, batchIX)
 	if err == nil && !resolution.Dismiss {
 		if err := s.syncOwnerActionBatch(syncCtx, batch.ID); err != nil && !errors.Is(err, errNotPending) {
 			return "", err
@@ -232,6 +218,32 @@ func (s *Service) toolOwnerActionPrepare(ctx context.Context, machine, self stri
 		return "The batch has no remaining approved items. Execute nothing.", nil
 	}
 	return out.String(), nil
+}
+
+// Both waiters observe the same published card. A quick reply can retire it
+// before the original tool caller resumes; publishing its ID again would lose that reply.
+func (s *Service) waitOwnerActionBatch(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	type result struct {
+		resolution proto.Resolution
+		err        error
+	}
+	registered := make(chan *pending, 1)
+	finished := make(chan result, 1)
+	go func() {
+		r, err := s.waitRegisteredInteraction(context.Background(), ix, nil, func(p *pending) { registered <- p })
+		finished <- result{r, err}
+	}()
+	select {
+	case outcome := <-finished:
+		return outcome.resolution, outcome.err
+	case p := <-registered:
+		// An item decision may already be durable when the batch card is first published.
+		err := s.syncOwnerActionBatch(context.WithoutCancel(ctx), ix.ApprovalBatchID)
+		if err != nil && !errors.Is(err, errNotPending) {
+			return proto.Resolution{}, err
+		}
+		return s.await(ctx, p)
+	}
 }
 
 func ownerActionCardProof(ix proto.Interaction, source string) ownerReplyProof {

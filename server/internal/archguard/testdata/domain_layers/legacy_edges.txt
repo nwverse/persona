@@ -5,9 +5,10 @@
 # merge base's list lacks, unless a frozen import's package or path moved (python3 scripts/test/name_freezes.py moves
 # writes those).
 #
-# These packages predate the rules; their counts only fall; do not copy their shapes. Copy server/internal/domainkit and
-# the compliant twins in server/internal/archguard/testdata/domainrules/planted (agentref, assistant/fleetcount and
-# their adapters). assistant/chatsearch depends on impure packages (prompts, transcript, lazyre, compat, proto, the
+# These packages predate the rules; their counts only fall; do not copy their shapes. Copy server/internal/domainkit,
+# server/internal/agentref and its adapter, and the compliant twins in
+# server/internal/archguard/testdata/domainrules/planted (assistant/fleetcount and its adapter), or start with
+# python3 scripts/gen/new_domain_slice.py. assistant/chatsearch depends on impure packages (prompts, transcript, lazyre, compat, proto, the
 # SDK's wire and golang.org/x/text): its imports stay frozen here until it is converted.
 internal/assistant/chatsearch imports github.com/nwverse/persona/sdk/go/wire
 internal/assistant/chatsearch imports golang.org/x/text/unicode/norm

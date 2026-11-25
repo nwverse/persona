@@ -303,7 +303,6 @@
   "lib-assistant-view",
   "lib-attachments",
   "lib-auth",
-  "lib-channels",
   "lib-compaction",
   "lib-connection",
   "lib-connectors.telegram_open_title",

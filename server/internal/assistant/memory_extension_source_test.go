@@ -192,6 +192,80 @@ func TestMemoryExtensionCacheNoWaitAndGeneration(t *testing.T) {
 	}
 }
 
+// The public query handler applies explicit tags to mapped extension fields. Different terms can match across
+// fields, but every term is required. Category matches still pass through the conversation's visibility checks.
+func TestDecisionsQueryMemoryTags(t *testing.T) {
+	s, _, st, _ := memoryAssembleService(t)
+	s.memoryEntries = &memEntrySource{}
+	s.store = func() Store { return &entriesMemStore{infoCategoryMemStore: st} }
+	page := wire.MemoryEntriesResult{Tagged: true, Entries: []wire.MemoryEntry{
+		{ID: "qa-workflow", Text: "qa: release checks include a rollback rehearsal", Facet: "workflow", Subjects: []string{"project-alpha"}, Status: "active"},
+		{ID: "qa-unrelated", Text: "qa: prepare a weekly note", Facet: "judgement", Status: "active"},
+		{ID: "qa-finance", Text: "qa: private budget", Facet: "workflow", Categories: []string{categoryFinance}, OriginSpace: "qa-finance", Status: "active"},
+	}}
+	s.memoryExtension = &memExtensionSource{batch: memoryExtensionBatchOf([]wire.MemoryEntriesResult{page})}
+	for _, tc := range []struct{ tag, want string }{
+		{"workflow", "qa-workflow"}, {"WORKFLOW", "qa-workflow"}, {"judgement", "qa-unrelated"},
+		{"release rollback", "qa-workflow"}, {"  ROLLBACK \t RELEASE  ", "qa-workflow"},
+		{"project-al", "qa-workflow"}, {"project-al workflow rollback", "qa-workflow"},
+		{"release absent", ""}, {"nonexistent", ""}, {"finance", ""},
+	} {
+		t.Run(tc.tag, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"tag": tc.tag})
+			raw, err := s.toolEntries(t.Context(), "qa-machine", "qa-main", "decisions_query", args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out struct {
+				Memory []recalledMemory `json:"memory"`
+			}
+			if err := json.Unmarshal([]byte(raw), &out); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if len(out.Memory) != 0 {
+					t.Fatalf("unrelated or hidden entries returned: %s", raw)
+				}
+			} else if len(out.Memory) != 1 || out.Memory[0].ID != memoryExtensionIDPrefix+tc.want {
+				t.Fatalf("tag %q: %s", tc.tag, raw)
+			}
+		})
+	}
+	// An explicit category filter does not grant the category. Once granted, the mapped category is searchable.
+	if err := s.tagConversation(t.Context(), "qa-main", []string{categoryFinance}, infoTaggedByModel, ""); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := s.toolEntries(t.Context(), "qa-machine", "qa-main", "decisions_query", json.RawMessage(`{"tag":"FINANCE workflow"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Memory []recalledMemory `json:"memory"`
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Memory) != 1 || out.Memory[0].ID != memoryExtensionIDPrefix+"qa-finance" {
+		t.Fatalf("category recall: %s", raw)
+	}
+	for _, args := range []string{`{"tag":"workflow","by":"user"}`, `{"tag":"workflow","trust":"user_verbatim"}`, `{"tag":"workflow","status":"superseded"}`} {
+		raw, err := s.toolEntries(t.Context(), "qa-machine", "qa-main", "decisions_query", json.RawMessage(args))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Memory  []recalledMemory `json:"memory"`
+			Omitted string           `json:"memory_omitted"`
+		}
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Memory) != 0 || out.Omitted != "ledger_filters" {
+			t.Fatalf("filter semantics: %s", raw)
+		}
+	}
+}
+
 // decisions_query carries the memory extension's entries in its memory field: the main space's and general ones, on
 // the first page only, and none when a filter the extension's entries have no field for is asked.
 func TestDecisionsQueryMemoryField(t *testing.T) {
@@ -210,11 +284,16 @@ func TestDecisionsQueryMemoryField(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out struct {
-			Entries []proto.AssistantEntry `json:"entries"`
-			Memory  []recalledMemory       `json:"memory"`
+			Entries       []proto.AssistantEntry `json:"entries"`
+			Memory        []recalledMemory       `json:"memory"`
+			MemoryOmitted string                 `json:"memory_omitted"`
 		}
 		if err := json.Unmarshal([]byte(raw), &out); err != nil || out.Entries == nil {
 			t.Fatalf("decisions_query = %s (%v)", raw, err)
+		}
+		wantOmitted := args == `{"by":"user"}` || args == `{"trust":"user_verbatim"}` || args == `{"status":"superseded"}`
+		if (out.MemoryOmitted == "ledger_filters") != wantOmitted {
+			t.Errorf("%s: memory_omitted = %q", args, out.MemoryOmitted)
 		}
 		var ids []string
 		for _, m := range out.Memory {
