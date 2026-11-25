@@ -108,29 +108,28 @@ describe("a sidebar row's ⋯", () => {
     expect(label(session())).toBe("关联到待办…");
     expect(label(session({ todo: { id: "t1", title: "发版" } } as Partial<Session>))).toBe("改挂到其他待办…");
   });
-  it("offers 关闭… and 实时接入 when the chat's ⋯ does (#3405, #7125)", () => {
+  it("offers Delete on idle chats and keeps live attach independent (#3405, #7125)", () => {
     const keys = (s: Session) => agentRowMenuItems(s, { pinned: false, muted: false, onRename: () => {}, onDelete: () => {} }).map((i) => i.key);
-    expect(keys(session())).toContain("close");
-    expect(keys(session({ state: "offline", status: "offline" }))).not.toContain("close");
-    expect(keys(session({ assistant: true } as Partial<Session>))).not.toContain("close");
+    expect(keys(session())).toContain("delete");
+    expect(keys(session())).not.toContain("close");
+    expect(keys(session({ state: "offline", status: "offline" }))).toContain("delete");
+    expect(keys(session({ assistant: true } as Partial<Session>))).not.toContain("delete");
     const live = { source_kind: "codex_app_server", capabilities: { attach: true } } as Partial<Session>;
-    expect(keys(session(live))).toContain("attach");
-    expect(keys(session(live))).not.toContain("close"); // no terminal capability
-    expect(keys(session({ ...live, attached: true } as Partial<Session>))).not.toContain("attach");
+    expect(keys(session(live))).toEqual(expect.arrayContaining(["attach", "delete"]));
+    expect(keys(session({ ...live, attached: true }))).not.toContain("attach");
     expect(keys(session())).not.toContain("attach");
   });
-  it("offers 重命名 and 关闭… on a runtime's session where its node says so (#6294)", () => {
+  it("keeps runtime Rename opt-in and allows deletion without close support (#6294)", () => {
     const keys = (s: Session) => agentRowMenuItems(s, { pinned: false, muted: false, onRename: () => {}, onDelete: () => {} }).map((i) => i.key);
-    const paseo = { source_kind: "runtime", agent: "claude", capabilities: { read: true, send: true, interrupt: true, approve: true, close: true, rename: true } } as Partial<Session>;
-    expect(keys(session(paseo))).toEqual(expect.arrayContaining(["rename", "close"]));
-    const refused = keys(session({ ...paseo, capabilities: { read: true, send: true, close: false, rename: false } } as Partial<Session>));
-    expect(refused).not.toContain("rename");
-    expect(refused).not.toContain("close");
-    // an older node says neither: a source keeps neither, as before
-    const older = keys(session({ ...paseo, capabilities: { read: true, send: true } } as Partial<Session>));
-    expect(older).not.toContain("rename");
-    expect(older).not.toContain("close");
-    expect(keys(session())).toEqual(expect.arrayContaining(["rename", "close"])); // the user's own Agent keeps both
+    const runtime = { source_kind: "runtime", agent: "claude" } as Partial<Session>;
+    const allowed = keys(session({ ...runtime, capabilities: { read: true, send: true, close: true, rename: true } }));
+    expect(allowed).toEqual(expect.arrayContaining(["rename", "delete"]));
+    expect(allowed).not.toContain("close");
+    for (const capabilities of [{ read: true, send: true, close: false, rename: false }, { read: true, send: true }]) {
+      const actions = keys(session({ ...runtime, capabilities }));
+      expect(actions).not.toContain("rename");
+      expect(actions).toContain("delete");
+    }
   });
   it("offers 删除对话 on a finished or seen desktop thread, which has no terminal to close it from", () => {
     const thread = { source_kind: "codex_app_server", capabilities: { read: true, send: true } } as Partial<Session>;
