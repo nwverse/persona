@@ -91,6 +91,7 @@ it("searches name/description locally, disambiguates equal names, selects with k
   expect(tokens()[0].title).toBe("project · .");
   expect(getContexts("skill-test")).toHaveLength(0);
   await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="发送"]')!.click());
+  await vi.waitFor(() => expect(onSend).toHaveBeenCalledOnce());
   expect(onSend.mock.calls[0][0].text).toContain('kind="skill" title="review" url="" ref="a"');
   expect(parseUserText(onSend.mock.calls[0][0].text).text).toBe("Check review please");
   expect(localStorage.getItem("draft:skill-test") ?? "").toBe("");
