@@ -193,7 +193,7 @@ function HandoffFullTextButton({ size, state, onClick }: { size: number; state: 
       disabled={loading}
       aria-busy={loading || undefined}
       className={cx(
-        "mt-1.5 flex h-7 w-fit items-center gap-1.5 rounded-control px-1 font-sans text-[12.5px] font-medium whitespace-nowrap transition-colors hover:bg-hover disabled:opacity-60",
+        "mt-1.5 flex h-7 w-fit items-center gap-1.5 rounded-control px-1 font-sans text-label font-medium whitespace-nowrap transition-colors hover:bg-hover disabled:opacity-60",
         state === "failed" ? "text-red" : "text-accent-ink",
       )}
       data-full-text={state}
