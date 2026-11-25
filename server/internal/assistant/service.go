@@ -315,6 +315,8 @@ type Service struct {
 	prEventRoute   prEventRouteBook  // pr_status_route.go: opt-in direct PR-event routing dedupe
 	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
 
+	topicFollowups topicFollowupBook // topic_followup.go: activity in already linked task topics
+
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
 	repoMirrors      repoMirrorSyncState     // repo_mirrors.go: opt-in low-frequency periodic mirror sync

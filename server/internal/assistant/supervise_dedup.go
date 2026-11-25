@@ -28,7 +28,7 @@ type superviseFingerprint struct {
 }
 
 func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, string) {
-	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout {
+	if g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigTopicFollowup {
 		// One durable wake per to-do and canonical prerequisite/children set, independent of restarts or sweeps.
 		key, _ := json.Marshal([]string{g.Todo, g.Kind})
 		sum := sha256.Sum256([]byte(g.Key))
@@ -250,7 +250,7 @@ func (s *Service) ackSupervisionDedupLocked(ctx context.Context, signals []super
 	next := maps.Clone(history)
 	changed := false
 	for _, g := range signals {
-		stable := g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo ||
+		stable := g.Kind == sigTopicFollowup || g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPRMerged || g.Kind == sigNeedsUserExternalInfo ||
 			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 		if !stable {
 			// Unmarked legacy deliveries retain their established acknowledgment path.

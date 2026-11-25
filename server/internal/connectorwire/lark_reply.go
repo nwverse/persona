@@ -37,3 +37,24 @@ type LarkReplyObservation struct {
 	Reply     LarkReplyMessage `json:"reply"`
 	CheckedAt time.Time        `json:"checked_at"`
 }
+
+// LarkTopicWatch observes activity in an already linked topic, not a reply to a particular request.
+// Identity is empty only when establishing the binding's configured source for the first time.
+type LarkTopicIdentity struct {
+	Brand         string `json:"brand"`
+	AppID         string `json:"app_id"`
+	AccountOpenID string `json:"account_open_id"`
+}
+
+type LarkTopicWatch struct {
+	Identity LarkTopicIdentity `json:"identity"`
+	ChatID   string            `json:"chat_id"`
+	ThreadID string            `json:"thread_id"`
+	Since    time.Time         `json:"since"`
+}
+
+type LarkTopicObservation struct {
+	Watch     LarkTopicWatch     `json:"watch"`
+	Messages  []LarkReplyMessage `json:"messages"`
+	CheckedAt time.Time          `json:"checked_at"`
+}
