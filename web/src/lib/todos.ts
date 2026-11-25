@@ -105,6 +105,82 @@ export interface TodoRepoGate {
   reason?: string;
 }
 
+/** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
+export type TodoBoardSectionKey =
+  | "needs_you"
+  | "in_progress"
+  | "pending_review"
+  | "waiting"
+  | "someday"
+  | "done"
+  | (string & {});
+
+/** One top-level entry in a server-computed status group, with optional folded/surfaced child IDs (#15774). */
+export interface TodoBoardEntry {
+  todo_id: string;
+  folded_child_ids?: string[];
+  surfaced_child_ids?: string[];
+  folded_count?: number;
+}
+
+/** One server-computed status group in `board.status_groups` (#15774). */
+export interface TodoBoardStatusGroup {
+  key: TodoBoardSectionKey;
+  total_count: number;
+  visible_count: number;
+  entries: TodoBoardEntry[];
+}
+
+/** Per-direction counts in `board.direction_groups` (#15774). */
+export interface TodoBoardDirectionCounts {
+  needs_you: number;
+  in_progress: number;
+  pending_review: number;
+  waiting: number;
+  done: number;
+  total: number;
+}
+
+/** One server-computed direction group in `board.direction_groups` (#15774). */
+export interface TodoBoardDirectionGroup {
+  direction_id: string;
+  label?: string;
+  counts: TodoBoardDirectionCounts;
+  todo_ids: string[];
+}
+
+/** One node in the server-computed By-to-do sidebar tree (`board.sidebar_tree`, #15774). */
+export interface TodoBoardSidebarNode {
+  todo_id: string;
+  section: TodoBoardSectionKey;
+  item_type: "personal" | "task" | (string & {});
+  direction_id?: string;
+  child_ids?: string[];
+  surfaced_child_ids?: string[];
+  folded_count: number;
+  needs_you_count: number;
+  active_count: number;
+}
+
+/** Global section and open totals in `board.counts` (#15774). */
+export interface TodoBoardCounts {
+  needs_you: number;
+  in_progress: number;
+  pending_review: number;
+  waiting: number;
+  someday: number;
+  done: number;
+  open_total: number;
+}
+
+/** Complete server-owned board projection tree returned by GET /api/v1/todos under todos_v2=true (#15774, #15800). */
+export interface TodoBoardProjection {
+  status_groups: TodoBoardStatusGroup[];
+  direction_groups: TodoBoardDirectionGroup[];
+  sidebar_tree: TodoBoardSidebarNode[];
+  counts: TodoBoardCounts;
+}
+
 export interface Todo {
   id: string;
   title: string;
@@ -146,6 +222,8 @@ export interface Todo {
   kind?: string;
   /** Additive audience metadata (#14619): "human" (personal to-do), "autonomous" (agent task), or unset for legacy rows. */
   audience?: string;
+  /** Server-derived item classification (#15758): "personal" or "task"; unset on older hubs. */
+  item_type?: "personal" | "task" | (string & {});
   /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */
   done_by?: string;
   done_reason?: string;

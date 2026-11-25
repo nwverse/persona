@@ -270,6 +270,7 @@ func (h *Hub) resumeDevelopmentWriters() {
 	h.live.resumeWrites()
 	h.wakeClientOps()
 	h.push.resumeWrites()
+	h.resumePushGradingLayerReconcile()
 	h.resumePersonaTiers()
 	h.resumeMeshPersist()
 	h.resumeAssistantProfile()
