@@ -23,6 +23,8 @@ type Store interface {
 	PutSetting(ctx context.Context, key string, v any) error
 
 	PutPlacement(context.Context, db.PlacementRow) error
+	// PutModelRouting records which candidate of a model profile's tier a dispatch ran on (tier_pick.go).
+	PutModelRouting(context.Context, db.ModelRoutingRow) error
 
 	// The plans the assistant handed the user (task_plan).
 	CreateTaskPlan(ctx context.Context, p db.TaskPlanRow) error

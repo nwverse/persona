@@ -60,7 +60,7 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_just_finished", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                (["sessions_list", "sessions_lookup"] + (["sessions_hierarchy"] if NET["hierarchy"] else []) + ["sessions_todo", "sessions_quick_filters", "sessions_just_finished", "sessions_agents_only"]) if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
@@ -478,6 +478,7 @@ for _mid in filter(None, os.environ.get("MOCK_OFFLINE_MACHINES", "").split(","))
     for _m in MACHINES:
         if _m["id"] == _mid:
             _m.update(online=False, error="ssh: connect to host %s port 22: Operation timed out" % _mid, last_seen=ago(hours=1))
+# Load-queue selection and its help text live in machine_load_mock (a registered mock domain, #12519).
 # MOCK_LONG_OS=1: the server's OS has a long name, so its card's chips (OS, herdr, claude) do not fit on one line.
 if os.environ.get("MOCK_LONG_OS"):
     SYSTEMS["server"]["name"] = "Example GNU/Linux 2 (codename)"
@@ -546,6 +547,7 @@ def metric_at(mid, t):
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
+    cpu, load = machine_alerts.queued(mid, cpu, load, sys_["cores"], h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
     if concern_level == "critical":
         disk_frac = 0.95
@@ -865,6 +867,16 @@ SESSIONS = [
     sess("macbook", RECIPE, "菜谱网站加搜索", "/Users/me/code/recipes", "offline", "offline", "", 0, "", 0, 60 * 26,
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
+
+# MOCK_CODEX_ROUTE=terminal: the Codex agent is a Codex 0.169 or later in its pane, so it offers its model and thinking
+# effort as an app-server thread does (#12572, docs/integrations/codex.md "On the terminal route"): capabilities.model
+# and the efforts of the model it runs; the node types Codex's own /model to apply a pick.
+if os.environ.get("MOCK_CODEX_ROUTE") == "terminal":
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(launcher="codex", effort="medium", efforts=["low", "medium", "high", "xhigh"],
+                      capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True,
+                                    "modes": False, "model": True})
 
 if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
     for _s in SESSIONS:
@@ -2157,10 +2169,10 @@ def mock_png(w=96, h=64):
 
 
 # MOCK_PERSONA_QUEUE=1 (#4342): the first Persona chat is at work with two of the user's messages queued (the second
-# went with a photo, so its words are the apps' stand-in) and one from another conversation, which the assistant holds
-# until the turn ends (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
+# went with a photo, so its words are the apps' stand-in) and one from another conversation, kept for its next
+# message (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
 QUEUED_PHOTOS = {"请看图片": [{"mime": "image/png", "data": mock_png()}]}
-PERSONA_QUEUE_MESSAGES = ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」：会议纪要整理好了，要不要发给参会的人？"]
+PERSONA_QUEUE_MESSAGES = ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」（不唤醒）：会议纪要整理好了，要不要发给参会的人？"]
 if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
@@ -4252,7 +4264,7 @@ def recording_minutes_next(rid):
 
 
 def minutes_span(body):
-    """`when`, `start` and `end` as the hub writes them (server/internal/kb/minutes.go `minutesWhen`, #4713): the recording's
+    """`when`, `start` and `end` as the hub writes them (server/internal/modules/recording/writers/minutes.go `minutesWhen`, #4713): the recording's
     own start to its end (`duration`, or `ended_at` when later; at least a minute) in the local zone. `when` adds the end's
     date when it is another day; `start` / `end` are RFC 3339 with the offset, whole seconds, for the apps to format."""
     def at(v):
@@ -4484,7 +4496,7 @@ def minutes_overview(m, segs, lang):
 
 
 def minutes_markdown(m, body, lang, ov=None):
-    """minutes.md as the hub writes it (kb/minutes.go renderMinutes): with clock times in the local zone, sections with
+    """minutes.md as the hub writes it (modules/recording/writers/minutes.go renderMinutes): with clock times in the local zone, sections with
     nothing left out, the fixed words from the hub's kb-minutes.json in the minutes' language. With the overview ov (the
     overview shape's; a malformed one is never laid out) it follows the contract's "Markdown" (#6563): the headline, the
     core conclusions, the topics under their group headings (or as the sections with one untitled group) with decisions
@@ -7530,6 +7542,7 @@ def recordings_route_locked(h, method, p):
             detail = dict(KB_DETAIL[("recordings", rid)], kind="recordings", id=rid,
                           path="/home/me/.persona/data/recordings/" + rid)
             out = {"detail": detail}
+            if not os.environ.get("MOCK_LEGACY_HUB"): out["supports_expected_pinned"] = True
             word = parse_qs(urlparse(h.path).query).get("q", [""])[0]
             if word: out["matches"] = day_recap_matches(rid, word)
             return h.send_json(out) or True
@@ -12091,6 +12104,7 @@ _CLAUDE_DIRS = [("~/.claude", "default", 0, 86), ("~/.config/claude/work", "conf
 # not there at all, as a node that blocks them lists none (#10053). A change pushes that computer's rows and replays
 # its pending cards, as the manager does; the cards never leave the inventory.
 AGENT_DIRS_HIDDEN = {}
+AGENT_DIRS_RULE_LOCK = threading.RLock()
 AGENT_DIRS_FAIL = {"n": 0}  # GET /mock/agent_dirs_fail?n=<count>: the next n reads of the list answer 503
 
 
@@ -12119,11 +12133,19 @@ def _hidden_by_directory(mid, cwd, action="hide"):
 
 
 def _agent_dirs_hidden_state(mid):
-    return {"rules": AGENT_DIRS_HIDDEN.get(mid, []), "home": _machine_home(mid)}
+    return {"rules": AGENT_DIRS_HIDDEN.get(mid, []), "home": _machine_home(mid),
+            **({} if os.environ.get("MOCK_LEGACY_HUB") else {"supports_expected_rules": True})}
 
 
 def _set_agent_dirs_hidden(mid, body):
     """PUT …/agent-dirs/hidden: the whole list, checked as the manager checks it; (state, None) or (None, error)."""
+    with AGENT_DIRS_RULE_LOCK:
+        if "expected_rules" in body and body["expected_rules"] != AGENT_DIRS_HIDDEN.get(mid, []):
+            return None, "agent directory rules changed"
+        return _apply_agent_dirs_hidden(mid, body)
+
+
+def _apply_agent_dirs_hidden(mid, body):
     rules = []
     for r in body.get("rules") or []:
         pat = (r.get("pattern") or "").strip()
@@ -18804,7 +18826,8 @@ MODES_LOG = []  # POST …/modes requests, GET /mock/modes (the model picker's a
 
 
 def all_sessions():
-    rows = fold_hierarchy([decorated_session(s) for s in (SESSIONS + ASSISTANT)])
+    raw = [decorated_session(s) for s in (SESSIONS + ASSISTANT)]
+    rows = fold_hierarchy(raw) if NET["hierarchy"] else raw
     if not AGENT_DIRS_HIDDEN:
         return rows
     return [dict(r, hidden_by_directory=True) if not r.get("assistant") and _hidden_by_directory(r["machine_id"], r.get("cwd")) else r
@@ -20329,7 +20352,8 @@ def span(items, frm=None, to=None):
 #   GET /mock/delay?s=3   the same, from now on (0 turns it off)
 #   GET /mock/down?s=8    the hub is gone for that long: open WebSockets drop, new connections are closed unanswered
 #   GET /mock/reject?s=8  this device's credential is revoked for that long: open WebSockets drop, handshakes answer 401
-NET = {"delay": float(os.environ.get("MOCK_DELAY", "0")), "down_until": 0.0, "reject_until": 0.0}
+#   GET /mock/hierarchy?on=0|1  disable/enable sessions_hierarchy folding (folded_under), for pre-hierarchy client fallback tests
+NET = {"delay": float(os.environ.get("MOCK_DELAY", "0")), "down_until": 0.0, "reject_until": 0.0, "hierarchy": True}
 
 # ---------- frames lost, doubled, late or out of order (#1073) ----------
 # POST /mock/wire {"rules": [{"type": "items", "action": "drop" | "dup" | "delay" | "hold", "ms": 1500, "count": 1,
@@ -20436,8 +20460,10 @@ def case_route(h, method, p, q, body):
             case_json(h, {"error": str(e)}, 400)
             return True
         CASE.close()
-        # "now": its times moved to the present, for an app on the real clock (the iOS simulator's)
-        CASE = sync_case.CaseHub(case, shift=sync_case.shift_to(time.time()) if asked.get("now") else 0)
+        # "now": move fixture times to the present for an app on the real clock (the iOS simulator's).
+        live_time = time.time if asked.get("now") else None
+        shift = sync_case.shift_to(live_time()) if live_time else 0
+        CASE = sync_case.CaseHub(case, shift=shift, live_time=live_time)
         case_json(h, CASE.state())
         return True
     if method == "GET" and MOCK_WEB and not p.startswith(("/api/", "/mock/")):
@@ -21977,9 +22003,12 @@ def file_streamed(f, q):
 
 
 def net_control(path, q):
-    """Handles /mock/delay, /mock/down and /mock/reject; True if it was one of them."""
+    """Handles /mock/delay, /mock/down, /mock/reject and /mock/hierarchy; True if it was one of them."""
     if path == "/mock/delay":
         NET["delay"] = float(q.get("s", ["0"])[0])
+        return True
+    if path == "/mock/hierarchy":
+        NET["hierarchy"] = q.get("on", ["1"])[0] != "0"
         return True
     if path == "/mock/down":
         NET["down_until"] = time.time() + float(q.get("s", ["5"])[0])
@@ -27392,6 +27421,7 @@ class H(BaseHTTPRequestHandler):
                       "summary": e.get("one_line")}, **KB_DETAIL.get((kind, e["id"]), {}))
             if kind == "recordings": d["meta"] = meeting_detail_meta(e["id"], d.get("meta") or {})
             out = {"detail": d}
+            if kind == "recordings" and not os.environ.get("MOCK_LEGACY_HUB"): out["supports_expected_pinned"] = True
             word = (q.get("q") or [""])[0]
             if word:
                 ms = [{"path": "%s/%s/summary.md" % (kind, e["id"]), "n": i + 1, "line": l.strip()}
@@ -28260,27 +28290,33 @@ class H(BaseHTTPRequestHandler):
             if os.environ.get("MOCK_KB_SAVE_FAIL") == "1": return self.send_json({"error": "知识库暂时写不进去"}, 502)
             kind, eid = p.split("/")[4:6]
             body = json.loads(self.last_body or b"{}")
-            e = next((e for e in KB.get(kind, []) if e["id"] == eid), None)
-            if e is None: return self.send_json({"error": "not found"}, 404)
-            for k in ("importance", "relevance", "tags"):
-                if k in body: e[k] = body[k]
-            if kind == "projects" and ("status" in body or "project_kind" in body):
-                pk, st = (e.get("extra") or "short · active").split(" · ")
-                e["extra"] = "%s · %s" % (body.get("project_kind") or pk, body.get("status") or st)
-            meta = KB_DETAIL.get((kind, eid), {}).get("meta")
-            if meta is not None:
-                meta.update({k: e[k] for k in ("importance", "relevance", "tags") if k in e})
-                if kind == "projects": meta["kind"], meta["status"] = e["extra"].split(" · ")
-            if isinstance(body.get("pinned"), str):  # confirmed facts: "" clears them
-                m = kb_meta(kind, eid)
-                if body["pinned"]: m["pinned"] = body["pinned"]
-                else: m.pop("pinned", None)
-            lock = body["lock_lists"] if "lock_lists" in body else body.get("lock") is not False
-            for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
-                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid, lock)
-            for field, lst in (("allow_people", "people"), ("allow_chats", "chats"), ("allow_projects", "projects")):
-                for oid in body.get(field) or []: kb_allow(kind, eid, lst, oid)
-            KB_UPDATES.append({"kind": kind, "id": eid, **body})
+            with RECORDINGS_LOCK:
+                e = next((e for e in KB.get(kind, []) if e["id"] == eid), None)
+                if e is None: return self.send_json({"error": "not found"}, 404)
+                if "expected_pinned" in body:
+                    if kind != "recordings" or not isinstance(body.get("pinned"), str) or not isinstance(body["expected_pinned"], str):
+                        return self.send_json({"error":"expected_pinned requires a recording pinned update"},400)
+                    if body["expected_pinned"] != (kb_meta(kind,eid) or {}).get("pinned", ""):
+                        return self.send_json({"error":"conflict"},409)
+                for k in ("importance", "relevance", "tags"):
+                    if k in body: e[k] = body[k]
+                if kind == "projects" and ("status" in body or "project_kind" in body):
+                    pk, st = (e.get("extra") or "short · active").split(" · ")
+                    e["extra"] = "%s · %s" % (body.get("project_kind") or pk, body.get("status") or st)
+                meta = KB_DETAIL.get((kind, eid), {}).get("meta")
+                if meta is not None:
+                    meta.update({k: e[k] for k in ("importance", "relevance", "tags") if k in e})
+                    if kind == "projects": meta["kind"], meta["status"] = e["extra"].split(" · ")
+                if isinstance(body.get("pinned"), str):  # confirmed facts: "" clears them
+                    m = kb_meta(kind, eid)
+                    if body["pinned"]: m["pinned"] = body["pinned"]
+                    else: m.pop("pinned", None)
+                lock = body["lock_lists"] if "lock_lists" in body else body.get("lock") is not False
+                for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
+                    for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid, lock)
+                for field, lst in (("allow_people", "people"), ("allow_chats", "chats"), ("allow_projects", "projects")):
+                    for oid in body.get(field) or []: kb_allow(kind, eid, lst, oid)
+                KB_UPDATES.append({"kind": kind, "id": eid, **body})
             return self.send_json({"ok": True})
         if os.environ.get("MOCK_LARK_NATIVE_OLK") and (p == "/test/lark-encryption/reset" or p == "/api/v1/lark/encryption/unlock" or p.endswith(("/encryption/covers", "/encryption/prepare", "/encrypted-messages"))):
             body = json.loads(self.last_body or b"{}")
@@ -29181,7 +29217,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         if p.startswith("/api/v1/machines/") and p.endswith("/agent-dirs/hidden") and self.command == "PUT":
             state, err = _set_agent_dirs_hidden(p.split("/")[4], json.loads(self.last_body or b"{}"))
-            return self.send_json({"error": err} if err else state, 400 if err else 200)
+            return self.send_json({"error": err} if err else state, 409 if err == "agent directory rules changed" else 400 if err else 200)
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs/blocked") and self.command == "PUT":
             body, mid = json.loads(self.last_body or b"{}"), p.split("/")[4]
             pats = []

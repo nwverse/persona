@@ -134,7 +134,8 @@ type assistantProc struct {
 	manual        bool // an explicit /compact (manual or idle-aware delivery): its end is reported
 	requested     bool // its first request was logged
 	// release: the main conversation's release policy as the reaper last read it from its record (assistant_reap.go).
-	release assistantRelease
+	release           assistantRelease
+	releaseCompaction bool // the main-chat compaction before releasing the process reports its end
 	// tui: started as interactive Claude Code through `personad assistant-tui` (assistant_tui.go). tuiNote: why it
 	// runs claude -p although interactive was asked for (the bridge fell back, or a recent fallback holds new starts
 	// off); "" when it runs as asked.
@@ -169,9 +170,12 @@ type assistantProc struct {
 	// (workingLocked).
 	lifecycle bool
 
-	// owner: the Node that took it over from an earlier connection of a resident node (assistant_keep.go); nil: the
-	// one that started it.
+	// owner: the Node that started it, or the one that took it over from an earlier connection of a resident node
+	// (assistant_keep.go); nil in synthetic tests that never went through spawn.
 	owner atomic.Pointer[Node]
+	// stopped: stop() has been invoked on this process, so its exit waiter sweeps any straggler descendants from its
+	// process group before dropping it from liveAssistants and closing exited.
+	stopped atomic.Bool
 
 	// round: it runs a round of the background supervisor, resumed at the end of the conversation's first turn
 	// (assistant_round.go). It is never compacted when idle: that would cut the first turn off the chain the next
@@ -691,6 +695,9 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	asked := ""
 	if agent == "claude" {
+		if _, err := n.resolveClaudeModelArg(ctx, launcher, execution.Model); err != nil {
+			return "", err
+		}
 		asked = n.startProfile(executionOption(options).ConfigDir, guestKind, resume)
 		execution.ConfigDir, err = n.assistantProfileSelection(ctx, id, launcher, asked, resume)
 		if err != nil {
@@ -963,6 +970,14 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 			return "", err
 		}
 	}
+	if title, preparing := ctx.Value(segmentTitleKey{}).(string); preparing && p.cx != nil {
+		// Codex writes the empty rollout when named. The receipt must remain resumable after idle release.
+		if err := p.cx.call(ctx, "thread/name/set", map[string]any{"threadId": id, "name": title}, nil); err != nil {
+			n.logf("assistant %s: could not persist prepared Codex thread: %v", short(id), err)
+			n.stopAssistantProcess(id)
+			return "", refusal("missing_generation", i18n.T(i18n.From(ctx), "assistant-conversation_segments.missing_generation"), nil)
+		}
+	}
 	if startTier != "" {
 		// Acknowledge the native setting before persisting or exposing the new conversation. This process is either a
 		// cold start or an adopted spare, so a refusal must stop it rather than leave an unused conversation behind.
@@ -1096,7 +1111,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if strings.TrimSpace(text) != "" || len(images) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
-	in := assistantInput{text: text, images: images, content: content}
+	in := assistantInput{text: text, images: images, content: content, supervision: ctx.Value(supervisionDeliveryKey{}) == true}
 	startAttemptsAt := time.Now()
 	if fresh && !p.born.IsZero() {
 		startAttemptsAt = p.born
@@ -1318,12 +1333,19 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			ParentToolUseID *string                     `json:"parent_tool_use_id"`
 			IsError         bool                        `json:"is_error"`
 			Result          string                      `json:"result"`
+			Errors          json.RawMessage             `json:"errors"`
 			Reason          string                      `json:"reason"` // tuiFallbackSubtype: why interactive did not start
 			ModelUsage      map[string]claudeModelUsage `json:"modelUsage"`
 		}
-		if json.Unmarshal(line, &ev) != nil {
+		if err := json.Unmarshal(line, &ev); err != nil {
 			p.invalidateUpdateTasks()
-			continue
+			// A field of another type than the node reads (a gateway's token count as a string, say) fails the line
+			// but not the fields around it, which are decoded all the same. A turn's end is still its end: dropped,
+			// the conversation stayed working until its next turn ended (#14351).
+			var mismatch *json.UnmarshalTypeError
+			if ev.Type != "result" || !errors.As(err, &mismatch) {
+				continue
+			}
 		}
 		if p.round && ev.SessionID != "" && ev.SessionID != p.id && validID(ev.SessionID) {
 			n.noteRoundFork(ev.SessionID, p.id)
@@ -1379,12 +1401,12 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				n.forgetCacheWarm(p.id)
 				p.mu.Lock()
 				p.context = ev.Compact.Post
-				manual := p.manual
-				p.manual = false
+				report := p.manual || p.releaseCompaction
+				p.manual, p.releaseCompaction = false, false
 				p.mu.Unlock()
 				n.recordIdleCompactionContext(p.id, ev.Compact.Post)
 				n.contextCompacted(p.id)
-				if manual {
+				if report {
 					n.compactionEnded(p.id, "")
 				}
 				continue
@@ -1508,9 +1530,9 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 				}
 			}
 			p.mu.Lock()
-			manual := p.manual
+			reportCompaction := p.manual || p.releaseCompaction
 			contextTokens := p.context
-			p.manual = false
+			p.manual, p.releaseCompaction = false, false
 			window := reportedWindow(ev.ModelUsage, p.replyModel)
 			changed, idleAt := p.followWindow(window), p.compactIdleAt
 			p.compacting = false
@@ -1532,8 +1554,10 @@ func (n *Node) readAssistant(p *assistantProc, r io.Reader) {
 			if changed {
 				n.logger.Printf("assistant %s: the model's window is %d tokens, idle compaction at %d", p.id[:8], window, idleAt)
 			}
-			if manual { // an explicit /compact ended without a boundary: it did not compact
-				n.compactionEnded(p.id, compactFailure(ev.IsError, ev.Result))
+			if reportCompaction { // /compact ended without a boundary
+				var details []string
+				_ = json.Unmarshal(ev.Errors, &details)
+				n.compactionEnded(p.id, compactFailure(ev.IsError, ev.Result, details...))
 			}
 			if f, err := n.file(p.id); err == nil {
 				n.refresh(p.id, f)

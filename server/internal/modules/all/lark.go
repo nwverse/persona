@@ -3,6 +3,7 @@
 package all
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/nwverse/persona/server/internal/botcard"
@@ -20,8 +21,11 @@ import (
 // (internal/cliport), which the extension host drives, and its assistant layer, the outbound channel port the
 // assistant reaches the owner's chat through (internal/larkhost).
 func init() {
-	modules = append(modules, lark.Module{})
-	botport.Provide(botport.Provider{
+	modules = append(modules, lark.NewModule(func(ctx context.Context) *lark.Layer {
+		l, _ := larkhost.LayerFrom(ctx).(*lark.Layer) // nil: no layer of this build's module on the request
+		return l
+	}))
+	botport.Provide(lark.Module{}.Info().ID, botport.Provider{
 		New: func(appID, appSecret, domain string, h *http.Client) botport.Client {
 			c := feishubot.New(appID, appSecret, domain)
 			if h != nil {
@@ -40,8 +44,8 @@ func init() {
 			return r
 		},
 	})
-	larkhost.Provide(func(h larkhost.Host) larkhost.Layer { return lark.New(h) })
-	cliport.Provide(cliport.Provider{
+	larkhost.Provide(lark.Module{}.Info().ID, func(h larkhost.Host) larkhost.Layer { return lark.New(h) })
+	cliport.Provide(lark.Module{}.Info().ID, cliport.Provider{
 		NewRunner:    func(cfg cliwire.Config) cliport.Runner { return larkcli.New(cfg) },
 		NewConnector: func(cfg cliwire.Config) cliport.Connector { return larkconnector.New(cfg) },
 	})
