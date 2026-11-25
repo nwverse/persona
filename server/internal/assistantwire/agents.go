@@ -255,6 +255,8 @@ const (
 	MethodAgentResumeParams = "agents.resume_params"
 	// MethodAgentTabName: {prompt} → {name}: a herdr tab's name for an Agent started with prompt ("" when none).
 	MethodAgentTabName = "agents.tab_name"
+	// EventAgentTabNameStarted: AgentTabNameStart, one way: a start has its session, so its model name can finish off the caller's path.
+	EventAgentTabNameStarted = "agents.tab_name_started"
 	// EventSessionSeen: SessionSeen, one way: the user looked at a session in an app.
 	EventSessionSeen = "session.seen"
 )
@@ -267,6 +269,16 @@ type AgentStartParams struct {
 	Params    map[string]any `json:"params"`
 	NameFrom  string         `json:"name_from,omitempty"`
 	Lang      string         `json:"lang,omitempty"`
+}
+
+// AgentTabNameStart is agents.tab_name_started's params: the started session and the placeholder its tab still has to
+// carry before the late automatic name may replace it. NameFrom is the prompt or name hint, without project context.
+type AgentTabNameStart struct {
+	MachineID       string `json:"machine_id"`
+	SessionID       string `json:"session_id"`
+	TabID           string `json:"tab_id"`
+	ExpectedTabName string `json:"expected_tab_name"`
+	NameFrom        string `json:"name_from"`
 }
 
 // AgentResumeParams is agents.resume_params's params: Params are the message's (the node's session.send; the hub
