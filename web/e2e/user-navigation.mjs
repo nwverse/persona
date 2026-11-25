@@ -557,17 +557,18 @@ async function many(browser, theme) {
       await landed(page, 0);
       await check(`${name}: the rail's wheel scrolls its own track`, async () => {
         const count = await page.locator(`${RAIL} button[data-tick]`).count();
-        const box = await tick(page, 0).boundingBox();
-        assert.ok(box, "The windowed rail has a real wheel target");
+        const box = await track.boundingBox();
+        assert.ok(box, "The rail has a visible wheel target");
+        await page.waitForFunction(() => document.querySelector("[data-nav-track]").scrollTop === 0);
         const before = await page.locator(CHAT).evaluate((sc) => sc.scrollTop);
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         await page.mouse.wheel(0, 400);
-        await page.waitForFunction((rail) => Number(document.querySelector(`${rail} button[data-tick]`)?.getAttribute("data-tick")) > 0, RAIL);
+        await page.waitForFunction(() => document.querySelector("[data-nav-track]").scrollTop > 100);
         const later = Number(await track.locator("button[data-tick]").first().getAttribute("data-tick")) + 6;
         await tick(page, later).hover();
         await preview(page, later);
         await page.mouse.wheel(0, -400);
-        await page.waitForFunction((rail) => !!document.querySelector(`${rail} button[data-tick='0']`), RAIL);
+        await page.waitForFunction(() => document.querySelector("[data-nav-track]").scrollTop === 0);
         await tick(page, 0).hover();
         await preview(page, 0);
         assert.equal(await page.locator(CHAT).evaluate((sc) => sc.scrollTop), before, "Wheel input on the rail does not move the transcript");
