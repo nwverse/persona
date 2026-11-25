@@ -1825,6 +1825,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		if !already {
 			m.watcherJoined(msg.SessionID)
 		}
+		m.replayLiveTools(c, msg.SessionID)
 		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
 		// backlog still goes after it, so nothing falls between the two.
 		go func() {

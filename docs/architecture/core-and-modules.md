@@ -554,7 +554,7 @@ page, the legacy water extension's import and the `health_intake` tool. Its mani
 which the kernel announces while it is loaded (it left `modapi.ClientModules` with this move).
 
 - **The seam**: `server/internal/healthhost`, in recording's shape: `Layer` (core -> module: `Routes`, `Tool`,
-  `ReminderLoop`, `Items`) and `Host` (module -> core: the settings rows, the intake store, the water extension's migration, the
+  `ReminderLoop`, `Items`, `CardAction`, `WorkoutReceived`, `WorkoutReport`) and `Host` (module -> core: the settings rows, the intake store, the water extension's migration, the
   apps' events, the language and time zone, standby and quiet push, the push with its card, and the extension page's
   fitting). The module declares its own `Host` with the same methods and types (`server/internal/modules/health/host.go`),
   so it imports no core service; `server/internal/modules/all/health.go` provides its layer under
@@ -575,6 +575,14 @@ which the kernel announces while it is loaded (it left `modapi.ClientModules` wi
   water reminder runs (`TestHealthFollowsItsModule`). The entries already stored stay in the database.
   Health chat retains phone-data guidance but omits intake-item instructions. The `Items` seam reads the ordered
   `health.items` setting (or computed defaults); item saves, tool logging and reminder planning share the module lock.
+  Strength training (#14713) adds `StrengthStore`, `CardShown`, `CardChanged` and `PageLink` to Host. Its contract types
+  live in `assistantwire`; the four strength tables and atomic draft/card changes remain in `internal/db`. The module
+  owns `health_strength`, its managed `health-strength-` cards and `strength.*` states under `-health-intake`.
+  The core dispatches reserved card actions before its generic outbox, persists strength workout windows through
+  `WorkoutReceived` before upload acknowledgment, and asks `WorkoutReport` for current inputs inside `runTask`.
+  No module, no added strength item, an unknown window or assembly errors keep the stored task prompt; other workouts
+  remain byte-identical. Module absence also removes `health_strength` from hello and refuses its card buttons, while
+  retaining all stored strength data. No additional page route or hub business logic is introduced.
 
 ### Knowledge UI
 
