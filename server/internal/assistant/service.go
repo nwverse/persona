@@ -321,7 +321,6 @@ type Service struct {
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll         bool
 	later                    laterBook    // later.go: questions that can wait for a briefing
-	brief                    briefBook    // briefing.go
 	reporters                reporterBook // reporters.go
 	sched                    schedule     // schedule.go
 	delayedMu                sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
