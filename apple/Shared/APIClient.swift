@@ -199,6 +199,8 @@ nonisolated struct APIClient: Sendable {
     var sessionLookup = false
     /// The hub's hello has `sessions_list`: session lists come in pages with a revision that `since` follows.
     var sessionList = false
+    /// The hub's hello has `sessions_page_counts`: a windowed row answer can carry its own aggregates.
+    var sessionsPageCounts = false
     /// The hub's hello has `sessions_hierarchy`: windowed lists and counts send `roots=1`. Older hubs do not, so a
     /// child stays a row of its own. A parent-session page is a separate request and never sends `roots`.
     var sessionsHierarchy = false
@@ -1736,8 +1738,12 @@ nonisolated struct APIClient: Sendable {
         var ownerReplyApproval: Bool?
         var persistentOwnerActionCards: Bool?
         var ownerReplyApprovalPhrases: [String]?
+        /// Let Persona make dashboards (#15017): the conversations may draft pages the owner keeps. Off by default; an
+        /// absent field (a hub without Dashboards, or one that never had it on) is off. The switch is shown by the hub's
+        /// `assistant_pages` feature, not by this field.
+        var dashboards: Bool?
         enum CodingKeys: String, CodingKey {
-            case launcher, cwd, conversations, timezone, main, leaders, manager
+            case launcher, cwd, conversations, timezone, main, leaders, manager, dashboards
             case defaultPermissionMode = "default_permission_mode"
             case machineID = "machine_id", mainMachineID = "main_machine_id", notes = "notes_effective", mainTasksQuiet = "main_tasks_quiet"
             case foldRoutineRelayReplies = "fold_routine_relay_replies"
@@ -1909,8 +1915,10 @@ nonisolated struct APIClient: Sendable {
         var ownerReplyApproval: Bool?
         var persistentOwnerActionCards: Bool?
         var ownerReplyApprovalPhrases: [String]?
+        /// Dashboards (#15017): `{"dashboards": true}` turns them on.
+        var dashboards: Bool?
         enum CodingKeys: String, CodingKey {
-            case launcher, timezone, notes
+            case launcher, timezone, notes, dashboards
             case machineID = "machine_id", mainTasksQuiet = "main_tasks_quiet", meetingAttendanceDefault = "meeting_attendance_default"
             case foldRoutineRelayReplies = "fold_routine_relay_replies"
             case mainBackgroundFolded = "main_background_folded", mainSupervisesOwnTasks = "main_supervises_own_tasks"
@@ -2406,9 +2414,10 @@ nonisolated struct APIClient: Sendable {
     }
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
-    /// `handoffCard`: a hand-off card's own approval, which says so (`SecretHandoff.feature`) on this request alone.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false) async throws -> ResolveResult {
-        let headers = handoffCard ? ["X-Persona-Features": SecretHandoff.feature] : [:]
+    /// `handoffCard`: a hand-off or explicit env card's own approval, which says so on this request alone.
+    /// `secretRunEnv` selects the env feature; otherwise the hand-off feature is used.
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false, secretRunEnv: Bool = false) async throws -> ResolveResult {
+        let headers = handoffCard ? ["X-Persona-Features": secretRunEnv ? "secret_run_env" : SecretHandoff.feature] : [:]
         return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID,
                                                                                  extraHeaders: headers))
     }

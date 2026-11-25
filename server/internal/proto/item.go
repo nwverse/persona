@@ -212,6 +212,12 @@ func decimalItemPart(s string) bool {
 	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r < '0' || r > '9' })
 }
 
+// QuestionReply preserves the question quoted by a Codex reply. A single answer is already in Item.Text.
+type QuestionReply struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer,omitempty"`
+}
+
 // Item is one content block of a Claude Code transcript.
 type Item struct {
 	// Stored identifies an incomplete durable copy. Its source can be requested from
@@ -229,6 +235,9 @@ type Item struct {
 	IsError   bool            `json:"is_error,omitempty"`
 	Image     *Image          `json:"image,omitempty"`
 	Queued    bool            `json:"queued,omitempty"` // user input typed while the agent worked, absorbed mid-turn
+
+	QuestionReplies    []QuestionReply `json:"question_replies,omitempty"`
+	QuestionRepliesCut bool            `json:"question_replies_cut,omitempty"`
 	// Outcome: what a tool_result's call came to (status, exit code, patch, git…), set by the node from the
 	// runtime's record; absent on other items and from older nodes (ToolOutcome).
 	Outcome *ToolOutcome `json:"outcome,omitempty"`
@@ -245,7 +254,7 @@ type Item struct {
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
-	// Narration marks assistant text belonging to the work summary (Codex commentary), even if sent unfolded.
+	// Narration marks public progress text (Claude narration or Codex commentary), including on unfolded pages.
 	Narration bool `json:"narration,omitempty"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.
 	From string `json:"from,omitempty"`
@@ -448,6 +457,8 @@ const (
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"
+	// SourceExtension: an event an extension observed and reported (assistant.event). Title is the extension's name.
+	SourceExtension = "extension"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.

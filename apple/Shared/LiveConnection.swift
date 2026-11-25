@@ -89,6 +89,12 @@ nonisolated enum ServerEvent: Sendable {
     case directions
     /// Intake changed; values and notes are read through the health route, never broadcast.
     case healthIntake
+    case healthItems
+    case healthStrength
+    /// The kept Dashboards pages changed (#15017): one kept, pinned, unpinned, renamed, removed or restored, or the switch
+    /// turned. No payload: the places (`GET /api/v1/extensions/-/ui`) are read again. A page's content comes as
+    /// `extension_ui` with extension `-pages`.
+    case assistantPages
     case assistantFeed(FeedItem)
     case assistantView(ExtensionAssistantView)
     case assistantViewAction(conversation: String, action: ExtensionViewAction)
@@ -126,7 +132,8 @@ nonisolated enum ServerEvent: Sendable {
         var live: SessionLive?
         var upsert: [Session]?
         var remove: [String]?
-        var revision: String?
+        /// Session-list revisions are opaque strings; health-item revisions are integers.
+        var revision: JSONValue?
         var items: [Item]?
         var backlog: Bool?
         var hasMore: Bool?
@@ -243,7 +250,7 @@ nonisolated enum ServerEvent: Sendable {
 
     static func decode(_ data: Data) -> ServerEvent? {
         // A source subscription was saved, ran or was deleted (#2041): its pages are drawn again, as an invalidate of theirs.
-        // Read before the envelope, whose `revision` is a string where this event's is a number; the hub's compact JSON is
+        // Read before the envelope, whose fields may belong to other event shapes; the hub's compact JSON is
         // looked for first, so every other message skips the extra decode.
         if data.range(of: subscriptionType) != nil, (try? JSON.decoder.decode(EventType.self, from: data))?.type == "subscription" {
             return .extensionInvalidate(extension: SubscriptionsUI.id, id: nil)
@@ -265,7 +272,7 @@ nonisolated enum ServerEvent: Sendable {
         case "sessions":
             guard let m = e.machineID else { return nil }
             return .sessions(machineID: m, (e.sessions ?? []).map { var s = $0; s.machineID = m; return s })
-        case "sessions_list": return e.revision.map { .sessionsList(revision: $0, changes: SessionListChanges(since: e.since, changed: e.changed)) }
+        case "sessions_list": return e.revision?.string.map { .sessionsList(revision: $0, changes: SessionListChanges(since: e.since, changed: e.changed)) }
         case "sessions_delta":
             guard let m = e.machineID else { return nil }
             return .sessionsDelta(machineID: m, upsert: (e.upsert ?? []).map { var s = $0; s.machineID = m; return s }, remove: e.remove ?? [])
@@ -320,7 +327,10 @@ nonisolated enum ServerEvent: Sendable {
         case "managers": return .managers
         case "directions": return .directions
         // The app refreshes the home totals and any open reserved intake page for this hub.
+        case "health_strength": return .healthStrength
+        case "health_items": return .healthItems
         case "health_intake": return .healthIntake
+        case "assistant_pages": return .assistantPages
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
             guard let view = e.view, !view.id.isEmpty, view.version > 0,
@@ -394,7 +404,7 @@ nonisolated extension ServerEvent {
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
         case .sendReceipt(let receipt): var receipt = receipt; receipt.key.group = group; return .sendReceipt(receipt)
         case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .look, .managers, .directions, .healthIntake, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .personas, .look, .managers, .directions, .healthIntake, .healthItems, .healthStrength, .assistantPages, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
              .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages: return self
         }
     }

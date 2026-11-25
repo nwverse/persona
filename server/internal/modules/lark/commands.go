@@ -111,7 +111,7 @@ func (s core) botCommand(ctx context.Context, f FeishuFeatures, messageID, text,
 		}
 		reply(s.startAgentCard(ctx, rest), "")
 	case "/stop", "/停止", "/停":
-		_, message := s.h.StopConversation(ctx, f, s.botTargetFor(root, parent))
+		_, message := s.stopConversation(ctx, f, s.botTargetFor(root, parent))
 		s.botNote(ctx, messageID, message)
 		return true, ""
 	case "/status", "/状态":
@@ -125,7 +125,7 @@ func (s core) botCommand(ctx context.Context, f FeishuFeatures, messageID, text,
 	case "/modellist", "/modelchange":
 		s.botModels(ctx, f, messageID, cmd, rest, root, parent)
 	case "/tasks", "/进展", "/总览": // i18n-ignore: command aliases typed by the user; the catalogs describe them in /help
-		if f.Board && s.h.StandingBoardCommand(ctx) {
+		if f.Board && s.standingBoardCommand(ctx) {
 			break
 		}
 		cards, fallbacks := s.h.TasksOverview(ctx)
@@ -246,7 +246,7 @@ func (s core) statusCard(ctx context.Context, t botTarget) (*botcard.Card, strin
 	for _, ix := range shown {
 		q := clip(s.h.PendingQuestion(ix), 120)
 		kind := ""
-		if key := s.h.IxKindTag(ix.Kind); key != "" {
+		if key := ixKindTags[ix.Kind]; key != "" {
 			kind = i18n.T(l, key)
 		}
 		md := "**" + botcard.EscapeMarkdown(q) + "**"
@@ -462,7 +462,7 @@ func (s core) startAgentCard(ctx context.Context, prompt string) *botcard.Card {
 	if prompt != "" {
 		fields[2].(map[string]any)["default_value"] = prompt
 	}
-	if s.h.WorkbenchActive() { // the workbench's permission field, before what to do (workbench.go)
+	if s.workbenchActive() { // the workbench's permission field, before what to do (workbench.go)
 		fields = append(fields[:2], wbModeSelect(l), fields[2])
 	}
 	return c.Form("start", fields, botcard.Submit(i18n.T(l, "assistant-feishu_cards.start"), botcard.Primary, "start_submit", map[string]any{"a": "start"}))

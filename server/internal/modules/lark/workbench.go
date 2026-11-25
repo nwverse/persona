@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ func (s core) workbenchCommand(ctx context.Context, f assistantwire.FeishuFeatur
 	}
 	switch cmd {
 	case "/home", "/工作台", "/主页": // i18n-ignore: command aliases typed by the user; the catalogs describe them in /help
-		s.h.SummonWorkbench(ctx)
+		s.summonWorkbench(ctx)
 	case "/today", "/今日", "/今天": // i18n-ignore: command aliases typed by the user
 		reply(s.todayCard(ctx))
 	case "/inbox", "/收件箱": // i18n-ignore: command aliases typed by the user
@@ -82,7 +83,7 @@ func (s core) workbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			s.h.WorkbenchRefresh(cctx)
+			s.workbenchRefresh(cctx)
 		}()
 		return toast("success", wbT(l, "refreshed"))
 	case "ix":
@@ -90,7 +91,7 @@ func (s core) workbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			s.h.WorkbenchBringCard(cctx, id)
+			s.workbenchBringCard(cctx, id)
 		}()
 		return toast("info", wbT(l, "opening"))
 	case "today", "inbox", "tasks", "home", "list":
@@ -122,7 +123,7 @@ func (s core) workbenchNav(ctx context.Context, a *botcard.CardAction) *botcard.
 		case "inbox":
 			post(s.inboxCard(cctx))
 		case "home":
-			s.h.SummonWorkbench(cctx)
+			s.summonWorkbench(cctx)
 		}
 	}()
 	return toast("info", wbT(l, "opening"))
@@ -139,7 +140,7 @@ func wbNavButton(label, style, to string) botcard.Button {
 func (s core) homeCard(ctx context.Context, f assistantwire.FeishuFeatures) (card *botcard.Card, fallback, said string) {
 	l, web := s.botLang(ctx), s.h.WebBase(ctx)
 	loc := s.h.Location(ctx)
-	now := s.h.StandingNow()
+	now := s.t.board.clock()
 	c, busy := s.workbenchCount(ctx, now)
 	rows := s.h.WorkbenchBoard(ctx, l, web, now)
 	title := wbT(l, "home_title")
@@ -208,7 +209,7 @@ func (s core) homeCard(ctx context.Context, f assistantwire.FeishuFeatures) (car
 	fb.WriteString(strings.Join(day, "\n"))
 
 	// One row: the Inbox (filled when something there needs the owner), the tasks, and a "more" menu with the rest.
-	companions := s.h.Companions(ctx)
+	companions := s.workbenchCompanions(ctx)
 	var bs []botcard.Button
 	inboxBot := slices.IndexFunc(companions, func(b assistantwire.WorkbenchCompanion) bool { return b.Inbox })
 	if inboxBot < 0 {
@@ -296,7 +297,7 @@ func wbSource(l i18n.Lang, it assistantwire.WorkbenchItem) string {
 // todayCard is the day at a glance: the main conversation's "Today" (the one the app shows), plus what waits.
 func (s core) todayCard(ctx context.Context) (*botcard.Card, string) {
 	l, loc := s.botLang(ctx), s.h.Location(ctx)
-	now := s.h.StandingNow().In(loc)
+	now := s.t.board.clock().In(loc)
 	title := wbT(l, "today_title", i18n.Args{"date": now.Format(wbT(l, "date_layout")), "weekday": wbT(l, "weekday_"+now.Weekday().String())})
 	card := botcard.NewCard(title, botcard.Blue, title)
 	var body todayBody
@@ -417,7 +418,7 @@ func (s core) inboxCard(ctx context.Context) (*botcard.Card, string) {
 		if g := wbGist(it); g != "" {
 			line += "\n" + botcard.EscapeMarkdown(clip(g, 120))
 		}
-		line += "\n<font color='grey'>" + botcard.EscapeMarkdown(wbSource(l, it)) + " · " + wbClock(s.h.Location(ctx), it.UpdatedAt, s.h.StandingNow()) + "</font>"
+		line += "\n<font color='grey'>" + botcard.EscapeMarkdown(wbSource(l, it)) + " · " + wbClock(s.h.Location(ctx), it.UpdatedAt, s.t.board.clock()) + "</font>"
 		if i > 0 {
 			card.HR()
 		}
@@ -495,11 +496,19 @@ func (s core) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *
 		if op == "draft" {
 			list = mid // pressed on the Inbox card: it is redrawn once the reply goes out
 		}
+		expectedVersion, _ := strconv.Atoi(a.Str("version"))
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
-			text, err := s.h.DraftReply(cctx, id, instruction)
-			card := s.draftCard(cctx, it, text, err, list)
+			cardItem, text, err := s.h.DraftReply(cctx, id, instruction, expectedVersion, op == "redraft")
+			if cardItem.ID == "" {
+				cardItem = it
+				if err == nil {
+					// A transient result cannot borrow a version from the item captured before generation.
+					cardItem.ReplyVersion = 0
+				}
+			}
+			card := s.draftCard(cctx, cardItem, text, err, list)
 			if op == "redraft" {
 				if err := s.botUpdateCard(cctx, mid, card); err == nil {
 					return
@@ -518,13 +527,16 @@ func (s core) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *
 		if it.Done {
 			return toast("info", wbT(l, "inbox_gone"))
 		}
+		// Missing, malformed and explicit zero all denote an old unversioned card. The reply-policy route decides
+		// whether that legacy card is still allowed; inside policy scope it fails closed.
+		expectedVersion, _ := strconv.Atoi(a.Str("version"))
 		list := a.Str("list")
 		go func() {
 			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			// One reply per draft card however many presses: the card's message is the send's id, and a press that
 			// comes after the reply filed the item changes nothing (the first one drew the card).
-			filed, err := s.h.ReplyInbox(cctx, id, text, "feishu-workbench-"+mid)
+			filed, err := s.h.ReplyInbox(cctx, id, text, "feishu-workbench-"+mid, expectedVersion)
 			if filed {
 				return
 			}
@@ -566,11 +578,13 @@ func (s core) draftCard(ctx context.Context, it assistantwire.WorkbenchItem, tex
 	box := botcard.Input("text", wbT(l, "draft_text"), "", true)
 	box["default_value"] = text
 	instr := botcard.Input("instruction", wbT(l, "draft_instruction"), wbT(l, "draft_instruction_placeholder"), false)
-	// Sending goes out under the owner's name: Feishu's dialog asks first.
+	version := it.ReplyVersion
+	// Sending goes out under the owner's name: Feishu's dialog asks first. Both actions bind the exact AI card they
+	// rendered; an action from a replaced suggestion must never confirm its old text against the new source position.
 	card.Form("draft", []any{box, instr},
-		botcard.Confirm(botcard.Submit(wbT(l, "btn_send"), wbFilled, "send_submit", map[string]any{"a": "ib", "op": "send", "id": it.ID, "list": list}),
+		botcard.Confirm(botcard.Submit(wbT(l, "btn_send"), wbFilled, "send_submit", map[string]any{"a": "ib", "op": "send", "id": it.ID, "list": list, "version": version}),
 			wbT(l, "send_confirm_title"), wbT(l, "send_confirm_text", i18n.Args{"who": clip(wbWho(it), 20)})),
-		botcard.Submit(wbT(l, "btn_redraft"), botcard.Default, "redraft_submit", map[string]any{"a": "ib", "op": "redraft", "id": it.ID, "list": list}))
+		botcard.Submit(wbT(l, "btn_redraft"), botcard.Default, "redraft_submit", map[string]any{"a": "ib", "op": "redraft", "id": it.ID, "list": list, "version": version}))
 	reply := wbT(l, "draft_as_you")
 	if it.Connector && it.ConnectorReplyTo != "" {
 		reply = it.ConnectorReplyTo

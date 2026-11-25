@@ -663,6 +663,41 @@ func TestSupervisionRefusalsSpeakTheClientsLanguage(t *testing.T) {
 	}
 }
 
+// notingWriter takes note of the errors written to it (ErrorNoter), as the hub's request logger does; passing hides it
+// one Unwrap down, as the hub's other writers do.
+type notingWriter struct {
+	*httptest.ResponseRecorder
+	status int
+	body   map[string]any
+}
+
+func (w *notingWriter) NoteError(status int, body map[string]any) { w.status, w.body = status, body }
+
+type passing struct{ http.ResponseWriter }
+
+func (w passing) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// What WriteBody writes is noted on the first writer down the chain that takes note; bytes written another way never
+// are, and a chain without one only gets the body (#14490).
+func TestWriteBodyNotesItsError(t *testing.T) {
+	w := &notingWriter{ResponseRecorder: httptest.NewRecorder()}
+	Call(passing{w}, errors.New("the node went away"))
+	if w.status != http.StatusBadGateway || w.body["code"] != "internal" || !strings.Contains(w.Body.String(), `"code":"internal"`) {
+		t.Fatalf("noted %d %v, wrote %d %s", w.status, w.body, w.Code, w.Body.String())
+	}
+	other := &notingWriter{ResponseRecorder: httptest.NewRecorder()}
+	other.WriteHeader(http.StatusBadGateway)
+	_, _ = passing{other}.Write([]byte(`{"code":"internal","error":"passed on"}`))
+	if other.body != nil {
+		t.Fatalf("bytes were noted: %v", other.body)
+	}
+	plain := httptest.NewRecorder()
+	WriteCode(passing{plain}, http.StatusServiceUnavailable, "assistant_offline", errors.New("not connected"))
+	if plain.Code != http.StatusServiceUnavailable || !strings.Contains(plain.Body.String(), "assistant_offline") {
+		t.Fatalf("without a noter: %d %s", plain.Code, plain.Body.String())
+	}
+}
+
 func TestUnresolvedModelRefusalSpeaksTheClientsLanguage(t *testing.T) {
 	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 		rec := httptest.NewRecorder()

@@ -121,6 +121,34 @@ describe("UI 12: vector map canvas", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps a selected route fitted and resets to the map overview", async () => {
+    const item = drawItem({ sections: [{ items: [{
+      ...SAMPLE_VIEW.sections[0].items[0], markers: [], routes: [
+        { id: "west", label: "West", mode: "driving", points: [{ lat: 38, lon: 112 }, { lat: 38.001, lon: 112.005 }] },
+        { id: "east", label: "East", mode: "driving", points: [{ lat: 38, lon: 113 }, { lat: 38.001, lon: 113.005 }] },
+      ],
+    }] }] });
+    await mount(item);
+    const eastSpan = () => {
+      const points = host.querySelector('[data-map-route-line="east"]')!.getAttribute("points")!.trim().split(/\s+/);
+      const xs = points.map((point) => Number(point.split(",")[0]));
+      return Math.max(...xs) - Math.min(...xs);
+    };
+    const overview = eastSpan();
+    await act(async () => host.querySelector<HTMLElement>('[data-map-route="east"]')!.click());
+    expect(host.querySelector('[data-map-route-line="east"]')?.getAttribute("data-selected")).toBe("true");
+    const fitted = eastSpan();
+    expect(fitted).toBeGreaterThan(overview * 10);
+    await act(async () => root.render(null));
+    await mount(item);
+    expect(eastSpan()).toBeCloseTo(fitted);
+    const reset = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("extensions-viewbody.map_reset")}"]`)!;
+    expect(reset.disabled).toBe(false);
+    await act(async () => reset.click());
+    expect(eastSpan()).toBeCloseTo(overview);
+    expect(reset.disabled).toBe(true);
+  });
+
   it("renders vector polylines, marker buttons, route tabs, scale bar, and verified HTTPS links", () => {
     const html = renderToStaticMarkup(<MapCanvas item={drawItem()} busy="" onPress={() => {}} />);
     const d = doc(html);
@@ -151,7 +179,7 @@ describe("UI 12: vector map canvas", () => {
     expect(formatMapDuration(4500)).toBe(t("extensions-viewbody.map_duration_hm", { hours: 1, minutes: 15 }));
   });
 
-  it("switches routes, enables Reset View only after camera movement, and handles keyboard pan/zoom/reset", async () => {
+  it("switches routes, enables Reset View after a route fit, and handles keyboard pan/zoom/reset", async () => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
     await mount(drawItem());
@@ -163,7 +191,7 @@ describe("UI 12: vector map canvas", () => {
     await act(async () => altTab.click());
     expect(altTab.getAttribute("aria-selected")).toBe("true");
     expect(host.querySelector('[data-map-route-line="r-alt"]')?.getAttribute("data-selected")).toBe("true");
-    expect(resetBtn().disabled).toBe(true);
+    expect(resetBtn().disabled).toBe(false);
 
     // Zoom in via button enables Reset View.
     const zoomIn = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("extensions-viewbody.map_zoom_in")}"]`)!;

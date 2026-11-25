@@ -140,6 +140,9 @@ func (n *Node) newCodexAppChat(ctx context.Context, p runtimeStartParams, nameHi
 		return nil, refusal("codex_needs_prompt", "在 Codex App 里新开对话需要第一条消息，这次没有发送。", nil)
 	}
 	model, effort := strings.TrimSpace(p.Model), strings.TrimSpace(p.Effort)
+	if (model != "" || effort != "") && !codexDesktopBusAvailable(home) {
+		return nil, codexDesktopUnavailable(ctx)
+	}
 	if model != "" && !proto.ValidModelID(model) {
 		return nil, fmt.Errorf("invalid model %q", model)
 	}

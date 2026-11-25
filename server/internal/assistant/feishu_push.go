@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -100,6 +101,10 @@ func (s *Service) feishuTodoPush(ctx context.Context, machine, session, title, b
 // feishuPushToldTodo is feishuPushTold, with a to-do only on the reminder path. Ordinary notify_user passes nil and
 // keeps its conversation link, context-free reply routing and body exactly as before.
 func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, title, body, key string, r *copyReport, todo *Todo) error {
+	if s.larkAbsent() {
+		r.skipped(channel.Feishu) // no module: nothing to send, nothing to retry, nothing failed
+		return nil
+	}
 	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
 	private, space := false, ""
 	if todo != nil {
@@ -127,7 +132,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 	}
 	st, err := s.chat().Status(ctx)
 	ready := err == nil && st.Ready
-	s.workbenchOn(st.Features, ready) // as feishuFeatures
+	s.larkModule().WorkbenchOn(st.Features, ready) // as feishuFeatures
 	if err != nil && !answered(err) {
 		r.going()
 		return err
@@ -152,7 +157,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 	// most botAnswerCards); the push's title heads the first card, the open button goes under the last.
 	l := s.botLang(ctx)
 	ctx = feishuSendAs(ctx, "push", machine, session)
-	cards := answerCards(l, s.linkNamer(ctx), body, false, nil, "")
+	cards := s.answerCards(l, s.linkNamer(ctx), body, false, nil, "")
 	head := botcard.NewCard("", "", title)
 	for i, ac := range cards {
 		if i == 0 {
@@ -176,7 +181,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			}
 		}
 	}
-	if (reminder == nil || !reminder.botAttempted) && s.divertAnswer(ctx, "push", cards) {
+	if (reminder == nil || !reminder.botAttempted) && s.divertAnswer(ctx, assistantwire.NoticePush(), cards) {
 		s.markPushed(channel.Feishu, machine, session)
 		r.went(channel.Feishu, nil)
 		return nil
@@ -220,7 +225,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 		}
 	}
 	if reminder == nil && len(missing) > 0 && (key == "" || again == nil) {
-		s.botSay(ctx, missingPiecesNote(l, missing))
+		s.botSay(ctx, s.larkModule().MissingPiecesNote(l, missing))
 	}
 	return again
 }
@@ -285,7 +290,7 @@ func (s *Service) feishuMirror(ctx context.Context, machine, session string) {
 	if asked != "" && main {
 		foot = i18n.T(l, "assistant-feishu_cards.asked_elsewhere", i18n.Args{"asked": clip(oneLine(stripContext(asked)), 80)}) + "\n" + label
 	}
-	cards := answerCards(l, s.linkNamer(ctx), answer, false, nil, foot)
+	cards := s.answerCards(l, s.linkNamer(ctx), answer, false, nil, foot)
 	if len(cards) > 0 {
 		cards[len(cards)-1].card.AppendToLinks(s.openButton(ctx, machine, session))
 	}
@@ -315,7 +320,7 @@ type mirrorSend struct {
 func (s *Service) mirrorStillDue(ctx context.Context, m *mirrorSend) (bool, error) {
 	st, err := s.chat().Status(ctx)
 	ready, f := err == nil && st.Ready, st.Features
-	s.workbenchOn(f, ready)
+	s.larkModule().WorkbenchOn(f, ready)
 	if err != nil && !answered(err) {
 		return false, err // unknown readiness is temporary, not evidence that the owner switched the channel off
 	}
@@ -348,7 +353,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 	ctx = feishuSendAs(ctx, kind, m.target.MachineID, m.target.SessionID)
 	// A scheduled task's result goes to a notifications companion when one takes the notices (feishu_companions.go);
 	// the main conversation's turns stay in the chat, where a reply continues them.
-	if !m.main && s.divertAnswer(ctx, "task", m.cards) {
+	if !m.main && s.divertAnswer(ctx, assistantwire.NoticeTask(), m.cards) {
 		if m.sent != nil {
 			m.sent()
 		}
@@ -377,7 +382,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 		}
 	}
 	if len(missing) > 0 {
-		s.botSay(ctx, missingPiecesNote(m.l, missing))
+		s.botSay(ctx, s.larkModule().MissingPiecesNote(m.l, missing))
 	}
 }
 
@@ -541,7 +546,7 @@ func agentDoneCard(l i18n.Lang, head, text, place, secondary string, sess proto.
 			meta = append([]string{botcard.EscapeMarkdown(i18n.T(l, "assistant-feishu_cards.only_beginning"))}, meta...)
 		}
 		card.Meta(meta...).Buttons(open)
-		if len(card.JSON()) <= answerCardMaxBytes || limit <= agentDoneClip/8 {
+		if len(card.JSON()) <= assistantwire.AnswerCardMaxBytes || limit <= agentDoneClip/8 {
 			break
 		}
 		limit /= 2

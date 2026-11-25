@@ -58,6 +58,7 @@ type fleetDevs struct {
 type fleetNode struct {
 	name, home, trust string
 	homeReal          string // home with its links followed, when the node says it is another path
+	executable        string // the file its node said it runs from when its connection began ("": it did not say)
 	sessions          []proto.Session
 	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
@@ -151,7 +152,8 @@ func (d *fleetDevs) List() []devices.Summary {
 	var out []devices.Summary
 	for _, id := range d.order {
 		n := d.machines[id]
-		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away})
+		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+			Online: !n.away, Reachable: !n.away})
 	}
 	return out
 }
@@ -170,7 +172,8 @@ func (d *fleetDevs) Summary(id string) (devices.Summary, bool) {
 	if n == nil || !slices.Contains(d.order, id) {
 		return devices.Summary{}, false
 	}
-	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Trust: n.trust, Online: !n.away, Reachable: !n.away}, true
+	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+		Online: !n.away, Reachable: !n.away}, true
 }
 
 // Shown is the node's shownUntil and unlisted, as the devices say them.
@@ -342,6 +345,7 @@ type fleetMem struct {
 	resolvedInsertGate    chan struct{}
 	resolvedInsertStarted chan struct{}
 	resolvedOutcomeErr    error
+	deadlineErr           error
 }
 
 func newFleetMem() *fleetMem {
@@ -364,6 +368,24 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 		m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
 	}
 	return nil
+}
+
+func (m *fleetMem) UpdateInteractionDeadline(_ context.Context, id string, created, expires time.Time) error {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.deadlineErr != nil {
+		return m.deadlineErr
+	}
+	if m.status[id] != "pending" {
+		return errors.New("interaction deadline was not recorded")
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID == id && m.recs[i].Interaction.CreatedAt.Equal(created) {
+			m.recs[i].Interaction.ExpiresAt = expires
+			return nil
+		}
+	}
+	return errors.New("interaction deadline was not recorded")
 }
 
 func (m *fleetMem) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error {

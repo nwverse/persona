@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -32,7 +34,146 @@ type todoProjection struct {
 // computer asked once (todoRunSessions), and with them the pending cards of those runs (todoFactsOf).
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
 	facts := s.todoFactsOf(ctx, list)
+	if len(facts) > 0 && facts[0].TodosV2 {
+		reposByTodo := s.populateTodoRepoGates(ctx, list)
+		populateTodoItemTypes(list, reposByTodo)
+	}
 	return todoProjection{facts: facts, views: projection.Views(facts, now)}
+}
+
+// populateTodoRepoGates computes and attaches the weakest-link Target Repo delivery gate summary
+// to each listed to-do that has bound repositories, and returns the loaded repository bindings by to-do ID.
+// Callers must invoke this only when todos_v2 is enabled.
+func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) map[string][]repository.TaskRepository {
+	ids := make([]string, len(list))
+	for i := range list {
+		ids[i] = list[i].ID
+	}
+	reposByTodo := s.loadOpenTodoRepositories(ctx, ids)
+	if len(reposByTodo) == 0 {
+		return reposByTodo
+	}
+	for i := range list {
+		bound := reposByTodo[list[i].ID]
+		if len(bound) == 0 {
+			continue
+		}
+		list[i].RepoGate = aggregateRepoGate(buildRepoGateInputs(list[i].Todo, bound))
+	}
+	return reposByTodo
+}
+
+func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRepo {
+	prByURL := make(map[string]TodoPRStatus, len(t.OtherPRs)+1)
+	for _, pr := range t.OtherPRs {
+		if key := normalizeRepoGateURL(pr.URL); key != "" {
+			prByURL[key] = pr
+		}
+	}
+	if t.PRStatus != nil {
+		if key := normalizeRepoGateURL(t.PRStatus.URL); key != "" {
+			prByURL[key] = *t.PRStatus
+		}
+	} else if key := normalizeRepoGateURL(t.PRURL); key != "" {
+		if _, exists := prByURL[key]; !exists {
+			prByURL[key] = TodoPRStatus{URL: strings.TrimSpace(t.PRURL), State: "open"}
+		}
+	}
+
+	out := make([]repoGateRepo, 0, len(bound))
+	for _, repo := range bound {
+		repoKey := strings.TrimSpace(repo.SourceSnapshot.Identity.CanonicalURL)
+		if repoKey == "" {
+			repoKey = strings.TrimSpace(repo.RepoID)
+		}
+		repoLabel := strings.TrimSpace(repo.SourceSnapshot.Identity.Path)
+		if repoLabel == "" {
+			repoLabel = strings.TrimSpace(repo.DirectoryAlias)
+		}
+		if repoLabel == "" {
+			repoLabel = repoKey
+		}
+
+		isTarget := len(repo.Links) == 0
+		refPRs := map[string]bool{}
+		for _, l := range repo.Links {
+			role := strings.TrimSpace(l.Role)
+			if role == "" || role == repository.LinkRoleDelivery {
+				isTarget = true
+			} else if role == repository.LinkRoleReference {
+				if key := normalizeRepoGateURL(l.CanonicalURL); key != "" {
+					refPRs[key] = true
+				}
+			}
+		}
+
+		var prs []repoGatePR
+		if isTarget {
+			seenPRs := map[string]bool{}
+			for _, l := range repo.Links {
+				role := strings.TrimSpace(l.Role)
+				if role == repository.LinkRoleReference || l.Kind != "pull_request" {
+					continue
+				}
+				key := normalizeRepoGateURL(l.CanonicalURL)
+				if key == "" || seenPRs[key] {
+					continue
+				}
+				seenPRs[key] = true
+				if obs, ok := prByURL[key]; ok {
+					prs = append(prs, toRepoGatePR(l.CanonicalURL, obs))
+				} else {
+					prs = append(prs, repoGatePR{URL: l.CanonicalURL, State: "open"})
+				}
+			}
+			// Fall back to observed PRs belonging to this repository when not explicitly linked yet,
+			// while strictly excluding any URL marked as a reference link.
+			if repoPrefix := normalizeRepoGateURL(repo.SourceSnapshot.Identity.CanonicalURL); repoPrefix != "" {
+				prefix := repoPrefix + "/"
+				for key, obs := range prByURL {
+					if seenPRs[key] || refPRs[key] || !strings.HasPrefix(key, prefix) {
+						continue
+					}
+					seenPRs[key] = true
+					prs = append(prs, toRepoGatePR(obs.URL, obs))
+				}
+			}
+		}
+
+		out = append(out, repoGateRepo{
+			RepoKey:   repoKey,
+			RepoLabel: repoLabel,
+			IsTarget:  isTarget,
+			PRs:       prs,
+		})
+	}
+	return out
+}
+
+func toRepoGatePR(fallbackURL string, obs TodoPRStatus) repoGatePR {
+	u := strings.TrimSpace(obs.URL)
+	if u == "" {
+		u = strings.TrimSpace(fallbackURL)
+	}
+	return repoGatePR{
+		URL:       u,
+		State:     obs.State,
+		Draft:     obs.Draft,
+		Review:    obs.Review,
+		Checks:    obs.Checks,
+		Conflicts: obs.Conflicts,
+	}
+}
+
+func normalizeRepoGateURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if idx := strings.IndexAny(raw, "#?"); idx >= 0 {
+		raw = raw[:idx]
+	}
+	return strings.ToLower(strings.TrimRight(raw, "/"))
 }
 
 // hasParkInteractionLink says whether this park's projection must retain its workers' pending cards, even after release.

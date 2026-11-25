@@ -311,6 +311,22 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "desktop/src/connect-input.ts": {
+      "reason": "Exact legacy pairing URL scheme accepted by existing desktop sign-in input.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "desktop/src/setup.js": {
+      "reason": "Exact legacy pairing URL scheme accepted by the desktop setup input compatibility parser.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "desktop/scripts/link-real-common.mjs": {
       "reason": "Receipt redaction retains the exact legacy pairing URL scheme and environment prefix accepted by existing clients.",
       "tokens": [
@@ -531,11 +547,13 @@
       "external_refs": []
     },
     "harmony/entry/src/main/ets/core/WireCompatibility.ts": {
-      "reason": "Harmony native transport and pairing compatibility with existing deployed hubs.",
+      "reason": "Harmony native transport, persisted session, pairing, deep-link and forwarded-context compatibility with existing deployed hubs.",
       "tokens": [
         "X-Jarvis-Client",
         "X-Jarvis-Op-Id",
-        "jarvis"
+        "jarvis",
+        "jarvis-context",
+        "jarvis-file"
       ],
       "path_tokens": [],
       "external_refs": []
@@ -543,7 +561,9 @@
     "harmony/entry/src/main/ets/models/Compatibility.ets": {
       "reason": "Harmony context envelopes read and send the existing negotiated wire tag.",
       "tokens": [
-        "jarvis-context"
+        "jarvis",
+        "jarvis-context",
+        "jarvis-file"
       ],
       "path_tokens": [],
       "external_refs": []
@@ -1225,6 +1245,7 @@
       "tokens": [
         "JARVIS_ASSISTANT",
         "JARVIS_ASSISTANT_BIN",
+        "JARVIS_CATEGORIES",
         "JARVIS_GUEST",
         "JARVIS_SESSION_ID",
         "JARVIS_SPACE",
@@ -1366,6 +1387,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "web/e2e/composer-inline-references.mjs": {
+      "reason": "Browser assertions for the exact legacy context/file markers accepted by the registered compatibility adapter.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "web/src/lib/assistant-chat.test.ts": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
@@ -1482,6 +1511,30 @@
       "reason": "Regression fixture for the historical state directory in a session's working directory.",
       "tokens": [
         ".jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/tests/agent-task-groups.test.mjs": {
+      "reason": "Exact persisted started-by compatibility fixture for the manual-task grouping contract.",
+      "tokens": [
+        "started_by_jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/tests/extension-ui.test.mjs": {
+      "reason": "Exact legacy deep-link compatibility assertion for the app-owned subscription setup route.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "harmony/entry/src/main/ets/models/Wire.ets": {
+      "reason": "Exact persisted started-by compatibility field used by the task-grouping reader.",
+      "tokens": [
+        "started_by_jarvis"
       ],
       "path_tokens": [],
       "external_refs": []

@@ -151,6 +151,9 @@ class ShellLaneTests(unittest.TestCase):
         (self.root / "scripts/assets").mkdir()
         (self.root / "scripts/assets/gen_tokens.py").write_text("pass\n")  # the generated-tokens check (#4209)
         (self.root / "scripts/assets/gen_icon_meanings.py").write_text("pass\n")  # the icon meanings check (#4209)
+        (self.root / "scripts/test").mkdir()
+        # The client domain guard's Android scan (docs/server/architecture.md "Domain model", 'Client modules').
+        (self.root / "scripts/test/test_client_domain_modules.py").write_text("pass\n")
         (self.root / "android/settings.gradle.kts").write_text(SETTINGS)
         (self.root / "android/gradle/libs.versions.toml").write_text('[versions]\njdk = "21"\ncompileSdk = "37"\nbuildTools = "37.0.0"\n')
         (self.root / "android/gradle/wrapper/gradle-wrapper.jar").touch()

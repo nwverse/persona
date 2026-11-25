@@ -5,6 +5,7 @@ package wire
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -63,6 +64,7 @@ type Manifest struct {
 	// Configured host CLI integrations the program may use through a bounded, read-only typed RPC. IDs never name an
 	// executable; writes and arbitrary command lines are not part of this contract.
 	HostIntegrations []HostIntegrationSpec `json:"host_integrations,omitempty"`
+	Upgrade          *UpgradeSpec          `json:"upgrade,omitempty"`
 }
 
 // HostIntegrationSpec: A configured CLI integration, selected by a closed ID rather than by an extension-provided
@@ -122,6 +124,19 @@ type AuthSpec struct {
 	// An extension_page (plugin_page) ui contribution: its own sign-in page for apps that do not know auth; apps that do
 	// leave it out of its pages.
 	Page string `json:"page,omitempty"`
+}
+
+// UpgradeSpec: what the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The
+// hub snapshots the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse
+// the manifest.
+type UpgradeSpec struct {
+	// auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade.
+	Backup string `json:"backup,omitempty"`
+	// Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+	Prepare bool `json:"prepare,omitempty"`
+	// Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+	// snapshot.
+	HealthCheck bool `json:"health_check,omitempty"`
 }
 
 type Dependency struct {
@@ -1076,9 +1091,12 @@ type InitializeParams struct {
 	Extension *ExtensionInfo `json:"extension,omitempty"`
 	Plugin    *ExtensionInfo `json:"plugin,omitempty"`
 	// The configuration with the schema's defaults filled in.
-	Config  json.RawMessage   `json:"config,omitempty"`
-	Secrets map[string]string `json:"secrets,omitempty"`
-	Granted Permissions       `json:"granted"`
+	Config json.RawMessage `json:"config,omitempty"`
+	// The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+	// authorization input, not extension settings persisted in the extension registry.
+	InboxVisibility json.RawMessage   `json:"inbox_visibility,omitempty"`
+	Secrets         map[string]string `json:"secrets,omitempty"`
+	Granted         Permissions       `json:"granted"`
 	// The contributions this run is for, by extension point.
 	Active map[string][]string `json:"active,omitempty"`
 	// The contributions of the other extensions that are on to the points it exports, by its point id (event
@@ -3693,31 +3711,32 @@ var ConnectorErrorCodes = []string{"rate_limited", "no_machine", "offline", "nod
 // read-only sources and calls their short tool names. An extension's connector with one this hub does not know loses
 // only that capability.
 const (
-	ConnectorCapabilityStatus         = "status"
-	ConnectorCapabilityTools          = "tools"
-	ConnectorCapabilityActions        = "actions"
-	ConnectorCapabilityEvents         = "events"
-	ConnectorCapabilityInbox          = "inbox"
-	ConnectorCapabilitySettle         = "settle"
-	ConnectorCapabilityArchive        = "archive"
-	ConnectorCapabilityChats          = "chats"
-	ConnectorCapabilityItems          = "items"
-	ConnectorCapabilityLogin          = "login"
-	ConnectorCapabilityOptions        = "options"
-	ConnectorCapabilityThreads        = "threads"
-	ConnectorCapabilitySnapshot       = "snapshot"
-	ConnectorCapabilityGroup          = "group"
-	ConnectorCapabilityMeta           = "meta"
-	ConnectorCapabilityFallback       = "fallback"
-	ConnectorCapabilityMachines       = "machines"
-	ConnectorCapabilityRecall         = "recall"
-	ConnectorCapabilityHistory        = "history"
-	ConnectorCapabilityHistoryAnchors = "history_anchors"
-	ConnectorCapabilityCatalog        = "catalog"
+	ConnectorCapabilityStatus          = "status"
+	ConnectorCapabilityTools           = "tools"
+	ConnectorCapabilityActions         = "actions"
+	ConnectorCapabilityEvents          = "events"
+	ConnectorCapabilityInbox           = "inbox"
+	ConnectorCapabilitySettle          = "settle"
+	ConnectorCapabilityArchive         = "archive"
+	ConnectorCapabilityChats           = "chats"
+	ConnectorCapabilityItems           = "items"
+	ConnectorCapabilityLogin           = "login"
+	ConnectorCapabilityOptions         = "options"
+	ConnectorCapabilityThreads         = "threads"
+	ConnectorCapabilitySnapshot        = "snapshot"
+	ConnectorCapabilityGroup           = "group"
+	ConnectorCapabilityMeta            = "meta"
+	ConnectorCapabilityFallback        = "fallback"
+	ConnectorCapabilityMachines        = "machines"
+	ConnectorCapabilityRecall          = "recall"
+	ConnectorCapabilityHistory         = "history"
+	ConnectorCapabilityHistoryAnchors  = "history_anchors"
+	ConnectorCapabilityCatalog         = "catalog"
+	ConnectorCapabilityInboxVisibility = "inbox_visibility"
 )
 
 // ConnectorCapabilities are the values of ConnectorCapability, in order.
-var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"}
+var ConnectorCapabilities = []string{"status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"}
 
 // ConnectorState: connectorStatus.state. disabled is the hub's own (the user switched it off); a program never
 // answers it.
@@ -4536,18 +4555,39 @@ type ConnectorKBItem struct {
 	// Why it concerns the owner, as far as the program can tell: mentions (the document mentions the owner),
 	// comment_mentions (a comment or reply on it does), authored (the owner owns it), viewed (the owner opened it
 	// recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
-	Signals      []string  `json:"signals,omitempty"`
-	Importance   string    `json:"importance,omitempty"`
-	Relevance    int       `json:"relevance,omitempty"`
-	Tags         []string  `json:"tags,omitempty"`
-	Locked       bool      `json:"locked,omitempty"`
-	TaggedAt     time.Time `json:"tagged_at,omitzero"`
-	Pinned       string    `json:"pinned,omitempty"`
-	LockedFields []string  `json:"locked_fields,omitempty"`
+	Signals []string `json:"signals,omitempty"`
+	// The content's identity across sources (feishu_doc:<obj_token>): items from two sources with the same key are kept
+	// once, with both in sources.
+	CanonicalKey string `json:"canonical_key,omitempty"`
+	// Other ids other sources store the same content under (a wiki node token).
+	Aliases []string `json:"aliases,omitempty"`
+	// Only grows: an item handed over with a lower revision than the stored one does not replace it.
+	Revision int    `json:"revision,omitempty"`
+	BodyHash string `json:"body_hash,omitempty"`
+	// The item's text (a document as Markdown, a meeting's transcript), bounded by the source.
+	Content string `json:"content,omitempty"`
+	// Every place the content was read from.
+	Sources      []ConnectorKBSourceRef `json:"sources,omitempty"`
+	Importance   string                 `json:"importance,omitempty"`
+	Relevance    int                    `json:"relevance,omitempty"`
+	Tags         []string               `json:"tags,omitempty"`
+	Locked       bool                   `json:"locked,omitempty"`
+	TaggedAt     time.Time              `json:"tagged_at,omitzero"`
+	Pinned       string                 `json:"pinned,omitempty"`
+	LockedFields []string               `json:"locked_fields,omitempty"`
 	// The store's: which extension holds a locked field. A connector's is ignored.
 	Provenance map[string]ConnectorKBProvenance `json:"provenance,omitempty"`
 	// The store's: the links the user removed, by list. A connector's is ignored.
 	Excluded map[string][]string `json:"excluded,omitempty"`
+}
+
+// ConnectorKBSourceRef: one place a knowledge-base item was read from.
+type ConnectorKBSourceRef struct {
+	Channel string    `json:"channel"`
+	Binding string    `json:"binding,omitempty"`
+	Account string    `json:"account,omitempty"`
+	Entry   string    `json:"entry,omitempty"`
+	SeenAt  time.Time `json:"seen_at,omitzero"`
 }
 
 // ConnectorKBProvenance: who holds a locked field of a knowledge-base entity, and from what (kb.schema.json
@@ -5091,6 +5131,10 @@ type KBEntry struct {
 	// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872);
 	// absent on other kinds, before a match and from an older hub.
 	MeetingID string `json:"meeting_id,omitempty"`
+	// A recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a hub
+	// transcription not final) while nothing can settle it: module_off when the recording module is off. Derived when
+	// read, never stored; absent otherwise and from an older hub.
+	Paused string `json:"paused,omitempty"`
 	// Reference-only for a project that stores pointers. Omitted means full.
 	ProjectMode string              `json:"project_mode,omitempty"`
 	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
@@ -5155,6 +5199,9 @@ type KBDetail struct {
 	// A person's profiles by writer ("user", "ext:<id>"), as written; summary shows them too
 	// (docs/assistant/knowledge.md "Person profiles").
 	Profiles map[string]KBProfileRecord `json:"profiles,omitempty"`
+	// A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is
+	// off. Derived when read, never stored.
+	Paused string `json:"paused,omitempty"`
 	// Reference-only for a project that stores pointers. Omitted means full.
 	ProjectMode string              `json:"project_mode,omitempty"`
 	Freshness   *KBProjectFreshness `json:"freshness,omitempty"`
@@ -5686,19 +5733,25 @@ type ModelRefusal struct {
 }
 
 // AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
-// "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list):
-// invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
-// assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
-// not set up: try again).
+// "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list, or
+// "assistant.events" for assistant.event): invalid_params; not_found (assistant.messages: no such conversation in the
+// assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+// computer is not connected or not set up: try again); assistant.event only: no_main_conversation (the user has no
+// main conversation: nothing was started or changed, do not retry until they have one); rate_limited (data
+// {retry_after} in seconds: too many events from this extension); queue_full (this extension already has the most
+// events waiting behind a running turn: try again later).
 const (
-	AssistantErrorCodeInvalidParams    = "invalid_params"
-	AssistantErrorCodeNotFound         = "not_found"
-	AssistantErrorCodeAssistantOffline = "assistant_offline"
-	AssistantErrorCodeMachineOffline   = "machine_offline"
+	AssistantErrorCodeInvalidParams      = "invalid_params"
+	AssistantErrorCodeNotFound           = "not_found"
+	AssistantErrorCodeAssistantOffline   = "assistant_offline"
+	AssistantErrorCodeMachineOffline     = "machine_offline"
+	AssistantErrorCodeNoMainConversation = "no_main_conversation"
+	AssistantErrorCodeRateLimited        = "rate_limited"
+	AssistantErrorCodeQueueFull          = "queue_full"
 )
 
 // AssistantErrorCodes are the values of AssistantErrorCode, in order.
-var AssistantErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "machine_offline"}
+var AssistantErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "machine_offline", "no_main_conversation", "rate_limited", "queue_full"}
 
 // AssistantConversationsParams: assistant.conversations (assistant.read): the conversations last active at or after
 // since, newest first.
@@ -5886,6 +5939,118 @@ type AssistantEntriesChangedEvent struct {
 	ID       string `json:"id"`
 	RecordID string `json:"record_id"`
 	Status   string `json:"status"`
+}
+
+// AssistantEventSeverity: how much the user should care. info: tell them only if it matters to what they are doing;
+// warning: they should hear about it; critical: they need to know now.
+const (
+	AssistantEventSeverityInfo     = "info"
+	AssistantEventSeverityWarning  = "warning"
+	AssistantEventSeverityCritical = "critical"
+)
+
+// AssistantEventSeverities are the values of AssistantEventSeverity, in order.
+var AssistantEventSeverities = []string{"info", "warning", "critical"}
+
+// AssistantEventState: where the thing an event's key names is now, in the extension's own words (firing, resolved,
+// ...): a label each extension chooses.
+// It is free text, not a closed set of values.
+type AssistantEventState string
+
+// AssistantEventReplace: whether an event takes the place of one of the extension's with the same key still waiting
+// behind a running turn: absent and true replace, false keeps the earlier one as its own message.
+// It has three values: AssistantEventReplaceDefault (absent from the JSON), AssistantEventReplaceTrue and
+// AssistantEventReplaceFalse.
+type AssistantEventReplace uint8
+
+const (
+	// AssistantEventReplaceDefault: absent.
+	AssistantEventReplaceDefault AssistantEventReplace = iota
+	// AssistantEventReplaceTrue: true.
+	AssistantEventReplaceTrue
+	// AssistantEventReplaceFalse: false.
+	AssistantEventReplaceFalse
+)
+
+// IsZero reports AssistantEventReplaceDefault, which omitzero leaves out of the JSON.
+func (v AssistantEventReplace) IsZero() bool { return v == AssistantEventReplaceDefault }
+
+// Or is the boolean v says, or absent when v is the default.
+func (v AssistantEventReplace) Or(absent bool) bool {
+	switch v {
+	case AssistantEventReplaceTrue:
+		return true
+	case AssistantEventReplaceFalse:
+		return false
+	}
+	return absent
+}
+
+// MarshalJSON writes true or false; AssistantEventReplaceDefault is null (a field tagged omitzero leaves it out
+// instead).
+func (v AssistantEventReplace) MarshalJSON() ([]byte, error) {
+	switch v {
+	case AssistantEventReplaceDefault:
+		return []byte("null"), nil
+	case AssistantEventReplaceTrue:
+		return []byte("true"), nil
+	case AssistantEventReplaceFalse:
+		return []byte("false"), nil
+	}
+	return nil, errors.New("AssistantEventReplace: not one of its three values")
+}
+
+// UnmarshalJSON reads true or false, and null as absent; anything else fails.
+func (v *AssistantEventReplace) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*v = AssistantEventReplaceDefault
+		return nil
+	}
+	var b bool
+	if err := json.Unmarshal(data, &b); err != nil {
+		return err
+	}
+	*v = AssistantEventReplaceFalse
+	if b {
+		*v = AssistantEventReplaceTrue
+	}
+	return nil
+}
+
+// AssistantEventParams: assistant.event (assistant.events): one event for the assistant's main conversation. The
+// assistant gets it as something an extension observed, never as the user's words, and decides what to tell the user.
+// An event with the same key as one of this extension's still waiting behind a running turn replaces it, unless
+// replace is false. Lengths are in characters.
+type AssistantEventParams struct {
+	// What the event is about (one monitored thing). The same extension and key replace an event not yet delivered.
+	Key      string `json:"key"`
+	Severity string `json:"severity,omitempty"`
+	// One line saying what happened.
+	Title string `json:"title"`
+	// The details.
+	Body string `json:"body,omitempty"`
+	// What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order.
+	ActionHint string `json:"action_hint,omitempty"`
+	// Where the thing the key names is now, in the extension's words (firing, resolved, ...).
+	State AssistantEventState `json:"state,omitempty"`
+	// false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true.
+	Replace AssistantEventReplace `json:"replace,omitzero"`
+}
+
+// AssistantEventDelivery: what happened to the event. delivered: sent into the idle main conversation now. queued:
+// the conversation is running (or not reachable just now), so it goes in when its turn ends. replaced: it took the
+// place of an earlier event with the same key that was still queued.
+const (
+	AssistantEventDeliveryDelivered = "delivered"
+	AssistantEventDeliveryQueued    = "queued"
+	AssistantEventDeliveryReplaced  = "replaced"
+)
+
+// AssistantEventDeliveries are the values of AssistantEventDelivery, in order.
+var AssistantEventDeliveries = []string{"delivered", "queued", "replaced"}
+
+type AssistantEventResult struct {
+	Delivery string `json:"delivery"`
 }
 
 // AssistantDataStatusParams: assistant.data_status takes no parameters.
@@ -6880,6 +7045,10 @@ type MemoryEntriesResult struct {
 	HasMore bool `json:"has_more"`
 	// Opaque: what to send as after for the next page; required in practice whenever has_more is true.
 	After string `json:"after,omitempty"`
+	// The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+	// keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+	// out or 0: 4096. Entries past it are left out, the most important kept.
+	StandingBytes int `json:"standing_bytes,omitempty"`
 }
 
 // MemoryEntry: one entry as the program keeps it. Only an active entry is carried; the others may be answered (so a
@@ -6890,8 +7059,8 @@ type MemoryEntry struct {
 	ID string `json:"id"`
 	// What the entry says, as the program would render it, on one or a few lines.
 	Text string `json:"text"`
-	// The program's own grouping (preferences, workflow, people…). Informational: the hub neither filters nor orders by
-	// it.
+	// The program's own grouping (preferences, workflow, people…). Used for explicit recall tag matching; it does not
+	// change priority or visibility.
 	Facet string `json:"facet,omitempty"`
 	// active: the program would use it today, whatever it calls that state itself (a program with its own stable or
 	// shifting states answers active for both); candidate: not borne out yet; dormant: not seen lately; retired: no
@@ -7757,6 +7926,7 @@ var newDef = map[string]func() any{
 	"ToolArchive":                   func() any { return new(ToolArchive) },
 	"ToolNPM":                       func() any { return new(ToolNPM) },
 	"AuthSpec":                      func() any { return new(AuthSpec) },
+	"UpgradeSpec":                   func() any { return new(UpgradeSpec) },
 	"Dependency":                    func() any { return new(Dependency) },
 	"Exports":                       func() any { return new(Exports) },
 	"ExportedPoint":                 func() any { return new(ExportedPoint) },
@@ -8066,6 +8236,7 @@ var newDef = map[string]func() any{
 	"ConnectorHistoryAnchor":        func() any { return new(ConnectorHistoryAnchor) },
 	"ConnectorItems":                func() any { return new(ConnectorItems) },
 	"ConnectorKBItem":               func() any { return new(ConnectorKBItem) },
+	"ConnectorKBSourceRef":          func() any { return new(ConnectorKBSourceRef) },
 	"ConnectorKBProvenance":         func() any { return new(ConnectorKBProvenance) },
 	"ConnectorKBEvidence":           func() any { return new(ConnectorKBEvidence) },
 	"ConnectorDocTitleParams":       func() any { return new(ConnectorDocTitleParams) },
@@ -8183,6 +8354,8 @@ var newDef = map[string]func() any{
 	"AssistantEntriesParams":        func() any { return new(AssistantEntriesParams) },
 	"AssistantEntriesResult":        func() any { return new(AssistantEntriesResult) },
 	"AssistantEntriesChangedEvent":  func() any { return new(AssistantEntriesChangedEvent) },
+	"AssistantEventParams":          func() any { return new(AssistantEventParams) },
+	"AssistantEventResult":          func() any { return new(AssistantEventResult) },
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
@@ -8354,6 +8527,7 @@ var Calls = map[string]Call{
 	"assistant.messages":              {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
 	"assistant.memory":                {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
 	"assistant.entries.list":          {Name: "assistant.entries.list", From: "program", Params: "AssistantEntriesParams", Result: "AssistantEntriesResult"},
+	"assistant.event":                 {Name: "assistant.event", From: "program", Params: "AssistantEventParams", Result: "AssistantEventResult"},
 	"event.assistant.entries.changed": {Name: "event.assistant.entries.changed", From: "hub", Params: "AssistantEntriesChangedEvent", Result: "", Event: true},
 	"assistant.data_status":           {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
 	"machines.pair_link":              {Name: "machines.pair_link", From: "program", Params: "MachinesPairLinkParams", Result: "MachinesPairLinkResult"},

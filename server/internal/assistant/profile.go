@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"net/http"
 	"path"
 	"slices"
@@ -91,6 +92,9 @@ type Settings struct {
 	MinutesDays *int `json:"minutes_days,omitempty"`
 	// KBTopics: the knowledge base organizes knowledge points by topic (#3783, kb/topics.go). nil is on (the default).
 	KBTopics *bool `json:"kb_topics,omitempty"`
+	// Dashboards: conversations may draft pages the owner keeps in the sidebar (#15017, pages_ui.go). nil is off (the
+	// default); only the owner changes it (a device with full access).
+	Dashboards *bool `json:"dashboards,omitempty"`
 	// MainBackgroundFolded: the apps fold the main conversation's background rounds (another conversation's message,
 	// a scheduled task or follow-up) into one line that opens on request (#4314). nil is on (the default).
 	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
@@ -114,6 +118,8 @@ type Settings struct {
 	TodosV2 *bool `json:"todos_v2,omitempty"`
 	// IntegrationsV2 enables the unified experimental Integrations & Extensions experience (#14802, #14805). nil is off (the default).
 	IntegrationsV2 *bool `json:"integrations_v2,omitempty"`
+	// LabsSeen is the set of experiment IDs acknowledged on any client of this assistant.
+	LabsSeen []string `json:"labs_seen,omitempty"`
 	// MeetingAttendanceDefault: the role a meeting recording pre-selects on the phone (off, listener, participant;
 	// docs/assistant/meeting-minutes.md "Attending a meeting"); nil is off.
 	MeetingAttendanceDefault *string `json:"meeting_attendance_default,omitempty"`
@@ -187,6 +193,13 @@ type Settings struct {
 	// subscription's usage limit stops it, until that limit resets (#14435, limit_fallback.go). Empty (the default):
 	// it waits for the reset as before. The assistant writes it through persona_settings; PUT /api/v1/assistant does not.
 	LimitFallbacks []string `json:"limit_fallbacks,omitempty"`
+	// MachineFallbacks are the backup computers, first choice first, that the main conversation, direction leaders, and
+	// unbound default routines fail over to when the primary computer stays offline past MachineFallbackMinutes
+	// (#15119, machine_fallback.go). Empty (the default) disables automatic cross-machine failover.
+	MachineFallbacks []string `json:"machine_fallbacks,omitempty"`
+	// MachineFallbackMinutes is how many minutes a computer must stay offline before automatic failover moves
+	// conversations or falls back default routines to MachineFallbacks (#15119). nil or 0 uses the 10-minute default.
+	MachineFallbackMinutes *int `json:"machine_fallback_minutes,omitempty"`
 	// BriefingWaits tunes only the deterministic wait rows in morning/evening facts: the briefing module's setting
 	// (internal/modules/briefing, Waits), kept here as stored, also while the module is off. Nil uses the module's
 	// defaults (the supervision thresholds); changes go through persona_settings' ordinary owner approval (modules.go),
@@ -548,7 +561,7 @@ func (s *Service) minutesDays(ctx context.Context) int {
 }
 
 // meetingRoles are the values of meeting_attendance_default, off (the default) first.
-var meetingRoles = []string{kb.AttendanceOff, kb.AttendanceListener, kb.AttendanceParticipant}
+var meetingRoles = []string{recordingwire.AttendanceOff, recordingwire.AttendanceListener, recordingwire.AttendanceParticipant}
 
 // meetingAttendanceDefault is the role a meeting recording pre-selects (meeting_attendance_default, off by default).
 func (s *Service) meetingAttendanceDefault(ctx context.Context) string {
@@ -560,7 +573,7 @@ func meetingAttendanceOf(v Settings) string {
 	if r := v.MeetingAttendanceDefault; r != nil && slices.Contains(meetingRoles, *r) {
 		return *r
 	}
-	return kb.AttendanceOff
+	return recordingwire.AttendanceOff
 }
 
 // settingsLastGood is savedSettings, except that a transient read failure serves the settings read last when there
@@ -805,14 +818,17 @@ type assistantView struct {
 	MinutesDays int `json:"minutes_days"`
 	// KBTopics is in effect, like MainTasksQuiet.
 	KBTopics bool `json:"kb_topics"`
+	// Dashboards is in effect (off until the owner turns it on).
+	Dashboards bool `json:"dashboards"`
 	// MainBackgroundFolded is in effect, like MainTasksQuiet.
 	MainBackgroundFolded    bool `json:"main_background_folded"`
 	FoldRoutineRelayReplies bool `json:"fold_routine_relay_replies"`
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
-	RecentTaskChats bool `json:"recent_task_chats"`
-	WorkGuide       bool `json:"work_guide"`
-	TodosV2         bool `json:"todos_v2"`
-	IntegrationsV2  bool `json:"integrations_v2"`
+	RecentTaskChats bool     `json:"recent_task_chats"`
+	WorkGuide       bool     `json:"work_guide"`
+	TodosV2         bool     `json:"todos_v2"`
+	IntegrationsV2  bool     `json:"integrations_v2"`
+	LabsSeen        []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
 	MeetingTranscriptionDefault   string   `json:"meeting_transcription_default"`
@@ -878,6 +894,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
 		CacheKeepalive: cacheKeepaliveOf(v).Enabled, CacheKeepaliveMinutes: cacheKeepaliveOf(v).IntervalMinutes, CacheKeepaliveMax: cacheKeepaliveOf(v).MaxRequests,
 		IdleReleaseMinutes: s.idleReleaseMinutes(ctx), MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
+		Dashboards:                  v.Dashboards != nil && *v.Dashboards,
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),
 		MeetingTranscriptionExtension: meetingTranscriptionExtensionOf(v), MeetingTranscriptionReady: s.transcriptionReadyNow(),
 		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
@@ -887,6 +904,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		WorkGuide:               v.workGuideOn(),
 		TodosV2:                 v.todosV2On(),
 		IntegrationsV2:          v.integrationsV2On(),
+		LabsSeen:                append([]string{}, v.LabsSeen...),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DeliveryGate:            deliveryGateOf(v),
 		DoneNeedsDelivery:       deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
@@ -917,20 +935,29 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 			// Select the headless conversations before copying, decorating or serializing the inventory: coding
 			// sessions can outnumber them by thousands.
 			if m, found := s.fleetMachine(d.ID); found {
-				list = s.decorateInventory(m.ID, s.assistantSessions(m), false)
+				list = s.decorateInventory(m.ID, s.assistantSessions(ctx, m), false)
 			}
 		} else {
 			list, _ = s.sessions(ctx, d.ID)
 		}
 		for _, c := range list {
-			if c.Assistant && !c.IsDeleted() && spaceOf(c) == sp && (withArchived || !c.Archived) {
-				out.Conversations = append(out.Conversations, c)
+			if !c.Assistant || c.IsDeleted() || !(withArchived || !c.Archived) {
+				continue
 			}
+			rowSpace, known := s.conversationRowSpace(ctx, c)
+			if !known || rowSpace != sp {
+				continue
+			}
+			c.Space = rowSpace
+			out.Conversations = append(out.Conversations, c)
 		}
 	}
 	if sp == "" && v.MainMachineID != "" && v.MainMachineID != v.MachineID {
-		if c, ok := s.session(ctx, v.MainMachineID, v.Main); ok && c.Assistant && spaceOf(c) == "" {
-			out.Conversations = append(out.Conversations, c)
+		if c, ok := s.session(ctx, v.MainMachineID, v.Main); ok && c.Assistant {
+			if rowSpace, known := s.conversationRowSpace(ctx, c); known && rowSpace == "" {
+				c.Space = rowSpace
+				out.Conversations = append(out.Conversations, c)
+			}
 		}
 	}
 	return out
@@ -954,7 +981,7 @@ func (s *Service) profileRoutes() {
 		}
 		if r.Header.Get(RoleHeader) == roleExtension {
 			out.StartDefaults = nil // read with its own scope (GET /api/v1/assistant/start-defaults), not assistant.ask
-			out.Conversations = extensionConversations(out.Conversations)
+			out.Conversations = s.extensionViewConversations(r.Context(), out.Conversations)
 		}
 		apierr.WriteJSON(w, out)
 	})

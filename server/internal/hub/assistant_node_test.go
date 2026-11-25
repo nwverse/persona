@@ -118,7 +118,8 @@ func newAssistantNode(t *testing.T, h *Hub) *assistantNode {
 			} else if p["resume_only"] == true && !n.known[id] {
 				return nil, fmt.Errorf("conversation %s is gone", id)
 			}
-			if !n.omitSentItems && p["hold_pushes"] == true {
+			source, _ := p["message_source"].(map[string]any)
+			if !n.omitSentItems && source["kind"] == proto.SourceSupervision {
 				if text, _ := p["text"].(string); text != "" {
 					if n.sentItems == nil {
 						n.sentItems = map[string][]proto.Item{}

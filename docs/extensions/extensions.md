@@ -216,6 +216,7 @@ Lives at the root of the extension package. Example (a connector for a fictional
 | `tools` | No | Command-line programs it needs (#4507); the hub installs them in the extension's own directory and puts them on its `PATH`, see "Command-line programs (tools)"; requires `runtime` |
 | `auth` | No | `{title, description?, page?}`: the extension needs a sign-in (#4507); the program implements `auth.*`, see "Sign-in (auth)"; requires a `runtime` that speaks the protocol |
 | `host_integrations` | No | `[{id, version}]`: a configured host CLI integration, by its closed ID and a semantic-version range. At most one; requires an RPC runtime. The program calls `cli.call`, see "Host CLI integrations". This grants no shell, arbitrary command, write or credential access |
+| `upgrade` | No | `{backup?, prepare?, health_check?}`: what the extension asks of the hub around an automatic upgrade (#15238). `backup`: `auto` (default) / `required`; `prepare`: the hub calls the installed program's `upgrade.prepare` before backing up its data; `health_check`: the hub calls the new program's `upgrade.health` once it is up. `prepare` and `health_check` require a runtime that speaks the protocol. Every marketplace extension is backed up before an automatic upgrade whether or not it has this; see "Backup before an upgrade". Hubs from before this field read manifests strictly, so extensions using it ask for a newer hub in `engines` |
 
 Manifests are at most 256 KB and are read strictly: an unknown field at any level means it can't be installed (a misspelled `permission` is not silently ignored).
 
@@ -494,7 +495,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `agents.read` | See the Agents and chats on your computers | `GET /api/v1/sessions…` (list, info, items, images, screen), `/interactions`, `/interactions/history` (paged by time, see "Question history"), `/agents…` (personal Agents), `/workspaces`, `/workspace-board`; never the health space's chats or a private card (see "Never shown to extensions") |
 | `agents.control` | Drive Agents | `POST /api/v1/sessions` (create), a chat's `messages` / `interrupt` / `queue` / `queue/send-now` / `seen` / `rename`, `POST /api/v1/interactions/{id}/resolve` (approving a plan, or answering a terminal card with anything but a bare `dismiss`, also needs `agents.permission_mode`), `/choose` and `/reanswer`, sending messages to and marking read for personal Agents; with no terminal control characters in the text it sends (messages, prompts, notes, titles, answers; see below) |
 | `agents.permission_mode` | Change the permission mode of the chats it started itself | A chat's `modes` with `permission_mode` only, `POST /api/v1/sessions` resuming a chat with a `permission_mode`, approving a plan (`POST /api/v1/interactions/{id}/resolve` with `approve: true`, which sets the chat's mode) and answering a terminal card (`kind: "screen"`, whose keys can change it): only of a chat its extension opened (see below) |
-| `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat` |
+| `machines.read` | See your computers | `GET /api/v1/machines`, `/machines/{id}/metrics`, `/machines/{mid}/stat`, `GET /api/v1/assistant/machine-resources` (read-only per-machine resource summary including disk, OS/arch, failing launcher names and `is_hub`, excluding space sessions from `working_agents` and omitting connection errors and session details) |
 | `notify` | Send notifications to your devices | `POST /api/v1/notify` (see "Sending notifications") |
 | `push.grading` | Manage its push grading layer and preview grading decisions | `GET` / `PUT` / `DELETE /api/v1/push/grading/layer` (the extension's own persisted grading layer only; another extension's or manager's layer gets 403) and `POST /api/v1/push/grading/preview` (read-only decision preview without writing state). Never modifies the owner's `hub.ln_mode` switch or bypasses active owner attention modes, and is removed automatically when the extension is disabled, uninstalled or drops the scope. Granted by name only, not covered by the legacy `hub_api` or every-scope grant |
 | `assistant.ask` | Start chats with Persona and read chat activity | `GET /api/v1/assistant`, `POST /api/v1/assistant/conversations`, `GET …/conversations/{id}/feed`; never the health space's chats, nor what a feed holds of a to-do it is not shown (see "Never shown to extensions") |
@@ -504,12 +505,14 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `assistant.dispatch_policy` | Read and change the assistant dispatch policy | `GET` / `PUT /api/v1/assistant/dispatch-policy`; a policy written by an extension must expire within one hour (see "Dispatch policy") |
 | `assistant.start_defaults` | Read the Agent presets and set the defaults task Agents start with | `GET /api/v1/assistant/worker-presets`, `GET` / `PUT /api/v1/assistant/start-defaults`, `POST /api/v1/assistant/start-defaults/preview` (read-only: what a policy would do for a task, nothing stored or started); a policy written by an extension must expire within one hour ([assistant.md](../assistant/assistant.md) "Start defaults"). Not covered by the legacy `hub_api` full access: it can raise what task Agents spend (a preset, effort `max`, ultracode), so an extension gets it only by naming it, as `agents.permission_mode` |
 | `dispatch.guard` | Read and change the explicit-target dispatch guard and narrow the affected conversations' tools | `GET` / `PUT /api/v1/assistant/dispatch-guard`; an extension-written enabled policy must expire within one hour ([assistant.md](../assistant/assistant.md) "Explicit dispatch guard"). Granted by name only, not by the legacy every-scope grant |
+| `tasks.schedule` | Schedule pending tasks to available computers | `GET /api/v1/assistant/placement/pending`, `POST /api/v1/assistant/placement/{todo_id}/assign`, `POST /api/v1/assistant/placement/{todo_id}/defer`, plus the `placement.pending` wake event. Calling `GET /api/v1/assistant/placement/pending` refreshes the extension's 60-second active scheduling lease; without an active lease (or past the 15-second fallback window), the kernel falls back to its built-in machine selection. Never exposes task prompts or hidden privacy-space tasks. Granted by name only, not by the legacy `hub_api` or every-scope grant |
 | `todos.write` | Create and edit to-dos, attach chats to to-dos | `POST /api/v1/todos`, `PATCH /api/v1/todos/{id}`, a to-do's `agents/{mid}/{sid}` and `spaces/{mid}/{space…}` (`PUT` / `DELETE`), `POST /api/v1/todos/{id}/decisions` (outcome decisions only, see [todos.md](../assistant/todos.md) "API overview"), `PUT /api/v1/todos/{id}/repositories` and `PUT /api/v1/todos/{id}/repositories/{repo_id}/links` (replace repository associations and issue/PR links); creating and editing to-dos and adding decisions not with terminal control characters (see below); deleting to-dos, superseding decisions, completion checks and retries still require full access; none of a to-do it is not shown, nor a run or space it may not take onto one (404, see "Never shown to extensions") |
 | `decisions.raise` | Ask the owner for a decision | `POST /api/v1/decisions`, `GET /api/v1/decisions/{id}`, `POST /api/v1/decisions/{id}/withdraw`; raise a rich pending Needs-you decision, poll only the caller's own answer and withdraw it ([todos.md](../assistant/todos.md) "Decisions raised outside a supervisor"). It does not open any owner answer route and is never included in legacy every-scope access |
 | `assistant.read` | Read your Persona chats (your messages and its replies) | No HTTP route: the `assistant.conversations` / `assistant.messages` RPC (see "Assistant conversations"). `assistant.ask` does not include it |
 | `spaces` (#14574) | Manage domain-space metadata and SPACE.md | List and create tracks, change a track and its `SPACE.md`, and read or change a visible conversation's categories; no custom-kind writes. Explicit by name only, never included in the legacy every-scope grant. Conversation listing and starts still require `assistant.ask`; sensitive tracks remain hidden by their existing policy. |
 | `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only; another track's memory only as the user lets this extension read it) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
+| `assistant.events` | Tell your Persona main chat what it observes (events it can pass on to you; it cannot start or change chats) | No HTTP route: the `assistant.event` RPC (see "Assistant events"). Neither `assistant.ask` nor `assistant.read` includes it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
 | `market.refresh_own` | Refresh the extension marketplace it was installed from | `POST /api/v1/extensions/-/self/market/refresh` only. Not covered by an all-scope token or the legacy `hub_api` grant: the manifest must name it and the owner must approve it |
@@ -551,7 +554,7 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
 - **Compatibility**: old extensions with `hub_api: true` still get the hub's full token (only in env vars), with an extra warning on install and upgrade, "hub_api is the legacy form"; extensions in manager.json still get the full token. On a manager other than the built-in one, both get a token of every scope instead (none of the routes open to full credentials only): that manager has no token of the hub's to hand on. Every other extension's token there opens the scopes it asked for and no more.
   An attached package ("Attaching an installed package") granted `hub_api` gets a token of every scope too, on any manager, in `initialize` only: its program is not the manager's child, so it never gets the hub's own token.
   One installed from `remote:` and granted `hub_api` gets no hub token (one granted scopes gets a token of those).
-  A token of every scope has every scope but `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard`, `push.grading` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
+  A token of every scope has every scope but `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard`, `push.grading`, `tasks.schedule` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
   The `hub_api` grant covers every scope but those named-only scopes: upgrading from `hub_api` to a new version that asks for only a few scopes needs no new consent, unless one of them is one of those named-only scopes (which `added_permissions` then lists); the reverse does.
 - The permission summary includes the scopes (normalized: sorted, deduplicated); for extensions without `hub` the summary is the same as before. An upgrade that adds scopes needs consent again, and `added_permissions` shows "Use more of the hub's features".
 
@@ -849,7 +852,7 @@ The contribution (extension point `memory_sources`, version 1, namespace `memory
 
 | Method | Parameters → answer | Notes |
 | --- | --- | --- |
-| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
+| `memory.entries` | `{contribution, limit, after?}` → `{entries, tagged, has_more, after?, standing_bytes?}` | One page, most important first: standing entries, then by `rank`, then newest. `limit` is 1 to 500 (the manager asks 200) and only caps the page: end it early, with `has_more` and `after`, so the answer stays within 1 MB (200 entries of 4096 CJK characters would not). `after` is the previous page's opaque cursor; `has_more` true needs an `after`, and true with an empty one is read as the end of the entries. Read-only: answering changes nothing in the program's state. |
 
 Each entry (`MemoryEntry`):
 
@@ -858,7 +861,7 @@ Each entry (`MemoryEntry`):
 | `id` | Required, `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, stable across pages and answers. The manager carries it as `memory-extension:<id>`, which a to-do's brief names. |
 | `text` | Required, 1 to 4096 characters: what the entry says, as the extension would render it. |
 | `status` | Required: `active` (the extension would use it today, whatever it calls that state itself: an extension with its own stable and shifting states answers `active` for both), `candidate` (not borne out yet), `dormant` (not seen lately), `retired` (no longer true). Only `active` is carried; any other value drops the entry. |
-| `facet` | The extension's own grouping (`^[a-z][a-z0-9_]{0,31}$`). Informational: the hub neither filters nor orders by it. |
+| `facet` | The extension's own grouping (`^[a-z][a-z0-9_]{0,31}$`). Used for explicit `decisions_query` tag matching; it does not change priority or visibility. |
 | `origin_space` | The slug of the space the entry was first said in; left out for the main space. |
 | `categories` | Up to 8 information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`); left out for a general entry. One the hub does not know makes the entry not known. |
 | `standing` | The extension kept it in every conversation (its own always-in-context entries). Only a standing entry goes to a standing channel (usage still decides); an entry without it comes in only by relevance, its `subjects` or text matched in a recall, a hand-off or the Inbox, as the extension's own "included when named" entries did. Until the source is wired in, the flag only orders entries among the extension's own. |
@@ -868,14 +871,22 @@ Each entry (`MemoryEntry`):
 - **`tagged`** is a promise for the whole page: the extension writes `origin_space` and `categories` on every entry and
   leaves them out only when empty. The manager reads a batch as tagged only when every page says so. Untagged, a missing
   field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
+- **`standing_bytes`** (#15312) is the bytes of standing entries' text the extension wants a standing channel to carry,
+  say its own setting for how much it keeps resident. The hub keeps this budget apart from its own memory ledger's
+  (neither spends the other's), takes the largest any page or source states, and caps it at 8192; left out or 0 means
+  4096. A negative value, or one that is not an integer, fails the page like the other page fields. Past the budget the
+  usual rule holds: the most important entries first, one that does not fit is left out and a smaller one after it may
+  still go (`docs/assistant/health.md` "Memory by scene", "Budgets").
 - **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
   is the hub's; an extension that pre-filters only hides entries the user's rules would have let through.
-- **Bounds**: 5 seconds per call, at most 1 MB per answer, at most 5 pages and 1000 entries per assembly (past them the
-  rest are left, less important by the extension's own order). An entry that breaks a rule above (an unknown `status`
+- **Bounds**: 5 seconds per call and at most 1 MB per answer. The hub follows the existing cursors to the end, with
+  no page or entry-count cutoff, and caches the complete source. A complete read is bounded by 2 minutes and 128 MiB
+  of answers; exceeding either limit or repeating a cursor fails the read, never caches a truncated prefix. Scene
+  output budgets apply after relevance and visibility filtering. An entry that breaks a rule above (an unknown `status`
   included) is dropped alone, never repaired, and an id seen before is dropped too; the rest of the page is kept.
 - **Errors**: the base error codes, or `not_ready` (the entries are not loaded yet) and `failed` with a one-line
   message. A timeout, an answer that is too large, a page whose own fields (`entries` as an array, `tagged`, `has_more`,
-  `after`) do not hold to the schema, a program that does not run, and every error mean the assemblies use
+  `after`, `standing_bytes`) do not hold to the schema, a program that does not run, and every error mean the assemblies use
   none of the extension's entries until the next read and log why. It never falls back to the extension's text.
 - **Who calls**: the manager only, for the owner's personal assemblies; no other extension, device or token can.
 - **How often**: every contribution that is on is read in one go, page by page, and the merged result is kept for a
@@ -900,7 +911,7 @@ Where the entries go (`docs/assistant/health.md` "Memory by scene" has the rules
 | A main-space conversation's standing context | Only its `standing` entries that the standing rule lets through (its own track's, general ones from elsewhere; never a sensitive entry from elsewhere), as one section of the per-message snapshot (`- 记忆…：` / `- Memory …:`), sent again only when it changes. Only for the owner's own assistant computer, never a guest's conversation or a work computer. Track conversations (spaces, health) take none, as they took none of the extension's instructions. |
 | A dispatched Agent's first message | A planned task: the hand-off rule (`handOffMemory`: general entries its words bear on, sensitive ones only after the owner's Start on a plan confirmed for their categories), noted in the to-do's brief. An Agent the assistant starts or a to-do handed to a new Agent: general entries its words bear on, never a sensitive one. Only on the owner's own computer. |
 | The Inbox's helper (triage and drafts) | General entries the item bears on, never a sensitive one, at most 1 KB, as a background block under the extension's name. |
-| A recall | `decisions_query`'s first page adds `memory: [{id, text}]` beside the ledger's `entries` (the cursor stays the ledger's): its own track's entries, general ones from elsewhere, sensitive ones only when the conversation carries every one of their categories; with `tag`, only entries whose subjects or text name it; at most 3 KB, the most important first. A filter the entries have no field for (`by`, `trust`, a `status` other than `active`) leaves them out. |
+| A recall | `decisions_query`'s first page adds `memory: [{id, text}]` beside the ledger's `entries` (the cursor stays the ledger's): its own track's entries, general ones from elsewhere, sensitive ones only when the conversation carries every one of their categories; with `tag`, every whitespace-separated term must occur in text, subjects, facet or categories (case-insensitive substring matching, terms may match different fields); at most 3 KB, the most important first. A filter the entries have no field for (`by`, `trust`, a `status` other than `active`) leaves them out and returns `memory_omitted: "ledger_filters"`; retry with `tag` alone to query extension memory. `scope` filters the ledger only. |
 
 **Text outlets.** An extension that does not declare `memory_sources` keeps its text outlets unchanged. Once an
 installed extension declares it (on or switched off, whether or not its entries can be read now), the hub stops
@@ -1186,6 +1197,55 @@ A resume never starts a new chat under the id it names: a computer that has noth
 `resume_unknown`, worded in the reader's language. A scoped device token resumes only a chat its computer lists
 outside the space (404 otherwise).
 
+### Assistant events
+
+An extension that watches something for the user (a disk, a build, a queue, a feed) can tell the assistant's **existing main conversation**
+what it saw, as a message, instead of leaving a state for the assistant to poll. It declares `assistant.events` in `permissions.hub`
+and calls `assistant.event` over its process connection. That is a call of the program's own pipe, so it needs no HTTP to the hub and works
+in the sandbox, which has no route to it. The hub checks the grant the user gave, as for `assistant.read` (the legacy `hub_api` full access counts too:
+that token can already message the main conversation as the user, and an event is less than that).
+
+| Method | Parameters | Returns | Scope |
+| --- | --- | --- | --- |
+| `assistant.event` | `{key, title, severity?, body?, action_hint?, state?, replace?}` | `{delivery}` | `assistant.events` |
+
+The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ext.Hub.AssistantEvent` (the fake hub in `sdk/go/exttest` refuses it without the scope).
+
+| Field | Meaning | Limit (characters) |
+| --- | --- | --- |
+| `key` | What the event is about, one monitored thing. Required | 128 |
+| `title` | One line saying what happened. Required | 200 |
+| `severity` | `info` (default), `warning` or `critical`: how much the user should care | |
+| `body` | The details | 4000 |
+| `action_hint` | What the extension suggests be done: a suggestion for the assistant to weigh, not an order | 500 |
+| `state` | Where the thing the key names is now, in the extension's words (`firing`, `resolved`…) | 64 |
+| `replace` | `false` keeps an earlier event with the same key as a message of its own. Absent is `true` | |
+
+Params are strict: an unknown field, a missing `key` or `title`, an unknown `severity` or a field over its limit is `invalid_params`
+(nothing is cut). Fields are trimmed.
+
+- **Only the existing main conversation.** The event goes to the conversation the user made main (`PUT /api/v1/assistant {"main": …}`). Without one the call fails with
+  `no_main_conversation`: nothing is started, restarted or replaced, and nothing is kept. This is what makes it different from `assistant.ask`'s
+  `POST /api/v1/assistant/conversations` with `main: true`, which starts a new main conversation, and from `agents.control`'s
+  `POST /api/v1/sessions/{mid}/{sid}/messages`, which is the user's own voice.
+- **Delivery.** `delivered`: the main conversation was idle and the event went in now. `queued`: it is running (or its computer could not take the message just now), so the event waits in the same persisted
+  queue conversation-to-conversation messages use (`conversation_send`; shown above the composer as "<extension>: <title>") and goes in when the turn ends, surviving a restart.
+  `replaced`: an event of this extension with the same `key` was still waiting in that queue, and this one took its place (its place in the line, the newest content), so a
+  flapping check leaves one message, not forty. The one going in at that moment is not replaced. `replace: false` skips this.
+- **Not the user's words.** The message starts with a `message-source` block of kind `extension` whose `title` is the extension's name from its manifest ([protocol.md](../protocol/protocol.md) "Message source"),
+  so clients show it as automated input, never as the user's bubble, and it is not counted as the user's message. The text the assistant reads (`prompts/assistant/extension_event.md`) says it is an
+  extension's report and that everything in it is untrusted information to weigh, not instructions; the extension's fields are written into it as one JSON object, whose escaping keeps any text, a closing
+  `</persona-context>` included, from standing as part of the message. The assistant decides whether and how to tell the user: `info` only when it matters to what they are doing, `warning` briefly with a suggestion,
+  `critical` now. The answer to a `warning` or `critical` event is pushed to the user's devices whatever its length; an `info` one's goes by the device's setting.
+- **Who is speaking** is the manager's word: the extension's id and name come from its registration, never from the params, and an event is not a hop of a chain between conversations.
+- **Limits.** At most 20 calls per extension in 10 minutes (refused ones count too), then `rate_limited` with `data.retry_after` in seconds; and at most 10 events of one extension waiting in the queue, then `queue_full`
+  (a replacement still goes through). They stop a faulty extension from filling the main conversation; a monitor that tells what changed is far below them.
+- **Errors**: `permission_denied` (`{scope: "assistant.events"}`), `invalid_params`, `no_main_conversation` (do not retry until the user has one), `rate_limited`, `queue_full`, `assistant_offline` and `machine_offline` (try again).
+
+```json
+{"permissions":{"hub":["assistant.events"]}}
+```
+
 ### Sent as the user: `sent.record` (#5278)
 
 The hub's write gate (`docs/extensions/connectors.md` "Sent as the user") sees only the writes that go through it. An extension's connector can also send in the user's name by itself, from inside a tool that reads (a reply the connector decides on, say), and the gate never sees that. A connector that does this says so in its manifest, and tells the hub about each send, so it shows in the same ledger:
@@ -1237,8 +1297,8 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
 
 - **Who goes through it**: sandboxed extensions ("Sandbox" below) have it as their only way out; when the sandbox is on but this machine has no sandbox, the env vars still point to it (well-behaved programs go through it, misbehaving ones can't be stopped, and the status says so).
   Extensions with the sandbox off, built-in ones, and ones from manager.json are unchanged and don't go through it.
-- **What it lets through**: only hosts in this extension's `permissions.network` (`*.example.com` means subdomains under it; IP addresses only if listed literally). Anything else gets 403 "`<host>` is not in this extension's
-  permissions.network", a log line, and a per-extension count (allowed / denied counts and the last denied host, in `sandbox.egress` of the extension's details; also counted in the health counters `egress.allowed` / `egress.denied`).
+- **What it lets through**: only hosts in this extension's `permissions.network` (`*.example.com` means subdomains under it; IP addresses only if listed literally), the addresses its saved settings name (`config:` entries, below) and the hosts its owner allowed (below). Anything else gets 403 "persona sandbox egress: `<host>:<port>` is not in this extension's
+  permissions.network, its settings addresses or the hosts its owner allowed" (the program sees that text; a CONNECT tunnel is refused with the same status), the log line "extension `<id>`: sandbox egress refused `<host>:<port>` (…)", and a per-extension count (allowed / denied counts and the last denied host, in `sandbox.egress` of the extension's details; also counted in the health counters `egress.allowed` / `egress.denied`).
   Names that resolve to local loopback or link-local addresses (cloud metadata services) are not allowed, unless that exact IP is listed. Any port.
 - **Addresses in entry lists** (#9504): `config:<list>[].<field>` expands to every valid saved entry address, with `:http` carrying the same explicit HTTP opt-in as a fixed `config:<field>`. Indexes, nested paths and extra suffixes are invalid. Each entry gets its own exact host/port check, including the default port and URL-userinfo rejection; changing that normalized target clears the entry's secret atomically with the settings write. Adding an entry needs no new manifest consent because the list declaration already disclosed current and future addresses.
 - **The hub's own API**: extensions holding a hub token (`hub` scopes or legacy `hub_api`) reach the hub from the sandbox at `http://hub.persona.internal` (that is what `PERSONA_HUB_URL` and `initialize`'s `hub.url` are),
@@ -1275,8 +1335,25 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
   The responding address is preferred on the next CONNECT to that host:port, but only if it appears in the freshly checked DNS answer. This in-memory hint cache holds at most 1024 destinations.
   Server-first protocols pass their banner through immediately. Clients get up to 1 s to send a complete hello; idle, incomplete, oversized or unrecognized input falls back to ordinary relay with its bytes preserved, without retries.
   Single-address destinations, tunnels through an upstream proxy, plain HTTP, HTTP upgrades and the source-runtime fetch broker keep their existing behavior and timeouts. There is no new configuration.
-- Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Node (libraries that apply the proxy themselves), Python and curl all honor them;
+- Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Python, curl and Node libraries that apply the proxy themselves honor them;
   old clients that only honor `HTTPS_PROXY` still can't get out from the sandbox, which is the intended effect.
+  `NODE_USE_ENV_PROXY=1` is set as well (#15707): without it Node's own `fetch` and `WebSocket` ignore the proxy variables, dial straight out and fail inside the Linux sandbox with `ENETUNREACH` while the proxy counts nothing.
+  Node reads it from 24.0 / 22.21 (`fetch`, `WebSocket`) and 24.5 (`http` / `https`); older Node ignores it, so a native-fetch extension needs Node 24 or a proxy-aware HTTP library. Strict sandboxes (source runtimes), which have no proxy variables, do not get it.
+
+#### Extension egress rules in short
+
+A sandboxed extension (Linux: no network namespace of its own but loopback; macOS: only the proxy's port) reaches the outside only through the egress proxy, and the proxy lets each connection through only when one of these allows its exact destination:
+
+1. its granted `permissions.network` (a name, `*.suffix`, or an IP written as it is);
+2. `hub.persona.internal` when it holds a hub token, and `host.persona.internal:<port>` when `permissions.network` lists a loopback address;
+3. an address its **saved settings** name through a granted `config:<field>` (or `config:<list>[].<field>`) entry: that host and port only;
+4. a host its **owner allowed** in the admin UI (one host, optionally one port; no wildcard).
+
+Nothing else is reachable: no other host or port, no direct connection, and no private, loopback, link-local or metadata address that a name resolves to unless rule 1 names that IP or rule 4 allows a LAN host. Sandboxes are not switched off to make an extension work, and the extension cannot widen these rules itself.
+
+**A connector whose service address is in its sign-in record** (#15707): some legacy connectors take their service URL in their own sign-in step and keep it in the connector's sealed secret storage, not in a `format: "uri"` setting, and their manifest declares no `permissions.network`. The hub cannot read that record (its format is the extension's), so it cannot derive a grant from it, and it must not trust the program to name its own destination. The narrow grant is rule 4: once the extension runs with a proxy-aware client (Node's native `fetch` / `WebSocket` with `NODE_USE_ENV_PROXY`, above), its refused destination appears under `sandbox.egress.recent_denied` and on the settings page; the owner allows exactly that host (with its port) for that extension in the admin UI, and the next connection goes through. An extension that can be changed should instead move the address into a `format: "uri"` setting with a `config:<field>` permission (rule 3), so that changing the address follows the user's settings.
+
+**Diagnosing "unreachable" from a sandboxed extension**: a 403 or a log line saying "sandbox egress refused `<host>:<port>`" means the destination has no grant (rules above). A client error such as `ENETUNREACH`, `EAI_AGAIN` or `connect: operation not permitted` with the extension's `sandbox.egress` counts unchanged means the program dialled around the proxy: its HTTP client ignores the proxy variables (old Node without `NODE_USE_ENV_PROXY`, a raw socket, a library with its own transport), or it addressed `127.0.0.1` instead of `host.persona.internal`.
 
 ### Sandbox (#1856)
 
@@ -1307,7 +1384,7 @@ The way out is a shorter data directory (`PERSONA_HOME`) or manager directory (`
 - New user, PID, network, IPC and UTS namespaces; system directories (`/usr`, `/bin`, `/lib*`, `/etc`, `/opt`) are read-only, the sandbox's own root is read-only too, `/tmp` is a private empty directory, and **the home directory is invisible** (its path can't be written to either);
   the package directory is read-only, while its own data directory (`PERSONA_EXTENSION_DATA`, also `HOME`) and run directory (`~/.persona/extensions/run/<id>/`: its HTTP socket, the proxy socket, and with `agent_runtimes` the socket that leads to the node's `runtime.sock`) are writable.
 - The network namespace has only loopback: the sandbox's first process is `personad __sandbox-run` (personad mounted read-only at `/run/persona/personad`), which forwards `127.0.0.1:3128` on the sandbox's own loopback to the proxy's
-  unix socket, then runs the extension's program (stdin / stdout / stderr as-is, signals forwarded, exit code passed through). So any language's HTTP client works as long as it honors `HTTP(S)_PROXY`, with no SDK changes; only to reach local services on the hub machine you write `host.persona.internal`, not a loopback address ("Egress" above).
+  unix socket, then runs the extension's program (stdin / stdout / stderr as-is, signals forwarded, exit code passed through). So any language's HTTP client works as long as it honors `HTTP(S)_PROXY` (Node's native `fetch` and `WebSocket` through `NODE_USE_ENV_PROXY`, set by the hub), with no SDK changes; only to reach local services on the hub machine you write `host.persona.internal`, not a loopback address ("Egress" above).
 - `systemd-run --user --scope` sets limits: `MemoryMax` (default 1024 MB), `MemorySwapMax=0`, `CPUQuota` (default 100%, i.e. one core). The manifest can request others:
   `runtime.resources: {"memory_mb": 64–8192, "cpu_percent": 10–800}` (old hubs read manifests strictly, so extensions using it put a build number that includes #1856 in `engines.persona`).
   When `systemd-run --user` isn't available (no user systemd), there is only bwrap, with no limits.
@@ -1827,7 +1904,7 @@ For extensions installed from an extension marketplace (source `market:<marketpl
 - **When to upgrade**: the source marketplace is still registered, the new version is higher than the installed one, usable on this hub (has a package for its platform, `engines` satisfied), the extension is enabled, both the master switch and this extension's own switch are on (both on by default),
   **it asks for no more than the user approved** (`MorePermissions` is false; the permission summary equals `granted_digest`), and the extension is idle: no calls in flight, no open HTTP requests or WebSockets
   (a connector always holds its extension, which does not count as in use), and the assistant is not working (its next step might call this extension's tools). If busy, check again the next minute.
-- **How to upgrade**: the same path as a manual upgrade: download per the marketplace index, verify sha256, preview, then upgrade (in the audit log the actor is `自动升级` (auto-upgrade)); stop the old, start the new, and if the new version does not come up within 30 seconds, roll back to the old one (`watchUpgrade`, actor `hub` in the audit log).
+- **How to upgrade**: the same path as a manual upgrade: download per the marketplace index, verify sha256, preview, then back up the extension's data ("Backup before an upgrade" below), then upgrade (in the audit log the actor is `自动升级` (auto-upgrade)); stop the old, start the new, and if the new version does not come up within 30 seconds, or fails its `upgrade.health`, roll back to the old one and to the backup (`watchUpgrade`, actor `hub` in the audit log).
   **A rolled-back version is recorded as skipped** and never auto-installed again (regardless of who upgraded it originally), until the marketplace has a higher version.
   That holds for a rollback the user starts too (the admin page's **Roll back**, `POST /api/v1/extensions/{id}/-/rollback`, `personad extension rollback`, #1826): the version left is skipped with `skipped_by: "user"` on the newer version's `upgrade` (and its "upgraded" note goes), so the apps say the user rolled back from it rather than that it didn't start, and nothing is pushed. A version that failed to install (download or verification failed) is retried the next time the marketplace yields a new index.
 - **Disabled extensions** (#1525): while an extension is turned off, the hub neither upgrades it nor tells the user of a version that asks for more; its newer version shows `state` `off` with a `detail` saying it is paused,
@@ -1847,6 +1924,37 @@ For extensions installed from an extension marketplace (source `market:<marketpl
 - **Telling the user**: success, rollback, waiting for confirmation and install failure are all recorded on the extension (`ExtensionView.upgrade_note`); online apps receive `{"type": "extension_upgrade", "extension", "note"}`;
   the first three also send a quiet push (`thread-id` `plugin_upgrade`, `interruption-level` `passive`, with both `plugin_upgrade: {plugin, kind, version}` and `extension_upgrade: {extension, kind, version}`).
 - **Where it is stored**: the hub setting `plugin_upgrades` (master switch, extensions switched off, skipped versions, versions already announced, each extension's last result); no new table.
+
+### Backup before an upgrade
+
+A new version may migrate or damage the data it finds; rolling back only the package would leave the old version on data it no longer
+understands. So before every automatic upgrade the hub keeps a snapshot of the extension's data directory, and a rollback puts it back
+(#15238). Code: `server/internal/extmgr/extension_upgrade_backup.go` (when) and `server/internal/extension/registry_backup.go` (the snapshots).
+
+- **What is kept**: the extension's own data directory (`PERSONA_EXTENSION_DATA`, `<extensions dir>/data/<storage key>`): directories,
+  regular files and symbolic links (as links, never followed; sockets and pipes are skipped). Its settings and secrets are not in it and an
+  upgrade does not change them. Hub-held business storage (`storage.*`, in Postgres) and the data of programs on computers (`node`) are not
+  part of the snapshot.
+- **Where and how many**: `<extensions dir>/backups/<storage key>/<UTC time>-<old version>.tar.gz`, written to a temporary file and renamed
+  when complete (the directory `0700`, the archives `0600`: they hold what the data holds, sign-in credentials included); after each
+  snapshot only the newest **3** per extension stay. An uninstall that does not keep the data removes them with
+  it (they are its data too); **Keep data** keeps them.
+- **Order**: when the installed version's manifest has `upgrade.prepare`, the hub first calls its program's
+  `upgrade.prepare {from, to, data_dir}` (2 minutes at most) so it can flush or export what it holds; an error, or `{ok: false, error}`,
+  stops the upgrade ("Upgrade failed" with the reason) and nothing else happens. The hub then **stops the old program**, so nothing writes
+  while the directory is copied, and takes the snapshot. An extension without a data directory has nothing to keep, and goes on.
+- **When the snapshot fails** (disk full, unreadable files): by default the failure is logged and the upgrade goes ahead without one. When
+  either version's manifest says `upgrade.backup: "required"`, the upgrade is not installed: the old program starts again and the extension
+  records "Upgrade failed" with the reason, tried again when the marketplace has a new index.
+- **Health check**: when the new version's manifest has `upgrade.health_check`, the hub calls its `upgrade.health {}` once it is running
+  (30 seconds at most; one started by calls is started for it). An error, or `{ok: false, error}`, counts as not coming up. Without it the
+  hub's usual checks apply: the program ends in error (exits, fails `initialize`, misses its HTTP `/health`) within the 30 seconds.
+- **Rollback**: the new program is stopped, the data directory is replaced whole by the snapshot (what the new version wrote is gone; a
+  snapshot of an extension that had no data directory removes the one the new version made), then the package goes back to the old
+  version, which starts on its own data. The note is `rolled_back` with the reason, and the version is skipped as for any rollback. A
+  snapshot that cannot be put back is logged and the package still rolls back.
+- **Not covered**: manual upgrades and a rollback the user starts by hand take no snapshot and restore none; the snapshots on disk are
+  there to restore by hand (`tar -xzf` into an empty data directory while the extension is off).
 
 `ExtensionView` has these extra fields for marketplace extensions: `auto_upgrade` (this extension's saved switch), `auto_upgrade_paused` (why that switch does not apply now: `market_removed` when its source marketplace is no longer registered, otherwise `disabled` when the extension is turned off; omitted otherwise),
 `market` (the id of the marketplace it upgrades from, also after that marketplace is removed; older hubs omit it),
@@ -1920,7 +2028,7 @@ An extension installed from a package (a marketplace, `file:`, `dir:`, …) can 
   `data_dir` in the details (`personad extension show <id>`) says where that data directory is, so a program run on its own on the same machine can keep using it in place.
 - **What is checked**: the sockets must be the ones the package's runtime uses (`rpc` for one that speaks the protocol, `http` when it serves HTTP), and the program on them must answer `manifest` (`GET /manifest` for an HTTP-only one) with the package's id and version, so attaching grants nothing the package did not have. Each connection asks again before `initialize` ("Refused" above), so a program swapped for another one or version later gets nothing either.
   A package with no program, or a source runtime one, cannot be attached; one installed from `remote:` has no package and is attached already.
-- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope except the named-only `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard` and `market.refresh_own` when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
+- **Its program**: `initialize` gives it no path on the hub machine (`extension.dir` and `extension.data_dir` are empty). It gets its settings and secrets as usual, and a hub token of its granted scopes, or of every scope except the named-only `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard`, `push.grading`, `tasks.schedule` and `market.refresh_own` when it was granted `hub_api`: never the hub's own token ("Hub API: scopes").
 - **No upgrade or rollback while attached**: both are refused, and it never upgrades itself. Detach it, upgrade the package, and attach the new version's program.
 - **Audit**: `attach` (version and sockets) and `detach` (version) go to the extension's audit log, and the manager switches the extension's connection at once.
 
@@ -2255,7 +2363,7 @@ The [source handler contract](source-api-handlers.md) defines the separate typed
     So commands the gate cannot parse (loops, scripts, `$(…)`) are denied outright if they contain a write, with a hint to send it as a separate command. A resident node's proxy is process-wide: chats that survive a hub reconnect keep using the original address, and calls allowed on the new connection still pass.
     Once the extension is disabled, both the command and the credentials are gone. Gates with no `auth` that do not meet the default condition (several secrets, no `base_env`) still put credentials into the assistant's environment, as do gates provided by older hubs (before #1317).
   - **Card**: the confirmation card's title is `title`; the extension can answer `assistant.summary {contribution, summary}` → `{summary}` to replace ids in the card with names (left as-is if they cannot be resolved).
-  - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt. Next to it, `PERSONA_TRACK_KIND` names the kind of the conversation's track (#13472, `docs/assistant/health.md` "Tracks and kinds"): `orchestration` in the main space, `space` in the health space and a domain space, a user's kind in a track of that kind; a command may serve some kinds only. It is missing when the node was not told the kind (an older node or manager, or a process resumed before its directory was prepared since the node started), which such a command takes as unknown.
+  - **Space** (#6003): every assistant process has `PERSONA_SPACE` in its environment: `health` in the health space (`docs/assistant/health.md`), `main` everywhere else, decided by the conversation's directory when the node starts the process (`assistantSpace` in `node/larkgate_env.go`). An extension's skills and commands reach every space; a command meant for one space checks this rather than its working directory, which a `cd` in front of the command changes without a confirmation. Overriding it takes `PERSONA_SPACE=… <command>`, which the gate does not let through unless the gate lists the variable in `allowed_env`, so it goes to the normal permission prompt. Next to it, `PERSONA_TRACK_KIND` names the kind of the conversation's track (#13472, `docs/assistant/health.md` "Tracks and kinds"): `orchestration` in the main space, `space` in the health space and a domain space, a user's kind in a track of that kind; a command may serve some kinds only. It is missing when the node was not told the kind (an older node or manager, or a process resumed before its directory was prepared since the node started), which such a command takes as unknown. Beside both, `PERSONA_CATEGORIES` carries the conversation's sorted comma-separated information categories (#13246, `docs/assistant/health.md` "Information categories"): empty (`PERSONA_CATEGORIES=`) for general, `health` in the health space, or comma-separated names such as `emotion,finance`. It is omitted when unknown (an older node or manager, a directory not prepared since the node started, a turn waiting to be tagged, or an unreadable store), which a command treats as sensitive. Agents never inherit `PERSONA_TRACK_KIND` or `PERSONA_CATEGORIES`.
   - The gate file is read in strict mode and checked at install time (the script must be inside a skill); credentials cannot start with `PERSONA_` / `PERSONA_` or be `PATH`.
 
 ### Assistant content from the data directory (#5770)
@@ -2544,7 +2652,7 @@ When the app draws a slot, it states in `context` whom it is drawing for and whe
 | --- | --- | --- |
 | `placement` | — | This contribution's slot |
 | `size` | Optional: `compact` / `full` | If not sent, the size from the slot table; `compact` is a card and must be compact (see the limits under "New items") |
-| `ui_version` | The UI version the app can draw: the hub knows `11`; the web sends `10` (its native stream `7`), Android and iOS send `10`; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
+| `ui_version` | The UI version the app can draw: the hub knows `11`; iOS sends `11` on iPhone and iPad and `8` on Apple's other systems (Vision Pro, the Mac), the web and Android send `10` (the web's native stream `7`), HarmonyOS `6` over HTTP and `7` on its native stream; **older apps do not send it, which counts as 1** | `min(app's, hub's)`; the extension can draw a version an older app can handle (e.g. `progress` instead of `chart`) |
 | `tz` | The user's time zone (IANA name, `Asia/Shanghai`) | Passed on only if it loads; if not sent or invalid, the user time zone the hub knows (reported by the app, or from assistant settings), empty if neither. "Today" is computed in it |
 | `locale` | The app's language (`zh-Hans-CN`) | Passed on only if it looks like a language tag, otherwise empty |
 | `platform` | `ios` / `mac` / `android` / `web` | Other values are dropped |
@@ -3293,7 +3401,7 @@ are new or their fields changed. A card draws the same graph as a still fitted p
 presses; pressing it opens Full screen, the same interactive canvas as the page's. The web's native stream still sends 7.
 
 **The web's non-still canvas** (#11234) is a control room; a page, Full screen and a card's Full screen all draw it (the card itself stays a
-still 200 px preview). A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
+still 200 px preview). A view with a `graph`, `scene`, or `map` takes the wide page width (`wideView`, up to 1680 px) like split, columns, code and diff views; on wide containers the collapsible outline (208 px → 260 px at `60rem` → 300 px at `80rem`) and timeline label column (148 px → 200 px at `60rem`) widen responsively so indented node titles have room. A collapsible outline of the visible nodes runs down the leading side: `j` / `k` and the arrow keys walk it,
 Enter opens the selected node's first link or runs its action, and Escape clears the selection and closes the inspector. Tapping a node
 that carries `facts`, `detail` or `links` opens an in-place node inspector beside the canvas (stacked below on narrow screens) with
 those readings, summary, HTTPS links (`openLink` opens hub session links in the side panel when supported) and any node `action`
@@ -3591,6 +3699,7 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | `todo.decision` | `id`, `title`, `thread?`, `decision`: a decision was written on a to-do (needs `todos.read`, see below; never of a to-do it is not shown) |
 | `leader.changed` | `id`, `title`, `project?`, `ended?`: a direction was made, retitled, filed under another project, ended or made current again (needs `leaders.read`, see "Leader events") |
 | `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a direction's task reached its goal, needs the owner's decision or is stuck, or the direction reported progress (needs `leaders.read`) |
+| `placement.pending` | `plan_id`, `todo_id`, `batch_size`: one-way wake notification that a planned task is awaiting machine placement (needs `tasks.schedule`, granted by name only; carries no prompts or private fields and is never emitted for hidden privacy-space tasks) |
 
 SDK programs receive them in `Namespaces["event"]` (method name is the event name).
 

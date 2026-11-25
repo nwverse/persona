@@ -1253,7 +1253,8 @@ func TestPlanTasksFailingTogetherAllKeepTheirError(t *testing.T) {
 	}
 	waitFor(t, "every start's failure to be written", func() bool {
 		done, _ := st.done()
-		return done && s.tasks.planEdits.len() == 0
+		// A launch can have passed the read barrier and still be about to record its start error.
+		return done && s.tasks.planEdits.len() == 0 && s.taskStarting.Load() == 0
 	})
 	if _, timedOut := st.done(); timedOut {
 		t.Fatal("the plan's writers did not all come")
