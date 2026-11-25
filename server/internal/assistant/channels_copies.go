@@ -26,6 +26,7 @@ const (
 	copySent    = "sent"    // the first Feishu card landed (or a notifications companion took it); a channel took the text
 	copyFailed  = "failed"  // nothing of it went out
 	copyPending = "pending" // not known yet when the tool answered
+	copySkipped = "skipped" // the channel is not in this hub (its module is left out or switched off): not a failure, not told
 )
 
 // errNoCopy: the Feishu push returned without a first card that landed or failed (nothing to send).
@@ -61,6 +62,19 @@ func (r *copyReport) going(to ...pushCopy) {
 		c.state = copyPending
 		r.copies = append(r.copies, c)
 	}
+	r.senders--
+	r.changedLocked()
+}
+
+// skipped: this sender has no channel to send to because its module is absent; the copy is recorded as skipped so a hub
+// without that channel is told apart from a bot that is not ready (which records nothing). Like going, once per sender.
+func (r *copyReport) skipped(id string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.copies = append(r.copies, pushCopy{channel: id, state: copySkipped})
 	r.senders--
 	r.changedLocked()
 }
