@@ -23,13 +23,15 @@ vi.mock("./store", async (original) => {
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Place = { extension: string; extension_name?: string; id: string; placement: string; title: string; icon?: string };
+type Place = { extension: string; extension_name?: string; id: string; placement: string; title: string; icon?: string; opens?: string; size?: string };
 const today: Place = { extension: "example-today", id: "today", placement: "nav_page", title: "Today", icon: "calendar" };
 const index: Place = { extension: "-pages", extension_name: "Persona", id: "index", placement: "nav_page", title: "Dashboards", icon: "chart" };
 const run: Place = { extension: "-pages", extension_name: "Persona", id: "pg_3f9a1c0d5e7b2a41", placement: "nav_page", title: "Morning run", icon: "heart" };
+const rentCard: Place = { extension: "-pages", extension_name: "Persona", id: "g_1a2b3c4d5e6f7081", placement: "overview_card", size: "compact", title: "Elm Street rent", opens: "pg_1a2b3c4d5e6f7081" };
 const emit = (type: string, msg: Record<string, unknown> = {}) => hub.listeners.get(type)?.forEach((l) => l({ type, ...msg }));
 let answer: Place[] = [];
 let asked = 0;
+let askedUrls: string[] = [];
 let host: HTMLDivElement;
 let root: Root;
 let slots: typeof import("./extension-slots");
@@ -39,17 +41,32 @@ const flush = async () => {
 
 function Sidebar() {
   const entries = slots.useExtensionSlot("nav_page");
-  return <p data-entries>{entries.map((u) => `${u.extension}/${u.id}:${u.title}`).join(",")}</p>;
+  const overview = slots.useExtensionSlot("overview_card");
+  const machines = slots.useExtensionSlot("machine_section");
+  const inbox = slots.useExtensionSlot("inbox_item");
+  return (
+    <>
+      <p data-entries>{entries.map((u) => `${u.extension}/${u.id}:${u.title}`).join(",")}</p>
+      <p data-overview>{overview.map((u) => `${u.extension}/${u.id}:${u.title}->${u.opens ?? ""}`).join(",")}</p>
+      <p data-other>{[...machines, ...inbox].map((u) => `${u.extension}/${u.id}`).join(",")}</p>
+    </>
+  );
 }
 const entries = () => host.querySelector("[data-entries]")!.textContent;
+const overview = () => host.querySelector("[data-overview]")!.textContent;
+const other = () => host.querySelector("[data-other]")!.textContent;
 
 beforeEach(async () => {
   localStorage.clear();
   localStorage.setItem("persona.token", "jd_example_browser_credential");
   answer = [today];
   asked = 0;
+  askedUrls = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-    if (url.includes("/-/ui")) asked++;
+    if (url.includes("/-/ui")) {
+      asked++;
+      askedUrls.push(url);
+    }
     return { ok: true, status: 200, text: async () => JSON.stringify(url.includes("/-/ui") ? { ui: answer } : {}), headers: new Headers() };
   }));
   host = document.createElement("div");
@@ -110,5 +127,30 @@ describe("assistant_pages refreshes the places (#15017)", () => {
     await flush();
     expect(asked).toBe(1);
     expect(entries()).toBe("");
+  });
+
+  it("asks for places with ?pages_overview=1 and routes -pages g_ cards only to overview_card (#13020)", async () => {
+    expect(askedUrls).toEqual(["/api/v1/extensions/-/ui?pages_overview=1"]);
+    answer = [today, index, rentCard];
+    act(() => emit("assistant_pages"));
+    await flush();
+    expect(askedUrls).toEqual([
+      "/api/v1/extensions/-/ui?pages_overview=1",
+      "/api/v1/extensions/-/ui?pages_overview=1",
+    ]);
+    expect(overview()).toBe("-pages/g_1a2b3c4d5e6f7081:Elm Street rent->pg_1a2b3c4d5e6f7081");
+    expect(entries()).toBe("example-today/today:Today,-pages/index:Dashboards");
+    expect(other()).toBe("");
+
+    // an extension_ui invalidation for the g_ card does not refetch the places list
+    act(() => emit("extension_ui", { extension: "-pages", id: "g_1a2b3c4d5e6f7081", invalidate: true }));
+    await flush();
+    expect(asked).toBe(2);
+
+    // turning Show on Overview off pushes assistant_pages and drops the card from overview_card
+    answer = [today, index];
+    act(() => emit("assistant_pages"));
+    await flush();
+    expect(overview()).toBe("");
   });
 });

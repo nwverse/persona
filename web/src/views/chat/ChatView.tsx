@@ -1650,8 +1650,8 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
         if (target && (target.closest("input, textarea, select, [contenteditable='true']") || target.isContentEditable)) return;
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed) return;
-        const ta = composerBox.current?.querySelector("textarea");
-        if (ta && !ta.disabled) ta.focus();
+        const field = composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT);
+        if (field && !field.matches(":disabled,[aria-disabled=true]")) field.focus();
       }
     };
     addEventListener("keydown", key);
@@ -2182,7 +2182,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
   // the banner's buttons go with it: the keyboard goes back to the composer, not on a touch screen alone (that would raise
   // the keyboard). Called on a press, by when the composer's box (declared below) is there.
   const backToComposer = () => {
-    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   };
   // gone at once; a retry that did not go brings it back, as nothing else on the page could retry then
   const retryError = () => {
@@ -2250,7 +2250,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     shown.current = view;
     if (!fine) return;
     const frame = requestAnimationFrame(() => {
-      const field = view === "term" ? termLayer.current?.querySelector("textarea") : composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT);
+      const field = view === "term" ? termLayer.current?.querySelector("textarea") : composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT);
       field?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
@@ -2275,7 +2275,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
     if (!dockFocus.current || !lostWith(dockFocus.current, document.activeElement, document.body)) return;
     dockFocus.current = null;
     setCardField(false);
-    if (fine) composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
+    if (fine) composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.focus({ preventScroll: true });
   });
   // the run's time counts from the turn's start, as its "Working…" does (not from the session's last state change)
   const stateSince = session?.state_since;
@@ -2394,7 +2394,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
       short={short && !cardField}
       keyboard={keyboard}
       reveal={commandInSlot && commandReveal?.pending === true}
-      onDismissKeyboard={() => composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.blur()}
+      onDismissKeyboard={() => composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.blur()}
     />
   );
 
@@ -2851,7 +2851,7 @@ function ActiveChatView({ mid, sid, assistant, starting: launching, onToggleSide
             <CommandWaitingNotice interactions={docked} mid={mid} sid={sid} queueHeld={commandQueueHeld} dock={dockAbove}
               focusId={commandReveal?.pending ? commandReveal.id : undefined} keyboard={keyboard} onFocused={commandRevealed}
               onAnswer={(id) => {
-                composerBox.current?.querySelector<HTMLTextAreaElement>(COMPOSER_INPUT)?.blur();
+                composerBox.current?.querySelector<HTMLElement>(COMPOSER_INPUT)?.blur();
                 setCommandReveal({ id, pending: true });
               }} />
           </Suspense>

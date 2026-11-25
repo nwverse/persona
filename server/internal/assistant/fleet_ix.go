@@ -881,6 +881,11 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		s.fleet.mu.Unlock()
 		return errHandoffElsewhere // a channel, the assistant, a remembered answer, an older hub: a no only
 	}
+	if p != nil && proto.SecretRunEnvInteraction(p.ix) && !proto.SecretHandoffDeclines(r) &&
+		(approver == nil || approver.DeviceID == "" || authorization != nil) {
+		s.fleet.mu.Unlock()
+		return errSecretRunEnv // an older specialized client would show no env warning before its Run
+	}
 	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
 		s.fleet.mu.Unlock()
 		return errInvalidQuestionCancel
@@ -1693,6 +1698,23 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 			resumable[i].AlwaysKeys = nil
 			notKept := false
 			resumable[i].AlwaysHonored = &notKept
+		}
+	}
+	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
+		for _, id := range cancelled {
+			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			rec, err := func() (rec *db.InteractionRecord, err error) {
+				defer guard(&err)
+				return recStore.InteractionRecord(readCtx, id)
+			}()
+			cancel()
+			if err != nil {
+				s.logf("read invalidated interaction %s: %v", id, err)
+				continue
+			}
+			if rec != nil {
+				s.recordRestartInvalidation(ctx, rec.Interaction)
+			}
 		}
 	}
 	var back []proto.Interaction

@@ -2329,7 +2329,7 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 // retry the unchanged parameters automatically.
 func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun, cause error) {
 	retry := !taskConfigurationRefusal(cause)
-	if t.Facts || t.Report {
+	if (t.Facts || t.Report) && s.briefingOn() {
 		s.briefNotStarted(ctx, t, run, retry)
 		return
 	}
@@ -2496,7 +2496,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	full := text
 	text = clip(oneLine(text), 300)
 	s.logf("task %s run %s failed: %s", t.ID, run.ID, text)
-	briefing := t.Facts || t.Report
+	briefing := (t.Facts || t.Report) && s.briefingOn()
 	streak := s.updateRun(run, runFailed, text, briefing)
 	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)

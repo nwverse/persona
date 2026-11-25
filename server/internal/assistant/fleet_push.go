@@ -367,6 +367,20 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 			text = counts
 		}
 	}
+	if links := s.consumeSideSupervisionLinks(id); len(links) > 0 && !redact {
+		var missing []string
+		for _, link := range links {
+			if link != "" && !strings.Contains(text, link) {
+				missing = append(missing, link)
+			}
+		}
+		if len(missing) > 0 {
+			if text != "" {
+				text += "\n"
+			}
+			text += strings.Join(missing, "\n")
+		}
+	}
 	s.deliver(Notification{Kind: assistantwire.NotifyDone, DeviceID: machine, Subtitle: place, SessionID: id, Title: head,
 		Body: text, TookMS: took.Milliseconds(), LongMS: long.Milliseconds()})
 	// The same finished turn's one Feishu card (#4674); the sender re-checks the pushes switch and the conversations

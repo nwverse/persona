@@ -262,7 +262,7 @@ Not counted as recording: `attribution.go` (extension write attribution; `editTa
 | `kb/archive.go` (callback fields `RecordingDaysFunc`, `MinutesDaysFunc`, `MeetingChanged`, `MinutesWritten`, `DayRecapWritten`, `DayRecordingName`) | settings and callbacks | callbacks | stay; nil callbacks are no-ops today |
 | `assistant/kb.go:538,543` | the retention tick `PruneRecordings` and `SummarizeRecordings(ctx, 3)` | write, every tick | prune stays (3.2); summarise is the module's (gated) |
 | `assistant/kb_lanes.go:118,121,124` | lanes `WriteMinutes(ctx,2)`, `TitleRecordings(ctx,2)`, `WriteDayRecaps(ctx,1)` | background jobs | the module's (gated by the port) |
-| `assistant/briefing_day.go:36,92,97` | `TodaysDayRecordings`, `ReadDayRecap`, `RecapState` for the evening briefing | read | unchanged (R) |
+| Former assistant/briefing_day.go:36,92,97 | `TodaysDayRecordings`, `ReadDayRecap`, `RecapState` for the evening briefing | read | unchanged (R) |
 | `assistant/tools_apps.go:80-81,168-190,743-789` | `kb_list`/`kb_get` of recordings: `Recordings()`, `Recording(id)`, `PhotosMarkdown`, the trimmed-transcript note | read | unchanged (R) |
 | `assistant/space_recordings.go:160` | `HoldsRecording` | read | unchanged (R) |
 | `assistant/profile.go`, `assistant/settings_tool.go` | `kb.MinutesDaysFor` | pure | unchanged (R) |
