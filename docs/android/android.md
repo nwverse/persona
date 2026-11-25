@@ -2744,6 +2744,19 @@ JAVA_TOOL_OPTIONS=-Dpersona.shots=/tmp/persona-extension-graph ./gradlew :featur
 The 42 PNGs go to that directory (default `feature/settings/build/extension-graph-shots/`). They are Compose/JVM evidence, not
 emulator, physical-device or production validation; attach them to the PR, never commit them.
 
+### Dashboards and watch pages (#15017, #13020)
+
+Specification [dashboards.md](../assistant/dashboards.md) ("Phase 2: watch pages (#13020)") and shared cases in `spec/fixtures/dashboards/watch.json`.
+
+- **HTTP-only reserved ids and ownership line** (`DashboardPages.kt`, `ExtensionUiScreen.kt`): every extension id starting with `-` (`-pages`) renders over HTTP only and never opens the native page stream; `assistant_pages` triggers `ExtensionSlots.load()`; the header takes the View's title (never the raw `pg_…` id); every `-pages` page except `index` shows the localized `Kept up to date by Persona` caption under the header.
+- **Watch pages and Dashboards index** (`ExtensionViewContent.kt`, `ExtensionViewV6.kt`, `ExtensionSlots.kt`):
+  - A watch `metric` with `tone` and `icon` (when `icon_color` is omitted, as in tripped `number`, `table`, and `trend` watches) tints the icon in the tone's dot color rather than quiet ink; a status light with `icon_color` (`gray` / `green` / `amber` / `red`) keeps its named hue.
+  - An index `row` carrying both `value` and `spark` (a `trend` watch row) stacks `value` right-aligned directly above `JSparkline` in the trailing slot so the title and check timestamp stay unclipped on phone widths while keeping row height unchanged.
+  - A switch-only `row` without a navigation action (such as the footer's **Alert me** switch, `persona.alert` with `on=true|false`) delegates toggle clicks to the 56 dp `JRow` (`Role.Switch`) and passes `onCheckedChange = null` to `JSwitch`, matching `JSwitchRow`'s single merged accessibility node and hit target; flips apply immediately (`ExtensionViewModel.hold`) and roll back with an error notice if the action fails.
+  - `ExtensionSlotText.icon` (`extensionNavIcon`) delegates to `ExtensionIcons.of` so pinned watch pages using `AgentPageIcons` (`wifi`, `trend_up`, `heart`, `location`, `money`, etc.) draw their real icon in the sidebar.
+- **No `-pages` overview cards in Settings › Extensions** (`ExtensionSlots.kt`): Android does not request `?pages_overview=1`; defensively, `ExtensionSlotText.known`, `ExtensionSlotsState.cards`, and `extensionSlotItems` all exclude `overview_card` places whose extension id starts with `-`, so Settings › Extensions never loads or shows a `-pages` Overview card.
+- **Tests and JVM captures**: `DashboardsWatchPagesTest` (decodes and renders all 15 `spec/fixtures/dashboards/watch.json` `draws` sections and glance rows through `ExtensionUiPage`, exercises `persona.refresh` / `persona.pause` / `persona.resume` / `persona.alert` optimistic flip and failure rollback, and pins the `-*` `overview_card` filter), `DashboardsWatchShotsTest` (all four displays empty/normal/alert, light and dark, phone 400 dp and tablet 840 dp, Glass/Brief/Board, footer states, index rows, `zh-Hans` and `ja`, default `feature/settings/build/dashboards-watch-shots/`), and `DashboardsDrawerShotsTest` (drawer pixel parity).
+
 ### Host-owned extension settings (#2397)
 
 Android follows [the shared settings contract](../extensions/extension-settings.md). Every `ExtensionPage`, including direct navigation,
