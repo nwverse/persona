@@ -177,6 +177,7 @@ function PushSourceDetailPane({
   reloadKey: number;
   onReload: () => void;
 }) {
+  useLayoutEffect(() => pinManagerAt(["/subscriptions"], otherManager(manager)), [manager]);
   const title = item?.name ?? t("subscriptions.title_sources");
   return (
     <div data-integration-detail={item?.id ?? "source"} data-integration-kind="source">
@@ -218,6 +219,33 @@ function PushSourceDetailPane({
         <LazySourcesUI key={`${state}:${reloadKey}`} title={title} state={state} />
       </Suspense>
     </div>
+  );
+}
+
+/** Full-width Data Flow pane (`-sources` / `-sources@<manager>`), pinning `/subscriptions` when a manager is named. */
+function SourcesFlowPane({
+  manager,
+  reloadKey,
+}: {
+  manager?: string;
+  reloadKey: number;
+}) {
+  useLayoutEffect(() => (manager ? pinManagerAt(["/subscriptions"], otherManager(manager)) : undefined), [manager]);
+  return (
+    <>
+      {manager && (
+        <div className="mb-3 flex items-center gap-2">
+          <OwnerMark manager={manager} />
+        </div>
+      )}
+      <Suspense fallback={<Loading />}>
+        <LazySourcesUI
+          key={`${manager ?? ""}:${reloadKey}`}
+          title={t("subscriptions.title_sources")}
+          initialView="graph"
+        />
+      </Suspense>
+    </>
   );
 }
 
@@ -635,13 +663,7 @@ export function Integrations({
       <div data-integrations-sources-view>
         {listHeader}
         {viewSwitch}
-        <Suspense fallback={<Loading />}>
-          <LazySourcesUI
-            key={sourcesReload}
-            title={t("subscriptions.title_sources")}
-            initialView="graph"
-          />
-        </Suspense>
+        <SourcesFlowPane manager={route.manager} reloadKey={sourcesReload} />
       </div>
     );
   }
@@ -800,6 +822,7 @@ export function Integrations({
       onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
       onSettings={onSettings}
       onOpenConnector={(id, manager) => go({ kind: "connector", id, manager })}
+      onOpenSources={(sourceState, manager) => go({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
     />
   ) : null;
 
