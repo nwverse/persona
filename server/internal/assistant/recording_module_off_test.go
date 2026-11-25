@@ -385,7 +385,18 @@ func TestStoredPhotoWithTheModule(t *testing.T) {
 	if code, out := moduleOffRequest(t, s, "DELETE", photo); code != http.StatusOK || string(out["deleted"]) != "true" {
 		t.Errorf("the module's photo delete: %d %v", code, out)
 	}
-	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusNotFound {
-		t.Errorf("a deleted photo: %d", w.Code)
+	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "photo_not_found") {
+		t.Errorf("a deleted photo: %d %s", w.Code, w.Body.String())
+	}
+	for _, n := range []string{"9", "0", "abc", "-1"} {
+		if w := moduleOffGet(s, "/api/v1/recordings/"+moduleOffRec+"/photos/"+n, ""); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "photo_not_found") {
+			t.Errorf("photo %s: %d %s", n, w.Code, w.Body.String())
+		}
+	}
+	if code, _ := moduleOffRequest(t, s, "DELETE", "/api/v1/kb/recordings/"+moduleOffRec); code != http.StatusOK {
+		t.Fatalf("delete: %d", code)
+	}
+	if w := moduleOffGet(s, photo, ""); w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "recording_deleted") {
+		t.Errorf("a photo of a deleted recording: %d %s", w.Code, w.Body.String())
 	}
 }
