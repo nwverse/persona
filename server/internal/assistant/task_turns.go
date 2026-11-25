@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -148,6 +149,30 @@ type turnSignal struct {
 	Told    *time.Time `json:"told,omitempty"`
 	// JudgeDown: superviseSignal.JudgeDown, so a replay after a restart is batched as the first telling was.
 	JudgeDown bool `json:"judge_down,omitempty"`
+}
+
+func (sig *turnSignal) matches(g superviseSignal) bool {
+	if sig == nil || sig.Kind != g.Kind {
+		return false
+	}
+	if sig.Key == g.Key {
+		return true
+	}
+	if g.Kind != sigReview || g.Recipient != "" || g.To != "" {
+		return false
+	}
+	// Older turn and outbox JSON kept the nanoseconds that the ordinary review's SQL row lost.
+	// Only equate that old key with its actual stored precision. Two distinct full event keys stay distinct.
+	old, stored := sig.Key, g.Key
+	if len(old) < len(stored) {
+		old, stored = stored, old
+	}
+	raw, ok := strings.CutPrefix(old, "review@")
+	if !ok {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && ordinaryReviewKey(at) == stored
 }
 
 // replayTurnSignal queues only the still-current, untold ledger signal. Recovery can wait on Inbox I/O while
@@ -681,8 +706,10 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if sig := e.Signal; sig != nil && sig.Kind == g.Kind && sig.Told != nil && (sig.Key == g.Key || b.again[g.Todo]) {
-		if sig.Key != g.Key {
+	sig := e.Signal
+	match := sig.matches(g)
+	if sig != nil && sig.Kind == g.Kind && sig.Told != nil && (match || b.again[g.Todo]) {
+		if !match {
 			next := *sig // a turn handed out keeps the signal it was read with
 			next.Key = g.Key
 			e.Signal = &next
@@ -691,7 +718,7 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		}
 		return true
 	}
-	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key || sig.Handoff != g.Handoff {
+	if !match || sig.Handoff != g.Handoff {
 		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff, JudgeDown: g.JudgeDown}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
@@ -735,7 +762,7 @@ func (s *Service) turnsToldLocked(ctx context.Context, list []superviseSignal) b
 			continue
 		}
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
+		if sig := e.Signal; ok && sig.matches(g) && sig.Told == nil {
 			old := *sig
 			previous[g.Todo] = &old
 			next, now := *sig, time.Now().UTC()
@@ -774,7 +801,7 @@ func (s *Service) turnsUntold(ctx context.Context, list []superviseSignal) {
 			continue
 		}
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told != nil {
+		if sig := e.Signal; ok && sig.matches(g) && sig.Told != nil {
 			next := *sig
 			next.Told = nil
 			e.Signal = &next

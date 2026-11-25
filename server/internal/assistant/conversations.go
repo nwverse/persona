@@ -1917,14 +1917,16 @@ func (s *Service) queuedFor(id string) int {
 }
 
 // selfSpace is the space of conversation self ("" the assistant's own, and for a caller that is no conversation), and
-// whether it could be told (the assistant's machine lists it).
+// whether it could be told (the assistant's machine lists it or attests its launch directory).
 func (s *Service) selfSpace(ctx context.Context, self string) (string, bool) {
 	if self == "" {
 		return "", true
 	}
-	c, ok := s.session(ctx, s.settings(ctx).MachineID, self)
+	machine := s.settings(ctx).MachineID
+	c, ok := s.callerSpaceSession(ctx, machine, self)
 	if !ok {
-		return "", false
+		cwd := s.callerCwd(ctx, machine, self)
+		return runSpace(proto.Session{Cwd: cwd}), cwd != ""
 	}
 	return spaceOf(c), true
 }

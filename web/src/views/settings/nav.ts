@@ -2,7 +2,8 @@
 // categories are in the left sidebar and /settings is "General"; phone width, /settings is the list (as on iOS), a category is
 // /settings?tab=… pushed over it, and Back goes back to the list. An item's page (an extension, a channel, a connector) is
 // pushed over its category's page the same way at any width, so Back steps out of it one level (#2800).
-import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
+import { registeredModules } from "../../core/module-host";
+import { enabledSettingsTabs } from "../../core/module-settings";
 import { t } from "../../i18n";
 import { settingsTab } from "../../lib/channels";
 import type { IconName } from "../../ui/icons";
@@ -17,13 +18,13 @@ import {
 
 export { settingsHref } from "./href";
 
-export type CoreTab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "integrations" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
+export type CoreTab = "general" | "persona" | "prompts" | "notifications" | "models" | "agents" | "integrations" | "channels" | "connectors" | "sources" | "extensions" | "shortcuts" | "advanced" | "devices" | "hub" | "managers" | "knowledge" | "avatar" | "labs";
 /** A feature module's category (core/module-host.ts `settingsTabs`): its key, never a core one. */
 export type ModuleTab = string & { readonly moduleTab?: never };
 /** A category: one of the core's, or an enabled module's. */
 export type Tab = CoreTab | ModuleTab;
 /** The core's categories (core/module-host.ts CORE_SETTINGS_TABS names the same; nav.test.ts keeps them in step). */
-export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
+export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "advanced", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
 export type SettingsSection = "providers" | "model-config" | "translation" | AgentTab;
@@ -63,6 +64,8 @@ export const TAB_INFO: Record<CoreTab, { label: string; icon: IconName; hint: st
   sources: { label: t("settings-nav.tab_sources"), icon: "inbox", hint: t("settings-nav.hint_sources") },
   extensions: { label: t("settings-nav.tab_extensions"), icon: "extension", hint: t("settings-nav.hint_extensions") },
   shortcuts: { label: t("settings-nav.tab_shortcuts"), icon: "keyboard", hint: t("settings-nav.hint_shortcuts") },
+  // #13398: the opt-in looks (theme color, extension theme, fonts, colored sidebar icons) live here, not in General.
+  advanced: { label: t("settings-nav.tab_advanced"), icon: "sliders", hint: t("settings-nav.hint_advanced") },
   // Temporary trials with a stable default, lossless rollback and a tracked exit (docs/web/web.md "Labs").
   // General owns permanent module switches. Put lasting advanced preferences in their owning category and
   // keep debug controls, demos and irreversible changes out of Labs.
@@ -79,7 +82,7 @@ export const TAB_INFO: Record<CoreTab, { label: string; icon: IconName; hint: st
 export type NavGroup = "assistant" | "device" | "hub" | "labs";
 export const NAV_GROUPS: { key: NavGroup; tabs: CoreTab[] }[] = [
   { key: "assistant", tabs: ["models", "persona", "prompts", "integrations", "channels", "connectors", "sources", "extensions", "knowledge", "agents"] },
-  { key: "device", tabs: ["general", "notifications", "shortcuts"] },
+  { key: "device", tabs: ["general", "notifications", "shortcuts", "advanced"] },
   { key: "hub", tabs: ["hub", "managers", "avatar", "devices"] },
   { key: "labs", tabs: ["labs"] },
 ];

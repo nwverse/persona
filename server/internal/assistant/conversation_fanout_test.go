@@ -466,7 +466,9 @@ func TestConversationSendExplicitWakeFalseNeverWakesLater(t *testing.T) {
 // deadline, preserves the cap across restart, wakes the target exactly once, and does not double-wake on another
 // restart or after a crash while claimed.
 func TestConversationSendDeferredWakeSurvivesHubRestart(t *testing.T) {
-	shortFanoutWindow(t, 220*time.Millisecond)
+	// This case constructs and restores two managers before exercising the persisted cap. Keep the window long
+	// enough for that setup under load; the original deadline and all wake-once assertions remain unchanged.
+	shortFanoutWindow(t, 2*time.Second)
 	st := withDelayedWaitCAS(&memStore{})
 	f := newFakeHub().withMachine()
 

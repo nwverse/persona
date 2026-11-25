@@ -1,5 +1,11 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
+  appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
+  Near their due time, a catalog test can count both the workout report and a briefing, while waiting for only the
+  first recorded run can hide the second dispatch. Isolate the fixture, verify the workout's `RefID`, and reproduce
+  with a due default routine and settled asynchronous work; keep the single-send and requested-binding assertions.
+
 - `assistant.New` must not read the database (#13408). Many tests build the Service on a fake store that embeds a nil
   `Store` and implements only the methods it needs; one new `Setting` call in `New` (reading the feature-module switch)
   panicked dozens of unrelated tests. Read what the constructor needs where the manager starts (`main.go`, next to the

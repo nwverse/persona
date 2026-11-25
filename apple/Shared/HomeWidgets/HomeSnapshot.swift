@@ -215,7 +215,9 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
         var online: Bool
         var working = 0
         var needsYou = 0
-        /// Load average ÷ cores, 0…100; nil when not reported.
+        /// The 1-minute load average ÷ cores × 100, rounded to 10 (the Live Activity's `FleetState.Stats.Load.percent`):
+        /// 100 is one thread per core, and it passes 100 when threads wait for a core, so it is shown per core
+        /// (`FleetText.perCore`) and the ring stops full; nil when not reported.
         var load: Int?
         /// The mark the user gave it (`Machine.icon`: server, desktop, else a laptop).
         var icon: String?
@@ -250,6 +252,7 @@ nonisolated struct HomeSnapshot: Codable, Hashable, Sendable {
 
     /// Hub-owned day buckets. Optional at the top level so version 1 snapshots remain readable.
     nonisolated struct Intake: Codable, Hashable, Sendable {
+        var items: [String]?
         var supported: Bool
         /// An opaque app-side hub scope; never a credential. Older snapshots omit it.
         var scope: String?

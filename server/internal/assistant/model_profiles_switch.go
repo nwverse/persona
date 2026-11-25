@@ -2,11 +2,14 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
 	"time"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -16,6 +19,19 @@ import (
 type modelProfileSwitch struct {
 	From, To string
 	Changed  []string
+}
+
+// modelProfileApproval is a dry-run's exact display and expected catalog
+// revision. A non-nil preview makes the locked switch/rollback plan read-only.
+type modelProfileApproval struct {
+	revision int64
+	display  string
+}
+
+type modelProfileDisplayChange struct {
+	Field  string `json:"field"`
+	Before any    `json:"before"`
+	After  any    `json:"after"`
 }
 
 // applyModelProfile switches to profile id: every category it sets is checked as a save in Settings › Model
@@ -33,9 +49,16 @@ func (s *Service) applyModelProfile(ctx context.Context, id string, by ProfileAc
 }
 
 func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by ProfileActor) (modelProfileSwitch, bool, error) {
+	return s.modelProfileSwitchLocked(ctx, id, by, nil)
+}
+
+func (s *Service) modelProfileSwitchLocked(ctx context.Context, id string, by ProfileActor, preview *modelProfileApproval) (modelProfileSwitch, bool, error) {
 	ps, seeded, err := s.modelProfilesLocked(ctx)
 	if err != nil {
 		return modelProfileSwitch{}, false, err
+	}
+	if preview != nil {
+		preview.revision = ps.Revision
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == id })
 	if i < 0 {
@@ -142,9 +165,17 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 	}
 	if len(sw.Changed) == 0 && state.Active == id {
 		// already in use, nothing to do: the rollback stays the one of the switch that got here (or none, just made)
+		if preview != nil {
+			preview.display = modelProfileApprovalDisplay("switch", "", sw, image, p.Purposes, stored)
+			return sw, false, nil
+		}
 		if seeded {
 			return sw, false, s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: ps, modelProfileStateKey: state})
 		}
+		return sw, false, nil
+	}
+	if preview != nil {
+		preview.display = modelProfileApprovalDisplay("switch", "", sw, image, p.Purposes, stored)
 		return sw, false, nil
 	}
 	if changedLaunchers {
@@ -183,6 +214,17 @@ func (s *Service) rollbackModelProfileTo(ctx context.Context, targetID string, b
 }
 
 func (s *Service) rollbackModelProfileLocked(ctx context.Context, targetID string, by ProfileActor) (modelProfileSwitch, bool, error) {
+	return s.modelProfileRollbackLocked(ctx, targetID, by, nil)
+}
+
+func (s *Service) modelProfileRollbackLocked(ctx context.Context, targetID string, by ProfileActor, preview *modelProfileApproval) (modelProfileSwitch, bool, error) {
+	if preview != nil {
+		ps, _, err := s.modelProfilesLocked(ctx)
+		if err != nil {
+			return modelProfileSwitch{}, false, err
+		}
+		preview.revision = ps.Revision
+	}
 	state, err := s.readModelProfileState(ctx)
 	if err != nil {
 		return modelProfileSwitch{}, false, err
@@ -277,6 +319,10 @@ func (s *Service) rollbackModelProfileLocked(ctx context.Context, targetID strin
 	if changedLaunchers {
 		writes[launchersManagedKey] = stored
 	}
+	if preview != nil {
+		preview.display = modelProfileApprovalDisplay("rollback", rollbackEntryID(stack[idx]), sw, undo, prev.Purposes, stored)
+		return sw, false, nil
+	}
 	if len(sw.Changed) == 0 && state.Active == prev.Profile {
 		return sw, false, nil
 	}
@@ -294,6 +340,119 @@ func (s *Service) rollbackModelProfileLocked(ctx context.Context, targetID strin
 		return sw, false, err
 	}
 	return sw, changedLaunchers, nil
+}
+
+func modelProfileApprovalDisplay(action, rollbackID string, sw modelProfileSwitch, before *modelProfileImage, afterPurposes map[string]ModelBinding, stored []storedLauncher) string {
+	changes := make([]modelProfileDisplayChange, 0, len(sw.Changed))
+	for _, field := range sw.Changed {
+		afterBinding, afterPurpose := afterPurposes[field]
+		beforeBinding, beforePurpose := before.Purposes[field]
+		if afterPurpose || beforePurpose {
+			var a, b any
+			if beforePurpose {
+				beforeBinding.ConfigDir = ""
+				a = beforeBinding
+			}
+			if afterPurpose {
+				afterBinding.ConfigDir = ""
+				b = afterBinding
+			}
+			changes = append(changes, modelProfileDisplayChange{Field: field, Before: a, After: b})
+			continue
+		}
+		dot := strings.LastIndex(field, ".")
+		if dot < 0 {
+			continue
+		}
+		name, launcherField := field[:dot], field[dot+1:]
+		var after LauncherModels
+		if i := slices.IndexFunc(stored, func(l storedLauncher) bool { return l.Name == name }); i >= 0 {
+			for _, f := range after.fields(&stored[i].ManagedLauncher) {
+				*f.set = profileValue(*f.launcher)
+			}
+		}
+		changes = append(changes, modelProfileDisplayChange{Field: field,
+			Before: modelProfileLauncherValue(before.Launchers[name], launcherField),
+			After:  modelProfileLauncherValue(after, launcherField)})
+	}
+	raw, _ := json.Marshal(struct {
+		Action     string                      `json:"action"`
+		From       string                      `json:"from"`
+		To         string                      `json:"to"`
+		RollbackID string                      `json:"rollback_id,omitempty"`
+		Changes    []modelProfileDisplayChange `json:"changes"`
+	}{Action: action, From: sw.From, To: sw.To, RollbackID: rollbackID, Changes: changes})
+	return string(raw)
+}
+
+func modelProfileLauncherValue(models LauncherModels, field string) any {
+	for _, f := range models.fields(nil) {
+		if f.name == field && *f.set != nil {
+			return **f.set
+		}
+	}
+	return nil
+}
+
+func (s *Service) prepareModelProfileSwitch(ctx context.Context, id string) (modelProfileApproval, error) {
+	var approval modelProfileApproval
+	if strings.TrimSpace(id) == "" {
+		return approval, fmt.Errorf("id is required; use model_profiles_list")
+	}
+	s.models.mu.Lock()
+	_, _, err := s.modelProfileSwitchLocked(ctx, id, ProfileActor{Kind: "assistant"}, &approval)
+	s.models.mu.Unlock()
+	return approval, err
+}
+
+func (s *Service) prepareModelProfileRollback(ctx context.Context) (modelProfileApproval, error) {
+	var approval modelProfileApproval
+	s.models.mu.Lock()
+	_, _, err := s.modelProfileRollbackLocked(ctx, "", ProfileActor{Kind: "assistant"}, &approval)
+	s.models.mu.Unlock()
+	return approval, err
+}
+
+func modelProfileApprovalMatches(fresh modelProfileApproval, item ownerActionItem) bool {
+	return item.Revision != nil && fresh.revision == *item.Revision && item.Display != "" && fresh.display == item.Display
+}
+
+func (s *Service) applyApprovedModelProfileSwitch(ctx context.Context, id string, by ProfileActor, item ownerActionItem) (modelProfileSwitch, error) {
+	s.models.mu.Lock()
+	var fresh modelProfileApproval
+	_, _, err := s.modelProfileSwitchLocked(ctx, id, by, &fresh)
+	if err == nil && !modelProfileApprovalMatches(fresh, item) {
+		err = fmt.Errorf("the model profile switch changed after the batch card was shown: %w", approvalops.ErrStale)
+	}
+	var sw modelProfileSwitch
+	pushed := false
+	if err == nil {
+		sw, pushed, err = s.applyModelProfileLocked(ctx, id, by)
+	}
+	s.models.mu.Unlock()
+	if err == nil && (sw.From != sw.To || len(sw.Changed) > 0) {
+		s.modelProfileSwitched(ctx, sw, pushed)
+	}
+	return sw, err
+}
+
+func (s *Service) applyApprovedModelProfileRollback(ctx context.Context, by ProfileActor, item ownerActionItem) (modelProfileSwitch, error) {
+	s.models.mu.Lock()
+	var fresh modelProfileApproval
+	_, _, err := s.modelProfileRollbackLocked(ctx, "", by, &fresh)
+	if err == nil && !modelProfileApprovalMatches(fresh, item) {
+		err = fmt.Errorf("the model profile rollback changed after the batch card was shown: %w", approvalops.ErrStale)
+	}
+	var sw modelProfileSwitch
+	pushed := false
+	if err == nil {
+		sw, pushed, err = s.rollbackModelProfileLocked(ctx, "", by)
+	}
+	s.models.mu.Unlock()
+	if err == nil && (sw.From != sw.To || len(sw.Changed) > 0) {
+		s.modelProfileSwitched(ctx, sw, pushed)
+	}
+	return sw, err
 }
 
 // modelProfileSwitched tells everyone after a switch or rollback: the nodes get the launchers (when their fields

@@ -52,6 +52,8 @@ type Options struct {
 	Trust MachineTrust
 	// AgentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go): the devices; nil: nothing hidden.
 	AgentDirs AgentDirs
+	// HerdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go): the devices; nil: none.
+	HerdrSessions HerdrSessions
 	// SecretKey is the path of the key the model providers' keys are sealed with (the manager's own secret.key,
 	// models_launchers.go); "" makes one for this run only (tests).
 	SecretKey string
@@ -93,6 +95,8 @@ type Service struct {
 	moduleSwitch    moduleswitch.Set
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
+	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
+	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
 	sendFanout       sendFanout
 	logical          logicalDeviceState
@@ -101,6 +105,8 @@ type Service struct {
 	history          conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
 	agentDirs AgentDirs
+	// herdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go); nil: none.
+	herdrSessions HerdrSessions
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
 	remoteImages *remoteimage.Fetcher
 	// channelPicture fetches an answer's pictures for a channel that sends them (channels_images.go): remoteImages.Get,
@@ -146,8 +152,9 @@ type Service struct {
 	// startCandidates lists the presets a start-defaults rule can pick on a machine (start_candidates.go); nil: the
 	// built-in model-profile source. A dynamic candidates source is injected here without touching matching or retries.
 	startCandidates startCandidateSource
-	// tierRank orders the usable candidates of a tier with several (tier_pick.go); nil: the user's order. Scoring
-	// (#14701) sets it; a trial of a profile not in use (#14702) calls pickTierCandidateIn with that profile.
+	// tierRank orders the usable candidates of a tier with several (tier_pick.go); nil: the scorer (candidate_score.go,
+	// #14701), which keeps the user's order without data. A trial of a profile not in use (#14702) calls
+	// pickTierCandidateIn with that profile.
 	tierRank tierRanker
 	// refs is the provider extensions' values for launcher keys that are references (launcher_secrets.go); nil: none.
 	refs launcherSecrets
@@ -161,9 +168,11 @@ type Service struct {
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent      humanSends
 	storeApprovals storeApprovals
+	ownerWaits     ownerActionWaits
+	routineChecks  routineCheckApprovalBook
 
 	hub         Hub
-	store       func() Store
+	storeFn     atomic.Pointer[func() Store]
 	entriesDial func(context.Context, any) ([]byte, error)
 	// memoryEntries is where the memory assembler reads the ledger in tests; nil reads the manager database
 	// (memory_assemble_entry.go).
@@ -267,9 +276,11 @@ type Service struct {
 	infoTags             infoTagCache           // info_tag.go
 	infoTagWaiting       infoTagPending         // info_use.go
 	captures             captureWork            // capture_sort.go: wakes the loop that sorts quick captures
-	spaceFill            spaceBackfill          // conversation_space_backfill.go
-	outcomeLines         outcomeLines           // todo_outcome.go
-	workerOutcomes       workerOutcomes         // worker_memory.go
+	healthTells          captureWork            // health_tell.go: wakes ordered Health delivery
+	trainingChatMu       sync.Mutex
+	spaceFill            spaceBackfill  // conversation_space_backfill.go
+	outcomeLines         outcomeLines   // todo_outcome.go
+	workerOutcomes       workerOutcomes // worker_memory.go
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
@@ -310,7 +321,6 @@ type Service struct {
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll         bool
 	later                    laterBook    // later.go: questions that can wait for a briefing
-	brief                    briefBook    // briefing.go
 	reporters                reporterBook // reporters.go
 	sched                    schedule     // schedule.go
 	delayedMu                sync.Mutex   // delayed_waits.go: one local writer to the durable wait backlog
@@ -333,7 +343,6 @@ type Service struct {
 	work             workBook          // agents_work.go: the Agents business
 	reply            replyBook         // agents_reply.go: the reminders of questions left unanswered
 	chans            channelsBook      // channels.go
-	fbot             feishuBook        // feishu.go
 	tposts           threadPoster      // the lark module's thread_posts.go: what a todo tells its chat thread
 	lark             larkLayer         // lark.go: the lark module's layer, the outbound channel port (s.chat())
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
@@ -345,13 +354,12 @@ type Service struct {
 	tview            todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
 	trevision        todoRevisionBook  // todo_revision.go: the pushed read's cheap validator
 	offers           routeBook         // route.go: the directions offered for New chats
-	standing         standingBoard     // feishu_board.go: the standing "waiting for you" card
-	workbench        workbenchState    // feishu_workbench_pin.go: the pinned workbench
-	companions       companionState    // feishu_companions.go: the notices for a companion bot
+	fleetUp          atomic.Bool       // the fleet has been brought up since this process started (FleetUp): the pending cards are the real ones (lark_board.go)
 	kb               kbState           // kb.go
 	inbox            inboxBook         // inbox_book.go
 	board            boardBook         // workspace_board.go: the workspace board
 	viewEvents       viewNotifications // views.go: only coalesced notifications; contents are stored first
+	pages            pagesRuntime      // pages_actions.go, pages_events.go: the pages' events, taps and turns (Dashboards)
 	viewMemo         viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
 
 	devs                 Devices // the computers (devices.go); nil: no fleet
@@ -412,14 +420,12 @@ var _ Handler = (*Service)(nil)
 
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
-	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, store: o.Store, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
+	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
+		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
+	s.setStore(o.Store)
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
-	if s.store == nil {
-		s.store = func() Store { return nil }
-	}
 	if _, ok := s.store().(logicalConversationStore); ok && s.devs != nil {
 		s.devs = &logicalDevices{Devices: s.devs, s: s}
 	}
@@ -441,6 +447,7 @@ func New(o Options) *Service {
 	s.infoAccessRoutes()
 	s.trackRoutes()
 	s.captureRoutes() // captures.go: quick capture
+	s.healthTellRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
 	s.ruleSuggestionRoutes()
@@ -474,7 +481,10 @@ func New(o Options) *Service {
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
 	s.placeRoutes()
-	saved.Register(saved.Host{Store: func() any { return s.store() }, Event: s.event, Handle: s.handle, Full: fullRole, BodyErr: writeBodyErr})
+	reg := s.newRegistry() // the typed seam the modules register through (seam_ports.go)
+	defer reg.Seal()       // New returns it sealed: registering later is a defect
+	// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
+	reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
 	s.resourceRoutes()
 	s.repositoryRoutes()
 	s.repoMirrorRoutes()
@@ -488,7 +498,6 @@ func New(o Options) *Service {
 	s.workspaceBoardRoutes()
 	s.navigationRoutes() // navigation.go: the page the apps open on
 	s.channelRoutes()
-	s.companionRoutes()
 	s.kbInit(o.KB)
 	// The recording module's layer, before its routes (kbRoutes) and its hello capabilities (recording.go).
 	s.recOpts.timings, s.recOpts.lists = maps.Clone(o.RecordingTimings), maps.Clone(o.RecordingTimingLists)
@@ -546,6 +555,31 @@ func fullRole(r *http.Request) bool {
 // here already means the extension holds todos.write.
 func todoWriter(r *http.Request) bool {
 	return fullRole(r) || r.Header.Get(RoleHeader) == roleExtension
+}
+
+// store returns the assistant's current Store (nil when running without a database).
+func (s *Service) store() Store {
+	if fn := s.storeFn.Load(); fn != nil && *fn != nil {
+		return (*fn)()
+	}
+	return nil
+}
+
+// storeAccessor returns the installed store accessor (nil on a bare Service created without New).
+func (s *Service) storeAccessor() func() Store {
+	if fn := s.storeFn.Load(); fn != nil {
+		return *fn
+	}
+	return nil
+}
+
+// setStore installs fn as the store accessor. Production sets it once in New; tests swap it through setStore so
+// background readers calling s.store() synchronize with the swap.
+func (s *Service) setStore(fn func() Store) {
+	if fn == nil {
+		fn = func() Store { return nil }
+	}
+	s.storeFn.Store(&fn)
 }
 
 // runCtx ends when the service stops: Run's context; background before Run (tests).
@@ -1088,6 +1122,7 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
 	s.ownerHeard(r.SessionID)
+	go s.ownerAppeared(context.WithoutCancel(ctx), "user_spoke", r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
 	s.progressMade(r.MachineID, r.SessionID, time.Now()) // told something: a new stretch (supervise_progress.go)
 	// A meeting's turn under way is the user's from here on (meeting_turns.go).
@@ -1120,6 +1155,7 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 	s.taskWorking(ctx, r.MachineID, r.SessionID, row)
 	s.workStartedObserved(ctx, r.MachineID, r.SessionID, time.Now(), newTurn)
 	s.availTurnStarted(r.MachineID, r.SessionID, newTurn, time.Now())
+	s.pageTurnStarted(r.MachineID, r.SessionID, time.Now()) // a tap on a page it took up (pages_actions.go)
 }
 
 // TurnEnded: a task's agent may be done (in the background: it waits for the agents to settle), an agent's turn is
@@ -1141,6 +1177,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.infoTagTurnEnded(ctx, r.SessionID) // its categories are not known until it is tagged (info_use.go)
 		s.backgroundRoundTurnEnded(ctx, r.SessionID, time.Now())
 		s.availTurnEnded(ctx, r.MachineID, r.SessionID, time.Now()) // an assistant conversation's round (availability.go)
+		s.pageTurnEnded(r.MachineID, r.SessionID, time.Now())       // the taps on pages it took up are answered (pages_actions.go)
 		s.afterSettle(context.WithoutCancel(ctx), s.taskTurnSettled, r.MachineID, r.SessionID)
 		// A review's reviewer answered (supervise_autoreview.go, agents_session_review.go).
 		go s.autoReviewTurnEnded(context.WithoutCancel(ctx), r.MachineID, r.SessionID)
@@ -1200,6 +1237,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	if f := s.sessionsSeen; f != nil {
 		f(d)
 	}
+	s.noteNodeOnline(d.MachineID, time.Now())
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)
 	if s.retractConfirmedStartUnknowns(ctx, d.Sessions) {

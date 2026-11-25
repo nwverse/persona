@@ -33,6 +33,7 @@ const (
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
 	sigEscalated     = "escalated"      // its leader conversation judged it needs the user (supervise_leader.go): told the main one
 	sigOrphaned      = "orphaned"       // nobody works on it: its agents are closed or offline and nothing brings one back (tasks_orphan.go)
+	sigRecovered     = "recovered"      // a node reconnected after an outage or reboot and left affected work unresumable (node_recovery.go, #14781)
 	sigAsk           = "ask"            // its agent's card came to the supervisor before the user (ask_route.go)
 	sigDecide        = "decide"         // a task leader's worker needs a decision its leader cannot make: told the conversation above the leader (task_leader.go)
 	sigDecisionReply = "decision_reply" // the owner wrote in a task's Agent chat; its pending decision needs confirmation
@@ -92,8 +93,9 @@ type superviseSignal struct {
 	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
 	PendingPredecessors []string
 	PRURL               string // draft_pr: the current or earlier followed PR, revalidated before delivery
-	// Unreachable: this decision exists because the task leader's agent could not be reached, not because the worker
-	// waits for the user. It stays a decision even though the worker's ledger is not needs_user (task_leader.go).
+	// Unreachable: this decision exists because its assigned task leader Agent or Assistant supervisor could not be
+	// reached, not because the worker waits for the user. It stays a decision even when the worker is not needs_user.
+	// Recipient distinguishes an unreachable Assistant supervisor from the existing task-leader-Agent escalation.
 	Unreachable      bool
 	At               time.Time
 	Machine, Session string
@@ -223,9 +225,9 @@ func (g superviseSignal) urgent() bool {
 		// that needs the supervisor soon: every stopped task says the same until the model is back, and each used to
 		// wake the main conversation on its own. They go out together, on the ordinary schedule.
 		return !g.JudgeDown
-	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigDecide, // started: the user waits to hear it
+	case sigNeedsYou, sigIdle, sigAllStopped, sigFailed, sigInterrupted, sigStarted, sigPRConflict, sigDraftPR, sigPREvent, sigEscalated, sigAsk, sigOrphaned, sigRecovered, sigDecide, // started: the user waits to hear it
 		sigRecheck, sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigEstimateDue, sigTimedOut, // the owner, an automatic deadline or a stopped task waits
-		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo:
+		sigParkedDue, sigParkDecided, sigDecisionReply, sigHandoffResult, sigCardlessWait, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOwnerPresent:
 		return true
 	case sigReport:
 		return g.Report != upReportProgress
@@ -267,6 +269,7 @@ type superviseBook struct {
 	told             map[string]time.Time // conversation → last accepted supervision message
 	timer            *time.Timer
 	timerAt          time.Time
+	stopped          bool // set by stopSuperviseTimers under mu; stops timer callbacks and prevents re-arming
 	off              supervisionOff // the automatic-supervision switch's memory (supervise_switch.go)
 
 	resuming map[[2]string]struct{} // fingerprints of offline leader sends in flight, under dedupMu
@@ -1064,10 +1067,10 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 
 // scheduleDigestLocked sets the timer for when the pending signals are due; s.supervise.mu is held.
 func (s *Service) scheduleDigestLocked(now time.Time) {
-	if s.runCtx().Err() != nil || !s.autoSupervisionOn(context.Background()) {
+	b := &s.supervise
+	if b.stopped || s.runCtx().Err() != nil || !s.autoSupervisionOn(context.Background()) {
 		return // stopping, or automatic supervision messages are off: no digest is scheduled
 	}
-	b := &s.supervise
 	batch := s.supervisionBatchInterval(context.Background())
 	b.syncBatchInterval(batch)
 	list := make([]superviseSignal, 0, len(b.pending))
@@ -1086,15 +1089,15 @@ func (s *Service) scheduleDigestLocked(now time.Time) {
 		b.timer.Stop()
 	}
 	b.timerAt = at
-	b.timer = time.AfterFunc(wait, func() { s.sendDigest(s.runCtx()) })
+	b.timer = time.AfterFunc(wait, s.runDigestTimer)
 }
 
 // retryDigestLocked tries the digest again in d, unless one is due sooner (b.mu held).
 func (s *Service) retryDigestLocked(d time.Duration) {
-	if s.runCtx().Err() != nil || !s.autoSupervisionOn(context.Background()) {
+	b := &s.supervise
+	if b.stopped || s.runCtx().Err() != nil || !s.autoSupervisionOn(context.Background()) {
 		return
 	}
-	b := &s.supervise
 	at := time.Now().Add(d)
 	if b.timer != nil && !b.timerAt.After(at) {
 		return
@@ -1103,7 +1106,43 @@ func (s *Service) retryDigestLocked(d time.Duration) {
 		b.timer.Stop()
 	}
 	b.timerAt = at
-	b.timer = time.AfterFunc(d, func() { s.sendDigest(s.runCtx()) })
+	b.timer = time.AfterFunc(d, s.runDigestTimer)
+}
+
+// runDigestTimer runs a timer-scheduled digest while supervision timers remain active. Checking b.stopped under
+// b.digestMu closes the window where a timer fired just before stopSuperviseTimers and would otherwise run after it returns.
+func (s *Service) runDigestTimer() {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	b.mu.Lock()
+	stopped := b.stopped
+	b.mu.Unlock()
+	if stopped {
+		return
+	}
+	s.sendDigestLocked(s.runCtx())
+}
+
+// stopSuperviseTimers prevents new digest timers from arming, disarms any pending timer, and waits for any in-flight
+// digest callback to finish. Explicit sendDigest calls with a live context still run.
+func (s *Service) stopSuperviseTimers() {
+	b := &s.supervise
+	b.mu.Lock()
+	b.stopped = true
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer, b.timerAt = nil, time.Time{}
+	}
+	b.mu.Unlock()
+	b.digestMu.Lock()
+	b.mu.Lock()
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer, b.timerAt = nil, time.Time{}
+	}
+	b.mu.Unlock()
+	b.digestMu.Unlock()
 }
 
 // watchSignals are what t and its agents show now that the supervisor should hear of, by their state alone: a task
@@ -1192,7 +1231,13 @@ func reviewKey(v *Supervision) string {
 	if r := v.externalPRWake(); r != nil {
 		return externalPRReviewPrefix + r.At.UTC().Format(time.RFC3339Nano)
 	}
-	return "review@" + v.UpdatedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
+	return ordinaryReviewKey(v.UpdatedAt)
+}
+
+// updated_at is a PostgreSQL timestamptz. A review raised before restarting must have the same
+// identity as the watch obtains after reading that timestamp back at microsecond precision.
+func ordinaryReviewKey(at time.Time) string {
+	return "review@" + at.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
 // stallAfter is how long without progress counts as stuck for a task that should take expect minutes.

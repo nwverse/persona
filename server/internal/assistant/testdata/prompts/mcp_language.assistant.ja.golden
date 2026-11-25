@@ -85,6 +85,27 @@
     }
   },
   {
+    "name": "ask_user_withdraw",
+    "description": "Withdraw a pending ask_user question card created by this conversation when it is no longer needed. Only cancels this conversation's own ask_user question; another conversation's card and user-owned approvals, plans or screen dialogs are rejected. Repeated calls on an already-ended card of this conversation are idempotent.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "interaction_id"
+      ],
+      "properties": {
+        "interaction_id": {
+          "type": "string",
+          "description": "the pending ask_user interaction ID (ix_…)"
+        },
+        "reason": {
+          "type": "string",
+          "description": "optional short reason why the question is no longer needed"
+        }
+      }
+    },
+    "defer_loading": true
+  },
+  {
     "name": "notify_user",
     "description": "Send the user a push notification right now (works when the app is closed). Tapping it opens this conversation. Use for results of scheduled runs and anything time-sensitive; ordinary replies already notify. In the hub's push grading, a notice from a conversation other than the main one is held for the briefing instead of alerting unless it is P0; the tool answer then says it was moved to the briefing, so treat the user as not alerted.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
@@ -1854,7 +1875,7 @@
   },
   {
     "name": "model_profiles_list",
-    "description": "List editable model profiles, current profile, changed fields, rollback and recent audit events. Profiles contain model settings only, never credentials.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "List profiles, active profile, drift, rollback previews and audit events. Model settings only, never credentials.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "properties": {},
@@ -1863,7 +1884,7 @@
   },
   {
     "name": "model_profile_get",
-    "description": "Inspect one model profile by id. See its purpose bindings, launcher model fields and named execution tiers (the Agent presets). Add, change or remove a tier with persona_settings key model_profiles.tiers; other fields are edited through the model-profiles HTTP API. Saving does not apply purpose or launcher settings.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Inspect a profile. Edit bindings with persona_settings model_profiles.bindings, tiers with model_profiles.tiers, or capture with model_profile_capture. Saving does not apply purposes/launchers.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1881,7 +1902,7 @@
   },
   {
     "name": "model_profile_switch",
-    "description": "Switch atomically to a model profile by id when the user asks (for example economy or performance). Saves a before-image for model_profile_rollback and records actor/time. Applies on next model call or Agent start; does not interrupt running work. Inspect profiles first; do not assume economy needs any particular model.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Switch atomically to a profile by id; inspect first. Saves a rollback point and affects new model calls/Agent starts, not running work.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1899,11 +1920,29 @@
   },
   {
     "name": "model_profile_rollback",
-    "description": "Undo the last model-profile switch using its saved before-image. Restores only touched model settings, not launcher credentials. Inspect the rollback preview with model_profiles_list first; a second rollback redoes the switch.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Undo the latest profile switch, restoring touched model settings only. Inspect the preview first; another rollback may redo it.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "properties": {},
       "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
+    "name": "model_profile_capture",
+    "description": "Capture current purposes/launcher model fields into an existing profile with exact before/after phone approval. Preserves tiers, rechecks revision and reads back. Does not change current configuration; switch to apply.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Existing profile id from model_profiles_list"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
     },
     "defer_loading": true
   },
@@ -2001,7 +2040,7 @@
   },
   {
     "name": "view_show",
-    "description": "Create a persistent live card in the calling assistant conversation. Use the same View schema as persona-view and extension UI: sections of components, a required plain-text fallback, and optional named pages. The card stays at its feed position; use view_update to change it. The hub validates the View and returns field-level errors for correction. At most 64 KB per card and 200 cards per conversation. This does not send a push notification. Keep the conclusion in your normal reply too. Returns {id, version}; save the id for updates. Do not collect passwords or secrets in a card. An html component can call persona.reply / persona.open only when it has a key, and each call is confirmed by the user; the card's one reply is shared with its reply actions.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Create a live card in this assistant conversation: a View as persona-view and extension UI use (sections of components, a required plain-text fallback, optional named pages), at most 64 KB, 200 cards a conversation. It keeps its feed position; change it with view_update. Field-level errors come back for correction. No push: keep the conclusion in your reply too. Returns {id, version}. Never collect passwords or secrets. An html component with a key may call persona.reply / persona.open, each confirmed by the user; the card's one reply is shared with its reply actions.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2018,7 +2057,7 @@
   },
   {
     "name": "view_update",
-    "description": "Replace a live card created by this assistant conversation with a complete validated View. Other conversations and ordinary agents cannot modify it. Supply the version read from view_get to reject stale updates; without it the hub uses the version it reads at the start of this call. Validation or a version conflict leaves the previous card intact. Contents are stored before update notifications are coalesced (at most one per second). Returns {version}. Keep stable component keys to preserve editing and scroll state across devices.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Replace a live card of this conversation with a whole new View (rules as view_show); no other conversation or agent can. A version from view_get refuses a stale update; without one, the version read now is used. A refused update leaves the card as it was. Updates are stored at once and told at most once a second. Returns {version}. Keep component keys stable.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2046,7 +2085,7 @@
   },
   {
     "name": "view_get",
-    "description": "Read a persistent live card created by the calling assistant conversation. Returns its id, conversation, version, full View, timestamps and actions (the user's selected reply and submitted values, with pending/sent/failed delivery status; kind html is a reply from an html component's persona.reply, its text the reply the user confirmed; version is the card version the user saw when choosing). Use it before updating a card after resuming work; an id from another conversation is forbidden. Updating the card never clears a committed answer.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "Read a live card of this conversation: id, version, View, times and actions (the user's reply and values, delivery pending/sent/failed; kind html is a persona.reply, its text what the user confirmed; version the one they saw). Read it before updating after resuming. An update never clears a committed answer.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -4087,7 +4126,7 @@
   },
   {
     "name": "decisions_query",
-    "description": "Decisions; scope:{executor,machine[],project[],personal}. memory[]: remembered entries this conversation may use (first page; none with by, trust or a status other than active).\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "description": "memory[] page 1: tag words match text/subjects/facet/categories (AND, ignore case). by/trust/non-active status: memory_omitted=ledger_filters; retry tag alone. scope=ledger-only\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -4111,55 +4150,6 @@
         },
         "scope": {
           "type": "object"
-        }
-      },
-      "additionalProperties": false
-    },
-    "defer_loading": true
-  },
-  {
-    "name": "health_intake",
-    "description": "Health chats only. log kind/amount (water ml, protein g); list entries/IDs, daily totals/goals (default 7 days incl. today); delete record UUID, repeatable. Estimates need ask_user; new ID per log; list before retrying.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
-    "input_schema": {
-      "type": "object",
-      "required": [
-        "action"
-      ],
-      "properties": {
-        "action": {
-          "type": "string",
-          "enum": [
-            "log",
-            "list",
-            "delete"
-          ]
-        },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "water",
-            "protein"
-          ]
-        },
-        "amount": {
-          "type": "number",
-          "description": "ml 1-3000; g \u003e0-200; max one decimal."
-        },
-        "at": {
-          "type": "string",
-          "description": "RFC3339; default now."
-        },
-        "note": {
-          "type": "string",
-          "description": "Food/portion; max 4096 UTF-8 bytes; no NUL."
-        },
-        "days": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 366
-        },
-        "id": {
-          "type": "string"
         }
       },
       "additionalProperties": false

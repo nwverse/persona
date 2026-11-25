@@ -134,7 +134,7 @@ func (s core) threadFlush(id string) {
 	if !ok {
 		return // unbound since (or bound to a thread of another channel)
 	}
-	st, err := s.h.StatusKept(ctx)
+	st, err := s.feishuStatusKept(ctx)
 	if err != nil || !st.Ready {
 		s.logf("todo %s: not posting to its thread: the bot is not ready (%v)", id, err)
 		return
@@ -145,7 +145,7 @@ func (s core) threadFlush(id string) {
 		s.logf("todo %s: not posting to its thread: its chat is not one the bot may send into", id)
 		return
 	}
-	anchor := s.h.TopicMessage(ctx, chatID, threadID)
+	anchor := s.topicMessage(ctx, chatID, threadID)
 	if anchor == "" {
 		s.logf("todo %s: not posting to its thread: no message of the topic is known to reply to", id)
 		return
@@ -164,7 +164,7 @@ func (s core) threadFlush(id string) {
 		// The anchor was withdrawn or deleted: the topic has no such message to reply under. This line is lost (a failed
 		// post is not tried again); the next message the owner writes there is the new anchor.
 		s.logf("todo %s: post to its thread: its anchor message is gone; forgetting it", id)
-		s.h.ForgetTopicMessage(ctx, chatID, threadID, anchor)
+		s.forgetTopicMessage(ctx, chatID, threadID, anchor)
 	default:
 		s.logf("todo %s: post to its thread: %v", id, err)
 	}

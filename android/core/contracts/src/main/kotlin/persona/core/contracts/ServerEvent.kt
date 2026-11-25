@@ -293,6 +293,13 @@ data class ExtensionAuthEvent(val extension: String, val auth: persona.core.cont
 data object DirectionsEvent : ServerEvent
 
 /**
+ * The assistant's Dashboards places changed (#15017, `assistant_pages`, payload `{}`): a page was kept, pinned,
+ * unpinned, renamed, removed or restored, or the switch in Settings › Assistant was turned. Only from a hub that
+ * says `assistant_pages`; the clients read the extension places list (`GET /api/v1/extensions/-/ui`) again.
+ */
+data object AssistantPagesEvent : ServerEvent
+
+/**
  * Whose an extension push is (`extension_ui`, `extension_operation`, `extension_auth`): the hub puts a top-level
  * `manager` on every manager's but the assistant's it starts, so none is the assistant's (docs/assistant/managers.md,
  * the same extension id under several managers, #1834).
@@ -384,6 +391,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "assistant_saved_prompts" -> input.json.decodeFromJsonElement<SavedPromptsEvent>(obj)
             "assistant_starred" -> input.json.decodeFromJsonElement<StarredMessagesEvent>(obj)
             "directions" -> DirectionsEvent
+            "assistant_pages" -> AssistantPagesEvent
             "task_plan" -> input.json.decodeFromJsonElement<TaskPlanEvent>(obj)
             "assistant_view" -> input.json.decodeFromJsonElement<AssistantViewEvent>(obj)
             "assistant_view_action" -> input.json.decodeFromJsonElement<AssistantViewActionEvent>(obj)
@@ -445,6 +453,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             is SavedPromptsEvent -> "assistant_saved_prompts" to output.json.encodeToJsonElement(value)
             is StarredMessagesEvent -> "assistant_starred" to output.json.encodeToJsonElement(value)
             DirectionsEvent -> "directions" to JsonObject(emptyMap())
+            AssistantPagesEvent -> "assistant_pages" to JsonObject(emptyMap())
             is TaskPlanEvent -> "task_plan" to output.json.encodeToJsonElement(value)
             is AssistantViewEvent -> "assistant_view" to output.json.encodeToJsonElement(value)
             is AssistantViewActionEvent -> "assistant_view_action" to output.json.encodeToJsonElement(value)
