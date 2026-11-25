@@ -204,7 +204,8 @@ func (c *outsideChecks) declares(p *Pkg, name string) bool {
 // its type parameters, and an instance of the type (peek[fleetcount.Why]), made in any file of the package,
 // implements any core's visitor, so in a package a file of which imports a core or the kit it counts against a core
 // or kit package the package imports: first one that declares an interface method of its name, then a core, then by
-// path; in a core's own test, only another core it imports.
+// path. In a core's own test, generic or not, a Visit* method counts only against another core it imports: the core's
+// black-box tests visit it, with its own types and the kit's.
 func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]ref, allowed bool) {
 	if allowed || fd.Recv == nil || !strings.HasPrefix(fd.Name.Name, "Visit") {
 		return
@@ -213,6 +214,9 @@ func (c *outsideChecks) visitorImpl(f *File, fd *ast.FuncDecl, refs map[string]r
 	for _, p := range params(fd.Type.Params) {
 		pkg, _ := baseType(unwrapParam(p))
 		if r, ok := refs[pkg]; ok {
+			if f.Test && core(c.p.Layer) && !core(r.pkg.Layer) {
+				continue // a core's own tests visit it with the kit's types (VisitHoldUntil(until instant.Instant))
+			}
 			named = append(named, r)
 		}
 	}

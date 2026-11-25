@@ -141,6 +141,19 @@ func TestDomainRuleCases(t *testing.T) {
 				"\t\"github.com/nwverse/persona/server/internal/domainkit/slot\"\n",
 			"type view struct{ rows int }\n\nfunc (x *view) VisitAgent(a slot.Slot, w fleetcount.Why, s instant.Instant) {}\n")),
 			[]string{"out-visitor-impl"}},
+		// A core's own black-box tests visit it, with its own types and the kit's (quiethours' VisitHoldUntil takes only
+		// an instant.Instant); another core's types in such a test are still a finding against that core.
+		{"a core's own test visiting it with the kit's types passes", merged(fleet, map[string]string{
+			"internal/assistant/fleetcount/kit_visit_test.go": "package fleetcount_test\n\nimport (\n" +
+				"\t\"github.com/nwverse/persona/server/internal/domainkit/instant\"\n" +
+				"\t\"github.com/nwverse/persona/server/internal/domainkit/slot\"\n)\n\n" +
+				"type held struct{ at instant.Instant }\n\nfunc (h *held) VisitHoldUntil(at instant.Instant) { h.at = at }\n\n" +
+				"type place struct{ at slot.Slot }\n\nfunc (p *place) VisitPlace(at slot.Slot) { p.at = at }\n"}), []string{}},
+		{"a core's own test visiting another core is a finding", merged(fleet, map[string]string{
+			"internal/assistant/fleetcount/ref_visit_test.go": "package fleetcount_test\n\n" +
+				"import \"github.com/nwverse/persona/server/internal/agentref\"\n\ntype seen struct{ m agentref.MachineID }\n\n" +
+				"func (r *seen) VisitRef(m agentref.MachineID, _ agentref.SessionID) { r.m = m }\n"}),
+			[]string{"out-visitor-impl"}},
 		// A generic type's Visit method names no core, and the file that declares it need not import one: in a package
 		// another file of which imports a core or the kit, it implements a visitor all the same, undeclared code included.
 		{"a generic visitor split from its use in undeclared code", merged(fleet, map[string]string{
