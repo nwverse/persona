@@ -36,20 +36,6 @@ func putMeetingMinutes(t *testing.T, e *Engine, id string, m Minutes) {
 	}
 }
 
-// coreWriters is the provider a test gives an engine that needs the recording module's hook without the module: the
-// writers that are still in this package (RecordingWriters), and nothing for the minutes and day recaps, which are
-// the module's and tested there.
-type coreWriters struct {
-	recordingwire.WritersInCore
-	noMinutes
-}
-
-type noMinutes struct{ recordingwire.NoProvider }
-
-func testProvider(e *Engine) recordingwire.Provider {
-	return coreWriters{RecordingWriters(e), noMinutes{}}
-}
-
 // changeRecording rewrites recording id's meta.json with fn applied.
 func changeRecording(t *testing.T, e *Engine, id string, fn func(r *Recording)) {
 	t.Helper()
