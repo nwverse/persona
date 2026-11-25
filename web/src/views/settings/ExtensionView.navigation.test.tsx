@@ -247,4 +247,103 @@ describe("LegacyExtensionUI tab and stack navigation", () => {
       expect(req.state).toBe(`step=${i + 1}`);
     }
   });
+
+  it("preserves initialState when a rendered view omits state, while allowing a stateless root to clear tab state", async () => {
+    // 1. Entry opened with firstState="item=42" whose rendered view omits `state` must preserve "item=42" across push + Back.
+    const statelessDetail = {
+      title: "Item 42",
+      sections: [{
+        items: [
+          { type: "text", text: "Loaded item 42" },
+          { type: "row", title: "Sub Detail", action: { id: "sub", push: { ui: "sub", state: "sub=1", title: "Sub" } } },
+        ],
+      }],
+    };
+    await act(async () => {
+      root.render(<LegacyExtensionUI extension="demo" ui="item" state="item=42" history={false} />);
+    });
+    await settle();
+    expect((await resolveDraw(statelessDetail)).state).toBe("item=42");
+
+    await clickButton("Sub Detail");
+    expect((await resolveDraw(detailView("Sub Page"))).state).toBe("sub=1");
+
+    await clickButton("Item 42");
+    const restored = await resolveDraw(statelessDetail);
+    expect(restored.ui).toBe("item");
+    expect(restored.state).toBe("item=42");
+
+    // 2. Stateless root (initialState undefined) switching from stateful tab back to stateless default tab clears state.
+    const statelessOverview = {
+      title: "Overview Tab",
+      tabs: tabView("overview").tabs,
+      sections: [{
+        items: [
+          { type: "text", text: "Stateless overview" },
+          { type: "row", title: "Open Detail", action: { id: "open_detail", push: { ui: "detail", title: "Detail" } } },
+        ],
+      }],
+    };
+    await act(async () => {
+      root.render(<LegacyExtensionUI extension="demo" ui="home" history={false} />);
+    });
+    await settle();
+    expect((await resolveDraw(statelessOverview)).state).toBeUndefined();
+
+    await clickButton("Nodes");
+    await resolveAct(tabView("nodes"));
+    await clickButton("Overview");
+    await resolveAct(statelessOverview);
+
+    await clickButton("Open Detail");
+    await resolveDraw(detailView("D"));
+    await clickButton("Overview Tab");
+    const backHome = await resolveDraw(statelessOverview);
+    expect(backHome.ui).toBe("home");
+    expect(backHome.state).toBeUndefined();
+  });
+
+  it("ignores a stale in-flight renderUI response from a popped page so it never corrupts depth 1", async () => {
+    const titles: (string | undefined)[] = [];
+    await act(async () => {
+      root.render(
+        <LegacyExtensionUI
+          extension="demo"
+          ui="main"
+          state="tab=overview"
+          history={false}
+          onTitle={(t) => titles.push(t)}
+        />,
+      );
+    });
+    await settle();
+    await resolveDraw(tabView("overview"));
+
+    await clickButton("Nodes");
+    await resolveAct(tabView("nodes"));
+
+    // Push detail page, capture its in-flight renderUI request without resolving it yet.
+    await clickButton("Open Detail");
+    const staleDetailReq = mock.draws.shift()!;
+    expect(staleDetailReq.ui).toBe("detail");
+
+    // Pop back to depth 1 while depth 2's renderUI is still in flight.
+    titles.length = 0;
+    await clickButton("Nodes Tab");
+    const depth1Reload = mock.draws.shift()!;
+    expect(depth1Reload.ui).toBe("main");
+    expect(depth1Reload.state).toBe("tab=nodes");
+
+    // Resolve the stale depth 2 response before depth 1's reload completes: must be completely ignored.
+    await act(async () => staleDetailReq.resolve(detailView("Stale Popped Detail")));
+    await settle();
+    expect(titles).not.toContain("Stale Popped Detail");
+    expect(host.textContent).not.toContain("Stale Popped Detail");
+
+    // Now resolve depth 1's reload cleanly.
+    await act(async () => depth1Reload.resolve(tabView("nodes")));
+    await settle();
+    expect(host.textContent).toContain("Body nodes");
+    expect(titles).toEqual(["Nodes Tab"]);
+  });
 });

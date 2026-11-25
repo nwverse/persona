@@ -348,8 +348,11 @@ export function LegacyExtensionUI({
   /** The first page asked to be taken off (a pop with nothing under it): the page around it closes. Without it, ignored. */
   onClose?: () => void;
 }) {
+  type StackEntry = UIPage & { id: number; initialState?: string };
   const nextEntryId = useRef(1);
-  const [stack, setStack] = useState<(UIPage & { id: number })[]>(() => [{ id: 1, ui, ...(firstState ? { state: firstState } : {}) }]);
+  const [stack, setStack] = useState<StackEntry[]>(() => [
+    { id: 1, ui, ...(firstState ? { state: firstState, initialState: firstState } : {}) },
+  ]);
   const stackRef = useRef(stack);
   stackRef.current = stack;
   const poppingRef = useRef<number | null>(null);
@@ -385,6 +388,8 @@ export function LegacyExtensionUI({
   const [query, setQuery] = useState(""); // the search box as typed
   const stateRef = useRef<string | undefined>(top.state);
   const drawnRef = useRef(false); // a view has been drawn
+  const asked = useRef(0);
+  const inFlightRef = useRef(false);
   const ctxKey = `${context?.launcher ?? ""}\n${context?.machine ?? ""}\n${context?.item ?? ""}\n${context?.size ?? ""}`;
   const mode = pages ?? (compact || embedded ? "open" : "stack");
   useEffect(() => onDepth?.(depth), [depth, onDepth]);
@@ -395,32 +400,36 @@ export function LegacyExtensionUI({
   useEffect(() => {
     if (lastPropKey.current === propKey) return;
     lastPropKey.current = propKey;
+    asked.current += 1;
     poppingRef.current = null;
-    const next = [{ id: ++nextEntryId.current, ui, ...(firstState ? { state: firstState } : {}) }];
+    const entry: StackEntry = { id: ++nextEntryId.current, ui, ...(firstState ? { state: firstState, initialState: firstState } : {}) };
+    const next = [entry];
     stackRef.current = next;
+    pageKeyRef.current = `${entry.id}\n1\n${entry.ui}`;
     setStack(next);
   }, [propKey, ui, firstState]);
 
   // keep: drawn again for the same thing, the fields typed into stay as typed
-  const show = (v: UIView, keep = false) => {
+  const show = (v: UIView, keep = false, expectedKey = pageKeyRef.current, expectedId = stackRef.current.at(-1)?.id) => {
+    const current = stackRef.current;
+    const lastIdx = current.length - 1;
+    const curTop = current[lastIdx];
+    if (!curTop || pageKeyRef.current !== expectedKey || curTop.id !== expectedId) return;
     // drawn again for the same page: the diffs loaded since stay (UI version 5)
     setView((before) => (keep ? keepLoaded(before, v) : v));
     const start = fieldValues(v);
     setValues((old) => (keep ? Object.fromEntries(Object.entries(start).map(([k, x]) => [k, old[k] ?? x])) : start));
-    stateRef.current = v.state;
-    const current = stackRef.current;
-    const lastIdx = current.length - 1;
-    const curTop = current[lastIdx];
-    if (curTop) {
-      const nextTitle = v.title || curTop.title;
-      if (curTop.state !== v.state || curTop.title !== nextTitle) {
-        const updated: UIPage & { id: number } = { id: curTop.id, ui: curTop.ui };
-        if (v.state !== undefined) updated.state = v.state;
-        if (nextTitle !== undefined) updated.title = nextTitle;
-        const nextStack = [...current.slice(0, lastIdx), updated];
-        stackRef.current = nextStack;
-        setStack(nextStack);
-      }
+    const nextState = v.state ?? curTop.initialState;
+    stateRef.current = nextState;
+    const nextTitle = v.title || curTop.title;
+    if (curTop.state !== nextState || curTop.title !== nextTitle) {
+      const updated: StackEntry = { id: curTop.id, ui: curTop.ui };
+      if (curTop.initialState !== undefined) updated.initialState = curTop.initialState;
+      if (nextState !== undefined) updated.state = nextState;
+      if (nextTitle !== undefined) updated.title = nextTitle;
+      const nextStack = [...current.slice(0, lastIdx), updated];
+      stackRef.current = nextStack;
+      setStack(nextStack);
     }
     drawnRef.current = true;
     // a control's choice stays only while its request is on its way: once answered, what the extension draws is shown
@@ -433,14 +442,14 @@ export function LegacyExtensionUI({
   // Every request that draws the whole view (a draw, a press, a search) takes the next number when it leaves: an answer
   // whose number is not the latest any more is older than what was asked since (a press, another page, the next search)
   // and is not drawn, nor its error shown (#4931).
-  const asked = useRef(0);
-  const inFlightRef = useRef(false);
   const load = useCallback((keep?: boolean) => {
     const mine = ++asked.current;
+    const expectedKey = pageKey;
+    const expectedId = top.id;
     inFlightRef.current = true;
     setLoading(true);
     renderUI(extension, top.ui, context, stateRef.current, manager)
-      .then((v) => mine === asked.current && show(v, keep === true))
+      .then((v) => mine === asked.current && show(v, keep === true, expectedKey, expectedId))
       .catch((e) => {
         if (mine !== asked.current) return;
         if (isUnsupported(e)) (setUnsupported(true), onUnsupported?.());
@@ -508,14 +517,20 @@ export function LegacyExtensionUI({
     const onPop = (e: PopStateEvent) => {
       poppingRef.current = null;
       const at = typeof (e.state as { extPage?: unknown } | null)?.extPage === "number" ? (e.state as { extPage: number }).extPage : 1;
-      setStack((s) => {
-        const next = at < s.length ? s.slice(0, Math.max(1, at)) : s;
-        stackRef.current = next;
-        return next;
-      });
+      const current = stackRef.current;
+      if (at >= current.length) return;
+      const next = current.slice(0, Math.max(1, at));
+      const nextTop = next[next.length - 1];
+      asked.current += 1;
+      stackRef.current = next;
+      pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
+      setStack(next);
     };
     addEventListener("popstate", onPop);
-    return () => removeEventListener("popstate", onPop);
+    return () => {
+      poppingRef.current = null;
+      removeEventListener("popstate", onPop);
+    };
   }, [historied]);
 
   const push = (p: UIPush) => {
@@ -528,11 +543,13 @@ export function LegacyExtensionUI({
       return;
     }
     const pushed = pushPage(current, p, curTop.ui);
-    const next = pushed.map((entry, idx) =>
+    const next: StackEntry[] = pushed.map((entry, idx) =>
       idx === pushed.length - 1
-        ? { ...entry, id: ++nextEntryId.current }
-        : current[idx] ?? { ...entry, id: ++nextEntryId.current },
+        ? { ...entry, id: ++nextEntryId.current, ...(entry.state !== undefined ? { initialState: entry.state } : {}) }
+        : current[idx] ?? { ...entry, id: ++nextEntryId.current, ...(entry.state !== undefined ? { initialState: entry.state } : {}) },
     );
+    const nextTop = next[next.length - 1];
+    asked.current += 1;
     poppingRef.current = null;
     if (historied && next.length > current.length) {
       // Pushing onto this stack from inside an open overlay (e.g. a Full screen map/graph stop) replaces the
@@ -542,6 +559,7 @@ export function LegacyExtensionUI({
       else history.pushState(nextState, "", location.href);
     }
     stackRef.current = next;
+    pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
     setStack(next);
   };
   const pop = () => {
@@ -557,7 +575,10 @@ export function LegacyExtensionUI({
       history.back(); // the popstate above takes the page off
     } else {
       const next = current.slice(0, -1);
+      const nextTop = next[next.length - 1];
+      asked.current += 1;
       stackRef.current = next;
+      pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
       setStack(next);
     }
   };
@@ -580,11 +601,13 @@ export function LegacyExtensionUI({
     }
     setBusy(action.id);
     const mine = ++asked.current;
+    const expectedKey = pageKey;
+    const expectedId = top.id;
     try {
       const r = outcome(await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: sent, manager }), context?.item, extension);
       // what it says to do is still done; the view it answers only while nothing was asked since
-      const latest = mine === asked.current;
-      if (r.view && latest) show(r.view, !!(extra && "q" in extra)); // a search keeps what is typed
+      const latest = mine === asked.current && pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
+      if (r.view && latest) show(r.view, !!(extra && "q" in extra), expectedKey, expectedId); // a search keeps what is typed
       if (r.items && latest) setView((v) => (v ? patchView(v, r.items) : v));
       if (r.toast) toast(r.toast, "ok");
       if (r.url) openLink(r.url, undefined, linkManager);
@@ -614,10 +637,13 @@ export function LegacyExtensionUI({
     async (action: UIAction, extra?: Record<string, string>) => {
       // it does not take a number (it does not make a draw on its way older), but its view is not drawn over a newer one
       const at = asked.current;
+      const expectedKey = pageKey;
+      const expectedId = top.id;
       try {
         const r = await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: { ...extra, ...action.values }, manager });
-        if (r.items?.length) setView((v) => (v ? patchView(v, r.items) : v));
-        if (r.view && at === asked.current) show(r.view, true);
+        const sameEntry = pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
+        if (r.items?.length && sameEntry) setView((v) => (v ? patchView(v, r.items) : v));
+        if (r.view && at === asked.current && sameEntry) show(r.view, true, expectedKey, expectedId);
         if (r.toast) toast(r.toast, "ok");
         return r;
       } catch (e) {
@@ -638,6 +664,8 @@ export function LegacyExtensionUI({
     };
     flight.current.set(c.name, entry);
     const at = asked.current;
+    const expectedKey = pageKey;
+    const expectedId = top.id;
     let r: ReturnType<typeof outcome> | null = null;
     try {
       r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value }, manager }), context?.item, extension);
@@ -651,15 +679,16 @@ export function LegacyExtensionUI({
     if (entry.queued) void sendControl(entry.queued.c, entry.queued.value);
     else if (!r) setControls((x) => without(x, c.name)); // failed: the extension's last value again
     if (!r) return;
-    const applied = (!!r.view && at === asked.current) || !!r.items;
-    if (r.view && at === asked.current) show(r.view, true);
-    if (r.items) setView((v) => (v ? patchView(v, r.items) : v));
+    const sameEntry = pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
+    const applied = sameEntry && ((!!r.view && at === asked.current) || !!r.items);
+    if (r.view && at === asked.current && sameEntry) show(r.view, true, expectedKey, expectedId);
+    if (r.items && sameEntry) setView((v) => (v ? patchView(v, r.items) : v));
     if (applied && !entry.queued) setControls((x) => without(x, c.name));
     if (r.toast) toast(r.toast, "ok");
     if (r.url) openLink(r.url, undefined, linkManager);
     if (r.push) push(r.push);
     if (r.pop) pop();
-    if (r.reload || (r.view && at !== asked.current && !inFlightRef.current)) load(true);
+    if (r.reload || (r.view && sameEntry && at !== asked.current && !inFlightRef.current)) load(true);
   };
   const applyControl = (c: UIRowControl, value: string) => {
     setControls((x) => ({ ...x, [c.name]: value }));
