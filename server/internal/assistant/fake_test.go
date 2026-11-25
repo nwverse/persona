@@ -264,8 +264,13 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 	f.mu.Lock()
 	h, in := f.hello, f.inbox
 	f.mu.Unlock()
-	if in != nil { // the inbox's tests give the models there (inbox_fake_test.go)
-		h.Models = in.hubModels()
+	if in != nil {
+		in.mu.Lock()
+		hasModels := in.model != nil || len(in.models) > 0
+		in.mu.Unlock()
+		if hasModels { // Only an explicitly configured fake Inbox replaces the ordinary hello's models.
+			h.Models = in.hubModels()
+		}
 	}
 	return h, nil
 }
@@ -378,6 +383,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 	}
 	f.mu.Unlock()
+	if hooks.beforeCall != nil {
+		hooks.beforeCall(p)
+	}
 	if hooks.before != nil {
 		hooks.before(read)
 	}

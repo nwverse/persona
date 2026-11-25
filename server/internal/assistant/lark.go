@@ -300,6 +300,14 @@ func (h larkHost) WorkbenchItem(id string) (assistantwire.WorkbenchItem, bool) {
 	return workbenchItemOf(it), true
 }
 
+func (s *Service) workbenchInboxAction(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse {
+	return s.larkModule().WorkbenchInboxAction(ctx, a)
+}
+
+func (s *Service) draftCard(ctx context.Context, it InboxItem, text string, err error, list string) *botcard.Card {
+	return s.larkModule().WorkbenchDraftCard(ctx, workbenchItemOf(it), text, err, list)
+}
+
 // workbenchItemOf is an Inbox item as the workbench's cards show it.
 func workbenchItemOf(it InboxItem) assistantwire.WorkbenchItem {
 	w := assistantwire.WorkbenchItem{ID: it.ID, Source: it.Source, AccountName: it.AccountName, Title: it.Title,

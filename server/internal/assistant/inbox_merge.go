@@ -34,6 +34,23 @@ type InboxMergeRef struct {
 	Title       string `json:"title,omitempty"`
 }
 
+// inboxVisibilityRefUnion retains each contributor once, including contributors of a row that was itself merged before.
+func inboxVisibilityRefUnion(groups ...[]InboxMergeRef) []InboxMergeRef {
+	var out []InboxMergeRef
+	seen := map[string]bool{}
+	for _, refs := range groups {
+		for _, ref := range refs {
+			key := ref.Source + "\x00" + ref.ID
+			if ref.ID == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
 // tierRank orders tiers by how much they need the user: Needs you, FYI, Collapsed, untriaged.
 func tierRank(t string) int {
 	switch t {
@@ -64,8 +81,7 @@ func (b *inboxBook) merge(items []*InboxItem, now time.Time) (*InboxItem, []*Inb
 	var took []*InboxItem
 	var entries []InboxChainEntry
 	if sv.ReplyInstruction == nil {
-		// Upgrade chain-only provenance before resequencing and trimming can discard it. A member's own later decision
-		// must not consume the survivor's active rewrite instruction.
+		// Upgrade legacy chain-only provenance before resequencing and trimming can discard it.
 		sv.ReplyInstruction = chainReplyInstruction(sv.Chain)
 	}
 	for _, it := range items {
@@ -80,11 +96,15 @@ func (b *inboxBook) merge(items []*InboxItem, now time.Time) (*InboxItem, []*Inb
 				sv.MergedFrom = append(sv.MergedFrom, ref)
 			}
 		}
+		// A later Undo can reopen this old survivor with its member text still in Context. Preserve that text's
+		// provenance before dropping the member refs, including for survivors merged before the durable fields existed.
 		it.ReplyContentSources = replyPolicySourceUnion(replyPolicySourceSet(it))
 		it.ReplyContextTruncated = replyPolicyContextTruncated(it)
+		it.VisibilityContentRefs = inboxVisibilityRefUnion(it.VisibilityContentRefs, it.MergedFrom)
 		it.MergedFrom = nil
 		it.MergedInto = sv.ID
 		sv.MergedFrom = append(sv.MergedFrom, InboxMergeRef{ID: it.ID, Source: it.Source, AccountName: it.AccountName, Title: it.Title})
+		sv.VisibilityContentRefs = inboxVisibilityRefUnion(sv.VisibilityContentRefs, sv.MergedFrom, it.VisibilityContentRefs)
 		sv.ReplyContentSources = replyPolicySourceUnion(replyPolicySourceSet(sv), replyPolicySourceSet(it))
 		sv.ReplyContextTruncated = replyPolicyContextTruncated(sv) || replyPolicyContextTruncated(it)
 		sv.Count += it.Count
@@ -205,14 +225,18 @@ func (b *inboxBook) unmerge(sv *InboxItem, now time.Time) []*InboxItem {
 		sv.Count = max(sv.Count-m.Count, 1)
 		out = append(out, m)
 	}
+	// Rows merged before the durable fields existed still carry their member text. Capture both boundaries before
+	// dropping MergedFrom, or Undo would make that retained text look like an unmerged, fully classified survivor.
 	sv.ReplyContentSources = replyPolicySourceUnion(replyPolicySourceSet(sv))
 	sv.ReplyContextTruncated = replyPolicyContextTruncated(sv)
+	sv.VisibilityContentRefs = inboxVisibilityRefUnion(sv.VisibilityContentRefs, sv.MergedFrom)
 	sv.MergedFrom = nil
 	if t := sv.PreMergeTier; t != "" {
 		sv.Tier = t[:len(t)-1]
 		sv.PreMergeTier = ""
 	}
 	sv.TriagedAt, sv.RuleOf = "", ""
+	// Undo restores rows, not the survivor's original Context: member text and its source/truncation boundary remain.
 	resetReplyPolicyClassification(sv)
 	restoreMergeTitle(sv)
 	b.chainAdd(sv, InboxChainEntry{Kind: ChainMerged, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.unmerged")})
@@ -244,8 +268,9 @@ func (b *inboxBook) followMerged(changed []*InboxItem, now time.Time) []*InboxIt
 			baseline = sv.UpdatedAt
 			roundStart[sv] = baseline
 		}
-		// noteReceived proves that this member advanced in this collection. The timestamp fallback preserves direct
-		// followMerged callers' behavior for older/manual updates without suppressing a genuinely new, older event.
+		// noteReceived proves that this member advanced in this collection. The timestamp fallback preserves the direct
+		// followMerged callers' behavior for older/manual updates, but must not suppress a genuinely new, older member event.
+		// A survivor changing in the same round is not member advancement: migrated account adoption also changes both rows.
 		if !advanced && !it.UpdatedAt.After(baseline) {
 			continue
 		}
@@ -305,6 +330,10 @@ type inboxMergeReply struct {
 func (s *Service) mergeInbox(ctx context.Context, targets []inboxBulkTarget, now time.Time) (inboxMergeReply, error) {
 	b := &s.inbox
 	out := inboxMergeReply{Members: []string{}, Skipped: []inboxBulkSkip{}}
+	fullCfg, configErr := s.inboxConfigFresh(ctx)
+	if configErr != nil {
+		return out, configErr
+	}
 	b.mu.Lock()
 	var items []*InboxItem
 	seen := map[string]bool{}
@@ -317,6 +346,8 @@ func (s *Service) mergeInbox(ctx context.Context, targets []inboxBulkTarget, now
 		switch {
 		case !ok:
 			out.Skipped = append(out.Skipped, inboxBulkSkip{t.ID, bulkSkipMissing})
+		case inboxVisibilityWithMembersExcludedLocked(b, it, fullCfg.Visibility):
+			out.Skipped = append(out.Skipped, inboxBulkSkip{t.ID, bulkSkipChanged})
 		case !it.open() || it.MergedInto != "" || b.filing[t.ID] != nil && b.holdsFiling(b.filing[t.ID]):
 			out.Skipped = append(out.Skipped, inboxBulkSkip{t.ID, bulkSkipChanged})
 		case t.Version != "" && t.Version != inboxVersion(it):

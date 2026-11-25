@@ -2001,11 +2001,19 @@ The web Changes panel's secondary file tree (#10477) reuses the existing `Resize
 
 ### 4.3 Feedback and haptics
 
-Settings › Hub uses the update group's status row for Web development progress. Pair the
-phase title with the localized step. Use a thin accent bar on the inset track when the
-step supplies a percentage, and the shared spinner while its total is unknown. Use
-`text-meta` for the phase and `text-label` for the step and measurements. Announce
-step changes through the live status label and let the measurements wrap at narrow widths.
+Settings › Hub shows a stage strip and an inset step list during updates (#15240). The
+strip borrows the task stage markers so users can see what is running and what remains
+even when a phase has no detailed progress. A development update takes the rollback
+snapshot after the idle wait, so the backup marker stays pending until the Hub reaches
+it. Use a green check for completed work, an accent mark for the current stage and a
+hollow mark for pending work. The inset list pairs the localized step with the shared
+spinner, live status label and an accent bar when the Hub reports a percentage. The
+header shows the short target and elapsed time when the start of the update can be
+observed. With only the phase's start available, label the time as phase elapsed. Let
+stage labels and measurements wrap. Keep the busy sessions and the confirmed restart
+override together in the inset panel while the Hub waits for idle. The native version
+picker wraps its selected label on narrow screens to keep the second-level timestamp
+and short commit visible.
 
 Message feedback (#5258, principle 7, super rule 5) reuses the chat's status line and pending bubble, not a new card or
 style. Show Sending immediately from local state, then Processing on the hub's `message_send_state` receipt; do not wait

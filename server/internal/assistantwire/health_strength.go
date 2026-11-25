@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// StrengthReportPrompt carries assembled report inputs and the workout start used to choose its training chat.
+type StrengthReportPrompt struct {
+	Prompt string
+	Start  time.Time
+}
+
 const CapabilityHealthStrength = "health_strength"
 const WorkoutActivityStrength = "Strength training"
 
