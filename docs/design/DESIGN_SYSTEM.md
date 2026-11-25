@@ -673,9 +673,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   under a finished turn's last reply, never under narration in a work summary or words still streaming. Copy message ·
   Start a new session ("Start a new chat" in Persona conversations) · ⋯ More message actions (Quote, Forward, Use as
   context) · the relative time (12 px `--ink-3`, the exact time as its tooltip). 24 × 24 round buttons 2 px apart, 14 px
-  icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. Shown on hover or keyboard focus, it stays 250 ms after
-  the pointer leaves and fades over 250 ms; an open ⋯ keeps it. Touch screens keep the copy + ⋯ row under that reply;
-  the right-click / long-press menu keeps every action. A reply cut short by an error or an interruption carries
+  icons, `--ink-3`, `--ink` on `--hover-2` under the pointer. The latest finished reply keeps the full row left-aligned
+  below its text (#15428). Its resting `--ink-3` shifts to `--ink-2` on reply hover or keyboard focus within the bar.
+  Earlier bars appear on hover or keyboard focus, stay 250 ms after the pointer leaves and fade over 250 ms. An open ⋯
+  keeps the bar visible. Touch screens keep the copy + ⋯ row under a finished reply. The right-click / long-press menu
+  keeps every action. A reply cut short by an error or an interruption carries
   cindy's "This reply did not complete" line above it (13 px `--ink-2`). After the time (#5426, `TurnUsage`, cindy's
   usage cell): what the exchange cost, 6 px on, 12 px `--ink-3`, half a pixel down, "Worth $0.12" in an Agent session
   with cindy's usage card (320 px, `--surface`, `--line` border, 12 px radius, `shadow-overlay`, 16 px padding, 12 px
@@ -851,14 +853,14 @@ Set to Full page, the Agent's page opened from a card shows cindy's way-back str
 
 No new token. The two icons are added to `ui/icons.tsx` in the existing stroke grammar. iOS and Android draw these cards in the chat, one per Agent, and a card with an Agent opens that Agent's page (#5110).
 
-**Changed-files card** (web, #5157, `web/src/views/chat/TurnChanges.tsx`; cindy's `TurnChangesCard`, at the owner's request, 2026-11-12), Agents only (super rules 0 and 4): the last thing in a finished Agent exchange that edited files.
-- **Frame:** a `rounded-xl` `bg-surface` section with a 1 px `--line` border and 4 px above and below.
-- **Head** (at least 64 px, 16 px across, 12 px down, 12 px gaps): a 36 px `--field` tile (`rounded-control`) with the 18 px `fileDiff` mark in `--ink-2`; **Changed N files** (14 px medium `--ink`, one line) with `+N -N` under it (12 px mono, `--diff-add-fg` / `--diff-del-fg`, ASCII minus); **Review**, the standard secondary `Button`, on the right.
-- **Files** (under a `--line` hairline, 12 px across, 8 px down): 36 px rows (44 on a touch screen), `rounded-control`, `hover:bg-hover`: the 15 px `file` mark in `--ink-2`, the path relative to the session's folder (13 px `--ink`, truncated, the full path as its title) and its own `+N -N` (each only above zero). Three rows, then **Show N more files** ⌄ / **Show less** ⌃ (13 px `--ink-2`, 32 px, hover `--ink`).
+**Changed-files card** (web, #5157, `web/src/views/chat/TurnChanges.tsx`; iOS/iPadOS, #12016, `apple/Persona/Views/Chat/TurnChangesCard.swift`; cindy's `TurnChangesCard`, at the owner's request, 2026-11-12), Agents only (super rules 0 and 4): the last thing in a finished Agent exchange that edited files.
+- **Frame:** a `rounded-xl` `bg-surface` section with a 1 px `--line` border and 4 px above and below (on iOS/iPadOS: `Theme.card` with `Theme.Radius.card` and hairline `Theme.cardStroke`).
+- **Head** (at least 64 px, 16 px across, 12 px down, 12 px gaps): a 36 px `--field` tile (`rounded-control`) with the 18 px `fileDiff` mark in `--ink-2` (on iOS/iPadOS: `Theme.Size.wellL` `Theme.Fill.well` tile with `Theme.Icon.reviewChanges`); **Changed N files** (14 px medium `--ink`, one line; `Theme.Font.secondaryMedium` on iOS) with `+N -N` under it (`CodeChangeCounts` on iOS, omitted when uncountable); **Review**, the standard secondary `Button` (`.themedButton()` on iOS, stacked under the header at accessibility text sizes), on the right.
+- **Files** (under a `--line` hairline, 12 px across, 8 px down): 36 px rows (44 on a touch screen; `Theme.Size.tapTarget` on iOS), `rounded-control`, `hover:bg-hover`: the file mark (`FileViewer.symbol(for:)` on iOS), the path relative to the session's folder (`Theme.Font.caption`, middle-truncated on iOS, full path copyable from the context menu) and its own `+N -N` (each only above zero, omitted when clipped). Three rows, then **Show N more files** ⌄ / **Show less** ⌃ (`FoldToggle` pinned in place with `chatPinned` on iOS).
 - **Counts** are the exchange's own successful edits, the numbers each edit's row shows, counted without drawing a diff; folded work counts by the changes its fold carries, so a reload keeps the card. A fold from an older node carries none, and an exchange whose start is not on the page is missing edits: neither has a card (principle 5: no count that cannot be known).
-- **Review** opens the branch's review (commits and uncommitted work); a file row goes to its file there, or opens the file itself when the review does not list it or the file is outside the session's folder.
+- **Review** opens the branch's review (commits and uncommitted work); a file row goes to its file there (unfolded and scrolled into view on iOS `ReviewPage`), or opens the file itself (`FileViewer` on iOS) when the hub lacks review, the review fails to load or does not list that file, or the file is outside the session's folder.
 
-Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark instead of file-type icons, rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). The `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); no new token.
+Deviations from cindy: no Undo / Reapply (Persona cannot apply or revert a turn's patch), the plain `file` mark on web (`FileViewer.symbol(for:)` on iOS), rows a finger tall on touch screens (6.3), and 评审 for Review in Chinese (the Review panel's word). On web, `fileDiff` and `alertCircle` marks are added to `ui/icons.tsx` (Lucide's file-diff and circle-alert, as cindy's); on iOS/iPadOS, zero new tokens or symbols.
 
 #### Connected Inbox message cards (#856)
 

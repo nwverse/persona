@@ -102,7 +102,7 @@ export function tabInfo(k: Tab): { label: string; icon: IconName; hint: string }
 
 /** NAV_GROUPS with the enabled modules' categories, each after its group's own.
  *  When `integrationsV2` is false (default), hides `integrations` so legacy tabs stay unchanged.
- *  When `integrationsV2` is true, collapses `channels`, `connectors`, and `extensions` into `integrations`. */
+ *  When `integrationsV2` is true, collapses `channels`, `connectors`, `extensions`, and `sources` into `integrations`. */
 export function navGroups(integrationsV2 = false): { key: NavGroup; tabs: Tab[] }[] {
   const extra = enabledSettingsTabs();
   return NAV_GROUPS.map((g) => {
@@ -120,14 +120,15 @@ export function resolveSettingsTarget(
   sub: string | null,
   integrationsV2: boolean,
   filter?: string | null,
-): { tab: Tab; sub: string | null; filter?: IntegrationFilter } {
+  manager?: string | null,
+): { tab: Tab; sub: string | null; filter?: IntegrationFilter; manager?: string } {
   if (integrationsV2 && isLegacyIntegrationTab(tab)) {
-    const mapped = legacyToIntegrations(tab, sub);
+    const mapped = legacyToIntegrations(tab, sub, tab === "sources" ? manager : undefined);
     return { tab: "integrations", sub: mapped.sub, ...(mapped.filter ? { filter: mapped.filter } : {}) };
   }
   if (!integrationsV2 && tab === "integrations") {
     const mapped = integrationsToLegacy(sub, filter);
-    return { tab: mapped.tab, sub: mapped.sub };
+    return { tab: mapped.tab, sub: mapped.sub, ...(mapped.manager ? { manager: mapped.manager } : {}) };
   }
   return { tab, sub };
 }
@@ -153,7 +154,7 @@ export function settingsAt(search: string, hash = ""): { tab: Tab | null; sub: s
 }
 
 /** Replace a legacy category URL (or path-based settings route) in place, retaining provider and manager parameters.
- *  Also performs bidirectional redirection between `integrations` and legacy `connectors`/`channels`/`extensions`
+ *  Also performs bidirectional redirection between `integrations` and legacy `connectors`/`channels`/`extensions`/`sources`
  *  according to `integrationsV2`. Pass `"loading"` while assistant state is still loading to avoid
  *  prematurely redirecting away from `/settings?tab=integrations`. */
 export function redirectLegacySettings(
@@ -171,6 +172,9 @@ export function redirectLegacySettings(
     if (pathRoute.sub) {
       const param = SUB[pathRoute.tab as Tab];
       if (param) q.set(param, pathRoute.sub);
+    }
+    if (pathRoute.manager && !q.get("manager")) {
+      q.set("manager", pathRoute.manager);
     }
   }
 
@@ -209,12 +213,13 @@ export function redirectLegacySettings(
     changed = true;
     const param = SUB[normalizedTab];
     const currentSub = param ? (q.get(param) ?? (normalizedTab === "extensions" ? q.get("plugin") : null)) : null;
-    const mapped = legacyToIntegrations(normalizedTab, currentSub);
+    const mapped = legacyToIntegrations(normalizedTab, currentSub, normalizedTab === "sources" ? q.get("manager") : undefined);
     q.set("tab", "integrations");
     q.delete("channel");
     q.delete("connector");
     q.delete("extension");
     q.delete("plugin");
+    q.delete("state");
     q.delete("purpose");
     if (mapped.sub) {
       q.set("integration", mapped.sub);
@@ -234,9 +239,11 @@ export function redirectLegacySettings(
     q.delete("connector");
     q.delete("extension");
     q.delete("plugin");
+    q.delete("state");
     q.delete("purpose");
     const targetParam = SUB[mapped.tab];
     if (mapped.sub && targetParam) q.set(targetParam, mapped.sub);
+    if (mapped.manager && !q.get("manager")) q.set("manager", mapped.manager);
   }
 
   if (!changed) return null;

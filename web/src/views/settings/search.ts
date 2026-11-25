@@ -167,6 +167,9 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // the daily sync to the knowledge base (LarkSyncSection.tsx), inside the Lark settings: found by its heading, opens the Lark row
   { tab: "connectors", group: t("settings-larksync.title"), hint: words(t("settings-larksync.add"), t("settings-larksync.schedule_label")), anchor: "lark" },
   { tab: "connectors", group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent" },
+  // Inbox Sources (folded into Integrations Data Flow `-sources` when integrations_v2 is enabled)
+  { tab: "sources", group: t("settings-nav.tab_sources"), hint: t("settings-nav.hint_sources"), anchor: "inbox-sources" },
+  { tab: "sources", group: t("settings-assistantsettings.inbox_todo_forward"), hint: t("settings-assistantsettings.inbox_todo_forward_hint"), anchor: "inbox-todo-forward" },
   // Extensions: an extension's secrets are on its page, opened from the list; a market's token under Manage markets
   { tab: "extensions", group: t("settings-extensions.title"), anchor: "extensions" },
   { tab: "extensions", group: t("settings-extensions.secrets_title"), anchor: "extensions" },
@@ -221,10 +224,12 @@ const INTEGRATIONS_ANCHOR_SUB: Record<string, string | undefined> = {
   lark: "builtin:lark",
   sent: "-sent",
   market: "-market",
+  "inbox-sources": "-sources",
+  "inbox-todo-forward": "-sources",
 };
 
 /** The search box's matches: categories by label / hint, and page groups and settings by their heading or label.
- *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions` into `integrations` and remaps
+ *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions`/`sources` into `integrations` and remaps
  *  their indexed groups so quick search jumps directly to the unified Integrations & Extensions view. */
 export function searchSettings(query: string, integrationsV2 = false): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
@@ -242,14 +247,18 @@ export function searchSettings(query: string, integrationsV2 = false): { tabs: T
   const tabMatches = (k: Tab) => {
     const info = tabInfo(k);
     if (has(info.label, info.hint)) return true;
-    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions") still finds Integrations.
+    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions", "Inbox Sources") still finds Integrations.
     if (integrationsV2 && k === "integrations") {
-      return (["channels", "connectors", "extensions"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
+      return (["channels", "connectors", "extensions", "sources"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
     }
     return false;
   };
   const indexed = integrationsV2
-    ? SEARCH_INDEX.map((g) => (isLegacyIntegrationTab(g.tab) ? { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor] } : g))
+    ? SEARCH_INDEX.map((g) => {
+        if (!isLegacyIntegrationTab(g.tab)) return g;
+        const hint = g.anchor === "inbox-sources" ? words(g.hint ?? "", t("settings-integrations.view_sources")) : g.hint;
+        return { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor], ...(hint ? { hint } : {}) };
+      })
     : SEARCH_INDEX;
   return {
     tabs: searchableTabs.filter(tabMatches),

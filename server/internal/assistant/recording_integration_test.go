@@ -79,7 +79,7 @@ func TestEveningFactsDayIsBounded(t *testing.T) {
 		d.Actions = append(d.Actions, prompts.BriefDayAction{Who: "Bo", What: fmt.Sprintf("Thing %d", i)})
 	}
 	d.Parts = []prompts.BriefDayPart{{Part: 1, Made: "21:00", Upto: "20:58", Summary: strings.Repeat("概", 300)}}
-	briefDayBound(d)
+	briefDayBound(t, d)
 	if n := prompts.BriefDayRunes(d); n > briefDayRunes || n < briefDayRunes-200 {
 		t.Fatalf("%d runes", n)
 	}
@@ -320,6 +320,7 @@ func TestDayRecapPushRefPerChannel(t *testing.T) {
 // The section stays within 4000 runes whatever a valid day holds: 500 gaps of as many reasons, a dozen parts. The
 // reasons with the most time and the first and latest parts are listed, the others counted.
 func TestEveningFactsDayBoundsGapsAndParts(t *testing.T) {
+	needsBriefingModule(t)
 	d := newDayFixture(t)
 	var gaps []map[string]any
 	for i := range 500 {
@@ -350,7 +351,7 @@ func TestEveningFactsDayBoundsGapsAndParts(t *testing.T) {
 	if len(day.Parts) != briefDayParts || day.PartsLeft != 7 || day.Parts[0].Part != 1 || day.Parts[len(day.Parts)-1].Part != 12 {
 		t.Errorf("parts %+v, %d left", day.Parts, day.PartsLeft)
 	}
-	text := f.modelText()
+	text := d.s.briefModelText(f)
 	for _, want := range []string{"；另有 494 种原因共 494 段 494 分钟", "  - 中间另有 7 个部分没列出\n", "Standup"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("facts lack %q:\n%s", want, text)
@@ -380,7 +381,7 @@ func TestEveningFactsDayBoundsEverything(t *testing.T) {
 	for range 50 {
 		d.Actions = append(d.Actions, prompts.BriefDayAction{Who: strings.Repeat("人", 40), What: strings.Repeat("事", briefDayWhat)})
 	}
-	briefDayBound(d)
+	briefDayBound(t, d)
 	if n := prompts.BriefDayRunes(d); n > briefDayRunes {
 		t.Fatalf("%d runes", n)
 	}
@@ -749,11 +750,11 @@ func TestMeetingPhotoNoteTool(t *testing.T) {
 		}
 		return b.String()
 	}
-	rev := r.engine().PhotosRev(meetingRec)
+	rev := recWrites(r.engine()).PhotosRev(meetingRec)
 	if res := call(sid, `{"photo":1,"text":"  The Q3 budget on the board is 40k.  "}`); res.IsError {
 		t.Fatalf("note: %s", text(res))
 	}
-	if ps := r.photosOf(meetingRec); ps[0]["note"] != "The Q3 budget on the board is 40k." || r.engine().PhotosRev(meetingRec) != rev+1 {
+	if ps := r.photosOf(meetingRec); ps[0]["note"] != "The Q3 budget on the board is 40k." || recWrites(r.engine()).PhotosRev(meetingRec) != rev+1 {
 		t.Fatalf("noted %v", ps[0])
 	}
 	for name, c := range map[string]struct{ args, want string }{
@@ -1057,3 +1058,12 @@ func tellDayRecap(e *kb.Engine, r kb.Recording, rc kb.DayRecap) ([]string, error
 		TellDayRecap(context.Context, kb.Recording, kb.DayRecap) ([]string, error)
 	}).TellDayRecap(context.Background(), r, rc)
 }
+
+// recordingWrites is what these tests call of the recording module's writers (writers.Writers), reached as
+// tellDayRecap reaches them: through the knowledge base's provider.
+type recordingWrites interface {
+	PhotosRev(rawID string) int64
+	TranscriptionUpdate(rawID string, fn func(t *kb.MeetingTranscription, r kb.Recording) error) (kb.MeetingTranscription, error)
+}
+
+func recWrites(e *kb.Engine) recordingWrites { return e.RecordingProvider().(recordingWrites) }

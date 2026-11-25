@@ -184,6 +184,26 @@ func (g superviseSignal) level() string {
 	return supervisionTriage
 }
 
+// userLevel reports whether a supervision signal in a side conversation needs user attention (a decision, a review to
+// accept, or an agent waiting for an answer) rather than info-level or routine monitoring updates.
+func (g superviseSignal) userLevel() bool {
+	if g.level() == supervisionInfo {
+		return false
+	}
+	switch g.Kind {
+	case sigReview, sigHandoffResult, sigCardlessWait, sigPRMerged, sigParentCloseout,
+		sigNeedsYou, sigAsk, sigDecide, sigEscalated, sigDecisionReply, sigRecheck,
+		sigUndecidable, sigDeliveryHold, sigOwnerCannot, sigNeedsUserExternalInfo,
+		sigParkDecided, sigParkedDue, sigFailed, sigInterrupted, sigOrphaned, sigTimedOut, sigAllStopped:
+		return true
+	case sigReport:
+		return g.Report == upReportQuestion || g.Report == upReportBlocked || g.Report == upReportDone
+	case sigCheck:
+		return g.Report == checkDecidedReport
+	}
+	return false
+}
+
 // id names what a newer signal replaces while it waits: the task's signal of that kind (a report: of that kind of
 // report, so a progress report does not push out a question).
 func (g superviseSignal) id() string {
@@ -279,6 +299,7 @@ type superviseBook struct {
 	noMainSince, noMainLogged time.Time
 	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
 	visible                   map[string]bool      // an explicit user action makes the current triage turn visible
+	sideLinks                 map[string][]string  // side conversation → task/conversation links to attach to its user-level supervision push
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
@@ -292,7 +313,11 @@ func (b *superviseBook) init() {
 	if b.pending == nil {
 		b.pending, b.sent, b.asks, b.hold = map[string]superviseSignal{}, map[string]string{}, map[string]string{}, map[string]time.Time{}
 		b.visible = map[string]bool{}
+		b.sideLinks = map[string][]string{}
 		b.legacyBackground = map[string]bool{}
+	}
+	if b.sideLinks == nil {
+		b.sideLinks = map[string][]string{}
 	}
 	if b.failSeen == nil {
 		b.failSeen = map[string]failSeen{}
