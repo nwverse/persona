@@ -1,6 +1,7 @@
 package fleetcount_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,121 @@ func TestTheZeroValuesAreDefects(t *testing.T) {
 	raises(t, "fleetcount.Visibility.LeftOut: the zero Visibility", func() { noVisibility.LeftOut() })
 	var noRef agentref.Ref
 	raises(t, "fleetcount.PlacementUnder: the zero Ref", func() { fleetcount.PlacementUnder(noRef) })
+}
+
+// Every closed set's Accept raises a defect on its zero value, before it tells the visitor anything.
+func TestAcceptingAZeroValueIsADefect(t *testing.T) {
+	var (
+		got          told
+		noState      fleetcount.State
+		noRole       fleetcount.Role
+		noLineage    fleetcount.Lineage
+		noMuting     fleetcount.Muting
+		noVisibility fleetcount.Visibility
+		noStanding   fleetcount.CardStanding
+		noTelling    fleetcount.Telling
+		noHolding    fleetcount.Holding
+		noSurface    fleetcount.Surface
+		noWhy        fleetcount.Why
+	)
+	raises(t, "fleetcount.State.Accept: the zero State", func() { noState.Accept(&got) })
+	raises(t, "fleetcount.Role.Accept: the zero Role", func() { noRole.Accept(&got) })
+	raises(t, "fleetcount.Lineage.Accept: the zero Lineage", func() { noLineage.Accept(&got) })
+	raises(t, "fleetcount.Muting.Accept: the zero Muting", func() { noMuting.Accept(&got) })
+	raises(t, "fleetcount.Visibility.Accept: the zero Visibility", func() { noVisibility.Accept(&got) })
+	raises(t, "fleetcount.CardStanding.Accept: the zero CardStanding", func() { noStanding.Accept(&got) })
+	raises(t, "fleetcount.Telling.Accept: the zero Telling", func() { noTelling.Accept(&got) })
+	raises(t, "fleetcount.Holding.Accept: the zero Holding", func() { noHolding.Accept(&got) })
+	raises(t, "fleetcount.Surface.Accept: the zero Surface", func() { noSurface.Accept(&got) })
+	raises(t, "fleetcount.Why.Accept: the zero Why", func() { noWhy.Accept(&got) })
+	if len(got.names) > 0 {
+		t.Errorf("a zero value told %q", got.names)
+	}
+}
+
+// told is the tests' own visitor of every closed set: it writes down each value it is told, and the agent a
+// placement is folded under.
+type told struct {
+	names []string
+	under agentref.Ref
+}
+
+func (r *told) add(name string) { r.names = append(r.names, name) }
+
+func (r *told) VisitWorking()                 { r.add("working") }
+func (r *told) VisitNeedsYou()                { r.add("needs_you") }
+func (r *told) VisitFinished()                { r.add("finished") }
+func (r *told) VisitIdle()                    { r.add("idle") }
+func (r *told) VisitWorker()                  { r.add("worker") }
+func (r *told) VisitAssistant()               { r.add("assistant") }
+func (r *told) VisitRoot()                    { r.add("root") }
+func (r *told) VisitSubtask()                 { r.add("subtask") }
+func (r *told) VisitHeard()                   { r.add("heard") }
+func (r *told) VisitMuted()                   { r.add("muted") }
+func (r *told) VisitListed()                  { r.add("listed") }
+func (r *told) VisitQuiet()                   { r.add("quiet") }
+func (r *told) VisitHiddenByDirectory()       { r.add("hidden_by_directory") }
+func (r *told) VisitOwnRow()                  { r.add("own_row") }
+func (r *told) VisitUnder(under agentref.Ref) { r.add("under"); r.under = under }
+func (r *told) VisitStands()                  { r.add("stands") }
+func (r *told) VisitForm()                    { r.add("form") }
+func (r *told) VisitTold()                    { r.add("told") }
+func (r *told) VisitUntold()                  { r.add("untold") }
+func (r *told) VisitForTheOwner()             { r.add("for_the_owner") }
+func (r *told) VisitHeldByPersona()           { r.add("held_by_persona") }
+func (r *told) VisitHeldBySupervisor()        { r.add("held_by_supervisor") }
+func (r *told) VisitBadge()                   { r.add("badge") }
+func (r *told) VisitLiveActivity()            { r.add("live_activity") }
+func (r *told) VisitLink()                    { r.add("link") }
+func (r *told) VisitHeld()                    { r.add("held") }
+
+// Every closed set tells each of its values to its visitor, the one way a caller maps it; a placement under another
+// agent tells that agent.
+func TestEveryClosedSetTellsItsValues(t *testing.T) {
+	var got told
+	for _, x := range []fleetcount.State{fleetcount.StateWorking(), fleetcount.StateNeedsYou(), fleetcount.StateFinished(), fleetcount.StateIdle()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Role{fleetcount.RoleWorker(), fleetcount.RoleAssistant()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Lineage{fleetcount.LineageRoot(), fleetcount.LineageSubtask()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Muting{fleetcount.MutingHeard(), fleetcount.MutingMuted()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Visibility{fleetcount.VisibilityListed(), fleetcount.VisibilityQuiet(), fleetcount.VisibilityHiddenByDirectory()} {
+		x.Accept(&got)
+	}
+	lead := ref(t, "lead")
+	for _, x := range []fleetcount.Placement{fleetcount.PlacementOwnRow(), fleetcount.PlacementUnder(lead)} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.CardStanding{fleetcount.CardStandingStands(), fleetcount.CardStandingForm()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Telling{fleetcount.TellingTold(), fleetcount.TellingUntold()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Holding{fleetcount.HoldingForTheOwner(), fleetcount.HoldingHeldByPersona(), fleetcount.HoldingHeldBySupervisor()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Surface{fleetcount.SurfaceBadge(), fleetcount.SurfaceLiveActivity(), fleetcount.SurfaceLink()} {
+		x.Accept(&got)
+	}
+	for _, x := range []fleetcount.Why{fleetcount.WhyNeedsYou(), fleetcount.WhyHeld(), fleetcount.WhyMuted(), fleetcount.WhyQuiet()} {
+		x.Accept(&got)
+	}
+	const want = "working needs_you finished idle worker assistant root subtask heard muted listed quiet hidden_by_directory " +
+		"own_row under stands form told untold for_the_owner held_by_persona held_by_supervisor badge live_activity link " +
+		"needs_you held muted quiet"
+	if line := strings.Join(got.names, " "); line != want {
+		t.Errorf("Accept told\n%s\nwant\n%s", line, want)
+	}
+	if got.under != lead {
+		t.Error("PlacementUnder did not tell the agent it is folded under")
+	}
 }
 
 // NewAgents and NewCards copy what they are handed: the caller may reuse its slices.
