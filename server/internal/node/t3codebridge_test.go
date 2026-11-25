@@ -279,6 +279,11 @@ func TestT3CodeServerStateNeedsLoopbackAndALiveProcess(t *testing.T) {
 		"http://192.0.2.7:3773": false, // the bridge sends its session only to this computer
 		"https://127.0.0.1:1":   false,
 		"":                      false,
+		// User info that names this computer while the request goes elsewhere (the session token would leave it).
+		"http://localhost:80@evil.example":      false,
+		"http://127.0.0.1:1@evil.example":       false,
+		"http://localhost:3773@evil.example:80": false,
+		"http://[::1]:3773@evil.example":        false,
 	} {
 		write(origin)
 		if _, ok := t3codeServerOf(home); ok != want {
@@ -289,6 +294,52 @@ func TestT3CodeServerStateNeedsLoopbackAndALiveProcess(t *testing.T) {
 	t3codeAlive = func(int) bool { return false }
 	if _, ok := t3codeServerOf(home); ok {
 		t.Error("a server whose process is gone is still found")
+	}
+}
+
+// The MCP endpoint is built from the parsed origin, and only for a plain http origin on this computer: nothing in the
+// origin may send the request, and with it the bridge's session token, anywhere else.
+func TestT3CodeMCPEndpointOnlyForAPlainLoopbackOrigin(t *testing.T) {
+	for origin, want := range map[string]string{
+		"http://127.0.0.1:3773":  "http://127.0.0.1:3773/mcp",
+		"http://127.0.0.1:3773/": "http://127.0.0.1:3773/mcp",
+		"http://localhost:3773":  "http://localhost:3773/mcp",
+		"http://[::1]:3773":      "http://[::1]:3773/mcp",
+		"http://127.0.0.1":       "http://127.0.0.1/mcp",
+		"http://127.8.9.10:3773": "http://127.8.9.10:3773/mcp",
+		// User info: the host the request goes to is the one after the @.
+		"http://localhost:80@evil.example":      "",
+		"http://127.0.0.1:1@evil.example":       "",
+		"http://localhost:3773@evil.example:80": "",
+		"http://[::1]:3773@evil.example":        "",
+		"http://user@127.0.0.1:3773":            "", // loopback, but no user info is ever expected
+		"http://user:pass@localhost:3773":       "",
+		// Not this computer, or not plain http.
+		"http://evil.example:3773":           "",
+		"http://192.0.2.7:3773":              "",
+		"http://localhost.evil.example:3773": "",
+		"http://127.0.0.1.evil.example":      "",
+		"https://127.0.0.1:3773":             "",
+		"HTTP://127.0.0.1:3773":              "http://127.0.0.1:3773/mcp", // the scheme is case-insensitive and parsed lower
+		"ws://127.0.0.1:3773":                "",
+		"http:127.0.0.1:3773":                "",
+		"//127.0.0.1:3773":                   "",
+		"127.0.0.1:3773":                     "",
+		"":                                   "",
+		// Anything after the host that the endpoint would have been joined onto.
+		"http://127.0.0.1:3773/evil":           "",
+		"http://127.0.0.1:3773?x=1":            "",
+		"http://127.0.0.1:3773?":               "",
+		"http://127.0.0.1:3773#frag":           "",
+		"http://127.0.0.1:3773/%2e%2e":         "",
+		"http://localhost:x@evil.example":      "",
+		"http://127.0.0.1:3773\\@evil.example": "",
+		"http://[::1%25eth0]:3773":             "",
+	} {
+		got, ok := t3codeMCPEndpoint(origin)
+		if ok != (want != "") || got != want {
+			t.Errorf("origin %q: endpoint %q (ok %v), want %q", origin, got, ok, want)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,6 +61,8 @@ type t3codeServerState struct {
 	Port          int    `json:"port"`
 	Origin        string `json:"origin"`
 	ServerVersion string `json:"serverVersion"`
+
+	mcpEndpoint string // the MCP endpoint built from the parsed, checked origin; set by t3codeServerOf
 }
 
 // t3codeHome is the T3 home: $T3CODE_HOME, else ~/.t3 (T3 Code's resolveBaseDir).
@@ -85,9 +88,14 @@ func t3codeServerOf(home string) (t3codeServerState, bool) {
 			continue
 		}
 		var st t3codeServerState
-		if json.Unmarshal(raw, &st) != nil || st.PID <= 0 || !t3codeLoopbackOrigin(st.Origin) {
+		if json.Unmarshal(raw, &st) != nil || st.PID <= 0 {
 			continue
 		}
+		endpoint, ok := t3codeMCPEndpoint(st.Origin)
+		if !ok {
+			continue
+		}
+		st.mcpEndpoint = endpoint
 		if !t3codeAlive(st.PID) {
 			continue
 		}
@@ -99,23 +107,23 @@ func t3codeServerOf(home string) (t3codeServerState, bool) {
 // t3codeAlive reports whether the server's process is running; tests replace it.
 var t3codeAlive = osproc.Alive
 
-// t3codeLoopbackOrigin: origin is http on this computer (127.0.0.1, ::1 or localhost). The bridge sends the session it
-// issued only there.
-func t3codeLoopbackOrigin(origin string) bool {
-	rest, ok := strings.CutPrefix(origin, "http://")
-	if !ok {
-		return false
+// t3codeMCPEndpoint is the MCP endpoint of origin when origin is a plain http origin on this computer (127.0.0.1, ::1
+// or localhost): ok is false otherwise. The bridge sends the session it issued only there, so the origin is parsed the
+// way the HTTP client will read it, and anything that could move the request elsewhere or hide where it goes (user
+// info, a path, a query, a fragment, an opaque form) is refused. The endpoint is built from the parsed host, never by
+// joining raw strings.
+func t3codeMCPEndpoint(origin string) (string, bool) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" || u.Opaque != "" || u.User != nil || u.Host == "" ||
+		(u.Path != "" && u.Path != "/") || u.RawPath != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return "", false
 	}
-	host := rest
-	if i := strings.LastIndex(rest, ":"); i >= 0 && !strings.HasSuffix(rest, "]") {
-		host = rest[:i]
-	}
-	host = strings.Trim(host, "[]")
-	if host == "localhost" {
-		return true
-	}
+	host := u.Hostname()
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return "", false
+	}
+	return (&url.URL{Scheme: "http", Host: u.Host, Path: "/mcp"}).String(), true
 }
 
 // t3codeBin is the t3 command line: on PATH, else the launcher the desktop app writes in the T3 home (bin/t3), else
@@ -272,7 +280,7 @@ func (rh *RuntimeHost) runT3CodeBridge(ctx context.Context, st t3codeServerState
 		rh.serveConn(ctx, hostEnd, "")
 		cancel()
 	}()
-	b := newT3CodeBridge(newT3CodeMCP(strings.TrimRight(st.Origin, "/")+"/mcp", sess.Token), bridgeEnd, rh.logger.Printf)
+	b := newT3CodeBridge(newT3CodeMCP(st.mcpEndpoint, sess.Token), bridgeEnd, rh.logger.Printf)
 	rh.setT3CodeStatus("")
 	ver := firstOf(st.ServerVersion, rh.version)
 	return b.run(ctx, ver)
