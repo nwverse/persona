@@ -22,7 +22,10 @@ import (
 // plan's own todo_id, the todo a started task became, is the hub's to set, and the shallower field wins in JSON.
 type planTaskIn struct {
 	PlanTask
-	TodoID string `json:"todo_id"`
+	TodoID        string   `json:"todo_id"`
+	WritePrefixes []string `json:"write_prefixes,omitempty"`
+	ForceParallel bool     `json:"force_parallel,omitempty"`
+	ChangedFiles  []string `json:"changed_files,omitempty"`
 }
 
 // toolTaskPlanFrom is task_plan from the conversation sessionID running on machine (where its attachments are).
@@ -38,6 +41,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var a struct{ Tasks []PlanTask }
+	var plannedScopes []plannedWriteScopeInput
 	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
 		tasks, err := scope.workerTasks(args)
@@ -45,6 +49,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", err
 		}
 		a.Tasks = tasks
+		plannedScopes = make([]plannedWriteScopeInput, len(tasks))
 	} else {
 		var in struct {
 			Tasks      []planTaskIn `json:"tasks"`
@@ -62,6 +67,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			t.PlanTask.Parent = "" // the hub's, set only for a task leader's workers
 			t.PlanTask.Supervisor = lead
 			a.Tasks = append(a.Tasks, t.PlanTask)
+			plannedScopes = append(plannedScopes, plannedWriteScopeInput{
+				WritePrefixes: t.WritePrefixes,
+				ChangedFiles:  t.ChangedFiles,
+				ForceParallel: t.ForceParallel,
+			})
 		}
 	}
 	if len(a.Tasks) == 0 {
@@ -430,6 +440,10 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
+	for i := range a.Tasks {
+		plannedScopes[i].Task = a.Tasks[i]
+	}
+	conflictHints := s.planWriteScopeConflicts(ctx, plannedScopes)
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
 		CreatedAt: now, UpdatedAt: now}
@@ -450,6 +464,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if err != nil {
 			return "", err
 		}
+		s.rememberPlannedWriteScopes(ctx, started.Tasks, plannedScopes)
 		var b strings.Builder
 		fmt.Fprintf(&b, "Queued %d worker(s) beneath your task %s for dispatch:\n", len(started.Tasks), scope.task.ID)
 		for _, t := range started.Tasks {
@@ -466,6 +481,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		b.WriteString("This is not confirmation that any agent started: you are told when one fails to start. A worker that has " +
 			"report_to_supervisor reports to you in a message, and they cannot hand work on.")
 		b.WriteString(dups)
+		b.WriteString(conflictHints)
 		b.WriteString(taskPlanEstimateNotes(started.Tasks))
 		return b.String(), nil
 	}
@@ -494,6 +510,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		b.WriteString("After the user taps Start, check the task cards or context snapshot for the outcome.")
 		b.WriteString(dups)
+		b.WriteString(conflictHints)
 		b.WriteString(taskPlanEstimateNotes(p.Tasks))
 		if _, talking := s.ownersPresent(time.Now())[sessionID]; talking {
 			// The owner is talking in this very conversation: the card is in front of them, a push would only repeat it.
@@ -529,6 +546,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if err != nil {
 		return "", err
 	}
+	s.rememberPlannedWriteScopes(ctx, started.Tasks, plannedScopes)
 	var b strings.Builder
 	supervisor := ""
 	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (plan %s):\n", len(started.Tasks), started.ID)
@@ -566,6 +584,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
 	}
 	b.WriteString(dups)
+	b.WriteString(conflictHints)
 	b.WriteString(taskPlanEstimateNotes(started.Tasks))
 	if wait > 0 && len(started.Tasks) == 1 && scope == nil && started.Tasks[0].Error == "" {
 		t := started.Tasks[0]
