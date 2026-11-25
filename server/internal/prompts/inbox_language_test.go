@@ -59,6 +59,38 @@ func TestMalformedInboxMarkerIsNotInferred(t *testing.T) {
 	}
 }
 
+func TestInboxAgentPromptListsHandoffTargetsInAllLanguages(t *testing.T) {
+	targets := []InboxHandoffTarget{
+		{Machine: "server", Session: "m1", Role: "main", Title: "Main"},
+		{Machine: "server", Session: "lead-1", Role: "leader", Title: "Release Ops"},
+		{Machine: "server", Session: "task-chat-1", Role: "task", Title: "Fix login crash"},
+	}
+	for _, tc := range []struct {
+		lang string
+		want []string
+	}{
+		{"", []string{"可交接的现有对话", "kind handoff", "[main] Main（machine: server, session: m1）", "[leader] Release Ops（machine: server, session: lead-1）", "[task] Fix login crash（machine: server, session: task-chat-1）"}},
+		{"English", []string{"Eligible existing conversations for kind handoff", "kind handoff:", "[main] Main (machine: server, session: m1)", "[leader] Release Ops (machine: server, session: lead-1)", "[task] Fix login crash (machine: server, session: task-chat-1)"}},
+		{"日本語", []string{"引き継ぎ先として選べる既存の会話", "kind handoff：", "[main] Main（machine: server, session: m1）", "[leader] Release Ops（machine: server, session: lead-1）", "[task] Fix login crash（machine: server, session: task-chat-1）"}},
+	} {
+		t.Run("lang="+tc.lang, func(t *testing.T) {
+			got := RenderInboxAgent(InboxAgent{
+				Language:       tc.lang,
+				Owner:          "Example owner",
+				EventID:        "lark:f1:100",
+				Title:          "Release question",
+				Item:           InboxItem{Language: tc.lang, Kind: "dm", Context: "Any update?"},
+				HandoffTargets: targets,
+			})
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("missing %q in:\n%s", w, got)
+				}
+			}
+		})
+	}
+}
+
 func TestInboxReplyPolicyPromptLanguages(t *testing.T) {
 	for _, tc := range []struct {
 		language string

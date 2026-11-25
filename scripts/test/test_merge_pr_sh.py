@@ -33,7 +33,7 @@ import pr_watch_merge  # noqa: E402
 sys.path.insert(0, str(SCRIPTS / "test"))
 from fake_gh import FAKE_GH, rows  # noqa: E402
 
-RATCHET_SCRIPTS = ("changed_ratchets.py", "sleep_ratchet.py", "web_font_ratchet.py", "ratchet_base.py")  # scripts/ci
+RATCHET_SCRIPTS = ("changed_ratchets.py", "sleep_ratchet.py", "web_font_ratchet.py", "wire_types_ratchet.py", "merge_wire_types.py", "ratchet_base.py")  # scripts/ci
 GO_TEST = "server/internal/demo/demo_test.go"
 
 class MergePrTests(unittest.TestCase):

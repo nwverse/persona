@@ -179,9 +179,6 @@ func (h larkHost) RecallRun(messageID string) {
 	h.s.recallChannelRun(channel.Feishu, messageID, channel.ClientMsgID(channel.Feishu, messageID))
 }
 
-func (h larkHost) WorkbenchOn(f FeishuFeatures, ready bool) { h.s.workbenchOn(f, ready) }
-func (h larkHost) WorkbenchActive() bool                    { return h.s.workbench.on.Load() }
-
 func (h larkHost) ResolveTarget(ctx context.Context, t botTarget) (assistantwire.ChatResolved, error) {
 	rt, err := h.s.resolveBotTarget(ctx, t)
 	return chatResolved(rt), err
@@ -242,10 +239,13 @@ func (h larkHost) ApproveOwnerAction(ctx context.Context, ev botcard.MessageEven
 
 // ---- the commands ----
 
-func (h larkHost) StopConversation(ctx context.Context, f FeishuFeatures, t botTarget) (string, string) {
-	out := h.s.stopConversation(ctx, f, t)
+func (h larkHost) InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (string, string) {
+	out := h.s.interruptBotConversation(ctx, resolvedTarget{machine: rt.Machine, machineName: rt.MachineName, session: rt.Session,
+		label: rt.Label, secondary: rt.Secondary, main: rt.Main, isNew: rt.IsNew})
 	return out.kind, out.message
 }
+
+func (h larkHost) TurnPending(machine, session string) bool { return h.s.turnPending(machine, session) }
 
 func (h larkHost) StopProgressCard(ctx context.Context, f FeishuFeatures, t botTarget, messageID string) (string, string) {
 	out := h.s.stopProgressCard(ctx, f, t, messageID)
@@ -285,10 +285,6 @@ func (h larkHost) SessionLink(web, machine, session string, assistant bool) stri
 func (h larkHost) FeishuRuns() int                             { return len(h.s.channelRuns(channel.Feishu)) }
 func (h larkHost) VisiblePending() []proto.Interaction         { return h.s.visiblePendingInteractions() }
 func (h larkHost) PendingQuestion(ix proto.Interaction) string { return pendingQuestion(ix) }
-
-func (h larkHost) StandingBoardCommand(ctx context.Context) bool {
-	return h.s.standingBoardCommand(ctx)
-}
 
 func (h larkHost) MainChat(ctx context.Context) (string, string) {
 	cfg := h.s.settings(ctx)
@@ -354,6 +350,8 @@ func (h larkHost) AskSensitive(ctx context.Context, ix proto.Interaction) bool {
 
 func (h larkHost) AskState(id string) (ended, pending bool) { return h.s.ixState(id) }
 
+func (h larkHost) AskPending(id string) (proto.Interaction, bool) { return h.s.pendingIx(id) }
+
 func (h larkHost) ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error) {
 	return h.s.resolveInteraction(ctx, channel.Feishu, id, r, action)
 }
@@ -414,7 +412,7 @@ func (h larkHost) LaterHandled(ctx context.Context, id string) (bool, error) {
 	return h.s.laterHandled(ctx, id, time.Now())
 }
 
-func (h larkHost) TabName(ctx context.Context, prompt string) string { return h.s.tabName(ctx, prompt) }
+func (h larkHost) TabName(ctx context.Context, prompt string) string { return localTabName(prompt) }
 
 func (h larkHost) ApplyModel(ctx context.Context, kind string, params map[string]any) error {
 	return h.s.applyModel(ctx, kind, params)
@@ -430,6 +428,11 @@ func (s *Service) startChatAgent(ctx context.Context, machine string, params map
 		Session proto.Session `json:"session"`
 	}
 	err := s.call(ctx, machine, DeviceSessionStart, params, &res)
+	if err == nil {
+		nameFrom, _ := params["prompt"].(string)
+		requested, _ := params["tab_name"].(string)
+		s.nameAgentTabLater(agentTabNameStart(machine, res.Session, requested, nameFrom))
+	}
 	return res.Session, err
 }
 
@@ -451,8 +454,6 @@ func (h larkHost) AgentGone(ix proto.Interaction) bool {
 func (h larkHost) ApprovalNudgeDeadline(ix proto.Interaction) (time.Time, bool) {
 	return h.s.approvalNudgeDeadline(ix)
 }
-
-func (h larkHost) BoardChanged() { h.s.boardChanged() }
 
 // ---- the to-dos of topics and of requests from elsewhere ----
 

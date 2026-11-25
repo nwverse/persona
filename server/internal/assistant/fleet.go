@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetcount/fleetcountadapt"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -46,6 +47,9 @@ type fleetBook struct {
 	reportSent map[string]time.Time
 	// cardTell serializes telling the hub a card with checking it is still held (fleet_ix.go tellCard).
 	cardTell sync.Mutex
+	// A card can be withdrawn while it is being told. Reconnect takes both locks to order its
+	// complete inventory with new cards and withdrawals on the same connection.
+	cardEnd sync.Mutex
 	// codexAnnounced: Codex card id -> when it was announced (fleet_ix_codex.go)
 	codexAnnounced map[string]time.Time
 	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix_codex.go)
@@ -91,6 +95,9 @@ type fleetBook struct {
 	enc    bytes.Buffer
 	// archived is what was told of each machine's archived rows (fleet.archived, tellArchived), under sentMu.
 	archived map[string]archivedSent
+	// views and archViews: the arrays the views of each list and of its archived rows told apart are decided in
+	// (fleet_views.go), under sentMu.
+	views, archViews fleetcountadapt.Views
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
@@ -135,6 +142,8 @@ type fleetBook struct {
 	live liveState // the Live Activity's content as last told (fleet_live.go)
 
 	started sync.Once
+	// The first reconnect and the first arriving card both wait for prior-process cleanup.
+	restored sync.Once
 
 	q        fleetQueue // what the nodes' events start for the assistant, in order (fleet_follow.go)
 	followMu sync.Mutex

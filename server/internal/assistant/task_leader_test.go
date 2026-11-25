@@ -404,7 +404,8 @@ func TestWritableTaskPlanNeedsNoExplicitPermission(t *testing.T) {
 	}
 }
 
-// Any conversation may give role leader; main supervises that task while its workers stay with the task leader Agent.
+// Any conversation may give role leader; a live side conversation supervises the leader task it dispatched (#13657)
+// while its workers stay with the task leader Agent.
 func TestTaskPlanRoleFromAnyConversation(t *testing.T) {
 	s, f := newQuietService(t)
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
@@ -419,8 +420,8 @@ func TestTaskPlanRoleFromAnyConversation(t *testing.T) {
 	}
 	waitFor(t, "the leader's link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || todo.Origin != "conv2" {
-		t.Fatalf("main does not supervise the side conversation's leader: %+v (origin %q)", todo.Supervision, todo.Origin)
+	if v := todo.Supervision; v == nil || v.Supervisor != "conv2" || todo.Origin != "conv2" {
+		t.Fatalf("live side conversation does not supervise its own leader: %+v (origin %q)", todo.Supervision, todo.Origin)
 	}
 	if a := todo.Agents[0]; a.Source != sourceLeader || a.SessionID != "s1" || a.MachineID != "box" {
 		t.Fatalf("the leader's link: %+v", a)

@@ -69,7 +69,11 @@
 /web/src/core/module-flags.ts @chyroc @szupzj18
 /web/src/core/module-host.test.ts @chyroc @szupzj18
 /web/src/core/module-host.ts @chyroc @szupzj18
+/web/src/core/module-hub-memory.test.tsx @chyroc @szupzj18
 /web/src/core/module-hub-reset.test.ts @chyroc @szupzj18
+/web/src/core/module-hub-storage.ts @chyroc @szupzj18
+/web/src/core/module-settings.ts @chyroc @szupzj18
+/web/src/core/module-switch-write.ts @chyroc @szupzj18
 /web/src/core/module-switch.ts @chyroc @szupzj18
 /web/src/lib/agent-filter.ts @chyroc @szupzj18
 /web/src/lib/agent-groups.ts @chyroc @szupzj18

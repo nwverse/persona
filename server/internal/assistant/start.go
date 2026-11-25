@@ -173,7 +173,17 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	digests, files := skillDigests(plugins.Skills)
 	deny := s.trackDenyDirs(ctx)
 	denyKey, _ := json.Marshal(deny)
-	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: string(denyKey)}
+	kind := s.trackKindOf(ctx, space)
+	floor, floorKnown := s.trackFloor(ctx, space)
+	var prepCats []string
+	if floorKnown {
+		prepCats, _ = normalCategories(floor)
+		if prepCats == nil {
+			prepCats = []string{}
+		}
+	}
+	given := preparedState{md: md, skills: digests, workGuide: onDemand != "", deny: string(denyKey),
+		trackKind: kind, categories: strings.Join(prepCats, ","), categoriesKnown: floorKnown}
 	// A track's instructions end with its SPACE.md, which the node reads (and the user edits there): the node is asked
 	// every time, and what it read is compared after (space_md_digest).
 	if onlyChanged && !files && tmpl != trackTemplateSpace {
@@ -193,8 +203,11 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	if tmpl == trackTemplateSpace {
 		params["space"] = map[string]any{"slug": track.Slug, "initial_space_md": s.initialSpaceMD(ctx, track)}
 	}
-	if kind := s.trackKindOf(ctx, space); kind != "" {
+	if kind != "" {
 		params["track_kind"] = kind // the node's PERSONA_TRACK_KIND for the directory's processes (an older node ignores it)
+	}
+	if floorKnown {
+		params["categories"] = prepCats // the node's PERSONA_CATEGORIES for the directory's processes (an older node ignores it)
 	}
 	var prep struct {
 		Cwd           string   `json:"cwd"`
@@ -229,11 +242,14 @@ func (s *Service) prepareSpaceIf(ctx context.Context, machine, space string, onl
 	return prep.Cwd, true, nil
 }
 
-// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md, the plugin skills (skillDigests)
-// and the denied track directories (trackDenyDirs, as JSON).
+// preparedState is what prepareSpaceIf gave a node for a directory: the CLAUDE.md, the plugin skills (skillDigests),
+// the denied track directories (trackDenyDirs, as JSON), and the track's kind and default categories.
 type preparedState struct {
 	md, skills, deny string
 	workGuide        bool
+	trackKind        string
+	categories       string
+	categoriesKnown  bool
 	// spaceMD is the digest of the SPACE.md a track's instructions ended with, as the node read it.
 	spaceMD string
 }
@@ -648,13 +664,17 @@ func (s *Service) startConversation(ctx context.Context, p startParams) (proto.S
 // Start is assistant.start: a conversation one of the hub's features starts (the inbox's AI twin), or the channels'
 // (the lark module's message.go, channels_plugin.go). It is named after its first turn like the app's, unless it is untitled.
 func (s *Service) Start(ctx context.Context, p StartParams) (proto.Session, error) {
+	return s.startUserWith(ctx, p, s.start)
+}
+
+func (s *Service) startUserWith(ctx context.Context, p StartParams, start func(context.Context, StartParams) (proto.Session, error)) (proto.Session, error) {
 	if p.Origin == "" || p.Origin == OriginUser {
 		p.Text = prompts.ProtectUserMessage(p.Text)
 	}
 	// The first message gets no client_msg_id of the manager's own (#5200): the node would tag its line with it, and the
 	// iPhone app, which matches its pending bubble by the id a line carries, would show the message twice. An Always
 	// rule still needs a vouched client_msg_id. Missing-reply recovery can also use the vouched start in startOn.
-	sess, err := s.start(ctx, p)
+	sess, err := start(ctx, p)
 	if err != nil {
 		return proto.Session{}, err
 	}
@@ -1306,6 +1326,9 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		}
 	}
 	if err == nil && said && owner {
+		if err := s.releasePushes(ctx, p.SessionID); err != nil {
+			return nil, err
+		}
 		s.endHeldChannelRuns(p.MachineID, p.SessionID)
 		s.ownerInterjects(p.SessionID, params)
 	}
@@ -1359,6 +1382,8 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if err := s.putInboxPermissionMode(ctx, p.MachineID, p.SessionID, params, origin, originKnown); err != nil {
 		return nil, false, err
 	}
+	delete(params, "categories") // only the manager may attest conversation categories, including on early returns
+	delete(params, "categories_unknown")
 	text, _ := params["text"].(string)
 	own := !contextTagRe.MatchString(text)
 	params["is_main"] = false
@@ -1385,6 +1410,7 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 			return params, own, nil
 		}
 	}
+	s.putConversationCategories(ctx, p.SessionID, params)
 	// sendModel has successful early returns for native and external picks. Attach mode provenance at their common
 	// exit too; on an error the params are not sent. Inbox keeps its dedicated policy, and guests returned above.
 	inputMode, _ := params["permission_mode"].(string)
