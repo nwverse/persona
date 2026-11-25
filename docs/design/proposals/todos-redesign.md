@@ -211,8 +211,9 @@ size, with nothing past an edge.
 headers are not drawn, so the list reads as a plain list with search and + at its foot; they appear once two sections
 have rows. **Search** (amended 2026-11-21) is the system's search field on the list, scoped to To-dos: it looks through
 the titles and notes of the to-dos on the device as the words are typed, keeps the sections with their folds open, and
-ends with one row, "Search Chats for …", that takes the words to the app's search; closed to-dos and the hub's own
-matches merge in later, with #10465's search step. It replaces "the app's one search, scoped to To-dos, shown as a
+ends with one row, "Search Chats for …", that takes the words to the app's search; since #10465's search step
+(2026-11-23) it finds closed to-dos too, on the device, which holds every to-do, so the hub's own matches wait for what
+the phone does not hold. It replaces "the app's one search, scoped to To-dos, shown as a
 removable chip": the iPhone's drawer has no scoped search, and every native sibling list keeps the system's field. The
 web keeps #6589's one search.
 

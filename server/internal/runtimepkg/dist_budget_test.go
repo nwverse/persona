@@ -33,11 +33,12 @@ import (
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
 // Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
 // Cleaning up pending asks and autonomous turns when a shared Antigravity ACP process exits (#15756) adds 163 B (265,525 B).
+// Exposing always_label and honoring always-allow permission choices in Antigravity (#15785) adds 161 B (265,686 B).
 // Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
-// its matching visible step (#14297) add 362 B (265,887 B).
+// its matching visible step (#14297) add 345 B (266,031 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 265_887
+	const budget = 266_031
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

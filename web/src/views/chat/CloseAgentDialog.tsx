@@ -7,8 +7,50 @@ import { sessionMenuActions, sessionTitle, tabLabel } from "../../lib/format";
 import { navigate, parse, showsSession } from "../../lib/router";
 import { getSession, getState, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
+import type { WorktreeStatus } from "../../lib/worktree-cleanup";
 import { Button, cx, Dialog, toast } from "../../ui/atoms";
 import { cleanupReady, KEEP, runCleanup, useAgentWorktree, WorktreeCleanup, type Cleanup } from "./SessionWorktreeCleanup";
+
+export interface CloseAgentArchiveResult {
+  ok: boolean;
+  busy?: boolean;
+}
+
+export interface CloseAgentDialogProps {
+  open: boolean;
+  onClose: () => void;
+  onClosed?: () => void;
+  session: Session;
+  machineName: string;
+  /** Live session snapshot (`null` when the session went away); skips the default store when provided. */
+  liveSession?: Session | null;
+  /** Hub feature flags; skips the default store when provided. */
+  features?: readonly string[];
+  /** Managed worktree status (`null` for none); skips the default worktree status request when provided. */
+  worktree?: WorktreeStatus | null;
+  /** Controlled archive-and-close action; replaces `archiveAgent(..., appArchiveDeps)`. */
+  onArchiveClose?: (session: Session) => Promise<CloseAgentArchiveResult>;
+  /** Controlled plain-close action; replaces `POST .../close`. */
+  onCloseSession?: (session: Session) => Promise<void>;
+  /** Controlled worktree cleanup action; replaces `runCleanup`. */
+  onCleanupWorktree?: (worktree: WorktreeStatus, cleanup: Cleanup) => void | Promise<void>;
+  /** Controlled notification callback; replaces the default `toast`. */
+  onNotice?: (message: string, tone: "ok" | "error" | "info") => void;
+}
+
+interface CloseAgentLiveProps extends CloseAgentDialogProps {
+  live: Session | undefined;
+  liveControlled: boolean;
+}
+
+interface CloseAgentFeaturesProps extends CloseAgentLiveProps {
+  resolvedFeatures: readonly string[];
+  featuresControlled: boolean;
+}
+
+interface CloseAgentResolvedProps extends CloseAgentFeaturesProps {
+  wt: WorktreeStatus | null;
+}
 
 // "Close…" (#7125): the one way the web closes an Agent. Its row menu, the chat's ⋯ and "Close pane" on its pane all
 // ask here (lib/close-agent.ts; views/CloseAgentHost.tsx loads this chunk on that intent), reading the agent's latest row as it changes:
@@ -17,23 +59,72 @@ import { cleanupReady, KEEP, runCleanup, useAgentWorktree, WorktreeCleanup, type
 //   archive a busy agent), then leaves its chat as "Close agent" did (#3405); so does an agent the hub cannot archive and close.
 // The conversation stays every way. `onClosed`: what to do once a plain close is done; without it, the page leaves the
 // agent's chat only when that chat is open.
-export function CloseAgentDialog({ open, onClose, onClosed, session, machineName }: { open: boolean; onClose: () => void; onClosed?: () => void; session: Session; machineName: string }) {
+export function CloseAgentDialog(props: CloseAgentDialogProps) {
+  if (props.liveSession === undefined) return <CloseAgentWithLive {...props} />;
+  return <CloseAgentFeatures {...props} live={props.liveSession ?? undefined} liveControlled />;
+}
+
+function CloseAgentWithLive(props: CloseAgentDialogProps) {
+  const live = useStore(() => getSession(props.session.machine_id, props.session.session_id));
+  return <CloseAgentFeatures {...props} live={live} liveControlled={false} />;
+}
+
+function CloseAgentFeatures(props: CloseAgentLiveProps) {
+  if (props.features === undefined) return <CloseAgentWithFeatures {...props} />;
+  return <CloseAgentWorktree {...props} resolvedFeatures={props.features} featuresControlled />;
+}
+
+function CloseAgentWithFeatures(props: CloseAgentLiveProps) {
+  const resolvedFeatures = useStore((st) => st.features);
+  return <CloseAgentWorktree {...props} resolvedFeatures={resolvedFeatures} featuresControlled={false} />;
+}
+
+function CloseAgentWorktree(props: CloseAgentFeaturesProps) {
+  if (props.worktree === undefined) return <CloseAgentWithWorktree {...props} />;
+  const wt = props.worktree?.ours && props.worktree.path ? props.worktree : null;
+  return <CloseAgentDialogView key={`${props.session.machine_id}/${props.session.session_id}`} {...props} wt={wt} />;
+}
+
+function CloseAgentWithWorktree(props: CloseAgentFeaturesProps) {
+  const wt = useAgentWorktree(props.session, props.open);
+  return <CloseAgentDialogView key={`${props.session.machine_id}/${props.session.session_id}`} {...props} wt={wt} />;
+}
+
+function CloseAgentDialogView({
+  open,
+  onClose,
+  onClosed,
+  session,
+  machineName,
+  live,
+  liveControlled,
+  resolvedFeatures,
+  featuresControlled,
+  wt,
+  onArchiveClose,
+  onCloseSession,
+  onCleanupWorktree,
+  onNotice,
+}: CloseAgentResolvedProps) {
   const [pending, setPending] = useState(false);
   // the hub said it is busy though this page doesn't know why yet (a 409 to the archive): it closes as a busy one does
   const [refused, setRefused] = useState(false);
-  const live = useStore(() => getSession(session.machine_id, session.session_id));
-  const features = useStore((st) => st.features);
-  const wt = useAgentWorktree(session, open);
   const [cleanup, setCleanup] = useState<Cleanup>(KEEP);
   useEffect(() => {
     if (open) setCleanup(KEEP); // each time: keeping is the default
     if (open) setRefused(false);
   }, [open]);
-  const shown = closing(live ?? session, session, features, refused);
+  const shown = closing(live ?? session, session, resolvedFeatures, refused);
+  const notify = (message: string, tone: "ok" | "error" | "info") => {
+    if (onNotice) onNotice(message, tone);
+    else toast(message, tone);
+  };
   const go = async () => {
+    if (pending) return;
     // the agent went away while the dialog was open: nothing left to close, so don't leave a button that does nothing
-    const current = getSession(session.machine_id, session.session_id);
-    const now = current && closing(current, session, getState().features, refused);
+    const current = liveControlled ? live : getSession(session.machine_id, session.session_id);
+    const activeFeatures = featuresControlled ? resolvedFeatures : getState().features;
+    const now = current && closing(current, session, activeFeatures, refused);
     if (!current || !now || now.offer === "no" || now.offer === "busy") {
       onClose();
       return;
@@ -41,22 +132,33 @@ export function CloseAgentDialog({ open, onClose, onClosed, session, machineName
     setPending(true);
     try {
       if (now.offer === "archive") {
-        const r = await archiveAgent(current, true, appArchiveDeps);
+        const r = onArchiveClose ? await onArchiveClose(current) : await archiveAgent(current, true, appArchiveDeps);
         if (!r.ok) {
           if (r.busy) setRefused(true); // the toast said why; the dialog now offers to close it anyway
           return;
         }
         onClose();
       } else {
-        await api(`${sessionPath(session.machine_id, session.session_id)}/close`, { method: "POST" });
-        toast(t("close-agent.closed"), "ok");
+        if (onCloseSession) await onCloseSession(current);
+        else await api(`${sessionPath(session.machine_id, session.session_id)}/close`, { method: "POST" });
+        notify(t("close-agent.closed"), "ok");
         onClose();
         if (onClosed) onClosed();
         else if (showsSession(parse(stripBase(location.pathname), location.search), session.machine_id, session.session_id)) navigate({ name: "home" });
       }
-      await runCleanup(session.machine_id, wt, cleanup, session.host);
+      if (wt?.path && cleanup.remove) {
+        if (onCleanupWorktree) {
+          try {
+            await onCleanupWorktree(wt, cleanup);
+          } catch (e) {
+            notify(t("chat-sessiondialogs.wt_remove_failed", { error: errorText(e) }), "error");
+          }
+        } else {
+          await runCleanup(session.machine_id, wt, cleanup, session.host);
+        }
+      }
     } catch (e) {
-      toast(t("close-agent.close_failed", { error: errorText(e) }), "error");
+      notify(t("close-agent.close_failed", { error: errorText(e) }), "error");
     } finally {
       setPending(false);
     }
