@@ -61,6 +61,7 @@ import { whenComposer } from "../../lib/links";
 import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
 import { useShortcuts } from "../../lib/use-shortcuts";
+import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
 import type { Item, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
@@ -70,10 +71,11 @@ import { ChatView } from "./ChatView";
 const row = (x: Partial<Session> = {}): Session => ({ machine_id: "mac", session_id: "s1", title: "Checks", cwd: "/code", status: "working", state: "working", ...x }) as Session;
 const item = (seq: number, x: Partial<Item> = {}): Item => ({ id: `i${seq}`, seq, role: "assistant", kind: "text", text: `row ${seq}`, ts: "2026-11-06T00:00:00Z", ...x }) as Item;
 const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-const push = async (seq: number, x: Partial<Item> = {}) => {
-  act(() => live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq })));
-  await settle();
-};
+const push = (seq: number, x: Partial<Item> = {}) => act(async () => {
+  live.listeners.forEach((l) => l.items?.({ machine_id: "mac", session_id: "s1", items: [item(seq, x)], from_seq: seq - 1, to_seq: seq }));
+  // Measure the render after the normal transcript burst window has committed.
+  await new Promise((resolve) => setTimeout(resolve, ITEM_COALESCE_MS));
+});
 const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
 
 let host: HTMLDivElement;
