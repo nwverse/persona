@@ -8,6 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/domainkit/instant"
+	"github.com/nwverse/persona/server/internal/domainkit/opt"
 	"github.com/nwverse/persona/server/internal/domainkit/slot"
 )
 
@@ -29,10 +30,17 @@ const viewRoom = 1 << 10
 // fills in the view's epoch, rev, as_of and build. A tally of another surface, or one with places f does not hold,
 // is a defect.
 //
-// The Inbox and the to-dos have no count in the view yet (docs/protocol/counts.md, "Later ids"). Until each has a core
-// of its own, its count comes in as one more input of this function, today's number as package assistant works it out,
-// so no record is made for it.
-func (f *Fleet) View(needsYou fleetcount.Tally) assistantwire.CountsView {
+// todos are the to-do list's counts, as GET /api/v1/todos answers them for the whole list (the to-do projection's
+// Counts()), or none while the manager has not counted its to-dos: counts.todos_needs_you is their needs_you, with
+// totals repeating it, and absent while there are none, which reads as unknown, never 0 (docs/protocol/counts.md
+// "todos_needs_you"). Those counts are numbers without their rows, so the count lists no keys and its n is all more.
+// The to-dos have no core yet; once they do, their counts come in as its value rather than the wire's, and this
+// function stays their writer.
+//
+// The Inbox has no count in the view yet (docs/protocol/counts.md, "Later ids"). Until it has a core of its own, its
+// count comes in as one more input of this function, today's number as package assistant works it out, so no record
+// is made for it.
+func (f *Fleet) View(needsYou fleetcount.Tally, todos opt.Option[assistantwire.TodoCounts]) assistantwire.CountsView {
 	if !needsYou.On(fleetcount.SurfaceBadge()) {
 		defect.Raise("fleetcountadapt.Fleet.View", "a tally of another surface than the Agents list's")
 	}
@@ -42,11 +50,27 @@ func (f *Fleet) View(needsYou fleetcount.Tally) assistantwire.CountsView {
 	count := r.count()
 	r.f = nil
 	n := count.N
-	return assistantwire.CountsView{
+	view := assistantwire.CountsView{
 		Counts: assistantwire.CountsViewCounts{AgentsNeedsYou: count},
 		Totals: &assistantwire.CountsViewTotals{AgentsNeedsYou: &n},
 	}
+	todos.Match(func(counts assistantwire.TodoCounts) { writeTodos(&view, counts) }, todosUncounted)
+	return view
 }
+
+// writeTodos writes the to-do list's counts into v as counts.todos_needs_you and its total, in one allocation: their
+// needs_you, with no row listed, so all of n is more.
+func writeTodos(v *assistantwire.CountsView, todos assistantwire.TodoCounts) {
+	part := &struct {
+		count assistantwire.CountsViewCount
+		n     int
+	}{count: assistantwire.CountsViewCount{N: todos.NeedsYou, More: todos.NeedsYou}, n: todos.NeedsYou}
+	v.Counts.TodosNeedsYou, v.Totals.TodosNeedsYou = &part.count, &part.n
+}
+
+// todosUncounted leaves counts.todos_needs_you out: the manager has not counted its to-dos, so the count is unknown,
+// never 0.
+func todosUncounted() {}
 
 // countsRows gathers a tally's rows by place in f's lists, then writes them out as a count. It keeps its arrays from
 // one view to the next; the count it writes holds none of them.

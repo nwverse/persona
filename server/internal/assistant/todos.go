@@ -524,6 +524,7 @@ func (s *Service) todosPushSoon() {
 		p.armed = false
 		p.mu.Unlock()
 		s.todoViewPushed() // every app reads the list again from here (todo_view_push.go)
+		s.todosCountSoon() // and the counts view's to-dos follow, read by the manager if no app does (counts_view.go)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.event(ctx, map[string]any{"type": "todos"})
