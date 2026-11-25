@@ -90463,6 +90463,14 @@
       },
       "extractionState" : "manual"
     },
+    "If the Agent is open and can be closed, it will close." : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "If the Agent is open and can be closed, it will close." } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "エージェントが開いていて閉じられる場合は閉じます。" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "如果 Agent 仍处于打开状态且可关闭，它也会关闭。" } }
+      },
+      "extractionState" : "manual"
+    },
     "If the chat hasn't been compacted, only the last few messages come along. For a full summary, compact the context first." : {
       "localizations" : {
         "en" : {

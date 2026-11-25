@@ -38,7 +38,6 @@ struct SiblingTabs: View {
     @State private var shown: SessionKey?
     @State private var showAll = false
     @State private var closing: Session?
-    @State private var stopping: SessionKey?
     @State private var closeOrder: [SessionKey] = []
 
     var body: some View {
@@ -49,7 +48,7 @@ struct SiblingTabs: View {
                 allButton(siblings)
             }
         }
-        .confirmClose($closing) { key in closed(key, closeOrder) }
+        .confirmDeleteSession($closing) { key in closed(key, closeOrder) }
         .sheet(isPresented: $showAll) {
             SiblingList(current: current, space: model.session(current)) { key in
                 showAll = false
@@ -67,17 +66,9 @@ struct SiblingTabs: View {
     }
 
     private func requestClose(_ session: Session) {
-        guard stopping == nil, let latest = model.latest(session.key), latest.canTerminal else { return }
+        guard let latest = model.latest(session.key), latest.canDelete else { return }
         closeOrder = model.siblings(of: current).map(\.key)
-        if AgentCloseRules.needsConfirmation(latest) {
-            closing = latest
-        } else {
-            stopping = latest.key
-            Task {
-                if await model.close(latest.key) { closed(latest.key, closeOrder) }
-                stopping = nil
-            }
-        }
+        closing = latest
     }
 
     private func strip(_ siblings: [Session]) -> some View {
@@ -121,14 +112,12 @@ struct SiblingTabs: View {
         .accessibilityAddTraits(on ? .isSelected : [])
         .accessibilityIdentifier("chat.sibling")
         .contextMenu {
-            if s.canTerminal {
+            if s.canDelete {
                 Button(role: .destructive) { requestClose(s) } label: {
-                    Label("Stop & Close Agent", systemImage: Theme.Icon.end).lineLimit(1)
+                    Label("Delete Chat…", systemImage: Theme.Icon.delete).lineLimit(1)
                 }
-                .disabled(stopping != nil)
             }
         }
-        .disabled(stopping == s.key)
         .id(s.key)
     }
 
@@ -216,29 +205,14 @@ private struct SiblingList: View {
 
     @State private var showNew = false
     @State private var closing: Session?
-    @State private var stopping: SessionKey?
     @State private var closeOrder: [SessionKey] = []
-    @State private var failure: String?
 
     private var siblings: [Session] { model.siblings(of: current) }
 
     private func requestClose(_ session: Session) {
-        guard stopping == nil, let latest = model.latest(session.key), latest.canTerminal else { return }
+        guard let latest = model.latest(session.key), latest.canDelete else { return }
         closeOrder = siblings.map(\.key)
-        failure = nil
-        if AgentCloseRules.needsConfirmation(latest) {
-            closing = latest
-        } else {
-            stopping = latest.key
-            Task {
-                if await model.close(latest.key) {
-                    closed(latest.key, closeOrder)
-                } else {
-                    failure = model.toast?.message ?? String(localized: "Couldn't stop it. The tab is still open; try again.")
-                }
-                stopping = nil
-            }
-        }
+        closing = latest
     }
 
     /// Where a new tab goes: the space this chat is in (its machine, directory and herdr workspace).
@@ -262,15 +236,6 @@ private struct SiblingList: View {
                     }
                 }
                 .padding(.horizontal, Theme.Space.l).padding(.top, Theme.Space.l).padding(.bottom, Theme.Space.s)
-                if let failure {
-                    Text(failure)
-                        .font(Theme.Font.secondary)
-                        .foregroundStyle(Theme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, Theme.Space.l)
-                        .padding(.vertical, Theme.Space.s)
-                        .accessibilityIdentifier("agent.tabs.close.error")
-                }
                 if let s = space, let name = s.spaceName, let k = s.spaceKey {
                     Button { openSpace(k) } label: {
                         HStack(spacing: Theme.Space.m) {
@@ -309,8 +274,7 @@ private struct SiblingList: View {
                                     .font(Theme.Font.label).lineLimit(1).truncationMode(.tail)
                             }
                             Spacer(minLength: 8)
-                            if stopping == s.key { ProgressView().tint(Theme.danger) }
-                            else if on { ThemedIcon(Theme.Icon.done).font(Theme.Font.captionStrong).foregroundStyle(Theme.accent) }
+                            if on { ThemedIcon(Theme.Icon.done).font(Theme.Font.captionStrong).foregroundStyle(Theme.accent) }
                         }
                         .padding(.horizontal, Theme.Space.l)
                         // A tab's other agents hang a level in under its starter.
@@ -325,18 +289,17 @@ private struct SiblingList: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        if s.canTerminal {
+                        if s.canDelete {
                             Button { requestClose(s) } label: {
-                                Label("Close", systemImage: Theme.Icon.end).lineLimit(1)
+                                Label("Delete Chat…", systemImage: Theme.Icon.delete).lineLimit(1)
                             }
                             .tint(Theme.danger)
-                            .accessibilityLabel("Stop and Close \(label)")
                         }
                     }
                     .contextMenu {
-                        if s.canTerminal {
+                        if s.canDelete {
                             Button(role: .destructive) { requestClose(s) } label: {
-                                Label("Stop & Close Agent", systemImage: Theme.Icon.end).lineLimit(1)
+                                Label("Delete Chat…", systemImage: Theme.Icon.delete).lineLimit(1)
                             }
                         }
                     }
@@ -345,9 +308,7 @@ private struct SiblingList: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .scrollBounceBehavior(.basedOnSize)
-        .disabled(stopping != nil)
-        .interactiveDismissDisabled(stopping != nil)
-        .confirmClose($closing) { key in closed(key, closeOrder) }
+        .confirmDeleteSession($closing) { key in closed(key, closeOrder) }
         // The new tab opens in place of this one, like picking a tab (pick closes this sheet and the form with it).
         .sheet(isPresented: $showNew) {
             if let preset {

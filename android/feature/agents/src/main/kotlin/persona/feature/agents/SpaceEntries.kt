@@ -179,7 +179,6 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             forkOnline = onlineForRow,
             takeoverActions = takeoverActions,
             onInterrupt = { model.interrupt(row.session) },
-            onClose = { operationDialog = AgentOperationDialog.Close(row.session) },
             onDelete = { operationDialog = AgentOperationDialog.Delete(row.session) })
     }
     Box(Modifier.fillMaxSize()) {
@@ -199,7 +198,7 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
             // The page's list arrives a moment after it opens: no "No running agents" flash before that.
             loaded = page.sessions.isNotEmpty() || page.machines.isNotEmpty(),
-            onClose = { row -> closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) } },
+            onClose = { row -> deleteSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Delete(row.session) } },
             sessions = page.sessions,
             onOpenSide = { row, side ->
                 model.opened(row)

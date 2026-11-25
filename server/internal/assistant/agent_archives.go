@@ -53,10 +53,7 @@ func (rec agentArchive) activeAfter() time.Time {
 // conversation to whichever row lists it next, and is not kept under a pane's id, which the engine gives to another
 // conversation later.
 func archiveSessionOf(s proto.Session) string {
-	if aliases := s.Aliases(); s.Agent == "agy" && s.PaneID != "" && len(aliases) > 0 {
-		return aliases[0]
-	}
-	return s.SessionID
+	return s.ConversationID()
 }
 
 // A just-closed confirmation can remain in a node's cached list until its next push.

@@ -34,7 +34,6 @@ import PersonaWire
             .pin, .mute, .todo, .moveTodo, .unlinkTodo, .stopLoop, .handToPersona, .screen,
             .copyDirectory, .terminal, .copyResume, .resume,
             .splitPane, .splitRight, .splitDown, .nodeGit, .gitPull, .gitPush, .gitFetch, .closeTab,
-            .close,
         ]
         #expect(row.items.map(\.id) == ids)
         #expect(row.items.contains { $0.id == .pin }, "detail has the row's Pin action")
@@ -53,7 +52,7 @@ import PersonaWire
             .files, .space, .interrupt, .markSeen, .takeover, .continueInNewSession,
             .pin, .mute, .handToPersona, .copyDirectory,
         ])
-        #expect(!facts.items.contains { $0.id == .close }, "cannot close without a terminal")
+        #expect(!facts.items.contains { $0.id == .delete }, "working Agents cannot be deleted")
         #expect(!facts.items.contains { $0.id == .delete }, "a live session is not deleted")
         #expect(!facts.items.contains { $0.id == .terminal }, "no terminal capability, no terminal")
     }
@@ -120,25 +119,25 @@ import PersonaWire
     }
 
     /// The issue's list (#13396): Interrupt, Rename and Pin stay on the top level, with Mark as Seen and, in the chat
-    /// on another pane, Back to Chat; Close Agent… is last, Delete Chat… then under More; with no Close, Delete Chat… is last.
+    /// on another pane, Back to Chat; Delete Chat… is last when the Agent is eligible.
     @Test func theFrequentActionsStayOnTopAndOneDestructiveOneIsLast() throws {
         var s = try session("unread", status: "idle")
         s.repoRoot = "/work/example"
         let open = AgentActionFacts(session: s, currentPane: .files, git: try gitStatus(files: 1)).layout
         #expect(open.top.map(\.id) == [.backToChat, .interrupt, .markSeen, .rename, .pin])
         #expect(open.topLevelCount == AgentActionLayout.topLimit)
-        #expect(open.last?.id == .close)
-        #expect(open.more.first?.id == .git && open.more.last?.id == .delete, "\(open.more.map(\.id))")
+        #expect(open.last?.id == .delete)
+        #expect(open.more.first?.id == .git && !open.more.contains { $0.id == .delete }, "\(open.more.map(\.id))")
 
         let row = AgentActionFacts(session: try session()).layout
         #expect(row.top.map(\.id) == [.interrupt, .rename, .pin])
-        #expect(row.last?.id == .close)
+        #expect(row.last == nil)
         #expect(row.more.map(\.id).starts(with: [.files, .subagents, .space, .attach]))
 
         let ended = AgentActionFacts(session: try session("offline", status: "offline")).layout
         #expect(!ended.top.contains { $0.id == .interrupt }, "an ended Agent has nothing to interrupt")
         #expect(ended.last?.id == .delete)
-        #expect(!ended.more.contains { $0.id == .delete || $0.id == .close })
+        #expect(!ended.more.contains { $0.id == .delete })
     }
 
     @Test func bothEntryPointsConstructTheIdenticalView() throws {

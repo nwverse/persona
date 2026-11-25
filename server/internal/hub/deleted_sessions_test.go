@@ -14,6 +14,62 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestDeleteAgyFollowsConversationAcrossPaneCloseAndRestart(t *testing.T) {
+	h, n := conversationsHub(t)
+	n.m.mu.Lock()
+	n.m.online = true
+	n.m.mu.Unlock()
+	const pane, conversation = "agy-workspace-pane", "agy-conversation"
+	row := proto.Session{SessionID: pane, Agent: "agy", PaneID: "workspace:pane", Status: proto.StatusIdle}
+	row.SetAliases([]string{conversation})
+	editSessions(n.m, func(list []proto.Session) []proto.Session { return append(list, row) })
+	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /api/v1/sessions/{mid}/{sid}", h.withMachine(h.deleteSession))
+	remove := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/server/"+pane, nil))
+		return w
+	}
+	n.mu.Lock()
+	n.retireErr = fmt.Errorf("node refused to retire")
+	n.mu.Unlock()
+	if w := remove(); w.Code < 400 || sessionHiddenByDeletion(row, h.deletedAt("server")) {
+		t.Fatalf("failed retirement must not delete the row: %d %s", w.Code, w.Body.String())
+	}
+	n.mu.Lock()
+	n.retireErr = nil
+	n.sends = nil
+	n.mu.Unlock()
+	w := remove()
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	}
+	if w := remove(); w.Code != http.StatusOK {
+		t.Fatalf("retry: %d %s", w.Code, w.Body.String())
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.sends) != 1 {
+		t.Fatalf("expected one terminal retirement, got %v", n.sends)
+	}
+	params, _ := n.sends[0]["retire"].(map[string]any)
+	if params["session_id"] != pane || params["close_terminal"] != true {
+		t.Fatalf("wrong pane retirement: %v", params)
+	}
+	h2 := newTestHub(t)
+	h2.store = h.store
+	history := proto.Session{SessionID: conversation, Agent: "agy", Status: proto.StatusDone, UpdatedAt: time.Now().Add(-time.Minute)}
+	reused := row
+	reused.SetAliases([]string{"agy-different-conversation"})
+	if got := h2.shown("server", []proto.Session{row, history, reused}); len(got) != 1 || got[0].ConversationID() != reused.ConversationID() {
+		t.Fatalf("deletion should follow only the deleted conversation: %v", ids(got))
+	}
+	history.Status = proto.StatusWorking
+	if got := h2.shown("server", []proto.Session{history}); len(got) != 1 {
+		t.Fatal("resumed conversation did not reappear")
+	}
+}
+
 // Deleting a conversation takes an offline one out of what the apps get (the list, the pushes), kept across a
 // restart; a running one, the assistant's and an unknown one can't be deleted; used again, it is listed again.
 func TestDeleteSessions(t *testing.T) {
@@ -30,6 +86,8 @@ func TestDeleteSessions(t *testing.T) {
 			proto.Session{SessionID: "busy-0012", Cwd: "/code/app", Status: proto.StatusBlocked, UpdatedAt: now},
 			proto.Session{SessionID: "stopped-0013", Cwd: "/code/app", Status: proto.StatusInterrupted, UpdatedAt: now.Add(-time.Hour)},
 			proto.Session{SessionID: "keep-0014", Cwd: "/code/app", Status: proto.StatusInterrupted, UpdatedAt: now.Add(-time.Hour)},
+			proto.Session{SessionID: "queued-0015", Status: proto.StatusIdle, Queued: []string{"next message"}},
+			proto.Session{SessionID: "background-0016", Status: proto.StatusIdle, BackgroundWorking: true},
 		)
 	})
 	mux := http.NewServeMux()
@@ -78,12 +136,14 @@ func TestDeleteSessions(t *testing.T) {
 		t.Fatalf("only the deleted interrupted session is hidden: %s", got)
 	}
 	for path, want := range map[string]int{
-		"/api/v1/sessions/server/run-0009":  http.StatusConflict,
-		"/api/v1/sessions/server/boot-0010": http.StatusConflict,
-		"/api/v1/sessions/server/busy-0012": http.StatusConflict,
-		"/api/v1/sessions/server/trip-0002": http.StatusBadRequest, // the assistant's: archived instead
-		"/api/v1/sessions/server/nope-0000": http.StatusNotFound,
-		"/api/v1/sessions/elsewhere/x":      http.StatusNotFound,
+		"/api/v1/sessions/server/run-0009":        http.StatusConflict,
+		"/api/v1/sessions/server/boot-0010":       http.StatusConflict,
+		"/api/v1/sessions/server/busy-0012":       http.StatusConflict,
+		"/api/v1/sessions/server/queued-0015":     http.StatusConflict,
+		"/api/v1/sessions/server/background-0016": http.StatusConflict,
+		"/api/v1/sessions/server/trip-0002":       http.StatusBadRequest, // the assistant's: archived instead
+		"/api/v1/sessions/server/nope-0000":       http.StatusNotFound,
+		"/api/v1/sessions/elsewhere/x":            http.StatusNotFound,
 	} {
 		if c := del(path); c != want {
 			t.Fatalf("delete %s: %d, want %d", path, c, want)

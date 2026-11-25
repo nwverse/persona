@@ -73,7 +73,6 @@ class AgentsCodexTakeoverMenuTest {
                     onRename = {},
                     onStopLoop = {},
                     onHandoff = {},
-                    onClose = {},
                     takeoverActions = actions,
                 )
             }
@@ -110,12 +109,12 @@ class AgentsCodexTakeoverMenuTest {
                 val coord = coordinator()
                 continueLabels = AgentSessionMenuItems(
                     row = AgentSession(continueOnly), pinned = false, muted = false, busy = false,
-                    onOpen = {}, onPin = {}, onMute = {}, onRead = {}, onRename = {}, onStopLoop = {}, onHandoff = {}, onClose = {},
+                    onOpen = {}, onPin = {}, onMute = {}, onRead = {}, onRename = {}, onStopLoop = {}, onHandoff = {},
                     takeoverActions = codexTakeoverMenuActions(continueOnly, coord, enabled = true),
                 ).map { it.label }
                 ordinaryLabels = AgentSessionMenuItems(
                     row = AgentSession(ordinary), pinned = false, muted = false, busy = false,
-                    onOpen = {}, onPin = {}, onMute = {}, onRead = {}, onRename = {}, onStopLoop = {}, onHandoff = {}, onClose = {},
+                    onOpen = {}, onPin = {}, onMute = {}, onRead = {}, onRename = {}, onStopLoop = {}, onHandoff = {},
                     takeoverActions = codexTakeoverMenuActions(ordinary, coord, enabled = true),
                 ).map { it.label }
             }

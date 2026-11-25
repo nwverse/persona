@@ -149,23 +149,19 @@ describe("the row menu", () => {
   const keys = (s: Session, features: string[]) =>
     agentRowMenuItems(s, { pinned: false, muted: false, onRename() {}, onDelete() {}, features }).filter((i) => ["archive", "close", "delete"].includes(i.key));
 
-  it("offers Archive and one Close… instead of Delete chat, after a hairline (#7125)", () => {
+  it("offers Archive and Delete chat for the same Agent at any width", () => {
     const items = keys(live, hub.features);
-    expect(items.map((i) => [i.key, Boolean(i.disabled), Boolean(i.divider)])).toEqual([["archive", false, true], ["close", false, false]]);
-    expect(items[1]).toMatchObject({ label: t("agentmenus.close"), danger: true });
-    expect(keys({ ...live, status: "offline", state: "offline" }, hub.features).map((i) => i.key)).toEqual(["archive"]);
+    expect(items.map((i) => [i.key, Boolean(i.disabled), Boolean(i.divider)])).toEqual([["archive", false, true], ["delete", false, false]]);
+    expect(items[1]).toMatchObject({ label: t("agentmenus.delete_chat"), danger: true });
+    expect(keys({ ...live, status: "offline", state: "offline" }, hub.features).map((i) => i.key)).toEqual(["archive", "delete"]);
     expect(keys({ ...live, status: "offline", state: "offline" }, ["terminal_stream"]).map((i) => i.key)).toEqual(["delete"]);
-    // an older hub without archives: Close… still closes, and takes the hairline
-    expect(keys(live, ["terminal_stream"]).map((i) => [i.key, Boolean(i.divider)])).toEqual([["close", true], ["delete", false]]);
+    expect(keys(live, ["terminal_stream"]).map((i) => i.key)).toEqual(["delete"]);
   });
 
-  it("keeps Close… while the agent works; only Archive waits, saying why", () => {
+  it("does not offer Delete while the Agent is working", () => {
     const busy = keys({ ...live, status: "working", state: "working" }, hub.features);
-    expect(busy.map((i) => [i.key, Boolean(i.disabled)])).toEqual([["archive", true], ["close", false]]);
+    expect(busy.map((i) => [i.key, Boolean(i.disabled)])).toEqual([["archive", true]]);
     expect(busy[0].detail).toBe(t("agentmenus.archive_busy"));
-    expect(busy[1].detail).toBeUndefined();
-    const serving = keys({ ...live, ports: [{ port: 3000 }] }, hub.features);
-    expect(serving.map((i) => [i.key, Boolean(i.disabled)])).toEqual([["archive", false], ["close", false]]);
   });
 
   it("removes an untouched Persona start from the Hub list even when its computer cannot close it", () => {
@@ -175,27 +171,10 @@ describe("the row menu", () => {
     expect(actions({ ...leftover, updated_at: undefined })).toContain("delete");
     expect(actions({ ...live, status: "offline", state: "offline", start_error: "missing launcher" })).toContain("delete");
     for (const changes of [
-      { updated_at: "2026-11-20T03:00:00Z" }, { started_by_persona: false }, { starting: true },
-      { last_text: "A previous exchange" }, { rev: 3 }, { source_kind: "codex_history" },
-      { awaiting_first_message: true }, { status: "working", state: "working" }, { pending_interactions: 1 },
-      { capabilities: { read: true, send: true, terminal: true } }, { assistant: true }, { archived: true },
+      { starting: true }, { status: "working", state: "working" }, { pending_interactions: 1 },
+      { assistant: true }, { archived: true },
       { undelivered: [{ id: "send", text: "later", at: "2026-11-20T03:00:00Z", state: "waiting", computer: "Studio" }] },
     ] satisfies Partial<Session>[]) expect(actions({ ...leftover, ...changes })).not.toContain("delete");
   });
 
-  it("opens the one Close… dialog for the row", async () => {
-    const { onOpenCloseAgent } = await import("../../lib/close-agent");
-    const opened: Session[] = [];
-    const stop = onOpenCloseAgent((s) => opened.push(s));
-    for (const s of [live, { ...live, status: "working", state: "working" } as Session]) keys(s, hub.features).find((i) => i.key === "close")!.onSelect();
-    stop();
-    expect(opened.map((s) => s.status)).toEqual(["idle", "working"]);
-  });
-
-  it("disables Close…, saying why, only for a busy agent whose node offers no plain close", () => {
-    const noPlainClose = { ...live, status: "working", state: "working", capabilities: { read: true, send: true, terminal: false } } as Session;
-    const close = keys(noPlainClose, hub.features).find((i) => i.key === "close")!;
-    expect(close).toMatchObject({ disabled: true, detail: t("agentmenus.close_busy") });
-    expect(keys({ ...noPlainClose, status: "idle", state: "idle" }, hub.features).find((i) => i.key === "close")?.disabled).toBeFalsy();
-  });
 });

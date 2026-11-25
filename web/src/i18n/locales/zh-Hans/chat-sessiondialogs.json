@@ -19,7 +19,7 @@
   "delete_failed": "删除失败：{error}",
   "delete_title": "删除这个对话？",
   "delete": "删除",
-  "delete_detail": "「{title}」会从各端的列表里移除。{machine} 上的对话记录不会删除，之后在电脑上用 claude --resume 继续，它会重新出现。",
+  "delete_detail": "「{title}」会从各端的列表里移除。如果 Agent 在 {machine} 上仍处于打开状态且可关闭，它也会关闭。对话记录会保留，只有重新使用这个对话时才会再次显示。",
   "wt_title": "这个 Agent 在 Persona 建的 worktree 里干活",
   "wt_keep": "保留 worktree",
   "wt_remove": "移除",

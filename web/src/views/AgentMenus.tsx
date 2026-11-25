@@ -2,9 +2,8 @@
 // and the confirmation of "Mark all as seen". What they do is in lib/agent-actions.ts.
 import { flipMute, flipPin, handToPersona } from "../lib/agent-actions";
 import { errorText } from "../lib/api";
-import { resumeCommand, sessionCanRename, sessionMenuActions } from "../lib/format";
-import { appArchiveDeps, archiveAgent, archiveOffers, offerSessionDelete } from "../lib/agent-archives";
-import { closeAgentAction } from "../lib/close-agent";
+import { resumeCommand, sessionCanRename, sessionDeletable, sessionMenuActions } from "../lib/format";
+import { appArchiveDeps, archiveAgent, archiveOffers } from "../lib/agent-archives";
 import { machineWithHub } from "../lib/mesh";
 import { isPinned } from "../lib/pins";
 import { isMuted } from "../lib/session-actions";
@@ -41,29 +40,15 @@ export function agentRowMenuItems(s: Session, o: { pinned: boolean; muted: boole
     ...(onLinkTodo && s.todo ? [{ key: "unlink-todo", label: t("agentmenus.unlink"), icon: "x" as const, onSelect: () => void unlinkTodo(s, s.todo!.id) }] : []),
     ...(s.cwd ? [{ key: "cwd", label: t("agentmenus.copy_folder"), icon: "folder" as const, accel: "c", onSelect: () => copyText(s.cwd) }] : []),
     ...(allowed.includes("resume") ? [{ key: "resume", label: t("agentmenus.copy_resume"), icon: "terminal" as const, onSelect: () => copyText(resumeCommand(s)) }] : []),
-    ...archiveCloseItems(s, features),
-    ...(offerSessionDelete(s, features) ? [{ key: "delete", label: t("agentmenus.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => onDelete(s) }] : []),
+    ...archiveItems(s, features),
+    ...(sessionDeletable(s) ? [{ key: "delete", label: t("agentmenus.delete_chat"), icon: "trash" as const, danger: true, onSelect: () => onDelete(s) }] : []),
   ];
 }
 
-/** "Archive" and "Close…" after a hairline (#7125). Archive (lib/agent-archives.ts) only hides the agent, so a busy one
- *  shows it disabled, saying what to wait for. Close… (lib/close-agent.ts) asks, then archives and closes an agent that
- *  is not busy, and says what closing interrupts before it closes a busy one. The chat's ⋯ offers the same. */
-export function archiveCloseItems(s: Session, features: readonly string[]): MenuItem[] {
+/** Archive remains available for people who want to find the Agent in Archived later. */
+export function archiveItems(s: Session, features: readonly string[]): MenuItem[] {
   const archive = archiveOffers(s, features).archive;
-  const items: MenuItem[] = [
-    ...(archive !== "no"
-      ? [{ key: "archive", label: t("agentmenus.archive"), icon: "archive" as const, disabled: archive === "busy", detail: archive === "busy" ? t("agentmenus.archive_busy") : undefined, onSelect: () => void archiveAgent(s, false, appArchiveDeps) }]
-      : []),
-    ...closeItems(s, features),
-  ];
-  return items.map((it, i) => (i === 0 ? { ...it, divider: true } : it));
-}
-
-/** "Close…" alone: an archived chat's ⋯ has it under Restore while its agent is still open on the computer. */
-export function closeItems(s: Session, features: readonly string[]): MenuItem[] {
-  const close = closeAgentAction(s, features);
-  return close ? [{ key: "close", label: t("agentmenus.close"), icon: "x" as const, danger: true, ...close }] : [];
+  return archive === "no" ? [] : [{ key: "archive", label: t("agentmenus.archive"), icon: "archive", divider: true, disabled: archive === "busy", detail: archive === "busy" ? t("agentmenus.archive_busy") : undefined, onSelect: () => void archiveAgent(s, false, appArchiveDeps) }];
 }
 
 async function unlinkTodo(s: Session, todo: string) {
@@ -86,7 +71,7 @@ export function AgentRowMenu({ s, anchor, at, onClose, ...o }: { s: Session; anc
   const online = useStore((st) => st.machines.find((m) => m.id === s.machine_id)?.online !== false);
   // its Rename… and Delete… open dialogs from a chunk of their own: on its way while the pointer moves to them (#10382)
   useEffect(preloadSessionDialogs, []);
-  return <NodeMenu node={sessionNode(s, online)} at={at ?? { anchor }} onClose={onClose} before={agentRowMenuItems(s, { pinned, muted, features, ...o })} omit={["node-copy-path", "node-rename"]} />;
+  return <NodeMenu node={sessionNode(s, online)} at={at ?? { anchor }} onClose={onClose} before={agentRowMenuItems(s, { pinned, muted, features, ...o })} omit={["node-copy-path", "node-rename", "node-close-pane", "node-close-tab"]} />;
 }
 
 const LazySpaceMenu = lazy(() => import("./SpaceMenu").then((module) => ({ default: module.SpaceMenu })));

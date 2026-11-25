@@ -169,24 +169,25 @@ class AgentsHomeAffordancesTest {
         rule.onAllNodesWithText("Interrupt").assertCountEquals(0)
     }
 
-    /** A runtime's session (#6294): no terminal, so Rename and Close agent only where its node says it can. */
-    private fun runtimeRow(capabilities: SessionCapabilities) = Session("box", "paseo", title = "Runtime task", status = "working",
-        state = "working", sourceKind = "runtime", agent = "claude", capabilities = capabilities)
+    private fun runtimeRow(capabilities: SessionCapabilities, status: String = "idle") = Session("box", "paseo", title = "Runtime task", status = status,
+        state = status, sourceKind = "runtime", agent = "claude", capabilities = capabilities)
 
-    @Test fun aRuntimeRowRenamesAndClosesWhereItsNodeSays() {
+    @Test fun anIdleRuntimeRowOffersDeleteInPlaceOfClose() {
         showScreen(rows = listOf(runtimeRow(SessionCapabilities(read = true, send = true, close = true, rename = true))))
         rule.onNodeWithText("Runtime task").performTouchInput { longClick() }
         rule.onNodeWithText("Rename").assertIsDisplayed()
-        rule.onNodeWithText("Close agent").assertIsDisplayed()
+        rule.onNodeWithText("Delete chat").assertIsDisplayed()
+        rule.onNodeWithText("Close agent").assertDoesNotExist()
         rule.onNodeWithText("Copy resume command").assertDoesNotExist()
     }
 
-    @Test fun aRuntimeRowFromAnOlderNodeOffersNeither() {
-        showScreen(rows = listOf(runtimeRow(SessionCapabilities(read = true, send = true))))
+    @Test fun aWorkingRuntimeRowDoesNotOfferDelete() {
+        showScreen(rows = listOf(runtimeRow(SessionCapabilities(read = true, send = true), status = "working")))
         rule.onNodeWithText("Runtime task").performTouchInput { longClick() }
         rule.onNodeWithText("Mute").assertIsDisplayed()
         rule.onNodeWithText("Rename").assertDoesNotExist()
         rule.onNodeWithText("Close agent").assertDoesNotExist()
+        rule.onNodeWithText("Delete chat").assertDoesNotExist()
     }
 
     @Test fun groupingLight() = shootGrouping(dark = false)

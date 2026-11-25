@@ -111,7 +111,7 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             && a.session.capabilities == b.session.capabilities
             && a.session.state == b.session.state && a.session.status == b.session.status
             && a.session.canTerminal == b.session.canTerminal && a.session.canRename == b.session.canRename
-            && a.session.canClose == b.session.canClose && a.session.canAttach == b.session.canAttach
+            && a.session.canAttach == b.session.canAttach
             && a.session.canDelete == b.session.canDelete && a.session.canInterrupt == b.session.canInterrupt
             && (a.session.loop != nil) == (b.session.loop != nil)
             && a.session.todo == b.session.todo
@@ -174,7 +174,6 @@ nonisolated struct AgentActionFacts: Equatable, Sendable {
             }
             add(.closeTab, .node)
         }
-        if session.state.isLive, session.canClose { add(.close, .destructive) }
         if session.canDelete { add(.delete, .destructive) }
         return out
     }
@@ -214,7 +213,7 @@ nonisolated struct AgentActionItem: Equatable, Identifiable, Sendable {
         case attach, interrupt, markSeen, takeover, continueInNewSession, rename, pin, mute
         case todo, moveTodo, unlinkTodo, linkTodo, moveTo, stopLoop, handToPersona, screen
         case copyDirectory, terminal, copyResume, resume
-        case splitPane, splitRight, splitDown, nodeGit, gitPull, gitPush, gitFetch, closeTab, close, delete
+        case splitPane, splitRight, splitDown, nodeGit, gitPull, gitPush, gitFetch, closeTab, delete
     }
     enum Group: String, CaseIterable, Sendable { case navigation, session, utilities, node, destructive }
     let id: ID
@@ -223,7 +222,7 @@ nonisolated struct AgentActionItem: Equatable, Identifiable, Sendable {
 
 /// Where the Agent menu draws each item of its inventory (#13396): at most seven on the top level, More counted. Interrupt,
 /// Mark as Seen, Rename and Pin, with Back to Chat while the chat shows another pane, stay there, then More, then one
-/// destructive item last: Close Agent…, else Delete Chat…. Everything else is in More, in the inventory's order.
+/// destructive item last: Delete Chat… when available. Everything else is in More, in the inventory's order.
 nonisolated struct AgentActionLayout: Equatable, Sendable {
     /// The most items the top level holds, More and the last item counted.
     static let topLimit = 7
@@ -235,7 +234,7 @@ nonisolated struct AgentActionLayout: Equatable, Sendable {
     var last: AgentActionItem?
 
     init(_ items: [AgentActionItem]) {
-        let last = items.first { $0.id == .close } ?? items.first { $0.id == .delete }
+        let last = items.first { $0.id == .delete }
         top = items.filter { Self.topIDs.contains($0.id) }
         more = items.filter { !Self.topIDs.contains($0.id) && $0.id != last?.id }
         self.last = last
@@ -262,18 +261,16 @@ extension AgentActionFacts {
 final class AgentMenuHandlers {
     var navigate: (Session, AgentMenuDestination) -> Void = { _, _ in }
     var rename: (Session) -> Void = { _ in }
-    var close: (Session) -> Void = { _ in }
     var delete: (Session) -> Void = { _ in }
     var linkTodo: (Session) -> Void = { _ in }
     var openTodo: (Session) -> Void = { _ in }
     var takeover: (Session) -> Void = { _ in }
     var continueInNewSession: (Session) -> Void = { _ in }
 
-    func update(rename: @escaping (Session) -> Void = { _ in }, close: @escaping (Session) -> Void = { _ in },
+    func update(rename: @escaping (Session) -> Void = { _ in },
                 linkTodo: @escaping (Session) -> Void = { _ in }, delete: @escaping (Session) -> Void = { _ in },
                 takeover: @escaping (Session) -> Void = { _ in }, continueInNewSession: @escaping (Session) -> Void = { _ in }) {
         self.rename = rename
-        self.close = close
         self.linkTodo = linkTodo
         self.delete = delete
         self.takeover = takeover
@@ -491,10 +488,6 @@ struct AgentActionMenu: View, Equatable {
         case .closeTab:
             Button(role: .destructive) { if let s = now() { NodeActions.shared.askCloseTab(s) } } label: {
                 Label("Close Tab…", systemImage: Theme.Icon.closeTab).lineLimit(1)
-            }
-        case .close:
-            Button(role: .destructive) { if let s = now() { handlers.close(s) } } label: {
-                Label("Close Agent…", systemImage: Theme.Icon.end)
             }
         case .delete:
             Button(role: .destructive) { if let s = now(), s.canDelete { handlers.delete(s) } } label: {

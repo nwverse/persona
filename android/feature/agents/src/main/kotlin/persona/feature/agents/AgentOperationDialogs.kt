@@ -15,7 +15,6 @@ import androidx.compose.ui.unit.dp
 import persona.core.contracts.Session
 import persona.core.domain.sort.SessionRename
 import persona.core.domain.sort.canTerminal
-import persona.core.domain.sort.closeConfirmation
 import persona.core.domain.sort.deleteConfirmation
 import persona.core.domain.sort.isRex
 import persona.core.domain.sort.isTern
@@ -25,7 +24,6 @@ internal sealed interface AgentOperationDialog {
     val session: Session
     data class Rename(override val session: Session) : AgentOperationDialog
     data class RenameSpace(override val session: Session) : AgentOperationDialog
-    data class Close(override val session: Session) : AgentOperationDialog
     data class Delete(override val session: Session) : AgentOperationDialog
 }
 
@@ -38,7 +36,7 @@ internal fun AgentOperationDialog(
 ) {
     val session = dialog.session
     // Keep or remove the worktree Persona made for it, when it worked in one (#4532); removed once it is gone.
-    val ending = dialog is AgentOperationDialog.Close || dialog is AgentOperationDialog.Delete
+    val ending = dialog is AgentOperationDialog.Delete
     val worktree = persona.feature.chat.rememberOurWorktree(worktrees.takeIf { ending }, session.machineId, session.cwd, machine?.online == true,
         session.worktreeKind)
     var cleanup by remember(session.key) { mutableStateOf(persona.feature.chat.WorktreeCleanup()) }
@@ -49,18 +47,6 @@ internal fun AgentOperationDialog(
     val cleanupSection: (@Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit)? = worktree?.let { st ->
         { persona.feature.chat.WorktreeCleanupSection(st, cleanup, { cleanup = it }, machine?.home) } }
     when (dialog) {
-        // The same words as the chat's menu (core:domain closeConfirmation); long press and swipe both land here.
-        is AgentOperationDialog.Close -> {
-            val confirmation = session.closeConfirmation(machineName)
-            JDialog(
-                onDismiss = dismiss, title = confirmation.title.text(), destructive = true, text = confirmation.message.text(),
-                confirm = stringResource(R.string.agents_action_close_agent) to {
-                    // It may have been closed elsewhere since the dialog opened: then there is nothing left to do.
-                    if (model.closable(session)) model.close(session, onDone = ::cleanUp)
-                    dismiss()
-                }, confirmEnabled = persona.feature.chat.WorktreeCleanups.ready(worktree, cleanup), content = cleanupSection,
-            )
-        }
         // The same words as the chat's menu (core:domain deleteConfirmation).
         is AgentOperationDialog.Delete -> {
             val confirmation = session.deleteConfirmation(machineName)

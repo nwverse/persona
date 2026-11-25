@@ -130,16 +130,15 @@ class AgentOperationsTest {
         assertEquals(R.string.agents_dialog_rename_text, renameNote(Session("machine", "s", paneId = "w1:p1"), space = false))
     }
 
-    /** Swiping closes where the node says it can (#6294), else in a terminal pane, as before; never while busy or offline. */
-    @Test fun swipingClosesWhereTheNodeSaysItCan() {
+    @Test fun swipingDeletesIdleOrOfflineAgents() {
         val paseo = Session("machine", "paseo", status = "idle", sourceKind = "runtime", agent = "claude",
             capabilities = SessionCapabilities(read = true, send = true, close = true))
-        fun swipe(session: Session, busy: Boolean = false) = closeSwipe(AgentSession(session), busy) {}
+        fun swipe(session: Session, busy: Boolean = false) = deleteSwipe(AgentSession(session), busy) {}
         assertNotNull(swipe(paseo))
         assertNull(swipe(paseo, busy = true))
-        assertNull(swipe(paseo.copy(status = "offline")))
-        assertNull(swipe(paseo.copy(capabilities = paseo.capabilities!!.copy(close = false))))
-        assertNull("an older node says nothing", swipe(paseo.copy(capabilities = SessionCapabilities(read = true, send = true))))
+        assertNotNull(swipe(paseo.copy(status = "offline")))
+        assertNotNull(swipe(paseo.copy(capabilities = paseo.capabilities!!.copy(close = false))))
+        assertNull(swipe(paseo.copy(status = "working")))
         assertNotNull(swipe(Session("machine", "s", status = "idle", paneId = "w1:p1")))
         assertNull(swipe(Session("machine", "s", status = "idle", assistant = true)))
     }

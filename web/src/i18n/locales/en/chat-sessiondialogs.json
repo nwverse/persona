@@ -19,7 +19,7 @@
   "delete_failed": "Couldn't delete: {error}",
   "delete_title": "Delete this chat?",
   "delete": "Delete",
-  "delete_detail": "“{title}” will be removed from the list on every device. The transcript on {machine} stays, and if you continue it with claude --resume on the computer, it comes back.",
+  "delete_detail": "“{title}” will be removed from the list on every device. If the Agent is open on {machine} and can be closed, it will close. The transcript stays and the conversation reappears only when used again.",
   "wt_title": "This agent worked in a worktree Persona made",
   "wt_keep": "Keep the worktree",
   "wt_remove": "Remove it",

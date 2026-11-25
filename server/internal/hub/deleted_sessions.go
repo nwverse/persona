@@ -15,10 +15,10 @@ import (
 )
 
 // Deleting a conversation (issue #801) only takes it out of the apps' lists: the hub notes when (settings
-// sessions.deleted, by "machine/session id") and leaves out of what it sends the apps an offline session that has
+// sessions.deleted, by "machine/conversation id") and leaves out of what it sends the apps an idle session that has
 // not been used since. The transcript stays on its computer; once the session is used again (resumed, a new
 // message) it is listed again. A start that failed (start_error) goes the same way, right away instead of when the
-// node forgets it. A finished one that is still open (idle, seen) goes too. Running sessions and the assistant's
+// node forgets it. A finished one that is still open (idle, seen) is also closed when possible. Running sessions and the assistant's
 // conversations (they archive) cannot be deleted.
 
 const deletedSessionsKey = "sessions.deleted"
@@ -105,7 +105,7 @@ func stillDeleted(s proto.Session, at time.Time) bool {
 
 // sessionHiddenByDeletion applies the same precedence to normal and archived lists.
 func sessionHiddenByDeletion(s proto.Session, deleted map[string]time.Time) bool {
-	at, ok := deleted[s.SessionID]
+	at, ok := deleted[s.ConversationID()]
 	return ok && (s.ArchiveChangedAt == nil || !s.ArchiveChangedAt.After(at)) && stillDeleted(s, at)
 }
 
@@ -140,7 +140,7 @@ var (
 	errDeleteHeld      = i18n.Err("hub-deleted_sessions.held")
 )
 
-// deleteSession is DELETE /api/v1/sessions/{mid}/{sid}: take an offline session out of the apps' lists.
+// deleteSession closes an idle Agent where possible, then takes it out of the apps' lists.
 func (h *Hub) deleteSession(w http.ResponseWriter, r *http.Request, m *Machine) {
 	if principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot delete conversations"))
@@ -150,12 +150,16 @@ func (h *Hub) deleteSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 	s, found := h.decoratedSession(m, id)
 	switch {
 	case !found:
+		if _, deleted := h.deletedAt(m.cfg.ID)[id]; deleted {
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
 		writeErr(w, http.StatusNotFound, errDeleteUnknown)
 		return
 	case s.Assistant:
 		writeErr(w, http.StatusBadRequest, errDeleteAssistant)
 		return
-	case s.Starting || s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked:
+	case !stillDeleted(s, s.UpdatedAt) || s.BackgroundWorking || s.BackgroundWaiting || len(s.Queued) > 0:
 		writeErr(w, http.StatusConflict, errDeleteRunning)
 		return
 	case holdsMessages(s):
@@ -164,7 +168,29 @@ func (h *Hub) deleteSession(w http.ResponseWriter, r *http.Request, m *Machine) 
 		writeErr(w, http.StatusConflict, errDeleteHeld)
 		return
 	}
-	if err := h.noteDeleted(r.Context(), m.cfg.ID, id, time.Now().UTC()); err != nil {
+	if sessionHiddenByDeletion(s, h.deletedAt(m.cfg.ID)) {
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
+	// Do not hide a live Agent if closing it failed or it became busy. An offline
+	// computer needs no RPC to remove its retained history from the lists.
+	at := time.Now().UTC()
+	if m.isOnline() && !s.Archived && (s.Status == proto.StatusIdle || s.Status == proto.StatusDone) {
+		switch {
+		case s.Capabilities != nil && s.Capabilities.Close != nil && *s.Capabilities.Close:
+			if _, ok := h.callNode(w, r, m, "session.close", map[string]any{"session_id": s.SessionID, "only_idle": true}, 30*time.Second, "", nil); !ok {
+				return
+			}
+		case s.SourceKind == "" && s.PaneID != "":
+			if _, ok := h.callNode(w, r, m, "session.retire", map[string]any{"session_id": s.SessionID, "close_terminal": true}, 30*time.Second, "", nil); !ok {
+				return
+			}
+		}
+	}
+	// Complete the write even if the client disconnects after the node closed it.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+	defer cancel()
+	if err := h.noteDeleted(ctx, m.cfg.ID, s.ConversationID(), at); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

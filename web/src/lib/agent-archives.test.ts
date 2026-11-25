@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
-  AGENT_ARCHIVE_CLOSE_FEATURE, AGENT_ARCHIVES_FEATURE, archiveAgent, archiveOffers, closeBusyReason, closeOffer, offerSessionDelete, restoreAgent,
+  AGENT_ARCHIVE_CLOSE_FEATURE, AGENT_ARCHIVES_FEATURE, archiveAgent, archiveOffers, closeBusyReason, closeOffer, restoreAgent,
   type ArchiveDeps, type CloseResult,
 } from "./agent-archives";
 import { t } from "../i18n";
@@ -17,8 +17,6 @@ describe("what the menus offer", () => {
     expect(archiveOffers(open, both)).toEqual({ archive: "ok", close: "ok" });
     expect(archiveOffers(open, [AGENT_ARCHIVES_FEATURE])).toEqual({ archive: "ok", close: "no" }); // an older manager
     expect(archiveOffers(open, [])).toEqual({ archive: "no", close: "no" }); // an older hub: Delete chat stays
-    expect(offerSessionDelete(open, [])).toBe(true);
-    expect(offerSessionDelete(open, both)).toBe(false);
   });
 
   it("never offers the assistant's conversations or one already archived", () => {

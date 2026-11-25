@@ -102,13 +102,15 @@ export function sessionMenuActions(s: Session): string[] {
   ];
 }
 
-// "Delete chat" only takes a conversation out of the list (the hub notes it; the transcript stays) until it is used again:
+// "Delete chat" closes an idle Agent where possible and takes it out of the list until used again. The transcript stays:
 // the statuses the hub keeps out of the lists (hub/deleted_sessions.go stillDeleted), not the assistant's (they archive)
 // and not one still starting (issue #801). Idle (finished and seen) too: it stays hidden until it works again.
 const DELETABLE_STATUSES = new Set(["offline", "done", "idle", "unknown", "interrupted"]);
 
 export function sessionDeletable(s: Session): boolean {
-  return !s.assistant && DELETABLE_STATUSES.has(s.status) && !s.starting;
+  return !s.assistant && !s.archived && DELETABLE_STATUSES.has(s.status) && !s.starting &&
+    !s.pending_interactions && !s.background_working && !s.background_waiting && !s.queued?.length &&
+    !s.undelivered?.some((message) => message.computer);
 }
 
 // docs/protocol/agent-states.md: needs you → unread → awaiting reply (seen, awaiting the user's reply, #5096) → working →

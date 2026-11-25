@@ -97,6 +97,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.CloseAgentMessagePane -> R.string.designsystem_core_close_agent_message_pane
     CoreText.Key.CloseAgentMessageRuntime -> R.string.designsystem_core_close_agent_message_runtime
     CoreText.Key.DeleteSessionTitle -> R.string.designsystem_core_delete_session_title
+    CoreText.Key.DeleteSessionClosesAgent -> R.string.designsystem_core_delete_session_closes_agent
     CoreText.Key.DeleteSessionOnMachineCommand -> R.string.designsystem_core_delete_session_on_machine_command
     CoreText.Key.DeleteSessionOnMachine -> R.string.designsystem_core_delete_session_on_machine
     CoreText.Key.DeleteSessionCommand -> R.string.designsystem_core_delete_session_command

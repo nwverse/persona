@@ -405,7 +405,6 @@ internal fun AgentsScreen(
                     navigator.navigate(ChatRoute(it.machineId, it.sessionId, kind = ConversationKind.Assistant))
                 })
             },
-            onClose = { operationDialog = AgentOperationDialog.Close(row.session) },
             // A Codex app-server thread the phone may join live (iOS "Join live").
             onAttach = if (row.session.canAttach) ({ model.attach(row.session) }) else null,
             onFork = forkAction,
@@ -901,7 +900,7 @@ internal fun AgentsScreen(
                                 depth = slot?.level ?: entry.depth, position = if (slot != null) GroupPosition(true, entry.last) else GroupPosition(entry.first, entry.last),
                                 located = entry.located,
                                 onOpen = { openRow(row) }, menuItems = { rowMenu(row, entry.nested) },
-                                onClose = closeSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Close(row.session) },
+                                onClose = deleteSwipe(row, operations.busy) { operationDialog = AgentOperationDialog.Delete(row.session) },
                                 launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
                                 requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key],
                                 mixesComputers = mixesComputers, showHost = showHost, style = page.preferences.rowStyle,
@@ -1355,7 +1354,7 @@ internal fun SlotRow(
     /** What a long press offers; null: nothing (a computer's projects page lists its agents outside any space as iOS does, with no menu). */
     menuItems: (@Composable () -> List<JAction>)?,
     slotLabel: String? = null, requestCount: Int = 0,
-    /** Swiping the row left offers "Close" (iOS); null where the agent cannot be closed from here ([closeSwipe]). */
+    /** Swiping the row left offers Delete when the Agent can be removed. */
     onClose: (() -> Unit)? = null,
     /** Under its herdr tab (#2320): the tab's launcher, or a pane it split off. */
     launcher: Boolean = false, branch: Boolean = false,
@@ -1395,7 +1394,7 @@ internal fun SlotRow(
             onClick = link?.let { { links.openUri(it) } }, clickLabel = link?.let { stringResource(R.string.agents_source_feishu_open) })
     }
     val rowSideUnread = sideUnread?.toRowSideUnread(onOpenSide)
-    JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_close), PhIcons.X, Status.NeedsYou, it, destructive = true) }) {
+    JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_action_delete_chat), PhIcons.Trash, Status.NeedsYou, it, destructive = true) }) {
     AgentRow(
         title = session.displayTitle, status = row.rowStatus(muted), depth = depth, position = position,
         onClick = onOpen, onLongClick = menuItems?.let { { menu = true } }, compact = compact, muted = muted,
@@ -1536,12 +1535,8 @@ internal fun AgentTabEntryRow(
     )
 }
 
-/**
- * Swiping a row left closes the agent (iOS): only a live agent that closes from here (in a terminal pane, or a runtime's
- * session whose node says so, #6294), while nothing else is being saved.
- */
-internal fun closeSwipe(row: AgentSession, busy: Boolean, close: () -> Unit): (() -> Unit)? =
-    close.takeIf { row.session.isLive && row.session.canClose && !row.session.assistant && !busy }
+internal fun deleteSwipe(row: AgentSession, busy: Boolean, delete: () -> Unit): (() -> Unit)? =
+    delete.takeIf { row.session.canDelete && !busy }
 
 /**
  * The session actions are shared by the home list and the space page. A [nested] row, drawn under its parent's
@@ -1552,7 +1547,7 @@ internal fun closeSwipe(row: AgentSession, busy: Boolean, close: () -> Unit): ((
 internal fun AgentSessionMenuItems(
     row: AgentSession, pinned: Boolean, muted: Boolean, busy: Boolean,
     onOpen: () -> Unit, onPin: () -> Unit, onMute: () -> Unit, onRead: () -> Unit,
-    onRename: () -> Unit, onStopLoop: () -> Unit, onHandoff: () -> Unit, onClose: () -> Unit,
+    onRename: () -> Unit, onStopLoop: () -> Unit, onHandoff: () -> Unit,
     onAttach: (() -> Unit)? = null,
     onFork: (() -> Unit)? = null,
     forkOnline: Boolean = true,
@@ -1601,8 +1596,6 @@ internal fun AgentSessionMenuItems(
         if (takeoverActions.isNotEmpty()) addAll(takeoverActions)
         add(JAction(stringResource(R.string.agents_action_copy_directory), enabled = session.cwd.isNotBlank(), onClick = { copy(session.cwd, null) }))
         add(JAction(stringResource(R.string.agents_action_open_session), onClick = onOpen))
-        // Its pane quits, or a runtime's session ends where its node says it can (#6294).
-        if (session.isLive && session.canClose) add(JAction(stringResource(R.string.agents_action_close_agent), destructive = true, enabled = !busy, onClick = onClose))
         if (session.canDelete && onDelete != null) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !busy, onClick = onDelete))
     }
 }

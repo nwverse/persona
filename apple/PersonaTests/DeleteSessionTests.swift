@@ -31,9 +31,9 @@ struct DeleteSessionTests {
 
     @Test func theConfirmationSaysTheRecordStays() {
         #expect(DeleteSessionText.message(title: "修登录", machine: "工作站", resume: "claude --resume")
-            == "「修登录」会从各端的列表里移除。工作站 上的对话记录不会删除，之后在电脑上用 claude --resume 继续，它会重新出现。")
+            == "「修登录」会从各端的列表里移除。工作站 上的对话记录不会删除，之后在电脑上用 claude --resume 继续，它会重新出现。\n\n如果 Agent 仍处于打开状态且可关闭，它也会关闭。")
         #expect(DeleteSessionText.message(title: "修登录", machine: nil, resume: nil)
-            == "「修登录」会从各端的列表里移除。电脑上的对话记录不会删除，之后再用到它，它会重新出现。")
+            == "「修登录」会从各端的列表里移除。电脑上的对话记录不会删除，之后再用到它，它会重新出现。\n\n如果 Agent 仍处于打开状态且可关闭，它也会关闭。")
     }
 
     @Test func deleteSendsTheSessionsDelete() async throws {

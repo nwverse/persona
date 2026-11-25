@@ -142,6 +142,7 @@ type runtimeCallParams struct {
 	MessageSource  *proto.MessageSource `json:"message_source"`
 	A2AWakeOnSend  bool                 `json:"a2a_wake_on_send"`
 	Force          bool                 `json:"force"`
+	OnlyIdle       bool                 `json:"only_idle"`
 	SessionID      string               `json:"session_id"`
 	Text           string               `json:"text"`
 	Images         []proto.Image        `json:"images"`
@@ -343,6 +344,16 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		}
 		if p.Force && (n.runtimeAssistant(p.SessionID) || n.runtimeStatus(h, p.SessionID) != proto.StatusBlocked) {
 			return nil, refusal("agent_busy", "the Agent is no longer waiting for confirmation", nil), true
+		}
+		if p.OnlyIdle {
+			unlock := n.typing.lock(p.SessionID)
+			defer unlock()
+			switch n.runtimeStatus(h, p.SessionID) {
+			case proto.StatusWorking, proto.StatusBlocked:
+				return nil, refusal("agent_busy", "the Agent is still running", nil), true
+			case proto.StatusOffline:
+				return okResult(nil), nil, true
+			}
 		}
 		closeParams := map[string]any{"session_id": p.SessionID}
 		if p.Force {

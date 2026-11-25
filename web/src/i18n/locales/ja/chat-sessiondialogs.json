@@ -19,7 +19,7 @@
   "delete_failed": "削除できませんでした：{error}",
   "delete_title": "このチャットを削除しますか？",
   "delete": "削除",
-  "delete_detail": "「{title}」はすべてのデバイスの一覧から削除されます。{machine}上の会話記録は残り、コンピューターでclaude --resumeを使って続けると再び表示されます。",
+  "delete_detail": "「{title}」はすべてのデバイスの一覧から削除されます。{machine}でエージェントが開いていて閉じられる場合は閉じます。会話記録は残り、会話を再開したときにだけ再表示されます。",
   "wt_title": "このエージェントは Persona が作った worktree で作業していました",
   "wt_keep": "worktree を残す",
   "wt_remove": "削除する",

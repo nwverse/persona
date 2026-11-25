@@ -3702,9 +3702,6 @@ struct ChatView: View {
             ModuleViews(place: .chatMenu, context: .init(recent: computerActivity?.machine, from: key))
             if let s = session {
                 Button { UIPasteboard.general.string = s.cwd } label: { Label("Copy Directory", systemImage: Theme.Icon.folder) }
-                if s.status.isLive && s.canClose {
-                    Button(role: .destructive) { closing = s } label: { Label("Stop and Close Agent…", systemImage: Theme.Icon.end).lineLimit(1) }
-                }
                 if s.canDelete {
                     Button(role: .destructive) { deleting = s } label: { Label("Delete Chat…", systemImage: Theme.Icon.delete).lineLimit(1) }
                 }
@@ -3796,11 +3793,6 @@ struct ChatView: View {
                 if host == nil, let space = s.spaceKey, let openSpace {
                     Button { openSpace(space) } label: { Label("All Agents in Space", systemImage: Theme.Icon.space) }
                 }
-                if s.status.isLive && s.canClose { // `capabilities.close` where the node says (#6294), else a terminal's
-                    Button(role: .destructive) { closing = s } label: {
-                        Label("Stop and Close Agent…", systemImage: Theme.Icon.end).lineLimit(1)
-                    }
-                }
                 if s.canDelete {
                     Button(role: .destructive) { deleting = s } label: {
                         Label("Delete Chat…", systemImage: Theme.Icon.delete).lineLimit(1)
@@ -3833,7 +3825,6 @@ struct ChatView: View {
             }
         }
         handlers.rename = { renaming = $0 }
-        handlers.close = { closing = $0 }
         handlers.delete = { deleting = $0 }
         handlers.linkTodo = { AgentMenuRouting.shared.linkingSession = $0 }
         handlers.openTodo = { _ in showTodoDetail = true }

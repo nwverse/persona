@@ -126,16 +126,17 @@ class RuntimeSessionActionsShotsTest {
 
             openMenu()
             rule.onNodeWithText("Rename").assertHasClickAction()
-            rule.onNodeWithText("Close agent").assertHasClickAction()
+            rule.onNodeWithText("Delete chat").assertHasClickAction()
+            rule.onNodeWithText("Close agent").assertDoesNotExist()
             // Idle: nothing to interrupt. No terminal: no Terminal and no resume command.
             rule.onNodeWithText("Interrupt").assertHasNoClickAction()
             rule.onAllNodesWithText("Terminal").assertCountEquals(0)
             rule.onAllNodesWithText("Copy resume command").assertCountEquals(0)
             save(rule.onNode(isDialog()).captureToImage().asAndroidBitmap(), "runtime-actions-$look")
 
-            rule.onNodeWithText("Close agent").performClick()
+            rule.onNodeWithText("Delete chat").performClick()
             settle()
-            rule.onNodeWithText("This ends the session on MacBook. Work in progress stops.", substring = true).assertExists()
+            rule.onNodeWithText("will be removed from the list on every device", substring = true).assertExists()
             rule.onAllNodesWithText("terminal", substring = true, ignoreCase = true).assertCountEquals(0)
             save(rule.onNode(isDialog()).captureToImage().asAndroidBitmap(), "runtime-close-$look")
             rule.onNodeWithText("Cancel").performClick()

@@ -65,6 +65,7 @@ data class CoreText(val key: Key, val args: List<Any> = emptyList()) {
         CloseAgentMessagePane("“%1\$s”\n%2\$s\n\nThis quits %4\$s on %3\$s and closes its terminal pane. Work in progress stops; the chat is kept, and you can continue it later from History in Agents."),
         CloseAgentMessageRuntime("“%1\$s”\n%2\$s\n\nThis ends the session on %3\$s. Work in progress stops."),
         DeleteSessionTitle("Delete this chat?"),
+        DeleteSessionClosesAgent("If the Agent is open and can be closed, it will close."),
         DeleteSessionOnMachineCommand("“%1\$s” will be removed from the list on every device. The chat record on %2\$s is not deleted; continue it there with %3\$s and it comes back."),
         DeleteSessionOnMachine("“%1\$s” will be removed from the list on every device. The chat record on %2\$s is not deleted; it comes back when you use it again."),
         DeleteSessionCommand("“%1\$s” will be removed from the list on every device. The chat record on the computer is not deleted; continue it there with %2\$s and it comes back."),

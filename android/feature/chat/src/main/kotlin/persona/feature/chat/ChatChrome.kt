@@ -29,11 +29,9 @@ import persona.core.domain.sort.SessionRename
 import persona.core.domain.sort.SideRollup
 import persona.core.domain.sort.childRollup
 import persona.core.domain.sort.canAttach
-import persona.core.domain.sort.canClose
 import persona.core.domain.sort.canInterrupt
 import persona.core.domain.sort.canRename
 import persona.core.domain.sort.canTerminal
-import persona.core.domain.sort.closeConfirmation
 import persona.core.domain.sort.deleteConfirmation
 import persona.core.domain.sort.isRex
 import persona.core.domain.sort.isTern
@@ -314,10 +312,6 @@ internal fun ChatHeader(
         // The modules' session actions (#13847), after the session's own and before closing it.
         addAll(persona.core.moduleapi.LocalModuleActions.current.actions(persona.core.moduleapi.MenuSlot.SessionActions,
             persona.core.moduleapi.ModuleActionTarget(session?.machineId, session?.sessionId)).asMenuActions { menu = false })
-        // Persona's conversations are not agents in a pane; a session without a terminal closes where its node says it can
-        // (a runtime's, #6294).
-        if (session?.assistant != true && session?.canClose != false)
-            add(JAction(stringResource(R.string.chat_chrome_close_agent), destructive = true, enabled = canAct && session?.isLive == true) { dialog = "close" })
         // Only one that is not running (core:contracts Session.canDelete); the same words as the Agents list's.
         if (session?.canDelete == true) add(JAction(stringResource(R.string.chat_chrome_delete_chat), destructive = true, enabled = canAct) { dialog = "delete" })
     })
@@ -349,20 +343,19 @@ internal fun ChatHeader(
                     JTextField(title, { title = it }, label = stringResource(R.string.chat_chrome_session_name), singleLine = true)
                 }
             })
-        // The same words as the Agents list's long press and swipe (core:domain closeConfirmation).
+        // The same confirmation as the Agents list's long press and swipe.
         // Keep or remove the worktree Persona made for it, when it worked in one (#4532); removed once it is gone.
-        "close", "delete" -> session?.let { target ->
-            val closing = dialog == "close"
-            val confirmation = if (closing) target.closeConfirmation(machine?.displayName) else target.deleteConfirmation(machine?.displayName)
+        "delete" -> session?.let { target ->
+            val confirmation = target.deleteConfirmation(machine?.displayName)
             val service = remember(worktrees) { worktrees?.invoke() }
             val rawMachine = persona.core.contracts.GroupKeys.raw(target.machineId)
             val worktree = rememberOurWorktree(service, rawMachine, target.cwd, machine?.online == true, target.worktreeKind)
             var cleanup by remember(target.key) { mutableStateOf(WorktreeCleanup()) }
             val res = androidx.compose.ui.platform.LocalResources.current
             JDialog(onDismiss = { dialog = null }, title = confirmation.title.text(), text = confirmation.message.text(),
-                confirm = stringResource(if (closing) R.string.chat_chrome_close_agent else R.string.chat_chrome_delete) to {
+                confirm = stringResource(R.string.chat_chrome_delete) to {
                     dialog = null
-                    state.run(target, if (closing) ChatAction.Close else ChatAction.Delete) { done -> if (done && service != null && worktree != null)
+                    state.run(target, ChatAction.Delete) { done -> if (done && service != null && worktree != null)
                         WorktreeCleanups.cleanUp(service, rawMachine, worktree, cleanup, feedback, res, target.worktreeKind) }
                 }, destructive = true, confirmEnabled = canAct && WorktreeCleanups.ready(worktree, cleanup),
                 content = worktree?.let { st -> { WorktreeCleanupSection(st, cleanup, { cleanup = it }, machine?.home) } })

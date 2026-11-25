@@ -452,6 +452,15 @@ func (s *Session) SetEngineHistory(legs []EngineLeg) {
 	s.setHierarchy(h)
 }
 
+// ConversationID stays the same when a conversation moves between listings.
+// Antigravity pane rows advertise the conversation's ID as their first alias.
+func (s Session) ConversationID() string {
+	if aliases := s.Aliases(); s.Agent == "agy" && s.PaneID != "" && len(aliases) > 0 {
+		return aliases[0]
+	}
+	return s.SessionID
+}
+
 // Aliases are the other session ids the row's conversation is known by on its machine (SessionHierarchy.Aliases);
 // nil when none. Shared with the row's other copies: not to be changed.
 func (s *Session) Aliases() []string {
