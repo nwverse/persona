@@ -35,10 +35,12 @@ import (
 // Antigravity shared ACP exit cleanup (#15756) and always-allow permission choices (#15785) bring the total to 265,686 B.
 // Antigravity permission mode persistence across companion restarts and resume re-application (#15807) add 273 B (265,959 B).
 // Antigravity agent-mode MCP proxy budgeting for non-assistant leader and worker catalogs (#15822) adds 253 B (266,212 B).
-// Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings (#15546), 2,112 B; the merged total is 268,324 B.
+// Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
+// Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
+// Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings (#15546), 2,112 B; the merged total is 268,373 B.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 268_324
+	const budget = 268_373
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

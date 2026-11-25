@@ -366,6 +366,25 @@ channel and exact final offset; duplicate, stale and unknown-channel confirmatio
 RFB keeps its existing completion rule in every combination: the local close finishes the channel and session at the
 next watchdog tick without waiting for `close_ack`.
 
+## Counts view (`counts_view`, #15893)
+
+A manager that names the capability `counts_view` tells the hub its counts view (`counts.view`); the hub relays it to
+clients that ask for the feature as `counts` messages, lists the feature always, and says `counts_view: true` on the
+roster entry of each online manager that tells one ([counts.md](counts.md) "The hub's relay"). A client draws a
+surface from views only while no manager in its scope is absent, and keeps a manager's last view across `view: null`,
+going offline and a hub restart (D10 and D13 of `docs/plans/plan-derived-counts.md`).
+
+| Pair | What it sees |
+| --- | --- |
+| Old app, new hub | It never asks for the feature, so it gets no `counts` message, and it ignores the roster's unknown `counts_view`. Its numbers are its own, as before |
+| New app, old hub | The hello lists no `counts_view`: every surface draws the app's fallback, today's rule |
+| New app and hub, a manager without the capability | Its roster entry is online without `counts_view`: the surfaces whose scope holds it draw the fallback |
+| New manager, old hub | The hub drops `counts.view`, an event it does not know |
+| Manager restarts or is redeployed | `view: null`, then a view with a new epoch; meanwhile the app draws its last view as it was, and no rule changes |
+| Hub restarts or switches versions | The new hub has no view until each manager connects again and tells its last one; an app keeps the views it has, and one with none draws the fallback until then |
+| Manager or hub rolled back | The hello lists no `counts_view`, or the reconnected manager's entry has no `counts_view: true`: the fallback from that message on |
+| Several paired hubs | Each hub on its own; the app adds them up |
+
 ## Apple 端交接
 
 原生协议兼容跟踪 #6192；本地状态与系统身份跟踪 #6152。Apple 的实现应遵循上述能力和字节约定；本清单不替它们宣称 Keychain、Intent、偏好、Shortcut、旧 controls、活动或 watch 在途数据已经验证。
