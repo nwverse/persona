@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
-import { packageHash } from '../../runtime-sdk/lib/package.js'
+import { installCurrent, packageHash } from '../../runtime-sdk/lib/package.js'
 import { createPiHost, herdrPaneOf, piWebOf } from '../lib/pi.js'
 
 /** A pi session manager over entries (file order); the branch runs from the leaf back through parentId. */
@@ -785,6 +785,44 @@ test('a newer offer invalidates an older pi lock retry', async (t) => {
   await new Promise((r) => setTimeout(r, 160))
   assert.equal(readlinkSync(join(dir, 'current')), newer.hash, 'the older timed retry cannot roll current back')
   assert.equal(n.packageCalls.length, 2)
+})
+
+test('a rollback hello keeps a stale pi retry from installing while reconnecting', async (t) => {
+  const dir = store(t)
+  const logs = []
+  const n = await startFakeNode(t)
+  const running = offerOf('rollback-A')
+  const offered = offerOf('rollback-B')
+  installCurrent(dir, running.hash, running.files.map((file) => ({ path: file.path, data: Buffer.from(file.data, 'base64') })))
+  n.offer = offered
+  const lock = join(dir, '.install.lock')
+  mkdirSync(lock)
+  writeFileSync(join(lock, `${process.pid}-0000000000000000`), '')
+  const host = createPiHost({ SessionManager: { listAll: async () => [], open: () => sessionManager('x', '/') }, web: { port: 1, host: '127.0.0.1' }, log: (msg) => logs.push(msg) },
+    { socketPath: n.path, retryMs: 100, listDisk: true, update: { name: PKG, hash: running.hash, store: dir } })
+  t.after(() => {
+    rmSync(lock, { recursive: true, force: true })
+    return host.stop()
+  })
+  host.start()
+  await until('the stale offer is waiting on the lock', () => logs.some((msg) => msg.includes('store is busy')))
+  const hellos = n.hellos
+  let answerHello
+  n.holdHello = new Promise((resolve) => { answerHello = resolve })
+  t.after(() => { answerHello(); n.holdHello = undefined })
+  n.offer = running
+  rmSync(lock, { recursive: true, force: true })
+  n.peer.close(new Error('node rollback'))
+  await until('the rollback hello is negotiating', () => n.hellos > hellos)
+  await new Promise((resolve) => setTimeout(resolve, 160))
+  assert.equal(readlinkSync(join(dir, 'current')), running.hash, 'the cached package cannot install before the replacement hello')
+  n.hello = undefined
+  answerHello()
+  n.holdHello = undefined
+  await until('the rollback hello completed', () => n.hello?.package?.hash === running.hash)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(readlinkSync(join(dir, 'current')), running.hash)
+  assert.equal(n.packageCalls.length, 1)
 })
 
 test('stopping during a package fetch does not install or schedule another retry', async (t) => {

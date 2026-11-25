@@ -315,11 +315,20 @@ test('a completed hello without an offer cancels the stale lock retry', async (t
   runtime.start()
   await until('the stale offer is waiting on the lock', () => logs.some((msg) => msg.includes('store is busy')))
   const hellos = node.hellos
-  node.offer = running // The node rolled back to A, so the next hello carries no update offer.
-  node.peer.close(new Error('node rollback'))
-  await until('the rollback hello completed', () => node.hellos > hellos)
+  let answerHello
+  node.holdHello = new Promise((resolve) => { answerHello = resolve })
+  t.after(() => { answerHello(); node.holdHello = undefined })
+  node.offer = running // The replacement node rolled back to A, but its hello is still negotiating.
   rmSync(lock, { recursive: true, force: true })
+  node.peer.close(new Error('node rollback'))
+  await until('the rollback hello is negotiating', () => node.hellos > hellos)
   await new Promise((resolve) => setTimeout(resolve, 160))
+  assert.equal(readlinkSync(join(store, 'current')), running.hash, 'a stale retry cannot publish B while disconnected or negotiating hello')
+  node.hello = undefined
+  answerHello()
+  node.holdHello = undefined
+  await until('the rollback hello completed', () => node.hello?.package?.hash === running.hash)
+  await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(readlinkSync(join(store, 'current')), running.hash, 'the completed hello invalidates B instead of publishing it later')
   assert.equal(node.packageCalls.length, 1)
 })

@@ -84,6 +84,7 @@ export function createPiHost(deps, options = {}) {
   let idleTimer
   let updateRetry
   let updateRetryHash = ''
+  let updateOfferHash = ''
   const settleMs = options.interruptSettleMs ?? INTERRUPT_SETTLE
   // pi-web: the sessions a browser has open (its event streams), as its debug snapshot said last; undefined: not known.
   let browsers = { at: 0, open: undefined, asking: undefined }
@@ -117,7 +118,7 @@ export function createPiHost(deps, options = {}) {
     log,
     connect: deps.connect,
     instance: options.instance ?? (options.instancePrefix ? `${instancePrefix}-${pid}` : undefined),
-    ...(update ? { package: { name: update.name, hash: update.hash }, onHello: () => clearUpdateRetry(), onUpdate: (offer) => void takeUpdate(offer) } : {}),
+    ...(update ? { package: { name: update.name, hash: update.hash }, onHello: helloUpdate, onUpdate: (offer) => void takeUpdate(offer) } : {}),
     retryMs: options.retryMs,
     pushDelayMs: options.pushDelayMs,
     // Listing sessions only on disk is safe only where the runtime running a session answers for it.
@@ -653,6 +654,16 @@ export function createPiHost(deps, options = {}) {
     return ![...live.values()].some((s) => s.running) && !rt.busy()
   }
 
+  function helloUpdate(res) {
+    const offer = res?.update
+    updateOfferHash = offer?.name === update.name && typeof offer.hash === 'string' && offer.hash !== update.hash ? offer.hash : ''
+    clearUpdateRetry()
+  }
+
+  function currentUpdate(offer) {
+    return !retired && started && rt.ready && offer?.hash === updateOfferHash
+  }
+
   function clearUpdateRetry() {
     clearTimeout(updateRetry)
     updateRetry = undefined
@@ -660,7 +671,7 @@ export function createPiHost(deps, options = {}) {
   }
 
   function retryUpdate(offer, pkg) {
-    if (retired || !started) return
+    if (!currentUpdate(offer)) return
     clearTimeout(updateRetry)
     updateRetryHash = offer.hash
     updateRetry = setTimeout(() => takeUpdate(offer, pkg), options.retryMs ?? 1000)
@@ -669,22 +680,29 @@ export function createPiHost(deps, options = {}) {
 
   async function takeUpdate(offer, pkg) {
     if (offer?.hash !== updateRetryHash) clearUpdateRetry()
-    if (!update || installing || retired || !started || offer?.name !== update.name || offer.hash === update.hash || bad.has(offer.hash)) return
+    if (!currentUpdate(offer) || offer.name !== update.name || offer.hash === update.hash || bad.has(offer.hash)) return
+    if (installing) {
+      retryUpdate(offer, pkg)
+      return
+    }
     installing = true
     try {
       if (!pkg) {
         let fetched
         try {
           fetched = await rt.fetchPackage(update.name)
+          if (!currentUpdate(offer)) return
         } catch (err) {
-          log(`persona: ${update.name} package fetch failed: ${err.message}; retrying`)
-          retryUpdate(offer)
+          if (currentUpdate(offer)) {
+            log(`persona: ${update.name} package fetch failed: ${err.message}; retrying`)
+            retryUpdate(offer)
+          }
           return
         }
         pkg = verifyPackage(fetched, update.name)
       }
       const { hash, files } = pkg
-      if (retired || !started || hash === update.hash || bad.has(hash)) return
+      if (!currentUpdate(offer) || hash === update.hash || bad.has(hash)) return
       installCurrent(update.store, hash, files, { keep: [update.hash] })
       log(`persona: ${update.name} ${hash.slice(0, 12)} from the node is installed (running ${update.hash.slice(0, 12)})`)
       clearUpdateRetry()
@@ -699,6 +717,7 @@ export function createPiHost(deps, options = {}) {
       idleTimer.unref?.()
       maybeReload()
     } catch (err) {
+      if (!currentUpdate(offer)) return
       if (err.code === 'ERR_RUNTIME_STORE_BUSY') {
         retryUpdate(offer, pkg)
         log(`persona: ${update.name} update store is busy; retrying ${offer.hash.slice(0, 12)}`)
