@@ -84,8 +84,8 @@ nonisolated enum TodoRowAnswersLogic {
     /// (with a recommendation among its options) and Options; a failed start's retry, Retry and Options. A run's asks
     /// (questions, plans, tools, forms, secrets), open decisions and an ask without a risk (an older manager's, read as
     /// open) offer none: the row's tap opens the to-do, where the ask is. `mark`: what this device did with it.
-    static func answers(_ view: TodoSummary?, section: String, closed: Bool, mark: TodoAnswerMark?) -> TodoRowAnswers? {
-        guard let view, !closed, [TodoListSection.needsYou, TodoListSection.canWait].contains(section),
+    static func answers(_ view: TodoSummary?, section: TodoListSection, closed: Bool, mark: TodoAnswerMark?) -> TodoRowAnswers? {
+        guard let view, !closed, [TodoListSection.needsYou, .canWait].contains(section),
               let ask = view.asks?.first else { return nil }
         var out = TodoRowAnswers(ask: ask, mark: mark)
         let safe = ask.risk == OwnerAskRisk.safe

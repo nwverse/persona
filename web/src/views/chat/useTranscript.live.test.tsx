@@ -96,8 +96,10 @@ describe("an agent's live text", () => {
     await delta("");
     expect(tr.streaming).toBe("Closing words.");
     expect(tr.streamEnded).toBe(true);
+    expect(tr.streamEndedThrough).toBe(5);
     items([said(6, "Closing words.")], 5);
     expect(tr.streaming).toBe("");
+    expect(tr.streamEndedThrough).toBeUndefined();
     expect(tr.items.at(-1)?.text).toBe("Closing words.");
   });
 
@@ -193,6 +195,28 @@ describe("the assistant's live text", () => {
     await delta("Writing the reply");
     await act(() => tr.loadEarlier());
     expect(tr.streaming).toBe("Writing the reply");
+  });
+
+  it("keeps a preview with a late echo until the next input really arrives", async () => {
+    items([said(6, "The prior turn has an answer.")], 5);
+    await delta("The turn is answering.");
+    items([{ ...prompt, id: "u7#0", seq: 7 }], 6);
+    expect(tr.streaming).toBe("The turn is answering.");
+    items([{ ...prompt, id: "u7#1", seq: 8, kind: "image" }], 7);
+    expect(tr.streaming).toBe("The turn is answering.");
+    await delta("");
+    expect(tr.streamEndedThrough).toBe(8);
+    items([{ ...prompt, id: "u9", seq: 9, kind: "image" }], 8);
+    expect(tr.streaming).toBe("");
+    expect(tr.streamEndedThrough).toBeUndefined();
+  });
+
+  it("drops an already bound reply before an old end marker can attach to the next input", async () => {
+    await delta("The reply to the already echoed input.");
+    items([{ ...prompt, id: "u6", seq: 6 }], 5);
+    await delta("");
+    expect(tr.streaming).toBe("");
+    expect(tr.streamEndedThrough).toBeUndefined();
   });
 });
 

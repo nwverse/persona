@@ -629,6 +629,10 @@ func messagesThinkingDisabledUnsupported(model string) bool {
 	return false
 }
 
+// DisabledThinking is the Messages API's thinking object that turns thinking off. It is built here, with the rest of
+// the providers' request formats, so callers that force it (the model probe) send the same bytes.
+func DisabledThinking() map[string]any { return map[string]any{"type": "disabled"} }
+
 // ApplyReasoningEffort keeps connection probes and runtime calls on the same wire format.
 // False means this protocol cannot express the requested effort; Chat and Responses validate model-specific levels upstream.
 func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
@@ -657,7 +661,7 @@ func ApplyReasoningEffort(body map[string]any, api, model, effort string) bool {
 			case messagesThinkingDisabledUnsupported(model):
 				body["output_config"] = map[string]any{"effort": "low"}
 			default:
-				body["thinking"] = map[string]any{"type": "disabled"}
+				body["thinking"] = DisabledThinking()
 			}
 		case "low", "medium", "high", "xhigh", "max":
 			body["output_config"] = map[string]any{"effort": effort}
