@@ -346,7 +346,7 @@ const MORE_BUTTON = "whitespace-nowrap rounded-[7px] px-2 py-1 text-left text-[1
 const NO_CONVERSATIONS: Session[] = [];
 type DirectionEntry = { id: string; conversation?: Session; external?: ExternalDirection };
 
-export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions }) {
+export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions, active = true }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions; active?: boolean }) {
   const bindings = useBindings();
   const searchHint = jumpHint(bindings);
   const assistant = useStore((s) => s.assistant);
@@ -359,7 +359,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
     [assistant?.conversations, liveChats, manager],
   );
   const { phase, online, total, main: mainConversation, sections, more } = useNavPages();
-  const mainWaiting = useMainWaiting(mainConversation);
+  const mainWaiting = useMainWaiting(active ? mainConversation : undefined);
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
@@ -389,7 +389,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const directionNames = useDirectionNames(leaders.map((id) => `${id}\u0000${conversationOf(id)?.title ?? ""}`).join("\u0001"));
   const baseCounts = useLeaderCounts();
   const plans = useFeed((s) => s.plans);
-  useEffect(() => { if (assistant?.main) void loadFeed(assistant.main); }, [assistant?.main, manager]);
+  useEffect(() => { if (active && assistant?.main) void loadFeed(assistant.main); }, [active, assistant?.main, manager]);
   const counts = useMemo(() => {
     const owned = new Set((assistant?.conversations ?? []).map((c) => c.session_id));
     if (assistant?.main) owned.add(assistant.main);
@@ -545,8 +545,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
         <PersonalAgents reg={reg} hover={hover} activeKey={activeKey} go={go} />
 
-        {workBrowserReady ? <PendingAgents route={route} reg={reg} hover={hover} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} />
-          : !(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} workspaceActions={workspaceActions} foldable onHoldsSeen={setHoldsSeen} />}
+        {active && (workBrowserReady ? <PendingAgents route={route} reg={reg} hover={hover} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} />
+          : !(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} workspaceActions={workspaceActions} foldable onHoldsSeen={setHoldsSeen} />)}
         {!workBrowserReady && <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon="clock" />}
       </div>
       <SeenRowsNoticeHost shown={holdsSeen} onNavigate={onNavigate} />
@@ -1128,9 +1128,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     return sidebarMachines.filter((m) => own.has(m.id));
   }, [ownIds, sidebarMachines]);
   const structuralOrder = useMemo(() => machineSessionOrder(machines), [machines]);
-  const { sessions: every, loaded, error: listError } = useFullAgentSessions();
-  const summaryAgents = useAgentSessions();
   const pagedTransport = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
+  // the whole block folds under its title in the sidebar (#2524); the phone's Agents page is the block, it doesn't
+  // and opens by itself when ⌘K puts words on the list, so what was asked for is in view (#6589)
+  const [blockFolded, toggleBlock] = useFolded("agents", false, { all: false, holds: dimFilters.query.trim() !== "" });
+  const folded = foldable && blockFolded;
+  const { sessions: every, loaded, error: listError } = useFullAgentSessions(!folded || !pagedTransport);
+  const summaryAgents = useAgentSessions();
   const allLaunches = useStore((s) => s.launches);
   const launches = useMemo(() => Object.values(allLaunches).filter((launch) => launch.phase !== "ready"), [allLaunches]);
   // A session whose launch is still actively starting/sending is already listed under "Starting": keep it out of the
@@ -1144,8 +1148,9 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [launches]);
   const [agents, previewAgents] = useMemo(() => {
     const visible = (rows: Session[]) => rows.filter((s) => isSidebarAgent(s) && (!inFlightLaunchKeys.size || !inFlightLaunchKeys.has(`${s.machine_id}\u0000${s.session_id}`)));
-    return [visible(every), pagedTransport ? visible(summaryAgents) : []];
-  }, [every, summaryAgents, pagedTransport, inFlightLaunchKeys]);
+    const primary = folded && pagedTransport && !every.length ? summaryAgents : every;
+    return [visible(primary), pagedTransport ? visible(summaryAgents) : []];
+  }, [every, summaryAgents, pagedTransport, folded, inFlightLaunchKeys]);
   const all = useScoped(agents);
   const previewAll = useScoped(previewAgents);
   const mutes = useStore((s) => s.mutes);
@@ -1343,10 +1348,6 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const [idleFolded, toggleIdle] = useFolded("idle-spaces", true, { scope: AGENTS_FOLD });
   const [pinnedFolded, togglePinned] = useFolded("agents-pinned", false, { holds: holdsRow(pinnedAgents, activeKey), scope: AGENTS_FOLD });
   const [launchesFolded, toggleLaunches] = useFolded("agents-launching", false, { holds: launches.some((l) => activeKey === `s:${l.machineId}/${l.id}`), scope: AGENTS_FOLD });
-  // the whole block folds under its title in the sidebar (#2524); the phone's Agents page is the block, it doesn't
-  // and opens by itself when ⌘K puts words on the list, so what was asked for is in view (#6589)
-  const [blockFolded, toggleBlock] = useFolded("agents", false, { all: false, holds: dimFilters.query.trim() !== "" });
-  const folded = foldable && blockFolded;
   const [showAllRecent, setShowAllRecent] = useState(false);
   const recentShown = showAllRecent ? recent : firstAndCurrent(recent, 8, (s) => rowKey(s) === activeKey);
   const recentState = worstTreeState(recent.map(agentTreeState));

@@ -361,15 +361,136 @@ describe("CloseAgentDialog with controlled data and callbacks", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     expectNoDefaultSingletons();
   });
+
+  it("skips worktree cleanup when archive?close=1 leaves the agent still open, but cleans up when closed or not_running", async () => {
+    const onCleanupWorktree = vi.fn().mockResolvedValue(undefined);
+    const onNotice = vi.fn();
+    for (const close of [
+      { closed: false, outcome: "refused", reason: "agent busy" },
+      { closed: false, outcome: "failed", detail: "process error" },
+      { closed: false, outcome: "offline" },
+    ]) {
+      onClose.mockClear();
+      onCleanupWorktree.mockClear();
+      const archive = vi.fn().mockResolvedValue({ ok: true, close });
+      await mount({
+        liveSession: idleSession,
+        features: archiveFeatures,
+        worktree: cleanWorktree,
+        onClosed,
+        onArchiveClose: archive,
+        onCleanupWorktree,
+        onNotice,
+      });
+      if (removeRadio()?.getAttribute("aria-checked") !== "true") await act(async () => removeRadio()!.click());
+      await act(async () => dialogButton(t("close-agent.archive_close"))!.click());
+      await flush();
+
+      expect(archive).toHaveBeenCalledWith(idleSession);
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onCleanupWorktree).not.toHaveBeenCalled();
+    }
+
+    for (const close of [
+      { closed: true, outcome: "closed" },
+      { closed: false, outcome: "not_running" },
+    ]) {
+      onClose.mockClear();
+      onCleanupWorktree.mockClear();
+      const archive = vi.fn().mockResolvedValue({ ok: true, close });
+      await mount({
+        liveSession: idleSession,
+        features: archiveFeatures,
+        worktree: cleanWorktree,
+        onClosed,
+        onArchiveClose: archive,
+        onCleanupWorktree,
+        onNotice,
+      });
+      await act(async () => dialogButton(t("close-agent.archive_close"))!.click());
+      await flush();
+
+      expect(archive).toHaveBeenCalledWith(idleSession);
+      expect(onCleanupWorktree).toHaveBeenCalledWith(cleanWorktree, { remove: true, deleteBranch: false, confirmed: false });
+    }
+    expectNoDefaultSingletons();
+  });
 });
 
 describe("CloseAgentDialog default compatibility", () => {
-  it("uses the default store, worktree hook, archiveAgent and runCleanup when optional props are omitted", async () => {
+  it("closes off-page and archived-but-open sessions not present in the store, while still dismissing a live session that vanished", async () => {
+    mocks.getState.mockReturnValue({ features: [...archiveFeatures] });
+    mocks.useStore.mockImplementation(<T,>(selector: (state: { features: readonly string[] }) => T) => selector({ features: [...archiveFeatures] }));
+    mocks.getSession.mockReturnValue(undefined);
+    mocks.archiveAgent.mockResolvedValue({ ok: true, close: { closed: true, outcome: "closed" } });
+    mocks.api.mockResolvedValue({});
+
+    // Off-page / filtered / grouped agent never in store: confirming archives & closes using the opened snapshot.
+    await mount();
+    await act(async () => dialogButton(t("close-agent.archive_close"))!.click());
+    await flush();
+    expect(mocks.archiveAgent).toHaveBeenCalledWith(idleSession, true, appArchiveDeps);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Archived-but-still-open agent dropped from store: confirming sends plain POST .../close.
+    onClose.mockClear();
+    mocks.archiveAgent.mockClear();
+    const archivedOpen: Session = { ...idleSession, session_id: "archived-open", archived: true };
+    await mount({ session: archivedOpen });
+    await act(async () => dialogButton(t("close-agent.close_agent"))!.click());
+    await flush();
+    expect(mocks.api).toHaveBeenCalledWith("/sessions/example-machine/archived-open/close", { method: "POST" });
+    expect(mocks.archiveAgent).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Live session present in store when opened, then vanishes before confirm: still dismisses without acting.
+    onClose.mockClear();
+    mocks.api.mockClear();
+    mocks.archiveAgent.mockClear();
+    const vanishing: Session = { ...idleSession, session_id: "vanishing-session" };
+    mocks.getSession.mockReturnValue(vanishing);
+    await mount({ session: vanishing });
+    mocks.getSession.mockReturnValue(undefined);
+    await act(async () => dialogButton(t("close-agent.archive_close"))!.click());
+    await flush();
+    expect(mocks.archiveAgent).not.toHaveBeenCalled();
+    expect(mocks.api).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Reopening the same dialog (same machine_id/session_id, open: true -> false -> true) after the session left
+    // the store clears stale `hadLive` so closing the off-page/archived snapshot still works.
+    onClose.mockClear();
+    await mount({ open: false, session: vanishing });
+    await mount({ open: true, session: { ...vanishing, archived: true } });
+    await act(async () => dialogButton(t("close-agent.close_agent"))!.click());
+    await flush();
+    expect(mocks.api).toHaveBeenCalledWith("/sessions/example-machine/vanishing-session/close", { method: "POST" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed on default archiveAgent when close outcome is omitted (archived_close_unknown)", async () => {
     mocks.getSession.mockReturnValue(idleSession);
     mocks.getState.mockReturnValue({ features: [...archiveFeatures] });
     mocks.useStore.mockImplementation(<T,>(selector: (state: { features: readonly string[] }) => T) => selector({ features: [...archiveFeatures] }));
     mocks.useAgentWorktree.mockReturnValue(cleanWorktree);
     mocks.archiveAgent.mockResolvedValue({ ok: true });
+
+    await mount();
+    await act(async () => removeRadio()!.click());
+    await act(async () => dialogButton(t("close-agent.archive_close"))!.click());
+    await flush();
+
+    expect(mocks.archiveAgent).toHaveBeenCalledWith(idleSession, true, appArchiveDeps);
+    expect(mocks.runCleanup).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the default store, worktree hook, archiveAgent and runCleanup when optional props are omitted", async () => {
+    mocks.getSession.mockReturnValue(idleSession);
+    mocks.getState.mockReturnValue({ features: [...archiveFeatures] });
+    mocks.useStore.mockImplementation(<T,>(selector: (state: { features: readonly string[] }) => T) => selector({ features: [...archiveFeatures] }));
+    mocks.useAgentWorktree.mockReturnValue(cleanWorktree);
+    mocks.archiveAgent.mockResolvedValue({ ok: true, close: { closed: true, outcome: "closed" } });
 
     await mount();
     await act(async () => removeRadio()!.click());

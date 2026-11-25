@@ -608,3 +608,69 @@ func TestPushGradingEffectiveCacheInvalidateNeverReturnsZeroConfig(t *testing.T)
 	default:
 	}
 }
+
+type panickingGradingStore struct {
+	settingsStore
+	panicVal any
+}
+
+func (s *panickingGradingStore) Settings(context.Context, ...string) (map[string]json.RawMessage, error) {
+	panic(s.panicVal)
+}
+
+func TestPushGradingEffectiveCachePanicUnwindsWithoutSwallowingOrDeadlocking(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		healthyStore := newGradingCacheStore()
+		prepareGradingCacheStore(t, healthyStore)
+		cache := newPushGradingEffectiveCache(time.Minute)
+
+		loadCtx, cancel := context.WithCancel(ctx)
+		load := &pushGradingLoad{
+			done:   make(chan struct{}),
+			cancel: cancel,
+			gen:    cache.gen,
+		}
+		cache.mu.Lock()
+		cache.loading = load
+		cache.mu.Unlock()
+
+		const waiters = 2
+		waiterErrs := make(chan error, waiters)
+		for range waiters {
+			go func() {
+				_, err := cache.effective(ctx, healthyStore, "manager-a")
+				waiterErrs <- err
+			}()
+		}
+		synctest.Wait()
+
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			cache.runLoad(load, loadCtx, &panickingGradingStore{panicVal: "simulated store panic"})
+		}()
+		if recovered != "simulated store panic" {
+			t.Fatalf("runLoad recovered = %v, want panic to propagate", recovered)
+		}
+		if !errors.Is(loadCtx.Err(), context.Canceled) {
+			t.Fatalf("loadCtx.Err() = %v, want context.Canceled", loadCtx.Err())
+		}
+		for range waiters {
+			if err := <-waiterErrs; err == nil {
+				t.Fatal("waiter error = nil, want non-nil aborted load error")
+			}
+		}
+
+		got, err := cache.effective(ctx, healthyStore, "manager-a")
+		if err != nil {
+			t.Fatalf("subsequent effective after panic unwind = %v", err)
+		}
+		if !got.Enabled || got.Actions.P1 != "push" || got.Actions.P2 != "push" {
+			t.Fatalf("subsequent effective = %+v, want healthy cached config", got)
+		}
+		if calls, _ := healthyStore.stats(); calls != 1 {
+			t.Fatalf("healthyStore calls = %d, want 1", calls)
+		}
+	})
+}
