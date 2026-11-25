@@ -27,4 +27,9 @@ echo "RECEIVER_MUTATION_DETECTED=1"
 '
 ci_run 'Production browser bundle' 600 bash -c 'cd web && npm run build'
 ci_run 'Chrome settings native fetch smoke' 180 node web/e2e/native-fetch-settings.mjs /tmp/persona-fetch-settings-chrome
-ci_run 'Retain Chrome evidence' 60 bash -c 'mkdir -p ops/evidence/native-fetch-settings; cp /tmp/persona-fetch-settings-chrome/result.json ops/evidence/native-fetch-settings/; cp /tmp/persona-fetch-settings-chrome/settings-*.png ops/evidence/native-fetch-settings/; cp receiver-mutation.log ops/evidence/native-fetch-settings/'
+ci_run 'Retain Chrome evidence' 60 python3 - <<'PYCODE'
+import base64
+from pathlib import Path
+for name in ["result.json", "settings-light.png", "settings-dark.png"]:
+    print("CHROME_ARTIFACT " + name + " " + base64.b64encode((Path("/tmp/persona-fetch-settings-chrome") / name).read_bytes()).decode())
+PYCODE
