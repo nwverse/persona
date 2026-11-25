@@ -571,6 +571,12 @@ on-demand model panel, not the everyday Assistant home (#6887).
 - User bubble: trailing, radius 20, padding 16 x 12, `ChatBox.user` fill in the unified layout, otherwise the theme's bubble gradient (`apple/Persona/DesignSystem/QuoteViews.swift:295-345`, `apple/Persona/Views/Chat/MessageViews.swift:151`).
 - Assistant text: unboxed in Agents chats; boxed in `ChatBox.persona` in Assistant chats. Streaming text re-parses only the tail.
 - Quotes sit above the words and jump to the original on tap.
+- Web inline references (#15410) help people reading their own messages in Assistant and Agents. A picked reference
+  keeps its composer label and 14 px semantic icon in the prose. The label uses accent ink strengthened for the
+  bubble's fill, with a subtle tint on hover or while open. Each reference is a focusable button that announces
+  whether it is expanded. It opens the existing context detail card under the bubble, including its links. One card
+  opens per bubble. A second activation closes it and picking another reference switches the card. Other contexts
+  stay in the existing collapsed Context row above the bubble. Older messages use that row for every context.
 - Your own long message folds (#5676; iOS `BubbleFold`, web `BubbleText`): past 14 lines as drawn it shows 10, the last
   line fading, with Show More / Show Less (展开 / 收起, 展開 / 折りたたむ). iOS puts it inside the bubble at its bottom, in
   the bubble's link color (`FoldToggle`), folds past 9 lines to 5 at the accessibility text sizes, opens a folded bubble
@@ -4444,3 +4450,20 @@ sheet), labels in `--ink` on every fill.
 Development: `MOCK_USAGE_MAP=1 python3 scripts/mock/mock_hub.py` serves a 93 % full Mac Studio, two folder levels that
 measure for a moment first, and one neutral offload provider; `-tab settings -openMachines YES -openUsageMap studio`
 (or `reclaim:studio`) opens the map at launch in Debug builds.
+
+## Avatar from an image: optional entries and card corners (#15449)
+
+- **Optional entries one level down**: the New from Photo sheet (iOS `AvatarCropView`) keeps its default path (picture,
+  name, Upload) and adds, only with a hub that lists `look_uploads_states`, two `NavigationLink` rows under the fields,
+  each a `LabeledContent` saying what it is set to: **Theme Color** (a round swatch, `Theme.AvatarSheet.swatch` with a
+  `swatchEdge` ring, and Automatic / Custom / Not set) and **Pictures for Each State** (Automatic / Custom). Reason:
+  principle 2; the sheet stays what it was for everyone who only wants a picture and a name.
+- **A row that is a menu**: each state's row in Pictures for Each State is one `Menu` whose label is the row (its
+  preview at `Theme.AvatarSheet.preview`, the state's name, Automatic or Your Picture, and `Theme.Icon.more` in the
+  accent), read by VoiceOver as one button with the state's value. An own picture's mark is a `Toggle` row right under
+  it, saying what the mark is. Previews play frames through `PersonaFramesView` (Core Animation), still with Reduce
+  Motion and in Low Power Mode.
+- **Card corners**: an uploaded avatar's card has Delete in its top trailing corner and, with that hub, Edit (a pencil)
+  in its top leading corner: the same round `chromeSurface` button, the whole 44 pt corner answering
+  (`tapTargetFrame`), and the same action named for VoiceOver (**Edit Avatar**, **Delete Avatar**). Never a context
+  menu: the grid is one Form row (`docs/apple/persona.md` "Uploading an image").

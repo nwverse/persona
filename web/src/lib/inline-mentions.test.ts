@@ -6,6 +6,7 @@ import {
 import { inlineBody, inlineReferences, readInlineBody } from "./inline-message";
 import type { ContextRef } from "./links";
 import { skillContext, splitSkillDraft } from "./skill-mentions";
+import { parseUserText } from "./turns";
 
 const skill = skillContext({ id: "personal-review", name: "Review", source: "user · ~/.skills", description: "Review & check" });
 const projectSkill = skillContext({ id: "project-review", name: "Review", source: "project · ./skills" });
@@ -63,6 +64,13 @@ describe("inline mention message bodies", () => {
     expect(split.skills.map(contextXML)).toEqual([file, skill].map(contextXML));
     expect(readInlineBody(split.text, [skill]).document).toEqual(["Check @docs/notes & plans.md with ", skill]);
     expect(readInlineBody("Use Review and @docs/notes & plans.md", [skill, file]).used.size).toBe(0);
+  });
+
+  it("keeps plain prose when an anchor trailer is malformed or truncated", () => {
+    const text = "Use Review.";
+    const body = `${text}\n\n<!-- persona-inline-v1 [[invalid]] -->`;
+    expect(readInlineBody(body, [skill])).toEqual({ text, document: [text], used: new Set() });
+    expect(parseUserText(body.slice(0, -8)).text).toBe(text);
   });
 
   it("rebinds references after session-link spelling changes and the workspace body is enriched", () => {

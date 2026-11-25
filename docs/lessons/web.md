@@ -1,5 +1,10 @@
 # Lessons: web UI and interactions
 
+## A text shimmer needs an opaque source color (#15367)
+
+Setting `color: transparent` also clears any gradient stop that reads `currentColor`.
+Use a transparent glyph fill for the animated gradient and check the painted text in a browser.
+
 ## Closed-task links keep native navigation and the app base (#6819)
 
 Build closed-task banner links with the router's `href` and handle clicks with `onLinkClick`. Plain clicks stay

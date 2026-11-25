@@ -563,7 +563,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			params["images"] = todoProtoImages(rows)
 		}
 	}
-	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, s.tabName(ctx, t.Title)
+	params["cwd"], params["prompt"], params["tab_name"] = t.Cwd, prompt, localTabName(t.Title)
 	if t.WaitInputID != "" {
 		params["client_msg_id"] = t.WaitInputID
 	}
@@ -712,6 +712,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 					if found {
 						t.startedAgent = cmp.Or(session.Agent, fit.snapshot)
 						noteDeferredStart(session)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, session, params["tab_name"].(string), t.Title))
 						return m.ID, session.SessionID, nil
 					}
 				}
@@ -724,6 +725,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 				s.logf("task %s: start answered late on %s; adopted session %s from the machine's own list", t.TodoID, m.ID, sess.SessionID)
 				t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
 				noteDeferredStart(sess)
+				s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 				return m.ID, sess.SessionID, nil
 			}
 			// Nothing found, and the link took the answer (it closed, or the machine is not reachable now): the
@@ -738,6 +740,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 						s.logf("task %s: start's link dropped; adopted session %s on %s after it reconnected", t.TodoID, sess.SessionID, m.ID)
 						t.startedAgent = cmp.Or(sess.Agent, fit.snapshot)
 						noteDeferredStart(sess)
+						s.nameAgentTabLater(agentTabNameStart(m.ID, sess, params["tab_name"].(string), t.Title))
 						return m.ID, sess.SessionID, nil
 					}
 				}
@@ -795,6 +798,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}
 	t.startedAgent = cmp.Or(res.Session.Agent, fit.snapshot)
 	noteDeferredStart(res.Session)
+	s.nameAgentTabLater(agentTabNameStart(m.ID, res.Session, params["tab_name"].(string), t.Title))
 	return m.ID, res.Session.SessionID, nil
 }
 
