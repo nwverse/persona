@@ -103,6 +103,7 @@ import { mainConversationData } from '../core/DefaultConversation';
 import { AssistantDetailPage } from '../components/AssistantDetailPage';
 import { tr, trError } from '../design/Strings';
 import { isHubStateKey } from '../core/StorageOwnership';
+import { formatSharedDraftText } from '../core/XiaoYiRoutes';
 
 interface ChatActionEntry extends SheetInfo {
   identity?: string;
@@ -1033,6 +1034,7 @@ struct Index {
     this.navigationRestoredScope = scope;
     if (this.meetingServices.pendingOpen && this.model.ready) { this.consumeMeetingReminder(); return; }
     if (this.model.projectsRequested && this.model.ready) { this.consumeProjectLaunch(); return; }
+    if (this.model.pendingXiaoYiRoute && this.model.ready) { this.consumeXiaoYiRoute(); return; }
     if (intent !== this.navigationIntent) this.savePath();
     if (this.model.section === 2 && !this.stack.size()) this.openResources('inbox');
     else if (this.model.section === 3 && !this.stack.size()) this.openSettingsRoot();
@@ -1042,6 +1044,65 @@ struct Index {
   }
   @Monitor('model.pairingLink') pairingChanged(): void { this.consumePairingLink(); }
   @Monitor('model.notificationTarget') notificationChanged(): void { this.consumeNotification(); }
+  @Monitor('model.pendingXiaoYiRoute', 'model.ready') xiaoYiRouteChanged(): void { this.consumeXiaoYiRoute(); }
+  private consumeXiaoYiRoute(): void {
+    if (!this.model.pendingXiaoYiRoute || !this.model.ready) return;
+    const raw = this.model.pendingXiaoYiRoute;
+    const parsed = Wire.parse(raw);
+    const dest = Wire.text(parsed, 'dest');
+    if (!dest) { this.model.pendingXiaoYiRoute = ''; return; }
+    if (dest !== 'settings_xiaoyi' && (!this.model.profile.id || this.navigationRestoredScope !== this.model.scope())) return;
+    this.model.pendingXiaoYiRoute = '';
+    this.spacesShown = false;
+    this.phoneSettingsShown = false;
+    if (dest === 'assistant') {
+      this.openSpace('persona');
+      return;
+    }
+    if (dest === 'agents') {
+      this.openSpace('agents');
+      return;
+    }
+    if (dest === 'session') {
+      const machine = Wire.text(parsed, 'machine'), session = Wire.text(parsed, 'session');
+      const profile = Wire.text(parsed, 'profile') || this.model.profile.id;
+      const manager = Wire.text(parsed, 'manager') || this.model.profile.manager;
+      if (profile && machine && session) {
+        this.model.openNotification(Wire.payload(['profile', 'manager', 'machine', 'session'], [profile, manager, machine, session])).catch(() => {});
+      }
+      return;
+    }
+    if (dest === 'todos') { this.openSpace('todo'); return; }
+    if (dest === 'knowledge') { this.openSpace('knowledge'); return; }
+    if (dest === 'health') { this.openSpace('health'); return; }
+    if (dest === 'inbox') { this.openSpace('inbox'); return; }
+    if (dest === 'recording') { this.openSpace('recordings'); return; }
+    if (dest === 'dictate') { this.openSpace('persona'); this.newConversation(); return; }
+    if (dest === 'settings_xiaoyi') {
+      if (!this.wide()) {
+        this.phoneSettingsQuery = '';
+        this.phoneSettingsTrail = pushPhoneSetting([], 'phone_xiaoyi');
+        this.phoneSettingsShown = true;
+      } else {
+        this.openSettings('phone_xiaoyi');
+      }
+      return;
+    }
+    if (dest === 'share') {
+      const sharedText = formatSharedDraftText(Wire.text(parsed, 'title'), Wire.text(parsed, 'text'), Wire.text(parsed, 'url'));
+      this.openSpace('persona');
+      if (sharedText) {
+        const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration();
+        this.openMain().then(() => {
+          if (this.model === owner && owner.owns(generation, scope)) {
+            const current = owner.draft.trim();
+            const next = !current ? sharedText : current.includes(sharedText) ? owner.draft : current + '\n\n' + sharedText;
+            owner.updateDraft(next);
+          }
+        }).catch(() => {});
+      }
+    }
+  }
   private consumeNotification(): void {
     if (!this.model.notificationTarget) return;
     const row = this.routeRow(this.model.notificationTarget); this.model.notificationTarget = '';

@@ -88,6 +88,11 @@ export class ClientModel {
   @Trace projectsRequested: boolean = false;
   @Trace pairingLink: string = '';
   @Trace notificationTarget: string = '';
+  @Trace pendingXiaoYiRoute: string = '';
+  openXiaoYiRoute(routeJson: string): void {
+    if (!routeJson || routeJson.length > 16384) return;
+    this.pendingXiaoYiRoute = routeJson;
+  }
   @Trace forgottenProfile: string = '';
   @Trace forgottenEpoch: number = 0;
   @Trace busy: boolean = false;
@@ -801,7 +806,7 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.draftLoading = false; this.features = []; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.error = '';
     }
     this.publishDirectory();
     try { await this.saveCleanup(); } catch (_) { this.error = 'cleanup_incomplete'; throw new Error('cleanup_incomplete'); }

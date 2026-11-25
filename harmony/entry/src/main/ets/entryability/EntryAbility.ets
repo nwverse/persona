@@ -2,6 +2,7 @@ import { phoneTextSize } from '../platform/PhoneTextSizePreference';
 import { nativeMeetingServices } from '../platform/NativeMeetingServices';
 import { phonePasswordLogin } from '../platform/PhonePasswordLogin';
 import { isPairingLink } from '../core/WireCompatibility';
+import { parseXiaoYiWant } from '../core/XiaoYiRoutes';
 import { deviceFeatures } from '../models/DeviceFeatures';
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
@@ -19,6 +20,7 @@ export default class EntryAbility extends UIAbility {
   private lifecycle: number = 0;
   private visible: boolean = true;
   private pendingNotification: Record<string, Object> | undefined;
+  private pendingXiaoYiRoute: string = '';
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     phoneTextSize.attach(this.context);
     nativeEnvironment.update(this.context.config);
@@ -31,19 +33,26 @@ export default class EntryAbility extends UIAbility {
       this.context.getApplicationContext().setColorMode(client.appearance === 1 ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT :
         client.appearance === 2 ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
       this.dispatchNotification();
+      this.dispatchXiaoYiRoute();
     }).catch(() => { client.error = 'failed'; client.ready = true; });
   }
   private receiveWant(want: Want): void {
-    nativeMeetingServices.receive(Wire.record(want.parameters));
+    const params = Wire.record(want.parameters);
+    nativeMeetingServices.receive(params);
     const uri = want.uri || '';
     if (phonePasswordLogin.receive(uri)) return;
-    if (uri.length <= 16384 && isPairingLink(uri)) client.pairingLink = uri;
-    else if (!uri && want.action !== NOTIFICATION_ACTION && want.parameters?.['personaPage'] === 'projects') client.projectsRequested = true;
+    if (uri.length <= 16384 && isPairingLink(uri)) { client.pairingLink = uri; return; }
+    if (want.action !== NOTIFICATION_ACTION) {
+      const route = parseXiaoYiWant(uri, params);
+      if (route) { this.pendingXiaoYiRoute = JSON.stringify(route); return; }
+      if (!uri && params['personaPage'] === 'projects') client.projectsRequested = true;
+    }
   }
   onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     nativeEnvironment.update(this.context.config);
     this.receiveWant(want);
     if (want.action === NOTIFICATION_ACTION) { this.pendingNotification = Wire.record(want.parameters); this.dispatchNotification(); }
+    this.dispatchXiaoYiRoute();
   }
   onConfigurationUpdate(_configuration: Configuration): void {
     phoneTextSize.refresh(_configuration.fontSizeScale || 0);
@@ -54,6 +63,11 @@ export default class EntryAbility extends UIAbility {
     if (!this.visible || !client.ready || !this.pendingNotification) return;
     const target = this.pendingNotification; this.pendingNotification = undefined;
     client.openNotification(target).catch(() => {});
+  }
+  private dispatchXiaoYiRoute(): void {
+    if (!this.visible || !client.ready || !this.pendingXiaoYiRoute) return;
+    const route = this.pendingXiaoYiRoute; this.pendingXiaoYiRoute = '';
+    client.openXiaoYiRoute(route);
   }
   onWindowStageCreate(stage: window.WindowStage): void {
     nativeEnvironment.bindWindow(stage.getMainWindowSync());
@@ -71,9 +85,9 @@ export default class EntryAbility extends UIAbility {
     nativeNotifications.refresh().then(async (): Promise<void> => {
       if (!this.visible || epoch !== this.lifecycle) return;
       await client.foregrounded();
-      if (this.visible && epoch === this.lifecycle) this.dispatchNotification();
+      if (this.visible && epoch === this.lifecycle) { this.dispatchNotification(); this.dispatchXiaoYiRoute(); }
     }).catch(() => { if (this.visible && epoch === this.lifecycle) client.error = 'failed'; });
     deviceFeatures.foreground().catch(() => {});
   }
-  onDestroy(): void { phoneTextSize.detach(); nativeEnvironment.foreground = false; NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
+  onDestroy(): void { phoneTextSize.detach(); nativeEnvironment.foreground = false; NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; this.pendingXiaoYiRoute = ''; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
 }
