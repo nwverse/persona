@@ -22,15 +22,21 @@ def shot(name):
     capture_screenshot(str(shots / f"{name}.png"))
 
 
+def type_draft(text):
+    js("document.querySelector('[data-composer-input]').focus()")
+    press_key("Control+a")
+    cdp("Input.insertText", text=text)
+
+
 new_tab("http://127.0.0.1:25358/persona/new")
 wait_for_load()
-js("localStorage.setItem('persona.token','mock'); localStorage.setItem('persona.language','en'); location.reload()")
-wait_for_element("textarea", timeout=15)
+js("localStorage.setItem('persona.token','mock'); localStorage.setItem('persona.language','en'); localStorage.removeItem('draft:persona-new'); location.reload()")
+wait_for_element("[data-composer-input]", timeout=15)
 print(page_info())
 print(js("Array.from(document.querySelectorAll('textarea')).map(e=>({placeholder:e.placeholder,disabled:e.disabled}))"))
 cdp("Emulation.setDeviceMetricsOverride", width=1365, height=900, deviceScaleFactor=1, mobile=False)
 js("document.documentElement.classList.remove('dark')")
-fill_input("textarea", "@review")
+type_draft("@review")
 time.sleep(.4)
 rows = js("Array.from(document.querySelectorAll('[role=option]')).map(e=>({text:e.textContent,selected:e.getAttribute('aria-selected')}))")
 print("Rendered duplicate sources:", rows)
@@ -47,46 +53,51 @@ js("document.documentElement.classList.remove('dark')")
 shot("narrow-light-menu")
 js("document.documentElement.classList.add('dark')")
 assert js("document.documentElement.scrollWidth <= innerWidth")
-# Keyboard select first, then verify a real emulated touch can remove it.
+# Select the highlighted source and remove the token in a single edit.
 press_key("Enter")
-fill_input("textarea", "Check the example")
+wait_for_element("[data-inline-mention]", timeout=10)
+cdp("Input.insertText", text="Check the example")
 time.sleep(.4)
 assert js("localStorage.getItem('draft:persona-new').includes('fixture-user')")
 shot("narrow-selected")
 js("document.documentElement.classList.remove('dark')")
 shot("narrow-light-selected")
 js("document.documentElement.classList.add('dark')")
-node = next(n for n in cdp("Accessibility.getFullAXTree")["nodes"]
-            if n.get("role", {}).get("value") == "button" and n.get("name", {}).get("value") == "Remove this context")
-q = cdp("DOM.getBoxModel", backendNodeId=node["backendDOMNodeId"])["model"]["content"]
-x, y = sum(q[0::2]) / 4, sum(q[1::2]) / 4
-assert max(q[0::2]) - min(q[0::2]) >= 44
-assert max(q[1::2]) - min(q[1::2]) >= 44
-cdp("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": x, "y": y}])
-cdp("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
-assert not js("document.body.innerText.includes('review · user · ~/example/skills')")
+assert js("document.querySelector('[data-inline-mention]').title") == "user · ~/example/skills"
+js("""(() => {
+  const token = document.querySelector('[data-inline-mention]');
+  token.parentElement.focus();
+  const range = document.createRange();
+  range.setStartAfter(token);
+  range.collapse(true);
+  const selection = getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+})()""")
+press_key("Backspace")
+assert not js("Boolean(document.querySelector('[data-inline-mention]'))")
 state("loading")
-fill_input("textarea", "@security")
+type_draft("@security")
 time.sleep(.1)
 print("Loading:", js("Array.from(document.querySelectorAll('[role=status]')).map(e=>e.textContent)"))
 shot("narrow-loading")
 time.sleep(2)
 press_key("Escape")
-fill_input("textarea", "Ordinary chat")
+type_draft("Ordinary chat")
 state("error")
-fill_input("textarea", "@review")
+type_draft("@review")
 time.sleep(.4)
 print("Failure:", js("Array.from(document.querySelectorAll('[role=status]')).map(e=>e.textContent)"))
 shot("narrow-error")
 assert js("document.body.innerText.includes('Skills unavailable here')")
 press_key("Escape")
-fill_input("textarea", "Plain chat remains usable")
-assert not js("document.querySelector('textarea').disabled")
+type_draft("Plain chat remains usable")
+assert js("document.querySelector('[data-composer-input]').isContentEditable")
 state("partial")
-fill_input("textarea", "@security")
+type_draft("@security")
 time.sleep(.4)
 js("document.documentElement.classList.remove('dark')")
 shot("narrow-light-partial")
 print("Partial:", js("Array.from(document.querySelectorAll('[role=status]')).map(e=>e.textContent)"))
 assert js("document.body.innerText.includes('Verified local skills only')")
-print("PASS rendered keyboard selection, persisted identity, 44px touch removal, light/dark, narrow large text, loading/failure/partial and ordinary input")
+print("PASS rendered keyboard selection, persisted identity, atomic removal, light/dark, narrow large text, loading/failure/partial and ordinary input")
