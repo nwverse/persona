@@ -19,13 +19,24 @@ import { InboxForwardSetting } from "../settings/InboxForwardSetting";
 // The relationship view and its layout are a chunk of their own, loaded when it is first shown.
 const SourcesGraphView = lazyPage(() => import("./SourcesGraph").then((m) => m.SourcesGraphView));
 
-/** `onGraph`: the relationship view is shown or not (the page around it widens for it). */
-export function SourcesUI({ title, state, onGraph }: { title: string; state?: string; onGraph?: (shown: boolean) => void }) {
+/** `onGraph`: the relationship view is shown or not (the page around it widens for it).
+ *  `initialView`: defaults to `"list"` for legacy Settings › Inbox Sources; `"graph"` opens directly on SourcesGraph. */
+export function SourcesUI({
+  title,
+  state,
+  onGraph,
+  initialView = "list",
+}: {
+  title: string;
+  state?: string;
+  onGraph?: (shown: boolean) => void;
+  initialView?: "list" | "graph";
+}) {
   const name = usePersona().name;
   const context = useMemo(() => ({ assistant: name }), [name]);
   // A page opened on one source or extension keeps to it: no switch there.
   const offered = useInboxSourcesGraphShown() && !state;
-  const [graph, setGraph] = useState(false);
+  const [graph, setGraph] = useState(initialView === "graph");
   const [opened, setOpened] = useState<string | null>(null);
   const [depth, setDepth] = useState(1);
   // Leaving (another Settings tab) gives the page its usual width back.
@@ -33,7 +44,10 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
   useEffect(() => {
     reported.current = onGraph;
   });
-  useEffect(() => () => reported.current?.(false), []);
+  useEffect(() => {
+    if (offered && initialView === "graph") reported.current?.(true);
+    return () => reported.current?.(false);
+  }, [offered, initialView]);
   const show = (on: boolean, page: string | null = null) => {
     setGraph(on);
     setOpened(page);
@@ -78,6 +92,7 @@ export function SourcesUI({ title, state, onGraph }: { title: string; state?: st
           <Suspense fallback={<Loading />}>
             <SourcesGraphView assistant={name} onOpen={(page) => show(true, page)} onAsk={askAssistant} />
           </Suspense>
+          <InboxForwardSetting />
         </>
       ) : (
         <>

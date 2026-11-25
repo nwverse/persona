@@ -24,9 +24,6 @@ func (s *Service) memoryEntrySrc() memoryEntrySource {
 	if s.memoryEntries != nil {
 		return s.memoryEntries
 	}
-	if s.store == nil {
-		return nil
-	}
 	st, _ := s.store().(memoryEntrySource)
 	return st
 }
@@ -136,11 +133,11 @@ func (s *Service) memoryEntryUses(ctx context.Context, entries []proto.Assistant
 }
 
 // The memory extension's entries are the assembler's second source, after the ledger's (#13532). The extension keeps
-// them in its own state; from its version 0.2.0-beta.41 each carries the space it was first said in (origin_space,
-// the slug, "" for the main space) and its categories (categories). Nothing on main hands them to the manager as
-// entries yet: the extension delivers rendered text (its instructions, project_context and inbox_context files, and
-// its own enkeep_recall tool), filtered by its own rules. memoryExtensionEntries is where a source plugs in, and
-// memoryExtensionUses the rules it is held to.
+// them in its own state and answers them through memory.entries once it declares memory_sources (#13586): each
+// carries the space it was first said in (origin_space, the slug, "" for the main space) and its categories
+// (categories). The extensions' manager reads them (memory_extension_source.go, the source Service.memoryExtension is
+// set to) and stops delivering that extension's text outlets directly; memoryExtensionUses is the rules they are held
+// to.
 
 // memoryExtensionIDPrefix starts the id of every entry of the memory extension as the assembler carries it, so a
 // to-do's brief tells them from the ledger's.
@@ -155,9 +152,11 @@ type memoryExtensionEntry struct {
 	// Categories are the names in categories (health, finance, relationships, emotion, legal_id); none: general.
 	Categories []string
 	Tags       []string
+	// Facet is the extension's grouping, used only by explicit recall queries.
+	Facet string
 	// Standing is the extension's standing flag: it kept the entry in every conversation (always in context). Only
-	// a standing entry is meant for a standing channel; the others come in by relevance (their subjects or text) in
-	// a recall, a hand-off or the Inbox. The gate itself comes with the change that wires a source in.
+	// a standing entry goes to a standing channel (memoryExtensionBatch.standingOnly); the others come in by relevance
+	// (their subjects or text) in a recall, a hand-off or the Inbox.
 	Standing bool
 }
 
@@ -168,6 +167,21 @@ type memoryExtensionEntry struct {
 type memoryExtensionBatch struct {
 	Entries []memoryExtensionEntry
 	Tagged  bool
+	// Names are the names of the extensions whose entries these are, for the Inbox's background block.
+	Names []string
+	// StandingBytes is the standing budget the extension stated (standing_bytes, the largest of its pages and of the
+	// sources); 0: none stated.
+	StandingBytes int
+}
+
+// standingBudget is the bytes of b's standing entries a standing channel carries (#15312): what the extension stated,
+// at most memoryExtensionStandingMost, else memoryExtensionStandingDefault. It is the extension's own, never spent by
+// the ledger's entries.
+func (b memoryExtensionBatch) standingBudget() int {
+	if b.StandingBytes <= 0 {
+		return memoryExtensionStandingDefault
+	}
+	return min(b.StandingBytes, memoryExtensionStandingMost)
 }
 
 // memoryExtensionSource hands the assembler the memory extension's entries: personal says the receiver may see what
@@ -225,7 +239,7 @@ func (s *Service) memoryExtensionUses(ctx context.Context, tagged bool) func(pro
 }
 
 // memorySources are the assembler's sources together, oldest first: the memory extension's entries, then the
-// ledger's, so a budget taken newest first goes to the ledger first. Each entry is seen by its own source's rules.
+// ledger's. Each entry is seen by its own source's rules and spends its own source's budget (assembleEntries).
 func (s *Service) memorySources(ctx context.Context, ledger []proto.AssistantEntry, ext memoryExtensionBatch) ([]proto.AssistantEntry, func(proto.AssistantEntry) infoUse) {
 	extEntries := ext.assistantEntries()
 	if len(extEntries) == 0 {

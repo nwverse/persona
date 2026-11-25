@@ -125,6 +125,8 @@ struct InteractionPreviewCard: View {
     var inCell = false
     /// Under its session's first card in the Agents list (`AgentsNeedsYou`), a card does not repeat the session's place.
     var showsPlace = true
+    /// Optional promoted herdr tab name override when `use_herdr_tab_name` is on (#13899).
+    var sessionTitleOverride: String? = nil
     var open: () -> Void
 
     var body: some View {
@@ -136,7 +138,7 @@ struct InteractionPreviewCard: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.heading).lineLimit(2) // a row title may wrap; the buttons below never do
                     if showsPlace {
-                        Text(interaction.placeLine(machine: machine))
+                        Text(interaction.placeLine(machine: machine, sessionTitleOverride: sessionTitleOverride))
                             .font(Theme.Font.label)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -207,6 +209,15 @@ struct InteractionPreviewCard: View {
     private var summary: String { interaction.askLine(includeToolName: true) ?? "" }
 
     @ViewBuilder private var quickActions: some View {
+        // A card its task's supervisor holds is not the user's to answer: no buttons, a line saying who has it.
+        if !interaction.answerableHere {
+            SupervisorHeldNote(compact: true).modifier(UnderTitle())
+        } else {
+            quickAnswers
+        }
+    }
+
+    @ViewBuilder private var quickAnswers: some View {
         switch interaction.kind {
         case .question:
             if let qs = interaction.questions, qs.count == 1, let q = qs.first, !q.multiSelect, q.options.count <= 4 {
@@ -254,6 +265,36 @@ struct InteractionPreviewCard: View {
         default:
             EmptyView()
         }
+    }
+}
+
+/// What a card its task's supervisor holds shows in place of its answers (`Interaction.supervisorHeld`): the supervisor
+/// has it, and it reaches the user only once the supervisor passes it up. Read-only: nothing here answers it.
+/// `compact`: the title line alone, under a list's card.
+struct SupervisorHeldNote: View {
+    var compact = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            ThemedIcon(Theme.Icon.view)
+                .font(Theme.Font.captionStrong)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text("Supervisor is handling this")
+                    .font(Theme.Font.captionStrong)
+                if !compact {
+                    Text("This went to its task's supervisor first. It comes to you only if the supervisor passes it up.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(compact ? Theme.Space.s : Theme.Space.m)
+        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("interaction.supervisor-held")
     }
 }
 
@@ -471,7 +512,7 @@ struct InteractionPanel: View {
                     .foregroundStyle(StatusPalette.needsYou.dot)
                 Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
                     .lineLimit(1)
-                VoiceAskMark(interaction: interaction) // Asking by Voice (docs/assistant/voice.md 1.2 H)
+                AppModel.shared.voice?.askMark(interaction) // Asking by Voice (the voice module) (docs/assistant/voice.md 1.2 H)
                 if collapsed {
                     Text(previewText).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
                         .layoutPriority(-1)
@@ -608,6 +649,15 @@ struct InteractionPanel: View {
     }
 
     @ViewBuilder private var form: some View {
+        // A card its task's supervisor holds (`Interaction.supervisorHeld`): no form to answer it, a line saying who has it.
+        if !interaction.answerableHere {
+            SupervisorHeldNote()
+        } else {
+            answerForm
+        }
+    }
+
+    @ViewBuilder private var answerForm: some View {
         switch interaction.kind {
         case .question: QuestionForm(interaction: interaction)
         case .plan: PlanForm(interaction: interaction, showFull: $showFullPlan)
@@ -2812,8 +2862,8 @@ struct SessionlessCardSheet: View {
 extension Interaction {
     /// The line under a card's title in a list: its session's title; a sessionless card says where it comes from, and
     /// Script when its title does not already name who asks (`personad ask` labels its cards Script, docs/integrations/script-cli.md).
-    func placeLine(machine: String?) -> String {
-        if let under = foldedUnder, !under.isEmpty, under != sessionID {
+    func placeLine(machine: String?, sessionTitleOverride: String? = nil) -> String {
+        if requestHomeKey != sessionKey {
             let title = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             // A side session's card says so (#7944), in the words its parent's chat uses.
             if foldedAs == SideFold.side || foldedSide != nil, !title.isEmpty {
@@ -2823,7 +2873,7 @@ extension Interaction {
             return String(localized: "From subagent · \(name)")
         }
         let mark = (agentLabelHint ?? "").isEmpty ? String(localized: "Script") : nil
-        let parts: [String?] = isSessionless ? [mark, sessionlessPlace, machine] : [sessionTitle, machine]
+        let parts: [String?] = isSessionless ? [mark, sessionlessPlace, machine] : [sessionTitleOverride ?? sessionTitle, machine]
         return parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }

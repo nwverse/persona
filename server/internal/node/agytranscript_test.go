@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 func TestAgyPaneTranscriptMapping(t *testing.T) {
@@ -176,6 +177,61 @@ func TestAgyToolArrayArgsAreClipped(t *testing.T) {
 	}
 	if _, small := agyTool("view_file", json.RawMessage(`[1,2]`)); string(small) != `[1,2]` {
 		t.Fatalf("small array changed: %s", small)
+	}
+}
+
+func TestAgyToolInput(t *testing.T) {
+	const path = "/example/file.go"
+	const content = "line1\nline2\nline3\n"
+	encode := func(value string) string {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	written := func(path, content string) map[string]string {
+		return map[string]string{"TargetFile": path, "CodeContent": content}
+	}
+	wantWrite := func(path, content string) map[string]string {
+		return map[string]string{"file_path": path, "content": content}
+	}
+	for _, tc := range []struct {
+		name, tool, wantTool string
+		args, want           map[string]string
+		truncated            bool
+	}{
+		{"encoded write", "write_to_file", "Write", written(encode(path), encode(content)), wantWrite(path, content), false},
+		{"plain quoted query", "grep_search", "Grep", map[string]string{"Query": `"exact phrase"`, "SearchPath": "/example"},
+			map[string]string{"pattern": `"exact phrase"`, "path": "/example"}, false},
+		{"plain JSON file", "write_to_file", "Write", written("/example/file.json", `"hello"`), wantWrite("/example/file.json", `"hello"`), false},
+		{"encoded tail cut", "write_to_file", "Write", written(encode(path), "\"line1\\nline2\\nli\n<truncated 41 bytes>"),
+			wantWrite(path, "line1\nline2\nli"+transcript.ApproximateClipNote(55)), true},
+		{"middle cut", "write_to_file", "Write", written(path, "HEAD-PART\n<truncated 40 bytes>\nTAIL-PART"),
+			wantWrite(path, "HEAD-PART"+transcript.ClipNote(58)), true},
+		{"encoded middle cut", "write_to_file", "Write", written(encode(path), "\"head\\n\n<truncated 10 bytes>\ntail\""),
+			wantWrite(path, "head\n"+transcript.ApproximateClipNote(20)), true},
+		{"tail cut after dangling backslash", "write_to_file", "Write", written(encode(path), "\"line1\\n\\\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n"+transcript.ApproximateClipNote(14)), true},
+		{"tail cut inside Unicode escape", "write_to_file", "Write", written(encode(path), "\"line1\\n\\u00\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n"+transcript.ApproximateClipNote(14)), true},
+		{"tail cut after escaped backslash", "write_to_file", "Write", written(encode(path), "\"line1\\n\\\\\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n\\"+transcript.ApproximateClipNote(15)), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := json.Marshal(tc.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool, input := agyToolInput(tc.tool, raw, tc.truncated)
+			if tool != tc.wantTool || string(input) != string(want) {
+				t.Fatalf("tool input = %s %s, want %s %s", tool, input, tc.wantTool, want)
+			}
+		})
 	}
 }
 
@@ -380,5 +436,70 @@ func TestAgyInterruptedErrorNoteIsDropped(t *testing.T) {
 	}
 	if len(uses) != 2 || results[uses[0]] != "" || results[uses[1]] != "file body" {
 		t.Fatalf("tool call pairing after interrupt = uses:%v results:%v", uses, results)
+	}
+}
+
+func TestAgyToolOutputStripsTimestampHeadersWithoutAlteringPlainText(t *testing.T) {
+	const receipt = `{"level":"triage","summary":"All checks quiet.","visibility":"silent"}`
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{
+			"duplicate_rfc3339_pairs_mcp_json",
+			"Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n" + receipt,
+			receipt,
+		},
+		{
+			"single_rfc3339_pair_crlf_fractional",
+			"Created At: 2026-11-23T09:10:40.25Z\r\nCompleted At: 2026-11-23T09:10:44.50Z\r\n" + receipt,
+			receipt,
+		},
+		{
+			"rfc3339_pair_with_immediate_output_marker",
+			"Created At: 2026-11-23T09:10:40Z\nCompleted At: 2026-11-23T09:10:44Z\nOutput:\ntotal 0\n",
+			"total 0\n",
+		},
+		{
+			"rfc3339_pair_preserves_later_output_marker_in_body",
+			"Created At: 2026-11-23T09:10:40Z\nCompleted At: 2026-11-23T09:10:44Z\nShowing lines 1-3\nOutput:\nkeep me",
+			"Showing lines 1-3\nOutput:\nkeep me",
+		},
+		{
+			"legacy_created_at_output",
+			"Created At: 2026-11-01\nOutput:\nsample.txt\n",
+			"sample.txt\n",
+		},
+		{
+			"plain_text_date_only_untouched",
+			"Created At: 2026-11-23\nCompleted At: 2026-11-23\nHello",
+			"Created At: 2026-11-23\nCompleted At: 2026-11-23\nHello",
+		},
+		{
+			"plain_text_single_created_at_untouched",
+			"Created At: 2026-11-23T16:10:40+08:00\nTitle: Notes",
+			"Created At: 2026-11-23T16:10:40+08:00\nTitle: Notes",
+		},
+		{
+			"non_leading_timestamps_untouched",
+			"Prefix\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nBody",
+			"Prefix\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nBody",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agyToolOutput(tc.input); got != tc.want {
+				t.Fatalf("agyToolOutput(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+
+	const fixture = `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-11-23T08:10:39Z","content":"Supervision check"}
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-11-23T08:10:40Z","tool_calls":[{"name":"mcp_persona_supervision_finish","args":{"visibility":"silent","summary":"All checks quiet."}}]}
+{"step_index":2,"type":"GENERIC","source":"MODEL","status":"DONE","created_at":"2026-11-23T08:10:44Z","content":"Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n{\"level\":\"triage\",\"summary\":\"All checks quiet.\",\"visibility\":\"silent\"}"}
+{"step_index":3,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-11-23T08:10:45Z","content":"OK"}
+`
+	steps, _ := parseAgySteps([]byte(fixture), agyTestID)
+	history := mapAgySteps(steps, time.Time{}, nil)
+	if len(history.items) != 4 || history.items[2].Kind != "tool_result" || history.items[2].Text != receipt {
+		t.Fatalf("mapped items = %+v, want stripped receipt %q", history.items, receipt)
 	}
 }

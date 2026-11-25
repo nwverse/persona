@@ -203,6 +203,16 @@ struct AssistantModelChoiceTests {
         #expect(AssistantModelChoice.followsDefault(isMain: false, supervisor: false, leader: true, origin: nil))
         #expect(AssistantModelChoice.followsDefault(isMain: false, supervisor: false, leader: false, origin: "task"))
         #expect(!AssistantModelChoice.followsDefault(isMain: false, supervisor: false, leader: false, origin: "manual"))
+        #expect(AssistantModelChoice.defaultRule(isMain: true, supervisor: false, leader: false, origin: nil) == .main)
+        #expect(AssistantModelChoice.defaultRule(isMain: false, supervisor: false, leader: true, origin: nil) == .main)
+        #expect(AssistantModelChoice.defaultRule(isMain: false, supervisor: true, leader: false, origin: nil) == .supervise)
+        #expect(AssistantModelChoice.defaultRule(isMain: false, supervisor: false, leader: false, origin: "manual") == .own)
+    }
+
+    @Test func everyAssistantConversationCanPickWithoutChangingTheOlderHubGate() {
+        #expect(AssistantModelChoice.pickerAvailable(assistant: true, keepsPick: true))
+        #expect(!AssistantModelChoice.pickerAvailable(assistant: false, keepsPick: true))
+        #expect(!AssistantModelChoice.pickerAvailable(assistant: true, keepsPick: false))
     }
 
     @Test func foldedAliasesTickTheConcreteRowAndMakeItANoOp() {
@@ -283,6 +293,62 @@ struct AssistantModelChoiceTests {
                                                    launcherAgent: "claude"))
     }
 
+    @Test func explicitSwitchRecognizesOtherEnginesAndRuntimeConnectionIdentity() throws {
+        let claude = try JSON.decoder.decode(Session.self, from: Data(
+            #"{"machine_id":"box","session_id":"s1","launcher":"claude","agent":"claude"}"#.utf8))
+        let agy = Launcher(name: "agy", model: nil, agent: "antigravity", source: "path")
+        #expect(AssistantModelChoice.switchNeeded(session: claude, target: agy))
+        #expect(!AssistantModelChoice.switchNeeded(
+            session: claude, target: Launcher(name: "other-claude", model: nil, agent: "claude", source: "zshrc")))
+
+        let hosted = Launcher(name: "hosted-claude", model: nil, agent: "claude", source: "runtime-one")
+        #expect(AssistantModelChoice.switchNeeded(session: claude, target: hosted))
+        let runtime = try JSON.decoder.decode(Session.self, from: Data(
+            #"{"machine_id":"box","session_id":"s2","launcher":"old","agent":"claude","source_kind":"runtime","source_instance_id":"runtime-one"}"#.utf8))
+        #expect(!AssistantModelChoice.switchNeeded(session: runtime, target: hosted))
+        #expect(AssistantModelChoice.switchNeeded(
+            session: runtime, target: Launcher(name: "hosted-elsewhere", model: nil, agent: "claude", source: "runtime-two")))
+    }
+
+    @Test func supervisionEligibilityRequiresACapableRuntimeWithoutChangingNativeClaudeOrCodex() {
+        #expect(AssistantModelChoice.launcherSupervisionPolicy(Launcher(name: "claude")))
+        #expect(AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "codex", agent: "codex", source: "path")))
+        #expect(AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "managed", agent: "claude", source: "persona")))
+        #expect(AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "legacy-managed", agent: "codex", source: LegacyNames.product)))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "persona_ext_runtime", agent: "claude", assistant: true, supervisionPolicy: true, source: "persona")))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "agy", agent: "antigravity", assistant: true, source: "agy")))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "agy", agent: "antigravity", assistant: true, source: "path")))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "agy", agent: "antigravity", assistant: true, supervisionPolicy: true, source: "path")))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "managed-agy", agent: "antigravity", assistant: true, supervisionPolicy: true, source: "persona")))
+        #expect(!AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "ordinary", agent: "antigravity", supervisionPolicy: true, source: "agy")))
+        #expect(AssistantModelChoice.launcherSupervisionPolicy(
+            Launcher(name: "agy", agent: "antigravity", assistant: true, supervisionPolicy: true, source: "agy")))
+    }
+
+    @Test func explicitSwitchUsesPaseoProvidersAndExtensionConnectionIDs() throws {
+        let paseo = try JSON.decoder.decode(Session.self, from: Data(
+            #"{"machine_id":"box","session_id":"s3","launcher":"grok","agent":"paseo"}"#.utf8))
+        let cursor = Launcher(name: "cursor", model: nil, agent: "paseo", source: "runtime-one")
+        #expect(AssistantModelChoice.sessionEngine(paseo) == "grok")
+        #expect(AssistantModelChoice.switchNeeded(session: paseo, target: cursor))
+        #expect(!AssistantModelChoice.switchNeeded(
+            session: paseo, target: Launcher(name: "grok", model: nil, agent: "paseo", source: "runtime-one")))
+
+        let extensionSession = try JSON.decoder.decode(Session.self, from: Data(
+            #"{"machine_id":"box","session_id":"s4","launcher":"persona_ext_first","agent":"claude"}"#.utf8))
+        #expect(AssistantModelChoice.switchNeeded(
+            session: extensionSession, target: Launcher(name: "persona_ext_second", model: nil, agent: "claude", source: "persona")))
+    }
+
     // MARK: Display name
 
     @Test func displayNameUsesTheModelThenTheLaunchersOwnModelThenTheLauncher() {
@@ -347,15 +413,18 @@ struct AssistantModelChoiceTests {
 
     @Test func launcherDecodesFriendlyNameAndRuntimeKind() throws {
         let json = """
-        {"name":"team-api","display_name":"Team API","model":"claude-sonnet-5-5","agent_type":"claude"}
+        {"name":"team-api","display_name":"Team API","model":"claude-sonnet-5-5","agent_type":"claude",
+         "assistant":true,"supervision_policy":true}
         """.data(using: .utf8)!
         let launcher = try JSON.decoder.decode(Launcher.self, from: json)
         #expect(launcher.displayName == "Team API")
         #expect(launcher.agentType == "claude")
         #expect(launcher.runtimeAgent == "claude")
+        #expect(launcher.assistant == true && launcher.supervisionPolicy == true)
 
         let fallback = try JSON.decoder.decode(Launcher.self, from: Data(#"{"name":"cx","agent_type":"","agent":"codex"}"#.utf8))
         #expect(fallback.runtimeAgent == "codex")
+        #expect(fallback.supervisionPolicy == nil)
 
         let odd = try JSON.decoder.decode(Launcher.self, from: Data(#"{"name":"cx","display_name":{},"agent_type":123,"agent":"codex"}"#.utf8))
         #expect(odd.name == "cx")
@@ -427,6 +496,24 @@ struct AssistantModelChoiceTests {
         #expect(hub.sent("GET", path).map(\.query) == [[:], ["purpose": "assistant"]])
     }
 
+    @Test func supervisorLauncherPurposeHasItsOwnCacheEntry() async throws {
+        let hub = FakeHub()
+        let path = "/api/v1/machines/box/launchers"
+        hub.on("GET", path) { request in
+            let name = request.query["purpose"] == "assistant.supervise" ? "supervisor-model" : "main-model"
+            return Data("{\"launchers\":[{\"name\":\"team\",\"model\":\"\(name)\"}]}".utf8)
+        }
+        let model = AppModel()
+        model.apiForTests = hub.client
+        let machine = MachineRef(id: "box")
+
+        #expect(try await model.assistantLaunchers(machine).launchers.first?.model == "main-model")
+        #expect(try await model.assistantLaunchers(machine, purpose: "assistant.supervise").launchers.first?.model == "supervisor-model")
+        #expect(try await model.assistantLaunchers(machine).launchers.first?.model == "main-model")
+        #expect(model.cachedAssistantLaunchers(machine, purpose: "assistant.supervise")?.launchers.first?.model == "supervisor-model")
+        #expect(hub.sent("GET", path).map(\.query) == [["purpose": "assistant"], ["purpose": "assistant.supervise"]])
+    }
+
     @Test func anExplicitAssistantCapabilityWinsOverAgentKind() {
         #expect(!Launcher(name: "runtime-codex", agent: "codex", assistant: false).runsAssistant)
         #expect(!Launcher(name: "runtime-claude", agent: "claude", assistant: false).runsAssistant)
@@ -438,7 +525,12 @@ struct AssistantModelChoiceTests {
         #expect(Launcher(name: "shell-codex", agent: "codex", source: "path").runsAssistant)
         #expect(Launcher(name: "shell-claude", agent: "claude", source: "zshrc").runsAssistant)
         #expect(Launcher(name: "managed-claude", agent: "claude", source: "persona").runsAssistant)
-        #expect(!Launcher(name: "managed-codex", agent: "codex", source: "persona").runsAssistant)
+        // Managed Codex runs the assistant as the hub and the web have it since #12569.
+        #expect(Launcher(name: "managed-codex", agent: "codex", source: "persona").runsAssistant)
+        #expect(Launcher(name: "managed-codex", agent: "codex", source: LegacyNames.product).runsAssistant)
+        // The hub's configured kind wins over the node's agent, as the web's `agent_type || agent`.
+        #expect(!Launcher(name: "provider", agent: "claude", agentType: "unknown", source: "persona").runsAssistant)
+        #expect(Launcher(name: "provider", agentType: "codex", source: "persona").runsAssistant)
         #expect(!Launcher(name: "agy", agent: "agy", source: "zshrc").runsAssistant)
         #expect(Launcher(name: "agy", agent: "agy", assistant: true, source: "agy").runsAssistant)
         #expect(!Launcher(name: "runtime-codex", agent: "codex", source: "paseo").runsAssistant)

@@ -67,6 +67,15 @@ func readBlock(t *testing.T, view map[string]string, block string) map[string]st
 			continue
 		}
 		old, had := view[name]
+		if inline := inlineIDs[name]; inline != nil {
+			if !had {
+				// A compact full block intentionally has no old index. Its changed ids are asserted directly;
+				// this reader cannot reconstruct the deliberately omitted, unchanged items.
+				continue
+			}
+			view[name] = readInline(t, old, rows, inline, block)
+			continue
+		}
 		id := rowIDs[name]
 		if !had || id == nil {
 			t.Fatalf("%q is told by its rows and the conversation has no such rows:\n%s", name, block)
@@ -111,24 +120,75 @@ func readBlock(t *testing.T, view map[string]string, block string) map[string]st
 	return view
 }
 
-// sameAsSnapshot fails unless view, in the snapshot's order, is the snapshot byte for byte (less its blank lines,
-// which no block carries).
+// readInline is a one-line section of items (inlineIDs) after the rows a block tells of it: a changed item replaces
+// its own, a new one goes first (the index lists the newest first), and the removed ones are dropped.
+func readInline(t *testing.T, old string, rows []string, id func(string) string, block string) string {
+	t.Helper()
+	head, items, ids, ok := inlineItems(old, id)
+	if !ok {
+		t.Fatalf("%q is told by its items and cannot be read by them:\n%s", old, block)
+	}
+	_, rest, _ := strings.Cut(old, "：")
+	parts := strings.Split(rest, "；")
+	trailer := ""
+	if len(parts) > len(ids) {
+		trailer = parts[len(parts)-1]
+	}
+	var added []string
+	for _, r := range rows {
+		if list, ok := strings.CutPrefix(r, rowsRemoved); ok {
+			for k := range strings.SplitSeq(strings.TrimSuffix(list, "）"), "；") {
+				i := slices.Index(ids, k)
+				if i < 0 {
+					t.Fatalf("item %q is removed and was never there:\n%s", k, block)
+				}
+				ids = slices.Delete(ids, i, i+1)
+			}
+			continue
+		}
+		item := strings.TrimPrefix(r, "  - ")
+		k := id(item)
+		if _, known := items[k]; !known {
+			added = append(added, k)
+		}
+		items[k] = item
+	}
+	var out []string
+	for _, k := range append(added, ids...) {
+		out = append(out, items[k])
+	}
+	if trailer != "" {
+		out = append(out, trailer)
+	}
+	return head + "：" + strings.Join(out, "；")
+}
+
+// sameAsSnapshot compares every section except the deliberately compact open to-do index: after a full block its
+// unchanged items are available through todo_list, not held by the conversation. Focused index tests assert its
+// changed ids and total directly.
 func sameAsSnapshot(t *testing.T, view map[string]string, snapshot, block string) {
 	t.Helper()
-	var lines []string
-	for line := range strings.SplitSeq(snapshot, "\n") {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
+	sections := snapshotSections(snapshot)
+	var want, got []string
+	for _, s := range sections {
+		if inlineIDs[s.key] != nil {
+			continue
+		}
+		want = append(want, s.text)
+		text, ok := view[s.key]
+		if !ok {
+			t.Fatalf("after the block the conversation has no %q:\n%s", s.key, block)
+		}
+		got = append(got, text)
+	}
+	viewSections := 0
+	for key := range view {
+		if inlineIDs[key] == nil {
+			viewSections++
 		}
 	}
-	snapshot = strings.Join(lines, "\n")
-	sections := snapshotSections(snapshot)
-	texts := make([]string, 0, len(sections))
-	for _, s := range sections {
-		texts = append(texts, view[s.key])
-	}
-	if got := strings.Join(texts, "\n"); got != snapshot || len(view) != len(sections) {
-		t.Fatalf("after the block the conversation has %d sections:\n%s\n\nthe snapshot has %d:\n%s\n\nthe block:\n%s", len(view), got, len(sections), snapshot, block)
+	if strings.Join(got, "\n") != strings.Join(want, "\n") || viewSections != len(want) {
+		t.Fatalf("after the block the conversation has:\n%s\n\nthe snapshot (apart from the compact index) has:\n%s\n\nthe block:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"), block)
 	}
 }
 
@@ -678,8 +738,14 @@ func TestContextDeltaBytesBeforeAndAfter(t *testing.T) {
 			view = readBlock(t, view, block)
 			sameAsSnapshot(t, view, snapshot, block)
 			if i == 0 {
-				if first = len(block); old != block {
-					t.Fatalf("%s: the first, whole block differs:\n%s\nbefore:\n%s", shape.name, block, old)
+				want := old
+				for _, s := range snapshotSections(snapshot) {
+					if inlineIDs[s.key] != nil {
+						want = strings.Replace(want, s.text+"\n", "", 1)
+					}
+				}
+				if first = len(block); want != block {
+					t.Fatalf("%s: the first full block differs beyond the compact index:\n%s\nwant\n%s", shape.name, block, want)
 				}
 			} else {
 				before, after = before+len(old), after+len(block)

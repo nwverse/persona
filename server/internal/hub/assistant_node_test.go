@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -20,16 +22,20 @@ type assistantNode struct {
 	mu    sync.Mutex
 	known map[string]bool
 	// Exact synthetic launcher/model pairs accepted by launchers.model.check; other pairs remain unsupported.
-	modelChecks map[string]string
-	made        int // conversations started, for the next id
-	sends       []map[string]any
-	kept        []string     // the last node.configure keep_sessions
-	items       []proto.Item // session.items answers this (assistant_titles_test.go)
+	modelChecks   map[string]string
+	made          int // conversations started, for the next id
+	sends         []map[string]any
+	kept          []string                // the last node.configure keep_sessions
+	items         []proto.Item            // session.items answers this (assistant_titles_test.go)
+	sentItems     map[string][]proto.Item // user transcript items written by successful supervision assistant.send calls, by session_id
+	omitSentItems bool                    // suppress sentItems writes to simulate RPC success without a transcript item
+	itemReads     int                     // session.items calls handled
 	// assistant.handoff answers handoff; assistant.compact notes the session and answers compactErr
 	// (assistant_main_test.go).
 	handoff    map[string]any
 	compacts   []string
 	compactErr error
+	sendErr    func(map[string]any) error
 }
 
 func newAssistantNode(t *testing.T, h *Hub) *assistantNode {
@@ -59,7 +65,12 @@ func newAssistantNode(t *testing.T, h *Hub) *assistantNode {
 			}
 			return map[string]any{}, nil
 		case "session.items":
-			return map[string]any{"items": n.items}, nil
+			n.itemReads++
+			items := n.items
+			if sid, _ := p["session_id"].(string); sid != "" && len(n.sentItems[sid]) > 0 {
+				items = append(slices.Clone(items), n.sentItems[sid]...)
+			}
+			return map[string]any{"items": items}, nil
 		case "session.queue.edit":
 			n.sends = append(n.sends, map[string]any{method: p})
 			return proto.QueueEdit{Queue: []string{"Fixture message"}}, nil
@@ -82,6 +93,11 @@ func newAssistantNode(t *testing.T, h *Hub) *assistantNode {
 			return map[string]any{"ok": true}, nil
 		case "session.send":
 			n.sends = append(n.sends, p)
+			if n.sendErr != nil {
+				if err := n.sendErr(p); err != nil {
+					return nil, err
+				}
+			}
 			return map[string]any{}, nil
 		case "session.interrupt":
 			n.sends = append(n.sends, map[string]any{"interrupt": p["session_id"]})
@@ -101,6 +117,18 @@ func newAssistantNode(t *testing.T, h *Hub) *assistantNode {
 				n.known[id] = true
 			} else if p["resume_only"] == true && !n.known[id] {
 				return nil, fmt.Errorf("conversation %s is gone", id)
+			}
+			if !n.omitSentItems && p["hold_pushes"] == true {
+				if text, _ := p["text"].(string); text != "" {
+					if n.sentItems == nil {
+						n.sentItems = map[string][]proto.Item{}
+					}
+					item := proto.Item{Seq: len(n.sentItems[id]) + 1, Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()}
+					if cid, _ := p["client_msg_id"].(string); cid != "" {
+						item.ClientMsgID = cid
+					}
+					n.sentItems[id] = append(n.sentItems[id], item)
+				}
 			}
 			return map[string]any{"session_id": id}, nil
 		}

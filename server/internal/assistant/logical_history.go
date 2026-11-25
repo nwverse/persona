@@ -91,7 +91,7 @@ func (s *Service) logicalHistoryCall(ctx context.Context, st logicalConversation
 		return json.Marshal(h)
 	}
 	if p.UserInputs {
-		return s.logicalUserInputs(ctx, st, c, p)
+		return s.logicalUserInputs(ctx, st, c)
 	}
 	page, err := s.logicalHistoryPage(ctx, st, c, p)
 	if err != nil {
@@ -400,11 +400,16 @@ func (s *Service) checkLogicalRead(ctx context.Context, st logicalConversationSt
 	return nil
 }
 
-func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationStore, c *db.LogicalConversation, p historyParams) (json.RawMessage, error) {
+func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationStore, c *db.LogicalConversation) (json.RawMessage, error) {
 	out := proto.UserInputIndex{History: c.History, Inputs: []proto.UserInputPosition{}}
 	for _, seg := range visibleSegments(c) {
+		params := map[string]any{"session_id": seg.SessionID, "user_inputs": true}
+		if seg.FrozenEnd != nil {
+			// Scope excerpts as well as positions. The final visible input can have a reply in the private tail.
+			params["before_seq"] = *seg.FrozenEnd + 1
+		}
 		var source proto.UserInputIndex
-		if err := s.physicalHistoryCall(ctx, seg.MachineID, DeviceSessionItems, map[string]any{"session_id": seg.SessionID, "user_inputs": true}, &source); err != nil {
+		if err := s.physicalHistoryCall(ctx, seg.MachineID, DeviceSessionItems, params, &source); err != nil {
 			return nil, err
 		}
 		if source.Total != len(source.Inputs) || source.Inputs == nil {
@@ -416,6 +421,7 @@ func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationS
 			}
 		}
 		for _, it := range source.Inputs {
+			// Older nodes ignore the boundary and send positions alone.
 			if seg.FrozenEnd != nil && it.Seq > *seg.FrozenEnd {
 				continue
 			}
@@ -423,7 +429,8 @@ func (s *Service) logicalUserInputs(ctx context.Context, st logicalConversationS
 			if err != nil {
 				return nil, err
 			}
-			out.Inputs = append(out.Inputs, proto.UserInputPosition{ID: seg.ItemID(it.ID), Seq: seq})
+			it.ID, it.Seq = seg.ItemID(it.ID), seq
+			out.Inputs = append(out.Inputs, it)
 		}
 	}
 	latest, err := st.LogicalConversation(ctx, c.MachineID, c.SessionID)

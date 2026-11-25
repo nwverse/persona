@@ -83,9 +83,9 @@ func (f *File) history() string {
 	if f.lines == 0 {
 		return "" // nothing read yet: no identity to compare
 	}
-	version := ".items1"
+	version := ".items2" // Re-read Codex pages whose user replies omitted the quoted question.
 	if !f.meta.Codex {
-		version = ".items3" // Model-only interjection items are removed; reload older client history.
+		version = ".items6" // Reload Claude folds whose latest command description was omitted.
 	}
 	return fmt.Sprintf("%x.%08x.%d", f.ino, f.firstHash, f.gen) + version + f.branchToken()
 }
@@ -388,6 +388,7 @@ func (f *File) Full(id string) (proto.Item, error) {
 		return it, fmt.Errorf("item %s: line %d of the transcript changed, reload the chat", id, it.Seq)
 	}
 	it.Text, it.FullSize, it.Image = full.Text, 0, full.Image
+	it.QuestionReplies, it.QuestionRepliesCut = full.QuestionReplies, false
 	return it, nil
 }
 
@@ -491,6 +492,13 @@ func (f *File) End() Span {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return Span{History: f.history(), To: f.lines}
+}
+
+// TurnClosedAfter reports whether a non-hidden turn close occurred after seq in the lines f has parsed.
+func (f *File) TurnClosedAfter(seq int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.meta.TurnClosed && f.meta.turnEndSeq > seq && (f.tree == nil || !f.tree.hidden[f.meta.turnEndLine])
 }
 
 // CoversClosedTurnAfter reports whether the checked end still covers every line after seq in history and the latest

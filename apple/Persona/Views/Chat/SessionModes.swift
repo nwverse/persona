@@ -352,11 +352,11 @@ nonisolated enum SessionModes {
         }
     }
 
-    /// The launcher whose /model list and typed IDs a session's switch offers: the session's own, plain claude when it
-    /// started without one (the web's `sessionLauncher`).
+    /// Use a named launcher's own catalog. A manually started Codex may report only its engine and surface.
     static func launcher(_ s: Session?) -> String {
-        guard let l = s?.launcher, !l.isEmpty else { return "claude" }
-        return l
+        if let launcher = s?.launcher, !launcher.isEmpty { return launcher }
+        guard let s, s.isCodex else { return "claude" }
+        return s.spaceKind == Launcher.codexAppSource || s.agentSurface == "desktop" ? "codex-app" : "codex"
     }
 
     /// What applying a model pick sends: the alias, unless the session already runs it (Default too, while it runs a
@@ -596,11 +596,11 @@ struct SessionModesMenu: View {
     var mainConversation = false
     /// "Other Model…" where a model can be picked: the composer opens `SessionTypedModelSheet` (#1644).
     var otherModel: (() -> Void)? = nil
-    /// The main Persona chat: opens its conversation model sheet (#6542, the per-conversation pick, #5033). Nil on
+    /// An Assistant conversation: opens its own model sheet (#6542, the per-conversation pick, #5033). Nil on
     /// older hubs, which keep the row read-only.
     var assistantPick: (() -> Void)? = nil
-    /// What the main chat's next message runs on, from the same effective setup as the composer title (#6911 M7): the
-    /// menu row names this, not the process's last model. Nil on every other conversation, whose row names what it runs.
+    /// What this conversation's next message runs on, from the same effective setup as the composer title (#6911 M7):
+    /// the menu row names this, not the process's last model. Nil when the conversation picker is unavailable.
     var assistantModelName: String? = nil
     /// A mode picked here goes through the page's `requestMode` (`SessionModeBar.pick`); nil applies it at once.
     var pick: ((String) -> Void)? = nil
@@ -657,7 +657,7 @@ struct SessionModesMenu: View {
                     }
                 }
             } else if let assistantPick {
-                // The main Persona chat (#6542): the row opens its conversation model sheet (pick kept on the hub, #5033).
+                // The current Assistant conversation (#6542): this row opens its own model sheet (#5033).
                 // It names the next message's effective model, the one source the composer title uses (#6911 M7).
                 Button(action: assistantPick) {
                     Label {

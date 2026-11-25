@@ -607,7 +607,7 @@ func TestRehomeKeepsLegacyBackgroundCloseout(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s.rehomeSupervisedTodos(context.Background())
+	s.backfillPlanSupervisors(context.Background())
 	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "bg1" {
 		t.Fatalf("rehome took the legacy background task to %q", got)
 	}
@@ -949,8 +949,8 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 	if _, _, err := s.updateSupervision(ctx, waits.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
 		t.Fatal(err)
 	}
-	for conv, want := range map[string]string{"side1": "conv1", "bg1": "conv1", "gone": "conv1"} {
-		// What the background supervisor hands out keeps the main conversation on its ledger, as every task it follows up.
+	for conv, want := range map[string]string{"side1": "side1", "bg1": "conv1", "gone": "conv1"} {
+		// Live side conversations own what they plan (#13657); the background supervisor and gone conversations fall back to main.
 		if got, ok := s.defaultPlanSupervisor(ctx, conv, ""); !ok || got != want {
 			t.Errorf("a task %s plans is supervised by %q %v, want %q", conv, got, ok, want)
 		}
@@ -1009,7 +1009,7 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 }
 
 // Cards of a main-supervised task use main's ask ladder even when a legacy background conversation is registered.
-// Main may escalate one; an unanswered card still reaches the user after the hold (#5732).
+// Main may escalate one; an unanswered card stays with main after the hold (#5732), never pushed to the user.
 func TestAsksOfMainSupervisedTasksUseMainLadder(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	ctx := context.Background()
@@ -1052,11 +1052,15 @@ func TestAsksOfMainSupervisedTasksUseMainLadder(t *testing.T) {
 	}
 	waitFor(t, "the push", func() bool { return e.pushesOf("ix1") == 1 })
 
-	// A card nobody handles still goes to the user after the hold.
+	// A card nobody handles stays with main after the hold, reminded, never pushed to the user.
 	e.raise(askPermission("ix2", "worker-2"))
 	e.noticeWith("conv1", "interaction_id=ix2")
 	e.s.askTick(time.Now().Add(2 * askHoldFor))
-	waitFor(t, "the push", func() bool { return e.pushesOf("ix2") == 1 })
+	e.noticeWith("conv1", "再交给你处理")
+	e.settle()
+	if got := e.pushesOf("ix2"); got != 0 {
+		t.Fatalf("the unhandled card was pushed %d times", got)
+	}
 
 	on := true
 	setSettings(t, e.s, func(v *Settings) { v.MainSupervisesOwnTasks = &on })
@@ -1065,7 +1069,8 @@ func TestAsksOfMainSupervisedTasksUseMainLadder(t *testing.T) {
 	}
 }
 
-// Without leader conversations a card is the user's as it comes, background supervisor or not.
+// Without leader conversations askLadder does not route to the background supervisor, while non-six-class
+// agent_permission cards still go to the task's supervisor or main conversation instead of pushing to the owner.
 func TestBackgroundSupervisorAloneDoesNotRouteAsks(t *testing.T) {
 	e := newRouteEnv(t, nil, false)
 	e.s.noBackground = false
@@ -1074,9 +1079,16 @@ func TestBackgroundSupervisorAloneDoesNotRouteAsks(t *testing.T) {
 		t.Fatal("a card is routed with no leader conversation")
 	}
 	e.raise(askPermission("ix1", "worker-1"))
-	waitFor(t, "the push", func() bool { return e.pushesOf("ix1") == 1 })
-	if e.lastShown("ix1").Delegating {
-		t.Fatal("the card is shown as delegating")
+	waitFor(t, "the non-owner permission routed to supervisor/main", func() bool {
+		for _, m := range laterFor(e.s, "conv1") {
+			if m.From == cardAgentPermission && strings.Contains(m.Text, "interaction_id=ix1") {
+				return true
+			}
+		}
+		return false
+	})
+	if !e.lastShown("ix1").Delegating || e.pushesOf("ix1") != 0 {
+		t.Fatal("non-owner permission pushed to the owner instead of routing")
 	}
 }
 
