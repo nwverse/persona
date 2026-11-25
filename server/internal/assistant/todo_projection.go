@@ -56,11 +56,11 @@ func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) 
 		if len(bound) == 0 {
 			continue
 		}
-		list[i].RepoGate = projection.AggregateRepoGate(buildRepoGateInputs(list[i].Todo, bound))
+		list[i].RepoGate = aggregateRepoGate(buildRepoGateInputs(list[i].Todo, bound))
 	}
 }
 
-func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []projection.RepoGateRepo {
+func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRepo {
 	prByURL := make(map[string]TodoPRStatus, len(t.OtherPRs)+1)
 	for _, pr := range t.OtherPRs {
 		if key := normalizeRepoGateURL(pr.URL); key != "" {
@@ -77,7 +77,7 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []projection
 		}
 	}
 
-	out := make([]projection.RepoGateRepo, 0, len(bound))
+	out := make([]repoGateRepo, 0, len(bound))
 	for _, repo := range bound {
 		repoKey := strings.TrimSpace(repo.SourceSnapshot.Identity.CanonicalURL)
 		if repoKey == "" {
@@ -104,7 +104,7 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []projection
 			}
 		}
 
-		var prs []projection.RepoGatePR
+		var prs []repoGatePR
 		if isTarget {
 			seenPRs := map[string]bool{}
 			for _, l := range repo.Links {
@@ -120,7 +120,7 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []projection
 				if obs, ok := prByURL[key]; ok {
 					prs = append(prs, toRepoGatePR(l.CanonicalURL, obs))
 				} else {
-					prs = append(prs, projection.RepoGatePR{URL: l.CanonicalURL, State: "open"})
+					prs = append(prs, repoGatePR{URL: l.CanonicalURL, State: "open"})
 				}
 			}
 			// Fall back to observed PRs belonging to this repository when not explicitly linked yet,
@@ -137,7 +137,7 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []projection
 			}
 		}
 
-		out = append(out, projection.RepoGateRepo{
+		out = append(out, repoGateRepo{
 			RepoKey:   repoKey,
 			RepoLabel: repoLabel,
 			IsTarget:  isTarget,
@@ -147,12 +147,12 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []projection
 	return out
 }
 
-func toRepoGatePR(fallbackURL string, obs TodoPRStatus) projection.RepoGatePR {
+func toRepoGatePR(fallbackURL string, obs TodoPRStatus) repoGatePR {
 	u := strings.TrimSpace(obs.URL)
 	if u == "" {
 		u = strings.TrimSpace(fallbackURL)
 	}
-	return projection.RepoGatePR{
+	return repoGatePR{
 		URL:       u,
 		State:     obs.State,
 		Draft:     obs.Draft,
