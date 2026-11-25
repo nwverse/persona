@@ -72,7 +72,7 @@ import PersonaWire
         #expect(order().rank(waiting) == AgentListOrder.stateKeys.firstIndex(of: "waiting"))
         #expect(!waiting.showsJustFinished(muted: false))
         let held = AgentListOrder(isPinned: { _ in false }, isMuted: { _ in false }, held: done.key, heldJustFinished: true)
-        done.markLocallySeen()
+        done.seenByTheHub()
         #expect(held.rank(done) == index && held.stays(done))
         var mutedWhileOpen = held
         mutedWhileOpen.isMuted = { _ in true }

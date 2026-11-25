@@ -116,7 +116,7 @@ import PersonaWire
         #expect(original.groups.map(\.rows) == sharedGroups.map { $0["rows"]?.array?.compactMap(\.string) ?? [] })
         input.settings.held = input.sessions[i].key
         input.settings.heldJustFinished = true
-        input.sessions[i].markLocallySeen()
+        input.sessions[i].seenByTheHub()
         for held in [true, false] {
             if !held { input.settings.held = nil; input.settings.heldJustFinished = false }
             let native = AgentSortComparable(native: input)

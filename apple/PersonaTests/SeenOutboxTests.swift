@@ -125,7 +125,7 @@ import PersonaWire
         #expect(later.needsSeen() && outbox.marks.isEmpty)
         outbox.mark(key, row, at: t0)
         row.seenAt = row.seenAt?.addingTimeInterval(10)
-        row.markLocallySeen()
+        row.seenByTheHub()
         _ = outbox.land([machine: [row]], at: t0 + 1)
         #expect(outbox.marks[key] != nil)
         #expect(outbox.due(at: t0 + SeenOutbox.confirmWithin + 1).isEmpty)

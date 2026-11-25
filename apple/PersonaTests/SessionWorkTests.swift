@@ -43,7 +43,7 @@ struct SessionWorkTests {
         }
         #expect(try !session(work: #"{"phase":"done"}"#).isJustFinished(muted: false))
         #expect(try !session(work: #"{"phase":"done","just_finished":false}"#).isJustFinished(muted: false))
-        row.markLocallySeen()
+        row.seenByTheHub()
         #expect(!row.needsSeen() && row.state == .idle && row.work?.line == "Merged")
     }
 
