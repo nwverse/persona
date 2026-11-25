@@ -241,7 +241,9 @@ Persona Core is a product on its own: a hub built without any module starts, ser
 - **End-to-end gate**: `python3 scripts/ci/module-e2e.py --modules <ids>` switches the modules off and on at run time
   (the `modules` row) on a test hub started the same way, with a default build and the real web app in headless
   Chrome: flags, the manager's list, the module's routes, extensions and connectors, its web entry and chunks, and the
-  core's pages in every phase, plus the mock hub as an older hub. A module move merges only after it passes on its
+  core's pages in every phase, plus the mock hub as an older hub. Off, a module's entry points are gone, and data the
+  user already has is asserted the other way: a stored recording is still listed and opens read-only in the web app,
+  with none of the module's controls and none of its chunks. A module move merges only after it passes on its
   branch (docs/operations/testing.md "Module e2e gate", #14417).
 - **Tests**: `GOFLAGS="-trimpath -tags=persona_core_only" python3 scripts/ci/server-shards.py <node|managers|other>
   --database-file <file with database_url>` runs a shard's every package without modules; a test of a module's own

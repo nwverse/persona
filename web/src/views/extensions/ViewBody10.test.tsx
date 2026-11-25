@@ -1297,4 +1297,18 @@ describe("UI 10: the control room", () => {
     expect(document.querySelector("[role=dialog]")).toBeNull();
     spy.mockRestore();
   });
+
+  it("uses container queries to widen the outline pane and timeline labels on wide workspaces", () => {
+    const d = doc(renderToStaticMarkup(<GraphCanvas item={draw(RICH())} busy="" onPress={() => {}} />));
+    const shell = d.querySelector(".graph-shell")!;
+    expect(shell.className).toContain("@container");
+    const outlinePane = d.querySelector("[data-graph-outline-pane]")!;
+    expect(outlinePane.className).toContain("w-[208px]");
+    expect(outlinePane.className).toContain("@min-[60rem]:w-[260px]");
+    expect(outlinePane.className).toContain("@min-[80rem]:w-[300px]");
+    const timelineRow = d.querySelector('[data-graph-timeline-row="run"]')!;
+    const labelSpan = timelineRow.querySelector("span")!;
+    expect(labelSpan.className).toContain("w-[148px]");
+    expect(labelSpan.className).toContain("@min-[60rem]:w-[200px]");
+  });
 });

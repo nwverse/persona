@@ -363,6 +363,41 @@ func TestAgyCompanionPlanStartNeedsReadonly(t *testing.T) {
 	}
 }
 
+func TestAgyCompanionBypassStartReachesCompanion(t *testing.T) {
+	n, f, home := herdrNode(t)
+	n.logger = log.New(io.Discard, "", 0)
+	n.runtimeSock = filepath.Join(filepath.Dir(f.sock), "runtime.sock")
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	if _, err := n.listenRuntimeSocket(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
+	hello["launchers"] = []map[string]any{{"name": agyAgent, "agent": agyAgent}}
+	companion := dialRuntime(t, n, hello)
+	companion.mu.Lock()
+	companion.answer = func(method string, _ json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": proto.Session{SessionID: "agy-readonly-bypass", Cwd: home, Status: proto.StatusIdle}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	companion.mu.Unlock()
+	_, err := nodeCall(t, n, "session.start", map[string]any{
+		"cwd": home, "launcher": agyAgent, "host": proto.HostAgy,
+		"permission_mode": proto.ModeBypass, "prompt": "Inspect the project",
+	})
+	starts := companion.got("session.start")
+	var start map[string]any
+	if err != nil || len(starts) != 1 || json.Unmarshal(starts[0], &start) != nil || start["permission_mode"] != proto.ModeBypass {
+		t.Fatalf("bypass companion start: %v, starts %s", err, starts)
+	}
+	if len(f.trace("tab.create")) != 0 {
+		t.Fatal("a companion bypass start opened a pane")
+	}
+}
+
 func TestAgyStartRefusesInvalidEffortBeforeCreatingPane(t *testing.T) {
 	n, f, home := herdrNode(t)
 	for _, effort := range []string{"auto", "ultra", "bogus"} {

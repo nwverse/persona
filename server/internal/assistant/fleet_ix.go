@@ -241,10 +241,14 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
 	}
-	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
-	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
+	// Plan mode enforces a read-only task's launch constraint. Its supervisor report and strictly read-only
+	// inspection Bash commands may run once without a card, while exiting plan mode stays denied and any write,
+	// ambiguous, credential-touching or inbox-origin Bash command still asks. Neither path registers a card or grants permissions.
 	report := ix.Kind == proto.IxPermission && slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), ix.ToolName)
-	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
+	safeReadonlyBash := ix.Kind == proto.IxPermission && ix.ToolName == "Bash" &&
+		!s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, false) &&
+		readonlyTaskSafeBash(ix.ToolInput, ix.Cwd)
+	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report || safeReadonlyBash {
 		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
 			plans, err := s.conversationPlans(ctx, todo.Origin)
 			if err != nil {
@@ -260,6 +264,10 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 							if todo.Supervision == nil || todo.Supervision.Supervisor == "" {
 								continue
 							}
+							allow := true
+							return proto.Resolution{Allow: &allow}, nil
+						}
+						if safeReadonlyBash {
 							allow := true
 							return proto.Resolution{Allow: &allow}, nil
 						}

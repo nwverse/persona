@@ -4,7 +4,7 @@ Explicit machine keeps fixed (default, refuses unavailable launchers) or flexibl
 
 Started tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.
 
-Edits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family uses bypassPermissions; Codex and companion agy use plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.
+Edits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.
 
 Resolve repository via repositories_list (repository_get when useful). User's explicit repo URL/path wins; saved bindings are references only, never infer machine/cwd. Non-repo tasks skip lookup. Closing terminal on acceptance is owner-only.
 

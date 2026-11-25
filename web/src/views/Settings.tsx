@@ -315,6 +315,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const search = searchSettings(query, integrationsV2);
   // Inbox Sources' relationship view (#5741) takes the wide page while it is shown; the list keeps its width.
   const [sourcesGraph, setSourcesGraph] = useState(false);
+  // Wide extension plugin_page views (code/diff/split/columns/graph/scene/map) expand to the full extension page width.
+  const [extensionPageWide, setExtensionPageWide] = useState(false);
   const [scrollAnchor, setScrollAnchor] = useState<string | null>(null);
   useEffect(() => {
     if (!scrollAnchor) return;
@@ -365,6 +367,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     pick(g.tab, g.sub ?? null, agent);
     setScrollAnchor(g.anchor);
   };
+  const onExtensionPage =
+    (tab === "extensions" && extensionsRoute(sub).kind === "page") ||
+    (tab === "integrations" && parseIntegrationsSub(sub).kind === "page");
   const integrationsSplit =
     !listed &&
     !phone &&
@@ -414,7 +419,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               className={
                 integrationsSplit
                   ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
-                  : cx("mx-auto px-5 py-6 sm:px-8", tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph) ? "max-w-[1120px]" : "max-w-[760px]")
+                  : cx(
+                      "mx-auto px-5 py-6 sm:px-8",
+                      onExtensionPage && extensionPageWide
+                        ? "max-w-[1680px]"
+                        : tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph)
+                          ? "max-w-[1120px]"
+                          : "max-w-[760px]",
+                    )
               }
               style={{ animation: `fade-up 320ms ${EASE} both` }}
             >
@@ -456,6 +468,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                     headerBack={phone}
                     initialFilter={normalizeIntegrationFilter(new URLSearchParams(location.search).get("filter"))}
                     onOpen={(id) => pick("integrations", id)}
+                    onPageWide={setExtensionPageWide}
                     onSettings={(url) => {
                       const target = settingsTarget(url);
                       if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
@@ -495,7 +508,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
                 </div>
               ) : (
-                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
+                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} onPageWide={setExtensionPageWide} />
               )}</Suspense>}
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
