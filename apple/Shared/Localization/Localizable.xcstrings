@@ -126421,6 +126421,30 @@
         }
       }
     },
+    "Off on this hub": {
+      "comment": "the watch face's Record complication, second line, while the hub's recording module is off; very short",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off on this hub"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このhubではオフ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台 hub 已关闭"
+          }
+        }
+      }
+    },
     "Off, scroll sideways": {
       "localizations": {
         "en": {
