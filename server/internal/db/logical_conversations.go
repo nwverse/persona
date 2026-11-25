@@ -916,15 +916,34 @@ func (d *DB) ConversationInputPending(ctx context.Context, machine, session stri
 	return conversationInputPending(ctx, d.pool, machine, session)
 }
 
-// ConversationSegmentDispatched reports whether any input has been sent, accepted,
-// or left in doubt since segment was activated, or whether no activation switch exists for it.
+// MarkConversationSegmentDispatched records durable dispatch evidence on segment
+// before any physical send RPC is attempted on a non-root segment.
+func (d *DB) MarkConversationSegmentDispatched(ctx context.Context, machine, session, segment string) error {
+	if d.sets&ManagerSet == 0 {
+		return errors.New("manager database unavailable")
+	}
+	tag, err := d.pool.Exec(ctx, `UPDATE conversation_segments SET dispatched=true WHERE id=$1 AND logical_machine=$2 AND logical_session=$3 AND state='active'`, segment, machine, session)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConversationEpoch
+	}
+	return nil
+}
+
+// ConversationSegmentDispatched reports whether segment has any durable dispatch
+// evidence (a direct send marker, or any sending/in_doubt/accepted input since
+// activation), or whether the segment or its activation switch cannot be verified.
 func (d *DB) ConversationSegmentDispatched(ctx context.Context, machine, session, segment string) (bool, error) {
 	if d.sets&ManagerSet == 0 {
 		return true, nil
 	}
 	var dispatched bool
 	err := d.pool.QueryRow(ctx, `SELECT
-		NOT EXISTS(SELECT 1 FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND target_segment=$3)
+		NOT EXISTS(SELECT 1 FROM conversation_segments WHERE id=$3 AND logical_machine=$1 AND logical_session=$2)
+		OR EXISTS(SELECT 1 FROM conversation_segments WHERE id=$3 AND logical_machine=$1 AND logical_session=$2 AND dispatched)
+		OR NOT EXISTS(SELECT 1 FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND target_segment=$3)
 		OR EXISTS(
 			SELECT 1 FROM conversation_inputs i
 			JOIN conversation_switches s

@@ -971,13 +971,22 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		if !ok || active.ID != a.ID {
 			return db.ErrConversationEpoch
 		}
+		if vanishedActiveTarget && current.Switch != nil && current.Switch.Phase == "active" && s.physicalSegmentMissing(ctx, active) {
+			return logicalRefusal(ctx, "unavailable")
+		}
 		if logicalSourceMayBeRetired(current) {
 			if _, err := s.logicalPhysical(ctx, a.MachineID, "assistant.segment.restore", map[string]any{"session_id": a.SessionID}); err != nil {
 				return err
 			}
 		}
-		if vanishedActiveTarget && current.Switch != nil && current.Switch.Phase == "active" && s.physicalSegmentMissing(ctx, active) {
-			return logicalRefusal(ctx, "unavailable")
+		if active.Ordinal > 1 {
+			marker, ok := s.store().(logicalSegmentInputStore)
+			if !ok {
+				return logicalRefusal(ctx, "unavailable")
+			}
+			if err := marker.MarkConversationSegmentDispatched(ctx, c.MachineID, c.SessionID, active.ID); err != nil {
+				return err
+			}
 		}
 		dispatched = true
 		_, sendErr = s.logicalPhysical(ctx, a.MachineID, queued.Method, cloneLogicalParams(queued.Params, a))

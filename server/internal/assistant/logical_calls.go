@@ -298,6 +298,15 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 			}
 			physical["history"] = active.SourceHistory
 		}
+		if active.Ordinal > 1 && (logicalSendMethod(method) || method == assistantwire.DeviceAssistantAnswerAgain) {
+			marker, ok := s.store().(logicalSegmentInputStore)
+			if !ok {
+				return logicalRefusal(ctx, "unavailable")
+			}
+			if err := marker.MarkConversationSegmentDispatched(ctx, machine, id, active.ID); err != nil {
+				return err
+			}
+		}
 		var e error
 		dispatched = true
 		out, e = s.logicalPhysical(ctx, active.MachineID, method, physical)

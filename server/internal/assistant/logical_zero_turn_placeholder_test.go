@@ -6,24 +6,32 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/conversationlog"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type zeroTurnPlaceholderRig struct {
-	s        *Service
-	d        *db.DB
-	physical *fleetDevs
-	mu       sync.Mutex
-	prepared int
-	sends    []map[string]any
+	s                     *Service
+	d                     *db.DB
+	physical              *fleetDevs
+	mu                    sync.Mutex
+	prepared              int
+	sends                 []map[string]any
+	liveSessions          []proto.Session
+	listErr               error
+	laggingList           bool
+	preparedZeroTurnAlive bool
 }
 
 func setupZeroTurnPlaceholderRig(t *testing.T, earlierFrozen int, missingMode string, keepActiveSwitch bool) *zeroTurnPlaceholderRig {
@@ -104,11 +112,20 @@ func setupZeroTurnPlaceholderRig(t *testing.T, earlierFrozen int, missingMode st
 	}
 	physical.setSessions("server", sessions)
 
-	rig := &zeroTurnPlaceholderRig{s: s, d: d, physical: physical}
+	rig := &zeroTurnPlaceholderRig{s: s, d: d, physical: physical, liveSessions: slices.Clone(sessions)}
 	nodeCall := func(method string, params json.RawMessage) (any, error) {
 		var p map[string]any
 		_ = json.Unmarshal(params, &p)
 		switch method {
+		case DeviceSessionsList:
+			rig.mu.Lock()
+			listErr := rig.listErr
+			live := slices.Clone(rig.liveSessions)
+			rig.mu.Unlock()
+			if listErr != nil {
+				return nil, listErr
+			}
+			return map[string]any{"sessions": live}, nil
 		case "assistant.segment.check":
 			launcher, _ := p["launcher"].(string)
 			engine := "codex"
@@ -120,6 +137,7 @@ func setupZeroTurnPlaceholderRig(t *testing.T, earlierFrozen int, missingMode st
 			rig.mu.Lock()
 			rig.prepared++
 			id := fmt.Sprintf("recovered-seg-%d", rig.prepared)
+			lagging := rig.laggingList
 			rig.mu.Unlock()
 			launcher, _ := p["launcher"].(string)
 			agent := "codex"
@@ -129,8 +147,7 @@ func setupZeroTurnPlaceholderRig(t *testing.T, earlierFrozen int, missingMode st
 			model, _ := p["model"].(string)
 			effort, _ := p["effort"].(string)
 			perm, _ := p["permission_mode"].(string)
-			physical.mu.Lock()
-			physical.machines["server"].sessions = append(physical.machines["server"].sessions, proto.Session{
+			row := proto.Session{
 				SessionID:      id,
 				MachineID:      "server",
 				Cwd:            "/home/u/.persona/assistant",
@@ -143,14 +160,24 @@ func setupZeroTurnPlaceholderRig(t *testing.T, earlierFrozen int, missingMode st
 				PermissionMode: perm,
 				Status:         proto.StatusIdle,
 				State:          proto.StateIdle,
-			})
-			physical.mu.Unlock()
+			}
+			rig.mu.Lock()
+			rig.liveSessions = append(rig.liveSessions, row)
+			rig.mu.Unlock()
+			if !lagging {
+				physical.mu.Lock()
+				physical.machines["server"].sessions = append(physical.machines["server"].sessions, row)
+				physical.mu.Unlock()
+			}
 			return map[string]any{"session_id": id, "prepared": true}, nil
 		case "assistant.segment.retire", "assistant.segment.restore", "session.close":
 			return map[string]bool{"ok": true}, nil
-		case DeviceAssistantSend, DeviceSessionSend:
+		case DeviceAssistantSend, DeviceSessionSend, assistantwire.DeviceAssistantAnswerAgain:
 			sid, _ := p["session_id"].(string)
-			if sid == "prepared-zero-turn" {
+			rig.mu.Lock()
+			alive := rig.preparedZeroTurnAlive
+			rig.mu.Unlock()
+			if sid == "prepared-zero-turn" && !alive {
 				return nil, &rpc.Error{Code: codeSessionNotFound, Message: "session prepared-zero-turn not found"}
 			}
 			rig.mu.Lock()
@@ -499,6 +526,8 @@ func TestMissingTranscriptWithRealHistoryRemainsProtected(t *testing.T) {
 				})
 				physical.machines["server"].call = func(method string, params json.RawMessage) (any, error) {
 					switch method {
+					case DeviceSessionsList:
+						return map[string]any{"sessions": []proto.Session{{SessionID: "main-chat", Cwd: "/home/u/.persona/assistant", Assistant: true, Rev: 100}}}, nil
 					case "assistant.segment.check":
 						return segmentTarget{Registered: true, Engine: "codex", Prepare: true, SupervisionPolicy: true}, nil
 					case "assistant.segment.prepare":
@@ -512,6 +541,92 @@ func TestMissingTranscriptWithRealHistoryRemainsProtected(t *testing.T) {
 				s.devs = &logicalDevices{Devices: physical, s: s}
 				s.logicalChanged()
 				return &zeroTurnPlaceholderRig{s: s, d: d, physical: physical}
+			},
+		},
+		{
+			name: "external_send_without_msg_id_missing_transcript",
+			setup: func(t *testing.T) *zeroTurnPlaceholderRig {
+				rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", false)
+				ctx := t.Context()
+				liveRow := proto.Session{
+					SessionID:      "prepared-zero-turn",
+					MachineID:      "server",
+					Cwd:            "/home/u/.persona/assistant",
+					Assistant:      true,
+					Agent:          "codex",
+					Launcher:       "codex",
+					Model:          "target-model",
+					Effort:         "medium",
+					PermissionMode: "default",
+					Status:         proto.StatusIdle,
+					State:          proto.StateIdle,
+				}
+				rig.mu.Lock()
+				rig.preparedZeroTurnAlive = true
+				rig.liveSessions = append(rig.liveSessions, liveRow)
+				rig.mu.Unlock()
+				rig.physical.setSessions("server", slices.Clone(rig.liveSessions))
+				rig.s.logicalChanged()
+
+				// Legitimate external NodeCall without client_msg_id or once_id bypasses
+				// conversation_inputs and dispatches directly to the physical segment.
+				extCtx := context.WithValue(ctx, logicalTransportKey{}, devicewire.NodeCall{MachineID: "server", Method: DeviceSessionSend})
+				if _, handled, err := rig.s.logicalCall(extCtx, "server", DeviceSessionSend, json.RawMessage(`{"session_id":"side-chat","text":"external send without id"}`)); !handled || err != nil {
+					t.Fatalf("external send without msg id failed: handled=%v err=%v", handled, err)
+				}
+				if got := rig.sentTo("prepared-zero-turn"); len(got) != 1 {
+					t.Fatalf("expected direct physical send to prepared-zero-turn, got %d", len(got))
+				}
+
+				// Now the segment disappears before history sync records SourceHistory/SourceRevision.
+				rig.mu.Lock()
+				rig.preparedZeroTurnAlive = false
+				rig.liveSessions = []proto.Session{{SessionID: "main-chat", Cwd: "/home/u/.persona/assistant", Assistant: true, Rev: 100}}
+				rig.mu.Unlock()
+				rig.physical.setSessions("server", slices.Clone(rig.liveSessions))
+				rig.s.logicalChanged()
+				return rig
+			},
+		},
+		{
+			name: "answer_again_without_queue_missing_transcript",
+			setup: func(t *testing.T) *zeroTurnPlaceholderRig {
+				rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", false)
+				ctx := t.Context()
+				liveRow := proto.Session{
+					SessionID:      "prepared-zero-turn",
+					MachineID:      "server",
+					Cwd:            "/home/u/.persona/assistant",
+					Assistant:      true,
+					Agent:          "codex",
+					Launcher:       "codex",
+					Model:          "target-model",
+					Effort:         "medium",
+					PermissionMode: "default",
+					Status:         proto.StatusIdle,
+					State:          proto.StateIdle,
+				}
+				rig.mu.Lock()
+				rig.preparedZeroTurnAlive = true
+				rig.liveSessions = append(rig.liveSessions, liveRow)
+				rig.mu.Unlock()
+				rig.physical.setSessions("server", slices.Clone(rig.liveSessions))
+				rig.s.logicalChanged()
+
+				if _, handled, err := rig.s.logicalCall(ctx, "server", assistantwire.DeviceAssistantAnswerAgain, json.RawMessage(`{"session_id":"side-chat","once_id":"aa-1"}`)); !handled || err != nil {
+					t.Fatalf("answer_again failed: handled=%v err=%v", handled, err)
+				}
+				if got := rig.sentTo("prepared-zero-turn"); len(got) != 1 {
+					t.Fatalf("expected direct physical answer_again to prepared-zero-turn, got %d", len(got))
+				}
+
+				rig.mu.Lock()
+				rig.preparedZeroTurnAlive = false
+				rig.liveSessions = []proto.Session{{SessionID: "main-chat", Cwd: "/home/u/.persona/assistant", Assistant: true, Rev: 100}}
+				rig.mu.Unlock()
+				rig.physical.setSessions("server", slices.Clone(rig.liveSessions))
+				rig.s.logicalChanged()
+				return rig
 			},
 		},
 	}
@@ -570,4 +685,137 @@ func TestMissingTranscriptWithRealHistoryRemainsProtected(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestZeroTurnSlowListLagDoesNotRollbackOrTriggerRecovery(t *testing.T) {
+	liveTargetRow := func(id string) proto.Session {
+		return proto.Session{
+			SessionID:      id,
+			MachineID:      "server",
+			Cwd:            "/home/u/.persona/assistant",
+			Assistant:      true,
+			Agent:          "codex",
+			Launcher:       "codex",
+			Model:          "target-model",
+			Effort:         "medium",
+			PermissionMode: "default",
+			Status:         proto.StatusIdle,
+			State:          proto.StateIdle,
+		}
+	}
+
+	t.Run("active_switch_prepare_succeeds_with_lagging_manager_list", func(t *testing.T) {
+		rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", false)
+		ctx := t.Context()
+		// Simulate node list push taking >3s: prepare succeeds on node (updating liveSessions),
+		// while manager display cache (physical.machines["server"].sessions) omits the new target.
+		rig.mu.Lock()
+		rig.laggingList = true
+		rig.mu.Unlock()
+
+		req, _ := json.Marshal(logicalSwitchRequest{
+			OperationID:    "slow-list-switch",
+			ExpectedEpoch:  2,
+			MachineID:      "server",
+			Launcher:       "claude",
+			Model:          "slow-list-model",
+			Effort:         "high",
+			PermissionMode: "default",
+		})
+		if err := rig.d.BeginConversationSwitch(ctx, "server", "side-chat", db.ConversationSwitch{
+			OperationID:   "slow-list-switch",
+			ExpectedEpoch: 2,
+			SourceSegment: "seg-two",
+			Request:       req,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, handled, err := rig.s.logicalCall(ctx, "server", DeviceSessionSend, json.RawMessage(`{"session_id":"side-chat","client_msg_id":"slow-first-1","text":"first turn under slow list"}`)); !handled || err != nil {
+			t.Fatalf("queue first turn under slow-list switch: handled=%v err=%v", handled, err)
+		}
+
+		waitFor(t, "delivery to prepared target despite lagging manager list", func() bool {
+			rig.s.logicalSweep(ctx)
+			return len(rig.sentTo("recovered-seg-1")) == 1
+		})
+
+		if stale := rig.sentTo("side-chat"); len(stale) != 0 {
+			t.Fatalf("healthy prepared target was rolled back to old segment: %+v", stale)
+		}
+		if _, cached := rig.physical.Session("server", "recovered-seg-1"); cached {
+			t.Fatal("test setup expected manager display cache to lag behind prepare")
+		}
+		c, err := rig.d.LogicalConversation(ctx, "server", "side-chat")
+		if err != nil || c == nil || c.Epoch != 3 || c.Switch != nil {
+			t.Fatalf("switch did not accept onto prepared target: %+v %v", c, err)
+		}
+		if active, ok := c.Active(); !ok || active.SessionID != "recovered-seg-1" || active.ClosePending {
+			t.Fatalf("expected active healthy recovered-seg-1, got: %+v", active)
+		}
+	})
+
+	t.Run("active_switch_probe_timeout_stays_uncertain_without_rollback", func(t *testing.T) {
+		rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", true)
+		ctx := t.Context()
+		rig.mu.Lock()
+		rig.preparedZeroTurnAlive = true
+		rig.listErr = context.DeadlineExceeded
+		rig.mu.Unlock()
+
+		if _, handled, err := rig.s.logicalCall(ctx, "server", DeviceSessionSend, json.RawMessage(`{"session_id":"side-chat","client_msg_id":"timeout-first-1","text":"do not rollback on probe timeout"}`)); !handled || err != nil {
+			t.Fatalf("queue first turn: handled=%v err=%v", handled, err)
+		}
+		waitFor(t, "delivery to active target when probe times out", func() bool {
+			rig.s.logicalSweep(ctx)
+			return len(rig.sentTo("prepared-zero-turn")) == 1
+		})
+		if rolledBack := rig.sentTo("side-chat"); len(rolledBack) != 0 {
+			t.Fatalf("timed-out probe caused false rollback to old segment: %+v", rolledBack)
+		}
+	})
+
+	t.Run("idle_prepared_slow_list_send_does_not_fabricate_replacement", func(t *testing.T) {
+		rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", false)
+		ctx := t.Context()
+		// Manager display cache omits prepared-zero-turn (so it looks like a placeholder),
+		// but the live node actually still has prepared-zero-turn healthy.
+		rig.mu.Lock()
+		rig.preparedZeroTurnAlive = true
+		rig.liveSessions = append(rig.liveSessions, liveTargetRow("prepared-zero-turn"))
+		rig.mu.Unlock()
+
+		if _, err := rig.s.toolConversationSend(ctx, "main-chat", []byte(`{"id":"side-chat","text":"hello healthy slow-listed segment"}`)); err != nil {
+			t.Fatalf("conversation_send failed: %v", err)
+		}
+		waitFor(t, "delivery to healthy prepared-zero-turn without replacement", func() bool {
+			rig.s.logicalSweep(ctx)
+			return len(rig.sentTo("prepared-zero-turn")) == 1
+		})
+		rig.mu.Lock()
+		preparedCount := rig.prepared
+		rig.mu.Unlock()
+		if preparedCount != 0 {
+			t.Fatalf("slow manager list triggered spurious replacement prepare count=%d", preparedCount)
+		}
+	})
+
+	t.Run("grace_window_stays_uncertain_without_recovery_or_rollback", func(t *testing.T) {
+		rig := setupZeroTurnPlaceholderRig(t, 6, "not_found", true)
+		ctx := t.Context()
+		rig.physical.mu.Lock()
+		rig.physical.machines["server"].shownUntil = time.Now().Add(time.Minute)
+		rig.physical.mu.Unlock()
+
+		c, err := rig.d.LogicalConversation(ctx, "server", "side-chat")
+		if err != nil || c == nil {
+			t.Fatalf("load logical conversation: %+v %v", c, err)
+		}
+		active, ok := c.Active()
+		if !ok {
+			t.Fatal("missing active segment")
+		}
+		if rig.s.physicalSegmentMissing(ctx, active) {
+			t.Fatal("grace window must remain uncertain and never report segment missing")
+		}
+	})
 }

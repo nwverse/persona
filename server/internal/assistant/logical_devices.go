@@ -582,6 +582,11 @@ func (d *logicalDevices) liveTarget(machine string) (string, bool) {
 
 type logicalSegmentInputStore interface {
 	ConversationSegmentDispatched(context.Context, string, string, string) (bool, error)
+	MarkConversationSegmentDispatched(context.Context, string, string, string) error
+}
+
+type currentConnectionListState interface {
+	CurrentConnectionListed(string) bool
 }
 
 func isMissingTranscriptErr(err error) bool {
@@ -624,24 +629,56 @@ func (s *Service) isZeroTurnPreparedSegment(ctx context.Context, c *db.LogicalCo
 }
 
 func (s *Service) physicalSegmentMissing(ctx context.Context, seg conversationlog.Segment) bool {
-	if physical := s.physicalDevices(); physical != nil {
-		sum, known := physical.Summary(seg.MachineID)
-		if !known || !sum.Online {
+	physical := s.physicalDevices()
+	if physical != nil {
+		if _, found := physical.Session(seg.MachineID, seg.SessionID); found {
 			return false
 		}
-		if shown, ok := physical.Shown(seg.MachineID); !ok || !shown.Listed {
-			return false
+		if live, ok := physical.(currentConnectionListState); ok {
+			if !live.CurrentConnectionListed(seg.MachineID) {
+				return false
+			}
+		} else {
+			sum, known := physical.Summary(seg.MachineID)
+			if !known || !sum.Online {
+				return false
+			}
+			if shown, ok := physical.Shown(seg.MachineID); !ok || !shown.Listed || !shown.Until.IsZero() {
+				return false
+			}
 		}
-		_, found := physical.Session(seg.MachineID, seg.SessionID)
-		return !found
 	}
-	var out struct {
-		Sessions []proto.Session `json:"sessions"`
+	// Never decide absence from the display cache alone: Shown.Listed can hold a
+	// retained pre-reconnect snapshot or lag behind a slow >3s list push after
+	// segment prepare. Probe the live node authoritatively with a bounded timeout;
+	// offline, grace, unready, malformed, or timed-out probes stay uncertain.
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var raw json.RawMessage
+	var err error
+	if physical != nil {
+		raw, err = physical.CallNode(probeCtx, seg.MachineID, DeviceSessionsList, json.RawMessage(`{}`))
+	} else {
+		err = s.call(context.WithValue(probeCtx, logicalSourceKey{}, true), seg.MachineID, DeviceSessionsList, map[string]any{}, &raw)
 	}
-	if err := s.call(context.WithValue(ctx, logicalSourceKey{}, true), seg.MachineID, DeviceSessionsList, nil, &out); err != nil {
+	if err != nil {
 		return false
 	}
-	for _, row := range out.Sessions {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	rawSessions, ok := fields["sessions"]
+	if !ok {
+		return false
+	}
+	var sessions []proto.Session
+	if len(rawSessions) > 0 && string(rawSessions) != "null" {
+		if err := json.Unmarshal(rawSessions, &sessions); err != nil {
+			return false
+		}
+	}
+	for _, row := range sessions {
 		if row.SessionID == seg.SessionID {
 			return false
 		}

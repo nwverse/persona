@@ -709,3 +709,27 @@ func TestConversationSegmentDispatched(t *testing.T) {
 		t.Fatalf("segment with accepted input should report dispatched=true: dispatched=%v err=%v", dispatched, err)
 	}
 }
+
+func TestMarkConversationSegmentDispatchedPersistsWithoutInputs(t *testing.T) {
+	d, _ := historyDB(t)
+	ctx := t.Context()
+	op := prepareLogicalSwitch(t, d)
+	if err := d.ActivateConversationSegment(ctx, "root-machine", "root-chat", op.OperationID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if dispatched, err := d.ConversationSegmentDispatched(ctx, "root-machine", "root-chat", "second"); err != nil || dispatched {
+		t.Fatalf("fresh active segment reported dispatched=%v err=%v", dispatched, err)
+	}
+	if err := d.MarkConversationSegmentDispatched(ctx, "root-machine", "root-chat", "first"); !errors.Is(err, ErrConversationEpoch) {
+		t.Fatalf("marking retired segment did not fail with ErrConversationEpoch: %v", err)
+	}
+	if err := d.MarkConversationSegmentDispatched(ctx, "root-machine", "root-chat", "second"); err != nil {
+		t.Fatalf("MarkConversationSegmentDispatched: %v", err)
+	}
+	if dispatched, err := d.ConversationSegmentDispatched(ctx, "root-machine", "root-chat", "second"); err != nil || !dispatched {
+		t.Fatalf("directly marked segment reported dispatched=%v err=%v", dispatched, err)
+	}
+	if dispatched, err := d.ConversationSegmentDispatched(ctx, "root-machine", "root-chat", "missing-seg"); err != nil || !dispatched {
+		t.Fatalf("unknown segment should fail closed: dispatched=%v err=%v", dispatched, err)
+	}
+}
