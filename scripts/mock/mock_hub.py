@@ -872,6 +872,16 @@ SESSIONS = [
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
 
+# MOCK_CODEX_ROUTE=terminal: the Codex agent is a Codex 0.169 or later in its pane, so it offers its model and thinking
+# effort as an app-server thread does (#12572, docs/integrations/codex.md "On the terminal route"): capabilities.model
+# and the efforts of the model it runs; the node types Codex's own /model to apply a pick.
+if os.environ.get("MOCK_CODEX_ROUTE") == "terminal":
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(launcher="codex", effort="medium", efforts=["low", "medium", "high", "xhigh"],
+                      capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True,
+                                    "modes": False, "model": True})
+
 if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
     for _s in SESSIONS:
         if _s["session_id"] == ORDERS:

@@ -29723,6 +29723,29 @@
         }
       }
     },
+    "Agents you read stay where they were, marked as seen, until you pull down to refresh." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agents you read stay where they were, marked as seen, until you pull down to refresh."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認したエージェントは、引き下げて更新するまで、確認済みとしてその場に残ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看过的 Agent 会以「已看」留在原处，下拉刷新后才移走。"
+          }
+        }
+      }
+    },
     "Agents · %lld" : {
       "shouldTranslate" : true,
       "localizations" : {
@@ -33275,6 +33298,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "An agent you open or mark as seen from Unread or Just Finished keeps its place, marked as seen, until you pull down to refresh, tap Clear Seen or choose a filter. With Leave When the Chat Closes it moves to Seen as soon as you leave its chat." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "An agent you open or mark as seen from Unread or Just Finished keeps its place, marked as seen, until you pull down to refresh, tap Clear Seen or choose a filter. With Leave When the Chat Closes it moves to Seen as soon as you leave its chat."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "「未確認」や「完了したばかり」から開いたり確認済みにしたりしたエージェントは、引き下げて更新するか、「確認済みを片付ける」をタップするか、フィルタを選ぶまで、確認済みとしてその場に残ります。「チャットを閉じたら移す」では、チャットを閉じるとすぐに確認済みに移ります。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从「完成未看」或「刚做完待看」打开或标为已看的 Agent，会以「已看」留在原处，直到你下拉刷新、点「清理已看」或选择筛选。选「离开就移走」时，离开对话就会移到「已看」。"
+          }
+        }
+      }
     },
     "An extension market is an index of extensions published by a repository or website. Add one to list its extensions here and install them directly." : {
       "localizations" : {
@@ -41801,6 +41847,29 @@
         }
       }
     },
+    "Change in Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change in Settings"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "設定で変更"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "去设置里修改"
+          }
+        }
+      }
+    },
     "check and tick [To-dos Line]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -50068,6 +50137,29 @@
         }
       },
       "extractionState" : "manual"
+    },
+    "Clear Seen (%lld)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Seen (%lld)"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認済みを片付ける（%lld）"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清理已看（%lld）"
+          }
+        }
+      }
     },
     "Clear Sign-in for %@?" : {
       "localizations" : {
@@ -99464,6 +99556,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "退出完全访问？"
+          }
+        }
+      }
+    },
+    "Leave When the Chat Closes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leave When the Chat Closes"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "チャットを閉じたら移す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "离开就移走"
           }
         }
       }
@@ -157158,6 +157273,29 @@
       },
       "extractionState" : "manual"
     },
+    "Seen Agents" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seen Agents"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認済みのエージェント"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "看过的 Agent"
+          }
+        }
+      }
+    },
     "Seen [State Names]" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -169515,6 +169653,29 @@
       },
       "extractionState" : "manual"
     },
+    "Stay Until Refresh" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stay Until Refresh"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新まで残す"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "留到刷新"
+          }
+        }
+      }
+    },
     "Step %lld of %lld" : {
       "localizations" : {
         "en" : {
@@ -174449,6 +174610,29 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "ToDoから外しました"
+          }
+        }
+      }
+    },
+    "Takes the agents you have read out of this section." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Takes the agents you have read out of this section."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "確認したエージェントをこのセクションから外します。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把你看过的 Agent 移出这一段。"
           }
         }
       }
@@ -221867,19 +222051,19 @@
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agents list layout rows cards compact"
+            "value" : "Agents list layout rows cards compact seen agents stay refresh"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agents 列表 布局 行 卡片 紧凑"
+            "value" : "Agents 列表 布局 行 卡片 紧凑 看过的 Agent 已看 留到刷新"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Agents 一覧 レイアウト 行 カード コンパクト"
+            "value" : "Agents 一覧 レイアウト 行 カード コンパクト 確認済みのエージェント 更新まで残す"
           }
         }
       }
