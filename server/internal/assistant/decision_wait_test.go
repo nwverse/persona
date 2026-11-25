@@ -169,7 +169,7 @@ func TestDecisionThatCannotBeKeptAsHeldIsPushed(t *testing.T) {
 	if err := st.memStore.PutSetting(context.Background(), settingsKey, s.settings(context.Background())); err != nil {
 		t.Fatal(err)
 	}
-	s.store = func() Store { return st }
+	s.setStore(func() Store { return st })
 	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	res := reviewTask(t, s, todo.ID, waitingDecision())
 	if strings.Contains(res, "can wait (can_wait)") || !strings.Contains(res, "can_wait was ignored ("+waitNotKept+")") ||

@@ -457,6 +457,12 @@ on-demand model panel, not the everyday Assistant home (#6887).
   name on one line truncated in the middle, and under it how far it got ("1.3 MB / 2.4 MB"), Waiting, its size, or
   Failed · Tap to Retry, a thin accent bar along the bottom while it waits or uploads, and the photos' ✕ at the top
   corner (hit through `tapTargetOutset(.all)`). Up to 10, three uploading at once; a tap on a failed card tries again. Send waits for them as for a video.
+- Web attachments (#15408): photos and remote files share one wrapping strip above the field with an 8 px gap.
+  The 52 px tiles use the card radius and an inset `line` border. A 1 px frame leaves the border visible around
+  white screenshots. Photos open in the markup editor. Remote files reuse the Files panel glyphs and show size,
+  upload progress, or a retry action. Both use the tray's circular `touch-hit-corner` remove control, visible on
+  hover, keyboard focus, and touch. The strip takes up no room when empty. `FileTiles` loads its tile body on the
+  first remote attachment.
 - Web bottom row (#5324, cindy's toolbar at the owner's request; cindy wins over this section's earlier rules for it):
   `[+][permission picker] … [model pill][Stop][voice][send / queue / stop]`. The + and the picker are bare 30 px round
   controls that show the model pill's frame (`line-strong` border, `hover` fill) on hover or while open; the action is one
@@ -923,6 +929,7 @@ existing overview list style.
   - On the V1 To-dos list (below; iOS, hubs with `todo_view`, from #10465's switch-on) there is no Got it: opening a to-do counts as seeing it; Shelved becomes the Inactive mark inside To do.
   - "N related" sits inside the row it belongs to, under its words; opened, the related rows come under it a level in, with a line down their side.
   - A filter and a sort for such a list go in one button's menu next to the view switch (on the web, next to the search field), the active filter also as a chip that clears it ("List controls" below); the sort orders rows inside each section and never moves a section (To-dos on iOS, Android and the web, #3740). The V1 To-dos list on iOS (below) keeps the filter at the foot toolbar and the sort in ⋯.
+- **Read-only To-dos progress board** (web, #12713; `web/src/views/TodoBoard.tsx`): a display mode beside List and Calendar for reviewing open work across projects, not a fourth status grouping or a filter. It reuses the existing view `Segmented`, project surfaces, `Tag`, field styling and type tokens. Every open row uses the page's `countsAsOpen` placement (closed, accepted, cancelled and Shelved work stays out) and its stored `project`, with No project last. Headings count the rows actually shown: open, the existing `owner_decides` rule as Waiting on you, and strictly older than the visible positive-hour threshold as Stale. The threshold defaults to 72 hours and is a reversible browser-local display choice, not a hub or to-do setting; changing it recomputes locally and invalid input preserves the last valid value. Progress text and time come from the same stored report/session pair; no such pair means No progress yet and creation time for staleness. Rows only open the existing to-do detail. The board has no editing, completion, assignment or follow-up controls, starts no model or Agent work and writes nothing. Why a new mode: the actionable status list and due-date calendar do not answer cross-project ownership, last-progress and staleness questions in one read-only view; the new count definitions and progress-source precedence are recorded in `docs/web/web.md`.
 - **To-dos list** (#10465; iOS, hubs with `todo_view`, from #10465's switch-on; `docs/design/proposals/todos-redesign.md`
   3.3 and 3.4, the page, the row and the container the owner chose on 11-21, which supersede the V1 frames
   `iphone/list`, `docs/design/prototypes/todos/v1/notes.md`): the hub files each to-do (its `view`'s section) and the list draws the sections in the hub's order, what the

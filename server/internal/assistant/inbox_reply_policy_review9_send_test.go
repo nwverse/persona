@@ -134,7 +134,7 @@ func TestInboxReplyPolicyFailedPublicationUnmarkedRowCannotSendAfterReloadLegacy
 			h.inbox.touched(it.ID)
 			h.inbox.mu.Unlock()
 		}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		return h, c, it
 	}
 
@@ -181,18 +181,18 @@ func TestInboxReplyPolicyFailedPublicationUnmarkedRowCannotSendAfterReloadLegacy
 		h, c, it := newFailedPublication(t)
 		h.inbox.onDemandDraftSaveHook = func() {
 			h.inbox.onDemandDraftSaveHook = nil
-			h.store = func() Store { return h.st }
+			h.setStore(func() Store { return h.st })
 			if _, err := suggestTool(t, h, `{"recap":"Metadata persisted before the failing tombstone"}`); err != nil {
 				t.Errorf("persisting the intermediate row failed: %v", err)
 			}
-			h.store = func() Store {
+			h.setStore(func() Store {
 				return &replyPolicyDraftFailStore{inboxMemStore: h.st, before: func() {}}
-			}
+			})
 		}
 		if text, err := h.draftReply(t.Context(), it.ID, ""); err == nil || text != "" {
 			t.Fatalf("failed publication returned text: text=%q err=%v", text, err)
 		}
-		h.store = func() Store { return h.st }
+		h.setStore(func() Store { return h.st })
 		restarted := New(Options{Hub: h.f, Store: func() Store { return h.st }, Logf: testLogf(t)})
 		if err := restarted.inboxReady(t.Context()); err != nil {
 			t.Fatal(err)
@@ -538,7 +538,7 @@ func TestInboxReplyPolicyFailedPublicationUnmarkedRowCannotSendAfterReload(t *te
 			h.inbox.touched(it.ID)
 			h.inbox.mu.Unlock()
 		}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		return h, c, it
 	}
 
@@ -585,18 +585,18 @@ func TestInboxReplyPolicyFailedPublicationUnmarkedRowCannotSendAfterReload(t *te
 		h, c, it := newFailedPublication(t)
 		h.inbox.onDemandDraftSaveHook = func() {
 			h.inbox.onDemandDraftSaveHook = nil
-			h.store = func() Store { return h.st }
+			h.setStore(func() Store { return h.st })
 			if _, err := suggestTool(t, h, `{"recap":"Metadata persisted before the failing tombstone"}`); err != nil {
 				t.Errorf("persisting the intermediate row failed: %v", err)
 			}
-			h.store = func() Store {
+			h.setStore(func() Store {
 				return &replyPolicyDraftFailStore{inboxMemStore: h.st, before: func() {}}
-			}
+			})
 		}
 		if text, err := h.draftReply(t.Context(), it.ID, ""); err == nil || text != "" {
 			t.Fatalf("failed publication returned text: text=%q err=%v", text, err)
 		}
-		h.store = func() Store { return h.st }
+		h.setStore(func() Store { return h.st })
 		restarted := New(Options{Hub: h.f, Store: func() Store { return h.st }, Logf: testLogf(t)})
 		if err := restarted.inboxReady(t.Context()); err != nil {
 			t.Fatal(err)

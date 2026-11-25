@@ -675,6 +675,14 @@ internal class AgentsViewModel(
             else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName))
         }
     }
+    fun renameUnified(session: Session, name: String) {
+        val edit = SessionRename.unifiedChanges(session, name)
+        if (!edit.changed) return
+        change(session.machineId, R.string.agents_notice_renamed) {
+            if (renamer != null) renamer.renameUnified(session, name)
+            else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName), unified = true)
+        }
+    }
     fun renameSpace(session: Session, name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty() || trimmed == session.spaceName) return

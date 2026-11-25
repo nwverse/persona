@@ -53,7 +53,7 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	tools := toolsNamed(withKnowledgeUI(toolNames, s))
 	// A bare Service has no settings store and is used by registry tests. With no
 	// store the opt-in is false; do not call the nil store function just to hide it.
-	if s.store != nil && ownerReplyApprovalOn(s.settings(ctx)) {
+	if s.storeFn.Load() != nil && ownerReplyApprovalOn(s.settings(ctx)) {
 		tools = append(tools, toolsNamed([]string{ownerActionPrepareTool})...)
 	}
 	if s.urgentOn(ctx) {
