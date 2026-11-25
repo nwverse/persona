@@ -438,11 +438,6 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
   }
   [data-chat-scroll][data-scrollbar-visible="true"] { scrollbar-color: var(--ink-3) transparent; }
 }
-/* The navigator's measured clearance grows only where the centered column's existing margin is insufficient. */
-[data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 5), var(--chat-nav-clearance, 0px)); }
-@media (min-width: 640px) {
-  [data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 8), var(--chat-nav-clearance, 0px)); }
-}
 button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
 /* Blue bubbles need stronger muted text in dark mode and a readable focus indicator in both schemes.
    Keep this local: page text and extension accent colors are unchanged. */
