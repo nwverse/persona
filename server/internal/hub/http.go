@@ -1225,7 +1225,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if p.TabName == "" && p.ResumeSessionID == "" && !desktopStartLauncher(resolvedLauncher) {
 		requested, _ := params["tab_name"].(string)
 		_ = h.notifyBus(h.machineOwner(m.cfg.ID), assistantwire.EventAgentTabNameStarted, assistantwire.AgentTabNameStart{
-			MachineID: m.cfg.ID, SessionID: res.Session.SessionID, TabID: cmp.Or(namingSession.SlotID, namingSession.TabID),
+			MachineID: assistantwire.AgentMachineID(m.cfg.ID), SessionID: assistantwire.AgentSessionID(res.Session.SessionID),
+			TabID:           assistantwire.AgentTabID(cmp.Or(namingSession.SlotID, namingSession.TabID)),
 			ExpectedTabName: cmp.Or(namingSession.HerdrTabName(), requested), NameFrom: nameFrom,
 		})
 	}

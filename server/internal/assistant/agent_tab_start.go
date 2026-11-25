@@ -14,7 +14,8 @@ import (
 // requested name is only a fallback for an incomplete answer: the node's expected-name recheck remains the authority.
 func agentTabNameStart(machine string, c proto.Session, requested, nameFrom string) assistantwire.AgentTabNameStart {
 	return assistantwire.AgentTabNameStart{
-		MachineID: machine, SessionID: c.SessionID, TabID: cmp.Or(c.SlotID, c.TabID),
+		MachineID: assistantwire.AgentMachineID(machine), SessionID: assistantwire.AgentSessionID(c.SessionID),
+		TabID:           assistantwire.AgentTabID(cmp.Or(c.SlotID, c.TabID)),
 		ExpectedTabName: cmp.Or(c.HerdrTabName(), requested), NameFrom: nameFrom,
 	}
 }
@@ -22,7 +23,7 @@ func agentTabNameStart(machine string, c proto.Session, requested, nameFrom stri
 // nameAgentTabLater finishes a start's model naming off its caller's path. A start with no usable session/tab identity
 // is left to the ordinary background naming pass rather than guessing which session or user-chosen label to replace.
 func (s *Service) nameAgentTabLater(p assistantwire.AgentTabNameStart) {
-	if p.SessionID == "" || p.ExpectedTabName == "" || strings.TrimSpace(p.NameFrom) == "" {
+	if string(p.SessionID) == "" || p.ExpectedTabName == "" || strings.TrimSpace(p.NameFrom) == "" {
 		return
 	}
 	b := &s.agentNames
@@ -47,20 +48,20 @@ func (s *Service) nameAgentTabLater(p assistantwire.AgentTabNameStart) {
 		}
 		// The node compares both identities again immediately before renaming, so a manual rename while the model was
 		// running always wins. Never replace this with an unguarded session.rename.
-		if err := s.call(ctx, p.MachineID, assistantwire.DeviceSessionRenameTabIfCurrent, map[string]any{
-			"session_id": p.SessionID, "tab_id": p.TabID, "expected_tab_name": p.ExpectedTabName, "tab_name": name,
+		if err := s.call(ctx, string(p.MachineID), assistantwire.DeviceSessionRenameTabIfCurrent, map[string]any{
+			"session_id": string(p.SessionID), "tab_id": string(p.TabID), "expected_tab_name": p.ExpectedTabName, "tab_name": name,
 		}, nil); err != nil {
 			if ctx.Err() == nil {
-				s.logf("tab name %s: %v", p.SessionID, err)
+				s.logf("tab name %s: %v", string(p.SessionID), err)
 			}
 			return
 		}
 		// nameStartedAgent records the local placeholder for display. Advance it only after the guarded rename lands.
-		if err := s.putInitialAgentTitle(ctx, p.MachineID, p.SessionID, name); err != nil {
-			s.logf("tab name %s: save session title: %v", p.SessionID, err)
+		if err := s.putInitialAgentTitle(ctx, string(p.MachineID), string(p.SessionID), name); err != nil {
+			s.logf("tab name %s: save session title: %v", string(p.SessionID), err)
 			return
 		}
-		s.publishSessions(p.MachineID)
+		s.publishSessions(string(p.MachineID))
 	}()
 }
 
@@ -73,14 +74,14 @@ func (s *Service) startedTabIdentity(ctx context.Context, p assistantwire.AgentT
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		current, found := s.rawAgentForNaming(ctx, p.MachineID, p.SessionID)
+		current, found := s.rawAgentForNaming(ctx, string(p.MachineID), string(p.SessionID))
 		if found {
 			label := current.HerdrTabName()
 			if label != "" && label != p.ExpectedTabName {
 				return p, false
 			}
 			if id := cmp.Or(current.SlotID, current.TabID); label == p.ExpectedTabName && id != "" {
-				p.TabID = id
+				p.TabID = assistantwire.AgentTabID(id)
 				return p, true
 			}
 		}
