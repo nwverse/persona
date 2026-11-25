@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Component contracts: passive cached scroll tracking, transient visibility, stable selection and accessible input.
+// Component contracts: passive cached scroll tracking, gutter clearance, stable selection and accessible input.
 import { act, Profiler, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,10 +56,13 @@ const { NavRail, NAV_RAIL_OBSERVER_MS } = await import("./NavRail");
 
 const tick = (i: number): NavRailTick => ({ id: `seg:${i}`, preview: `question ${i}` });
 // jsdom reports every box as 0: a scroller wide and tall enough for the rail needs real numbers
-const scrollerWith = (width: number, height: number) => {
+const scrollerWith = (width: number, height: number, contentWidth = Math.min(width, 500)) => {
   const el = document.createElement("div");
-  Object.defineProperty(el, "clientWidth", { value: width });
+  Object.defineProperty(el, "clientWidth", { value: width, configurable: true });
   Object.defineProperty(el, "clientHeight", { value: height });
+  const content = el.appendChild(document.createElement("div"));
+  content.dataset.chatContent = "";
+  Object.defineProperty(content, "clientWidth", { value: contentWidth });
   return el;
 };
 // the rail measures on requestAnimationFrame, which jsdom runs as a ~16 ms timer
@@ -86,38 +89,44 @@ afterEach(() => {
 });
 
 describe("NavRail", () => {
-  it("keeps global input ordinals in labels and keyboard announcements for a 50-mark window", async () => {
+  it("keeps global ordinals while moving a 28-tick window over 50 positions", async () => {
     const ticks = Array.from({ length: 50 }, (_, i) => ({ ...tick(i), ordinal: 629 + i }));
     act(() => root.render(<NavRail ticks={ticks} total={678} scroller={scrollerWith(1000, 800)} onJump={() => {}} reset="example/global" />));
     await settle();
     const marks = host.querySelectorAll("button[data-tick]");
-    expect(marks).toHaveLength(50);
-    expect(marks[0].getAttribute("aria-label")).toContain("629");
-    expect(marks[49].getAttribute("aria-label")).toContain("678");
+    expect(marks).toHaveLength(28);
+    expect(marks[0].getAttribute("aria-label")).toContain("651");
+    expect(marks[27].getAttribute("aria-label")).toContain("678");
+    expect((marks[0] as HTMLElement).style.height).toBe("15px");
     const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
     act(() => rail.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+    expect(host.querySelector('[data-tick="0"]')?.getAttribute("aria-label")).toContain("629");
     expect(host.querySelector('[aria-live="polite"]')?.textContent).toContain("629");
     expect(host.querySelector('[aria-live="polite"]')?.textContent).toContain("678");
   });
 
-  it("separates the hit strip from native and overlay scrollbars and clears narrow content padding on unmount", async () => {
-    const sc = scrollerWith(500, 600);
-    Object.defineProperty(sc, "offsetWidth", { value: 510 });
-    const content = document.createElement("div");
-    content.dataset.chatContent = "";
-    Object.defineProperty(content, "clientWidth", { value: 500 });
-    sc.append(content);
+  it("uses the natural left gutter and removes the rail and its tab stop when the pane shrinks", async () => {
+    const sc = scrollerWith(1200, 600, 880);
+    let width = 1200;
+    Object.defineProperty(sc, "clientWidth", { get: () => width });
+    Object.defineProperty(sc, "offsetWidth", { get: () => width + 10 });
     act(() => root.render(<NavRail ticks={[tick(1), tick(2)]} scroller={sc} onJump={() => {}} reset="example/gutter" />));
     await settle();
-    expect(host.querySelector<HTMLElement>("[data-nav-rail]")!.style.right).toBe(`${10 + M.edgeGap}px`);
-    expect(sc.style.getPropertyValue("--chat-nav-clearance")).toBe(`${M.width + M.edgeGap + M.endInset}px`);
-    act(() => root.render(null));
-    expect(sc.style.getPropertyValue("--chat-nav-clearance")).toBe("");
-    const overlay = scrollerWith(500, 600);
-    Object.defineProperty(overlay, "offsetWidth", { value: 500 });
-    act(() => root.render(<NavRail ticks={[tick(1), tick(2)]} scroller={overlay} onJump={() => {}} reset="example/overlay" />));
+    const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
+    expect(rail.style.left).toBe(`${M.edgeGap}px`);
+    act(() => rail.focus());
+    expect(host.querySelector("[data-nav-preview]")).not.toBeNull();
+    width = 1000;
+    finePointer.fireResize([{ target: sc }]);
     await settle();
-    expect(host.querySelector<HTMLElement>("[data-nav-rail]")!.style.right).toBe(`${M.edgeGap}px`);
+    expect(host.querySelector("[data-nav-rail]")).toBeNull();
+    expect(document.activeElement).not.toBe(rail);
+    expect(sc.style.cssText).toBe("");
+    width = 1200;
+    finePointer.fireResize([{ target: sc }]);
+    await settle();
+    expect(host.querySelector("[data-nav-rail]")).not.toBeNull();
+    expect(host.querySelector("[data-nav-preview]")).toBeNull();
   });
 
   it("rearms a frame cancelled by StrictMode's initial effect replay", async () => {
@@ -142,18 +151,18 @@ describe("NavRail", () => {
     expect(commits).toBeGreaterThan(1); // the mount, then the measure that draws it
   });
 
-  it("uses equal short marks before hover and after exit, including the current input", async () => {
+  it("restores calm marks and a distinct current input after hover or focus", async () => {
     const sc = scrollerWith(700, 600);
     const row = document.createElement("div");
     row.dataset.line = "seg:1";
     row.append(document.createElement("div"));
-    sc.append(row);
+    sc.firstElementChild!.append(row);
     act(() => root.render(<NavRail ticks={[tick(1), tick(2), tick(3)]} scroller={sc} onJump={() => {}} reset="example/idle-width" />));
     await settle();
     const marks = () => [...host.querySelectorAll<HTMLElement>("[data-nav-mark]")];
     const short = () => {
-      expect(marks().map((mark) => mark.style.width)).toEqual(Array(3).fill(`${M.tickWidth}px`));
-      expect(marks().map((mark) => mark.style.height)).toEqual(Array(3).fill(`${M.tickHeight}px`));
+      expect(marks().map((mark) => mark.style.width)).toEqual([M.currentWidth, M.tickWidth, M.tickWidth].map((n) => `${n}px`));
+      expect(marks().map((mark) => mark.style.height)).toEqual([M.currentHeight, M.tickHeight, M.tickHeight].map((n) => `${n}px`));
       expect(marks()[0].dataset.navMark).toBe("current");
       expect(marks()[0].classList.contains("bg-ink")).toBe(true);
       expect(marks()[0].style.opacity).toBe("1");
@@ -184,7 +193,7 @@ describe("NavRail", () => {
     const row = document.createElement("div");
     row.dataset.line = "seg:1";
     row.append(document.createElement("div"));
-    sc.append(row);
+    sc.firstElementChild!.append(row);
     let finish!: () => void;
     const jump = new Promise<void>((resolve) => { finish = resolve; });
     act(() => root.render(<NavRail ticks={[tick(1), tick(2)]} scroller={sc} onJump={() => jump} reset="example/pending" />));
@@ -235,14 +244,13 @@ describe("NavRail", () => {
     expect(reads).toBe(0); // no clientWidth / clientHeight
     expect(boxes).not.toHaveBeenCalled();
     expect(lines).not.toHaveBeenCalled();
-    expect(listen).not.toHaveBeenCalled(); // no scroll listener, so the idle timer is never armed
+    expect(listen).not.toHaveBeenCalled();
   });
 
   it("does not paint a frozen rail when a precise pointer comes back", async () => {
     const width = { value: 1200 };
-    const sc = document.createElement("div");
+    const sc = scrollerWith(width.value, 600, 880);
     Object.defineProperty(sc, "clientWidth", { get() { return width.value; } });
-    Object.defineProperty(sc, "clientHeight", { value: 600 });
     let watch = false;
     let flashed = false;
     act(() => root.render(
@@ -253,7 +261,7 @@ describe("NavRail", () => {
     await settle();
     expect(host.querySelectorAll("[data-nav-rail] button")).toHaveLength(8);
     // the chat then loses its margin (a rotation, a panel) while the pointer is gone
-    width.value = 700;
+    width.value = 950;
     act(() => { finePointer.set(false); });
     await settle();
     expect(host.querySelector("[data-nav-rail]")).toBeNull();
@@ -261,7 +269,7 @@ describe("NavRail", () => {
     act(() => { finePointer.set(true); });
     expect(flashed).toBe(false); // the commit that learns the pointer is back must not draw the old geometry
     await settle();
-    expect(host.querySelectorAll("[data-nav-rail] button")).toHaveLength(8); // the right edge works in narrow desktops too
+    expect(host.querySelector("[data-nav-rail]")).toBeNull();
   });
 
   it("does not restore a hover preview after the precise pointer comes back", async () => {
@@ -282,21 +290,44 @@ describe("NavRail", () => {
     expect(host.querySelector("[data-nav-rail-preview]")).toBeNull();
   });
 
-  it("dismisses a hover card synchronously while the rail's independent idle timer remains", async () => {
+  it("dismisses a bold query and reply preview immediately on pointer exit", async () => {
     const sc = scrollerWith(700, 600);
     act(() => root.render(<NavRail ticks={[{ ...tick(1), answerExcerpt: "A short response." }, tick(2)]} scroller={sc} onJump={() => {}} reset="example/exit" />));
     await settle();
-    vi.useFakeTimers();
     const button = host.querySelector("button")!;
     act(() => button.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
     const surface = host.querySelector<HTMLElement>("[data-nav-preview-surface]")!;
     expect(surface.style.padding).toBe(`${M.previewPadding}px`);
     expect(surface.classList.contains("rounded-nav-preview")).toBe(true);
+    expect(host.querySelector("[data-nav-preview-title]")?.textContent).toBe("question 1");
     expect(host.querySelector("[data-nav-preview-title]")?.classList.contains("truncate")).toBe(true);
-    expect(host.querySelector("[data-nav-preview-excerpt]")?.classList.contains("line-clamp-2")).toBe(true);
+    expect(host.querySelector("[data-nav-preview-title]")?.classList.contains("font-semibold")).toBe(true);
+    expect(host.querySelector("[data-nav-preview-excerpt]")?.textContent).toBe("A short response.");
+    expect(host.querySelector("[data-nav-preview-excerpt]")?.classList.contains("line-clamp-3")).toBe(true);
     act(() => button.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
-    expect(host.querySelector("[data-nav-preview]")).toBeNull(); // no timer advancement
-    expect(host.querySelector<HTMLElement>("[data-nav-rail]")!.dataset.visible).toBe("true");
+    expect(host.querySelector("[data-nav-preview]")).toBeNull();
+    expect(host.querySelector("[data-nav-rail]")).not.toBeNull();
+  });
+
+  it("describes attachment-only and answer-only inputs, and uses an ordinal for bare positions", async () => {
+    const ticks: NavRailTick[] = [
+      { id: "image", preview: "", ordinal: 1, attachmentsOnly: 2 },
+      { id: "answer", preview: "", ordinal: 2, answerExcerpt: "An indexed reply." },
+      { id: "position", preview: "", ordinal: 3 },
+    ];
+    act(() => root.render(<NavRail ticks={ticks} scroller={scrollerWith(700, 600)} onJump={() => {}} reset="example/fallbacks" />));
+    await settle();
+    const buttons = host.querySelectorAll("button");
+    const hover = (i: number) => act(() => buttons[i].dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
+    hover(0);
+    expect(host.querySelector("[data-nav-preview-title]")?.textContent).toBe(t("chat-navrail.attachments", { count: 2 }));
+    hover(1);
+    expect(host.querySelector("[data-nav-preview-title]")).toBeNull();
+    expect(host.querySelector("[data-nav-preview-excerpt]")?.textContent).toBe("An indexed reply.");
+    expect(buttons[1].getAttribute("aria-label")).toContain("An indexed reply.");
+    hover(2);
+    expect(host.querySelector("[data-nav-preview-title]")?.textContent).toBe(t("chat-navrail.input", { index: 3 }));
+    expect(host.querySelector("[data-nav-preview-excerpt]")).toBeNull();
   });
 
   it("keeps a preview across the rail/card hit zones but closes immediately when both are left", async () => {
@@ -309,7 +340,8 @@ describe("NavRail", () => {
     const card = host.querySelector<HTMLElement>("[data-nav-preview]")!;
     act(() => button.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: card })));
     expect(host.querySelector("[data-nav-preview]")).toBe(card);
-    expect(card.style.paddingRight).toBe(`${M.previewGap}px`);
+    expect(card.style.left).toBe(`${M.width}px`);
+    expect(card.style.paddingLeft).toBe(`${M.previewGap}px`);
     const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
     rail.setPointerCapture = vi.fn();
     const press = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
@@ -377,25 +409,42 @@ describe("NavRail", () => {
     expect([...host.querySelectorAll<HTMLElement>("[data-nav-mark]")].every((mark) => mark.style.width === `${M.tickWidth}px`)).toBe(true);
   });
 
-  it("starts hidden, wakes for scrolling and keyboard focus, and fades after quiet", async () => {
+  it("stays visible at rest without a body scroll or hover to reveal it", async () => {
     const sc = scrollerWith(700, 600);
+    vi.useFakeTimers();
     act(() => root.render(<NavRail ticks={[tick(1), tick(2)]} scroller={sc} onJump={() => {}} reset="example/s1" />));
+    act(() => vi.advanceTimersByTime(32));
+    const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
+    expect(getComputedStyle(rail).opacity || "1").toBe("1");
+    act(() => rail.focus());
+    act(() => rail.blur());
+    act(() => vi.advanceTimersByTime(3000));
+    expect(host.querySelector("[data-nav-rail]")).toBe(rail);
+    expect(getComputedStyle(rail).opacity || "1").toBe("1");
+    expect(host.querySelector("[data-nav-preview]")).toBeNull();
+  });
+
+  it("pages the tick window in both wheel directions without scrolling the transcript", async () => {
+    const sc = scrollerWith(700, 600);
+    const scrollBy = vi.fn();
+    sc.scrollBy = scrollBy;
+    act(() => root.render(<NavRail ticks={Array.from({ length: 80 }, (_, i) => tick(i))} scroller={sc} onJump={() => {}} reset="example/wheel" />));
     await settle();
     const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
-    expect(rail.dataset.visible).toBe("false");
-    vi.useFakeTimers();
-    act(() => sc.dispatchEvent(new Event("scroll")));
-    expect(rail.dataset.visible).toBe("true");
-    await act(async () => vi.advanceTimersByTimeAsync(2100));
-    expect(rail.dataset.visible).toBe("false");
-    act(() => rail.focus());
-    expect(rail.dataset.visible).toBe("true");
-    await act(async () => vi.advanceTimersByTimeAsync(2100));
-    expect(rail.dataset.visible).toBe("true");
-    act(() => rail.blur());
-    await act(async () => vi.advanceTimersByTimeAsync(2100));
-    expect(rail.dataset.visible).toBe("false");
-    vi.useRealTimers();
+    const wheel = (deltaY: number) => act(() => rail.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true })));
+    const first = () => Number(rail.querySelector("button")?.dataset.tick);
+    expect(first()).toBe(52);
+    wheel(-100);
+    expect(first()).toBeLessThan(52);
+    wheel(-100);
+    wheel(-100);
+    expect(first()).toBe(0);
+    expect(rail.querySelectorAll("button")).toHaveLength(28);
+    wheel(100);
+    wheel(100);
+    wheel(100);
+    expect(first()).toBe(52);
+    expect(scrollBy).not.toHaveBeenCalled();
   });
 
   it("selects every loaded input with the keyboard in a bounded window without jumping until Enter", async () => {
@@ -470,9 +519,7 @@ describe("NavRail", () => {
 
   it("reads rows from the content's own children, and does no per-message layout reads on scroll frames", async () => {
     const sc = scrollerWith(700, 600);
-    const content = document.createElement("div");
-    content.dataset.chatContent = "";
-    sc.append(content);
+    const content = sc.firstElementChild!;
     const boxes = Array.from({ length: 40 }, (_, i) => {
       const row = document.createElement("div");
       row.dataset.line = `seg:${i}`;
@@ -517,8 +564,10 @@ describe("NavRail", () => {
       expect(buttons.map((b) => Boolean(b.querySelector("[data-question-dot]")))).toEqual([false, true, true, false, false]);
       const width = (b: HTMLElement) => parseFloat(b.querySelector<HTMLElement>("[data-nav-mark]")!.style.width);
       expect(width(buttons[2])).toBeCloseTo(width(buttons[1]) * M.followWidth);
-      // something in progress or unread keeps the rail shown
-      expect(host.querySelector("[data-nav-rail]")!.className).toContain("opacity-100");
+      act(() => buttons[2].dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
+      const state = host.querySelector("[data-nav-preview-state]");
+      expect(state?.textContent).toBe(t("chat-navrail.follow_state", { state: t("chat-navrail.state_unread") }));
+      expect(state?.parentElement?.querySelector("[data-nav-preview-title]")?.textContent).toBe("question 3");
     });
 
     it("announces the state with a keyboard selection", async () => {
@@ -529,13 +578,16 @@ describe("NavRail", () => {
       expect(host.querySelector('[aria-live="polite"]')?.textContent).toContain(t("chat-navrail.state_pending"));
     });
 
-    it("works on a touch screen only with states: a tap jumps", async () => {
+    it("keeps touch navigation with states in a wide pane and hides it in a narrow pane", async () => {
       finePointer.matches = false;
       const jumps: string[] = [];
       act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(390, 700)} onJump={(id) => { jumps.push(id); }} reset="example/touch" />));
       await settle();
       expect(host.querySelector("[data-nav-rail]")).toBeNull();
       act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(390, 700)} onJump={(id) => { jumps.push(id); }} reset="example/touch" marks={marks} />));
+      await settle();
+      expect(host.querySelector("[data-nav-rail]")).toBeNull();
+      act(() => root.render(<NavRail ticks={five()} scroller={scrollerWith(1200, 700, 880)} onJump={(id) => { jumps.push(id); }} reset="example/touch" marks={marks} />));
       await settle();
       const rail = host.querySelector<HTMLElement>("[data-nav-rail]")!;
       expect(rail.dataset.navTouch).toBe("true");
@@ -545,12 +597,9 @@ describe("NavRail", () => {
     });
   });
 
-  it("skips full layout reads and redundant clearance writes during streaming tail mutations while keeping scroll, hover and jump intact", async () => {
+  it("keeps cached geometry during tail mutations and text-only tick updates while scroll, hover and jump still work", async () => {
     const sc = scrollerWith(700, 600);
-    const content = document.createElement("div");
-    content.dataset.chatContent = "";
-    Object.defineProperty(content, "clientWidth", { value: 700, configurable: true });
-    sc.append(content);
+    const content = sc.firstElementChild!;
     const boxes = Array.from({ length: 12 }, (_, i) => {
       const row = document.createElement("div");
       row.dataset.line = `seg:${i}`;
@@ -561,12 +610,10 @@ describe("NavRail", () => {
       return child;
     });
     const jump = vi.fn();
-    const setPropSpy = vi.spyOn(sc.style, "setProperty");
-    act(() => root.render(<NavRail ticks={boxes.map((_, i) => tick(i))} scroller={sc} onJump={jump} reset="example/stream-tail" />));
+    const ticks = boxes.map((_, i) => tick(i));
+    const render = (positions: NavRailTick[]) => act(() => root.render(<NavRail ticks={positions} scroller={sc} onJump={jump} reset="example/stream-tail" />));
+    render(ticks);
     await settle();
-    expect(setPropSpy).toHaveBeenCalledWith("--chat-nav-clearance", expect.any(String));
-
-    setPropSpy.mockClear();
     for (const child of boxes) vi.mocked(child.getBoundingClientRect).mockClear();
 
     // Stream DOM nodes into the last tick's body, an untracked assistant `[data-line]` reply after it,
@@ -592,10 +639,10 @@ describe("NavRail", () => {
     nextReplyLine.dataset.line = "reply:12";
     nextReplyLine.append(document.createElement("div"));
     content.append(nextReplyLine);
+    render(ticks.map((tick) => ({ ...tick, answerExcerpt: "New excerpt." })));
     await settle();
 
     for (const child of boxes) expect(child.getBoundingClientRect).not.toHaveBeenCalled();
-    expect(setPropSpy).not.toHaveBeenCalled();
 
     // Scroll highlighting, hover preview, and clicking to jump still work accurately.
     act(() => { sc.scrollTop = 420; sc.dispatchEvent(new Event("scroll")); });
@@ -603,7 +650,8 @@ describe("NavRail", () => {
     expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-tick")).toBe("4");
     const target = host.querySelector<HTMLElement>('[data-tick="2"]')!;
     act(() => target.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: document.body })));
-    expect(host.querySelector("[data-nav-preview]")?.textContent).toBe("question 2");
+    expect(host.querySelector("[data-nav-preview-title]")?.textContent).toBe("question 2");
+    expect(host.querySelector("[data-nav-preview-excerpt]")?.textContent).toBe("New excerpt.");
     act(() => target.click());
     expect(jump).toHaveBeenCalledWith("seg:2");
   });
@@ -612,7 +660,7 @@ describe("NavRail", () => {
     vi.useFakeTimers();
     let scWidth = 700;
     let scHeight = 600;
-    let contentWidth = 700;
+    let contentWidth = 500;
     const sc = document.createElement("div");
     Object.defineProperty(sc, "clientWidth", { get: () => scWidth });
     Object.defineProperty(sc, "clientHeight", { get: () => scHeight });
@@ -633,33 +681,32 @@ describe("NavRail", () => {
       return child;
     });
 
-    const setPropSpy = vi.spyOn(sc.style, "setProperty");
     act(() => root.render(<NavRail ticks={tops.map((_, i) => tick(i))} scroller={sc} onJump={() => {}} reset="example/resize-throttle" />));
+    const paddedWidth = 64;
+    const resizeContent = (height: number) => finePointer.fireResize([{ target: content, contentRect: { width: contentWidth - paddedWidth, height } }]);
+    resizeContent(800);
     act(() => { vi.advanceTimersByTime(32); });
     expect(host.querySelectorAll("[data-nav-rail] button")).toHaveLength(8);
 
-    setPropSpy.mockClear();
     for (const child of boxes) vi.mocked(child.getBoundingClientRect).mockClear();
 
     // Burst of height-only content growth (streaming) + auto-scroll within the throttle window.
     for (let n = 1; n <= 5; n++) {
-      finePointer.fireResize([{ target: content, contentRect: { width: 700, height: 800 + n * 24 } }]);
+      resizeContent(800 + n * 24);
       act(() => { sc.scrollTop = 700 + n * 24; sc.dispatchEvent(new Event("scroll")); });
       act(() => { vi.advanceTimersByTime(32); });
     }
     // No full row scan happened during the burst.
     for (let i = 0; i < boxes.length - 1; i++) expect(boxes[i].getBoundingClientRect).not.toHaveBeenCalled();
-    expect(setPropSpy).not.toHaveBeenCalled();
 
     // After the observer throttle fires, only the tail anchor is spot-checked and earlier rows stay untouched.
     act(() => { vi.advanceTimersByTime(NAV_RAIL_OBSERVER_MS + 32); });
     for (let i = 0; i < boxes.length - 1; i++) expect(boxes[i].getBoundingClientRect).not.toHaveBeenCalled();
     expect(boxes[boxes.length - 1].getBoundingClientRect).toHaveBeenCalledTimes(1);
-    expect(setPropSpy).not.toHaveBeenCalled();
 
     // An earlier row shifts (e.g., image load above the tail): the spot-check detects the tail moved and re-measures all rows.
     for (let i = 3; i < tops.length; i++) tops[i] += 150;
-    finePointer.fireResize([{ target: content, contentRect: { width: 700, height: 1100 } }]);
+    resizeContent(1100);
     act(() => { vi.advanceTimersByTime(NAV_RAIL_OBSERVER_MS + 32); });
     for (const child of boxes) expect(child.getBoundingClientRect).toHaveBeenCalled();
     act(() => { sc.scrollTop = 440; sc.dispatchEvent(new Event("scroll")); });
@@ -667,23 +714,20 @@ describe("NavRail", () => {
     // Row 3 is now at top 450, so scrollTop 440 + activeOffset 40 = 480 selects tick 3 instead of tick 4.
     expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-tick")).toBe("3");
 
-    // Window / scroller resize re-measures immediately on the next frame and updates clearance when width changes.
-    setPropSpy.mockClear();
+    // A scroller resize refreshes the offsets on the next frame.
+    for (const child of boxes) vi.mocked(child.getBoundingClientRect).mockClear();
     scWidth = 1200;
     scHeight = 500;
     contentWidth = 880;
     finePointer.fireResize([{ target: sc, contentRect: { width: 1200, height: 500 } }]);
     act(() => { vi.advanceTimersByTime(32); });
-    expect(setPropSpy).toHaveBeenCalledWith("--chat-nav-clearance", "0px");
+    for (const child of boxes) expect(child.getBoundingClientRect).toHaveBeenCalledOnce();
   });
 
   it("re-measures when an earlier disclosure mutates and coalesces bursts inside earlier rows", async () => {
     vi.useFakeTimers();
     const sc = scrollerWith(700, 600);
-    const content = document.createElement("div");
-    content.dataset.chatContent = "";
-    Object.defineProperty(content, "clientWidth", { value: 700 });
-    sc.append(content);
+    const content = sc.firstElementChild!;
     const tops = [0, 100, 200, 300];
     const boxes = tops.map((_, i) => {
       const row = document.createElement("div");

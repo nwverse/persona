@@ -21,13 +21,17 @@ func TestADesktopStartReportsItsSessionForNaming(t *testing.T) {
 	long := first + strings.Repeat("。补充说明", assistantwire.StartedNameFromRunes)
 	for _, tc := range []struct {
 		name, body, nameFrom string
+		// asked: the first message the manager gets with the start's params. A start that picks the desktop app sends
+		// none; one on the default launcher sends it, since only the manager knows the default, and the manager leaves
+		// a start it resolves to the desktop app without a tab name (assistant agents_start.go, inDesktopApp).
+		asked string
 	}{
-		{"desktop launcher picked", `{"machine_id":"machine","cwd":"/code/report","launcher":"claude-desktop","prompt":` + quote(first) + `}`, first},
+		{"desktop launcher picked", `{"machine_id":"machine","cwd":"/code/report","launcher":"claude-desktop","prompt":` + quote(first) + `}`, first, ""},
 		// The app sends async with no launcher; the manager resolves Models › Agents' default, the desktop app's.
-		{"desktop launcher by default", `{"machine_id":"machine","cwd":"/code/report","async":true,"prompt":` + quote(first) + `}`, first},
+		{"desktop launcher by default", `{"machine_id":"machine","cwd":"/code/report","async":true,"prompt":` + quote(first) + `}`, first, first},
 		// A long first message is named from its start: no more of it goes over the bus again.
 		{"long first message", `{"machine_id":"machine","cwd":"/code/report","launcher":"claude-desktop","prompt":` + quote(long) + `}`,
-			string([]rune(long)[:assistantwire.StartedNameFromRunes])},
+			string([]rune(long)[:assistantwire.StartedNameFromRunes]), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newTestHub(t)
@@ -81,8 +85,8 @@ func TestADesktopStartReportsItsSessionForNaming(t *testing.T) {
 				t.Fatalf("the desktop start waited for a tab name: %s", raw)
 			default:
 			}
-			if got := <-nameFrom; got != "" {
-				t.Fatalf("the manager was asked for a tab name from %q", got)
+			if got := <-nameFrom; got != tc.asked {
+				t.Fatalf("the manager got %q to name a tab from, want %q", got, tc.asked)
 			}
 			var event struct {
 				OK      bool `json:"ok"`

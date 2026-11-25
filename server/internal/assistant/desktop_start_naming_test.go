@@ -259,7 +259,7 @@ func TestADesktopStartIsNamedOnce(t *testing.T) {
 		namingReply(w, "修复 PDF 导出丢图")
 	})
 	arrived := make(chan struct{}, 2)
-	s.agentNames.beforeRequest = func() { arrived <- struct{}{} }
+	s.agentNames.requestJoined = func() { arrived <- struct{}{} }
 	desktopStarted(t, s, "report", desktopFirst)
 	desktopStarted(t, s, "report", desktopFirst)
 	for range 2 {
@@ -272,7 +272,7 @@ func TestADesktopStartIsNamedOnce(t *testing.T) {
 	}
 	close(release)
 	s.agentNames.runs.Wait()
-	s.agentNames.beforeRequest = nil
+	s.agentNames.requestJoined = nil
 	if calls.Load() != 1 || desktopListed(s, f).Title != "修复 PDF 导出丢图" {
 		t.Fatalf("%d model calls, title %q", calls.Load(), desktopListed(s, f).Title)
 	}
@@ -339,21 +339,23 @@ func TestAgentStartParamsAsksNoTabNameForTheDesktopApp(t *testing.T) {
 	if err != nil || p["launcher"] != "claude-desktop" || p["tab_name"] != nil || len(f.tabAsked) != 0 {
 		t.Fatalf("desktop start: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
 	}
+	// A terminal start gets the local placeholder; the model names its tab once the hub has the session
+	// (agents.tab_name_started), so the start asks for no name either.
 	p, err = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"cwd": "/code", "launcher": "claude", "launch": "engine"},
 		NameFrom: "修登录"})
-	if err != nil || p["tab_name"] != "fix-login" || len(f.tabAsked) != 1 {
+	if err != nil || p["tab_name"] != localTabName("修登录") || len(f.tabAsked) != 0 {
 		t.Fatalf("terminal start: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
 	}
-	// A resume is no new session: desktop_start_naming.go does not name it, so its tab name is asked for as before.
+	// A resume is no new session: desktop_start_naming.go does not name it, so it gets the placeholder as any start does.
 	p, err = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"cwd": "/code", "launcher": "claude-desktop",
 		"resume_session_id": "d1"}, NameFrom: "修登录"})
-	if err != nil || p["tab_name"] != "fix-login" || len(f.tabAsked) != 2 {
+	if err != nil || p["tab_name"] != localTabName("修登录") || len(f.tabAsked) != 0 {
 		t.Fatalf("resume: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
 	}
 }
 
 // Nor when the computer's launcher list cannot be read and the last one seen there does not name the launcher: what
-// it runs is then unknown, and its name says it is the desktop app's. Another launcher's start is named as before.
+// it runs is then unknown, and its name says it is the desktop app's. Another launcher's start gets its placeholder.
 func TestAgentStartParamsAsksNoTabNameForTheDesktopAppItCannotList(t *testing.T) {
 	f := newFakeHub()
 	f.sessions["box"] = nil // listed among the devices
@@ -368,7 +370,7 @@ func TestAgentStartParamsAsksNoTabNameForTheDesktopAppItCannotList(t *testing.T)
 	}
 	p, err = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"cwd": "/code", "launcher": "relay", "launch": "engine"},
 		NameFrom: "修登录"})
-	if err != nil || p["tab_name"] != "fix-login" || len(f.tabAsked) != 1 {
+	if err != nil || p["tab_name"] != localTabName("修登录") || len(f.tabAsked) != 0 {
 		t.Fatalf("terminal start: %v %v (tab names asked %d)", p, err, len(f.tabAsked))
 	}
 }

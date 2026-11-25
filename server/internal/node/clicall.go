@@ -230,6 +230,10 @@ type assistantPrepareState struct {
 	// trackKind is the kind of the directory's track as the manager last said it (assistant.prepare track_kind):
 	// its processes' PERSONA_TRACK_KIND; "" from a manager that does not say it.
 	trackKind string
+	// categories is the comma-separated default information categories of the directory's track as the manager last
+	// said them (assistant.prepare categories): its processes' PERSONA_CATEGORIES when categoriesKnown is true.
+	categories      string
+	categoriesKnown bool
 }
 
 // assistantPrepareDir gives prepare and running sessions the same key, including symlinked data directories.
@@ -271,6 +275,7 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 			if err := n.peer.Call(ctx, "mcp.call", params, &res); err != nil {
 				return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
 			}
+			n.toolViews.stripResult(session, req.Name, &res)
 			return res
 		}
 		if req.Name == "task_spawn" {
@@ -316,6 +321,7 @@ func (n *Node) cliCall(ctx context.Context, c net.Conn, req sockRequest) proto.T
 	if err := n.peer.Call(ctx, "mcp.call", params, &res); err != nil {
 		return proto.ErrorResult(proto.ToolErrorUnavailable, "Persona hub error: "+err.Error(), 0)
 	}
+	n.toolViews.stripResult(session, req.Name, &res)
 	return res
 }
 

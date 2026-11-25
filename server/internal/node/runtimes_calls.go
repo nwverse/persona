@@ -203,7 +203,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 	switch method {
 	case "session.items":
 		if p.UserInputs {
-			index, err := n.runtimeUserInputs(ctx, p.SessionID, func(params any) (json.RawMessage, error) { return call("session.items", params) })
+			index, err := n.runtimeUserInputs(ctx, p.SessionID, p.BeforeSeq, func(params any) (json.RawMessage, error) {
+				return call("session.items", params)
+			})
 			return index, err, true
 		}
 		out, err := call("session.items", params)
@@ -211,6 +213,7 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, err, true
 		}
 		out = n.echoedRaw(p.SessionID, out, "items") // echo.go
+		out = n.toolViews.attachRaw(p.SessionID, out, "items", p.BeforeSeq == 0 && p.ThroughSeq == 0)
 		out = n.ttft.annotateRaw(p.SessionID, out, "items", p.BeforeSeq == 0 && p.ThroughSeq == 0)
 		if !p.FoldWork || p.AfterSeq != nil || p.ThroughSeq > 0 {
 			return out, nil, true
@@ -234,6 +237,9 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		return page, nil, true
 	case "session.image", "session.item", "session.visualization":
 		out, err := call(method, params)
+		if method == "session.item" && err == nil {
+			out = n.toolViews.attachItemRaw(p.SessionID, out)
+		}
 		return out, err, true
 	case "session.watch":
 		attempt := n.runtimes.watch(h, p.SessionID, p.SinceSeq, p.History, rpc.ConnContext(ctx))
@@ -385,6 +391,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
 				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
+				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); h.agent() == agyAgent && ok {
+					if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+						info["swarm_workers"] = workers
+					}
+				}
 				if h.agent() == agyAgent {
 					if s.ContextTokens > 0 || s.OutputTokens > 0 {
 						info["context_tokens"] = int(s.ContextTokens)

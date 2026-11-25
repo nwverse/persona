@@ -13,11 +13,15 @@ internal/extwire
 internal/githubwire
 internal/imessagewire
 internal/kbwire
+internal/larksyncwire
+internal/linkwire
 internal/mailwire
 internal/modapi
 internal/nodeproto
 internal/proto
+internal/recordingwire
 internal/relayproto
 internal/repositorywire
 internal/rpc
+internal/wireids
 github.com/nwverse/persona/sdk/go/wire

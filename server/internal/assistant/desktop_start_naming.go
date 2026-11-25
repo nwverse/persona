@@ -52,12 +52,13 @@ func (s *Service) nameDesktopStart(machine string, started StartedSession) {
 		if !ok || !quietOn(prefs.AgentAutoNaming) {
 			return // switched off: the placeholder is the title
 		}
-		if hook := b.beforeRequest; hook != nil {
-			hook()
-		}
-		_, _, _ = b.requests.Do(agentNameKey(machine, started.SessionID), func() (any, error) {
+		result := b.requests.DoChan(agentNameKey(machine, started.SessionID), func() (any, error) {
 			return s.nameDesktopStartNow(ctx, machine, started.SessionID, started.Title, text)
 		})
+		if hook := b.requestJoined; hook != nil {
+			hook()
+		}
+		<-result
 	}()
 }
 
@@ -125,9 +126,6 @@ func (s *Service) nameDesktopStartNow(ctx context.Context, machine, sid, seeded,
 	s.logf("agent naming: desktop start session=%q/%q result=named", machine, sid)
 	return agentNameResult{Title: title, Changed: title != raw}, nil
 }
-
-// claudeDesktopLauncher is the node's launcher that starts a session in Claude's desktop app (node/claudedesktop_new.go).
-const claudeDesktopLauncher = "claude-desktop"
 
 // startsInDesktopApp says a new start runs in Claude's desktop app, which has no tab to name (AgentStartParams): by
 // what its launcher runs, or by its name when that is unknown (the computer's list could not be read and the last one

@@ -95,9 +95,6 @@ func (p *placement) violation(machine string, why *i18n.Message) {
 }
 
 func (s *Service) savePlacement(ctx context.Context, p *placement) {
-	if s.store == nil {
-		return
-	}
 	store := s.store()
 	if store == nil {
 		return
