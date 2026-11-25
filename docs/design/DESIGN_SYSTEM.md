@@ -1165,6 +1165,13 @@ A section of a page about one thing (a computer's page) lists its items in place
 - **Row actions**: a swipe and the long press on iOS, a row-end ⋯ menu on the web (and on iOS's in-place rows), never a button on every row. Several at once: Select (iOS edit mode, Select All / Deselect All and "Clear N" in the bottom bar) or checkboxes with a select-all box (web). Every destructive action asks first (4.4, rung 2), naming the item, or how many.
 - Why three: the session's file card shows three rows before "Show N more files" (3.3), and on a phone a fourth row with its date already pushes the sections below a screen away. The chat's queued messages show four in full because each is one line without actions.
 
+**Web update history** (Settings › This hub) is a chronological log for people maintaining their hub.
+Show five records at a time so recent outcomes are visible at entry and older records are easy to reach.
+Each row puts its status, compact pills and time above the version change. The time stays aligned with the first
+line if the pills need to wrap. A reason or a commit absent from the target version
+adds detail underneath. For a longer log, the settings card ends with the current page, total records returned
+by the hub, and quiet Previous and Next buttons. A refresh that removes the current page moves to the last available page.
+
 #### Sessions that need the user
 
 In every grouping a list offers, a session that needs the user is visible without opening anything: in a section at the top, or by the state mark on its row, with a folded group counting it on its header. Grouping by location (computer, repository, worktree, tab) never hides it, and nobody has to pick a computer or a repository first to see their own work.

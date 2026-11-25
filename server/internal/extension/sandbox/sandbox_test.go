@@ -151,8 +151,14 @@ func TestLinuxCommandLine(t *testing.T) {
 	if strings.Contains(line, os.Getenv("HOME")+" ") && os.Getenv("HOME") != "" {
 		t.Errorf("the home directory is bound: %s", line)
 	}
-	if !slices.Contains(env, "HTTPS_PROXY=http://127.0.0.1:3128") || !slices.Contains(env, "NO_PROXY=") {
+	if !slices.Contains(env, "HTTPS_PROXY=http://127.0.0.1:3128") || !slices.Contains(env, "NO_PROXY=") || !slices.Contains(env, "NODE_USE_ENV_PROXY=1") {
 		t.Errorf("env %v", env)
+	}
+	// A strict sandbox addresses its broker itself: no proxy, so Node is not told to use one (#15707).
+	strict := plan
+	strict.Strict = true
+	if _, _, env := Linux("/usr/bin/bwrap", strict); slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "NODE_USE_ENV_PROXY=") }) {
+		t.Errorf("strict env %v", env)
 	}
 	plan.Scope = true
 	name, args, env = Linux("/usr/bin/bwrap", plan)
