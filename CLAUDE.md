@@ -94,6 +94,14 @@ This is a public open-source repository; everyone and every Agent maintains it t
 - Chinese stays only as data that must match something real (hub or third-party output, prompts sent to a model, fixtures), marked
   `// i18n-ignore` where the checks ask.
 
+### Domain code
+
+- **Server domain code is strict** (`docs/server/architecture.md` "Domain model"; the short form for Agents is `server/internal/CLAUDE.md`):
+  a core holds value objects, never primitives; it has no exported fields, getters or setters; it is built only through parse / new /
+  restore (a staged builder past four inputs), its data leaves only through `Accept(visitor)` and `Wire()` in its adapter, and it takes the
+  clock and ids as arguments and returns failures as `outcome.Of`. Every new server package declares `//persona:layer`. Start one with
+  `python3 scripts/gen/new_domain_slice.py go <dir> --doc "…"`; `go test ./<pkg>/...` names each broken rule and its fix.
+
 ### Server and data
 
 - **All server state lives in the Postgres container** `persona-postgres` on the hub machine (`docs/server/server.md`); no JSON state files

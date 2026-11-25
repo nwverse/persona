@@ -40,6 +40,7 @@ import {
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
 import { acceptedAtRest, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { hasActiveAgentWork } from "../../lib/todo-triage";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
 import { navigate } from "../../lib/router";
@@ -119,11 +120,11 @@ export function useTaskLookup() {
 function taskNowIn(s: State, todo: Todo, plans: Record<string, TaskPlan>): TaskNow {
   const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
   const status = statusOf(todo, lookup, plans);
-  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup) };
+  return { status, lead: mostUrgentAgent(todo, lookup)?.session, wait: waitOf(todo, status, lookup), active: hasActiveAgentWork(todo, lookup) };
 }
 
 /** A task's status, lead agent and, while it waits, what it waits on (#11090, lib/todo-wait-reason.ts waitOf). */
-type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason };
+type TaskNow = { status: TodoStatus; lead?: Session; wait?: WaitReason; active: boolean };
 
 /** A task's status and lead agent (undefined without the task). */
 export function useTaskNow(todo: Todo | undefined): TaskNow | undefined {
@@ -875,7 +876,8 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const starting = !todo || (!(todo.kind === "concern" && acceptanceStands(todo)) && startInFlight(todo, plans));
   const liveWork = !finished && state !== "cancelled" ? activity : undefined;
   const liveLine = backgroundWorkLine(liveWork);
-  const active = liveWork || ["working", "waiting", "unread"].includes(state);
+  const agentActive = !finished && state !== "cancelled" && task?.active;
+  const active = liveWork || agentActive || ["working", "waiting", "unread"].includes(state);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
   const parked = active || finished || state === "cancelled" ? undefined : parkedLine(todo);
   // the status column is the Agent's own state, drawn with the Agents' marks; the to-do's own state is its chip (#6492)

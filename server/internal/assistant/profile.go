@@ -190,6 +190,13 @@ type Settings struct {
 	// subscription's usage limit stops it, until that limit resets (#14435, limit_fallback.go). Empty (the default):
 	// it waits for the reset as before. The assistant writes it through persona_settings; PUT /api/v1/assistant does not.
 	LimitFallbacks []string `json:"limit_fallbacks,omitempty"`
+	// MachineFallbacks are the backup computers, first choice first, that the main conversation, direction leaders, and
+	// unbound default routines fail over to when the primary computer stays offline past MachineFallbackMinutes
+	// (#15119, machine_fallback.go). Empty (the default) disables automatic cross-machine failover.
+	MachineFallbacks []string `json:"machine_fallbacks,omitempty"`
+	// MachineFallbackMinutes is how many minutes a computer must stay offline before automatic failover moves
+	// conversations or falls back default routines to MachineFallbacks (#15119). nil or 0 uses the 10-minute default.
+	MachineFallbackMinutes *int `json:"machine_fallback_minutes,omitempty"`
 	// BriefingWaits tunes only the deterministic wait rows in morning/evening facts: the briefing module's setting
 	// (internal/modules/briefing, Waits), kept here as stored, also while the module is off. Nil uses the module's
 	// defaults (the supervision thresholds); changes go through persona_settings' ordinary owner approval (modules.go),

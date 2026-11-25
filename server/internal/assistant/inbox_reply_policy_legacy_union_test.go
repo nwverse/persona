@@ -386,12 +386,13 @@ func TestInboxReplyPolicyAgentConfirmationGate(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchTransientDraftStaysLegacy(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	for _, tc := range []struct {
 		name   string
-		policy assistantwire.InboxReplyPolicyConfig
+		policy *assistantwire.InboxReplyPolicyConfig
 	}{
 		{name: "nil policy"},
-		{name: "disabled policy", policy: assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
+		{name: "disabled policy", policy: &assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, lark, it := handledHub(t)
@@ -561,10 +562,10 @@ func TestInboxReplyPolicyLegacyMirroredDraftGate(t *testing.T) {
 	})
 	for _, tc := range []struct {
 		name   string
-		policy assistantwire.InboxReplyPolicyConfig
+		policy *assistantwire.InboxReplyPolicyConfig
 	}{
 		{name: "nil policy"},
-		{name: "disabled policy", policy: assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
+		{name: "disabled policy", policy: &assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, lark, it := newDraft(t, false)

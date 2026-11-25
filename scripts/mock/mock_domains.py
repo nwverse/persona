@@ -52,6 +52,7 @@ from urllib.parse import parse_qs, urlparse
 
 # The domains, loaded in this order: an earlier domain's route wins, and features and help lines follow it.
 DOMAINS = [
+    "health_tell_mock",  # Tell Health acceptance and duplicate receipts (#14715)
     "health_intake_mock",  # Health intake records, pages and water migration (#13176, #13636)
     "desktops_mock",  # desktop client registration (hub/desktops.go), GET /mock/desktops, MOCK_DESKTOPS
     "bg_stalled_mock",  # an Agent whose background work stalled, still Working (#13744), MOCK_BG_STALLED

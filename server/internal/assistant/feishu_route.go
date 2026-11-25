@@ -14,8 +14,6 @@ import (
 // target's conversation or agent as it is now, whether the bot's switches allow it, the run that answers a message
 // started in it, a topic's to-do and who takes what is said there, and where a run's messages go.
 
-const botAnswerPiece = 6000 // runes per card: a card holds about 30 KB
-
 // startBotRun sends text (with its pictures) for the owner's message messageID into the target's conversation, or
 // starts one, and starts the run that answers it. ext are the run's channel values besides the reaction (where the
 // answer goes: runTo).

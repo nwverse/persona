@@ -108,6 +108,19 @@ func (s *Service) handOff(ctx context.Context, id string, in handoffReq) (InboxI
 		b.mu.Unlock()
 		return InboxItem{}, SessionRef{}, errNoInboxItem
 	}
+	b.mu.Unlock()
+	allowed, err := s.inboxVisibilityModelAllowed(ctx, it)
+	if err != nil {
+		return InboxItem{}, SessionRef{}, err
+	}
+	if !allowed {
+		return InboxItem{}, SessionRef{}, errCannotReply
+	}
+	b.mu.Lock()
+	if b.items[id] != it {
+		b.mu.Unlock()
+		return InboxItem{}, SessionRef{}, errNoInboxItem
+	}
 	if in.ReusePending {
 		var to *SessionRef
 		if g := currentSuggestion(it); g != nil && g.SourceOf == suggestionReplyTarget(it) {
@@ -359,6 +372,20 @@ func (s *Service) tellHandoff(ctx context.Context, id, title string, to SessionR
 		cctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
 		hello := s.hello(cctx)
+		b := &s.inbox
+		b.mu.Lock()
+		it := b.items[id]
+		b.mu.Unlock()
+		if it == nil {
+			return
+		}
+		allowed, err := s.inboxVisibilityModelAllowed(cctx, it)
+		if err != nil || !allowed {
+			if err != nil {
+				s.logf("inbox: tell %s about %s: fresh visibility: %v", short(to.SessionID), id, err)
+			}
+			return
+		}
 		text := renderHandoffNoteIn(n, inboxPromptOwner(hello), id, title, answerLanguage(hello.Locale))
 		params, err := s.sendParams(cctx, SendParams{MachineID: to.MachineID, SessionID: to.SessionID,
 			Params: map[string]any{"session_id": to.SessionID, "text": text}})
@@ -405,16 +432,22 @@ func (s *Service) actOnHandedSuggestion(ctx context.Context, it *InboxItem, g *I
 	edited := text != g.Text
 	to, title := *g.Conversation, clip(oneLine(it.Title), 80)
 	it.Suggestion = nil
+	if in.Action == suggestConfirm {
+		it.ReplyInstruction = nil
+	}
 	execute := in.Action == suggestConfirm && !g.Handback && g.Kind != SuggestConclusion
 	var note *inboxNote
 	closed := false
 	switch {
 	case in.Action == suggestReject:
+		it.ReplyInstruction = nil
 		b.chainAdd(it, rejectedEntry(l, g.Text, now))
 		note = &inboxNote{Name: prompts.NoteRejected, Text: g.Text}
 	case in.Action == suggestInstruct:
 		words := strings.TrimSpace(*in.Text)
 		b.chainAdd(it, instructedEntry(l, words, now))
+		instruction := it.Chain[len(it.Chain)-1]
+		it.ReplyInstruction = &instruction
 		note = &inboxNote{Name: prompts.NoteInstructed, Text: words}
 	case g.Handback:
 		b.chainAdd(it, confirmedEntry(l, text, edited, now))
@@ -505,7 +538,16 @@ func (s *Service) confirmHandedAgent(ctx context.Context, it *InboxItem, g *Inbo
 		err = errReplyPolicyBlocked
 	} else {
 		b.mu.Lock()
-		if verifyReplyPolicySuggestionLocked(it, g, nil, compileReplyPolicy(freshCfg.ReplyPolicy)) != nil {
+		var legacyErr error
+		if legacyReplyPolicyConfig(freshCfg.ReplyPolicy) {
+			legacyErr = replyPolicyActionGate(it, g, freshCfg.ReplyPolicy)
+		}
+		switch {
+		case inboxVisibilityWithMembersExcludedLocked(b, it, freshCfg.Visibility):
+			err = errCannotReply
+		case legacyErr != nil:
+			err = legacyErr
+		case verifyReplyPolicySuggestionLocked(it, g, nil, compileReplyPolicy(freshCfg.ReplyPolicy)) != nil:
 			err = errReplyPolicyBlocked
 		}
 		b.mu.Unlock()

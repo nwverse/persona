@@ -236,9 +236,6 @@ func directoryNode(_ context.Context, method string, raw json.RawMessage) (any, 
 	}
 }
 
-// roleAnswer is an answer-only device (a watch): it may read the board, not change it.
-const roleAnswer = "answer"
-
 func TestWorkspaceBoardMetadataNeverExecutesSession(t *testing.T) {
 	store := newMemoryBoardStore()
 	d := newBoardDevs()
