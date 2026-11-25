@@ -135,7 +135,6 @@ export default function SidebarRowHoverCard({ hover: { row, sidebar, detail }, o
       card.style.maxHeight = `${screenH - gap * 2}px`;
       card.style.left = `${Math.max(gap, Math.min(right + gap, screenW - width - gap))}px`;
       card.style.top = `${Math.max(gap, Math.min(anchor.top, screenH - card.offsetHeight - gap))}px`;
-      card.style.visibility = "visible";
     };
     place();
     const previous = row.getAttribute("aria-describedby");
@@ -154,7 +153,7 @@ export default function SidebarRowHoverCard({ hover: { row, sidebar, detail }, o
   }, [id, row, sidebar, onClose]);
 
   return createPortal(
-    <div ref={panel} id={id} role="tooltip" data-sidebar-row-hover-card style={{ visibility: "hidden" }} className="pointer-events-none fixed z-40 overflow-hidden rounded-nav-preview border border-line bg-surface p-4 text-left shadow-nav-preview">
+    <div ref={panel} id={id} role="tooltip" data-sidebar-row-hover-card className="pointer-events-none fixed z-40 overflow-hidden rounded-nav-preview border border-line bg-surface p-4 text-left shadow-nav-preview">
       {"session" in detail ? <SessionDetails detail={detail} row={row} /> : <PersonalDetails title={detail.title} agent={detail.agent} />}
     </div>,
     document.body,
