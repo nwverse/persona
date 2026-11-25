@@ -65,9 +65,10 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 			return nil, badRequest(fmt.Errorf("purpose %q requires engine launch for session.start", "agent.new"), s.appLang(ctx, p.Lang))
 		}
 		// Held to what the computer has (#2640): a launcher picked that it lacks is refused, a default it lacks gives
-		// way to one it has.
+		// way to one it has. A person's New Agent start: a default of Claude's desktop app opens in the app where the
+		// computer has it (models_desktop.go).
 		if m, ok := s.device(ctx, p.MachineID); ok {
-			note, agent, err := s.fitNewLauncher(ctx, m, own, params)
+			note, agent, err := s.fitNewLauncher(withPersonStart(ctx), m, own, params)
 			if err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
 			}
@@ -93,9 +94,8 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, p.MachineID, params)
 	if name, _ := params["tab_name"].(string); strings.TrimSpace(name) == "" && p.NameFrom != "" {
-		if name := s.tabName(ctx, p.NameFrom); name != "" {
-			params["tab_name"] = name
-		}
+		// Start locally; agents.tab_name_started asks the model after the hub has the session identity.
+		params["tab_name"] = localTabName(p.NameFrom)
 	}
 	return params, nil
 }
@@ -180,6 +180,10 @@ func (s *Service) nameStartedAgent(ctx context.Context, machine string, c proto.
 	}
 	return title
 }
+
+// localTabName starts an Agent without a model call. The existing fixed placeholder covers prompts with no ASCII
+// words and, unlike a meaningful local slug, remains eligible for the ordinary background naming pass if a late event is lost.
+func localTabName(prompt string) string { return cmp.Or(tabSlug(prompt), "persona") }
 
 // tabSlug keeps what a tab name may be: lowercase ASCII letters and digits, single hyphens, at most 24 characters.
 func tabSlug(s string) string {

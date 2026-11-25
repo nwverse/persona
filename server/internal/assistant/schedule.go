@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -57,6 +58,9 @@ type Task struct {
 	promptRunID string
 	// runGrantBasis belongs only to the model/task snapshot consumed by this run, never the stored task.
 	runGrantBasis string
+	// PageID is the dashboard page this routine refreshes (#13020, docs/assistant/dashboards.md). Immutable once set.
+	PageID     string `json:"page_id,omitempty"`
+	pageHeader string
 
 	WorkoutID        string `json:"workout_id,omitempty"`
 	ID               string `json:"id"`
@@ -1072,6 +1076,12 @@ func (s *Service) scheduleOwn(ctx context.Context, sessionID, title, rawPrompt, 
 		sc.mu.Unlock()
 		return "", t.ID, true, err
 	}
+	if t.PageID != "" {
+		if err := checkTask(t, time.Now()); err != nil {
+			sc.mu.Unlock()
+			return "", t.ID, true, err
+		}
+	}
 	t.keepSkipFrom(previous)
 	out += stopsAt(*t, loc)
 	err = s.saveLocked(sc, tasks)
@@ -1139,7 +1149,9 @@ func (s *Service) deleteTaskFrom(ctx context.Context, id, sessionID string) (boo
 		return false, err
 	}
 	i := sc.indexLocked(id)
+	deletedPageID := ""
 	if i >= 0 {
+		deletedPageID = sc.tasks[i].PageID
 		if err := s.keepWorkoutReceipt(ctx, sc.tasks[i]); err != nil {
 			sc.mu.Unlock()
 			return false, err
@@ -1154,6 +1166,9 @@ func (s *Service) deleteTaskFrom(ctx context.Context, id, sessionID string) (boo
 	delete(sc.waitTold, id)
 	sc.mu.Unlock()
 	if i >= 0 {
+		if deletedPageID != "" {
+			s.pageRoutineUnbound(ctx, id)
+		}
 		s.forgetTaskModel(ctx, id)
 		s.broadcastSchedule()
 	}
@@ -1216,6 +1231,9 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 		if t.Inbox != inboxOff {
 			b.WriteString(", " + inboxModeText(t))
 		}
+		if t.PageID != "" {
+			b.WriteString(", dashboard " + t.PageID)
+		}
 		if t.LastStatus != "" {
 			fmt.Fprintf(&b, ", last run %s %s", t.lastShown().In(loc).Format("01-02 15:04"), t.LastStatus)
 		}
@@ -1234,6 +1252,7 @@ func (s *Service) describeSchedule(ctx context.Context, space string) string {
 func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		TodoID       *string         `json:"todo_id"`
+		PageID       *string         `json:"page_id"`
 		FreshEachRun *bool           `json:"fresh_each_run"`
 		ID           string          `json:"id"`
 		Title        string          `json:"title"`
@@ -1289,19 +1308,79 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	if err != nil {
 		return "", err
 	}
+	var pageCallerVal pageCaller
+	var pageTarget *db.AssistantPageRow
+	var pageSt pageStore
+	checkPageOptions := func() error {
+		if a.Report != nil && *a.Report {
+			return errors.New("report: a dashboard routine cannot be a daily report")
+		}
+		if a.TodoID != nil && strings.TrimSpace(*a.TodoID) != "" {
+			return errors.New("todo_id: a dashboard routine cannot be linked to a to-do")
+		}
+		if push != nil && *push != pushAsked {
+			return errors.New(`push: a dashboard routine never pushes; omit push or use "asked"`)
+		}
+		if inbox != nil && *inbox != inboxOff {
+			return errors.New(`inbox: a dashboard routine never posts to the Inbox; omit inbox or use "off"`)
+		}
+		return nil
+	}
+	if a.ID == "" && a.PageID != nil && strings.TrimSpace(*a.PageID) != "" {
+		pageID := strings.TrimSpace(*a.PageID)
+		pageCallerVal, err = s.pageCallerOf(ctx, machine, self, false)
+		if err != nil {
+			return "", err
+		}
+		pageSt, _ = s.pageStore()
+		pageTarget, err = s.writablePage(ctx, pageSt, pageCallerVal, pageID)
+		if err != nil {
+			return "", err
+		}
+		if pageTarget.RoutineID != "" {
+			return "", fmt.Errorf("page_has_routine: page %s already has routine %s; pass id=%q to edit it instead",
+				pageTarget.ID, pageTarget.RoutineID, pageTarget.RoutineID)
+		}
+		if err := checkPageOptions(); err != nil {
+			return "", err
+		}
+	}
 	needsOwn := hasTaskModel(a.Launcher, a.Model, a.Effort)
 	changesRun := needsOwn || a.Time != "" || a.Weekdays != nil || a.Cron != "" || a.Until != nil ||
-		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil
+		a.FreshEachRun != nil || a.Push != nil || a.Inbox != nil || a.Report != nil || a.RunIf != nil || a.TodoID != nil || a.PageID != nil
 	title := strings.TrimSpace(a.Title)
 	requiresOwner := func(t Task) bool {
 		enables := a.Enabled != nil && *a.Enabled && !t.Enabled
 		renames := a.Title != "" && title != t.Title // the title is part of the rendered prompt
 		return t.PromptSelections && a.Prompt == "" && (changesRun || enables || renames)
 	}
+	unchangedRunIf := false
+	if a.ID != "" {
+		if prev, ok := s.pageRoutineTask(ctx, a.ID); ok && prev.Space == space {
+			if a.PageID != nil && strings.TrimSpace(*a.PageID) != prev.PageID {
+				return "", errors.New("page_id: a routine's page_id cannot be changed")
+			}
+			if prev.PageID != "" {
+				pageCallerVal, err = s.pageCallerOf(ctx, machine, self, false)
+				if err != nil {
+					return "", err
+				}
+				pageSt, _ = s.pageStore()
+				pageTarget, err = s.writablePage(ctx, pageSt, pageCallerVal, prev.PageID)
+				if err != nil {
+					return "", err
+				}
+				if err := checkPageOptions(); err != nil {
+					return "", err
+				}
+			}
+		}
+	}
 	if a.ID != "" && (changesRun || a.Enabled != nil || a.Title != "") {
 		// Refuse before model validation or pre-run command approval. Recheck
 		// under the schedule lock in case the owner edits the task meanwhile.
 		if prev, ok := s.taskView(ctx, a.ID); ok && prev.Space == space {
+			unchangedRunIf = runIf != nil && sameRoutineCheck(prev.RunIf, runIf)
 			if requiresOwner(prev) {
 				return "", errTaskSelectionsOwner
 			}
@@ -1315,7 +1394,7 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			}
 		}
 	}
-	if runIf != nil {
+	if runIf != nil && !unchangedRunIf {
 		approved, err := s.approveRoutineCheck(ctx, machine, self, runIf)
 		if err != nil {
 			return "", err
@@ -1337,13 +1416,28 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 			return "", fmt.Errorf("no task %q (list_followups lists them)", a.ID)
 		}
 		t = sc.tasks[i]
+		if a.PageID != nil && strings.TrimSpace(*a.PageID) != t.PageID {
+			sc.mu.Unlock()
+			return "", errors.New("page_id: a routine's page_id cannot be changed")
+		}
+		if t.PageID != "" && pageTarget == nil {
+			sc.mu.Unlock()
+			return "", errors.New("page_id: retry updating this dashboard routine")
+		}
 		if requiresOwner(t) {
 			sc.mu.Unlock()
 			return "", errTaskSelectionsOwner
 		}
+		if unchangedRunIf && !sameRoutineCheck(t.RunIf, runIf) {
+			sc.mu.Unlock()
+			return "", errors.New("run_if changed while the routine was being updated; retry the update")
+		}
 		old = t
 	} else {
 		t = Task{ID: "rt_" + randomHex(4), Repeat: repeatDaily, Enabled: true, Space: space, CreatedBy: "assistant", CreatedAt: time.Now().UTC()}
+		if pageTarget != nil {
+			t.PageID = pageTarget.ID
+		}
 	}
 	if a.Title != "" {
 		t.Title = title
@@ -1381,6 +1475,17 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 	if a.FreshEachRun != nil {
 		t.FreshEachRun = *a.FreshEachRun
 	}
+	if t.PageID != "" {
+		t.Push = pushAsked
+		t.Inbox = inboxOff
+		t.Report = false
+		t.Facts = false
+		t.TodoID = ""
+		t.SessionID = ""
+		if pageTarget != nil && pageTarget.Status == db.AssistantPageDraft {
+			t.Enabled = false // held until the owner taps Keep on the draft's preview card
+		}
+	}
 	if t.PromptSelections {
 		// Only a pause may have changed. Preserve the saved run settings,
 		// including an elapsed end time.
@@ -1399,6 +1504,9 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		}
 		if err := checkTask(&t, now); err != nil {
 			sc.mu.Unlock()
+			if errors.Is(err, errPageRoutineTooOften) {
+				return "", errors.New("too_often: a dashboard routine runs at most once an hour (at least 60 minutes between runs)")
+			}
 			return "", err
 		}
 		rearm(old, &t, now)
@@ -1420,13 +1528,57 @@ func (s *Service) toolScheduleRoutine(ctx context.Context, machine, self string,
 		}
 		return "", err
 	}
+	if pageTarget != nil {
+		if i < 0 {
+			bound, _, berr := pageSt.BindAssistantPageRoutine(ctx, pageTarget.ID, t.ID, now)
+			if berr != nil {
+				_, _ = s.deleteTask(context.WithoutCancel(ctx), t.ID)
+				var already *db.AssistantPageRoutineBoundError
+				if errors.As(berr, &already) {
+					return "", fmt.Errorf("page_has_routine: page %s already has routine %s; pass id=%q to edit it instead",
+						pageTarget.ID, already.RoutineID, already.RoutineID)
+				}
+				return "", pageWriteError(berr)
+			}
+			pageTarget = bound
+			if bound.Status == db.AssistantPageDraft {
+				if full, err := pageSt.AssistantPage(ctx, bound.ID); err == nil {
+					s.redrawPageOffer(ctx, full, nil)
+				}
+			} else {
+				if _, gerr := pageSt.GrantAssistantPageData(ctx, db.AssistantPageGrantRow{
+					PageID:      bound.ID,
+					GranteeKind: db.AssistantPageGrantRoutine,
+					GranteeRef:  t.ID,
+					Rights:      db.AssistantPageRightData,
+					GrantedBy:   pageConversationGranter(pageCallerVal),
+					CreatedAt:   now,
+				}); gerr != nil {
+					_, _ = pageSt.UnbindAssistantPageByRoutine(context.WithoutCancel(ctx), t.ID, now)
+					_, _ = s.deleteTask(context.WithoutCancel(ctx), t.ID)
+					return "", gerr
+				}
+				if !t.Enabled && (a.Enabled == nil || *a.Enabled) {
+					s.armPageRoutine(ctx, bound.ID, t.ID, now)
+					t.Enabled = true
+				}
+				s.pageChanged(bound.ID, pageContent)
+			}
+		} else if pageTarget.Status == db.AssistantPageDraft {
+			s.redrawPageOffer(ctx, pageTarget, nil)
+		} else {
+			s.pageChanged(pageTarget.ID, pageContent)
+		}
+	}
 	s.broadcastSchedule()
 	state := "off"
-	if next := t.next(time.Now(), loc); !next.IsZero() {
+	if pageTarget != nil && pageTarget.Status == db.AssistantPageDraft {
+		state = "held until the owner taps Keep"
+	} else if next := t.next(time.Now(), loc); !next.IsZero() {
 		state = "next run " + next.In(loc).Format("01-02 15:04 Mon") + " (" + until(next) + ")"
 	}
 	rule := ruleText(t, loc)
-	if t.Repeat == repeatCron && t.Enabled {
+	if t.Repeat == repeatCron && (t.Enabled || t.PageID != "") {
 		if r, err := parseCron(t.Cron); err == nil {
 			rule = cronReply(r, loc, time.Now()) // its next runs, to check against what was asked
 		}
@@ -1470,6 +1622,9 @@ func checkTask(t *Task, now time.Time) error {
 		}
 		t.Weekdays, t.At, t.EveryMinutes = days, time.Time{}, 0
 	case repeatInterval:
+		if t.PageID != "" && t.EveryMinutes < pageRoutineMinMinutes {
+			return errPageRoutineTooOften
+		}
 		if t.EveryMinutes < minEvery || t.EveryMinutes > maxEvery {
 			return i18n.Err("assistant-schedule.interval_range", i18n.Args{"min": minEvery})
 		}
@@ -1478,6 +1633,9 @@ func checkTask(t *Task, now time.Time) error {
 		}
 		t.Time, t.Weekdays = "", nil
 	case repeatOnce:
+		if t.PageID != "" {
+			return errPageRoutineOptions
+		}
 		if t.At.IsZero() {
 			return i18n.Err("assistant-schedule.pick_time")
 		}
@@ -1488,7 +1646,13 @@ func checkTask(t *Task, now time.Time) error {
 	case repeatCron:
 		r, err := parseCron(t.Cron)
 		if err != nil {
+			if t.PageID != "" && isCronOftenError(err) {
+				return errPageRoutineTooOften
+			}
 			return err
+		}
+		if t.PageID != "" && r.gap() < pageRoutineMinMinutes {
+			return errPageRoutineTooOften
 		}
 		t.Cron, t.Time, t.Weekdays, t.At, t.EveryMinutes = r.expr, "", nil, time.Time{}, 0
 	default:
@@ -1499,6 +1663,9 @@ func checkTask(t *Task, now time.Time) error {
 	}
 	if err := checkInbox(t.Inbox); err != nil {
 		return err
+	}
+	if t.PageID != "" && (t.Push != pushAsked || t.Inbox != inboxOff || t.Report || t.Facts || t.TodoID != "" || t.SessionID != "") {
+		return errPageRoutineOptions
 	}
 	if t.Launcher != "" && !launcherName.MatchString(t.Launcher) {
 		return i18n.Err("assistant-schedule.bad_launcher", i18n.Args{"launcher": strconv.Quote(t.Launcher)})
@@ -1586,7 +1753,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
 	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
-	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (feishu_nudge.go)
+	go s.nudgeLoop(ctx)                    // the Lark bot's cards left unanswered (the lark module's nudge.go)
 	go s.sourceReportLoop(ctx)             // the reports back to where a todo was asked (todo_source.go)
 	go s.remindLoop(ctx)                   // the todos' reminders (todo_plan.go)
 	go s.urgentLoop(ctx)                   // urgent calls' retries and reminders (urgent_call_loop.go)
@@ -1597,6 +1764,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.memoryDreamLoop(ctx)              // consolidating assistant memory, off by default
 	go s.memoryMergeLoop(ctx)              // telling the user what the node merged into the one memory (memory_merge.go)
 	go s.viewActionLoop(ctx)               // durable card reply outbox
+	go s.pagesLoop(ctx)                    // the taps on pages and the pages' upkeep (pages_actions.go)
 	go s.acceptLoop(ctx)                   // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
@@ -1608,6 +1776,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.historyLoop(ctx)        // durable assistant history, on by default
 	go s.undeliveredLoop(ctx)    // the owner's messages that could not go in (undelivered.go)
 	go s.captureLoop(ctx)        // sorting and filing quick captures (capture_sort.go)
+	go s.healthTellLoop(ctx)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
 }
@@ -1617,6 +1786,7 @@ func (s *Service) Run(ctx context.Context) {
 // (measured: 21 s on 2026-10-30).
 func (s *Service) scheduleLoop(ctx context.Context) {
 	wake := s.sched.wakeup()
+	cleanedOrphans := false
 	for {
 		now := time.Now()
 		wait := scheduleIdle
@@ -1624,6 +1794,12 @@ func (s *Service) scheduleLoop(ctx context.Context) {
 		// one-off or interval task on, so its time stays past: a member only checks again at the idle wake-up (or
 		// when the list changes), not every 50 ms.
 		if !s.hello(ctx).Assistant.Standby {
+			if !cleanedOrphans {
+				cleanedOrphans = true
+				cctx, ccancel := context.WithTimeout(ctx, 15*time.Second)
+				s.cleanOrphanPageRoutines(cctx)
+				ccancel()
+			}
 			s.runDue(ctx, now)
 			if next := s.nextDue(ctx, now); !next.IsZero() && next.Sub(now) < wait {
 				wait = max(next.Sub(now), 50*time.Millisecond)
@@ -2019,6 +2195,20 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		}
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
+	if t.PageID != "" {
+		t.SessionID = ""
+		t.Push = pushAsked
+		t.Inbox = inboxOff
+		t.Report = false
+		t.Facts = false
+		t.TodoID = ""
+		header, skipErr := s.preparePageRoutineRun(ctx, t)
+		if skipErr != nil {
+			run.ConditionSkipped = true
+			return proto.Session{}, s.skipRun(run, skipErr)
+		}
+		t.pageHeader = header
+	}
 	legacyExecution := policy.legacyFallback && t.SessionID == "" && t.Space == "" && t.StartGrant == nil &&
 		t.ExecutionMachineID == "" && t.Cwd == "" && model.override == (ModelBinding{})
 	fresh := t.startsFresh()
@@ -2077,6 +2267,12 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		t.kbDir = s.kb.dir // the hint names where the knowledge base is, not the default
 	}
 	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
+	t, trainingDay := s.workoutPromptNow(ctx, t)
+	if trainingDay != "" {
+		if ref, ok := s.trainingChat(ctx, trainingDay); ok {
+			t.MachineID, t.SessionID = ref.MachineID, ref.SessionID
+		}
+	}
 	if prefix, body := t.promptParts(); prefix != "" && strings.TrimSpace(body) == "" {
 		// Identical titles and references can occur in consecutive runs in the same chat.
 		run.ID = "run_" + randomHex(12)
@@ -2142,6 +2338,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		if err != nil {
 			return s.failTaskRun(ctx, t, run, err, false)
 		}
+		ex.Cwd = s.resolvedTaskCwd(ctx, here, ex.Cwd)
 	}
 	run.Execution = &ex
 	if clean && s.launcherAgent(ctx, here, launcher) != "claude" {
@@ -2218,6 +2415,9 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	s.noteRound(sess.MachineID, sess.SessionID, t.ID, t.runGrantBasis, time.Now().Add(-roundEarly)) // sent already: its prompt is older
 	s.logf("task %s ran %s after its time (new conversation %s, kept for the next runs)", t.ID, lateness(due, time.Now()), short(sess.SessionID))
 	s.adoptConversation(t.ID, sess.MachineID, sess.SessionID, sess.Launcher, ex)
+	if trainingDay != "" {
+		s.keepTrainingChat(ctx, trainingDay, SessionRef{MachineID: sess.MachineID, SessionID: sess.SessionID}, run.ConversationReason == "source_unavailable")
+	}
 	s.titleFixed(sess.MachineID, sess.SessionID, time.Now(), titleTask, t.label()) // "MMDD | scheduled | task name", the same for every run in it
 	var m *Device
 	if d, ok := s.device(ctx, sess.MachineID); ok {
@@ -2251,19 +2451,58 @@ func (s *Service) resumeOwn(ctx context.Context, machine, sid string, params map
 	return err
 }
 
+// notifyScheduleFailed hands a failed non-briefing scheduled run to its supervisor or the main conversation
+// instead of pushing to the owner. Owner-subscribed briefings (Facts/Report) and environments with no
+// supervisor or main conversation keep pushing to the owner.
+func (s *Service) notifyScheduleFailed(ctx context.Context, t Task, run ScheduleRun, m *Device, body string) {
+	if t.PageID != "" {
+		s.pageChanged(t.PageID, pageStatus)
+		return
+	}
+	l := s.lang(ctx)
+	name := t.labelIn(l)
+	if !t.Facts && !t.Report {
+		if to, ok := s.scheduleFailureTarget(ctx, t); ok {
+			title := i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name})
+			text := fmt.Sprintf("%s (task=%s run=%s)\n%s", title, t.ID, run.ID, body)
+			if _, kept := s.keepRelayLater(to, relayMsg{
+				From:      cardScheduleFailed,
+				FromTitle: title,
+				Tool:      cardScheduleFailed,
+				Text:      text,
+				At:        time.Now().UTC(),
+			}); kept {
+				s.publish(ctx)
+			}
+			return
+		}
+	}
+	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
+	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
+		name, _ = s.redactedNotice(ctx, l, t.Space)
+	}
+	n := Notification{
+		SessionID: run.SessionID,
+		Title:     i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}),
+		Body:      body,
+	}
+	if m != nil {
+		n.Subtitle, n.DeviceID = m.Name, m.ID
+	}
+	src := cardScheduleFailed
+	if t.Facts || t.Report {
+		src = cardBriefFallback
+	}
+	s.push(withCard(ctx, src), n)
+}
+
 // oneOffFailed keeps the failure notice even when delivery is unknown and retrying is unsafe.
 func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 	if t.Repeat != repeatOnce || run.Manual {
 		return
 	}
-	l := s.lang(ctx)
-	name := t.labelIn(l)
 	body := clip(oneLine(run.Error), 300)
-	// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
-	if s.exitPolicy(ctx, name+"\n"+body, run.SessionID, t.Space).Redact {
-		name, _ = s.redactedNotice(ctx, l, t.Space)
-	}
-	s.push(withCard(ctx, cardScheduleFailed), Notification{Title: i18n.T(l, "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: body})
+	s.notifyScheduleFailed(ctx, t, run, nil, body)
 }
 
 // oneOffNotStarted handles confirmed pre-delivery failures; Facts/Report runs use the fixed-facts fallback first.
@@ -2276,7 +2515,7 @@ func (s *Service) oneOffFailed(ctx context.Context, t Task, run ScheduleRun) {
 // retry the unchanged parameters automatically.
 func (s *Service) oneOffNotStarted(ctx context.Context, t Task, run ScheduleRun, cause error) {
 	retry := !taskConfigurationRefusal(cause)
-	if t.Facts || t.Report {
+	if (t.Facts || t.Report) && s.briefingOn() {
 		s.briefNotStarted(ctx, t, run, retry)
 		return
 	}
@@ -2314,6 +2553,10 @@ func (s *Service) sessionBusy(ctx context.Context, machine, id string) bool {
 // muted conversation is not pushed. A quiet task (pushesOnlyAsked) is pushed all the same, as its failed runs are
 // (run_failed): this says it did not run, not what it found.
 func (s *Service) tellWaitingSkip(ctx context.Context, t Task, m Device) {
+	if t.PageID != "" {
+		s.pageChanged(t.PageID, pageStatus)
+		return
+	}
 	key := ""
 	if c, ok := s.session(ctx, m.ID, t.RunSessionID); ok && (c.State == proto.StateNeedsYou || c.PendingInteractions > 0) {
 		key = s.waitKey(m.ID, t.RunSessionID, c)
@@ -2431,6 +2674,9 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		}
 	}
 	if text == "" {
+		if t.PageID != "" {
+			s.pageChanged(t.PageID, pageStatus)
+		}
 		if t.Facts {
 			s.briefReached(run.SessionID) // the briefing is in its conversation, whether or not a push follows
 		}
@@ -2443,19 +2689,16 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 	full := text
 	text = clip(oneLine(text), 300)
 	s.logf("task %s run %s failed: %s", t.ID, run.ID, text)
-	briefing := t.Facts || t.Report
-	streak := s.updateRun(run, runFailed, text, briefing)
+	briefing := (t.Facts || t.Report) && s.briefingOn()
+	streak := s.updateRun(run, runFailed, text, briefing || t.PageID != "")
 	run.Status, run.Error = runFailed, text
 	s.finishScheduledTodo(ctx, t, run)
-	if briefing {
+	if t.PageID != "" {
+		s.pageChanged(t.PageID, pageStatus)
+	} else if briefing {
 		s.briefFallback(ctx, run, t, m)
 	} else if !streak { // the streak notice already said it failed, with this reason
-		name := t.labelIn(s.lang(ctx))
-		// the lock screen does not name a task whose push says something sensitive (usage.go, scene 4)
-		if s.exitPolicy(ctx, name+"\n"+text, run.SessionID, t.Space).Redact {
-			name, _ = s.redactedNotice(ctx, s.lang(ctx), t.Space)
-		}
-		s.push(withCard(ctx, cardScheduleFailed), Notification{Subtitle: m.Name, DeviceID: m.ID, SessionID: run.SessionID, Title: i18n.T(s.lang(ctx), "assistant-schedule.run_failed", i18n.Args{"name": name}), Body: text})
+		s.notifyScheduleFailed(ctx, t, run, &m, text)
 	}
 	if run.Retried {
 		return
@@ -2497,7 +2740,7 @@ func (s *Service) watchScheduledRun(run ScheduleRun, t Task, m Device) {
 		w := delayedWait{ID: waitID, Kind: delayedScheduledRetry, At: now.Add(wait),
 			Retry: &scheduledLimitRetry{Run: retryRun, RunOf: run.of, MachineName: m.Name, LimitTurn: rec.turn}}
 		persisted := false
-		if s.store != nil && s.store() != nil {
+		if s.store() != nil {
 			pctx, cancel := context.WithTimeout(s.runCtx(), 5*time.Second)
 			err := s.persistScheduledRetry(pctx, w)
 			cancel()
@@ -2947,7 +3190,9 @@ func (s *Service) forgetConversation(ctx context.Context, id string) (Task, bool
 func taskPrompt(t Task, due, now time.Time, loc *time.Location, manual, kb, continued bool) string {
 	prefix, body := t.promptParts()
 	r := prompts.TaskRun{Label: t.label(), TodoID: t.TodoID, Once: t.Repeat == repeatOnce, Interval: t.Repeat == repeatInterval, Due: due.In(loc),
-		Prompt: body, KBHint: kb && t.calendar(), KnowledgeDir: t.kbDir, Continued: continued, PushAsked: t.pushesOnlyAsked(), InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(), Facts: t.factsText, State: taskStatePrompt(t)}
+		Prompt: body, KBHint: kb && t.calendar() && t.PageID == "", KnowledgeDir: t.kbDir, Continued: continued,
+		PushAsked: t.pushesOnlyAsked() && t.PageID == "", InboxWorthy: t.inboxWorthy(), InboxEvery: t.inboxEvery(),
+		Facts: t.factsText, State: taskStatePrompt(t), PageHeader: t.pageHeader}
 	if r.Interval {
 		r.Every = everyText(t.EveryMinutes)
 	}
@@ -3206,6 +3451,10 @@ func (s *Service) scheduleRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
+		if strings.TrimSpace(in.PageID) != "" {
+			apierr.Write(w, http.StatusBadRequest, errPageRoutinePageIDFixed)
+			return
+		}
 		t := editTask(Task{ID: "task_" + randomHex(4), CreatedAt: now.UTC()}, in, now)
 		if _, rich := raw["structured_prompt"]; rich {
 			t.PromptSelections = true
@@ -3222,7 +3471,7 @@ func (s *Service) scheduleRoutes() {
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+			writeTaskCheckError(w, err)
 			return
 		}
 		rearm(Task{}, &t, now)
@@ -3284,6 +3533,13 @@ func (s *Service) scheduleRoutes() {
 		}
 		old := sc.tasks[i]
 		sc.mu.Unlock()
+		if pidRaw, hasPageID := raw["page_id"]; hasPageID {
+			var pid string
+			if err := json.Unmarshal(pidRaw, &pid); err != nil || strings.TrimSpace(pid) != old.PageID {
+				apierr.Write(w, http.StatusBadRequest, errPageRoutinePageIDFixed)
+				return
+			}
+		}
 		if err := readStructuredTaskPrompt(raw); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -3339,7 +3595,7 @@ func (s *Service) scheduleRoutes() {
 		applyUntil(&t, end, hasUntil, clearUntil)
 		dropStaleUntil(&t, hasUntil, now)
 		if err := checkTask(&t, now); err != nil {
-			apierr.Write(w, http.StatusBadRequest, err)
+			writeTaskCheckError(w, err)
 			return
 		}
 		rearm(old, &t, now)
@@ -3362,6 +3618,17 @@ func (s *Service) scheduleRoutes() {
 		if err := s.commitTaskExecutionEdit(r.Context(), &old, t, edit); err != nil {
 			writeTaskExecutionCommitError(w, err)
 			return
+		}
+		if t.PageID != "" {
+			if st, ok := s.pageStore(); ok {
+				if p, err := st.AssistantPage(r.Context(), t.PageID); err == nil {
+					if p.Status == db.AssistantPageDraft {
+						s.redrawPageOffer(r.Context(), p, nil)
+					} else {
+						s.pageChanged(p.ID, pageContent)
+					}
+				}
+			}
 		}
 		s.broadcastSchedule()
 		v, _ := s.taskView(i18n.With(r.Context(), s.requestLang(r)), t.ID)
@@ -3431,16 +3698,29 @@ func (s *Service) scheduleRoutes() {
 				out = append(out, t)
 			}
 		}
+		kept := map[string]bool{}
 		for _, rt := range in.Routines {
 			prev, ok := old[rt.ID]
 			if !ok {
+				if strings.TrimSpace(rt.PageID) != "" {
+					sc.mu.Unlock()
+					apierr.Write(w, http.StatusBadRequest, errPageRoutinePageIDFixed)
+					return
+				}
 				prev = Task{ID: "rt_" + randomHex(4), CreatedAt: now.UTC()}
+			} else {
+				if strings.TrimSpace(rt.PageID) != "" && strings.TrimSpace(rt.PageID) != prev.PageID {
+					sc.mu.Unlock()
+					apierr.Write(w, http.StatusBadRequest, errPageRoutinePageIDFixed)
+					return
+				}
+				kept[prev.ID] = true
 			}
 			rt.Repeat, rt.Launcher, rt.Model, rt.PermissionMode, rt.Effort, rt.SessionID = repeatDaily, prev.Launcher, prev.Model, prev.PermissionMode, prev.Effort, prev.SessionID
 			t := editTask(prev, rt, now)
 			if err := checkTask(&t, now); err != nil {
 				sc.mu.Unlock()
-				apierr.Write(w, http.StatusBadRequest, err)
+				writeTaskCheckError(w, err)
 				return
 			}
 			if ok {
@@ -3457,11 +3737,20 @@ func (s *Service) scheduleRoutes() {
 			}
 			out = append(out, t)
 		}
+		var droppedPageRoutines []string
+		for id, prev := range old {
+			if prev.PageID != "" && !kept[id] {
+				droppedPageRoutines = append(droppedPageRoutines, id)
+			}
+		}
 		err = s.saveLocked(sc, out)
 		sc.mu.Unlock()
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, err)
 			return
+		}
+		for _, id := range droppedPageRoutines {
+			s.pageRoutineUnbound(r.Context(), id)
 		}
 		s.broadcastSchedule()
 		apierr.WriteJSON(w, map[string]any{"routines": s.tasksView(r.Context(), func(t Task) bool { return t.Repeat == repeatDaily })})
@@ -3496,15 +3785,18 @@ func (s *Service) deleteTaskRoute(w http.ResponseWriter, r *http.Request) {
 	apierr.WriteJSON(w, map[string]any{"ok": true})
 }
 
-// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
-func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
-	sc, err := s.lockedSchedule(r.Context())
+// errTaskNotFound is returned by runTaskNow when no scheduled task has the given id.
+var errTaskNotFound = i18n.Err("assistant-schedule.gone")
+
+// runTaskNow starts scheduled task id immediately at now: a one-off is marked done, a repeating task keeps its
+// schedule. Returns errScheduleUnavailable / errScheduleSave on storage failure, errTaskNotFound when id is missing,
+// or errTaskBusy when the task's last run is still active.
+func (s *Service) runTaskNow(ctx context.Context, id string, now time.Time) (proto.Session, error) {
+	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
-		apierr.Write(w, http.StatusServiceUnavailable, err)
-		return
+		return proto.Session{}, err
 	}
-	i := sc.indexLocked(r.PathValue("id"))
+	i := sc.indexLocked(id)
 	var t Task
 	if i >= 0 {
 		t = sc.tasks[i]
@@ -3517,22 +3809,31 @@ func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.saveLocked(sc, tasks); err != nil {
 			sc.mu.Unlock()
-			apierr.Write(w, http.StatusServiceUnavailable, err)
-			return
+			return proto.Session{}, err
 		}
 	}
 	sc.mu.Unlock()
 	if i < 0 {
-		apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-schedule.gone"))
-		return
+		return proto.Session{}, errTaskNotFound
 	}
 	s.broadcastSchedule()
-	sess, err := s.runTask(t, now, now, true, false)
-	if errors.Is(err, errTaskBusy) {
+	return s.runTask(t, now, now, true, false)
+}
+
+// runTaskRoute is "Run now": the task runs now; a one-off is then done, a repeating one keeps its schedule.
+func (s *Service) runTaskRoute(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.runTaskNow(r.Context(), r.PathValue("id"), time.Now())
+	switch {
+	case errors.Is(err, errScheduleUnavailable), errors.Is(err, errScheduleSave):
+		apierr.Write(w, http.StatusServiceUnavailable, err)
+		return
+	case errors.Is(err, errTaskNotFound):
+		apierr.Write(w, http.StatusNotFound, err)
+		return
+	case errors.Is(err, errTaskBusy):
 		apierr.Write(w, http.StatusConflict, i18n.Err("assistant-schedule.busy_wait"))
 		return
-	}
-	if err != nil {
+	case err != nil:
 		apierr.Call(w, err)
 		return
 	}

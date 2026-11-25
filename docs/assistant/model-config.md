@@ -118,6 +118,43 @@ discards it. Launcher execution health is a separate status; an API probe does n
 The iOS and Android purpose editors do not yet provide this draft test; Android also retains its free-text purpose effort
 field. Native parity is tracked in #6887.
 
+### Managed sample diagnostics with `model_probe`
+
+The assistant's `model_probe` MCP tool runs 1–10 caller-supplied samples through one **saved** provider. Unlike the web
+editor's draft connection test, its public input has no draft connection fields: a caller can select only the registered
+provider name, `messages` or `chat` on that same gateway, and optional model/effort overrides. The manager alone resolves
+the sealed key, custom headers, proxy and `via_machine` route. Unknown fields, including `api_key`, `headers` and
+`base_url`, are rejected before any request is sent, and neither credentials nor arbitrary connection overrides appear
+in the result.
+
+This is configuration-read-only, not side-effect-free: every sample is a real provider inference request and may consume
+quota. It does not write settings, profiles, purposes, launchers, conversation state, launcher health, or Chat
+compatibility cache entries. Restricted Inbox handling chats do not receive the tool.
+
+Each sample has a required nonempty `user` and optional `system`, `id`, and `label`. Combined system+user input is at most
+16 KiB per sample; IDs and labels are at most 128 Unicode code points. Concurrency is 1–4 (default 1), `max_tokens` is 1–1024 (default
+256), and each sample's end-to-end timeout is 1–30 seconds (default 30). A direct provider response is read up to 1 MiB.
+A `via_machine` response is first buffered by the existing `model.http` transport under its separate 16 MiB cap, then
+subject to the same 1 MiB probe parsing cap. Returned text is credential-redacted and UTF-8-safely truncated to 8 KiB;
+redaction replaces every occurrence of a stored credential/header value, even when it appears as ordinary answer text.
+Results remain in input order and report `index`,
+optional `id`/`label`, `ok`, full sample `ms`, `http_status`, redacted `error`, ordered unique `block_types`, bounded
+`text`, separate `text_truncated` (the 8 KiB output cap) and `generation_truncated` (the provider's token limit), optional
+numeric `usage`, and the number of compatibility `attempts`. Messages block types include `thinking` and
+`text`; Chat reports `reasoning_content` and `text` without returning reasoning as answer text. The top level reports the
+resolved provider/API/model/effort and total/succeeded/failed/total_ms.
+
+Messages requests use non-streaming responses; Chat uses the normal SSE stream. `effort:"off"` always puts
+`thinking:{"type":"disabled"}` on the Messages wire and `reasoning_effort:"none"` on Chat rather than silently using a
+model-specific low-effort fallback. Existing bounded Chat compatibility retries may remove a rejected effort field,
+rename `max_tokens` to `max_completion_tokens`, or remove `stream_options` after a 400/422 rejection; the per-sample
+`effort` describes the final attempt and becomes empty
+when effort was removed, while the top-level `effort` remains the requested/resolved value. A 429 is never retried: its
+status and original `Retry-After` header are returned. HTTP, network, timeout, malformed-response, stream-error,
+HTTP-200 provider errors, refusals and empty/unfinished-stream failures remain attached to their sample instead of being
+silently counted as successes. A provider token-limit ending remains a successful inference with
+`generation_truncated:true` so partial text cannot be mistaken for a complete answer.
+
 ## Sending through a computer (#4775)
 
 API purposes are HTTP requests the manager sends from its own machine. When that machine has no route to the provider
@@ -268,6 +305,16 @@ The web catalog includes the separate row and a reset-to-follow action. Android 
 
 Clients find these rows by data, not by ID: a purpose with `parent: "agent.new"` and writable `fields` is an Agents override (web `agentsOverride`, Android `agentsOverride`, Apple `ModelConfigurationModel.followsAgents`), shown with "Separately configured" / "Follow Agents". An older hub that still sends `inbox.agent` with `fields: []` keeps it a read-only use of Agents.
 
+## Claude's desktop app as Agents' launcher (#13117)
+
+Agents (`agent.new`) can run on **Claude's desktop app** (`launcher.claude-desktop`, `models_desktop.go`): a person's New Agent then opens its session in the app by default (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"). Settings › Model providers does not list it, as it has no command, gateway or test of its own; Model configuration adds it as a provider named "Claude desktop app" with the computers whose launcher list offers it.
+
+- **Agents only:** `provider_ids` holds it for `agent.new` alone. The main chat, scheduled tasks, the background supervisor, the in-meeting conversation and API uses run headless or through `model.run`, which an app cannot; the Inbox AI twin's and Lark /agent's own choices don't offer it either. The Codex App's `codex-app` is not offered anywhere (`docs/integrations/launchers.md`).
+- **The AI twin and Lark /agent:** they run headless, so while they follow Agents and Agents runs on the app, they run on Claude Code's default launcher; "Inherited from" says why. Set apart, they keep their own choice.
+- **Saving:** a model is saved without a node check (the app has no command to probe; its node checks the ID at the start). The permission mode Plan is refused: the app runs no read-only plan start.
+- **Computers without the app:** `GET /api/v1/machines/{mid}/launchers` answers `default` with the launcher a start there gives way to (`launcherInstead`, "Launcher-picker defaults"), with its own model and effort, so New Agent shows what will run; the start itself falls back the same way, with no error (#2640).
+- **Starts Persona makes itself:** a task, `agent_start` and a message resuming an Agent started outside Persona do not open the app from the default. A start in the app brings the app to the front and runs on the app's own settings, which an unattended start should not do. They run on that same fallback launcher, with a model the caller named kept, and the task's why or the tool's answer says so (`assistant-tasks.launcher_desktop_default`, `launcher_desktop_default_model`). Naming `claude-desktop` explicitly still opens the app.
+
 ## Meeting minutes and the in-meeting conversation (#7980)
 
 A recorded meeting uses two models: one writes its minutes afterwards, the other is Persona in the meeting, the room
@@ -374,6 +421,10 @@ Other `model_config.*` purpose records, old `inbox.agent` / `lark.agent` dedicat
 
 Creating or normally editing a task through the tasks API or the app does not accept model settings, and returned task views do not show the legacy `Launcher` / `Model` / `Effort` fields; a task's own model configuration goes through its model purpose instead. Scheduled tasks (purposes `schedule`, `task.<task id>`) follow “Main chat” (#1570, old tracker #1544, decided 2026-11-04; they belonged to Agents before #697): they run in the assistant's working directory with its instructions, memory, and tools, so they are assistant chats, not newly created Agents. Under Agents, an unconfigured task used default Claude Code, making the “Morning briefing” fail every time with `Not logged in` on a hub machine not logged into it. New task runs and resuming their own chats resolve `task.<task id>`, which inherits the main-chat category until that task is given its own launcher / model / effort. An override is written through `PATCH /api/v1/model-config/purposes/task.<task id>` (sparse, revision-checked) or the `schedule_routine` / `schedule_followup` `launcher` / `model` / `effort` arguments, and is validated against the machine that starts the task's new runs. Its record lives under `model_config.overrides.v1.task.<id>`, so the dormant pre-#1570 `model_config.task.<id>` records never revive, and deleting the task clears it. The override applies when a run starts or continues the task's own conversation; a run sent into the conversation the task came from keeps that conversation's launcher, so the tools refuse a task's own launcher for a follow-up that continues its source conversation (`new_conversation: true` gives it one). A model or effort given without a launcher pins the launcher the task runs on at that moment, so a later Main chat change cannot pair the model with another agent. Messages the user sends into that task's conversation, and follow-ups sent back to it, still follow “Main chat” for every message, just like the main chat, rather than retaining the previous turn's launcher. Returning to a source chat (a follow-up the assistant schedules for itself with `schedule_followup`) is a turn in that assistant chat, using the same rules as phone messages: the main chat, scheduled tasks' own chats, leader conversations and the background supervisor use “Main chat” (leaders and the background supervisor since 2026-11-13: the hub's supervision messages drive them and pick nothing, so a model a failed turn's recovery stepped one down to — Opus to Haiku on a run of 429s — stayed for good); the assistant's other chats retain their running launcher and model (#1518: previously classified as Agents, a follow-up switched the main chat to default Claude Code, which was not logged in on the hub machine; every later message returned `Not logged in`). Task permissions, run history, and session associations remain unchanged. GET for old purposes returns read-only information; PATCH is rejected. Apple's old purpose-editing links open the owning category editor and explicitly explain that changes apply throughout the category. Old hubs without the four-category catalog prompt for an update rather than pretending different effective models are four category defaults.
 
+## Tier candidates are not a silent change
+
+An Agent preset (a model profile's tier) may list several ordered candidates (`docs/assistant/model-profiles.md` "Candidates and aliases"). Choosing a later one at dispatch, by quota headroom or past results, is not a silent model change: the user listed every candidate and ordered them, nothing outside the list is ever chosen, and each dispatch says on the plan card which candidate ran and why (`dispatch.reason`: `score`, `quota`, `unavailable`, `over_pace`, `kept`, `switched`). A tier with one candidate, and every configuration outside presets, still never switches providers on its own.
+
 ## Who owns models (2026-11-05)
 
 Model configuration belongs to the **manager** (the assistant process `personad assistant`, `docs/assistant/assistant.md`, “Boundary with hub”). hub neither uses models nor stores model configuration:
@@ -470,7 +521,7 @@ The model panel of a Persona chat switches that conversation to another launcher
 - **Limits**: picks are this manager's, for its own conversations on its own computers; a conversation on a computer another manager carries keeps none here. A start keeps its pick right after its first message was handed to the computer, so a second message sent in that moment runs as if there were none.
 - **Never replaced**: when the default's launcher can't run here, the hub follows the bounded recovery and explicit-substitute rule above (`finishMainChatModel`). A pick is the user's choice, so a message on one that can't run any more is refused with why, and the pick stays until the user changes it: a provider out of the computer's device scope or skipping a computer with its own sign-in (409 `launcher_out_of_scope` / `launcher_own_service`, the scope's words), a launcher gone from the computer (409 `launcher_missing`, worded by the hub with the "connect a model" action), or one that can't run assistant chats (400). A launcher of the other agent kind than the conversation's (Claude Code can't resume a Codex thread, nor Codex a Claude transcript) is refused with 409 `launcher_other_kind`, as a message's own pick is (`launcher_kind.go`). The PUT refuses the same before keeping anything. With the computer's launcher list unreadable nothing is refused on a guess (`mainChatFit`).
 - **What a pick can be**: a launcher the computer's main-chat picker lists (`GET /api/v1/machines/{mid}/launchers?purpose=assistant`: its rc-file aliases and PATH wrappers, plain `claude`, and the Model providers that can run the main chat, launchers and Messages-protocol direct APIs, within the computer's device scope); a model that is a model ID (`proto.ValidModelID`), refused for a launcher that sets its own (`locked`) or whose agent takes none, and kept when the launcher's list lacks it (a typed one, "Typing a model ID"); an effort that is `auto`, one of Claude Code's levels or one of Codex's.
-- **What can't, and why**: `?purpose=assistant` also answers `unavailable`, so the panel shows these disabled with the reason rather than hiding them: the computer's launchers that can't run assistant chats (`not_main_chat`: a Paseo provider, a managed Codex launcher, a runtime without the assistant capability), then the Model providers that can't run here: Responses / Chat Completions direct APIs (`api_protocol`), an agent that can't (`not_main_chat`), out of the computer's device scope (`launcher_out_of_scope`) or skipping it for its own sign-in (`launcher_own_service`). Reasons come in the request's language; hidden launchers stay out entirely. A launcher that an assistant runtime on the same computer declares it runs the assistant for (`assistant_for`, [runtimes.md](../integrations/runtimes.md) "Assistant") also has `instead`, that runtime's launcher, and its reason names it ("For assistant chats, choose Grok"); a pick or a message on it is refused with the same pointer. Only that declaration counts, never a likeness of names or agents, and nothing ever runs on one in the other's place: the user chooses it.
+- **What can't, and why**: `?purpose=assistant` also answers `unavailable`, so the panel shows these disabled with the reason rather than hiding them: the computer's launchers that can't run assistant chats (`not_main_chat`: a Paseo provider, a runtime without the assistant capability), then the Model providers that can't run here: Responses / Chat Completions direct APIs (`api_protocol`), an agent that can't (`not_main_chat`), out of the computer's device scope (`launcher_out_of_scope`) or skipping it for its own sign-in (`launcher_own_service`). Reasons come in the request's language; hidden launchers stay out entirely. A launcher that an assistant runtime on the same computer declares it runs the assistant for (`assistant_for`, [runtimes.md](../integrations/runtimes.md) "Assistant") also has `instead`, that runtime's launcher, and its reason names it ("For assistant chats, choose Grok"); a pick or a message on it is refused with the same pointer. Only that declaration counts, never a likeness of names or agents, and nothing ever runs on one in the other's place: the user chooses it.
 - **Typed IDs**: the hub remembers a typed model (`models.used`, "Typing a model ID") when a message carried it. A pick's model is not sent with the messages, so a typed model kept only as a pick is not offered again under "Typed before" until a message carries it.
 
 ## Importing providers from shell aliases (#2455, #5024)
@@ -523,7 +574,7 @@ The text is never logged. At most 256 KiB is read, and the answer stays small: a
 
 ## Launcher-picker defaults
 
-`GET /api/v1/machines/{mid}/launchers` includes `default: {provider, model, effort}`, the effective value for the corresponding purpose in “Model Settings” (`?purpose=`, default `agent.new`; the main-chat picker sends `assistant`). An older hub adds `runtime` for `assistant`, which current clients do not need. Clients use it to show “Default: …” without separately querying model configuration.
+`GET /api/v1/machines/{mid}/launchers` includes `default: {provider, model, effort}`, the effective value for the corresponding purpose in “Model Settings” (`?purpose=`, default `agent.new`; the main-chat picker sends `assistant`). For `agent.new` on a computer without Claude's desktop app while Agents runs on it, `default` is the launcher the start runs there instead ("Claude's desktop app as Agents' launcher (#13117)"). An older hub adds `runtime` for `assistant`, which current clients do not need. Clients use it to show “Default: …” without separately querying model configuration.
 
 ## Choosing a model for a new Agent (#794)
 

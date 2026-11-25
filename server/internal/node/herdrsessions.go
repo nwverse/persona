@@ -286,9 +286,13 @@ func (n *Node) saveBlockedHerdrSessions() {
 	}
 }
 
+// The herdr.sessions.list node RPC: configurable named herdr sessions on this computer (#14898). Not bound to a
+// session, so it is answered from the method table (node_methods.go), not a case in Node.handleMethod.
+func init() { nodeRPC("herdr.sessions.list", (*Node).listHerdrSessions) }
+
 // listHerdrSessions answers the herdr.sessions.list node RPC: every configurable named herdr session known to herdr on
-// this computer (excluding default and persona-* data-directory sessions), sorted by name.
-func (n *Node) listHerdrSessions(ctx context.Context) (any, error) {
+// this computer (excluding default and persona-* data-directory sessions), sorted by name. It takes no params.
+func (n *Node) listHerdrSessions(ctx context.Context, _ json.RawMessage) (any, error) {
 	type item struct {
 		Name    string `json:"name"`
 		Running bool   `json:"running"`

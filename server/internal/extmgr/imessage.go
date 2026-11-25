@@ -51,6 +51,9 @@ func (h *Manager) addIMessage(cfg imessagewire.Config) error {
 
 // imessageAI is the user's "Hand to Persona" choice: on unless they turned it off.
 func (h *Manager) imessageAI(ctx context.Context) (bool, error) {
+	if h.inboxVisibilityBlocksSource(imessagewire.ID) {
+		return false, nil
+	}
 	if h.store == nil {
 		return true, nil
 	}
@@ -172,6 +175,11 @@ func (h *Manager) imessageRoutes(api *http.ServeMux) {
 		}
 		if h.store == nil {
 			writeErr(w, http.StatusServiceUnavailable, errors.New("no database"))
+			return
+		}
+		if *in.AI && h.inboxVisibilityBlocksSource(imessagewire.ID) {
+			c.SetAI(false)
+			writeErr(w, http.StatusConflict, errors.New("iMessage cannot preflight inbox_visibility; remove it from visibility.sources before enabling AI reads"))
 			return
 		}
 		h.imessageAIPending.Store(true)

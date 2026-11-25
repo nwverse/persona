@@ -182,7 +182,7 @@ func managerSentTypes(t *testing.T) []string {
 					case pkg == "assistant" && sel.Sel.Name == "event" && recv != nil && recv.Name == "s" && len(call.Args) == 2,
 						// a package moved out of assistant sends through the Host's Event, with the same two arguments
 						pkg == "assistant/saved" && sel.Sel.Name == "Event" && len(call.Args) == 2,
-						// the recording and health modules send through their Hosts the same way (their event, as the assistant's)
+						// These modules send through their Host the same way (their event, as the assistant's).
 						(pkg == "modules/recording" || pkg == "modules/health") && sel.Sel.Name == "event" && len(call.Args) == 2,
 						(pkg == "extmgr" || pkg == "devices") && sel.Sel.Name == "broadcast" && len(call.Args) == 1:
 						if typ, ok := typeOf(call.Args[len(call.Args)-1], fn.Body); ok {

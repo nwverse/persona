@@ -221,10 +221,17 @@ describe("diff", () => {
     expect(parts["docs/part b/renamed.md"]).toBe(renamed);
   });
 
+  it("keeps only filenames with a diff chunk in the lookup", () => {
+    const README = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n";
+    const file = "diff --git a/constructor b/constructor\n--- a/constructor\n+++ b/constructor\n@@ -1 +1 @@\n-old\n+new\n";
+    expect(splitDiff(README)["constructor"]).toBeUndefined();
+    expect(splitDiff(README + file)["constructor"]).toBe(file);
+  });
+
   it("maps actual Git-produced headers for names with spaces, which end their ---/+++ lines with a tab", () => {
     const dir = mkdtempSync(join(tmpdir(), "persona-space-diff-"));
     const git = (...args: string[]) => {
-      const result = spawnSync("git", ["-c", "core.quotepath=on", "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], { cwd: dir, encoding: "utf8", timeout: 10_000 });
+      const result = spawnSync("git", ["-c", "core.quotepath=on", ...args], { cwd: dir, encoding: "utf8", timeout: 10_000 });
       expect(result.status, result.stderr).toBe(0);
       return result.stdout;
     };
@@ -234,12 +241,13 @@ describe("diff", () => {
       mkdirSync(join(dir, "docs/part b"), { recursive: true });
       for (const name of [...names.slice(0, 3), "old name.md"]) writeFileSync(join(dir, name), "one\ntwo\nthree\nfour\n");
       git("add", "-A");
-      git("commit", "-qm", "base");
+      const base = git("write-tree").trim();
       for (const name of names.slice(0, 3)) writeFileSync(join(dir, name), "one\ntwo\nthree\nfour\nfive\n");
       git("mv", "old name.md", "new name.md");
       writeFileSync(join(dir, "new name.md"), "one\ntwo\nthree\nfour\nsix\n");
       git("add", "-A");
-      const diff = git("diff", "--cached", "-M");
+      const edited = git("write-tree").trim();
+      const diff = git("diff", "-M", base, edited);
       expect(diff).toContain("+++ b/my file.md\t\n");
       const parts = splitDiff(diff);
       expect(Object.keys(parts).sort()).toEqual([...names].sort());

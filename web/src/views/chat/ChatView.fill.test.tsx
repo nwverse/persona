@@ -137,13 +137,16 @@ describe("ChatView older pages", () => {
   it("anchors a prepended page when the rail joins a read started elsewhere", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
       String(input).includes("user_inputs=1") ? { total: 3, history: "", inputs: [
-        { id: "distant#0", seq: 1 }, { id: "intermediate#0", seq: 5 }, { id: "u1#0", seq: 10 },
+        { id: "distant#0", seq: 1, preview: "Compare the earlier drafts", answer: "The second draft is shorter." },
+        { id: "intermediate#0", seq: 5 }, { id: "u1#0", seq: 10 },
       ] } : {},
     ), { headers: { "Content-Type": "application/json" } })));
     await open({ scrollHeight: 6_000, clientHeight: 800 });
     // Advancing the viewport timers does not wait for the lazy rail module.
     await act(async () => { await vi.dynamicImportSettled(); });
-    expect(rail.props?.ticks.map((tick) => tick.id)).toContain("seg:distant#0");
+    expect(rail.props?.ticks).toContainEqual(expect.objectContaining({
+      id: "seg:distant#0", preview: "Compare the earlier drafts", answerExcerpt: "The second draft is shorter.",
+    }));
     const scroller = host.querySelector<HTMLElement>("[data-chat-scroll]")!;
     scroller.scrollTop = 3_200;
     let release!: (page: symbol) => void;
