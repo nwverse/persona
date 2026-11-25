@@ -58,3 +58,9 @@ def comment(prefix: str, text: str, width: int = 118) -> list[str]:
         lines.append(prefix + cur)
     return lines
 
+
+
+def sentence(text: str) -> str:
+    """text ending in a full stop, as a reason written into a doc comment."""
+    text = text.strip()
+    return text if text.endswith((".", "!", "?")) else text + "."

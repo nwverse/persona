@@ -124,7 +124,8 @@ TABLE = (
         (("scripts/app/*android*",), ("android",)),
         (("scripts/test/test_external_service_refs.py",), ("external-refs",)),
         (("scripts/gen/sdk_bundle.py", "scripts/test/test_sdk_bundle.py"), ("sdk-bundle",)),
-        (("scripts/gen/*extension*", "scripts/gen/wiregen/*", "scripts/test/test_extension_schema.py"),
+        (("scripts/gen/*extension*", "scripts/gen/wiregen/*", "scripts/test/fixtures/wiregen/*",
+          "scripts/test/test_wiregen_typed.py", "scripts/test/test_extension_schema.py"),
          ("extension-schema",)),
         # Any other script, nested ones included: the seconds-long repository checks.
         (("scripts/*",), ("pr-needs-issue", "extension-schema")),

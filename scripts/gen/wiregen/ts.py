@@ -5,8 +5,13 @@ from __future__ import annotations
 import json
 import re
 
-from .model import DEFAULT_HEADER, Call, Def, Field, TypeRef
-from .names import comment, upper_snake, plural
+from .model import DEFAULT_HEADER, Call, Def, Field, SchemaError, TypeRef
+from .names import comment, plural, sentence, upper_snake
+
+
+def lower_camel_id(name: str) -> str:
+    """An ID type's constructor: SessionID → sessionID."""
+    return name[:1].lower() + name[1:]
 
 
 def ts_calls(calls: list[Call]) -> list[str]:
@@ -28,8 +33,17 @@ def ts_calls(calls: list[Call]) -> list[str]:
 
 
 
-def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[str] | None = None) -> str:
+def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[str] | None = None, *,
+           defects: str = "ExtensionWire", flavor: str = "ts") -> str:
+    """TypeScript, or with flavor "arkts" the subset HarmonyOS's ArkTS accepts (an ID is a plain string alias there:
+    ArkTS has no intersection types to brand it with). defects names the class whose unknownEnum hook closed enums
+    with x-unknown "count" call."""
     out = [*(header or DEFAULT_HEADER), ""]
+    if any(d.count_unknown for d in defs.values()):
+        out += [f"/** Called with a closed enum's name and the raw value each time a parse function with x-unknown",
+                " * \"count\" meets a value this app does not know. null: nothing is called. */",
+                f"export class {defects}Defects {{",
+                "  static unknownEnum: ((enumName: string, raw: string) => void) | null = null;", "}", ""]
 
     def ttype(t: TypeRef) -> str:
         k = t.kind
@@ -67,7 +81,33 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
         return ["/**"] + comment(" * ", text) + [" */"]
 
     for d in defs.values():
-        if d.kind == "enum":
+        if d.kind == "enum" and d.closed:
+            if f"Unknown{d.name}" in defs:
+                raise SchemaError(f"{d.name}: Unknown{d.name} is the name of its unknown values")
+            values = ", ".join(json.dumps(v) for v in d.values)
+            out += doc(d.doc)
+            out.append(f"export type {d.name} = {' | '.join(json.dumps(v) for v in d.values)};")
+            out.append(f"export const {upper_snake(plural(d.name))}: readonly {d.name}[] = [{values}];")
+            out += ["", f"/** A {d.name} this app does not know, kept as it came. */",
+                    f"export interface Unknown{d.name} {{", "  unknown: string;", "}", "",
+                    f"/** A raw {d.name}: one this app knows, or Unknown{d.name} with the raw value. */",
+                    f"export function parse{d.name}(raw: string): {d.name} | Unknown{d.name} {{",
+                    f"  const known = {upper_snake(plural(d.name))}.find((value) => value === raw);",
+                    "  if (known !== undefined) {", "    return known;", "  }"]
+            if d.count_unknown:
+                out += [f"  const hook = {defects}Defects.unknownEnum;", "  if (hook !== null) {",
+                        f"    hook({json.dumps(d.name)}, raw);", "  }"]
+            out += [f"  const unknown: Unknown{d.name} = {{ unknown: raw }};", "  return unknown;", "}", ""]
+        elif d.kind == "id":
+            out += doc(d.doc or f"An ID: {d.name}.")
+            brand = f' & {{ readonly __brand: "{d.name}" }}' if flavor == "ts" else ""
+            out += [f"export type {d.name} = string{brand};", f"/** A {d.name} from its raw string. */",
+                    f"export function {lower_camel_id(d.name)}(raw: string): {d.name} {{",
+                    f"  return raw{'' if flavor != 'ts' else f' as {d.name}'};", "}", ""]
+        elif d.kind == "opaque":
+            out += doc(" ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))
+            out += [f"export type {d.name} = unknown;", ""]
+        elif d.kind == "enum":
             out += doc(d.doc)
             out.append(f"export type {d.name} = {' | '.join(json.dumps(v) for v in d.values)} | (string & {{}});")
             out.append(f"export const {upper_snake(plural(d.name))} = [{', '.join(json.dumps(v) for v in d.values)}] "

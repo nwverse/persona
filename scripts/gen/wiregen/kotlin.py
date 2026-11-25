@@ -7,7 +7,7 @@ import json
 import re
 
 from .model import DEFAULT_HEADER, Def, SchemaError, TypeRef, reserved_keys, unknown_doc
-from .names import comment, lower_camel, plural, upper_snake
+from .names import camel, comment, lower_camel, plural, sentence, upper_snake
 
 
 KOTLIN_KEYWORDS = {"as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if", "in", "interface",
@@ -20,8 +20,15 @@ def kt_ident(s: str) -> str:
     return f"`{s}`" if s in KOTLIN_KEYWORDS else s
 
 
+def kt_case(value: str) -> str:
+    """A closed enum's object: UpperCamel, with a suffix where it would be the enum's own Unknown."""
+    n = camel(value)
+    return n + "Value" if n == "Unknown" else n
+
+
 def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix: str = "Extension",
-               package: str = KOTLIN_PACKAGE) -> str:
+               package: str = KOTLIN_PACKAGE, defects: str = "ExtensionWire") -> str:
+    """defects names the object whose unknownEnum hook closed enums with x-unknown "count" call (<defects>Defects)."""
     def kname(name: str) -> str:
         return name if name.startswith(prefix) else prefix + name
 
@@ -31,6 +38,8 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
            "import kotlinx.serialization.SerialName",
            "import kotlinx.serialization.Serializable",
            "import kotlinx.serialization.SerializationException",
+           "import kotlinx.serialization.descriptors.PrimitiveKind",
+           "import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor",
            "import kotlinx.serialization.descriptors.SerialDescriptor",
            "import kotlinx.serialization.encoding.Decoder",
            "import kotlinx.serialization.encoding.Encoder",
@@ -64,7 +73,7 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
         if k == "map":
             return f"Map<String, {ktype(t.of)}>"
         d = defs[t.ref]
-        return "String" if d.kind == "enum" else kname(t.ref)
+        return "String" if d.kind == "enum" and not d.closed else kname(t.ref)
 
     def zero(t: TypeRef) -> str:
         k = t.kind
@@ -85,10 +94,12 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
         if k == "map":
             return "emptyMap()"
         d = defs[t.ref]
-        if d.kind == "any":
+        if d.kind in ("any", "opaque"):
             return "JsonNull"
         if d.kind == "enum":
-            return '""'
+            return f'{kname(t.ref)}.Unknown("")' if d.closed else '""'
+        if d.kind == "id":
+            return f'{kname(t.ref)}("")'
         if d.kind == "union":
             raise SchemaError(f"a required field of union type {t.ref}: not in the subset")
         return f"{kname(t.ref)}()"
@@ -98,8 +109,50 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
             return []
         return [f"{indent}/**"] + comment(f"{indent} * ", text) + [f"{indent} */"]
 
+    hook = defects + "Defects"
+    if any(d.count_unknown for d in defs.values()):
+        out += kdoc("Called with a closed enum's name and the raw value each time one with x-unknown \"count\" decodes "
+                    "a value this app does not know. null: nothing is called.")
+        out += [f"object {hook} {{", "    @Volatile", "    var unknownEnum: ((enumName: String, raw: String) -> Unit)? = null",
+                "}", ""]
+
+    def closed_enum(d: Def) -> list[str]:
+        name = kname(d.name)
+        cases = [(v, kt_case(v)) for v in d.values]
+        lines = kdoc((d.doc or f"{d.name}: a closed set of values.") + " A value this app does not know decodes to "
+                     "Unknown with the raw value, and encodes back as it came.")
+        lines += [f"@Serializable(with = {name}Serializer::class)", f"sealed interface {name} {{", "    val raw: String", ""]
+        lines += [f'    data object {c} : {name} {{ override val raw: String = {json.dumps(v)} }}' for v, c in cases]
+        lines += ["", "    /** A value this app does not know, kept as it came. */",
+                  f"    data class Unknown(override val raw: String) : {name}", "",
+                  "    companion object {",
+                  f"        val ALL: List<{name}> = listOf({', '.join(name + '.' + c for _, c in cases)})", "",
+                  f"        fun of(raw: String): {name} = when (raw) {{"]
+        lines += [f"            {json.dumps(v)} -> {name}.{c}" for v, c in cases]
+        lines += [f"            else -> {name}.Unknown(raw)", "        }", "    }", "}", "",
+                  f"object {name}Serializer : KSerializer<{name}> {{",
+                  f"    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor(\"{package}.{name}\", "
+                  "PrimitiveKind.STRING)", "",
+                  f"    override fun deserialize(decoder: Decoder): {name} {{", "        val raw = decoder.decodeString()",
+                  f"        val value = {name}.of(raw)"]
+        if d.count_unknown:
+            lines += [f"        if (value is {name}.Unknown) {hook}.unknownEnum?.invoke({json.dumps(d.name)}, raw)"]
+        lines += ["        return value", "    }", "",
+                  f"    override fun serialize(encoder: Encoder, value: {name}) {{", "        encoder.encodeString(value.raw)",
+                  "    }", "}", ""]
+        return lines
+
     for d in defs.values():
-        if d.kind == "enum":
+        if d.kind == "enum" and d.closed:
+            out += closed_enum(d)
+        elif d.kind == "id":
+            out += kdoc((d.doc or f"{d.name}: an ID.") + " It encodes as the bare string.")
+            out += ["@Serializable", "@JvmInline", f"value class {kname(d.name)}(val raw: String) {{",
+                    "    override fun toString(): String = raw", "}", ""]
+        elif d.kind == "opaque":
+            out += kdoc(" ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))
+            out += [f"typealias {kname(d.name)} = JsonElement", ""]
+        elif d.kind == "enum":
             out += kdoc(d.doc or f"Values of {d.name}.")
             out.append(f"object {kname(d.name)} {{")
             for v in d.values:
@@ -123,7 +176,10 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
                 ser = f'@SerialName("{f.name}") ' if n != f.name else ""
                 typ = ktype(f.type)
                 params += kdoc(f.doc, "    ")
-                if f.required:
+                if f.required and d.strict:
+                    # x-decode "strict": a missing required field fails to decode instead of taking its zero value.
+                    params.append(f"    {ser}val {kt_ident(n)}: {typ},")
+                elif f.required:
                     params.append(f"    {ser}val {kt_ident(n)}: {typ} = {zero(f.type)},")
                 else:
                     params.append(f"    {ser}val {kt_ident(n)}: {typ}? = null,")

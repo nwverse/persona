@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 
 from .model import DEFAULT_HEADER, Def, SchemaError, TypeRef, reserved_keys, unknown_doc
-from .names import comment, lower_camel, plural
+from .names import comment, lower_camel, plural, sentence
 
 
 SWIFT_KEYWORDS = {"protocol", "extension", "default", "func", "class", "struct", "enum", "var", "let", "in", "is", "as",
@@ -20,9 +20,24 @@ def swift_ident(s: str) -> str:
     return f"`{s}`" if s in SWIFT_KEYWORDS else s
 
 
-def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str = "Extension") -> str:
+def swift_case(value: str) -> str:
+    """A closed enum's case: lowerCamel, with a suffix where it would be the enum's own all or unknown."""
+    n = lower_camel(value)
+    return n + "Value" if n in ("all", "unknown", "rawValue") else n
+
+
+def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str = "Extension", *,
+              defects: str = "ExtensionWire") -> str:
+    """defects names the enum whose unknownEnum hook closed enums with x-unknown "count" call (<defects>Defects)."""
     out = [*(header or DEFAULT_HEADER), "", "import Foundation", ""]
     helper = (prefix or "Generated") + "WireJSON"
+    hook = defects + "Defects"
+    if any(d.count_unknown for d in defs.values()):
+        out += [f"/// Called with a closed enum's name and the raw value each time one with x-unknown \"count\" decodes a",
+                "/// value this app does not know. nil: nothing is called. Set it once, before decoding starts.",
+                f"public nonisolated enum {hook} {{",
+                "    public nonisolated(unsafe) static var unknownEnum: (@Sendable (_ enumName: String, _ raw: String) -> Void)?",
+                "}", ""]
 
     def swift_name(name: str) -> str:
         return name if name.startswith(prefix) else prefix + name
@@ -56,7 +71,7 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
         if k == "map":
             return f"[String: {stype(t.of)}]"
         d = defs[t.ref]
-        return "String" if d.kind == "enum" else swift_name(t.ref)
+        return "String" if d.kind == "enum" and not d.closed else swift_name(t.ref)
 
     def zero(t: TypeRef) -> str:
         k = t.kind
@@ -73,10 +88,12 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
         if k == "map":
             return "[:]"
         d = defs[t.ref]
-        if d.kind == "any":
+        if d.kind in ("any", "opaque"):
             return ".null"
         if d.kind == "enum":
-            return '""'
+            return '.unknown("")' if d.closed else '""'
+        if d.kind == "id":
+            return f'{swift_name(t.ref)}("")'
         if d.kind == "union":
             raise SchemaError(f"a required field of union type {t.ref}: not in the subset")
         return f"{swift_name(t.ref)}()"
@@ -119,6 +136,11 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
                 if d.extra:
                     value = f"{helper}.decode({stype(f.type)}.self, from: raw[{json.dumps(f.name)}])"
                     lines.append(f"        self.{n} = {value}" + (f" ?? {zero(f.type)}" if f.required else ""))
+                elif d.strict:
+                    # x-decode "strict": a missing required field or a mistyped one throws; a closed enum's unknown
+                    # value still decodes, to .unknown.
+                    method = "decode" if f.required else "decodeIfPresent"
+                    lines.append(f"        self.{n} = try c.{method}({stype(f.type)}.self, forKey: .{key})")
                 elif d.preserve_required:
                     # New stream envelopes cannot normalize malformed fields into valid operations. Required JSON
                     # values decode null explicitly; optional typed fields reject a present null or wrong type.
@@ -162,8 +184,54 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
         lines += ["}", ""]
         return lines
 
+    def closed_enum(d: Def) -> list[str]:
+        name = swift_name(d.name)
+        cases = [(v, swift_case(v)) for v in d.values]
+        lines = comment("/// ", d.doc or f"{d.name}: a closed set of values.")
+        lines += ["/// A value this app does not know decodes to .unknown with the raw value, and encodes back as it came.",
+                  f"public nonisolated enum {name}: Codable, Hashable, Sendable {{"]
+        lines += [f"    case {swift_ident(c)}" for _, c in cases]
+        lines += ["    /// A value this app does not know, kept as it came.", "    case unknown(String)", "",
+                  f"    public static let all: [{name}] = [{', '.join('.' + swift_ident(c) for _, c in cases)}]", "",
+                  "    public init(rawValue: String) {", "        switch rawValue {"]
+        lines += [f"        case {json.dumps(v)}: self = .{swift_ident(c)}" for v, c in cases]
+        lines += ["        default: self = .unknown(rawValue)", "        }", "    }", "",
+                  "    public var rawValue: String {", "        switch self {"]
+        lines += [f"        case .{swift_ident(c)}: {json.dumps(v)}" for v, c in cases]
+        lines += ["        case .unknown(let raw): raw", "        }", "    }", "",
+                  "    public init(from decoder: Decoder) throws {",
+                  "        let raw = try decoder.singleValueContainer().decode(String.self)",
+                  "        self.init(rawValue: raw)"]
+        if d.count_unknown:
+            lines += [f"        if case .unknown = self {{ {hook}.unknownEnum?({json.dumps(d.name)}, raw) }}"]
+        lines += ["    }", "", "    public func encode(to encoder: Encoder) throws {",
+                  "        var c = encoder.singleValueContainer()", "        try c.encode(rawValue)", "    }", "}", ""]
+        return lines
+
+    def id_type(d: Def) -> list[str]:
+        name = swift_name(d.name)
+        lines = comment("/// ", d.doc or f"{d.name}: an ID.")
+        lines += ["/// It encodes as the bare string.",
+                  f"public nonisolated struct {name}: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {{",
+                  "    public let rawValue: String", "",
+                  "    public init(rawValue: String) {", "        self.rawValue = rawValue", "    }", "",
+                  "    public init(_ rawValue: String) {", "        self.rawValue = rawValue", "    }", "",
+                  "    public var description: String { rawValue }", "",
+                  "    public init(from decoder: Decoder) throws {",
+                  "        rawValue = try decoder.singleValueContainer().decode(String.self)", "    }", "",
+                  "    public func encode(to encoder: Encoder) throws {",
+                  "        var c = encoder.singleValueContainer()", "        try c.encode(rawValue)", "    }", "}", ""]
+        return lines
+
     for d in defs.values():
-        if d.kind == "enum":
+        if d.kind == "enum" and d.closed:
+            out += closed_enum(d)
+        elif d.kind == "id":
+            out += id_type(d)
+        elif d.kind == "opaque":
+            out += comment("/// ", " ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))
+            out += [f"public typealias {swift_name(d.name)} = JSONValue", ""]
+        elif d.kind == "enum":
             out += comment("/// ", d.doc or f"Values of {d.name}.")
             out.append(f"public nonisolated enum {swift_name(d.name)} {{")
             for v in d.values:
