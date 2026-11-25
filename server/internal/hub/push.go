@@ -94,14 +94,16 @@ type Pusher struct {
 	// and mu, never by a push.
 	prefsEdit sync.Mutex
 
-	// gradingMu guards the low-distraction mode state (push_grading.go): the cached switch, the per-key push times for the
-	// 12-hour rule, the held-push list and the delivered-push counts.
+	// gradingMu guards the low-distraction mode state (push_grading.go): the cached switch, per-manager push times for
+	// repeat suppression, the held-push list and the delivered-push counts. gradingSwitchMu serializes owner switch
+	// writes across the database and in-memory cache so concurrent toggles never invert cached state.
+	gradingSwitchMu   sync.Mutex
 	gradingMu         sync.Mutex
 	gradingCached     *bool
 	gradingCachedAt   time.Time
 	gradingRefreshing bool
 	gradingVersion    uint64 // bumped by setPushGrading, so a refresh that read before it does not undo it
-	gradingLastAlert  map[string]time.Time
+	gradingLastAlert  map[string]map[string]time.Time
 	intercepts        []heldPushRecord
 	sent              []pushSent
 	heldDirty         bool // the held-push list changed since the last save

@@ -129,7 +129,19 @@ func pushLevelRank(level string) int {
 // non-main alerts are capped to no more urgent than cfg.NotifyUser.OthersMax
 // when configured.
 func applyPushGradingNotifyUserLevel(cfg pushGradingEffective, attnActive, isMain bool, explicitLevel, derivedLevel string) string {
-	if !cfg.Enabled && !attnActive {
+	if !cfg.Enabled {
+		// When push grading is disabled (including explicit owner enabled:false),
+		// never apply base or extension notify_user overrides during attention modes:
+		// keep only the built-in attention-mode main-conversation rule.
+		if !attnActive {
+			return derivedLevel
+		}
+		if explicitLevel == "" {
+			if isMain {
+				return assistantwire.LevelP0
+			}
+			return assistantwire.LevelP1
+		}
 		return derivedLevel
 	}
 	level := derivedLevel

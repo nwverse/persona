@@ -865,7 +865,7 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 			return &pushOutcome{held: interceptReasonDedup}, nil
 		}
 		policy := pushPolicy{kind: assistantwire.NotifyPush, level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked),
-			depth: n.Depth, track: n.Track, cardID: n.CardID, derivedLevel: n.Level == "", mainConv: h.isMainOn(n.DeviceID, n.SessionID)}
+			depth: n.Depth, track: n.Track, cardID: n.CardID, derivedLevel: n.Level == "", mainConv: h.isMainForManager(from, n.DeviceID, n.SessionID)}
 		o := h.notifyDoneUnder(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{}, managerPushCollapseID(from, n.ID),
 			pushRecordingID(n.RecordingID), policy)
 		out = &o

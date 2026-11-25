@@ -203,6 +203,27 @@ func TestPushGradingEffectiveMatchesLegacyDefaults(t *testing.T) {
 			t.Fatalf("non-main others default = %+v, want silenced P2", eval)
 		}
 	})
+
+	t.Run("P1-3 disabled base or layer notify_user overrides do not run during attention mode", func(t *testing.T) {
+		baseOff := parseGradingTestConfig(t, `{"version":1,"enabled":false,"notify_user":{"main":"P2","others_max":"P2"}}`, false)
+		layer := parseGradingTestConfig(t, `{"version":1,"notify_user":{"main":"P2","others_max":"P2"}}`, true)
+		effCfg := resolvePushGrading(&baseOff, &layer, "extension:ext-a")
+		baseCfg := resolvePushGrading(&baseOff, nil, "")
+		if effCfg.Enabled || baseCfg.Enabled {
+			t.Fatalf("expected disabled effective config: eff=%+v base=%+v", effCfg, baseCfg)
+		}
+		fragment := assistantwire.Attention{Mode: assistantwire.AttentionFragment, Until: now.Add(time.Hour)}
+		mainPolicy := pushPolicy{kind: assistantwire.NotifyPush, level: assistantwire.LevelP1, derivedLevel: true, mainConv: true, manager: assistantwire.AssistantID}
+		eval := evaluatePushGradingDecision(now, effCfg, baseCfg, fragment, nil, mainPolicy)
+		if !eval.Allow || eval.EffectiveLevel != assistantwire.LevelP0 {
+			t.Fatalf("disabled layer muted main conversation during fragment mode: %+v", eval)
+		}
+		explicitP0 := pushPolicy{kind: assistantwire.NotifyPush, level: assistantwire.LevelP0, manager: assistantwire.AssistantID}
+		eval2 := evaluatePushGradingDecision(now, effCfg, baseCfg, fragment, nil, explicitP0)
+		if !eval2.Allow || eval2.EffectiveLevel != assistantwire.LevelP0 {
+			t.Fatalf("disabled layer capped explicit P0 during fragment mode: %+v", eval2)
+		}
+	})
 }
 
 func TestPushGradingLegacyReasonAdapter(t *testing.T) {

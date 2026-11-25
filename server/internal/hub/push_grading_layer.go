@@ -253,8 +253,9 @@ func (p *Pusher) previewPushGrading(
 
 	var eval pushGradingEvaluation
 	if p != nil {
+		mgr := normalizeGradingManager(policy.manager)
 		p.gradingMu.Lock()
-		eval = evaluatePushGradingDecision(now, cfg, baseCfg, attn, p.gradingLastAlert, policy)
+		eval = evaluatePushGradingDecision(now, cfg, baseCfg, attn, p.gradingLastAlert[mgr], policy)
 		p.gradingMu.Unlock()
 	} else {
 		eval = evaluatePushGradingDecision(now, cfg, baseCfg, attn, nil, policy)
@@ -416,6 +417,10 @@ func (h *Hub) handlePostPushGradingPreview(w http.ResponseWriter, r *http.Reques
 			writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
 			return
 		}
+		if !h.ownsRef(extKey.Manager, req.Notification.MachineID, req.Notification.SessionID) {
+			writeErrCode(w, http.StatusForbidden, codeOtherManager, errOtherManager)
+			return
+		}
 		mgr = extKey.Manager
 		if req.Draft != nil {
 			draft = &pushGradingLayer{
@@ -442,7 +447,7 @@ func (h *Hub) handlePostPushGradingPreview(w http.ResponseWriter, r *http.Reques
 	}
 	done := req.Notification.Done || kind == assistantwire.NotifyDone
 	mainConv := kind == assistantwire.NotifyPush &&
-		h.isMainOn(req.Notification.MachineID, req.Notification.SessionID)
+		h.isMainForManager(mgr, req.Notification.MachineID, req.Notification.SessionID)
 	policy := pushPolicy{
 		kind:         kind,
 		level:        derived,

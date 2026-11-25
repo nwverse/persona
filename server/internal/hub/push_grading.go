@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Push grading: when its switch is on, the hub delivers pushes by urgency instead of pushing
@@ -33,6 +34,9 @@ const (
 
 	// gradingDedupWindow: how long the same related key stays quiet after it pushed once.
 	gradingDedupWindow = 12 * time.Hour
+	// gradingDedupMaxRetain matches the maximum valid versioned dedup_window (48h) so a shorter window on
+	// another manager or a temporary configuration change cannot evict active dedup entries early.
+	gradingDedupMaxRetain = 48 * time.Hour
 	// gradingConfigTTL bounds how often one Pusher asks the database for the switch while pushes keep coming.
 	gradingConfigTTL = 15 * time.Second
 	// heldPushMax bounds how many held pushes are kept; the oldest go first.
@@ -236,37 +240,30 @@ func (p *Pusher) readPushGrading() (enabled, ok bool) {
 }
 
 // setPushGrading writes the owner's switch (hub_settings) and refreshes the cache immediately.
-// When a versioned hub.push_grading base row already exists, its enabled field is updated in the
-// same atomic transaction so hub.push_grading and hub.ln_mode never diverge.
+// Writes respect write quiesce, serialize in-process toggles via gradingSwitchMu, and update
+// both hub.push_grading.enabled (when present) and hub.ln_mode inside one advisory-locked DB
+// transaction so both settings never diverge.
 func (p *Pusher) setPushGrading(ctx context.Context, enabled bool) error {
 	if p == nil || p.store == nil {
 		return errors.New("push settings are not available")
 	}
-	ctx, cancel := context.WithTimeout(ctx, p.storeTimeout)
+	if !quiesceHeld(ctx) {
+		if !p.quiesce.begin() {
+			return i18n.Err("hub-selfupdate.err_quiesced")
+		}
+		defer p.quiesce.end()
+	}
+	p.gradingSwitchMu.Lock()
+	defer p.gradingSwitchMu.Unlock()
+
+	wctx, cancel := context.WithTimeout(ctx, p.storeTimeout)
 	defer cancel()
-	wroteBase := false
 	if storeAPI, ok := p.store.(pushGradingStoreAPI); ok {
-		vals, err := storeAPI.Settings(ctx, pushGradingBaseSettingKey)
-		if err != nil {
+		if err := storeAPI.SetPushGradingSwitch(wctx, pushGradingBaseSettingKey, gradingSwitchSettingKey, enabled); err != nil {
 			return err
 		}
-		if raw, exists := vals[pushGradingBaseSettingKey]; exists {
-			base, err := parsePushGradingConfig(raw)
-			if err != nil {
-				return fmt.Errorf("read push grading base: %w", err)
-			}
-			base.Enabled = pushGradingOption[bool]{set: true, value: enabled}
-			if err := base.validate(false); err != nil {
-				return err
-			}
-			if err := storeAPI.PutPushGradingBase(ctx, pushGradingBaseSettingKey, pushGradingLayerSettingKey, gradingSwitchSettingKey, base); err != nil {
-				return err
-			}
-			wroteBase = true
-		}
-	}
-	if !wroteBase {
-		if err := p.store.PutSetting(ctx, gradingSwitchSettingKey, enabled); err != nil {
+	} else {
+		if err := p.store.PutSetting(wctx, gradingSwitchSettingKey, enabled); err != nil {
 			return err
 		}
 	}
@@ -399,6 +396,7 @@ func (p *Pusher) applyPushGrading(policy pushPolicy) (allow bool, reason string)
 		// Clients follow a session only as a complete pair; do not persist a half-destination.
 		in.MachineID, in.SessionID = "", ""
 	}
+	mgr := normalizeGradingManager(policy.manager)
 	p.gradingMu.Lock()
 	if !attn.Active() && !cfg.Enabled {
 		// Grading is off for this manager and no attention mode is in force:
@@ -407,10 +405,10 @@ func (p *Pusher) applyPushGrading(policy pushPolicy) (allow bool, reason string)
 		p.gradingMu.Unlock()
 		return true, ""
 	}
-	eval := evaluatePushGradingDecision(now, cfg, baseCfg, attn, p.gradingLastAlert, policy)
+	eval := evaluatePushGradingDecision(now, cfg, baseCfg, attn, p.gradingLastAlert[mgr], policy)
 	if eval.Allow {
 		if key != "" && (eval.EffectiveLevel == assistantwire.LevelP0 || attn.Active() || cfg.Enabled) {
-			p.noteKeyPushedLocked(key, now, cfg.DedupWindow)
+			p.noteKeyPushedLocked(mgr, key, now)
 		}
 		p.addSentLocked(pushSent{At: now.UTC(), Level: eval.EffectiveLevel, RelatedKey: key, Manager: policy.manager})
 		p.gradingMu.Unlock()
@@ -424,19 +422,28 @@ func (p *Pusher) applyPushGrading(policy pushPolicy) (allow bool, reason string)
 	return false, eval.LiveReason
 }
 
-// noteKeyPushedLocked remembers that key alerted at now, and forgets keys whose window is over (card keys are unique,
-// so the map would otherwise only grow). gradingMu is held.
-func (p *Pusher) noteKeyPushedLocked(key string, now time.Time, dedupWindow time.Duration) {
+// noteKeyPushedLocked remembers that key alerted on manager at now, and forgets keys older than
+// gradingDedupMaxRetain (48h, the maximum valid dedup_window) across managers so shorter windows
+// on another manager can never evict active dedup entries early. gradingMu is held.
+func (p *Pusher) noteKeyPushedLocked(manager, key string, now time.Time) {
 	if p.gradingLastAlert == nil {
-		p.gradingLastAlert = map[string]time.Time{}
+		p.gradingLastAlert = map[string]map[string]time.Time{}
 	}
-	retain := max(gradingDedupWindow, dedupWindow)
-	for k, at := range p.gradingLastAlert {
-		if now.Sub(at) >= retain {
-			delete(p.gradingLastAlert, k)
+	for m, byKey := range p.gradingLastAlert {
+		for k, at := range byKey {
+			if now.Sub(at) >= gradingDedupMaxRetain {
+				delete(byKey, k)
+			}
+		}
+		if len(byKey) == 0 {
+			delete(p.gradingLastAlert, m)
 		}
 	}
-	p.gradingLastAlert[key] = now
+	mgr := normalizeGradingManager(manager)
+	if p.gradingLastAlert[mgr] == nil {
+		p.gradingLastAlert[mgr] = map[string]time.Time{}
+	}
+	p.gradingLastAlert[mgr][key] = now
 }
 
 // relatedDestination is the legacy destination a held-push client follows when related_key is a to-do or an http(s)

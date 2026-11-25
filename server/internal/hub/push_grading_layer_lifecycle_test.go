@@ -205,9 +205,12 @@ func TestPushGradingLayerLifecycleManagerIsolationAndQuiesce(t *testing.T) {
 		if err := h.quiesce.pause(ctx); err != nil {
 			t.Fatal(err)
 		}
-		// HTTP write while paused returns 503.
+		// HTTP write while paused returns 503, and setPushGrading also respects write quiesce.
 		if code, body := gradingLayerHTTP(t, h, extA, http.MethodDelete, "/api/v1/push/grading/layer", ""); code != http.StatusServiceUnavailable {
 			t.Fatalf("DELETE while quiesced: %d %s, want 503", code, body)
+		}
+		if err := h.push.setPushGrading(ctx, true); err == nil {
+			t.Fatal("setPushGrading succeeded while hub writes were quiesced")
 		}
 		// Reconcile while paused defers until resume.
 		h.reconcilePushGradingLayer(assistantwire.AssistantID, nil)

@@ -604,11 +604,14 @@ func TestPushGradingPreviewMatchesDeliveryAndWritesZeroState(t *testing.T) {
 	}
 	putVersionedLayer(t, h, extA, `{"version":1,"actions":{"P1":"hold","P2":"push"},"dedup_window":"6h"}`)
 
-	snapshotState := func() (intercepts []heldPushRecord, stats []pushDayStats, lastAlert map[string]time.Time, storeVals map[string][]byte, sentRows int) {
+	snapshotState := func() (intercepts []heldPushRecord, stats []pushDayStats, lastAlert map[string]map[string]time.Time, storeVals map[string][]byte, sentRows int) {
 		intercepts = h.push.heldPushesView("", 0)
 		stats = h.push.pushDailyStats(h.push.now().Add(-24*time.Hour), "")
 		h.push.gradingMu.Lock()
-		lastAlert = maps.Clone(h.push.gradingLastAlert)
+		lastAlert = make(map[string]map[string]time.Time, len(h.push.gradingLastAlert))
+		for m, byKey := range h.push.gradingLastAlert {
+			lastAlert[m] = maps.Clone(byKey)
+		}
 		h.push.gradingMu.Unlock()
 		store.mu.Lock()
 		storeVals = make(map[string][]byte, len(store.vals))
@@ -815,6 +818,59 @@ func TestPushGradingPreviewLiveSemanticParity(t *testing.T) {
 			{name: "immersive P1 held despite layer", notification: trackNotification(assistantwire.LevelP1, "qa-plain", "", "p1"), wantAllow: false, wantNeutral: assistantwire.AttentionReasonImmersiveHeld, wantLive: assistantwire.AttentionReasonImmersiveHeld},
 			{name: "immersive P2 silent despite layer", notification: trackNotification(assistantwire.LevelP2, "qa-plain", "", "p2"), wantAllow: false, wantNeutral: assistantwire.AttentionReasonSilent, wantLive: assistantwire.AttentionReasonSilent},
 		})
+	})
+
+	t.Run("P1-5 per-manager dedup isolation and 48h retention under mixed windows", func(t *testing.T) {
+		h, _ := gradingHub(t)
+		if err := h.push.setPushGrading(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		extA := extGradingPrincipal(assistantwire.AssistantID, "ext-a")
+		putVersionedLayer(t, h, extA, `{"version":1,"actions":{"P1":"push"},"dedup_window":"36h"}`)
+
+		base := h.push.now()
+		// Assistant pushes P1 (allowed by layer) with key "shared:1" -> records dedup ONLY for assistant.
+		if allow, _ := h.push.applyPushGrading(pushPolicy{kind: assistantwire.NotifyPush, manager: assistantwire.AssistantID, level: assistantwire.LevelP1, relatedKey: "shared:1"}); !allow {
+			t.Fatal("assistant P1 should push")
+		}
+		// Manager-b must NOT see assistant's dedup entry (neither in preview nor live).
+		prevB := previewGradingHTTP(t, h, nil, `{"notification":{"kind":"assistant","level":"P2","manager":"manager-b","related_key":"shared:1"}}`)
+		if prevB.DedupHit || prevB.Reason != pushGradingOutcomeSilenced {
+			t.Fatalf("manager-b saw assistant's dedup entry: %+v", prevB)
+		}
+		// 13h later (>12h manager-b window, <36h assistant window), manager-b pushes P0 "other:1".
+		// That must NOT evict assistant's "shared:1" entry!
+		moveGradingClock(h, base.Add(13*time.Hour))
+		if allow, _ := h.push.applyPushGrading(pushPolicy{kind: assistantwire.NotifyPush, manager: "manager-b", level: assistantwire.LevelP0, relatedKey: "other:1"}); !allow {
+			t.Fatal("manager-b P0 should push")
+		}
+		prevA := previewGradingHTTP(t, h, extA, `{"notification":{"kind":"assistant","level":"P2","related_key":"shared:1"}}`)
+		if !prevA.DedupHit || prevA.Reason != pushGradingOutcomeDeduped {
+			t.Fatalf("assistant 36h dedup entry was prematurely evicted by manager-b push: %+v", prevA)
+		}
+	})
+
+	t.Run("P1-6 preview enforces machine/session ownership and scopes mainConv to target manager", func(t *testing.T) {
+		h, _ := gradingHub(t)
+		mainGradingProfile(h)
+		if err := h.push.setPushGrading(context.Background(), true); err != nil {
+			t.Fatal(err)
+		}
+		// Extension on manager-b probing assistant's machine/session gets 403 other_manager.
+		extOtherMgr := extGradingPrincipal("manager-b", "ext-b")
+		code, raw := gradingLayerHTTP(t, h, extOtherMgr, http.MethodPost, "/api/v1/push/grading/preview",
+			`{"notification":{"kind":"assistant","machine_id":"mac","session_id":"main-conv"}}`)
+		var errBody map[string]any
+		_ = json.Unmarshal(raw, &errBody)
+		if code != http.StatusForbidden || errBody["code"] != codeOtherManager {
+			t.Fatalf("foreign machine/session preview: got %d %s, want 403 %s", code, raw, codeOtherManager)
+		}
+		// Owner preview targeting manager-b with assistant's main-conv does NOT promote to P0.
+		prevOther := previewGradingHTTP(t, h, nil,
+			`{"notification":{"kind":"assistant","manager":"manager-b","machine_id":"mac","session_id":"main-conv"}}`)
+		if prevOther.Allow || prevOther.EffectiveLevel != assistantwire.LevelP1 {
+			t.Fatalf("manager-b preview promoted assistant's main conversation: %+v", prevOther)
+		}
 	})
 }
 
