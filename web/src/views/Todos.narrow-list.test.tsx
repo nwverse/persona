@@ -166,8 +166,11 @@ describe("side by side", () => {
   it("still shows the first row's page beside the list", async () => {
     screen.width = 1280;
     await mount("/todos");
-    // Selection and its page reads can settle after the fixed loop on a loaded machine.
-    await vi.waitFor(() => expect(current()).toEqual(["a"]), { timeout: 5000 });
-    await vi.waitFor(() => expect(loaded()).toEqual(["a"]), { timeout: 5000 });
+    // Selection and its page reads can settle after the fixed loop on a loaded machine. Observe both under one
+    // deadline: two sequential 5 s waits would exceed Vitest's unchanged 5 s whole-test budget.
+    await vi.waitFor(() => {
+      expect(current()).toEqual(["a"]);
+      expect(loaded()).toEqual(["a"]);
+    }, { timeout: 4500 });
   });
 });
