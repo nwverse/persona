@@ -117,7 +117,7 @@ describe("Assistant Needs you / In progress trays", () => {
     await openRows("task:verify-task");
     const row = host.querySelector('[data-needs-row="task:verify-task"][data-needs-open]');
     expect(row).not.toBeNull();
-    expect(row?.textContent).toContain("Please verify the result");
+    await expect.poll(() => row?.textContent).toContain("Please verify the result");
     const other = host.querySelector('[data-needs-row="task:other-verify"]');
     if (main) {
       expect(other).not.toBeNull();
