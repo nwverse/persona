@@ -38,17 +38,6 @@ type SpokenSpan = recordingwire.SpokenSpan
 // readSpoken is the upload's spoken, read leniently (recordingwire.ReadSpoken).
 func readSpoken(raw json.RawMessage) []SpokenSpan { return recordingwire.ReadSpoken(raw) }
 
-// MeetingLines is segs without Persona's echo: what the summary, the minutes and the follow-up read.
-func MeetingLines(segs []RecordingSegment) []RecordingSegment {
-	out := make([]RecordingSegment, 0, len(segs))
-	for _, sg := range segs {
-		if !sg.Echo {
-			out = append(out, sg)
-		}
-	}
-	return out
-}
-
 // markEcho marks the segments that are Persona's echo by spans; a segment the phone marked stays marked.
 func markEcho(segs []RecordingSegment, spans []SpokenSpan) {
 	if len(spans) == 0 {

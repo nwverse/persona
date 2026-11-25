@@ -14,9 +14,10 @@
 # --only domain_layers_baseline drops it. No PR opened later gets one: with a base, the test fails on an allowance the
 # merge base's baseline lacks.
 #
-# These packages predate the rules; their counts only fall; do not copy their shapes. Copy server/internal/domainkit and
-# the compliant twins in server/internal/archguard/testdata/domainrules/planted (agentref, assistant/fleetcount and
-# their adapters). assistant/chatsearch depends on impure packages (prompts, transcript, lazyre, compat, proto, the
+# These packages predate the rules; their counts only fall; do not copy their shapes. Copy server/internal/domainkit,
+# server/internal/agentref and its adapter, and the compliant twins in
+# server/internal/archguard/testdata/domainrules/planted (assistant/fleetcount and its adapter), or start with
+# python3 scripts/new_domain_slice.py. assistant/chatsearch depends on impure packages (prompts, transcript, lazyre, compat, proto, the
 # SDK's wire and golang.org/x/text): its imports stay frozen here until it is converted.
 cmd/persona-link app-named-primitive 1
 internal/agents app-exported-record 23
@@ -55,7 +56,7 @@ internal/assistant app-exported-record WatchSchedule #13882 #13914 #14029 #14104
 internal/assistant app-exported-record WatchTable #13882 #13914 #14029 #14104 #14362 #14995
 internal/assistant app-exported-record WatchView #13882 #13914 #14029 #14104 #14362 #14995
 internal/assistant app-lifecycle-write 30
-internal/assistant app-named-primitive 27
+internal/assistant app-named-primitive 26
 internal/assistant app-named-primitive ModelPurposeStatusCode #12300 #12307
 internal/assistant app-named-primitive launcherFit #12300 #12307
 internal/assistant app-named-primitive scopeHeadingKind #13820 #13912

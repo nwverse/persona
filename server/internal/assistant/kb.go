@@ -533,14 +533,16 @@ func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) 
 		}
 	})
 	// Recordings: those past recording_days go, or keep only their minutes until minutes_days (every run: a setting may
-	// just have shortened), complete ones get their summary (their minutes are the minutes lane's).
+	// just have shortened), complete ones get their summary (their minutes are the minutes lane's). The retention is
+	// the knowledge base's own and runs without the recording module too (kb.RetentionWithoutRecordingModule); the
+	// sweeps and the summaries are the module's and do nothing without it.
 	s.kbRun(ctx, func() {
 		if n := e.PruneRecordings(time.Now()); n > 0 {
 			s.logf("kb: pruned %d recording(s)", n)
 		}
 		s.meetingRoomsSweep(ctx, e) // the rooms of transcripts cut, and of recordings gone (meeting_room.go)
 		s.hubSweep(e)               // the audio sockets and jobs of transcripts cut (meeting_transcribe.go)
-		e.SummarizeRecordings(ctx, 3)
+		e.RecordingProvider().SummarizeRecordings(ctx, 3)
 	})
 	// Same work under two names, and the Moments (company feed) posts about each project: a few model calls every half hour.
 	if time.Since(r.links) >= kbItemsPoll {

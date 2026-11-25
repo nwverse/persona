@@ -100,6 +100,9 @@ type escalatedCard struct {
 	at   time.Time
 }
 
+// maxDialogChoices is how many of a terminal dialog's choices its text names (the bot's card shows as many buttons).
+const maxDialogChoices = 8
+
 // escalatedKeep bounds how long an escalated card is remembered unanswered (it expired, was cancelled or its node went).
 const escalatedKeep = 48 * time.Hour
 
@@ -166,7 +169,7 @@ func terminalQuestionText(ix proto.Interaction) string {
 	for _, o := range d.Options {
 		if o.Kind == "" && o.Label != "" {
 			choices = append(choices, clip(oneLine(o.Label), 60))
-			if len(choices) == maxDialogOptions {
+			if len(choices) == maxDialogChoices {
 				break
 			}
 		}

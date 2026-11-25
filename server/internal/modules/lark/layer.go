@@ -133,7 +133,8 @@ type Host interface {
 	// The commands (commands.go, models.go): stopping a conversation's turn (kind is the toast's), the lists to pick
 	// a conversation or an agent from, what a /status card shows, the standing board, and the main conversation's
 	// model.
-	StopConversation(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) (kind, message string)
+	InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (kind, message string)
+	TurnPending(machine, session string) bool
 	StopProgressCard(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget, messageID string) (kind, message string)
 	Conversations(ctx context.Context) (list []proto.Session, main string)
 	ConversationName(sess proto.Session, main string) string
@@ -146,7 +147,6 @@ type Host interface {
 	SessionLink(web, machine, session string, assistant bool) string
 	FeishuRuns() int
 	VisiblePending() []proto.Interaction
-	IxKindTag(kind string) string
 	PendingQuestion(ix proto.Interaction) string
 	StandingBoardCommand(ctx context.Context) bool
 	// MainChat is the main conversation and the machine it runs on ("" without one); MainModel what it runs on now.
@@ -159,11 +159,8 @@ type Host interface {
 	// The cards' presses and typed answers (card_actions.go, text_answer.go): an interaction answered, closed or
 	// asked about, a card's words, a decision or acceptance pressed (kind is the toast's), a later question handled,
 	// an agent started.
-	FinalStatus(status string) bool
 	EndedText(l i18n.Lang, status, fallback string) string
 	ResolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) string
-	AnsweredCard(ctx context.Context, ix proto.Interaction, how string) *botcard.Card
-	CardDone(ctx context.Context, messageID string, ix proto.Interaction, how string)
 	ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error)
 	ValidateClarifyQuestion(text string) error
 	ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error)
@@ -176,15 +173,21 @@ type Host interface {
 	StartAgent(ctx context.Context, machine string, params map[string]any) (proto.Session, error)
 	StartChannelRun(r *channel.Run)
 
-	// The nudges (nudge.go): a card still waiting (waiting false: it ended, or that is not known), its agent gone, a
-	// prepared card's deadline, the standing board told a card was nudged, a send refused outright.
-	CardLook(ctx context.Context, id string) (ix proto.Interaction, waiting bool)
+	// The agents' cards (asks.go, ask_cards.go): what a card says of the core as one value (who asks, the task, the
+	// conversation's page, the core's wording of the interaction), where it goes as the channels' runs say now, whether
+	// its words are sensitive (asked only for a card the chat does not drive, with "all cards" on: it may wait for
+	// the text to be tagged), and the core's live record of it (ended: interaction.ended came; pending: it is up).
+	AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView
+	AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute
+	AskSensitive(ctx context.Context, ix proto.Interaction) bool
+	AskState(id string) (ended, pending bool)
+
+	// The nudges (nudge.go): a card's agent gone, a prepared card's deadline, the standing board told a card was
+	// nudged, the tool a permission asks about.
 	AgentGone(ix proto.Interaction) bool
 	ApprovalNudgeDeadline(ix proto.Interaction) (time.Time, bool)
 	BoardChanged()
-	ChatRefused(err error) bool
 	IxToolName(ix proto.Interaction) string
-	FirstQuestion(ix proto.Interaction) string
 
 	// The to-dos of topics and of requests from elsewhere (thread.go, thread_open.go, elsewhere.go): the core's
 	// to-do, decision and question ledgers.
@@ -405,10 +408,51 @@ func (l *Layer) NudgeTick(ctx context.Context) { l.chat().nudgeTick(ctx) }
 // Book runs f on the chat's records under the chat's lock, the state read first (the core's cards, standing board
 // and companion bots).
 func (l *Layer) Book(ctx context.Context, f func(assistantwire.ChatBook)) {
+	l.chat().book(ctx, func(b chatBook) { f(b) })
+}
+
+// ---- the interaction port: what the core tells the chat of what Persona and the agents ask (asks.go) ----
+
+// AskAnnounced: a new interaction (interaction.announced): its card is posted when the bot's switches want one.
+func (l *Layer) AskAnnounced(ix proto.Interaction) { l.chat().feishuInteraction(ix) }
+
+// AskPost posts ix's card whatever the cards switches say, once, unless it ended meanwhile.
+func (l *Layer) AskPost(ctx context.Context, ix proto.Interaction) {
+	l.chat().postInteractionCard(ctx, ix)
+}
+
+// AskWanted: the bot posts a card for ix when it is announced.
+func (l *Layer) AskWanted(ctx context.Context, ix proto.Interaction) bool {
+	return l.chat().feishuCardWanted(ctx, ix)
+}
+
+// AskEnded: ix is over (answered anywhere, withdrawn, expired), how says how: its card says so. inChat: it was taken
+// back because the user wrote in the conversation.
+func (l *Layer) AskEnded(ix proto.Interaction, how string, inChat bool) {
+	l.chat().feishuInteractionEnded(ix, how, inChat)
+}
+
+// AskDetached: the cards ids are about to end because their node went away; they are kept for grace in case they
+// come back (AskBack).
+func (l *Layer) AskDetached(ids []string, grace time.Duration) { l.chat().feishuDetach(ids, grace) }
+
+// AskBack: ix is back on the apps after its node reconnected within grace: its card asks again.
+func (l *Layer) AskBack(ix proto.Interaction, grace time.Duration) {
+	l.chat().feishuCardBack(ix, grace)
+}
+
+// AsksCatchUp closes the cards whose interaction is over for good; pending are the interactions up now.
+func (l *Layer) AsksCatchUp(ctx context.Context, pending map[string]bool) {
+	l.chat().closeEndedBotCards(ctx, pending, true)
+}
+
+// AskCard and AnsweredCard are the card asking ix and the card it becomes once over, as posted: for the assistant's
+// black-box tests of what the cards say of the core. Not part of the port (larkhost.Asks).
+func (l *Layer) AskCard(ctx context.Context, ix proto.Interaction) *botcard.Card {
 	s := l.chat()
-	b := s.fbot()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	s.loadBotLocked(ctx)
-	f(chatBook{s})
+	return interactionCard(s.botLang(ctx), ix, s.h.AskView(ctx, ix))
+}
+
+func (l *Layer) AnsweredCard(ctx context.Context, ix proto.Interaction, how string) *botcard.Card {
+	return l.chat().answeredCard(ctx, ix, how)
 }

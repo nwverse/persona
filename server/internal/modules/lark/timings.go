@@ -27,6 +27,9 @@ var (
 		// new agent" button, is ignored (botStartCardWindow, botFormWindow).
 		"start_card_window": botStartCardWindow,
 		"form_window":       botFormWindow,
+		// card_recheck is how long after a reconnection the cards that may still be waiting are looked at again (the
+		// manager restores its interactions meanwhile; closeEndedBotCards).
+		"card_recheck": 90 * time.Second,
 	}
 	defaultTimingLists = map[string][]time.Duration{
 		// cot_end_tries are the waits between tries of cotEnd (a rate limit that hit the end likely hits the first
