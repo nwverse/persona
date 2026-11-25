@@ -565,10 +565,17 @@ node integrations/antigravity/desktop.mjs
 ```
 
 It discovers the local desktop hub through the current user's private descriptor under
-`~/.gemini/antigravity/daemon/`, lists existing conversations, watches exported transcript items,
-and forwards text replies and interrupts to the selected Cascade. Start each conversation with a message in the desktop app so replies can reuse its model and tool configuration.
-Handle approvals there as well. The desktop and CLI companions can run together. Override the desktop data directory
-with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop RPC is private and version dependent.
+`~/.gemini/antigravity/daemon/`, advertises an opt-in `antigravity-desktop` launcher, lists active
+conversations, watches exported transcript items, starts new conversations through
+`ConversationService/CreateConversation` (with model and effort selection via `launchers.models`
+and `session.start`), forwards text replies and settled interrupts, and supports native `rename`,
+`archive`, and `unarchive` controls through `ConversationService/UpdateConversation`.
+Desktop-UI-created conversations without an initialized configuration still require an initial turn
+in the desktop app so replies can reuse their model and tool configuration, and approvals stay in
+Antigravity Desktop. The desktop and CLI companions can run together. Override the desktop data
+directory with `--desktop-dir`, the Persona runtime socket with `--socket`, or the runtime identity
+and default model with `--runtime`, `--launcher`, `--display-name`, and `--model`. The desktop RPC
+is private and version dependent.
 
 ### Antigravity CLI
 
