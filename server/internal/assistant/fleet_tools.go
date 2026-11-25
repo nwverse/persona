@@ -155,7 +155,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		}
 		tools := s.mcpTools(ctx, assistant)
 		if assistant {
-			tools = s.guardTools(ctx, machine, session, tools)
+			tools = s.guardTools(ctx, machine, session, append(tools, s.healthTools(ctx, machine, session)...))
 			tools = append(tools, s.spaceTools(ctx, machine, session)...) // space_state_update (track_space_md.go)
 		}
 		if !assistant {
@@ -266,7 +266,7 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if !assistant && isDispatchTool(name) {
 		return s.dispatchTool(ctx, machine, session, name, args)
 	}
-	if assistant && name == spaceStateTool { // listed per conversation (spaceTools), so not in Tools: its handler checks
+	if assistant && (name == spaceStateTool || slices.Contains(healthToolNames, name)) { // listed per conversation, so not in Tools: its handler checks
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if assistant && s.isOwnTool(ctx, name) {

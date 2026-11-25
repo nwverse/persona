@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/healthhost"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -142,6 +143,10 @@ func (s *Service) postViewAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conversation, key := r.PathValue("id"), r.PathValue("key")
+	if strings.HasPrefix(key, healthhost.CardPrefix) {
+		s.healthCardAction(w, r, st, conversation, key, in)
+		return
+	}
 	old, err := st.AssistantViewAction(r.Context(), conversation, key)
 	if err != nil {
 		apierr.Write(w, http.StatusServiceUnavailable, err)
@@ -242,6 +247,10 @@ func (s *Service) postHTMLViewAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conversation, key := r.PathValue("id"), r.PathValue("key")
+	if strings.HasPrefix(key, healthhost.CardPrefix) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-health_strength.html_forbidden"))
+		return
+	}
 	if in.Kind == "reply" {
 		old, err := st.AssistantViewAction(r.Context(), conversation, key)
 		if err != nil {

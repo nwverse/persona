@@ -395,7 +395,7 @@ export function groupTitle(g: WorkGroupNode): string {
 
 /** Action kinds in first-seen order; file actions count distinct known paths, other kinds count calls.
  * Unknown tools keep their existing localized label. Only the first three kinds enter the compact header. */
-export function actionSummary(g: WorkGroupNode): { text: string; icon: string } {
+export function actionSummary(g: WorkGroupNode): { text: string; icon: string | null } {
   const kinds = new Map<string, { count: number; paths: Set<string>; icon: string; key?: string; label?: string }>();
   for (const child of g.children) {
     if (child.kind !== "step" || child.step.kind !== "tool") continue;
@@ -416,5 +416,5 @@ export function actionSummary(g: WorkGroupNode): { text: string; icon: string } 
     entry.count++;
   }
   const shown = [...kinds.values()].slice(0, 3);
-  return { text: shown.map((k) => k.key ? t(k.key, { count: k.count }) : k.label).join(" · "), icon: shown[0]?.icon ?? "layers" };
+  return { text: shown.map((k) => k.key ? t(k.key, { count: k.count }) : k.label).join(" · "), icon: shown[0]?.icon ?? null };
 }
