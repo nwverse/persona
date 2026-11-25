@@ -84,6 +84,32 @@ func (h *Hub) archiveManagerReady(w http.ResponseWriter, id string) bool {
 	return false
 }
 
+func (h *Hub) forwardAgentIdleArchive(w http.ResponseWriter, r *http.Request) {
+	role := principalOf(r.Context()).Role
+	if role != roleFull && role != roleExtension {
+		writeErr(w, http.StatusForbidden, i18n.Err("hub-agent_archives.forbidden"))
+		return
+	}
+	by := h.byRequest
+	if r.Method == http.MethodPost {
+		by = h.byMachine
+	}
+	owner, ok := h.owner(w, r, by)
+	if !ok {
+		return
+	}
+	status := h.archiveManagerHas(owner, assistantwire.CapabilityAgentSessionIdleArchive)
+	if status == http.StatusServiceUnavailable {
+		writeErrCode(w, status, assistantwire.CodeAssistantOffline, errAssistantOffline)
+		return
+	}
+	if status != http.StatusOK {
+		writeErrCode(w, status, "agent_idle_archive_unsupported", i18n.Err("hub-agent_archives.close_upgrade"))
+		return
+	}
+	h.forwardHTTP(w, r, owner)
+}
+
 func (h *Hub) forwardAgentArchives(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		if principalOf(r.Context()).Role != roleFull {
