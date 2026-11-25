@@ -65,9 +65,9 @@ type sessionState struct {
 	// AwaitingFirstMessage: an empty start reserved this conversation without sending
 	// a model input. Runtime instructions and the idle state wait for actual delivery.
 	AwaitingFirstMessage bool `json:"awaiting_first_message,omitempty"`
-	// MainCompactWindow: the window the main conversation last ran with (modelExecution.MainCompactWindow), kept like
-	// IsMain (the hub's copy keeps neither, so until the node restarts) for a start that carries no execution: a manual
-	// compaction with no process running (assistant_compact.go).
+	// MainCompactWindow: the window the main conversation or a leader conversation last ran with
+	// (modelExecution.MainCompactWindow), kept like IsMain (the hub's copy keeps neither, so until the node restarts) for
+	// a start that carries no execution: a manual compaction with no process running (assistant_compact.go).
 	MainCompactWindow int `json:"main_compact_window,omitempty"`
 	// AppMode / AppEffort: the permission mode and effort on an assistant conversation (modes.go). AppMode
 	// also retains a terminal Codex start constraint for later resumes. AppModeExplicit distinguishes a deliberate
