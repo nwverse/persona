@@ -40,8 +40,7 @@ func TestInboxVisibilityOriginStoreFailureFailsClosed(t *testing.T) {
 	h.origins.mu.Lock()
 	h.origins.loaded, h.origins.m = false, nil
 	h.origins.mu.Unlock()
-	h.store = func() Store { return originErrorStore{h.st} }
-
+	h.setStore(func() Store { return originErrorStore{h.st} })
 	// No origin hint simulates an older node. An unreadable origin book must not make this an ordinary tool call.
 	res := h.mcpCallWithOrigin(t.Context(), "server", "s1", "lark_messages", json.RawMessage(`{"chat_id":"synthetic-allowed"}`), true, "")
 	if !res.IsError || len(ext.calls) != 0 {
