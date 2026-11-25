@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extmgr"
 )
 
@@ -122,18 +123,31 @@ func (q *pageEventQueue) due(now time.Time) (out []string, next time.Time) {
 	return out, next
 }
 
-// pageEvents drives the queue on a timer.
+// pageEvents drives the queue on a timer and holds the pages' manual-refresh runtime state.
 type pageEvents struct {
 	mu      sync.Mutex
 	queue   pageEventQueue
 	timer   *time.Timer
 	timerAt time.Time
+	refresh pageRefreshState
 }
 
 // pageWritten: what page id draws changed (an Agent wrote it), and so the time the index shows for it.
 func (s *Service) pageWritten(id string) {
 	s.pageChanged(id, pageContent)
 	s.pageChanged(pagesIndex, indexTime)
+}
+
+// pageReadingChanged: a watch reading landed on page p; invalidate the page, the index glance and its Overview card.
+func (s *Service) pageReadingChanged(p *db.AssistantPageRow) {
+	if p == nil {
+		return
+	}
+	s.pageChanged(p.ID, pageContent)
+	s.pageChanged(pagesIndex, pageContent)
+	if len(p.Watch) > 0 && p.OnOverview {
+		s.pageChanged(overviewCardID(p.ID), pageContent)
+	}
 }
 
 // pageChanged: ui of the pages changed as c says; the apps are told when its turn comes.
