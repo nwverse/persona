@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	dispatchSimilarityMax = 12
+	dispatchSimilarityMax     = 12
+	dispatchSimilarityTimeout = 18 * time.Second
 	// A just-closed task may still have its Agent. Keep immediate follow-ups on that conversation while it remains linked.
 	dispatchRecentClose = 15 * time.Minute
 )
@@ -30,7 +31,7 @@ func (s *Service) similarDispatch(ctx context.Context, task PlanTask, request *B
 	if len(candidates) == 0 {
 		return Todo{}, false
 	}
-	judgeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	judgeCtx, cancel := context.WithTimeout(ctx, dispatchSimilarityTimeout)
 	defer cancel()
 	todo, matched, err := judgeDispatchSimilarity(judgeCtx, s.purposeModelFor("inbox.judge", "dispatch_reuse"), proposed, candidates)
 	if err != nil {

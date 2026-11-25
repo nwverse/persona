@@ -1724,6 +1724,7 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	}
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
+	dispatchReuse := strings.TrimSpace(prompts.RenderDispatchReuse())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.modelRequests++
@@ -1773,7 +1774,7 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.Contains(in.System, `{"lessons":[`): // the lessons of an accepted task (task_lessons.go), in any language
 			f.lessonsAsked = append(f.lessonsAsked, modelCall{in.System, user})
 			reply, fail = f.lessons, f.lessons == ""
-		case strings.HasPrefix(in.System, "Check whether the proposed dispatch would duplicate"):
+		case strings.HasPrefix(in.System, dispatchReuse):
 			reply = cmp.Or(f.dispatchMatch, `{"candidate":0}`)
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
