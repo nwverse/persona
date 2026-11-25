@@ -449,15 +449,32 @@ func (h *Hub) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.
 
 // ---- what the hub tells the manager of the apps ----
 
+// hasFullAppOnline reports whether at least one full user app (excluding runtime CLI simulators and
+// restricted/extension clients) is currently connected to the hub.
+func (h *Hub) hasFullAppOnline() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.role == roleFull && !c.runtimeCLI {
+			return true
+		}
+	}
+	return false
+}
+
 // fleetClientsChanged tells the managers what the apps can take now, when it changed (fleet.clients): an app that
-// takes MCP forms and links is connected, or a phone that registered for them would be pushed one (#2433). It runs
-// after an app connects, says hello or goes, and after the devices or their settings change. One at a time, each with
-// what is true then, so an older state never overtakes a newer one.
+// takes MCP forms and links is connected, or a phone that registered for them would be pushed one (#2433), or whether
+// a full user app is online. It runs after an app connects, says hello or goes, and after the devices or their settings
+// change. One at a time, each with what is true then, so an older state never overtakes a newer one.
 func (h *Hub) fleetClientsChanged() {
 	f := &h.reported
 	f.clientsSend.Lock()
 	defer f.clientsSend.Unlock()
-	c := assistantwire.Clients{Elicitation: h.hasElicitationClient(), ElicitationPush: h.push.pushesElicitation(h.desktopOnline())}
+	c := assistantwire.Clients{
+		Elicitation:     h.hasElicitationClient(),
+		ElicitationPush: h.push.pushesElicitation(h.desktopOnline()),
+		AppOnline:       h.hasFullAppOnline(),
+	}
 	f.mu.Lock()
 	same := f.clientsSent && f.clients == c
 	f.clients, f.clientsSent = c, true
@@ -505,6 +522,18 @@ func (h *Hub) fleetConnected() {
 // markSeen tells the manager the user looked at a session (an app's WebSocket seen).
 func (h *Hub) markSeen(machine, session string) {
 	_ = h.notifyBus(h.sessionOwner(machine, session), assistantwire.EventSeen, assistantwire.FleetSeen{MachineID: machine, SessionID: session})
+}
+
+// markInteractionSeen tells the owning manager that a full user app displayed pending interaction id to the user.
+func (h *Hub) markInteractionSeen(id string) {
+	if id == "" {
+		return
+	}
+	ix, ok := h.pendingInteraction(id)
+	if !ok {
+		return
+	}
+	_ = h.notifyBus(cmp.Or(ix.Manager, assistantwire.AssistantID), assistantwire.EventInteractionSeen, assistantwire.FleetInteractionSeen{InteractionID: id})
 }
 
 // mutesChanged tells every manager the muted spaces / agents (the hub's settings mutes) after a change and after a
@@ -702,6 +731,15 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 			return
 		}
 		h.forwardOwned(w, r, h.byRequest) // answered already: no longer pending, the request names its manager
+	}))
+	// Card view receipt: starts the short countdown on an unseen owner-only timed card (e.g. secret_run / secret_handoff).
+	// Restricted devices and extension tokens cannot claim the owner saw the card.
+	api.HandleFunc("POST /api/v1/interactions/{id}/seen", h.withoutTerminalControls(func(w http.ResponseWriter, r *http.Request) {
+		if answerOnly(r) || principalOf(r.Context()).Role != roleFull {
+			writeErr(w, http.StatusForbidden, errors.New("only a full user device can mark a card seen"))
+			return
+		}
+		h.forwardOwned(w, r, h.byInteraction)
 	}))
 	api.HandleFunc("GET /api/v1/interactions/history", func(w http.ResponseWriter, r *http.Request) {
 		if h.requestHasElicitation(r) {

@@ -64,6 +64,8 @@ go server/cmd/persona-node core
 go server/cmd/persona-projects core
 go server/cmd/personad core
 go server/internal/acceptloop core
+go server/internal/agentref core
+go server/internal/agentref/agentrefadapt core
 go server/internal/agents core
 go server/internal/agentsend core
 go server/internal/ai core
@@ -72,6 +74,7 @@ go server/internal/apierr core
 go server/internal/apns core
 go server/internal/approval core
 go server/internal/archguard core
+go server/internal/archguard/domainrules core
 go server/internal/assistant core
 go server/internal/assistant/archiverecovery core
 go server/internal/assistant/chatsearch core
@@ -117,6 +120,15 @@ go server/internal/depguard core
 go server/internal/devices core
 go server/internal/devicewire core
 go server/internal/dialogwire core
+go server/internal/domainkit/clock core
+go server/internal/domainkit/clock/clocktest core
+go server/internal/domainkit/defect core
+go server/internal/domainkit/domaintest core
+go server/internal/domainkit/fail core
+go server/internal/domainkit/instant core
+go server/internal/domainkit/opt core
+go server/internal/domainkit/outcome core
+go server/internal/domainkit/slot core
 go server/internal/errreport core
 go server/internal/extension core
 go server/internal/extension/conformance core

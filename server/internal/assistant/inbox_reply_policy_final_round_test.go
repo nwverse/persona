@@ -205,6 +205,7 @@ func TestInboxReplyPolicyDisabledDraftIgnoresUnrelatedItemUpdate(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchVersionedMirrorSend(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	for _, tc := range []struct {
 		name            string
 		expectedVersion int

@@ -4,11 +4,9 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"math"
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/recordingwire"
@@ -142,8 +140,6 @@ func dropUploadRoom(u *RecordingUpload, problem string) string {
 	return problem
 }
 
-func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
-
 // mendCoverage is c as the hub keeps it, mended rather than refused: to and the gaps clamped to 0 and above, a gap's
 // ends put in order, empty gaps dropped, the rest sorted; overlapping gaps (and touching ones) of the same reason are
 // made one, and where reasons differ the gap that starts first keeps the overlap. Past maxCoverageGaps the closest
@@ -232,35 +228,6 @@ func joinGaps(gaps []CoverageGap, may func(a, b CoverageGap) bool) []CoverageGap
 	return out
 }
 
-var dayZones sync.Map // IANA name → *time.Location, loaded once
-
-// dayLocation is the IANA zone name ("Local" is not one).
-func dayLocation(name string) (*time.Location, error) {
-	if l, ok := dayZones.Load(name); ok {
-		return l.(*time.Location), nil
-	}
-	if name == "" || name == "Local" {
-		return nil, fmt.Errorf("unknown time zone %q", name)
-	}
-	l, err := time.LoadLocation(name)
-	if err != nil {
-		return nil, err
-	}
-	dayZones.Store(name, l)
-	return l, nil
-}
-
-// RecordingZone is the zone r's clock times are in: a day recording's own (tz), else (and when it cannot be loaded)
-// the user's.
-func (s *Store) RecordingZone(r *Recording) *time.Location {
-	if r.Kind == RecordingDay && r.TZ != "" {
-		if l, err := dayLocation(r.TZ); err == nil {
-			return l
-		}
-	}
-	return s.Zone()
-}
-
 // recordingName is Store.recordingName, a day recording's in the owner's language (Engine.DayRecordingName) unless
 // the user titled it.
 func (e *Engine) recordingName(r *Recording) string {
@@ -270,14 +237,6 @@ func (e *Engine) recordingName(r *Recording) string {
 		}
 	}
 	return e.Store.recordingName(r)
-}
-
-// now is the engine's clock (a test sets clock).
-func (e *Engine) now() time.Time {
-	if e.clock != nil {
-		return e.clock()
-	}
-	return time.Now()
 }
 
 // putDay sets a day recording's own fields from upload u (cleaned, a new base): its count, and the revisions an
@@ -490,53 +449,10 @@ func sortDaySegments(segs []RecordingSegment) {
 	})
 }
 
-// coverageTo is how far r's text reaches, in seconds since started_at: its coverage's to, its duration without one
-// (the recap reads up to its last segment then, recapLines).
-func coverageTo(r *Recording) float64 {
-	if r.Coverage != nil {
-		return r.Coverage.To
-	}
-	return r.Duration
-}
-
-func seconds(sec float64) time.Duration { return time.Duration(sec * float64(time.Second)) }
-
 // hourStart is the start of t's clock hour in zone, by the zone's offset at t, so every hour is an hour of absolute
 // time: the hour a fall-back repeats is two of them, never one of two hours.
 func hourStart(t time.Time, zone *time.Location) time.Time {
 	_, off := t.In(zone).Zone()
 	shift := time.Duration(off) * time.Second
 	return t.Add(shift).Truncate(time.Hour).Add(-shift).In(zone)
-}
-
-// DayRecordings are the day recordings of day (YYYY-MM-DD, in each one's zone), by part, then start.
-func (e *Engine) DayRecordings(day string) []Recording {
-	return e.dayRecordings(func(r *Recording) bool { return r.Day == day })
-}
-
-// TodaysDayRecordings are the day recordings recorded on the owner's day of now in zone owner (the evening routine's:
-// a read-only knowledge base's store is not put in it), as the recap time takes them (DaySpan: one still open counts
-// until now), by part, then start: what the evening routine reads.
-func (e *Engine) TodaysDayRecordings(now time.Time, owner *time.Location) []Recording {
-	from, to, _ := dayStart(now.In(owner).Format(time.DateOnly), owner)
-	return e.dayRecordings(func(r *Recording) bool { return e.recordedWithin(r, now, from, to) })
-}
-
-// DaySpan is when day recording r was recorded as of now (daySpan): from its start to its end, or until now while it
-// is open, within its day.
-func (e *Engine) DaySpan(r *Recording, now time.Time) (time.Time, time.Time) {
-	return e.daySpan(r, now)
-}
-
-func (e *Engine) dayRecordings(keep func(r *Recording) bool) []Recording {
-	var out []Recording
-	for _, r := range e.Store.Recordings() {
-		if r.Kind == RecordingDay && keep(r) {
-			out = append(out, *r)
-		}
-	}
-	slices.SortFunc(out, func(a, b Recording) int {
-		return cmp.Or(cmp.Compare(a.Part, b.Part), a.StartedAt.Compare(b.StartedAt), strings.Compare(a.ID, b.ID))
-	})
-	return out
 }

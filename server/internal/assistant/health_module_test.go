@@ -165,7 +165,7 @@ func TestHealthFollowsItsModule(t *testing.T) {
 			if off {
 				modulesOff = []string{healthhost.ModuleID}
 			}
-			f, st := newFakeHub(), &intakeTestStore{}
+			f, st := healthHub(), &intakeTestStore{}
 			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), ModulesOff: modulesOff}))
 			if s.healthOn() == absent {
 				t.Fatalf("Health layer loaded = %v with the module off = %v", s.healthOn(), off)
@@ -179,9 +179,11 @@ func TestHealthFollowsItsModule(t *testing.T) {
 					t.Errorf("route %s %s listed = %v with the module off = %v", rq.method, rq.path, !off, off)
 				}
 			}
-			listed := slices.ContainsFunc(s.Tools(context.Background()), func(t proto.Tool) bool { return t.Name == healthhost.Tool })
-			if listed == absent {
-				t.Errorf("health_intake listed = %v with the module off = %v", listed, off)
+			for _, name := range healthToolNames {
+				listed := slices.ContainsFunc(s.ToolsFor(context.Background(), "server", "sleep-000-0000"), func(t proto.Tool) bool { return t.Name == name })
+				if listed == absent {
+					t.Errorf("%s listed = %v with the module off = %v", name, listed, off)
+				}
 			}
 			caps := withHealth([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems}, s)
 			if slices.Contains(caps, assistantwire.CapabilityHealthIntake) == absent {
@@ -194,7 +196,7 @@ func TestHealthFollowsItsModule(t *testing.T) {
 				if got := s.healthClaudeMD(context.Background(), "server"); strings.Contains(got, "`health_intake`") {
 					t.Error("intake instructions remained without the module")
 				}
-				if _, err := s.healthTool(context.Background(), json.RawMessage(`{"action":"list"}`)); err == nil {
+				if _, err := s.healthTool(context.Background(), healthhost.ToolCall{Name: healthhost.Tool, Args: json.RawMessage(`{"action":"list"}`)}); err == nil {
 					t.Error("health_intake ran without the module")
 				}
 				ctx, cancel := context.WithCancel(context.Background())
