@@ -6,7 +6,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
 // Views read it with useStore(selector); per-session item streams go to listeners (ChatView subscribes).
 
-import { chosenManager, defaultKnown, defaultManager, fromShownManager, messageManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
+import { chosenManager, defaultKnown, defaultManager, fromShownManager, messageManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, sameManager, shownManager } from "./manager-choice";
 import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { clearAssistantSnapshot, readAssistantSnapshot, writeAssistantSnapshot } from "./assistant-snapshot";
@@ -21,7 +21,7 @@ import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, newMark, nextDue, seenCopy, settleMarks, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
-import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
+import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, invalidateInFlightGets, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
@@ -869,8 +869,8 @@ export function connect() {
     // The normal hello refresh still covers changes between these snapshots and the start of the event stream.
     sidebarTimer = setTimeout(() => {
       if (sockOwner !== credentialOwner()) return;
-      void refreshAssistant().catch(() => {});
-      void refreshTodos();
+      void refreshAssistant({ coalesce: true }).catch(() => {});
+      void refreshTodos({ coalesce: true });
     }, 250);
   }
   directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
@@ -1077,8 +1077,13 @@ async function followDirections(changed = false) {
   const a = state.assistant;
   if (!ids || !a) return;
   const known = new Set(a.conversations.map((c) => c.session_id));
+  for (const s of state.sessions[a.machine_id] ?? []) {
+    if (s.assistant && !s.space && !s.archived && sameManager(s.manager, a.manager) && availableConversation(s)) known.add(s.session_id);
+  }
+  if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) {
+    set({ assistant: { ...a, leaders: ids } });
+  }
   if (ids.some((id) => !known.has(id) && !isExternalDirection(id))) void refreshAssistant().catch(() => {});
-  else if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) set({ assistant: { ...a, leaders: ids } });
 }
 
 const helloHooks = new Set<() => void>();
@@ -1148,6 +1153,7 @@ function onMessage(msg: Record<string, unknown>) {
       resendSeen();
       // resumed: the hub replays every broadcast missed since the cursor, nothing needs refetching
       if (!isResumed(msg)) {
+        invalidateInFlightGets();
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
         void refreshAgentSessions();
@@ -1650,14 +1656,14 @@ export function dropDelegated(id: string) {
 // Every request for a list the page keeps whole (/todos, /assistant), numbered: an answer to a request sent before the
 // one already applied is older than what the page shows (refresh() waits for /sessions too, seconds on a busy hub) and
 // must not put the old list back.
-function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) {
+function numbered<T>(path: string, read: (dedupe: boolean) => Promise<T> = (dedupe) => api<T>(path, { dedupe })) {
   let asked = 0;
   let applied = 0;
   return {
-    ask() {
+    ask(dedupe = false) {
       const n = ++asked;
       const owner = credentialOwner();
-      const answer = read();
+      const answer = read(dedupe);
       /** Whether this answer may be applied (no later request's answer is in place); if so it is the one in place now. */
       const fresh = () => {
         if (n < applied || owner !== credentialOwner()) return false;
@@ -1666,9 +1672,10 @@ function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) 
       };
       return { answer, fresh };
     },
-    /** Every answer still on its way is old now (another login). */
+    /** Every answer still on its way is old now (another login or confirmed mutation). */
     forget() {
       applied = ++asked;
+      invalidateInFlightGets(path);
     },
   };
 }
@@ -1691,12 +1698,13 @@ function validTodoBoard(raw: unknown): TodoBoardProjection | null {
 
 let keptTodos: { owner: string; etag: string; revision: string; answer: TodosListAnswer } | null = null;
 
-async function readTodos(): Promise<TodosListAnswer> {
+async function readTodos(dedupe = false): Promise<TodosListAnswer> {
   const owner = credentialOwner();
   const kept = keptTodos?.owner === owner ? keptTodos : null;
   let status = 0;
   let reply: Headers | undefined;
   const answer = await api<TodosListAnswer>("/todos", {
+    dedupe,
     headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
     onResponse: (headers, code) => { status = code; reply = headers; },
   });
@@ -1745,11 +1753,11 @@ export async function refresh() {
   const [sessions, interactions, machines, mutes, pins] = await Promise.allSettled([
     state.features.includes(SESSIONS_LIST_FEATURE)
       ? runtimeSessions.load().then(() => null)
-      : state.loaded ? Promise.resolve(null) : api<{ sessions: Session[] }>("/sessions"),
-    api<{ interactions: Interaction[] }>("/interactions"),
-    api<{ machines: Machine[] }>("/machines"),
-    api<AgentMutes>("/mutes"),
-    api<Partial<AgentPins>>("/pins"),
+      : state.loaded ? Promise.resolve(null) : api<{ sessions: Session[] }>("/sessions", { dedupe: false }),
+    api<{ interactions: Interaction[] }>("/interactions", { dedupe: false }),
+    api<{ machines: Machine[] }>("/machines", { dedupe: false }),
+    api<AgentMutes>("/mutes", { dedupe: false }),
+    api<Partial<AgentPins>>("/pins", { dedupe: false }),
     assistantDone, // keep the cold-start loaded gate until the main reference or its error is known
   ]);
   if (gen < refreshes.applied) return todosDone;
@@ -1830,6 +1838,7 @@ let pushedHidden = false; // only a failed hidden import; the loaded loop owns i
 let resetPushedTodos: () => void = () => {};
 
 export function todosPushed() {
+  invalidateInFlightGets("/todos");
   const epoch = pushedEpoch;
   void import("./todo-pushes").catch(() => null).then((m) => {
     if (epoch !== pushedEpoch) return;
@@ -1850,8 +1859,8 @@ export function todosPushed() {
   });
 }
 
-export async function refreshTodos() {
-  const asked = todosAsked.ask();
+export async function refreshTodos(opts?: { coalesce?: boolean }) {
+  const asked = todosAsked.ask(opts?.coalesce === true);
   try {
     const res = await asked.answer;
     applyTodos({ status: "fulfilled", value: res }, asked.fresh);
@@ -1913,14 +1922,14 @@ function replaceDefaultAssistant() {
 
 /** Reads the page's assistant again; true when its answer is the one in place now (not one a later answer, or another
  *  manager's page, made old meanwhile). */
-export async function refreshAssistant(): Promise<boolean> {
+export async function refreshAssistant(opts?: { coalesce?: boolean }): Promise<boolean> {
   const from = pageOf();
   if (!state.assistant) {
     const kept = currentAssistantSnapshot(from);
     restoredAssistant = kept ? { page: from, manager: kept.manager } : null;
     if (kept) showAssistant(kept.assistant);
   }
-  const asked = assistantAsked.ask();
+  const asked = assistantAsked.ask(opts?.coalesce === true);
   try {
     const a = await asked.answer;
     if (!asked.fresh() || from !== pageOf()) return false;
@@ -2123,6 +2132,7 @@ function resendSeen() {
 }
 
 export function reset() {
+  invalidateInFlightGets();
   resetAgentsDisplay();
   resetSeenVisit();
   disconnect();
