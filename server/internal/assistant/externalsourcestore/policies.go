@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -18,6 +19,37 @@ func (s *Store) PutExternalSourcePolicy(ctx context.Context, p assistantwire.Ext
 		_, err := tx.Exec(ctx, `
 			INSERT INTO assistant_external_source_policies (external_ref, policy) VALUES ($1, $2)
 			ON CONFLICT (external_ref) DO UPDATE SET policy = EXCLUDED.policy`, p.ExternalRef, p.Policy)
+		return err
+	})
+}
+
+// ChangeExternalSourcePolicy replaces the saved overrides only if they still match the approved before-image.
+// An empty before policy denotes inheritance, and an empty after policy restores it.
+func (s *Store) ChangeExternalSourcePolicy(ctx context.Context, p assistantwire.ExternalScopedPolicy, before assistantwire.ExternalPolicy) error {
+	return s.database.Transaction(ctx, func(tx pgx.Tx) error {
+		var tag pgconn.CommandTag
+		var err error
+		switch {
+		case before == (assistantwire.ExternalPolicy{}):
+			if p.Policy == before {
+				var exists bool
+				err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM assistant_external_source_policies WHERE external_ref = $1)`, p.ExternalRef).Scan(&exists)
+				if err == nil && exists {
+					return ErrChangeStale
+				}
+				return err
+			}
+			tag, err = tx.Exec(ctx, `
+				INSERT INTO assistant_external_source_policies (external_ref, policy) VALUES ($1, $2)
+				ON CONFLICT (external_ref) DO NOTHING`, p.ExternalRef, p.Policy)
+		case p.Policy == (assistantwire.ExternalPolicy{}):
+			tag, err = tx.Exec(ctx, `DELETE FROM assistant_external_source_policies WHERE external_ref = $1 AND policy = $2`, p.ExternalRef, before)
+		default:
+			tag, err = tx.Exec(ctx, `UPDATE assistant_external_source_policies SET policy = $3 WHERE external_ref = $1 AND policy = $2`, p.ExternalRef, before, p.Policy)
+		}
+		if err == nil && tag.RowsAffected() == 0 {
+			return ErrChangeStale
+		}
 		return err
 	})
 }
