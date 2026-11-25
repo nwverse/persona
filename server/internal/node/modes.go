@@ -323,6 +323,9 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 		return err
 	}
 	if n.isAssistantSession(id) {
+		if mode != "" && mode != proto.ModeDefault && n.conversationAgent(id) == traexAgent {
+			return fmt.Errorf("TRAE CLI Inbox requires default permissions")
+		}
 		n.mu.Lock()
 		p := n.procs[id]
 		n.mu.Unlock()

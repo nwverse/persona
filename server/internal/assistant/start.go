@@ -437,6 +437,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			purpose = purposeMain
 		}
 	}
+	if purpose == purposeAgent && p.Origin == OriginInbox {
+		ctx = context.WithValue(ctx, inboxAssistantFitKey{}, true)
+	}
 	if p.Launcher != "" && !p.RequireLauncher {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
 		if fit == mainChatRefused {
@@ -1467,6 +1470,9 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	origin, originKnown := s.managerOriginDecision(ctx, p.MachineID, p.SessionID, "", false)
 	if originKnown {
 		params["origin_known"] = true // an empty origin is an explicit ordinary decision, including on assistant.model
+	}
+	if originKnown && origin == OriginInbox {
+		ctx = context.WithValue(ctx, inboxAssistantFitKey{}, true)
 	}
 	if origin != "" {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the

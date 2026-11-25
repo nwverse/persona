@@ -74,7 +74,7 @@ func (n *Node) assistantInterrupt(id string) error {
 	n.mu.Lock()
 	p := n.procs[id]
 	n.mu.Unlock()
-	if p != nil && p.agent == "codex" && p.alive() {
+	if p != nil && p.cx != nil && p.alive() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := p.cx.interrupt(ctx); err == nil {

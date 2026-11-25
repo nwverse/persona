@@ -20,8 +20,12 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	var init struct {
 		CodexHome string `json:"codexHome"`
 	}
+	clientName := "persona"
+	if c.p.agent == traexAgent {
+		clientName = "traex-persona"
+	}
 	if err := c.call(ctx, "initialize", map[string]any{
-		"clientInfo":   map[string]any{"name": "persona", "title": "Persona", "version": "1"},
+		"clientInfo":   map[string]any{"name": clientName, "title": "Persona", "version": "1"},
 		"capabilities": map[string]any{"experimentalApi": true, "requestAttestation": false},
 	}, &init); err != nil {
 		return err
@@ -38,6 +42,10 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 		mode = startupMode[0]
 	}
 	params := map[string]any{"cwd": cwd}
+	if c.p.agent == traexAgent {
+		mode = proto.ModeDefault
+		params["approvalsReviewer"] = "user"
+	}
 	if mode != "" {
 		approval, sandbox := codexPolicy(mode)
 		params["approvalPolicy"], params["sandbox"] = approval, sandbox
@@ -54,9 +62,13 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir),
 		joinInstructionRemainderAndPolicy(remainder, c.p.model.SupervisionInstructions))
 	var res struct {
-		Model       string          `json:"model"`
-		ServiceTier json.RawMessage `json:"serviceTier"`
-		Thread      struct {
+		Model          string          `json:"model"`
+		ServiceTier    json.RawMessage `json:"serviceTier"`
+		ApprovalPolicy json.RawMessage `json:"approvalPolicy"`
+		Sandbox        struct {
+			Type string `json:"type"`
+		} `json:"sandbox"`
+		Thread struct {
 			ID   string `json:"id"`
 			Path string `json:"path"`
 		} `json:"thread"`
@@ -72,6 +84,14 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	}
 	if res.Thread.ID == "" {
 		return errors.New("no thread id")
+	}
+	if c.p.agent == traexAgent {
+		if resume && res.Thread.ID != id {
+			return errors.New("TRAE CLI returned a different thread on resume")
+		}
+		if string(res.ApprovalPolicy) != `"untrusted"` || res.Sandbox.Type != "workspaceWrite" {
+			return errors.New("TRAE CLI did not attest the Inbox approval and sandbox policy")
+		}
 	}
 	c.mu.Lock()
 	c.threadID = res.Thread.ID
@@ -90,7 +110,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 		n.pathsAt[res.Thread.ID] = time.Now()
 	}
 	n.mu.Unlock()
-	c.loadSpeedModels(ctx)
+	if c.p.agent == "codex" {
+		c.loadSpeedModels(ctx)
+	}
 	if c.nameGates != nil { // larkCheck records what it confirmed under this id (p.id): the addresses stand for it from now on
 		c.nameGates(res.Thread.ID)
 	}
@@ -187,6 +209,11 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 	}
 	c.p.mu.Unlock()
 	params := map[string]any{"threadId": thread, "input": input}
+	if c.p.agent == traexAgent {
+		mode = proto.ModeDefault
+		params["approvalsReviewer"] = "user"
+		params["capabilities"] = map[string]any{"mcpServers": c.traexMCPNames(), "skills": nil}
+	}
 	if mode != "" {
 		approval, _ := codexPolicy(mode)
 		params["approvalPolicy"], params["sandboxPolicy"] = approval, codexSandboxPolicy(mode, c.memDir)

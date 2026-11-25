@@ -182,6 +182,9 @@ export function permissionModesForLauncher(chosen: ModelProvider | undefined, ag
  *  or agents without permission modes (omp, traex, pi, cursor). */
 export function permissionModesForProvider(p: ModelPurpose, chosen: ModelProvider | undefined, agent: string): ModeOption[] {
   if (p.kind !== "launcher" || !supportsField(p, "permission_mode")) return [];
+  if (p.id === "inbox.agent" && agent === "traex") {
+    return PERMISSION_MODES.filter((mode) => mode.id === "default");
+  }
   return permissionModesForLauncher(chosen, agent);
 }
 

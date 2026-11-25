@@ -82,9 +82,6 @@ func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, store
 	if compat.Source(v.Source) == proto.SourceClaudeDesktop {
 		return p.ID == "agent.new" // a new session in Claude's desktop app: Agents' only (models_desktop.go)
 	}
-	if p.ID == purposeAgent && v.Kind == "launcher" && v.Agent == "traex" {
-		return false // Inbox execution uses assistant.send and requires origin-aware tools from process startup.
-	}
 	compatible := v.Kind == p.Kind
 	if p.Kind == "launcher" && v.Kind == "api" { // a direct Messages API provider starts Claude on its gateway (#2455)
 		compatible = messagesAPI(v.API)
@@ -392,7 +389,11 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 			return i18n.Err("assistant-models.err_permission_mode_unsupported")
 		}
 		name := strings.TrimPrefix(b.Provider, "launcher.")
-		if !slices.Contains(s.permissionModesForLauncher(ctx, p.MachineID, name, provider), b.PermissionMode) {
+		if p.ID == purposeAgent && provider != nil && provider.Agent == "traex" {
+			if b.PermissionMode != proto.ModeDefault {
+				return i18n.Err("assistant-models.err_permission_mode_unsupported")
+			}
+		} else if !slices.Contains(s.permissionModesForLauncher(ctx, p.MachineID, name, provider), b.PermissionMode) {
 			return i18n.Err("assistant-models.err_permission_mode_unsupported")
 		}
 		if b.PermissionMode == "plan" && s.desktopAppProvider(ctx, b.Provider) {
@@ -450,13 +451,14 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 				if err := s.call(ctx, machine, assistantwire.DeviceLaunchersModelCheck, s.launcherParams(ctx, machine, strings.TrimPrefix(b.Provider, "launcher."), params), &result); err != nil {
 					return i18n.Err("assistant-models.err_check_model", i18n.Args{"error": i18n.Localize(err, s.requestCtxLang(ctx))})
 				}
-				if p.CategoryID == "agent.new" && result.Agent != "claude" && result.Agent != "codex" && result.Agent != "agy" && result.Agent != "omp" && !(p.ID == "agent.new" && result.Agent == "traex") {
+				if p.CategoryID == "agent.new" && result.Agent != "claude" && result.Agent != "codex" && result.Agent != "agy" && result.Agent != "omp" && !(result.Agent == "traex" && (p.ID == "agent.new" || p.ID == purposeAgent)) {
 					return i18n.Err("assistant-models.err_agent_launcher")
 				}
 				if p.ID == purposeMeetingRoom && result.Agent != "" && result.Agent != "claude" {
 					return errMeetingRoomClaudeOnly // the machine runs another agent under this launcher's name
 				}
-				if b.PermissionMode != "" && result.Agent != "" && !permissionModeSupported(result.Agent, 0, b.PermissionMode) {
+				if b.PermissionMode != "" && result.Agent != "" && !permissionModeSupported(result.Agent, 0, b.PermissionMode) &&
+					!(p.ID == purposeAgent && result.Agent == "traex" && b.PermissionMode == proto.ModeDefault) {
 					return i18n.Err("assistant-models.err_permission_mode_unsupported")
 				}
 			}
