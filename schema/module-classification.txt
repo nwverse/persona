@@ -384,6 +384,7 @@ web web/src/admin/pages core
 web web/src/components core
 web web/src/core core
 web web/src/features core
+web web/src/features/external-sources core
 web web/src/features/todos core
 web web/src/i18n core
 web web/src/i18n/locales core

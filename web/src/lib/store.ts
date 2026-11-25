@@ -6,7 +6,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
 // Views read it with useStore(selector); per-session item streams go to listeners (ChatView subscribes).
 
-import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
+import { chosenManager, defaultKnown, defaultManager, fromShownManager, messageManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
 import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { clearAssistantSnapshot, readAssistantSnapshot, writeAssistantSnapshot } from "./assistant-snapshot";
@@ -99,6 +99,8 @@ export interface State {
   reanswered: Record<string, Reanswer>;
   assistant: AssistantInfo | null;
   assistantError: string | null;
+  /** Confirmed Labs receipts for the shown assistant. Null is an older hub, undefined is still loading. */
+  labsSeen: string[] | null | undefined;
   mutes: AgentMutes;
   /** Pinned spaces / agents (GET /pins): the top of the Agents list. */
   pins: AgentPins;
@@ -151,6 +153,7 @@ let state: State = {
   reanswered: {},
   assistant: initialAssistant?.assistant ?? null,
   assistantError: null,
+  labsSeen: initialAssistant?.assistant.labs_seen,
   mutes: { spaces: [], sessions: [], allowed: [] },
   pins: NO_PINS,
   loaded: false,
@@ -1163,6 +1166,11 @@ function onMessage(msg: Record<string, unknown>) {
       // follow at once (#4331: a sixth leader stayed hidden until a reload); a read already out may predate the change
       void followDirections(true);
       break;
+    case "assistant_labs_seen":
+      if (Array.isArray(msg.labs_seen) && msg.labs_seen.length <= 64 && msg.labs_seen.every((id) => typeof id === "string")) {
+        acceptLabsSeen(messageManager(msg), msg.labs_seen);
+      }
+      break;
     case "hub_restarting":
       restartNotice = true; // the close that follows is a restart: retry at once, stay quiet longer
       break;
@@ -1858,6 +1866,38 @@ export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations
   if (a) set({ assistant: { ...a, ...patch } });
 }
 
+const labsSeenByManager = new Map<string, string[]>();
+
+// A GET started before a receipt or a replayed event can carry a smaller set.
+function keepLabsSeen(manager: string, ids: string[]): string[] {
+  const before = labsSeenByManager.get(manager);
+  if (before && ids.every((id) => before.includes(id))) return before;
+  const seen = before ? [...new Set([...before, ...ids])] : ids;
+  labsSeenByManager.set(manager, seen);
+  return seen;
+}
+
+export function acceptLabsSeen(manager: string, ids: string[]) {
+  const a = state.assistant;
+  if (a && (a.manager || shownManager()) === manager && state.labsSeen) keepLabsSeen(manager, state.labsSeen);
+  const seen = keepLabsSeen(manager, ids);
+  if (!a || (a.manager || shownManager()) !== manager || state.labsSeen === seen) return;
+  const cached = assistantByManager.get(cacheKey()) ?? currentAssistantSnapshot(pageOf())?.assistant;
+  if (cached) {
+    const assistant = { ...cached, labs_seen: seen };
+    assistantByManager.set(cacheKey(), assistant);
+    writeAssistantSnapshot(pageOf(), manager, assistant);
+  }
+  set({ labsSeen: seen });
+}
+
+function showAssistant(assistant: AssistantInfo | null, fetched = false) {
+  const labsSeen = assistant?.labs_seen
+    ? keepLabsSeen(assistant.manager || shownManager(), assistant.labs_seen)
+    : fetched ? null : undefined;
+  set({ assistant, assistantError: null, labsSeen });
+}
+
 /** A different default owns every no-header answer still on its way. Retire those reads and ask once for the new one. */
 function replaceDefaultAssistant() {
   const manager = defaultManager();
@@ -1867,7 +1907,7 @@ function replaceDefaultAssistant() {
   restoredAssistant = null;
   assistantByManager.delete("");
   clearAssistantSnapshot("");
-  set({ assistant: null, assistantError: null });
+  showAssistant(null);
   void refreshAssistant().catch(() => {});
 }
 
@@ -1878,7 +1918,7 @@ export async function refreshAssistant(): Promise<boolean> {
   if (!state.assistant) {
     const kept = currentAssistantSnapshot(from);
     restoredAssistant = kept ? { page: from, manager: kept.manager } : null;
-    if (kept) set({ assistant: kept.assistant, assistantError: null });
+    if (kept) showAssistant(kept.assistant);
   }
   const asked = assistantAsked.ask();
   try {
@@ -1890,6 +1930,7 @@ export async function refreshAssistant(): Promise<boolean> {
       replaceDefaultAssistant();
       return false;
     }
+    if (assistant.labs_seen) assistant.labs_seen = keepLabsSeen(manager || shownManager(), assistant.labs_seen);
     defaultAssistantRetry = "";
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
@@ -1902,7 +1943,7 @@ export async function refreshAssistant(): Promise<boolean> {
     const owner = chosenManager() ?? undefined;
     for (const c of assistant.conversations) noteConversation(c.session_id, owner);
     if (assistant.main) noteConversation(assistant.main, owner);
-    set({ assistant, assistantError: null });
+    showAssistant(assistant, true);
     return true;
   } catch (err) {
     if (asked.fresh() && from === pageOf()) {
@@ -1938,12 +1979,13 @@ onManagerChoice(() => {
   assistantAsked.forget();
   restoredAssistant = null;
   let assistant = assistantByManager.get(cacheKey());
+  const fetched = !!assistant;
   if (!assistant) {
     const kept = currentAssistantSnapshot(page);
     assistant = kept?.assistant;
     if (kept) restoredAssistant = { page, manager: kept.manager };
   }
-  set({ assistant: assistant ?? null, assistantError: null });
+  showAssistant(assistant ?? null, fetched);
   void refreshAssistant().catch(() => {});
 });
 
@@ -2099,6 +2141,7 @@ export function reset() {
   resetPushedTodos();
   assistantAsked.forget();
   assistantByManager.clear();
+  labsSeenByManager.clear();
   restoredAssistant = null;
   defaultAssistantRetry = "";
   // and so do the pins and mutes of a refresh() or a failed save still on its way
@@ -2133,6 +2176,7 @@ export function reset() {
     reanswered: {},
     assistant: null,
     assistantError: null,
+    labsSeen: undefined,
     launches: {},
     outbox: {},
     mutes: { spaces: [], sessions: [], allowed: [] },
