@@ -5,6 +5,10 @@
   source, keep missing-item injection independent, and name push-held fixtures explicitly. Test both notification
   policies without relaxing transcript confirmation, once-ID or retry assertions.
 
+- Mixed core/module fixtures must keep testing the core when a module is absent (#15500). Check generic scheduled
+  failure routing first, then make the optional briefing hook assert absence or its normal fallback. Do not skip the
+  whole test, weaken the default-build assertion or wait for a notification from a module that is not loaded.
+
 - A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
   appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
   Near their due time, a catalog test can count both the workout report and a briefing, while waiting for only the
