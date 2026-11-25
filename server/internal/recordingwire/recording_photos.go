@@ -2,6 +2,8 @@ package recordingwire
 
 import (
 	"errors"
+	"slices"
+	"strconv"
 	"time"
 )
 
@@ -76,3 +78,57 @@ var (
 	// ErrBadPhoto wraps what is wrong with a photo to add.
 	ErrBadPhoto = errors.New("invalid photo")
 )
+
+// PhotoBook is photos.json.
+type PhotoBook struct {
+	Next   int           `json:"next"` // the next n; n is never reused
+	Rev    int64         `json:"rev"`  // PartPhotos' revision: only goes up
+	Photos []StoredPhoto `json:"photos"`
+	// Deleted are the photos the owner deleted: deleting one again answers false, adding its id again ErrPhotoDeleted.
+	Deleted []PhotoRef `json:"deleted,omitempty"`
+	// Withdraw are the photos deleted after they went into the room, which the room is still to be told of.
+	Withdraw []PhotoRef `json:"withdraw,omitempty"`
+}
+
+// Index is the position of the listed photo n, -1 when none is.
+func (b *PhotoBook) Index(n int) int {
+	return slices.IndexFunc(b.Photos, func(p StoredPhoto) bool { return p.N == n })
+}
+
+// StoredPhoto is a photo in photos.json: Photo without Cited (the minutes say that), with the request's digest and
+// Queued while it waits to go into the room (until its send succeeded: Queued and Forwarded is a send in doubt).
+type StoredPhoto struct {
+	N         int       `json:"n"`
+	ID        string    `json:"id"`
+	At        float64   `json:"at"`
+	Mime      string    `json:"mime"`
+	Width     int       `json:"width"`
+	Height    int       `json:"height"`
+	Text      string    `json:"text,omitempty"`
+	Caption   string    `json:"caption,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	Forwarded bool      `json:"forwarded,omitempty"`
+	Queued    bool      `json:"queued,omitempty"`
+	AddedAt   time.Time `json:"added_at"`
+	Digest    string    `json:"digest"`
+}
+
+// Photo is p as the apps read it, cited as the minutes say.
+func (p StoredPhoto) Photo(cited map[int]bool) Photo {
+	return Photo{N: p.N, ID: p.ID, At: p.At, Mime: p.Mime, Width: p.Width, Height: p.Height, Text: p.Text, Caption: p.Caption,
+		Note: p.Note, Cited: cited[p.N], Forwarded: p.Forwarded, AddedAt: p.AddedAt}
+}
+
+// Words is p's words.
+func (p StoredPhoto) Words() PhotoText {
+	return PhotoText{N: p.N, At: p.At, Caption: p.Caption, Text: p.Text, Note: p.Note}
+}
+
+// FileName is the photo's file in attachments/.
+func (p StoredPhoto) FileName() string {
+	ext := ".jpg"
+	if p.Mime == PhotoPNG {
+		ext = ".png"
+	}
+	return "p" + strconv.Itoa(p.N) + ext
+}

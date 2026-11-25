@@ -88,7 +88,7 @@ func (s *Recordings) meetingLiveFlush(id string) {
 			}
 		}
 		if slices.Contains(parts, kb.PartPhotos) { // kept in photos.json, not meeting.json
-			revs[kb.PartPhotos] = e.PhotosRev(id)
+			revs[kb.PartPhotos] = writersOf(e).PhotosRev(id)
 		}
 		if slices.Contains(parts, kb.PartInterim) { // the latest caption's time in milliseconds, never stored
 			revs[kb.PartInterim] = s.hubInterimRev(id)

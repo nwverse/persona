@@ -1,4 +1,4 @@
-package kb
+package recordingwire
 
 import (
 	"cmp"
@@ -45,12 +45,12 @@ func UnionSpans(spans [][2]float64) [][2]float64 {
 // short sentences that each cover a little count together. A span of no length is covered (1) when it lies in one of
 // by, else not (0).
 func CoveredShare(start, end float64, by [][2]float64) float64 {
-	return coveredShare(start, end, UnionSpans(by))
+	return CoveredByUnion(start, end, UnionSpans(by))
 }
 
-// coveredShare is CoveredShare with by a union already (UnionSpans): sorted and apart, so it finds the spans by
+// CoveredByUnion is CoveredShare with by a union already (UnionSpans): sorted and apart, so it finds the spans by
 // bisection.
-func coveredShare(start, end float64, union [][2]float64) float64 {
+func CoveredByUnion(start, end float64, union [][2]float64) float64 {
 	if !finite(start) || !finite(end) {
 		return 0
 	}
@@ -119,18 +119,18 @@ func GapsIn(held [][2]float64, from, to float64) [][2]float64 {
 	return out
 }
 
-// sameSpans: a and b are the same spans (nil and empty alike).
-func sameSpans(a, b [][2]float64) bool {
+// SameSpans: a and b are the same spans (nil and empty alike).
+func SameSpans(a, b [][2]float64) bool {
 	return len(a) == len(b) && (len(a) == 0 || slices.Equal(a, b))
 }
 
-// atSample is t seconds rounded to a sample of the hub's audio (1/AudioRate s); -1 for a time that is not one.
-func atSample(t float64) int64 {
+// AtSample is t seconds rounded to a sample of the hub's audio (1/AudioRate s); -1 for a time that is not one.
+func AtSample(t float64) int64 {
 	if !finite(t) || t < 0 {
 		return -1
 	}
 	return int64(math.Round(t * AudioRate))
 }
 
-// sampleAt is sample n in seconds.
-func sampleAt(n int64) float64 { return float64(n) / AudioRate }
+// SampleAt is sample n in seconds.
+func SampleAt(n int64) float64 { return float64(n) / AudioRate }

@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"encoding/json"
@@ -6,10 +6,12 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // minutesWaitFixtures are the cases the hub, the iPhone and the web share (spec/fixtures/minutes-wait, #13461).
-const minutesWaitFixtures = "../../../spec/fixtures/minutes-wait/cases.json"
+const minutesWaitFixtures = "../../../../../spec/fixtures/minutes-wait/cases.json"
 
 // The view carries final_done and end exactly when the shared cases say, with their values: while the final pass runs
 // (finishing, started) and the end is known, final_done at most the end.
@@ -85,7 +87,7 @@ func sameNumberOrText(t *testing.T, a, b json.RawMessage) bool {
 func TestFinalDoneMovesTheRevision(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
 	e, changed := hubEngine(t, nil)
-	e.clock = func() time.Time { return now }
+	e.SetClock(func() time.Time { return now })
 	putRecording(t, e, recID, hubUpload(1, now.Add(-time.Hour), false, nil), now)
 	parts := func() []string {
 		var all []string
@@ -103,18 +105,18 @@ func TestFinalDoneMovesTheRevision(t *testing.T) {
 		}
 		return tr
 	}
-	upd(func(t *MeetingTranscription) { t.State, t.End = TranscriptionFinishing, 600 })
+	upd(func(t *MeetingTranscription) { t.State, t.End = kb.TranscriptionFinishing, 600 })
 	parts()
 	upd(func(t *MeetingTranscription) { t.FinalDone = 300 })
 	if p := parts(); len(p) != 0 {
 		t.Fatalf("progress before the pass started moved %v", p)
 	}
 	upd(func(t *MeetingTranscription) { t.FinalFrom = now })
-	if p := parts(); !slices.Equal(p, []string{PartTranscription}) {
+	if p := parts(); !slices.Equal(p, []string{kb.PartTranscription}) {
 		t.Fatalf("the pass's start told %v", p)
 	}
 	upd(func(t *MeetingTranscription) { t.FinalDone = 450 })
-	if p := parts(); !slices.Equal(p, []string{PartTranscription}) {
+	if p := parts(); !slices.Equal(p, []string{kb.PartTranscription}) {
 		t.Fatalf("a window told %v", p)
 	}
 	if tr := transcriptionNow(t, e, recID); tr.FinalDone != 450 {
@@ -124,7 +126,7 @@ func TestFinalDoneMovesTheRevision(t *testing.T) {
 	if v := m.TranscriptionView(nil); v.FinalDone == nil || *v.FinalDone != 450 || v.End == nil || *v.End != 600 {
 		t.Fatalf("view %+v", v)
 	}
-	tr := upd(func(t *MeetingTranscription) { t.State = TranscriptionFinal })
+	tr := upd(func(t *MeetingTranscription) { t.State = kb.TranscriptionFinal })
 	if tr.FinalDone != 0 {
 		t.Fatalf("final keeps its progress: %+v", tr)
 	}

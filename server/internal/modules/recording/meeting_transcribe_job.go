@@ -447,7 +447,7 @@ func (r *hubRun) usage(j *liveJob, seconds float64, sessions int) {
 
 // addUsage adds seconds to recording id's billed transcription seconds.
 func (s *Recordings) addUsage(e *kb.Engine, id string, seconds float64) {
-	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := writersOf(e).TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.UsageSeconds += seconds
 		return nil
 	}); err != nil && !errors.Is(err, kb.ErrNotFound) && !errors.Is(err, kb.ErrRecordingDeleted) {

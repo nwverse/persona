@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"cmp"
@@ -91,7 +91,7 @@ type audioRec struct {
 }
 
 // audioRec is recording id's audio state, made on first use.
-func (s *Store) audioRec(id string) *audioRec {
+func (s *store) audioRec(id string) *audioRec {
 	s.audioMapMu.Lock()
 	defer s.audioMapMu.Unlock()
 	if s.audioRecs == nil {
@@ -107,7 +107,7 @@ func (s *Store) audioRec(id string) *audioRec {
 
 // audioDroppedLocked notes that recording id's audio directory is being removed, why: writes in flight finish before
 // (they hold recFilesMu for reading), and every one after is refused. The caller holds recFilesMu for writing.
-func (s *Store) audioDroppedLocked(id string, why error) {
+func (s *store) audioDroppedLocked(id string, why error) {
 	s.audioMapMu.Lock()
 	rec := s.audioRecs[id]
 	s.audioMapMu.Unlock()
@@ -119,7 +119,7 @@ func (s *Store) audioDroppedLocked(id string, why error) {
 // audioFileClosed closes the chunk file recording id's audio has open for writing, if any: after a gap upload, and
 // after a delete, a prune or the trim removed the directory (an open file would keep the unlinked audio on disk). The
 // caller holds no recFilesMu (audioRec.mu comes before it).
-func (s *Store) audioFileClosed(id string) {
+func (s *store) audioFileClosed(id string) {
 	s.audioMapMu.Lock()
 	rec := s.audioRecs[id]
 	s.audioMapMu.Unlock()
@@ -132,10 +132,10 @@ func (s *Store) audioFileClosed(id string) {
 }
 
 // audioFinal notes that recording id's final pass has started: its audio takes no more writes.
-func (s *Store) audioFinal(id string) { s.audioRec(id).final.Store(true) }
+func (s *store) audioFinal(id string) { s.audioRec(id).final.Store(true) }
 
 // audioPath is recording id's audio directory, or a file in it.
-func (s *Store) audioPath(id string, parts ...string) string {
+func (s *store) audioPath(id string, parts ...string) string {
 	return s.path(KindRecording, id, append([]string{photosDir, audioDir}, parts...)...)
 }
 
@@ -149,7 +149,7 @@ func (rec *audioRec) gone() error {
 
 // loadLocked reads rec's chunks from the directory once: each <from>.pcm with its size in whole samples (a file of an
 // odd size, the tail of a write a crash cut short, is cut back to them). The caller holds rec.mu and recFilesMu.
-func (rec *audioRec) loadLocked(s *Store, id string) error {
+func (rec *audioRec) loadLocked(s *store, id string) error {
 	if rec.loaded {
 		return nil
 	}
@@ -254,7 +254,7 @@ func (rec *audioRec) missingLocked(a, b int64) [][2]int64 {
 
 // fileLocked is the chunk file from (made empty when create), open for writing; the one open before is synced and
 // closed first.
-func (rec *audioRec) fileLocked(s *Store, id string, from int64, create bool) (*os.File, error) {
+func (rec *audioRec) fileLocked(s *store, id string, from int64, create bool) (*os.File, error) {
 	if rec.f != nil && rec.fFrom == from && !create {
 		return rec.f, nil
 	}
@@ -287,7 +287,7 @@ func (rec *audioRec) closeFileLocked() error {
 // else in new chunk files. A new file is made only while the recording is there (no tombstone, its meta.json, not
 // trimmed), so a write racing a delete or the trim never brings the directory back. The caller holds rec.mu and
 // recFilesMu.
-func (rec *audioRec) putLocked(s *Store, id string, a int64, pcm []byte) error {
+func (rec *audioRec) putLocked(s *store, id string, a int64, pcm []byte) error {
 	for len(pcm) > 0 {
 		n := int64(len(pcm) / 2)
 		i := slices.IndexFunc(rec.chunks, func(c audioChunk) bool { return c.end() == a })
@@ -335,7 +335,7 @@ func (rec *audioRec) putLocked(s *Store, id string, a int64, pcm []byte) error {
 }
 
 // syncLocked makes what rec stored durable: the open chunk file, the directory when a file was made, index.json.
-func (rec *audioRec) syncLocked(s *Store, id string) error {
+func (rec *audioRec) syncLocked(s *store, id string) error {
 	if rec.f != nil {
 		if err := rec.f.Sync(); err != nil {
 			return err
@@ -354,7 +354,7 @@ func (rec *audioRec) syncLocked(s *Store, id string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeRecordingFile(s.audioPath(id, audioIndexFile), append(raw, '\n')); err != nil {
+	if err := s.writeRecordingFile(s.audioPath(id, audioIndexFile), append(raw, '\n')); err != nil {
 		return err
 	}
 	rec.dirty = false
@@ -363,7 +363,7 @@ func (rec *audioRec) syncLocked(s *Store, id string) error {
 
 // audioWrite stores pcm (whole samples) of recording id from sample at, only what rec does not hold; end is the sample
 // after the last one written. ErrAudioFull when some of it lies past audioMost (the rest is stored).
-func (s *Store) audioWrite(id string, rec *audioRec, at int64, pcm []byte) (end int64, err error) {
+func (s *store) audioWrite(id string, rec *audioRec, at int64, pcm []byte) (end int64, err error) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	s.recFilesMu.RLock()
@@ -397,7 +397,7 @@ func (s *Store) audioWrite(id string, rec *audioRec, at int64, pcm []byte) (end 
 
 // audioSync makes recording id's audio durable; ack is the end, in seconds, of the contiguous audio held around sample
 // last (the latest write), and moved whether the gaps changed since meeting.json was given them.
-func (s *Store) audioSync(id string, rec *audioRec, last int64) (ack float64, moved bool, err error) {
+func (s *store) audioSync(id string, rec *audioRec, last int64) (ack float64, moved bool, err error) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	s.recFilesMu.RLock()
@@ -437,7 +437,7 @@ func gapsTo(held [][2]float64, end float64) float64 {
 
 // audioGaps are recording id's gaps for a recording that ends at end (0: not known yet), from the audio held now;
 // noted as what meeting.json was given. The caller may hold meetMu (never audioRec.mu).
-func (e *Engine) audioGaps(id string, end float64) [][2]float64 {
+func (e *engine) audioGaps(id string, end float64) [][2]float64 {
 	st := e.Store
 	rec := st.audioRec(id)
 	rec.mu.Lock()
@@ -456,7 +456,7 @@ func (e *Engine) audioGaps(id string, end float64) [][2]float64 {
 // audioHeldEnd is where the audio the hub holds of recording id ends, in seconds: 0 with none, or once it is gone. A
 // hub-mode recording ends no earlier (#9587): a phone killed mid-segment loses the segment it was writing, which the
 // hub got over the socket. The caller may hold meetMu (never audioRec.mu).
-func (e *Engine) audioHeldEnd(id string) float64 {
+func (e *engine) audioHeldEnd(id string) float64 {
 	st := e.Store
 	rec := st.audioRec(id)
 	rec.mu.Lock()
@@ -475,7 +475,7 @@ func (e *Engine) audioHeldEnd(id string) float64 {
 
 // refreshGaps writes recording id's gaps to meeting.json when the audio changed them (PartTranscription moves then),
 // until the final pass starts; the gaps after it (meeting.json's once the final pass started).
-func (e *Engine) refreshGaps(id string) [][2]float64 {
+func (e *engine) refreshGaps(id string) [][2]float64 {
 	var gaps [][2]float64
 	st := e.Store
 	st.meetMu.Lock()
@@ -504,20 +504,20 @@ func (e *Engine) refreshGaps(id string) [][2]float64 {
 // ErrNotFound, bad (PUT …/audio's ErrBadAudio, when not nil), ErrReadOnly, ErrNotHub, ErrTranscriptExpired (trimmed),
 // ErrTranscriptionFinal (the final pass started or ran, or the audio is gone). Its audio state is made before the
 // recording is read, so a delete from then on refuses the writes.
-func (e *Engine) audioFor(rawID string, bad error) (string, *audioRec, error) {
+func (e *engine) audioFor(rawID string, bad error) (string, *audioRec, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return "", nil, ErrNotFound
 	}
 	st := e.Store
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return "", nil, ErrRecordingDeleted
 	}
 	rec := st.audioRec(id)
 	r, ok := st.Recording(id)
 	switch {
 	case !ok:
-		if _, gone := st.tombstones()[id]; gone {
+		if gone := st.tombstoned(id); gone {
 			return "", nil, ErrRecordingDeleted
 		}
 		return "", nil, ErrNotFound
@@ -538,7 +538,7 @@ func (e *Engine) audioFor(rawID string, bad error) (string, *audioRec, error) {
 // AudioWriter stores one recording's audio from its socket; safe to close from another goroutine. A recording has one
 // socket at a time; two writers of one recording would still never store a sample twice.
 type AudioWriter struct {
-	e      *Engine
+	e      *engine
 	id     string
 	rec    *audioRec
 	last   atomic.Int64 // the sample after the latest write
@@ -547,7 +547,7 @@ type AudioWriter struct {
 
 // AudioOpen opens recording rawID's audio for writing. Its refusals, in the socket's order: ErrRecordingDeleted,
 // ErrNotFound, ErrReadOnly, ErrNotHub, ErrTranscriptExpired, ErrTranscriptionFinal.
-func (e *Engine) AudioOpen(rawID string) (*AudioWriter, error) {
+func (e *engine) AudioOpen(rawID string) (*AudioWriter, error) {
 	id, rec, err := e.audioFor(rawID, nil)
 	if err != nil {
 		return nil, err
@@ -635,7 +635,7 @@ func (w *AudioWriter) Close() error {
 
 // AudioHeld are the spans of recording rawID's audio the hub holds, in seconds (none once it is gone):
 // ErrRecordingDeleted after a delete, ErrNotFound with no upload of it.
-func (e *Engine) AudioHeld(rawID string) ([][2]float64, error) {
+func (e *engine) AudioHeld(rawID string) ([][2]float64, error) {
 	id, rec, err := e.audioReader(rawID)
 	if err != nil {
 		return nil, err
@@ -655,13 +655,13 @@ func (e *Engine) AudioHeld(rawID string) ([][2]float64, error) {
 }
 
 // audioReader is the recording rawID names for reading its audio: ErrRecordingDeleted, ErrNotFound.
-func (e *Engine) audioReader(rawID string) (string, *audioRec, error) {
+func (e *engine) audioReader(rawID string) (string, *audioRec, error) {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return "", nil, ErrNotFound
 	}
 	st := e.Store
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return "", nil, ErrRecordingDeleted
 	}
 	if _, ok := st.Recording(id); !ok {
@@ -674,7 +674,7 @@ func (e *Engine) audioReader(rawID string) (string, *audioRec, error) {
 // returns the gaps left. Its refusals in the contract's order: ErrRecordingDeleted, ErrNotFound, ErrBadAudio (at not
 // 0 or more, a body that is not whole samples), ErrReadOnly, ErrNotHub, ErrTranscriptExpired, ErrTranscriptionFinal;
 // ErrAudioFull, with the gaps, when some of it lies past MaxAudioSeconds (the rest is stored).
-func (e *Engine) AudioPut(rawID string, at float64, pcm []byte) ([][2]float64, error) {
+func (e *engine) AudioPut(rawID string, at float64, pcm []byte) ([][2]float64, error) {
 	s := atSample(at)
 	var bad error
 	if s < 0 || len(pcm)%2 != 0 {
@@ -705,7 +705,7 @@ func (e *Engine) AudioPut(rawID string, at float64, pcm []byte) ([][2]float64, e
 // AudioRead reads the held audio of [from, from+len(p)/2/AudioRate) into p for the final pass, contiguous from from:
 // n < len(p) where a hole starts (0 when from is in one), io.EOF when nothing is held at or after from (also once the
 // audio is gone). ErrRecordingDeleted, ErrNotFound; ErrBadAudio for a position that is not 0 or more.
-func (e *Engine) AudioRead(rawID string, from float64, p []byte) (int, error) {
+func (e *engine) AudioRead(rawID string, from float64, p []byte) (int, error) {
 	s := atSample(from)
 	if s < 0 {
 		return 0, ErrBadAudio
@@ -752,7 +752,7 @@ func (e *Engine) AudioRead(rawID string, from float64, p []byte) (int, error) {
 
 // AudioDelete deletes recording rawID's audio and sets AudioGoneAt; deleting it again (or a recording deleted or
 // trimmed) is no error. From then on the recording takes no audio (ErrTranscriptionFinal).
-func (e *Engine) AudioDelete(rawID string) error {
+func (e *engine) AudioDelete(rawID string) error {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return ErrNotFound
@@ -762,7 +762,7 @@ func (e *Engine) AudioDelete(rawID string) error {
 
 // dropAudio removes recording id's audio directory (writes from then on refused with why) and notes it in
 // meeting.json. The caller holds none of the store's locks.
-func (e *Engine) dropAudio(id string, why error) error {
+func (e *engine) dropAudio(id string, why error) error {
 	st := e.Store
 	if st.ReadOnly() {
 		return ErrReadOnly
@@ -804,7 +804,7 @@ func (e *Engine) dropAudio(id string, why error) error {
 // text, never complete, minutes failed) loses its audio now. The short summary needs no word: one not written from the
 // final transcript is due from the state on (summaryDue). The caller wakes the minutes lane. ErrRecordingDeleted,
 // ErrNotFound, ErrReadOnly, ErrNotHub.
-func (e *Engine) FinalTranscriptStored(rawID string) error {
+func (e *engine) FinalTranscriptStored(rawID string) error {
 	id, ok := RecordingID(rawID)
 	if !ok {
 		return ErrNotFound
@@ -823,11 +823,11 @@ func (e *Engine) FinalTranscriptStored(rawID string) error {
 }
 
 // finalStoredLocked is FinalTranscriptStored under recMu; drop: the audio is to go now.
-func (e *Engine) finalStoredLocked(id string) (drop bool, err error) {
+func (e *engine) finalStoredLocked(id string) (drop bool, err error) {
 	st := e.Store
 	r, ok := st.Recording(id)
 	if !ok {
-		if _, gone := st.tombstones()[id]; gone {
+		if gone := st.tombstoned(id); gone {
 			return false, ErrRecordingDeleted
 		}
 		return false, ErrNotFound
@@ -845,12 +845,12 @@ func (e *Engine) finalStoredLocked(id string) (drop bool, err error) {
 
 // noMinutesComing: recording r gets no minutes from the transcript it has: not a meeting, no text, never complete, or
 // its minutes failed with none written to make again.
-func (s *Store) noMinutesComing(r *Recording) bool {
+func (s *store) noMinutesComing(r *Recording) bool {
 	return !r.Complete || r.MinutesState == "" || r.MinutesState == MinutesFailed && !s.hasMinutes(r.ID)
 }
 
 // putRecordingMeta writes r's meta.json (putEntity), keeping r's meeting.json as read.
-func (s *Store) putRecordingMeta(r *Recording) error {
+func (s *store) putRecordingMeta(r *Recording) error {
 	conv := r.Conv
 	err := s.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
 	r.Conv = conv
@@ -860,7 +860,7 @@ func (s *Store) putRecordingMeta(r *Recording) error {
 // audioDue: recording r's audio is to go now (the caller holds recMu, r read under it): it is not transcribed on the
 // hub (an older manager's meeting.json after a rollback), or its final pass ran (or failed) and minutes made from that
 // transcript were written, its minutes failed, or it gets none.
-func (s *Store) audioDue(r *Recording) bool {
+func (s *store) audioDue(r *Recording) bool {
 	t := hubTranscription(r)
 	switch {
 	case t == nil:
@@ -880,7 +880,7 @@ func (s *Store) audioDue(r *Recording) bool {
 // be gone (audioDue) is deleted, minutes made before the final transcript of a recording whose final pass ran are
 // made again (FinalTranscriptStored was never told), and a hub-mode recording still in the manager's hands gets its
 // transcript.md and chars mended (repairRecord).
-func (e *Engine) sweepTranscriptions() {
+func (e *engine) sweepTranscriptions() {
 	st := e.Store
 	for _, r := range st.Recordings() {
 		_, statErr := os.Stat(st.audioPath(r.ID))
@@ -906,7 +906,7 @@ func (e *Engine) sweepTranscriptions() {
 
 // sweepOneLocked is sweepTranscriptions for recording id under recMu: whether its audio goes (and why writes are
 // refused from then on), whether its text or meta.json changed.
-func (e *Engine) sweepOneLocked(id string, hasAudio bool) (drop bool, why error, changed bool) {
+func (e *engine) sweepOneLocked(id string, hasAudio bool) (drop bool, why error, changed bool) {
 	st := e.Store
 	r, ok := st.Recording(id)
 	if !ok || r.Trimmed() {

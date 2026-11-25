@@ -1,4 +1,4 @@
-package kb
+package writers
 
 import (
 	"context"
@@ -19,7 +19,7 @@ import (
 // first (NameSource), so a renamed recording is never renamed again.
 
 // PurposeMeetingTitle is the model use of the live title: Information processing's, as chat titles are.
-const PurposeMeetingTitle = "meeting.title"
+const PurposeMeetingTitle = recordingwire.PurposeMeetingTitle
 
 // What wrote a recording's AITitle (Recording.AITitleFrom); "" is the summary's, written before it was said.
 const (
@@ -73,7 +73,7 @@ const renameRunes = 200
 // RenameRecording gives recording id the owner's name from the web (#8877): it names the recording before the upload's
 // title until an upload changes that title (the phone renamed it since), and "" takes it back. Not for a deleted
 // recording (ErrRecordingDeleted) or one there is none of (ErrNotFound); a trimmed one keeps its meta.json, so it can.
-func (e *Engine) RenameRecording(rawID, title string, now time.Time) (*Recording, error) {
+func (e *engine) RenameRecording(rawID, title string, now time.Time) (*Recording, error) {
 	if e.Store.ReadOnly() {
 		return nil, ErrReadOnly
 	}
@@ -88,7 +88,7 @@ func (e *Engine) RenameRecording(rawID, title string, now time.Time) (*Recording
 	st := e.Store
 	st.recMu.Lock()
 	defer st.recMu.Unlock()
-	if _, gone := st.tombstones()[id]; gone {
+	if gone := st.tombstoned(id); gone {
 		return nil, ErrRecordingDeleted
 	}
 	r, ok := st.Recording(id)
@@ -109,13 +109,6 @@ func (e *Engine) RenameRecording(rawID, title string, now time.Time) (*Recording
 	return r, nil
 }
 
-// putNamed puts r's name in the answer, with where it came from; neither while it is named only by when it started.
-func putNamed(p *RecordingPut, r *Recording) {
-	if p.NameSource = r.NameSource(); p.NameSource != "" {
-		p.Name = r.Name
-	}
-}
-
 // titleLine is a title the model wrote, on one line, without marks or the quotes around it, at most titleRunes.
 func titleLine(s string) string {
 	s = strings.Join(strings.Fields(stripMarks(s)), " ")
@@ -132,7 +125,7 @@ type liveTitle struct {
 // TitleRecordings writes the live titles that are due (liveTitleDue), the most recently uploaded recording first, at
 // most max calls a run; how many calls it made. A paused connection or no model set up stops the run without counting:
 // they stay due. Any other failure counts as a call, so the next waits liveTitleEvery.
-func (e *Engine) TitleRecordings(ctx context.Context, max int) int {
+func (e *engine) TitleRecordings(ctx context.Context, max int) int {
 	if e.Model == nil && e.ModelFor == nil {
 		return 0
 	}
@@ -155,7 +148,7 @@ func (e *Engine) TitleRecordings(ctx context.Context, max int) int {
 			calls++
 		}
 		if err != nil {
-			if deferred(ctx, err) {
+			if e.deferred(ctx, err) {
 				break
 			}
 			e.logf("recording %s: live title: %v", r.ID, err)
@@ -166,7 +159,7 @@ func (e *Engine) TitleRecordings(ctx context.Context, max int) int {
 
 // titleRecording asks for recording id's live title, read as it is now; called: the model was asked (not when it is no
 // longer due). The answer is stored unless the recording was deleted, trimmed, or settled by its summary meanwhile.
-func (e *Engine) titleRecording(ctx context.Context, id string, now time.Time) (called bool, err error) {
+func (e *engine) titleRecording(ctx context.Context, id string, now time.Time) (called bool, err error) {
 	files, meeting, hub, err := e.Store.recordSnapshot(id)
 	if err != nil || files["meta.json"] == nil {
 		return false, err
@@ -184,7 +177,7 @@ func (e *Engine) titleRecording(ctx context.Context, id string, now time.Time) (
 		return false, err
 	}
 	var text []string
-	for _, sg := range MeetingLines(TranscriptOfRecord(hubMode(meeting), device, hub.Segments)) {
+	for _, sg := range MeetingLines(e.Store.TranscriptOfRecord(hubMode(meeting), device, hub.Segments)) {
 		if t := strings.Join(strings.Fields(sg.Text), " "); t != "" {
 			text = append(text, t)
 		}
@@ -199,7 +192,7 @@ func (e *Engine) titleRecording(ctx context.Context, id string, now time.Time) (
 	err = e.modelFor(PurposeMeetingTitle).JSONMax(cctx, prompts.RenderKBRecordingTitle(e.writingOwner(e.outputLang(&r))),
 		prompts.RenderKBRecordingTitleInput(in), 300, &out)
 	cancel()
-	if err != nil && deferred(ctx, err) {
+	if err != nil && e.deferred(ctx, err) {
 		return true, err // not counted: asked again once the connection is back
 	}
 	st := e.Store
@@ -234,15 +227,4 @@ func headAndTail(s string, head, tail int) string {
 	}
 	r := []rune(s)
 	return string(r[:head]) + "\n…（中间省略）…\n" + string(r[len(r)-tail:])
-}
-
-// stripMarks and clipAtMost are the minutes overview's helpers titleLine uses; the overview moved to the recording
-// module with the minutes' writers, and these copies go there with the title writers (plan-kb-recording-port.md, PR 4).
-func stripMarks(s string) string { return strings.ReplaceAll(s, "**", "") }
-
-func clipAtMost(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	return clip(s, n-1)
 }
