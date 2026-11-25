@@ -295,6 +295,31 @@ Codex home its rollout is. A daemon can't do this: its threads are on another co
 While the runtime's session is `offline`, another program may take the thread up (the Codex App runs it, a shared app-server has it loaded). That program's row is then listed
 as well, with the thread's sub-Agents under it, so a message from the phone goes where the thread is open. Once the runtime's session runs again, the chat is that session alone.
 
+## Claiming a Codex app-server instance (optional)
+
+node attaches to every Codex app-server it finds on this computer and reads each one's loaded threads every 5 seconds (`docs/integrations/codex-app-server.md`). A runtime
+that serves an app-server-compatible daemon's chats itself (a companion that ships with the daemon and talks to its app-server like any client) would have node follow the same
+endpoint a second time: node keeps reading the threads the runtime already lists, and lists the threads the runtime's rows do not name (`codex_thread` hides only those they
+name). So the runtime claims the instance in hello (#12571):
+
+- hello carries `codex_claims: [{home?, endpoint?}]`; with the SDK, the `createRuntime` option `codexClaims` is a list, or a function that returns the list synchronously,
+  asked at every hello. An entry names the instances with that Codex home, the instance at that endpoint (`unix://<absolute path>` or `ws://<loopback IP>:<port>`), or, with
+  both, only the instance that has both. If other app-servers (the desktop App, for one) use the same home, claim by endpoint, or by home and endpoint together. node
+  compares them as it resolves its own instances: a home absolute with its links followed (`~/` is node's home), a socket alias as its target. At most 16 entries count.
+- node answers with the feature `codex_claims` (`rt.nodeHas('codex_claims')`); an older node ignores the field. Only a runtime on the local socket can claim: a daemon's
+  app-servers are another computer's, and the link passes no claims on.
+- While a claim holds, node closes its connection to a matching instance before it answers the hello, makes no `thread/*` call to it, and does not dial a matching instance it
+  discovers later. The instance's live chats are then listed only as the runtime's rows. The home's rollouts are still read as history, and `codex_thread` keeps hiding the
+  history row of each thread the runtime names.
+- A claim holds for 60 seconds after the runtime's last connection leaves, so a runtime that restarts does not have node attach to the instance, list its threads under node's
+  own rows and drop them again once the runtime is back. The runtime's own rows still leave the list while it is gone: as for any runtime, only rows whose conversation is a
+  Claude transcript on this computer stay. After the 60 seconds node attaches again within 5 seconds, with no restart. A hello without `codex_claims` ends that runtime's
+  claims at once. node logs when an instance becomes claimed, by which runtime, and when the claim ends.
+
+A claim removes a duplicate reader; it is not a write lock. The daemon still orders the writes of all its clients, and the phone, the web app, the desktop App and the terminal
+can all still write. Unlike `codex_discovery: false` (every discovered instance, `docs/operations/config.md`), a claim leaves out only the instances the runtime
+serves.
+
 ## Sub-Agents and background tasks (optional)
 
 When an Agent hands work off and ends the turn (background sub-Agents, workflows, commands running in the background), the session is "done" after the turn while the work isn't. The runtime reports them on the session row,
@@ -456,11 +481,12 @@ Report a dedicated local worker for each assistant conversation and pass `0` whe
 the main runtime process or a worker shared with ordinary Agent sessions. The node checks the session's ownership and
 assistant status, and verifies the worker is a strict process descendant of the connected runtime. It derives the
 caller's session from the worker's process tree, not from the CLI request. Antigravity runs each active assistant chat
-in its own ACP process, separate from the Agents' shared process. An idle assistant worker exits after five minutes
-without work; the next send or mode change resumes the chat in a fresh worker. A forked assistant chat gets its own
-worker when first used. An active turn or unanswered permission keeps the worker alive, and so does an Agent turn
-running in the same companion: the assistant that supervises it hears from it when it ends, so the five minutes count
-from the end of the last such turn (#13471).
+in its own ACP process, separate from the Agents' shared process. Both an idle assistant worker and the shared Agent
+ACP process exit after five minutes without work, preserving each session's reported context window; the next send or
+mode change resumes the conversation in a fresh process (#15253). A forked assistant chat gets its own
+worker when first used. An active turn or unanswered permission keeps the worker alive, and an Agent turn
+running in the same companion keeps assistant workers warm too: the assistant that supervises it hears from it when it
+ends, so the five minutes count from the end of the last such turn (#13471).
 
 A runtime that declares `caps.assistant` must:
 
@@ -479,6 +505,7 @@ A runtime that declares `caps.assistant` must:
 OpenCode's companion follows the same dedicated-worker boundary as agy: Assistant conversations use separate ACP process trees, ordinary Agents share a process, and only dedicated worker PIDs are reported. Idle retirement revokes the MCP URL and PID; resume uses `session/resume` and replays acknowledged options. Its plugin path cannot isolate a server process and rejects ambiguous same-directory tool ownership. Its separate instruction channel is advertised only after a pinned version and effective-config startup self-check; prefer advertised ACP systemPrompt append, otherwise use process-local instructions. The plugin always lacks that capability. See `docs/integrations/opencode.md`.
 
 6. **Optional supervision policy channel (`supervisionPolicy: true` → `caps.supervision_policy`)** (#11173): only declare this if the runtime can apply `supervision_instructions` on an authoritative channel separate from user message text, persisting across compaction and isolated per session (never rewriting shared `~/.persona/assistant/AGENTS.md` and never leaking policy into concurrent ordinary chats). The runtime must refuse a policy change while the session is busy with `code: "busy"`, clear its per-session policy when `supervision_instructions` is `""` or the session closes, and fail closed with `code: "assistant_supervision_runtime"` (never sending the prompt) if the policy cannot be applied. Runtimes that do not declare `caps.supervision_policy` never receive `supervision_instructions` and keep the existing refusal boundary for supervision deliveries (`docs/assistant/assistant.md` "Role-scoped supervision instructions (#8251)").
+7. **Optional remote assistant runtime (`caps.remote_agent`, `nwverse/persona#13305`)**: runtimes that back the assistant remotely (cloud APIs or sandboxed extensions without local filesystem access to `memory_dir`) declare `caps.remote_agent: true` alongside `caps.assistant: true`. The node advertises two additional MCP tools (`memory_read` and `memory_write`, implemented in `server/internal/node/assistant_runtime_memory.go`) in `mcp.tools {assistant: true}`, executes them in `mcp.call` scoped to the assistant shared memory directory (`memory_read` returns empty content when the memory directory or note does not exist yet; `memory_write` is refused in `plan` mode; both are refused for guest or non-assistant sessions), instructs the model in `runtime_instructions.md` to read/write shared memory via those tools, and enforces confirm-writes posture on command gates (converting configured write allow rules to confirm, ignoring `larkAlways`, and omitting `AlwaysKeys` even under `bypassPermissions`).
 
 The assistant launcher's entry in `launchers` may also carry `assistant_for`: the name of an Agent launcher on the same computer that runs the same agent with the same
 account but can't run the assistant itself (a Paseo provider; the Grok companion's `--assistant-for grok`, `integrations/grok/README.md`). The person setting the runtime up
@@ -672,18 +699,19 @@ serve as an assistant backend through the optional assistant contract above. It 
 with ACP support; `--agy-bin`, `--agy-dir`, `--socket`, `--no-update` and `--parent-stdin` override the executable, CLI data
 directory, node socket, automatic updates and parent-pipe shutdown. When `--agy-dir` is passed explicitly, the companion also sets `ANTIGRAVITY_CLI_CONFIG_DIR` for its spawned `agy` child processes (`acp` and `models`) so discovery, ACP sessions, and transcript reads share the same directory.
 To run an additional companion instance alongside the default `agy` companion (for example, a wrapped `agy` executable or separate configuration directory), pass a distinct `--runtime <id>` (default `agy`), and optionally `--launcher <name>` (default `<runtime>`), `--display-name <label>` (default `Antigravity`), `--prefix <prefix>` (default `<runtime>-`), and `--assistant-for <launcher>` to point a non-assistant Agent launcher at this companion in the main-chat picker. Custom runtime IDs keep `agent: "agy"` and do not cause the node's built-in `agy` companion to yield.
-Models come from authenticated `agy models` discovery and ACP session metadata. The companion refreshes the catalog every
-five minutes, and the picker's refresh requests a fresh catalog through optional `models({launcher, refresh})`
-(`caps.models`, `launchers.models`). Discovery never sends a prompt. The native settings file determines the advertised
+Models come from authenticated `agy models` discovery and ACP session metadata. The companion discovers the catalog once
+at startup, reuses a fresh catalog for five minutes on `models({launcher})`, and refreshes on demand when the TTL has
+elapsed or the picker requests `models({launcher, refresh: true})` (`caps.models`, `launchers.models`; #15253).
+Discovery never sends a prompt. The native settings file determines the advertised
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
 settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
 their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
 A CLI whose stored sign-in expired long ago does not fail `agy models`: it hangs. The companion kills it after 25 seconds
 and reports that the sign-in may have expired and that running `agy` once on the computer signs in again; each
-discovery in a row that times out doubles the wait before the next one, up to an hour, and one that answers restores
-the five-minute pace (#11106). Whether a call that sends no prompt can refresh such a sign-in is not established: a
-`agy models` run refreshed a token close to its expiry, but one expired for months stayed hung until a prompt in print
-mode signed in silently.
+discovery in a row that times out doubles the backoff for unforced lookups (from five minutes up to an hour), while an
+explicit `refresh: true` retries immediately and a successful discovery clears the backoff (#11106, #15253). Whether a
+call that sends no prompt can refresh such a sign-in is not established: a `agy models` run refreshed a token close to
+its expiry, but one expired for months stayed hung until a prompt in print mode signed in silently.
 One `agy acp` process can keep the model list it had when the account's plan lapsed or the CLI signed out (#10368), so
 a session's model list replaces the catalog only when its ACP process started after the latest successful discovery
 began. When ACP rejects a model as unknown and a fresh discovery lists it, the companion replaces the ACP process and
@@ -801,7 +829,7 @@ A runtime with read-only access to a subscription's rate-limit windows calls `rt
 
 The node advertises `usage_windows` only to runtimes on the local socket, not to daemons (their accounts must not be attributed to the node's machine). The SDK returns false while disconnected or with an older node and does not queue reports. A connected hub is not required because the node stores the snapshot locally. Reports replace the source named by the runtime id, so a companion restart does not duplicate its account. An older sample cannot replace a newer one; a valid empty `windows` array explicitly clears the source. The machine's existing `usage_windows` off switch rejects these reports too.
 
-Antigravity implements this source with its ACP process's native `RetrieveUserQuotaSummary` method and `forceRefresh: false`. It does not read the status-line command's account fields, invoke an account API itself, or start a model request.
+Antigravity implements this source with a running ACP worker's native `RetrieveUserQuotaSummary` method and `forceRefresh: false`, sampling when a session opens, a turn completes, or the node reconnects while a worker is already live (#15253). It never spawns an idle `agy acp` process just to read quota, does not extend a worker's idle timer, and does not read the status-line command's account fields, invoke an account API itself, or start a model request.
 
 ### Shared runtime behavior
 

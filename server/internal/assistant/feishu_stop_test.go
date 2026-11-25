@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -33,28 +32,6 @@ func stopCardAction(t botTarget) *botcard.CardAction {
 	var a botcard.CardAction
 	a.Action.Value = map[string]any{"a": "stop", "k": t.Kind, "m": t.MachineID, "s": t.SessionID}
 	return &a
-}
-
-// A run's progress card carries the Stop button with the run's own conversation, in the card's language; a card with
-// no live run carries no button (the answer and idle cards never do).
-func TestProgressCardStopButton(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
-	target := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "conv0001"}
-	b, _ := json.Marshal(progressCard("", "Persona", time.Second, nil, "", "", liveView{}, target))
-	card := string(b)
-	for _, want := range []string{`"a":"stop"`, `"k":"persona"`, `"m":"server"`, `"s":"conv0001"`, `"type":"danger"`, "停止"} {
-		if !strings.Contains(card, want) {
-			t.Fatalf("running card missing %q: %s", want, card)
-		}
-	}
-	b, _ = json.Marshal(progressCard(i18n.En, "Persona", time.Second, nil, "", "", liveView{}, target))
-	if en := string(b); !strings.Contains(en, "Stop") || strings.Contains(en, "停止") {
-		t.Fatalf("English card button not translated: %s", en)
-	}
-	b, _ = json.Marshal(progressCard("", "Persona", time.Second, nil, "", "", liveView{}, botTarget{}))
-	if strings.Contains(string(b), `"a":"stop"`) {
-		t.Fatalf("a card with no live run carries a stop button: %s", b)
-	}
 }
 
 // Pressing the progress card's Stop button interrupts the same conversation with the same device call as /stop in

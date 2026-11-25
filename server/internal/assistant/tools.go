@@ -41,19 +41,16 @@ var toolNames = []string{"resource_status", "ask_user", "notify_user", "supervis
 	"cancel_followup", "list_places", "save_place", "machines_list", "machine_redeploy", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "inbox_post", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
 	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
-	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get",
+	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get", pageToolName,
 	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
 	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"direction_name", "leader_progress", "decision_record", "decisions_query", "health_intake"}
+	"direction_name", "leader_progress", "decision_record", "decisions_query"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	tools := toolsNamed(withKnowledgeUI(toolNames, s))
-	if !s.healthOn() { // the Health module's tool (health_layer.go)
-		tools = slices.DeleteFunc(tools, func(t proto.Tool) bool { return t.Name == healthhost.Tool })
-	}
 	// A bare Service has no settings store and is used by registry tests. With no
 	// store the opt-in is false; do not call the nil store function just to hide it.
 	if s.store != nil && ownerReplyApprovalOn(s.settings(ctx)) {
@@ -91,6 +88,9 @@ func (s *Service) tool(ctx context.Context, call ToolCall) proto.ToolResult {
 	args := call.Arguments
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
+	}
+	if res, refused := s.inboxVisibilityToolRefusal(ctx, call.MachineID, call.SessionID, "", call.Name, args); refused {
+		return res
 	}
 	if res, refused := s.meetingRefuses(ctx, call.MachineID, call.SessionID, call.Name, true); refused {
 		return res // a meeting's batch started this turn: only reading tools (meeting_turns.go)
@@ -145,8 +145,8 @@ func (s *Service) appTool(ctx context.Context, app string, call ToolCall, args j
 }
 
 func (s *Service) runTool(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
-	if name == "health_intake" && s.agentCallerSpace(ctx, machine, self) != SpaceHealth {
-		return "", errors.New("health_intake is only available in a known Health conversation")
+	if slices.Contains(healthToolNames, name) && s.agentCallerSpace(ctx, machine, self) != SpaceHealth {
+		return "", errors.New(name + " is only available in a known Health conversation")
 	}
 	// What is said in a space stays there (docs/assistant/health.md "How directories and memory are isolated"): a space
 	// whose policy says so writes nothing to the knowledge base, nor changes or starts what is imported into it
@@ -164,8 +164,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolEntries(ctx, machine, self, name, args)
 	case spaceStateTool: // a space track's conversations only (track_space_md.go)
 		return s.toolSpaceStateUpdate(ctx, machine, self, args)
-	case "health_intake":
-		return s.healthTool(ctx, args)
+	case "health_intake", "health_strength":
+		return s.healthTool(ctx, healthhost.ToolCall{Name: name, Machine: machine, Session: self, Args: args})
 	case "repository_add":
 		return s.toolRepositoryAdd(ctx, machine, self, args)
 	case "repositories_list", "repository_get":
@@ -178,6 +178,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolOwnerActionPrepare(ctx, machine, self, args)
 	case "view_show", "view_update", "view_get":
 		return s.toolView(ctx, machine, self, name, args)
+	case pageToolName: // Dashboards (pages_tool.go)
+		return s.toolPage(ctx, machine, self, args)
 	case "task_plan":
 		return s.toolTaskPlanFrom(ctx, machine, self, args)
 	case "task_plan_withdraw":
@@ -2003,4 +2005,15 @@ func withKBWriteCheck(ctx context.Context, check func(text string) error) contex
 func kbWriteCheckOf(ctx context.Context) func(text string) error {
 	check, _ := ctx.Value(kbWriteCheckKey{}).(func(text string) error)
 	return check
+}
+
+var healthToolNames = []string{healthhost.Tool, healthhost.StrengthTool}
+
+// healthTools are advertised only to callers whose Health space is known from
+// the session snapshot or the node's attested caller directory.
+func (s *Service) healthTools(ctx context.Context, machine, session string) []proto.Tool {
+	if !s.healthOn() || s.agentCallerSpace(ctx, machine, session) != SpaceHealth {
+		return nil
+	}
+	return localizedMCPTools(toolsNamed(healthToolNames), s.toolLanguage(ctx))
 }
