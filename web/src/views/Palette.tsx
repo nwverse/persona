@@ -135,6 +135,16 @@ const NEVER_DELETED = () => false;
 const NOOP = () => {};
 const defaultNotify = (message: string) => { toast(message); };
 const defaultAvailable = (id: string) => Boolean(handlerOf(id));
+const nodeLoaderIds = new WeakMap<() => Promise<void>, number>();
+let nextNodeLoaderId = 0;
+function nodeLoaderIdOf(loader: () => Promise<void>): number {
+  let id = nodeLoaderIds.get(loader);
+  if (id === undefined) {
+    id = ++nextNodeLoaderId;
+    nodeLoaderIds.set(loader, id);
+  }
+  return id;
+}
 
 function markSnippetParts(snippet: string, ranges: readonly [number, number][]): [string, boolean][] {
   const out: [string, boolean][] = [];
@@ -587,19 +597,55 @@ function PaletteView({
   // The node the user is on adds its menu as `>` commands (lib/node-palette.ts registers them when imported). They load
   // the first time the palette is open, off the first screen and the idle tier; the list is drawn again once they have.
   // A failed load is not kept: the next opening asks again (Palette.node-commands-retry.test.tsx).
-  const loadNodeRef = useRef(typeof loadNodeCommands === "function" ? loadNodeCommands : undefined);
-  loadNodeRef.current = typeof loadNodeCommands === "function" ? loadNodeCommands : undefined;
-  const shouldLoadNode = loadNodeCommands !== false && (typeof loadNodeCommands === "function" || (controlledCommands === undefined && controlledContextCommands === undefined));
-  const [nodeCommands, setNodeCommands] = useState(false);
+  // Controlled loaders are scoped by active scope + loader identity and reset on scope/loader change or close/reopen,
+  // while default module import preserves its one-time load and retry-on-failure lifecycle.
+  const customNodeLoader = typeof loadNodeCommands === "function" ? loadNodeCommands : undefined;
+  const shouldLoadNode = loadNodeCommands !== false && (Boolean(customNodeLoader) || (controlledCommands === undefined && controlledContextCommands === undefined));
+  const nodeLoadKey = !shouldLoadNode
+    ? ""
+    : customNodeLoader
+      ? JSON.stringify(["custom", scope, nodeLoaderIdOf(customNodeLoader)])
+      : "default";
+  const nodeLoadKeyRef = useRef(nodeLoadKey);
+  nodeLoadKeyRef.current = nodeLoadKey;
+  const nodeLoadSeqRef = useRef(0);
+  const [nodeReady, setNodeReady] = useState<{ key: string; token: number }>({ key: "", token: 0 });
+  const nodeCommandsReady = nodeLoadKey !== "" && nodeReady.key === nodeLoadKey && (!customNodeLoader || open);
+  const nodeCommandsToken = nodeCommandsReady ? nodeReady.token : 0;
+  useLayoutEffect(() => {
+    if (!nodeLoadKey || customNodeLoader) {
+      nodeLoadSeqRef.current += 1;
+      setNodeReady((prev) => (prev.key ? { key: "", token: 0 } : prev));
+      return;
+    }
+    setNodeReady((prev) => (prev.key && prev.key !== nodeLoadKey ? { key: "", token: 0 } : prev));
+  }, [open, nodeLoadKey, customNodeLoader]);
   useEffect(() => {
-    if (!open || nodeCommands || !shouldLoadNode) return;
+    if (!open || !nodeLoadKey || nodeCommandsReady) return;
+    const token = ++nodeLoadSeqRef.current;
     let live = true;
-    const req = loadNodeRef.current ? Promise.resolve().then(() => loadNodeRef.current!()) : import("../lib/node-palette");
-    void req.then(() => live && setNodeCommands(true), () => {});
+    let req: Promise<unknown>;
+    if (customNodeLoader) {
+      try {
+        req = Promise.resolve(customNodeLoader());
+      } catch {
+        return;
+      }
+    } else {
+      req = import("../lib/node-palette");
+    }
+    void req.then(
+      () => {
+        if (!live || nodeLoadSeqRef.current !== token || nodeLoadKeyRef.current !== nodeLoadKey || !currentScope()) return;
+        setNodeReady({ key: nodeLoadKey, token });
+      },
+      () => {},
+    );
     return () => {
       live = false;
+      nodeLoadSeqRef.current += 1;
     };
-  }, [open, nodeCommands, shouldLoadNode]);
+  }, [open, nodeLoadKey, nodeCommandsReady, customNodeLoader, currentScope]);
   const managing = savedPanel?.scope === saved.scope ? savedPanel : null;
   useEffect(() => { if (savedPanel && !managing) setSavedPanel(null); }, [savedPanel, managing, setSavedPanel]);
   // Both search tools arrive with the opened palette, outside its idle chunk. Their data lifetimes remain
@@ -780,7 +826,7 @@ function PaletteView({
     const all = [...ctxCmds, ...appCommands({ bindings, available, run, machines: machines.map((m) => ({ id: m.id, name: m.name })), extra })];
     return filterCommands(all, text).map((cmd) => ({ kind: "command" as const, key: cmd.id, cmd }));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `route` is parsed anew each render; its path says it all
-  }, [open, mode, text, controlledCommands, controlledContextCommands, isCommandAvailable, onRunCommand, bindings, machines, pane?.mid, pane?.sid, formatHref(route), onNewAgent, recentChats, sessions, assistant, preferTab, nodeCommands, go, notify, resolveConversationRoute]);
+  }, [open, mode, text, controlledCommands, controlledContextCommands, isCommandAvailable, onRunCommand, bindings, machines, pane?.mid, pane?.sid, formatHref(route), onNewAgent, recentChats, sessions, assistant, preferTab, nodeCommandsToken, go, notify, resolveConversationRoute]);
   const shown = useMemo(() => (mode === "command" ? commands : [...hits, ...files.rows]), [mode, commands, hits, files.rows]);
 
   // Saved shortcuts can arrive or move while the palette is open. Keep the highlighted identity rather than

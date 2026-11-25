@@ -593,6 +593,222 @@ describe("Palette with controlled props", () => {
 
     assertNoDefaultSingletonsTouched();
   });
+
+  it("re-initializes custom loadNodeCommands across close/reopen, manager switches, and failed loads without reusing stale callbacks", async () => {
+    const calls: string[] = [];
+    let registered: PaletteCommand[] = [];
+    const context = () => registered;
+    const makeLoader = (manager: string) =>
+      vi.fn(async () => {
+        registered = [
+          {
+            id: "node:scoped",
+            title: "Scoped Node Action",
+            section: "Node",
+            run: () => {
+              calls.push(manager);
+            },
+          },
+        ];
+      });
+    const loaderA = makeLoader("manager-a");
+    const loaderB = makeLoader("manager-b");
+    const base = controlledBase({
+      query: ">Scoped",
+      manager: "manager-a",
+      commands: undefined,
+      contextCommands: context,
+      isCommandAvailable: () => false,
+      onRunCommand: vi.fn(),
+      loadNodeCommands: loaderA,
+    });
+
+    await mount(base);
+    await flush();
+    expect(loaderA).toHaveBeenCalledTimes(1);
+    act(() => optionByText("Scoped Node Action")!.click());
+    expect(calls).toEqual(["manager-a"]);
+
+    // Close, switch manager + loader while closed, then reopen under manager B
+    await mount({ ...base, open: false });
+    await mount({ ...base, manager: "manager-b", open: false, loadNodeCommands: loaderB });
+    await mount({ ...base, manager: "manager-b", open: true, loadNodeCommands: loaderB });
+    await flush();
+    expect(loaderA).toHaveBeenCalledTimes(1);
+    expect(loaderB).toHaveBeenCalledTimes(1);
+    act(() => optionByText("Scoped Node Action")!.click());
+    expect(calls).toEqual(["manager-a", "manager-b"]);
+
+    // Close and reopen under the same manager resets custom readiness and runs its loader again
+    await mount({ ...base, manager: "manager-b", open: false, loadNodeCommands: loaderB });
+    await mount({ ...base, manager: "manager-b", open: true, loadNodeCommands: loaderB });
+    await flush();
+    expect(loaderB).toHaveBeenCalledTimes(2);
+
+    // Same loader function reference across manager switch + retry after failure
+    let activeManager = "manager-c";
+    let failOnce = true;
+    const sharedLoader = vi.fn(async () => {
+      if (failOnce) {
+        failOnce = false;
+        throw new Error("temporary failure");
+      }
+      registered = [
+        {
+          id: "node:scoped",
+          title: "Scoped Node Action",
+          section: "Node",
+          run: () => {
+            calls.push(activeManager);
+          },
+        },
+      ];
+    });
+    await mount({ ...base, manager: "manager-c", open: false, loadNodeCommands: sharedLoader });
+    await mount({ ...base, manager: "manager-c", open: true, loadNodeCommands: sharedLoader });
+    await flush();
+    expect(sharedLoader).toHaveBeenCalledTimes(1);
+
+    // Failed custom load retries on next open
+    await mount({ ...base, manager: "manager-c", open: false, loadNodeCommands: sharedLoader });
+    await mount({ ...base, manager: "manager-c", open: true, loadNodeCommands: sharedLoader });
+    await flush();
+    expect(sharedLoader).toHaveBeenCalledTimes(2);
+    act(() => optionByText("Scoped Node Action")!.click());
+    expect(calls).toEqual(["manager-a", "manager-b", "manager-c"]);
+
+    // Switching manager while open with the same loader function identity also re-initializes
+    activeManager = "manager-d";
+    await mount({ ...base, manager: "manager-d", open: true, loadNodeCommands: sharedLoader });
+    await flush();
+    expect(sharedLoader).toHaveBeenCalledTimes(3);
+    act(() => optionByText("Scoped Node Action")!.click());
+    expect(calls).toEqual(["manager-a", "manager-b", "manager-c", "manager-d"]);
+
+    assertNoDefaultSingletonsTouched();
+  });
+
+  it("rejects stale in-flight custom loadNodeCommands completions across open manager switches and ABA transitions", async () => {
+    let resolveA!: () => void;
+    let registered = false;
+    const loaderA = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveA = () => {
+            registered = true;
+            resolve();
+          };
+        }),
+    );
+    const loaderB = vi.fn().mockResolvedValue(undefined);
+    const available = (id: string) => registered && id === "settings";
+    const base = controlledBase({
+      query: ">settings",
+      manager: "manager-a",
+      commands: undefined,
+      contextCommands: [],
+      isCommandAvailable: available,
+      onRunCommand: vi.fn(),
+      loadNodeCommands: loaderA,
+    });
+
+    await mount(base);
+    await flush();
+    expect(loaderA).toHaveBeenCalledTimes(1);
+    expect(options().some((el) => el.textContent?.includes(t("lib-shortcuts.cmd_settings")))).toBe(false);
+
+    // Switch to manager B while still open, then settle stale A: A's late resolution must not surface settings in B
+    await mount({ ...base, manager: "manager-b", loadNodeCommands: loaderB });
+    await act(async () => resolveA());
+    await flush();
+    expect(loaderB).toHaveBeenCalledTimes(1);
+    expect(options().some((el) => el.textContent?.includes(t("lib-shortcuts.cmd_settings")))).toBe(false);
+
+    // ABA with deferred loaders: A1 -> B -> A2; late A1 and late B must not publish readiness, only current A2 does
+    const dispatched: string[] = [];
+    let scopedCmds: PaletteCommand[] = [];
+    const context = () => scopedCmds;
+    const resolvesA: (() => void)[] = [];
+    const deferredA = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          const attempt = resolvesA.length + 1;
+          resolvesA.push(() => {
+            scopedCmds = [
+              {
+                id: `node:a-${attempt}`,
+                title: `ABA Action A${attempt}`,
+                section: "Node",
+                run: () => {
+                  dispatched.push(`a-${attempt}`);
+                },
+              },
+            ];
+            resolve();
+          });
+        }),
+    );
+    let resolveB!: () => void;
+    const deferredB = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveB = () => {
+            scopedCmds = [
+              {
+                id: "node:b-1",
+                title: "ABA Action B1",
+                section: "Node",
+                run: () => {
+                  dispatched.push("b-1");
+                },
+              },
+            ];
+            resolve();
+          };
+        }),
+    );
+
+    const abaBase = controlledBase({
+      query: ">ABA Action",
+      manager: "manager-a",
+      commands: undefined,
+      contextCommands: context,
+      isCommandAvailable: () => false,
+      onRunCommand: vi.fn(),
+      loadNodeCommands: deferredA,
+    });
+
+    await mount(abaBase);
+    await flush();
+    expect(deferredA).toHaveBeenCalledTimes(1);
+    expect(options()).toHaveLength(0);
+
+    // Switch to B (deferred), then stale A1 settles while B is pending
+    await mount({ ...abaBase, manager: "manager-b", loadNodeCommands: deferredB });
+    await flush();
+    expect(deferredB).toHaveBeenCalledTimes(1);
+    await act(async () => resolvesA[0]());
+    await flush();
+    expect(optionByText("ABA Action A1")).toBeUndefined();
+
+    // Switch back to A (ABA: starts A2), then stale B settles while A2 is pending
+    scopedCmds = [];
+    await mount({ ...abaBase, manager: "manager-a", loadNodeCommands: deferredA });
+    await flush();
+    expect(deferredA).toHaveBeenCalledTimes(2);
+    await act(async () => resolveB());
+    await flush();
+    expect(optionByText("ABA Action B1")).toBeUndefined();
+
+    // Current A2 resolves and dispatches A2
+    await act(async () => resolvesA[1]());
+    await flush();
+    expect(optionByText("ABA Action A2")).toBeDefined();
+    act(() => optionByText("ABA Action A2")!.click());
+    expect(dispatched).toEqual(["a-2"]);
+
+    assertNoDefaultSingletonsTouched();
+  });
 });
 
 describe("Palette default compatibility", () => {
@@ -610,11 +826,25 @@ describe("Palette default compatibility", () => {
     mocks.useAgentSessions.mockReturnValue([AGENT_SESSION]);
     mocks.useInbox.mockImplementation((selector: unknown) => (selector as (s: { items: InboxItem[] }) => unknown)({ items: INBOX_ITEMS }));
     mocks.useNavPages.mockReturnValue({ all: [{ k: "settings", label: "Settings", icon: "settings", to: { name: "settings" } }] });
-    mocks.usePalette.mockReturnValue({ open: true, query: "" });
+    mocks.usePalette.mockReturnValue({ open: false, query: "" });
     const onClose = vi.fn();
     const onNewAgent = vi.fn();
 
+    // Mounted closed does not eagerly import default node-palette
+    await mount({ open: false, onClose, onNewAgent });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await flush();
+    expect(mocks.nodePaletteLoads).toBe(0);
+
+    mocks.usePalette.mockReturnValue({ open: true, query: "" });
     await mount({ open: true, onClose, onNewAgent });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await flush();
+    expect(mocks.nodePaletteLoads).toBe(1);
     expect(mocks.usePalette).toHaveBeenCalled();
     expect(mocks.useStore).toHaveBeenCalled();
     expect(mocks.useInbox).toHaveBeenCalled();
@@ -637,5 +867,21 @@ describe("Palette default compatibility", () => {
     act(() => settingsCmd!.click());
     expect(mocks.runShortcut).toHaveBeenCalledWith("settings", { digit: undefined });
     expect(mocks.toast).toHaveBeenCalledWith(t("palette.command_unavailable"));
+
+    // Closing and reopening in default mode keeps one-time node-palette readiness and lists default contextCommands
+    const defaultNodeRun = vi.fn();
+    mocks.contextCommands.mockReturnValue([{ id: "node:default-check", section: "Node", title: "Default Node Action", run: defaultNodeRun }]);
+    mocks.usePalette.mockReturnValue({ open: false, query: "" });
+    await mount({ open: false, onClose, onNewAgent });
+    mocks.usePalette.mockReturnValue({ open: true, query: ">Default Node" });
+    await mount({ open: true, onClose, onNewAgent });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await flush();
+    expect(mocks.nodePaletteLoads).toBe(1);
+    expect(optionByText("Default Node Action")).toBeDefined();
+    act(() => optionByText("Default Node Action")!.click());
+    expect(defaultNodeRun).toHaveBeenCalledTimes(1);
   });
 });
