@@ -3681,8 +3681,8 @@ final class AppModel {
         await resolve(ix, r)
     }
 
-    /// `handoffCard`: the hand-off card's own buttons answer; an approval of one from anywhere else is refused here, as
-    /// the hub would refuse it (`SecretHandoff`).
+    /// `handoffCard`: the hand-off or explicit env card's own buttons answer; an approval of one from anywhere else is
+    /// refused here, as the hub would refuse it (`SecretHandoff`, `SecretRunRequest.delivery`).
     func resolve(_ ix: Interaction, _ r: Resolution, handoffCard: Bool = false) async {
         // To the hub of the interaction's own group (docs/protocol/multi-hub.md「Connections and routing」).
         // A stopped Agent's work card still takes the answers that send it nothing: put off, or dismissed (#6839).
@@ -3692,6 +3692,11 @@ final class AppModel {
         }
         let handoff = ix.isSecretHandoff && r.allow == true
         if handoff && !handoffCard {
+            toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
+            return
+        }
+        let env = SecretRunRequest(ix.toolInput)?.delivery == "env" && r.allow == true
+        if env && !handoffCard {
             toast = Toast(String(localized: "Approve it on its card in the chat."), style: .error)
             return
         }
@@ -3726,7 +3731,10 @@ final class AppModel {
                 Haptics.success()
                 return
             }
-            let res = try await OpRetry.untilDelivered { try await api.resolve(ix.id, r, opID: op, handoffCard: handoff) }
+            let res = try await OpRetry.untilDelivered {
+                try await api.resolve(ix.id, r, opID: op, handoffCard: (handoff || env) && handoffCard,
+                                      secretRunEnv: env && handoffCard)
+            }
             if res.already == true, let existing = res.resolution, existing.answeredBy == AssistantAnswer.assistant, ix.kind == .question {
                 // The assistant answered first: its answer shows in the chat, where the user may change it.
                 keepDelegated(ix, AssistantAnswer(answers: existing.answers ?? [:], reason: existing.reason ?? ""))
