@@ -322,6 +322,96 @@ func TestLarkSyncAuthorizeMissingPatchScopeFallsBackToDeviceFlow(t *testing.T) {
 	}
 }
 
+// Upgrading an existing docs_standard binding (on either the primary chat bot or a sync-only bot) to full_with_im:
+// POST /bots/{bot}/scopes starts QR scope registration for the existing app, finishing it updates the bot's tier and
+// clears its cached redirect while keeping the already-authorized binding on docs_standard until the owner authorizes
+// again with full_with_im scopes, after which the binding moves to full_with_im.
+func TestLarkSyncUpgradeExistingBindingToFullWithIM(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		botID string
+		appID string
+		sync  bool
+	}{
+		{name: "primary", botID: larksyncwire.PrimaryBot, appID: "cli_primary"},
+		{name: "sync_only", botID: "bsync", appID: "cli_sync", sync: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newLarkWorld(t)
+			if tc.sync {
+				w.addSyncBot(t, tc.botID, tc.appID, larksyncwire.TierDocs)
+			}
+			// Simulate a bot that already configured redirect once and has an existing docs_standard binding
+			// (including a legacy binding whose own Tier was left empty and inherited from the bot).
+			if _, err := w.h.larkSyncChange(context.Background(), func(st *larkSyncState) error {
+				if tc.botID == larksyncwire.PrimaryBot {
+					st.prefs.PrimaryRedirect = larkRedirect
+				} else {
+					st.bot(tc.botID).Redirect = larkRedirect
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			key, _ := w.adopt(t, tc.botID, "ou_up", "acc-docs", "ref-docs", 2*time.Hour)
+			_, view := w.do(t, "GET", "/api/v1/bots/feishu/sync", "")
+			if got := view["bindings"].([]any)[0].(map[string]any)["tier"]; got != larksyncwire.TierDocs {
+				t.Fatalf("before upgrade: binding tier = %v, want %s", got, larksyncwire.TierDocs)
+			}
+
+			// Step 1: add full_with_im scopes to the existing app via QR registration.
+			code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/"+tc.botID+"/scopes", `{"tier":"full_with_im"}`)
+			if code != 200 || p["step"] != stepLarkSyncRegister || p["kind"] != "qr" {
+				t.Fatalf("scopes begin: %d %v", code, p)
+			}
+			opts := w.reg.lastBegin(t)
+			if opts.AppID != tc.appID || !slices.Equal(opts.UserScopes, larksyncwire.ScopesFor(larksyncwire.TierFull)) {
+				t.Fatalf("scopes begin opts = %+v, want app %s with TierFull scopes", opts, tc.appID)
+			}
+			w.reg.polls = []botcard.RegisterTicket{{Status: botcard.RegisterDone, AppID: tc.appID}}
+			if code, p = w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/"+tc.botID+"/register", `{"step":"register"}`); code != 200 || p["done"] != true {
+				t.Fatalf("scopes poll: %d %v", code, p)
+			}
+
+			// Bot is now full_with_im, but the existing binding stays docs_standard until re-authorized.
+			_, view = w.do(t, "GET", "/api/v1/bots/feishu/sync", "")
+			if got := view["bindings"].([]any)[0].(map[string]any)["tier"]; got != larksyncwire.TierDocs {
+				t.Fatalf("after scopes before reauth: binding tier = %v, want %s", got, larksyncwire.TierDocs)
+			}
+
+			// Step 2: authorize again with full_with_im -> re-configures redirect/scopes and upgrades the binding.
+			w.ua.configure = larksyncwire.RedirectReport{Configured: true, Published: true}
+			code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/"+tc.botID+"/authorize", `{"redirect_uri":"`+larkRedirect+`","tier":"full_with_im"}`)
+			if code != 200 || out["mode"] != larkSyncModeBrowser {
+				t.Fatalf("authorize: %d %v", code, out)
+			}
+			if len(w.ua.configured) != 1 || w.ua.configured[0] != tc.appID+" "+larkRedirect {
+				t.Fatalf("configured after scopes upgrade = %v, want [%s %s]", w.ua.configured, tc.appID, larkRedirect)
+			}
+			req := w.ua.authorized[len(w.ua.authorized)-1]
+			if !slices.Equal(req.Scopes, larksyncwire.ScopesFor(larksyncwire.TierFull)) {
+				t.Fatalf("authorize scopes = %v, want TierFull", req.Scopes)
+			}
+
+			w.ua.exchange["c-full"] = larksyncwire.Token{
+				AccessToken: "acc-full", RefreshToken: "ref-full", ExpiresAt: w.now().Add(2 * time.Hour),
+				OpenID: "ou_up", TenantKey: "t1", Name: "Account ou_up", Scopes: larksyncwire.ScopesFor(larksyncwire.TierFull),
+			}
+			code, view = w.do(t, "POST", "/api/v1/bots/feishu/sync/oauth", `{"state":"`+req.State+`","code":"c-full"}`)
+			if code != 200 {
+				t.Fatalf("oauth: %d %v", code, view)
+			}
+			b := view["bindings"].([]any)[0].(map[string]any)
+			if b["key"] != key || b["tier"] != larksyncwire.TierFull || b["health"] != larksyncwire.HealthOK {
+				t.Fatalf("upgraded binding: %v", b)
+			}
+			if got := w.binding(t, key).Tier; got != larksyncwire.TierFull {
+				t.Fatalf("stored binding tier = %q, want %s", got, larksyncwire.TierFull)
+			}
+		})
+	}
+}
+
 // Twenty callers asking a binding's token while it ends soon: one refresh, every caller gets the new token, and it was
 // saved (sealed) before any of them got it. The reader's token func asks before every request: a token that is still
 // good is never refreshed, however often it is asked.

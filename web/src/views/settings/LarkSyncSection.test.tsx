@@ -306,4 +306,43 @@ describe("Lark daily sync section", () => {
     expect(api.registerSyncBot).toHaveBeenCalledWith("s5", "register");
     expect(text()).toContain(t("settings-larksync.step_create"));
   });
+
+  it("marks docs_standard bindings as no-chat and upgrades them via add-scopes QR then re-authorization", async () => {
+    vi.useFakeTimers();
+    await draw();
+
+    const docsRow = rowOf("primary~a1");
+    const fullRow = rowOf("s1~a2");
+    expect(docsRow.textContent).toContain(t("settings-larksync.no_chat_badge"));
+    expect(docsRow.textContent).toContain(t("settings-larksync.upgrade_to_full"));
+    expect(fullRow.textContent).not.toContain(t("settings-larksync.no_chat_badge"));
+    expect(fullRow.textContent).not.toContain(t("settings-larksync.upgrade_to_full"));
+
+    api.addSyncScopes.mockResolvedValue({ step: "register", kind: "qr", interval: 5, qr: { size: 2, rows: ["10", "01"] } });
+    const upgradeBtn = [...docsRow.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-larksync.upgrade_to_full"))!;
+    await act(async () => upgradeBtn.click());
+    expect(api.addSyncScopes).toHaveBeenCalledWith("primary", "full_with_im");
+    expect(text()).toContain(t("settings-larksync.step_scopes"));
+    expect(host.querySelector(`svg[aria-label="${t("settings-larksync.qr_label")}"]`)).not.toBeNull();
+
+    // Scanned: moves straight to re-authorization with full_with_im
+    api.registerSyncBot.mockResolvedValueOnce({ done: true });
+    api.authorizeSyncBot.mockResolvedValue({ mode: "browser", url: "https://accounts.example.com/authorize?state=u" });
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(api.registerSyncBot).toHaveBeenCalledWith("primary", "register");
+    expect(api.authorizeSyncBot).toHaveBeenCalledWith("primary", expect.stringMatching(/\/lark-oauth$/), "full_with_im");
+    expect(text()).toContain(t("settings-larksync.authorize_title"));
+  });
+
+  it("lets a docs_standard sync-only bot upgrade with bot-scoped QR title (with or without bindings)", async () => {
+    await draw(view({
+      bots: [{ bot_id: "s2", label: "Docs only", role: "sync_only", tier: "docs_standard", has_secret: true }],
+      bindings: [],
+    }));
+    expect(text()).toContain(t("settings-larksync.no_chat_badge"));
+    api.addSyncScopes.mockResolvedValue({ step: "register", kind: "qr", interval: 5, qr: { size: 2, rows: ["10", "01"] } });
+    await click(t("settings-larksync.upgrade_to_full"));
+    expect(api.addSyncScopes).toHaveBeenCalledWith("s2", "full_with_im");
+    expect(text()).toContain(t("settings-larksync.step_bot_scopes"));
+  });
 });
