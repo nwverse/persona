@@ -134,6 +134,8 @@ var (
 // The rules of a recording's stored state, which the knowledge base applies too (recordingwire/rules.go).
 var (
 	MinutesTaskKey     = recordingwire.MinutesTaskKey
+	RecordingID        = recordingwire.RecordingID
+	dayLocation        = recordingwire.DayLocation
 	clockAt            = recordingwire.ClockAt
 	coverageTo         = recordingwire.CoverageTo
 	dayStart           = recordingwire.DayStart
@@ -214,16 +216,15 @@ func (s *store) Items(kind string) []*Item               { return s.core.Calenda
 func (s *store) ReadMinutes(id string) (*Minutes, error) { return s.core.ReadMinutes(id) }
 func (s *store) readRecap(id string) (*DayRecap, error)  { return s.core.ReadRecap(id) }
 func (s *store) readPhotos(id string) (photoBook, error) { return s.core.PhotoBook(id) }
-func (s *store) recordingName(r *Recording) string       { return s.core.RecordingName(r) }
-func (s *store) recoverRecordingLocked(id string) error  { return s.core.RecoverRecording(id) }
+
+// recordingName is r's name in lists. The knowledge base's store names a day recording without the module's name
+// for the day; the one caller here (matchRecordings) never has a day recording, so the engine's name is the same.
+func (s *store) recordingName(r *Recording) string      { return s.core.RecordingName(r) }
+func (s *store) recoverRecordingLocked(id string) error { return s.core.RecoverRecording(id) }
 func (s *store) bumpPhotosRev(id string, start time.Time) error {
 	return s.core.BumpPhotosRev(id, start)
 }
 func (s *store) writeFile(p string, data []byte) error { return s.core.WriteFile(p, data) }
-func (s *store) dayLocation(name string) (*time.Location, error) {
-	return recordingwire.DayLocation(name)
-}
-func (s *store) RecordingID(raw string) (string, bool) { return recordingwire.RecordingID(raw) }
 func (s *store) photoWords(p recordingwire.PhotoText, clipped bool) string {
 	return s.core.PhotoWords(p, clipped)
 }

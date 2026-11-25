@@ -171,7 +171,7 @@ func (e *engine) repairDayRecap(r *Recording, u *RecordingUpload) (recapped bool
 		rc.Version = max(rc.Version, r.RecapVersion) + 1
 		zone := st.Zone()
 		if u.TZ != "" {
-			if l, err := st.dayLocation(u.TZ); err == nil {
+			if l, err := dayLocation(u.TZ); err == nil {
 				zone = l
 			}
 		}
@@ -314,7 +314,7 @@ func rememberTodo(r *Recording, a MinutesAction, todo string) bool {
 // where it has the task near the same time and nowhere else, and one written later even after a version that left it
 // out.
 func (e *engine) SetDayRecapTodos(rawID string, version int, confirmed []MinutesAction) (*DayRecap, error) {
-	id, ok := e.Store.RecordingID(rawID)
+	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
 	}

@@ -67,7 +67,7 @@ func (e *engine) AskMinutes(rawID string) error {
 	if e.Store.ReadOnly() {
 		return ErrReadOnly
 	}
-	id, ok := e.Store.RecordingID(rawID)
+	id, ok := RecordingID(rawID)
 	if !ok {
 		return ErrNotFound
 	}
@@ -109,7 +109,7 @@ func quietMinutes(r *Recording) bool { return r.MinutesQuiet > 0 && r.MinutesQui
 // ErrNotFound without minutes. Minutes written again since get them by task instead (byTask: MinutesTaskKey → to-do
 // id), on their actions without one; without byTask that is ErrMinutesStale.
 func (e *engine) SetMinutesTodos(rawID string, version int, todos, byTask map[string]string) (*Minutes, error) {
-	id, ok := e.Store.RecordingID(rawID)
+	id, ok := RecordingID(rawID)
 	if !ok {
 		return nil, ErrNotFound
 	}
