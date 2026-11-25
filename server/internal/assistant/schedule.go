@@ -1737,6 +1737,7 @@ func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
 	s.runModuleJobs(ctx)
 	go s.a2aLoop(ctx)
+	go s.externalInboxLoop(ctx)
 	go s.resourceLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
 	go s.healthReminders(ctx)

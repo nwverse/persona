@@ -2042,6 +2042,13 @@ Clients report their errors and crashes only while `features` has `error_reports
 - **What clients put in**: no user content (message text, mail, documents, prompts, notification bodies, file names the user chose), no device ids, account, hub address or machine names; breadcrumbs carry short code-chosen text (a screen's name, a route pattern). The manager scrubs again whatever slips through.
 - **Keeping and retrying**: a client keeps reports locally until it gets a 2xx (a crash is written before the process dies and sent at the next start with `previous_launch`), at most 50 for at most 7 days, and makes each report's `id` once so a retry is recognized.
 
+## Counts view (#15512)
+
+The counts people see (badges, tab numbers, switcher counts) are to come from one view per manager, `CountsView` in
+`schema/wire/counts.schema.json`, which the hub relays as it is. The view, its count ids, how an id may change and the
+clients' fallbacks are in [counts.md](counts.md). Nothing sends it yet: its WebSocket message, feature and roster field
+get their rows here when the manager and the hub start sending it.
+
 ## REST (App → hub)
 
 | Method | Path | Notes |
@@ -2596,7 +2603,7 @@ Layer / preview and push-layer integration are follow-up work, not part of this 
 Owners can opt into connecting external updates to directions and to-dos. These routes use full credentials and the
 selected assistant manager, via `X-Persona-Manager` or `manager`, with the usual default manager fallback.
 Unconfigured sources have forwarding off and ask the owner about new work. The API is available independently of
-Labs. This phase stores and previews configuration for the routing and editor work in #15515.
+Labs. Inbox routing uses these bindings and policies. The editor is tracked in #15518.
 
 ### Reference paths
 
@@ -2668,6 +2675,52 @@ A duplicate explicit reference and target pair returns 409 `external_binding_exi
 bindings and missing targets return 404 with `external_binding_not_found` or `external_target_not_found`.
 Invalid references, targets, policies and malformed JSON return 400. An unavailable store returns 503
 `external_sources_unavailable`.
+
+### Inbox routing
+
+New Inbox items and updates carry `external_path`, their normalized source reference followed by its parents.
+The manager derives the path from source metadata. Lark and Feishu name the chat and the topic when reported.
+The primary Lark account uses the default channel and other built-in accounts use their account ID. GitHub uses the
+notification's repository and issue or pull request. CI updates can include the PR associated with the failing run.
+Mail uses the account, reported IMAP mailbox and existing thread key. IMAP presents labels as named mailboxes.
+Subscription rows use provider `subscription`, a `source` container with the subscription ID, and an `item` with
+the source thread key. A connector's native row keeps the provider's identity when it is collected through a second
+entry point. Other push connectors use their source ID as the provider and container. Connectors provide source
+identity and content through Inbox and have no access to the work bindings.
+
+Routing starts when a saved policy on the path or one of its bindings explicitly sets a mode. Projection of an
+existing repository link alone leaves the source unconfigured. Only new source updates are admitted. Use `off`
+or `on_demand` to keep automatic routing off for an opted-in scope. Owners can still use the ordinary Inbox actions
+on those items. Restoring inheritance removes an override. The existing Inbox defaults apply when a source has
+no explicit routing mode.
+
+The first scope with an available, eligible target wins, from item to container to channel. For that scope, the
+manager resolves the policy for each target, including its binding override. A projected reference stays read-only
+even if the same to-do has an explicit owner binding. Each populated pre-filter dimension must match at least one
+entry. Keywords match title or preview text without regard to case. Senders match the reported name or sender ID.
+Mentions match whole `@name` tokens and the reported `me` or `all` flags when available.
+
+A single eligible target goes directly to its activity or existing owner. A GitHub issue or pull request with one
+open delivery to-do eligible as an owner goes to that to-do, with read-only copies for its FYI targets. Neither
+decision needs a model. Multiple eligible targets at the same scope can use the configured Inbox triage model, with
+just each candidate's ID, kind, title, short scope and state, plus the updates' summaries. An assignment can name
+one action owner and any eligible FYI recipients. An unrelated update stays out of work routing. When there is
+new work, the default is an Inbox confirmation. Automatic creation requires an explicit `auto_todo` policy and
+one eligible owning direction for the new work. The new to-do is created in that direction and can be picked up
+through the usual work flow.
+
+`realtime` handles the update as soon as the Inbox commits it. `digest` groups due summaries for triage by scope
+and candidate list, at the close of each `digest_interval_minutes` window. Windows have fixed boundaries and
+default to 60 minutes when the policy omits the interval. A mixed set can resolve in realtime, and an individual
+digest recipient still waits for its configured window.
+
+Postgres records a receipt for each canonical source object and stable provider event ID, using the cursor when
+the provider has no event ID. A mail Message-ID is scoped to the account and thread across mailboxes. IMAP UID
+fallbacks include the mailbox and its generation. A replay through a different Inbox row or an overlapping binding
+uses the same receipt. A new update for an already owned object goes to its active task, Agent or supervisor while
+that owner is authorized. When the owner is still active but its policy no longer allows delivery, the update waits
+for the owner of Persona to decide. FYI copies are activity entries and do not wake an Agent. An uncertain live
+delivery stays tied to its original recipient and is recorded in the work activity for the owner to check.
 
 ## Organization runtime snapshot (#11774)
 
