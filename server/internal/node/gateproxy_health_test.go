@@ -526,14 +526,23 @@ func TestFakeCodexAppServer(t *testing.T) {
 				continue
 			}
 		}
-		if m.Method == "thread/start" {
+		if m.Method == "thread/start" || m.Method == "thread/resume" {
 			if record := os.Getenv("PERSONA_FAKE_CODEX_START"); record != "" {
 				_ = os.WriteFile(record, append([]byte(nil), sc.Bytes()...), 0o600)
 			}
-			result = map[string]any{"thread": map[string]any{"id": thread, "path": ""}}
+			result = map[string]any{"thread": map[string]any{"id": thread, "path": os.Getenv("PERSONA_FAKE_CODEX_PATH")}}
+		}
+		if m.Method == "turn/start" && os.Getenv("PERSONA_FAKE_CODEX_COMPLETE") == "1" {
+			result = map[string]any{"turn": map[string]any{"id": "turn-1"}}
 		}
 		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": result})
 		fmt.Println(string(b))
+		if m.Method == "turn/start" && os.Getenv("PERSONA_FAKE_CODEX_COMPLETE") == "1" {
+			done, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "turn/completed", "params": map[string]any{
+				"threadId": thread, "turn": map[string]any{"id": "turn-1", "status": "completed"},
+			}})
+			fmt.Println(string(done))
+		}
 	}
 	os.Exit(0)
 }

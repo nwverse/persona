@@ -109,6 +109,8 @@ todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE /api/v1/todos/{id}/terminal-cleanup
 -                    DELETE /api/v1/todos/{id}/thread
+-                    DELETE {base}/bindings/{key}
+-                    DELETE {base}/bots/{bot}
 -                    DELETE {base}/markets/{mid}
 -                    GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json
 -                    GET /api/v1/admin/devices
@@ -405,6 +407,7 @@ todos.read           GET /api/v1/todos/{id}
 -                    GET /api/v1/todos/{id}/backend-workspace
 -                    GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}
 todos.read           GET /api/v1/todos/{id}/decisions
+-                    GET /api/v1/todos/{id}/handoffs
 -                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
@@ -422,6 +425,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET /api/v1/ws
 -                    GET /i/{code}
 -                    GET /i/{code}/docker
+-                    GET {base}
 -                    GET {base}/catalog
 -                    GET {base}/market-settings
 -                    GET {base}/markets
@@ -433,6 +437,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {peerPath}
 -                    PATCH /api/v1/agent-shares/{share_id}
 inbox.write          PATCH /api/v1/inbox/policies/{id}
+-                    PATCH /api/v1/looks/uploads/{id}
 -                    PATCH /api/v1/machines/{mid}/files/entry
 -                    PATCH /api/v1/managers/{id}
 -                    PATCH /api/v1/model-config/purposes/{id}
@@ -748,6 +753,7 @@ todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
+-                    POST /api/v1/todos/{id}/handoff
 -                    POST /api/v1/todos/{id}/retry
 -                    POST /api/v1/todos/{id}/start/answer
 todos.write          POST /api/v1/todos/{id}/workspace-naming/plans
@@ -757,9 +763,16 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST /api/v1/translate/message
 -                    POST /api/v1/workspace-board
 -                    POST {adminUploadPath}
+-                    POST {base}/bindings/{key}/run
+-                    POST {base}/bots
+-                    POST {base}/bots/{bot}/authorize
+-                    POST {base}/bots/{bot}/authorize/poll
+-                    POST {base}/bots/{bot}/register
+-                    POST {base}/bots/{bot}/scopes
 -                    POST {base}/catalog/preview
 -                    POST {base}/markets
 -                    POST {base}/markets/{mid}/refresh
+-                    POST {base}/oauth
 -                    POST {bus.JoinPath}
 -                    POST {peerPairPath}
 -                    PUT /api/v1/admin/devices/{credential_id}/owner
@@ -873,6 +886,8 @@ todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
 todos.write          PUT /api/v1/todos/{id}/workspace-rules
 -                    PUT /api/v1/workspace-board/settings
+-                    PUT {base}
+-                    PUT {base}/bindings/{key}
 -                    PUT {base}/market-settings
 -                    PUT {base}/markets/{mid}
 -                    PUT {base}/markets/{mid}/token

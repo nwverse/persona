@@ -8,12 +8,11 @@ import { t } from "../i18n";
 import { useDirectionTree, type Direction } from "../lib/direction-tree";
 import { directionTaskNode } from "../lib/direction-agent-tree";
 import { useAgentSessions } from "../lib/sessions";
-import { useStore } from "../lib/store";
 import { useFolded } from "../lib/use-folded";
 import { Collapse, cx, sidebarFoldMotion } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import type { GoFn, RegFn } from "./SidebarParts";
-import { TreeTodoRows, useMachineLabel } from "./SidebarTree";
+import { TreeTodoRows } from "./SidebarTree";
 
 type Props = {
   /** The direction's opaque id (its leader conversation's when it has one, never the external Agent's session id). */
@@ -38,8 +37,6 @@ export function SidebarDirectionRow({ id, row, ...p }: Props) {
 
 const DirectionTasks = memo(function DirectionTasks({ id, name, row, node, reg, hover, go, onNavigate }: Props & { node: Direction }) {
   const all = useAgentSessions();
-  const machines = useStore((s) => s.machines);
-  const machineLabel = useMachineLabel(machines);
   // only the saved fold (or folded): an open agent under it does not unfold it. Its rows are copies of the Agents list's,
   // which owns the open row (highlight, scroll to it): these register under their own keys and are never the open one
   const [folded, toggle] = useFolded(`direction:${id}`, true);
@@ -71,7 +68,7 @@ const DirectionTasks = memo(function DirectionTasks({ id, name, row, node, reg, 
         <Collapse open={!folded} sidebarFold>
           <div className="flex flex-col gap-px sidebar-indent" inert={folded || undefined}>
             {todos.map((td) => (
-              <TreeTodoRows key={td.key} td={td} machineLabel={machineLabel} noContext keyPrefix={`d:${id}:`} reg={reg} hover={hover} activeKey="" go={go} onNavigate={onNavigate} />
+              <TreeTodoRows key={td.key} td={td} keyPrefix={`d:${id}:`} reg={reg} hover={hover} activeKey="" go={go} onNavigate={onNavigate} />
             ))}
           </div>
         </Collapse>

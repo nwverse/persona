@@ -29,9 +29,9 @@ type codexLine struct {
 }
 
 type codexPayload struct {
-	Type       string              `json:"type"`
-	TurnID     string              `json:"turn_id"`
-	DurationMS json.RawMessage     `json:"duration_ms"`
+	Type       string          `json:"type"`
+	TurnID     string          `json:"turn_id"`
+	DurationMS json.RawMessage `json:"duration_ms"`
 	// task_complete: what failed the turn, null when it ended well ({message, codex_error_info}, CodexTurnError)
 	Error json.RawMessage `json:"error"`
 	// session_meta

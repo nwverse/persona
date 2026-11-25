@@ -71,11 +71,22 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		late bool // stored with a later message of the owner's: older than lines written before it
 	}
 	var picks []pick
+	// dups: messages another source already archived (Engine.Align), by ID: received, never written.
+	var dups map[string]time.Time
 	for _, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
 		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
+			continue
+		}
+		if e.Align != nil && e.Align(src, sc, m) {
+			if m.ID != "" {
+				if dups == nil {
+					dups = map[string]time.Time{}
+				}
+				dups[m.ID] = m.At
+			}
 			continue
 		}
 		if !selecting {
@@ -143,6 +154,13 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		if err := saveWindow(); err != nil {
 			return 0, err
 		}
+		if len(dups) > 0 && exists {
+			if err := e.receiveOnly(src, sc, cut, dups); err != nil {
+				return 0, err
+			}
+		}
+		// A chat not stored yet keeps no receipts for its duplicates: an empty chat would list beside the one that
+		// has the messages. They are asked about again when they come again.
 		return unchanged()
 	}
 	if err := ctx.Err(); err != nil {
@@ -156,6 +174,9 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	}
 	if err := attributeChat(c, src); err != nil {
 		return 0, err
+	}
+	for id, at := range dups {
+		r.IDs[id] = at
 	}
 	for i, m := range kept {
 		if m.ID != "" {
@@ -198,6 +219,24 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	return len(lines), nil
 }
 
+// receiveOnly records the IDs of dups (messages another source already archived) in a stored chat's receipts without
+// writing a line, so they are not aligned again. The caller holds ingestMu.
+func (e *Engine) receiveOnly(src Source, sc SourceChat, cut time.Time, dups map[string]time.Time) error {
+	e.Store.chatMu.Lock()
+	defer e.Store.chatMu.Unlock()
+	c, exists, r, err := e.Store.ingestState(src.Name(), sc, cut)
+	if err != nil || !exists {
+		return err
+	}
+	if err := attributeChat(c, src); err != nil {
+		return err
+	}
+	for id, at := range dups {
+		r.IDs[id] = at
+	}
+	return e.Store.commitIngest(c, nil, r, false, "")
+}
+
 // Defined in the contract package kbwire (docs/server/architecture.md "Contract packages"); the old names stay.
 type (
 	Detail    = kbwire.Detail
@@ -208,7 +247,7 @@ type (
 	Evidence   = kbwire.Evidence
 )
 
-var ErrNotFound = errors.New("not found")
+var ErrNotFound = kbwire.ErrNotFound
 
 // Get reads one entity. recentChars bounds a chat's latest messages in bytes, a recording's transcript in characters
 // (0: none).
@@ -778,6 +817,9 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 		r, ok := e.Store.Recording(id)
 		if !ok {
 			return "", ErrNotFound
+		}
+		if uu.ExpectedPinned != nil && r.Pinned != *uu.ExpectedPinned {
+			return "", ErrConflict
 		}
 		tagUpdate(u, &r.Tagging)
 		protectUpdate(u, &r.Tagging, le)

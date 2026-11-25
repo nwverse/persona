@@ -1,5 +1,15 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Mixed core/module fixtures must keep testing the core when a module is absent (#15500). Check generic scheduled
+  failure routing first, then make the optional briefing hook assert absence or its normal fallback. Do not skip the
+  whole test, weaken the default-build assertion or wait for a notification from a module that is not loaded.
+
+- A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
+  appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
+  Near their due time, a catalog test can count both the workout report and a briefing, while waiting for only the
+  first recorded run can hide the second dispatch. Isolate the fixture, verify the workout's `RefID`, and reproduce
+  with a due default routine and settled asynchronous work; keep the single-send and requested-binding assertions.
+
 - `assistant.New` must not read the database (#13408). Many tests build the Service on a fake store that embeds a nil
   `Store` and implements only the methods it needs; one new `Setting` call in `New` (reading the feature-module switch)
   panicked dozens of unrelated tests. Read what the constructor needs where the manager starts (`main.go`, next to the
@@ -530,6 +540,17 @@ user's language in process text too.
 
 - Match Inbox PR/issue comments by full task URLs before the AI twin gate (#5578). A to-do may record its link only in `pr_url`, its title or its notes. Keep host, repository and PR/issue kind in the identity, leave ambiguous matches to the judge, and use a separate per-message signal cursor: the twin's `Of` cursor tracks handling, which does not run while it is off. Persist associations before forwarding them, and retain the existing supervision opt-in and exclusions. A URL-only Agent must still obey the age limit before its first automatic handling; creating its task association is not permission to process old backlog. On load, seed previously linked items' signal cursors from the stored snapshot so a restart is not paid-for news; count only batches observed after that snapshot.
 
+## A card marked delegating needs someone woken for it and a way up (#15360)
+
+A leader's Bash approval (a Lark doc write the node's gate asked about) showed "Supervisor handling" for 21 minutes
+with nobody told. The non-owner route had handed it to the main conversation: marked `delegating`, so the apps hid it
+from Needs you and refused the owner's answer, and parked at once, so no timeout moved it. The main conversation got
+only a quiet note (`keepRelayLater`) that starts no turn, and `ask_escalate` takes a task, which the card had none of.
+Without a background supervisor the main conversation's own card went to itself. Before a route marks a card
+delegating, check that the conversation it goes to is woken for it, can answer or hand it up, and is not the one
+waiting on it. A new route also keeps the exceptions of the existing ones: `askLadder` already left the supervising
+conversations' cards with the user, and the new route had to share that rule (`supervisorConversation`).
+
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
 Every `{"type":"todos"}` makes every app read the whole `GET /api/v1/todos` (about 1 MB at ~500 to-dos), and one step of
@@ -991,3 +1012,8 @@ Cache keepalive revoked every role this way and never mounted a proxy, while its
 inventory with `Assistant: true`. Judge a raw row with `fleetMachine.isAssistant` (its directory), and build test
 inventories the way a node sends them. The same feature also needed Claude Code's `ENABLE_PROMPT_CACHING_1H`: without
 it the CLI declares only five-minute markers on an API key or a gateway, whatever TTL the gateway applies later.
+
+## Tool discovery can invalidate an entire warm conversation (#13719)
+
+Adding an always-loaded tool to the top-level list can invalidate a warm Claude conversation prefix. Test
+the full ordered list before and after discovery and reconnection, including a different upstream order.

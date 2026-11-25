@@ -98,6 +98,7 @@
   "agent_speed_model": "This model doesn’t advertise that Codex speed: {reason}",
   "agent_speed_invalid": "That Agent speed isn’t valid: {reason}",
   "assistant_supervision_busy": "This conversation's task-follow-up role changed. Wait for its current work to finish, then try again. Nothing was sent.",
+  "assistant_categories_busy": "This conversation's information categories changed. Wait for its current work to finish, then try again. Nothing was sent.",
   "assistant_supervision_runtime": "This Agent cannot receive separate task follow-up instructions. Supported launchers on this computer: {launchers}. Nothing was started or sent.",
   "assistant_supervision_none": "none detected; connect or update a compatible runtime",
   "assistant_supervision_account": "This engine supports task follow-up, but this account has not enabled custom system instructions. Ask the engine provider to enable them for your account. Nothing was started or sent.",

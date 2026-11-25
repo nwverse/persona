@@ -250,8 +250,8 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 
 // todoPushOver: to-do id no longer waits on the owner (its decision answered, superseded or withdrawn by its
 // supervisor, its owner wait over, the to-do closed). Its card is over (resolveCard): the hub lets the next push about it
-// ring (assistantwire.TodoPushKey) and takes the decision's push, which names the card as card_id, off the devices it
-// went to. Nothing is pushed.
+// ring (assistantwire.TodoPushKey) and takes the decision or needs-user push (which carries card_id and todo_id, never
+// interaction_id) off the devices it went to (#13916, #14388). Nothing is pushed.
 func (s *Service) todoPushOver(id string) {
 	if id != "" {
 		s.resolveCard(assistantwire.TodoAskCardID(id))

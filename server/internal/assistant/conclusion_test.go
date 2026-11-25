@@ -349,20 +349,22 @@ func TestBriefingSaysTheSameVerdictAsTheCard(t *testing.T) {
 	if len(cardsWith(posts(), botcard.EscapeMarkdown(verdict))) != 1 {
 		t.Fatalf("the card does not say %q", verdict)
 	}
-	facts := s.briefFactsAt(ctx, time.Now(), "")
-	body := facts.body(s, "早报")
-	var row *briefBodyRow
-	for i := range body.Accept {
-		if body.Accept[i].ID == todo.ID {
-			row = &body.Accept[i]
+	if s.briefingOn() {
+		facts := s.briefFactsAt(ctx, time.Now(), "")
+		body := s.briefBodyOf(facts, "早报")
+		var row *briefBodyRow
+		for i := range body.Accept {
+			if body.Accept[i].ID == todo.ID {
+				row = &body.Accept[i]
+			}
 		}
-	}
-	if row == nil || row.Verdict != verdict || row.Outcome != outcomeCannot {
-		t.Fatalf("the brief's row %+v", row)
-	}
-	card, _, _ := s.briefCard(facts, "早报", "")
-	if js := card.JSON(); !strings.Contains(js, botcard.EscapeMarkdown(verdict)) || !strings.Contains(js, "知道了") {
-		t.Fatalf("the briefing card does not say it:\n%s", js)
+		if row == nil || row.Verdict != verdict || row.Outcome != outcomeCannot {
+			t.Fatalf("the brief's row %+v", row)
+		}
+		card, _, _ := s.briefCard(facts, "早报", "")
+		if js := card.JSON(); !strings.Contains(js, botcard.EscapeMarkdown(verdict)) || !strings.Contains(js, "知道了") {
+			t.Fatalf("the briefing card does not say it:\n%s", js)
+		}
 	}
 	var onBoard bool
 	for _, r := range s.boardRows(ctx, s.botLang(ctx), s.webBase(ctx), time.Now()) {
@@ -795,7 +797,7 @@ func TestConclusionVerificationCopyFollowsDeliveryState(t *testing.T) {
 
 	// 3. Briefing feed and briefing card
 	facts := s.briefFactsAt(ctx, time.Now(), "")
-	body := facts.body(s, "早报")
+	body := s.briefBodyOf(facts, "早报")
 	var row *briefBodyRow
 	for i := range body.Accept {
 		if body.Accept[i].ID == todo.ID {

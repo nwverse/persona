@@ -721,6 +721,7 @@ struct ChatView: View {
     @inline(never) private func applyChatLifecycleTop(_ base: AnyView) -> AnyView {
         base
         .environment(\.openFile, actions.openFile)
+        .environment(\.openTurnReview, actions.openTurnReview)
         .environment(\.fileScope, FileScope(machine: key.machineRef, cwd: session?.cwd ?? ""))
         .environment(\.chatImages, store.images)
         .environment(\.viewImages, actions.viewImages)
@@ -892,7 +893,8 @@ struct ChatView: View {
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
                                        supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
                                        foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
-                                       closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" })
+                                       closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" },
+                                       turnChanges: showsTurnChanges, cwd: showsTurnChanges ? (session?.cwd ?? "") : "")
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -968,11 +970,25 @@ struct ChatView: View {
     /// A later turn must not make a frozen historical question look like a live one.
     private var shownRoundActive: Bool { frozen.map { $0.live != nil } ?? status.isActive }
 
+    /// Completed Agent exchanges show the Changed Files card (never Assistant conversations or subagent views).
+    private var showsTurnChanges: Bool { style == .dev && session?.assistant == false && viewing == nil }
+
+    /// Whether the Changed Files card can open branch review for this session.
+    private var canReviewTurnChanges: Bool {
+        #if os(iOS)
+        showsTurnChanges && model.features(key.group).contains("git_review") && !(session?.cwd ?? "").isEmpty
+        #else
+        false
+        #endif
+    }
+
     /// What builds the lines from the blocks, with what is open now.
     private var lineBuilder: ChatLines {
         ChatLines(openWork: openWork, openAll: Self.debugOpenAll, openRuns: openRuns,
                   openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
-                  foldsIntoRun: foldsIntoRun, foldSupervision: style == .assistant, foldBackground: foldsBackground,
+                  foldsIntoRun: foldsIntoRun, includeTurnChanges: showsTurnChanges,
+                  turnChangesCwd: showsTurnChanges ? session?.cwd : nil,
+                  foldSupervision: style == .assistant, foldBackground: foldsBackground,
                   main: shownKey.sessionID == model.assistantMain?.sessionID,
                   foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
                   openSupervision: openSupervision, openAllSupervision: Self.debugOpenSupervision, active: shownRoundActive)
@@ -1242,7 +1258,30 @@ struct ChatView: View {
             openFold: openFold,
             jumpToCall: { jumpToCall($0) },
             openQuote: { jumpToQuoted($0) },
-            openAppLink: { openHubPage($0) })
+            openAppLink: { openHubPage($0) },
+            openTurnBranchReview: {
+                #if os(iOS)
+                if TurnReviewRouting.route(targetFile: nil, canReview: canReviewTurnChanges, cwd: session?.cwd) == .review(targetFile: nil) {
+                    actions.pendingReviewFallback = nil
+                    reviewRequest = ReviewRequest(scope: .branch)
+                }
+                #endif
+            },
+            openTurnChangedFile: { [key, session] changed in
+                switch TurnReviewRouting.route(targetFile: changed.path, canReview: canReviewTurnChanges, cwd: session?.cwd) {
+                case .review(let target):
+                    #if os(iOS)
+                    actions.pendingReviewFallback = nil
+                    reviewRequest = ReviewRequest(scope: .branch, targetFile: target)
+                    #else
+                    file = FileRef(group: key.group, machineID: key.machineID, path: target ?? changed.path, cwd: session?.cwd)
+                    #endif
+                case .file(let path):
+                    file = FileRef(group: key.group, machineID: key.machineID, path: path, cwd: session?.cwd)
+                case .none:
+                    break
+                }
+            })
     }
 
     /// Folds or opens a work line without moving what you were reading. In the upside-down list the newest end holds
@@ -1548,6 +1587,8 @@ struct ChatView: View {
             RecapCard(items: items).chatPinned("recap-" + line.id) // where the open recap folds to (`dismissRecap`)
         case .viewed(_, let images):
             ViewedImagesRow(images: images).equatable()
+        case .turnChanges(let id, let changes):
+            TurnChangesCard(pinKey: id, changes: changes, canReview: canReviewTurnChanges).equatable()
         case .toolViews(_, let views):
             ToolViewAttachmentsRow(views: views, link: $link).equatable()
         }
@@ -3656,7 +3697,10 @@ struct ChatView: View {
     private var openReview: ((GitReviewScope?) -> Void)? {
         #if os(iOS)
         guard style == .dev, model.features(key.group).contains("git_review"), let cwd = session?.cwd, !cwd.isEmpty else { return nil }
-        return { scope in reviewRequest = ReviewRequest(scope: scope) }
+        return { scope in
+            actions.pendingReviewFallback = nil
+            reviewRequest = ReviewRequest(scope: scope)
+        }
         #else
         return nil
         #endif
@@ -3664,9 +3708,25 @@ struct ChatView: View {
 
     #if os(iOS)
     private func reviewPage(_ r: ReviewRequest) -> some View {
-        ReviewPage(key: key, cwd: session?.cwd ?? "", scope: r.scope, api: { [model, key] in model.api(key.group) })
+        let sessionKey = key
+        let cwd = session?.cwd ?? ""
+        return ReviewPage(key: sessionKey, cwd: cwd, scope: r.scope, targetFile: r.targetFile,
+                          onFallbackFile: { path in
+                              actions.pendingReviewFallback = (
+                                  sessionKey: sessionKey,
+                                  ref: FileRef(group: sessionKey.group, machineID: sessionKey.machineID, path: path, cwd: cwd)
+                              )
+                          },
+                          api: { [model, sessionKey] in model.api(sessionKey.group) })
             .environment(model)
             .presentationSizing(.page) // the iPad's too: room for the diffs, not the small form
+    }
+
+    private func handleReviewDismiss() {
+        guard let pending = actions.pendingReviewFallback else { return }
+        actions.pendingReviewFallback = nil
+        guard pending.sessionKey == key else { return }
+        file = pending.ref
     }
     #endif
 
@@ -4110,7 +4170,7 @@ struct ChatView: View {
             compactChrome
         }
         #if os(iOS)
-        .sheet(item: $reviewRequest) { r in reviewPage(r) }
+        .sheet(item: $reviewRequest, onDismiss: handleReviewDismiss) { r in reviewPage(r) }
         #endif
         // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
         // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
@@ -4246,7 +4306,7 @@ struct ChatView: View {
         .animation(Theme.Motion.layout, value: composerTyping)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sideHeaderHeight = $0 }
         #if os(iOS)
-        .sheet(item: $reviewRequest) { r in reviewPage(r) }
+        .sheet(item: $reviewRequest, onDismiss: handleReviewDismiss) { r in reviewPage(r) }
         #endif
         // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
         // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
@@ -5264,6 +5324,7 @@ struct ChatView: View {
         rememberReadPosition()
         if viewing != nil { model.unsubscribe(shownKey, by: owner); viewing = nil }
         model.unsubscribe(key, by: owner)
+        actions.pendingReviewFallback = nil
         key = next
         entry = nil // a saved place not reached in the last chat is not looked for in this one
         scratch.entryPages = 0
@@ -7512,6 +7573,8 @@ struct ChatLine: Identifiable {
         case day(Date)
         /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
         case viewed(id: String, images: [ViewedImage])
+        /// The files a completed Agent exchange changed, shown after its final answer (`TurnChanges`, #12016).
+        case turnChanges(id: String, changes: TurnChangeSet)
         /// Declarative extension views emitted out-of-band by a turn's tool calls (`ToolViews`).
         case toolViews(id: String, views: [ExtensionView])
         /// A part of a long finished answer, a row of its own (#4970, `AnswerParts`): the first has the answer's id.
@@ -7541,6 +7604,7 @@ struct ChatLine: Identifiable {
             case .placeMap(let m): "map-" + m.callID
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
+            case .turnChanges(let id, _): id
             case .toolViews(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
             case .modeChange(let id, _): id
@@ -7594,6 +7658,7 @@ struct ChatLine: Identifiable {
         return line
     }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
+    static func turnChanges(id: String, changes: TurnChangeSet) -> Self { Self(.turnChanges(id: id, changes: changes)) }
     static func toolViews(id: String, views: [ExtensionView]) -> Self { Self(.toolViews(id: id, views: views)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))
@@ -7717,13 +7782,21 @@ struct WorkStepView: View, Equatable {
         /// An app link to one of Persona's pages (`persona://open<path>`, an older `persona://` form, #9926): true when it
         /// opened.
         var openAppLink: (URL) -> Bool = { _ in false }
+        var openTurnBranchReview: () -> Void = {}
+        var openTurnChangedFile: (TurnChangedFile) -> Void = { _ in }
     }
 
     private var handlers = Handlers()
 
     func set(_ h: Handlers) { handlers = h }
 
+    /// A changed file queued to open in `FileViewer` after `ReviewPage` dismisses (avoids simultaneous sheet drop).
+    var pendingReviewFallback: (sessionKey: SessionKey, ref: FileRef)?
     private(set) lazy var openFile = FileOpener { [weak self] in self?.handlers.openFile($0) }
+    private(set) lazy var openTurnReview = TurnReviewOpener(
+        openBranchReview: { [weak self] in self?.handlers.openTurnBranchReview() },
+        openChangedFile: { [weak self] in self?.handlers.openTurnChangedFile($0) }
+    )
     private(set) lazy var openLink: (URL) -> Void = { [weak self] in self?.handlers.openLink($0) }
     private(set) lazy var openPort: (PortLink) -> Void = { [weak self] in self?.handlers.openPort($0) }
     private(set) lazy var viewImages: (ImageViewing) -> Void = { [weak self] in self?.handlers.viewImages($0) }
@@ -8432,6 +8505,9 @@ final class ChatScratch {
         var children = ""
         /// The permission mode changes merged in (#10297): one more is a new line.
         var modes: [String] = []
+        /// Whether completed Agent exchanges emit Changed Files cards (#12016), and the folder used for display paths.
+        var turnChanges = false
+        var cwd = ""
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

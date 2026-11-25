@@ -151,7 +151,12 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		return nil
 	}
 	s.modulesOff = slices.Clone(off)
-	s.modules = kernel.NewWithOptions(mods, kernel.LoadOptions{Off: func(id string) bool { return slices.Contains(off, id) }, Logf: s.logf, Check: check})
+	s.modules = kernel.NewWithOptions(mods, kernel.LoadOptions{
+		Off:   func(id string) bool { return slices.Contains(off, id) },
+		Logf:  s.logf,
+		Check: check,
+		Ports: s.modulePorts(),
+	})
 	for _, pattern := range s.modules.HubRoutes() {
 		handler, _ := s.modules.HubRoute(pattern)
 		s.handle(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -311,12 +316,16 @@ func moduleStore(v *Settings, key string, raw json.RawMessage) error {
 	return errors.New(key + " has no place in the assistant's settings")
 }
 
+func unavailableModuleSetting(key string) error {
+	return errors.New(key + " is not available: its module is off")
+}
+
 // moduleSettingGet is persona_settings' get of a module setting: the value in force.
 func (s *Service) moduleSettingGet(key string) func(ctx context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		m, ok := s.modules.Setting(key)
 		if !ok {
-			return "", errors.New(key + " is not available: its module is off")
+			return "", unavailableModuleSetting(key)
 		}
 		return string(m.Value(moduleStored(s.settings(ctx), key))), nil
 	}
@@ -330,7 +339,7 @@ func (s *Service) moduleSettingSet(key, cardKey, applied string) func(ctx contex
 	return func(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
 		m, ok := s.modules.Setting(key)
 		if !ok {
-			return nil, errors.New(key + " is not available: its module is off")
+			return nil, unavailableModuleSetting(key)
 		}
 		next, err := m.Check(raw)
 		if err != nil {
@@ -390,4 +399,13 @@ func (s *Service) briefingWaits(v Settings) (modapi.WaitRules, bool) {
 func (s *Service) briefingOn() bool {
 	_, ok := s.modules.ScheduleFacts()
 	return ok
+}
+
+// briefingRunner returns the loaded briefing module's runtime runner, or false when the module is off or built out.
+func (s *Service) briefingRunner() (modapi.ScheduleFactsRunner, bool) {
+	f, ok := s.modules.ScheduleFacts()
+	if !ok || f.Runner == nil {
+		return nil, false
+	}
+	return f.Runner, true
 }

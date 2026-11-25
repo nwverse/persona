@@ -27,7 +27,7 @@ func (s *Service) ensureLegacySubagentsLoaded(ctx context.Context) {
 	if loaded {
 		return
 	}
-	if s.store == nil || s.store() == nil {
+	if s.store() == nil {
 		f.subagentsMu.Lock()
 		f.subagentsLegacyLoaded = true
 		f.subagentsMu.Unlock()
@@ -123,7 +123,7 @@ func (s *Service) ensureSubagentsChecked(ctx context.Context, machine string, se
 		return
 	}
 	s.ensureLegacySubagentsLoaded(ctx)
-	if s.store == nil || s.store() == nil {
+	if s.store() == nil {
 		return
 	}
 	st, err := s.a2aStore()
@@ -298,7 +298,7 @@ func (s *Service) decorateSubagents(ctx context.Context, machine string, list []
 		return
 	}
 	s.ensureLegacySubagentsLoaded(ctx)
-	if s.store != nil && s.store() != nil {
+	if s.store() != nil {
 		if st, err := s.a2aStore(); err == nil {
 			f := &s.fleet
 			var missing []string

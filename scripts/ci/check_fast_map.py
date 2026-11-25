@@ -124,7 +124,9 @@ TABLE = (
         (("scripts/app/*android*",), ("android",)),
         (("scripts/test/test_external_service_refs.py",), ("external-refs",)),
         (("scripts/gen/sdk_bundle.py", "scripts/test/test_sdk_bundle.py"), ("sdk-bundle",)),
-        (("scripts/gen/*extension*", "scripts/test/test_extension_schema.py"), ("extension-schema",)),
+        (("scripts/gen/*extension*", "scripts/gen/wiregen/*", "scripts/test/fixtures/wiregen/*",
+          "scripts/test/test_wiregen_typed.py", "scripts/test/test_extension_schema.py"),
+         ("extension-schema",)),
         # Any other script, nested ones included: the seconds-long repository checks.
         (("scripts/*",), ("pr-needs-issue", "extension-schema")),
         (("apple/*",), ("apple",)),
@@ -165,10 +167,11 @@ TABLE = (
          ("scripts/test/test_name_freezes.py",)),
         (("scripts/test/name_freezes.py",), ("scripts/mock/test_mock_hub.py",)),
     ),
-    # The domain slice scaffold (scripts/new_domain_slice.py, #15179): test_new_domain_slice.py compiles and tests what
+    # The domain slice scaffold (scripts/gen/new_domain_slice.py, #15179): test_new_domain_slice.py compiles and tests what
     # it writes against the domain kit and the rules, and compares the golden, so a change to any of them runs it.
     (
-        (("server/internal/domainkit/*", "server/internal/archguard/domainrules/*",
+        (("scripts/gen/new_domain_slice.py", "scripts/new_domain_slice.py", "scripts/test/test_new_domain_slice.py",
+          "server/internal/domainkit/*", "server/internal/archguard/domainrules/*",
           "server/internal/archguard/testdata/scaffold/*", "server/internal/archguard/testdata/domain_layers/*",
           "server/internal/agentref/*"), ("scripts/test/test_new_domain_slice.py",)),
     ),
@@ -176,6 +179,13 @@ TABLE = (
     # list in android/build-logic and the call sites it names in the modules' sources.
     (
         (("android/*",), ("scripts/test/test_android_return_values.py",)),
+    ),
+    # The client domain guard (docs/server/architecture.md "Domain model", 'Client modules') finds the domain modules
+    # by name anywhere under android/ and apple/, and reads every Android and Swift source outside them for opt-ins,
+    # SPI imports and visitors; RuleTests reads its planted trees, apple.sh's domain package step and the doc's examples.
+    (
+        (("android/*", "apple/*", "scripts/test/fixtures/client_domain/*", "scripts/ci/apple.sh",
+          "docs/server/architecture.md"), ("scripts/test/test_client_domain_modules.py",)),
     ),
     # Most section names test_doc_sections.py checks sit in code comments under its SOURCE_DIRS (about a second).
     (
@@ -235,14 +245,16 @@ TABLE = (
          ("scripts/release/test_check_bundle_privacy.py", "scripts/test/test_merge_pr_sh.py")),
         (("scripts/operations/pr_watch_merge.py", "scripts/ci/changed_ratchets.py"),
          ("scripts/test/test_merge_pr_sh.py",)),
-        (("scripts/ci/sleep_ratchet.py", "scripts/ci/web_font_ratchet.py"),
+        (("scripts/ci/sleep_ratchet.py", "scripts/ci/web_font_ratchet.py", "scripts/ci/wire_types_ratchet.py"),
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py")),
         (("scripts/ci/ratchet_base.py",),
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py", "scripts/ci/test_sleep_ratchet.py",
           "scripts/ci/test_web_font_ratchet.py", "scripts/test/test_prompt_language_ratchet.py",
-          "scripts/ci/test_web_module_boundary_ratchet.py")),
+          "scripts/ci/test_web_module_boundary_ratchet.py", "scripts/ci/test_wire_types_ratchet.py")),
         (("scripts/ci/prompt_language_ratchet.py",), ("scripts/test/test_prompt_language_ratchet.py",)),
         (("scripts/ci/web_module_boundary_ratchet.py",), ("scripts/ci/test_web_module_boundary_ratchet.py",)),
+        (("scripts/ci/wire_types_ratchet.py", "scripts/ci/wire_types_baseline.json",
+          "server/internal/archguard/wirecount/*"), ("scripts/ci/test_wire_types_ratchet.py",)),
         (("scripts/test/go_trimpath.sh",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py")),
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
         (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py",
@@ -296,7 +308,7 @@ TABLE = (
     # test_wire_schema.py holds every sample the shared fixtures keep for a wire schema to that schema, at any depth;
     # it imports the extension test's validator.
     (
-        (("schema/wire/*", "spec/fixtures/*", "scripts/gen/extension_schema.py",
+        (("schema/wire/*", "spec/fixtures/*", "scripts/gen/extension_schema.py", "scripts/gen/wiregen/*",
           "scripts/test/test_extension_schema.py"), ("scripts/test/test_wire_schema.py",)),
     ),
     # test_todo_fixtures.py holds the to-do page and window fixtures to their READMEs' rules; it also reads the view

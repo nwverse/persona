@@ -87,7 +87,7 @@ func (s *Recordings) finalRound(ctx context.Context) {
 		return
 	}
 	s.hubSweep(e)
-	ids, err := e.HubRecordings()
+	ids, err := writersOf(e).HubRecordings()
 	if err != nil {
 		return
 	}
@@ -135,7 +135,7 @@ func (s *Recordings) finalLook(ctx context.Context, e *kb.Engine, id string, now
 	}
 	if t.FinalFrom.IsZero() {
 		if t.State == kb.TranscriptionLive {
-			if _, err := e.TranscriptionUpdate(rec.ID, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+			if _, err := writersOf(e).TranscriptionUpdate(rec.ID, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 				if t.State == kb.TranscriptionLive {
 					t.State = kb.TranscriptionFinishing
 				}
@@ -199,7 +199,7 @@ func (s *Recordings) finalPass(ctx context.Context, e *kb.Engine, id string, st 
 	s.hubTr.mu.Lock()
 	doneTo := st.doneTo
 	s.hubTr.mu.Unlock()
-	t, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	t, err := writersOf(e).TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		if t.State == kb.TranscriptionFinal || t.State == kb.TranscriptionFailed {
 			return errFinalDone
 		}
@@ -234,7 +234,7 @@ func (s *Recordings) finalPass(ctx context.Context, e *kb.Engine, id string, st 
 		st.windows, live = []finalWindow{{from: 0, to: math.Inf(1), sentences: h.Segments}}, nil
 		return s.finalEnd(e, id, st, live, tl)
 	}
-	held, err := e.AudioHeld(id)
+	held, err := writersOf(e).AudioHeld(id)
 	if err != nil {
 		return err
 	}
@@ -256,7 +256,7 @@ func (s *Recordings) finalPass(ctx context.Context, e *kb.Engine, id string, st 
 	// A busy service (#13446) that billed nothing was never reached either, as when busy was upstream_unavailable.
 	unreachable := errors.As(err, &je) && (je.Code == extwire.TEUpstreamUnavailable || je.Code == extwire.TEUpstreamBusy) && !billed
 	if unreachable {
-		u, uerr := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+		u, uerr := writersOf(e).TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 			t.FinalUnreachable++
 			return nil
 		})
@@ -303,7 +303,7 @@ func (s *Recordings) finalEnd(e *kb.Engine, id string, st *finalPassState, live 
 		state = kb.TranscriptionFailed
 	}
 	if len(merged) > 0 || len(live) > 0 {
-		if _, err := e.HubTranscriptPut(id, kb.HubPassFinal, merged); err != nil {
+		if _, err := writersOf(e).HubTranscriptPut(id, kb.HubPassFinal, merged); err != nil {
 			if errors.Is(err, kb.ErrNotFound) || errors.Is(err, kb.ErrRecordingDeleted) {
 				return nil
 			}
@@ -311,7 +311,7 @@ func (s *Recordings) finalEnd(e *kb.Engine, id string, st *finalPassState, live 
 		}
 	}
 	now := time.Now().UTC()
-	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := writersOf(e).TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		t.State, t.FinalAt, t.Problem, t.Fallback = state, now, "", false
 		return nil
 	}); err != nil {
@@ -321,7 +321,7 @@ func (s *Recordings) finalEnd(e *kb.Engine, id string, st *finalPassState, live 
 	delete(s.hubTr.passes, id)
 	s.hubTr.mu.Unlock()
 	s.logf("recording %s: final pass %s: %d sentence(s), %d window(s)", id, state, len(merged), len(st.windows))
-	if err := e.FinalTranscriptStored(id); err != nil {
+	if err := writersOf(e).FinalTranscriptStored(id); err != nil {
 		s.logf("recording %s: final transcript stored: %v", id, err)
 	}
 	s.kbWake() // the minutes, from the final transcript
@@ -379,7 +379,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 	if pos < 0 {
 		return nil // every window done
 	}
-	record, err := e.RecordOf(id)
+	record, err := writersOf(e).RecordOf(id)
 	if err != nil {
 		return err
 	}
@@ -549,7 +549,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 			}
 			t.Stop()
 		}
-		n, err := e.AudioRead(id, float64(pos)/kb.AudioRate, buf)
+		n, err := writersOf(e).AudioRead(id, float64(pos)/kb.AudioRate, buf)
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -590,7 +590,7 @@ func (s *Recordings) replay(ctx context.Context, e *kb.Engine, id string, held [
 // finalProgress tells the apps how far recording id's final pass is (#13461): the end of the last window it finished,
 // once per window. A failure to write it costs only the progress shown.
 func (s *Recordings) finalProgress(e *kb.Engine, id string, doneTo float64) {
-	if _, err := e.TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
+	if _, err := writersOf(e).TranscriptionUpdate(id, func(t *kb.MeetingTranscription, _ kb.Recording) error {
 		if t.State == kb.TranscriptionFinishing {
 			t.FinalDone = max(t.FinalDone, doneTo)
 		}

@@ -79,7 +79,8 @@ type Module interface {
 }
 
 // Host is everything a module may use of the core. It grows one method per slot as the server learns to serve the
-// slot (docs/architecture/core-and-modules.md "Slots"); a module never reaches the core any other way.
+// slot (docs/architecture/core-and-modules.md "Slots"), and narrow read/write ports for the ledgers a module acts on;
+// a module never reaches the core any other way.
 type Host interface {
 	// Logf writes to the manager's log, prefixed with the module's id.
 	Logf(format string, args ...any)
@@ -93,6 +94,17 @@ type Host interface {
 	AddMCPTool(name, description string, schema json.RawMessage, run func(context.Context, string, string, json.RawMessage) (string, error)) error
 	// AddBackgroundJob runs one declared loop under the Service Run context while the module is loaded.
 	AddBackgroundJob(name string, run func(context.Context) error) error
+
+	// Narrow core ports a module uses at run time (each may be nil in registration-only tests).
+	Tasks() TaskPort
+	Todos() TodoPort
+	Inbox() InboxPort
+	Later() LaterPort
+	Schedule() SchedulePort
+	Feed() FeedPort
+	Delivery() DeliveryPort
+	DayRecap() DayRecapPort
+	Prompts() PromptPort
 }
 
 // BackgroundJob is a module-owned loop. Run inherits Service.Run's cancellation; an off module never starts it.
@@ -124,13 +136,17 @@ type Setting struct {
 }
 
 // ScheduleFacts is a module's part in the facts a scheduled routine with facts on opens with (the briefing). The core
-// gathers the ledgers it owns (to-dos, cards, agents, queues); the module decides when stopped work counts as waiting
-// and how much of it is shown. Without it, such a routine opens with no facts.
+// owns the ledgers (to-dos, cards, agents, queues, schedule); the module gathers the briefing snapshot, builds its feed
+// item, manages per-run retention and model-failure fallbacks, and decides when stopped work counts as waiting. Without
+// it, such a routine opens with no facts.
 type ScheduleFacts struct {
 	// Setting is the key of the module's Setting the rules read ("" for none).
 	Setting string
 	// Waits are the wait rules for the setting's stored value (nil: never set).
 	Waits func(stored json.RawMessage) WaitRules
+	// Runner owns the briefing's fact gathering, feed item, fallback and schedule lifecycle hooks (optional for
+	// wait-only test modules).
+	Runner ScheduleFactsRunner
 }
 
 // WaitRules say when stopped work is waiting and how many rows a direction shows.

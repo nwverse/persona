@@ -345,6 +345,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// Done by the user: what the task came to goes in its decisions and its projects' timelines (#2820). cur
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
+		s.todoPushOver(id)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
 		maySatisfyAfter := row.StartError == "" && row.DoneBy != db.DoneByCancelled
 		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
@@ -373,6 +374,7 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err
 	}
+	s.todoPushOver(id)
 	s.askTodoClosed(context.WithoutCancel(ctx), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
 	s.onTodoWorkspaceReleased(ctx, cur, false)
 	return nil

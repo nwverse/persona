@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,12 +71,17 @@ func trProduction(t *testing.T) {
 	setVar(t, &trUsageMost, 200*time.Millisecond)
 }
 
+var trFixtureProviderID atomic.Uint64
+
 // trLive is a plugin whose one upstream is the stand-in for script s.
 func trLive(t *testing.T, s voicetest.Script) (*Plugin, *httptest.Server, *lockedLog, *voicetest.Live) {
 	t.Helper()
 	live := voicetest.NewLive(t, s)
-	pl, srv, logs := speakPlugin(t, Config{Providers: []Provider{{ID: "t", URL: live.URL(), Dialect: DialectLive, Key: "k",
-		DefaultModel: "m1"}}, Default: "t/m1"})
+	// A recycled loopback port belongs to a new stand-in. Give it its own provider identity so its first
+	// info request observes an unnegotiated upstream, and later jobs still share this upstream's actual grant.
+	id := fmt.Sprintf("test-live-%d", trFixtureProviderID.Add(1))
+	pl, srv, logs := speakPlugin(t, Config{Providers: []Provider{{ID: id, URL: live.URL(), Dialect: DialectLive, Key: "k",
+		DefaultModel: "m1"}}, Default: id + "/m1"})
 	return pl, srv, logs, live
 }
 
