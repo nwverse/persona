@@ -20,7 +20,7 @@ import { Markdown } from "../../ui/Markdown";
 import { ImageViewer } from "../chat/ImageViewer";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Monogram, useFollowEnd } from "./InboxParts";
-import { useLarkWrites } from "./LarkThread";
+import { useLarkWrites } from "./lark-write-gate";
 import { LarkInboxContent } from "./LarkInboxContent";
 import { ConnectorReadNotice, ConnectorReplyTarget, conversationFailure, type ConversationFailure } from "./ConnectorReadNotice";
 

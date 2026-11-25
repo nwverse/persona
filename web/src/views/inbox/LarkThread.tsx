@@ -6,7 +6,6 @@
 // play here, a card's buttons press, my messages show who read them, reactions can be put on, an avatar opens the
 // person's card, a group's box can @ people, and what is typed stays as the chat's draft.
 import { defaultManager, ItemManager, ownerHeaders, useItemManager, withManager } from "../../lib/manager-choice";
-import { moduleOn, useModuleStates } from "../../core/module-host";
 import { createContext, memo, use, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { api, ApiError, enc, errorText, getToken } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
@@ -46,6 +45,9 @@ import { newClientID, useLarkOutbox, type LarkOutgoing } from "./LarkOutbox";
 import { LarkPinsDialog } from "./LarkPins";
 import { isSummaryCard, LarkSummaryCard } from "./LarkSummaryCard";
 import { LarkTopicCard, LarkTopicDialog, useTopicReplies } from "./LarkTopicCard";
+import { LarkWriteGate, useLarkWrites } from "./lark-write-gate";
+
+export { LarkWriteGate, useLarkWrites };
 
 const PAGE = 30;
 
@@ -108,16 +110,6 @@ export function chatOfItem(item: InboxItem): LarkChatRef {
 const ChatAccount = createContext<number | undefined>(undefined);
 /** …and its feed, where a thread's pictures and files are sent. */
 const ChatFeed = createContext("");
-/** Inbox installs the module boundary. The default keeps the module-owned Messages page and isolated views writable;
- *  that page exists only while its module is on. */
-const LarkWrites = createContext(true);
-export const useLarkWrites = () => useContext(LarkWrites);
-
-/** Existing Lark history stays in Core when the module is off; only its Lark write controls become read-only. */
-export function LarkWriteGate({ children }: { children: ReactNode }) {
-  useModuleStates();
-  return <LarkWrites.Provider value={moduleOn("lark")}>{children}</LarkWrites.Provider>;
-}
 
 /** What a message drawn in the chat can reach: its pictures, the people, a fresh read of the chat. It stays the same
  * object while the chat is open, so a push renders no row through it. */

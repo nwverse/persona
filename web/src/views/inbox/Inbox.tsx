@@ -14,7 +14,7 @@ import { t } from "../../i18n";
 import { Button, cx, IconButton, Spinner } from "../../ui/atoms";
 import { ComposeDialog } from "./ComposeDialog";
 import { DetailPlaceholder, InboxDetail } from "./InboxDetail";
-import { LarkWriteGate } from "./LarkThread";
+import { LarkWriteGate } from "./lark-write-gate";
 import { InboxList } from "./InboxList";
 import { PolicyDialogHost } from "./PolicyDialog";
 import { FolderDialogHost } from "./InboxFolders";
