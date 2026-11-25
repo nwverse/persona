@@ -2297,7 +2297,13 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return live?.kind === "segment" ? live.seg : undefined;
   }, [lines]);
-  const processing = !sendFeedback && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
+  const hasFeedback = Boolean(
+    shownPending.some((p) => p.waits) ||
+    (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)),
+  );
+  // Keep empty-transcript "Loading chat" and inline "Processing…" mutually exclusive so at most one loader shows.
+  const loadingChat = tr.loading && !tr.items.length && !opening && !hasFeedback;
+  const processing = !hasFeedback && !loadingChat && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
     !liveSeg && (tr.loading || (opening && !tr.streaming));
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
@@ -2637,7 +2643,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
                 {t("chat-chatview.codex_waiting", { computer: machineName })}
               </p>
             )}
-            {tr.loading && !tr.items.length && !opening && (
+            {loadingChat && (
               <div className="flex justify-center py-16">
                 <Loading label={starting ? t("chat-chatview.preparing") : t("chat-chatview.loading_chat")} />
               </div>
@@ -2740,7 +2746,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               ) }))]
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
-            {(shownPending.some((p) => p.waits) || processing || (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0))) && (
+            {!loadingChat && (hasFeedback || processing) && (
               <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (processing ? "processing" : "sending")}>
                 {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>

@@ -69278,6 +69278,29 @@
         }
       }
     },
+    "Done earlier [To-dos List]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done earlier"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "それ以前に完了"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更早完成"
+          }
+        }
+      }
+    },
     "Done is listed by day [To-dos View]": {
       "extractionState": "manual",
       "localizations": {
@@ -69320,6 +69343,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "刚刚完成"
+          }
+        }
+      }
+    },
+    "Done this week [To-dos List]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done this week"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今週完了"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本周完成"
           }
         }
       }
@@ -69369,6 +69415,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Done yesterday [To-dos List]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done yesterday"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "昨日完了"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "昨天完成"
+          }
+        }
+      }
     },
     "Done · %@": {
       "localizations": {
@@ -161725,6 +161794,29 @@
       },
       "extractionState": "manual"
     },
+    "Search looks through the titles and notes of all your to-dos, including done ones. [To-dos Search]": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search looks through the titles and notes of all your to-dos, including done ones."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完了したものも含め、すべてのToDoのタイトルとメモから探します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "搜索范围是所有待办的标题和说明，已完成的也在内。"
+          }
+        }
+      }
+    },
     "Search in: %@": {
       "extractionState": "manual",
       "localizations": {
@@ -161744,29 +161836,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "検索範囲：%1$@"
-          }
-        }
-      }
-    },
-    "Search looks through the titles and notes of your open to-dos. [To-dos Search]": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Search looks through the titles and notes of your open to-dos."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "未完了のToDoのタイトルとメモから探します。"
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "搜索范围是未完成待办的标题和说明。"
           }
         }
       }

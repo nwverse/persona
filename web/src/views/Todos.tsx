@@ -127,6 +127,8 @@ import {
   slimSecondaryCue,
   type SlimCueTone,
 } from "../lib/todo-slim-row";
+import { DecisionQueuePanel, decisionQueueCandidates } from "../features/todos/DecisionQueuePanel";
+import { formatRowRepoGate, repoGateTone, shouldShowRowRepoGate, type RepoGateTone } from "../features/todos/repo-gate";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { stepsWords } from "../lib/todo-steps";
 import { useOwnerNeeds, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
@@ -413,6 +415,8 @@ function TodoListView({
   const [reorganizeSubmitting, setReorganizeSubmitting] = useState(false);
   const [reorganizeError, setReorganizeError] = useState<string | null>(null);
   const [reorganizeFeedback, setReorganizeFeedback] = useState<string | null>(null);
+  // Decision Queue modal strictly gated behind todos_v2 (#15757).
+  const [decisionQueueOpen, setDecisionQueueOpen] = useState(false);
 
   const exitReorganizeMode = useCallback(() => {
     setReorganizeMode(false);
@@ -647,6 +651,17 @@ function TodoListView({
       exitReorganizeMode();
     }
   }, [reorganizeMode, todosV2, calendarOn, requestMode, exitReorganizeMode]);
+
+  // Decision Queue candidates strictly from `needs_you` (`waiting` section) when todos_v2 is enabled (#15757).
+  const decisionQueueItems = useMemo(
+    () => (todosV2 ? decisionQueueCandidates(triageAll.sections.waiting.flatMap((g) => g.members)) : []),
+    [todosV2, triageAll.sections.waiting],
+  );
+  useEffect(() => {
+    if (decisionQueueOpen && (!todosV2 || boardOn || requestMode)) {
+      setDecisionQueueOpen(false);
+    }
+  }, [decisionQueueOpen, todosV2, boardOn, requestMode]);
 
   const reorganizeProps = useMemo(
     () =>
@@ -1216,6 +1231,24 @@ function TodoListView({
               />
             </div>
           ))}
+          {!boardOn && todosV2 && !requestMode && decisionQueueItems.length >= 2 && (
+            <div className="px-3 pb-2" data-testid="todos-decision-queue-strip">
+              <button
+                type="button"
+                data-testid="todos-decision-queue-open"
+                onClick={() => setDecisionQueueOpen(true)}
+                className="touch-hit flex w-full items-center justify-between gap-2 rounded-control border border-attention/30 bg-orange-tint px-2.5 py-1.5 text-left text-submeta font-medium text-attention transition-colors hover:brightness-95 focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <Icon name="hand" size={12} stroke={2.2} className="shrink-0" />
+                  <span className="truncate whitespace-nowrap">
+                    {t("todos.decision_queue_open", { count: decisionQueueItems.length })}
+                  </span>
+                </span>
+                <Icon name="chevron" size={11} className="shrink-0 -rotate-90 opacity-70" />
+              </button>
+            </div>
+          )}
           {!boardOn && todosV2 && !requestMode && sharedBlockers.length > 0 && (
             <SharedBlockersStrip
               blockers={sharedBlockers}
@@ -1598,6 +1631,15 @@ function TodoListView({
           todo={handoverTodo}
           machines={machines}
           onClose={() => setHandoverOpen(false)}
+        />
+      )}
+
+      {todosV2 && (
+        <DecisionQueuePanel
+          open={decisionQueueOpen}
+          items={decisionQueueItems}
+          onClose={() => setDecisionQueueOpen(false)}
+          onRefresh={refreshTodos}
         />
       )}
 
@@ -2582,6 +2624,14 @@ const TodoListItem = memo(function TodoListItem({
 
     const pr = prLink(todo.pr_status?.url ?? todo.pr_url);
     const repoCount = repoCountOf(todo);
+    const rowRepoGate = shouldShowRowRepoGate(todo.repo_gate) ? todo.repo_gate : undefined;
+    const rowRepoGateText = rowRepoGate ? formatRowRepoGate(rowRepoGate) : undefined;
+    const rowRepoGateToneClass: Record<RepoGateTone, string> = {
+      green: "text-green font-medium",
+      red: "text-red font-medium",
+      orange: "text-orange font-medium",
+      muted: "text-ink-3",
+    };
     const cue = slimSecondaryCue(todo, view, {
       effectiveSection,
       failedOpen,
@@ -2596,6 +2646,7 @@ const TodoListItem = memo(function TodoListItem({
       (goalSummary && goalSummary.blockedCount > 0) ||
       view.directionLabel ||
       view.projectLabel ||
+      rowRepoGate ||
       repoCount > 0 ||
       cue ||
       showSeenAction ||
@@ -2744,7 +2795,16 @@ const TodoListItem = memo(function TodoListItem({
                   {view.projectLabel}
                 </span>
               )}
-              {repoCount > 0 && (
+              {rowRepoGate && rowRepoGateText ? (
+                <span
+                  data-testid="todo-row-repo-gate"
+                  data-gate-state={rowRepoGate.state}
+                  title={rowRepoGateText}
+                  className={cx("max-w-44 shrink-0 truncate whitespace-nowrap tabular-nums", rowRepoGateToneClass[repoGateTone(rowRepoGate.state)])}
+                >
+                  {rowRepoGateText}
+                </span>
+              ) : repoCount > 0 && (
                 <span data-testid="todo-repo-count" className="shrink-0 whitespace-nowrap tabular-nums">
                   {t("todos.slim_repo_count", { count: repoCount })}
                 </span>
@@ -3949,6 +4009,7 @@ function TodoDetail({
       <ExternalSourcesEntry manager={todo.manager ?? defaultManager()} kind="todo" id={todo.id} title={todo.title}>
         <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
           prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2}
+          repoGate={todosV2 ? todo.repo_gate : undefined}
           onRepositoriesCount={todosV2 === true ? setRepositoryCount : undefined} />
       </ExternalSourcesEntry>
       {isWorkGoalV2 && childTodos.length > 0 && (
