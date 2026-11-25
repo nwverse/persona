@@ -509,6 +509,10 @@ func (n *Node) agyConversation(id, pane string) string {
 				n.agyBound = make(map[string]agyPaneBinding)
 			}
 			n.agyBound[pane] = next
+			if n.agyShown == nil {
+				n.agyShown = make(map[string]agyShown)
+			}
+			n.agyShown[id] = agyShown{conversation: next.conversation, at: time.Now()}
 		}
 		n.mu.Unlock()
 		return result
