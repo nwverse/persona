@@ -38,7 +38,7 @@ class ProcessScopeTests(unittest.TestCase):
         self.assertNotIn("/private", str(observation))
         self.assertNotIn(OTHER, str(observation))
 
-    def test_owned_launchd_debugger_before_host_is_retained_across_samples(self):
+    def test_owned_launchd_debugger_is_retained_when_its_short_lived_parent_exits(self):
         owned = f"/Library/Developer/CoreSimulator/Devices/{UDID}/Application/X/Persona.app/Persona"
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
         foreign_launcher = launcher.replace(UDID, OTHER)
@@ -47,7 +47,8 @@ class ProcessScopeTests(unittest.TestCase):
         snapshots = iter([
             "\n".join([line(46, 1, launcher), line(42, 46, "/usr/libexec/debugserver"),
                        line(47, 1, foreign_launcher), line(43, 47, "/usr/libexec/debugserver")]),
-            line(41, 46, owned, state="Ss"),
+            line(41, 46, owned, state="Ss") + "\n" + line(42, 1, "/usr/libexec/debugserver"),
+            line(41, 1, owned, state="Ss") + "\n" + line(42, 1, "/usr/libexec/debugserver"),
             line(41, 1, owned, state="Ss") + "\n" + line(42, 1, "/usr/libexec/debugserver"),
         ])
         def runner(*args, **kwargs):
@@ -58,7 +59,7 @@ class ProcessScopeTests(unittest.TestCase):
         third = visual.scoped_processes(UDID, runner, owned_debuggers)
         self.assertEqual(first["processes"], [{"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"}])
         self.assertEqual(second["processes"], [{"pid": 41, "ppid": 46, "state": "Ss", "name": "Persona"},
-                                               {"pid": 42, "state": "not-present", "name": "debugserver"}])
+                                               {"pid": 42, "ppid": 1, "state": "S", "name": "debugserver"}])
         self.assertIn({"pid": 42, "ppid": 1, "state": "S", "name": "debugserver"}, third["processes"])
         self.assertEqual(owned_debuggers, {42: START})
         self.assertNotIn("43", str(first) + str(second) + str(third))
@@ -86,6 +87,38 @@ class ProcessScopeTests(unittest.TestCase):
         self.assertNotIn(OTHER, str(first) + str(second) + str(reused))
         self.assertEqual(owned_debuggers, {}, "the rejected replacement is not retained as owned evidence")
 
+    def test_absent_equal_second_parent_one_replacement_cannot_publish_foreign_threads(self):
+        launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
+        original = (f" 46 1 {START} Ss {launcher}\n"
+                    f" 42 46 {START} S /usr/libexec/debugserver")
+        absent = f" 46 1 {START} Ss {launcher}"
+        replacement = f" 42 1 {START} S /usr/libexec/debugserver"
+        owned_debuggers = {}
+        visual.scoped_processes(UDID, lambda command, **kwargs:
+            subprocess.CompletedProcess(command, 0, original, ""), owned_debuggers)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            real_popen = subprocess.Popen
+            captures = []
+            def capture(command, **kwargs):
+                captures.append(command)
+                self.assertEqual(command, ["ps", "-M", "42"])
+                return real_popen([sys.executable, "-c", "print('foreign-thread-evidence')"], **kwargs)
+            with mock.patch.object(visual.watch.subprocess, "Popen", side_effect=capture):
+                missing = visual.sample_processes(UDID, output, 0, runner=lambda command, **kwargs:
+                    subprocess.CompletedProcess(command, 0, absent, ""), owned_debuggers=owned_debuggers)
+                replaced = visual.sample_processes(UDID, output, 1, runner=lambda command, **kwargs:
+                    subprocess.CompletedProcess(command, 0, replacement, ""), owned_debuggers=owned_debuggers)
+            self.assertEqual(missing["processes"], [
+                {"pid": 42, "state": "not-present", "name": "debugserver"}])
+            self.assertEqual(replaced["processes"], [],
+                             "an observed absence must end the parent-1 continuity exception")
+            self.assertEqual(captures, [])
+            self.assertEqual(owned_debuggers, {})
+            self.assertFalse((output / "process-001-debugserver-42-threads.txt").exists())
+            self.assertNotIn("foreign-thread-evidence", "".join(
+                path.read_text() for path in output.iterdir() if path.suffix != ".command"))
+
     def test_equal_second_reappeared_debugger_with_an_owned_launcher_is_new_evidence(self):
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
         snapshot = (f" 46 1 {START} Ss {launcher}\n"
@@ -101,22 +134,31 @@ class ProcessScopeTests(unittest.TestCase):
         launcher = f"/Library/Developer/CoreSimulator/Devices/{UDID}/ --launchd /usr/sbin/launchd_sim"
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            owned_debuggers = {42: START}
+            owned_debuggers = {}
             original = (f" 46 1 {START} Ss {launcher}\n"
                         f" 42 46 {START} S /usr/libexec/debugserver")
             reparented = f" 42 1 {START} S /usr/libexec/debugserver"
-            snapshots = iter([original, reparented, reparented, reparented, reparented])
-            def capture(command, path, **kwargs):
-                path.write_text("owned-thread-evidence\n")
-                path.with_suffix(path.suffix + ".status.txt").write_text("0\n")
-                return 0
-            with mock.patch.object(visual.watch, "bounded_file", side_effect=capture):
-                observation = visual.sample_processes(UDID, output, 0, runner=lambda command, **kwargs:
-                    subprocess.CompletedProcess(command, 0, next(snapshots), ""),
-                    owned_debuggers=owned_debuggers)
+            snapshots = iter([reparented, reparented, reparented])
+            real_popen = subprocess.Popen
+            captures = []
+            def capture(command, **kwargs):
+                captures.append(command)
+                self.assertEqual(command, ["ps", "-M", "42"])
+                return real_popen([sys.executable, "-c", "print('owned-thread-evidence')"], **kwargs)
+            def runner(command, **kwargs):
+                return subprocess.CompletedProcess(command, 0, next(snapshots), "")
+            visual.scoped_processes(UDID, runner=lambda command, **kwargs:
+                subprocess.CompletedProcess(command, 0, original, ""), owned_debuggers=owned_debuggers)
+            with mock.patch.object(visual.watch.subprocess, "Popen", side_effect=capture):
+                observation = visual.sample_processes(UDID, output, 0, runner=runner,
+                                                     owned_debuggers=owned_debuggers)
             self.assertEqual(observation["processes"], [
-                {"pid": 42, "ppid": 46, "state": "S", "name": "debugserver"}])
-            self.assertEqual((output / "process-000-debugserver-42-threads.txt.status.txt").read_text(), "0\n")
+                {"pid": 42, "ppid": 1, "state": "S", "name": "debugserver"}])
+            path = output / "process-000-debugserver-42-threads.txt"
+            self.assertEqual(path.read_text(), "owned-thread-evidence\n")
+            self.assertEqual(path.with_suffix(path.suffix + ".status.txt").read_text(), "0\n")
+            self.assertFalse(path.with_suffix(path.suffix + ".command").exists())
+            self.assertEqual(captures, [["ps", "-M", "42"]])
             self.assertEqual(owned_debuggers, {42: START})
 
     def test_reappeared_debugger_with_an_owned_launcher_is_new_evidence(self):

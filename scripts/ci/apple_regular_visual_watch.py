@@ -25,8 +25,9 @@ def scoped_processes(udid, runner=None, owned_debuggers=None, process_identities
     A debugger can precede its Persona target under this simulator's launchd. Keep
     that validated process for this invocation when its short-lived parent exits.
     The process start time distinguishes PID reuse; neither timestamp nor command
-    arguments are exported. A reappeared debugger with a new non-1 parent needs
-    current owned ancestry even when its one-second start timestamp is unchanged.
+    arguments are exported. Once a successful snapshot observes a debugger absent,
+    its continuous-presence retention ends; reappearing with parent 1 or the same
+    one-second start timestamp then requires current owned ancestry again.
     Private identities can be retained separately for the immediate thread check.
     """
     runner = runner or watch.subprocess.run
@@ -101,6 +102,10 @@ def scoped_processes(udid, runner=None, owned_debuggers=None, process_identities
                          if pid not in unowned and present_debuggers.get(pid) != owned_debuggers[pid]]
     processes.extend({"pid": pid, "state": "not-present", "name": "debugserver"}
                      for pid in missing_debuggers)
+    for pid in missing_debuggers:
+        # This observation ends continuous presence. Neither equal-second lstart
+        # nor parent 1 can transfer the old ownership to a later replacement.
+        owned_debuggers.pop(pid, None)
     return {"query_status": "completed", "processes": sorted(processes, key=lambda item: (item["name"], item["pid"]))}
 
 

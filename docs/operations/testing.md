@@ -218,10 +218,12 @@ The ordinary `AboutVersionRegularVisualTests` invocation has its own observation
 and `regular-visual-context.json`, recorded immediately before its unchanged `xcodebuild`. Its scoped stream therefore
 does not inherit the preceding readiness invocation's horizon. A 15-second sampler records only PID, parent PID, state
 and process name for the owned Persona host and a debugserver validated under it or its owned launchd_sim. A debugger
-first seen before the host remains associated with this invocation through its process start time, including when its
-launcher exits. If it reappears under a new non-1 parent, current owned ancestry is required even when the one-second
-`lstart` timestamp is unchanged; an equal timestamp alone cannot transfer ownership. The timestamp is internal only and
-never exported. Matching `ps -M` output is bounded and runs only after an immediate PID, start-time and ancestry check.
+first seen before the host remains associated with this invocation through its process start time while continuously
+present, including when its launcher exits. Once a successful snapshot observes it absent, or its identity is rejected,
+current owned ancestry is required before accepting it again. This applies even when its new parent is 1 or its
+one-second `lstart` timestamp is unchanged; an equal timestamp alone cannot transfer ownership. The timestamp is
+internal only and never exported. Matching `ps -M` output is bounded and runs only after an immediate PID, start-time
+and ancestry check.
 Each sample retains its own private identity snapshot while revalidation refreshes the shared current map. A process exit
 or a missing/changed identity at either check writes explicit unavailable evidence rather than aborting later sampling or
 final collection. A further check after temporary capture replaces a mismatching successful result with an explicit
