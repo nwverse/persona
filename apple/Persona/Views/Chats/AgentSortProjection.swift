@@ -229,7 +229,7 @@ nonisolated struct AgentSortComparable: Equatable, Sendable {
         switch settings.grouping {
         case "state":
             for (index, key) in AgentListOrder.stateKeys.enumerated() {
-                let members = live.filter { order.rank($0) == index }
+                let members = live.filter { order.section($0) == index }
                 guard !members.isEmpty else { continue }
                 let id = "state/\(key)"
                 let folded = isFolded(id, input: input, presentation: presentation)

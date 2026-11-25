@@ -1254,7 +1254,12 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// project → branch → agents with them (`RepoPlace`).
     var worktree: String? = nil
     var branch: String? = nil
+    /// The legacy state the hub still sends (`state`, frozen): read only by `AgentViewFallback` and the screens not yet
+    /// moved to `agentView` (docs/plans/plan-typed-core.md, P5b).
     var state: AgentState
+    /// Its five-phase view as the hub's manager computed it (`view`, docs/protocol/agent-states.md "Five phases"): nil
+    /// from a hub without `agent_view`. Read through `agentView`, which falls back to `AgentViewFallback`.
+    var view: AgentView? = nil
     var seenAt: Date?
     /// When the hub saw it enter its current state (`state_since`).
     var stateSince: Date? = nil
@@ -1389,24 +1394,20 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     /// Awaiting Reply (#5096): seen, stopped on a question to the user nobody answered yet, and not muted. The one rule
     /// for the lists' order and folds (`AgentListOrder.awaitsReply`) and for every word, color and question a row shows:
     /// a muted one is plain Seen everywhere, so callers say whether it is muted.
-    func awaitsYourReply(muted: Bool) -> Bool { state == .idle && awaitsReply && !muted }
-    func isJustFinished(muted: Bool) -> Bool { state == .idle && work?.justFinished == true && !muted }
+    func awaitsYourReply(muted: Bool) -> Bool { agentView.asksSeen && !muted }
+    func isJustFinished(muted: Bool) -> Bool { agentView.isJustFinished && !muted }
 
-    /// Group actions check mute preferences only for flagged idle rows.
+    /// Group actions check mute preferences only for flagged idle rows. Marking it seen changes nothing here: the hub's
+    /// next list says it is seen (an optimistic update never invents a state, docs/plans/plan-typed-core.md 2.4).
     func needsSeen(muted: @autoclosure () -> Bool = false) -> Bool {
-        state == .unread || (isJustFinished(muted: false) && !muted())
-    }
-
-    mutating func markLocallySeen() {
-        if state == .unread { state = .idle }
-        if work?.justFinished == true { work?.justFinished = nil }
+        agentView.isUnseen || (isJustFinished(muted: false) && !muted())
     }
 
     /// Waiting in the background (#6045): working, but all it runs is waiting. Shown apart from Working and lighter, and
     /// left out of Working's counts and filter; whatever acts on a working agent (stop, queue) still treats it as one.
     /// A list copy whose state was rewritten to working because a child is working is not waiting in the background.
     var waitsInBackground: Bool {
-        state == .working && backgroundWaiting && (children?.working ?? 0) == 0 && (children?.needsYou ?? 0) == 0
+        agentView.waitsInBackground && (children?.working ?? 0) == 0 && (children?.needsYou ?? 0) == 0
     }
     /// How many subagents the row says are running: its own reported count and its working folded children, once.
     var shownRunningChildren: Int { ChildSessions.shownRunning(self) }
@@ -1428,12 +1429,13 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     }
     /// The state counts and the quick filters go by: one that only waits in the background is counted with the quiet
     /// ones, not as Working (#6045).
-    var countedState: AgentState { waitsInBackground ? .idle : state }
+    /// Read off its view (`AgentView.legacyState`) for the screens that still take a legacy state.
+    var countedState: AgentState { waitsInBackground ? .idle : agentView.legacyState }
     /// Unique across groups; for the default group exactly what it always was.
     var id: String { (hubGroup.map { $0 + "|" } ?? "") + machineID + "/" + sessionID }
     /// What lists sort by, newest first: a working agent's updated_at moves on every step, so working ones keep
     /// the time they started working and stay put.
-    var sortDate: Date { (state == .working ? stateSince : nil) ?? updatedAt ?? .distantPast }
+    var sortDate: Date { (agentView.phase == .working ? stateSince : nil) ?? updatedAt ?? .distantPast }
     var key: SessionKey { SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
     /// The group it came from ("" = the default group).
@@ -1657,7 +1659,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case ultracode, ultracodeNote = "ultracode_note", ultracodePending = "ultracode_pending", ultracodeLostAt = "ultracode_lost_at"
         case repoRoot = "repo_root", worktree, branch
         case machineID = "machine_id", sessionID = "session_id", paneID = "pane_id", tabID = "tab_id",
-             workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state,
+             workspaceID = "workspace_id", agentName = "agent_name", startedByPersona = "started_by_persona", assistant, archived, state, view,
              assistantSpace = "space",
              spaceKind = "space_kind", host, spaceID = "space_id", spaceName = "space_name", spaceIndex = "space_index", parentSpaceID = "parent_space_id",
              slotID = "slot_id", slotName = "slot_name", slotIndex = "slot_index", paneIndex = "pane_index", seenAt = "seen_at", stateSince = "state_since", queued, background, loop, goal, subagents, workflows, ports,
@@ -1774,6 +1776,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         workflows = (try? c.decodeIfPresent([Lossy<WorkflowRun>].self, forKey: .workflows))?.compactMap(\.value)
         ports = try c.decodeIfPresent([ListeningPort].self, forKey: .ports)
         state = try c.decodeIfPresent(AgentState.self, forKey: .state) ?? AgentState(status: status)
+        // An odd view never drops the session: the row falls back to `AgentViewFallback`.
+        view = (try? c.decodeIfPresent(AgentView.self, forKey: .view)).flatMap { $0 }
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
         lastText = try c.decodeIfPresent(String.self, forKey: .lastText)
         asks = (try? c.decodeIfPresent(String.self, forKey: .asks)).flatMap { $0 } // an odd one never drops the session
@@ -2386,7 +2390,7 @@ extension Session {
     }
 
     /// Idle or unclassified: folded away in busy spaces (an Awaiting Reply one stays out: `AgentListOrder.stays`).
-    nonisolated var isQuiet: Bool { state == .idle || state == .unknown }
+    nonisolated var isQuiet: Bool { agentView.isQuiet }
 }
 
 /// Unified agent state (docs/protocol/agent-states.md), computed by the hub from herdr status, pending interactions and

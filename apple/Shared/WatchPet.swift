@@ -41,12 +41,13 @@ nonisolated enum WatchPet {
     static func status(sessions: [Session], interactions: [Interaction], unreachable: Bool, partlyUnreachable: Bool,
                        now: Date = .now, calendar: Calendar = .current) -> WatchPetStatus {
         if unreachable { return WatchPetStatus(state: .offline) }
-        // A card its task's supervisor holds (`Interaction.supervisorHeld`) is the supervisor's, not the user's:
-        // neither the card nor a session in Needs You whose pending cards here are all held makes the frog wait
-        // (`AgentsNeedsYou.rows`, D11). That session is still working under its supervisor.
+        // Each session as its five-phase view says (`Session.agentView`). A card its task's supervisor holds
+        // (`Interaction.supervisorHeld`) is the supervisor's, not the user's: neither the card nor a session whose pending
+        // cards here are all held makes the frog wait (D11); the hub's view says that session works under its
+        // supervisor, and the fallback for a hub without views is told so (`AgentViewFallback.Row.supervised`).
         var held: Set<SessionKey> = []
         var open: Set<SessionKey> = []
-        let waitingKeys = Set(sessions.filter { $0.state == .needsYou }.map(\.key))
+        let waitingKeys = Set(sessions.filter { $0.agentView.phase == .needsYou }.map(\.key))
         for ix in interactions {
             // A folded child's or side's card belongs to its parent row when that parent is waiting (`AgentsNeedsYou.rows`).
             let home = SessionKey(group: ix.group, machineID: ix.machineID, sessionID: ix.requestHome)
@@ -58,12 +59,15 @@ nonisolated enum WatchPet {
             open.insert(key)
         }
         let heldOnly = held.subtracting(open)
-        let waiting = open.union(sessions.filter { $0.state == .needsYou && !heldOnly.contains($0.key) }.map(\.key))
+        let views = sessions.map { s in
+            (key: s.key, view: s.view ?? AgentViewFallback.view(s, row: heldOnly.contains(s.key) ? .supervised : AgentViewFallback.ownRow(s), muted: false))
+        }
+        let waiting = open.union(views.filter { $0.view.phase == .needsYou }.map(\.key))
         if !waiting.isEmpty { return WatchPetStatus(state: .needsYou, count: waiting.count) }
-        let working = sessions.filter { $0.state == .working || ($0.state == .needsYou && heldOnly.contains($0.key)) }.count
+        let working = views.filter { $0.view.phase == .working }.count
         if working > 0 { return WatchPetStatus(state: .working, count: working) }
         if partlyUnreachable { return WatchPetStatus(state: .offline) }
-        let finished = sessions.filter { $0.state == .unread }.count
+        let finished = views.filter { $0.view.isUnseen }.count
         if finished > 0 { return WatchPetStatus(state: .done, count: finished) }
         return WatchPetStatus(state: isNight(now, calendar: calendar) ? .sleep : .idle)
     }

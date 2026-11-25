@@ -4188,12 +4188,14 @@ final class AppModel {
     /// The user looked at this session: finished work stops being "unread" (docs/protocol/agent-states.md).
     func markSeen(_ key: SessionKey) {
         sendSeen(key)
-        // Optimistic: flip the local copy right away (in `sessionsByMachine`, `childIndex`, or both on paged hubs).
+        // The rows keep the state the hub gave them until its next list says they are seen: an optimistic update never
+        // invents a state (docs/plans/plan-typed-core.md 2.4). Only the place a row was shown in is held here.
         var machineChanged = false
-        if var list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }),
+        if let list = sessionsByMachine[key.machineRef], let i = list.firstIndex(where: { $0.sessionID == key.sessionID }),
            list[i].needsSeen() {
-            if list[i].state == .unread || list[i].showsJustFinished(muted: isMuted(list[i])) {
-                let place: AgentListOrder.Held = list[i].state == .idle ? .justFinished : .unread
+            let unseen = list[i].agentView.isUnseen
+            if unseen || list[i].showsJustFinished(muted: isMuted(list[i])) {
+                let place: AgentListOrder.Held = unseen ? .unread : .justFinished
                 if key == visibleSession {
                     heldInList = key
                     heldJustFinished = place == .justFinished
@@ -4206,13 +4208,9 @@ final class AppModel {
                     if seenThisVisit[key] != place { seenThisVisit[key] = place }
                 }
             }
-            list[i].markLocallySeen()
-            sessionsByMachine[key.machineRef] = list
             machineChanged = true
         }
-        let childChanged = childIndex.markLocallySeen([key])
-        if childChanged && !machineChanged { sessionsChanged() }
-        if machineChanged || childChanged {
+        if machineChanged {
             seenRevision &+= 1
             sessionLists.markSeen([key], model: self)
         }
@@ -4329,23 +4327,6 @@ final class AppModel {
         let unread = keys.filter { key in sessionIndex[key].map { $0.needsSeen(muted: isMuted($0)) } == true }
         guard !unread.isEmpty else { return }
         for key in unread { sendSeen(key) }
-        var lists = sessionsByMachine
-        var machinesChanged = false
-        for (machine, keys) in Dictionary(grouping: unread, by: \.machineRef) {
-            guard var list = lists[machine] else { continue }
-            var remaining = Set(keys.map(\.sessionID))
-            for i in list.indices {
-                if remaining.isEmpty { break }
-                if remaining.remove(list[i].sessionID) != nil {
-                    list[i].markLocallySeen()
-                    machinesChanged = true
-                }
-            }
-            lists[machine] = list
-        }
-        if machinesChanged { sessionsByMachine = lists }
-        let childrenChanged = childIndex.markLocallySeen(Set(unread))
-        if childrenChanged && !machinesChanged { sessionsChanged() }
         seenRevision &+= 1
         sessionLists.markSeen(unread, model: self)
         Haptics.success()
@@ -4580,6 +4561,7 @@ final class AppModel {
                 copy.title = copy.title.hasPrefix(prefix) || copy.title.hasPrefix("分支 · ") ? copy.title : prefix + copy.title // i18n-ignore
                 copy.status = .offline
                 copy.state = .offline
+                copy.view = nil // a copy is not the original's view: the fallback reads it as not running
                 copy.paneID = nil // offline, in no tab: the header shows its own name, not the original's place
                 copy.tabID = nil
                 copy.workspaceID = nil
@@ -4663,6 +4645,7 @@ final class AppModel {
                     var item = item
                     item.status = .offline
                     item.state = .offline
+                    item.view = nil // closed: the hub's view of it is gone; the fallback reads it as not running
                     return item
                 }
             }
@@ -5260,7 +5243,7 @@ final class AppModel {
         // projection as its cards.
         let waitingNow = waitingRows(scoped(allSessions), reading: session)
         b.agents = AgentsNeedsYou.badge(AgentsNeedsYou.rows(cards: scopedInteractions, waiting: AgentsNeedsYou.waiting(waitingNow)),
-                                        place: place)
+                                        session: { self.sessionIndex[$0] }, place: place)
         if b != badges { badges = b }
         let waiting = waitingAgents()
         if waiting != assistantWaiting { assistantWaiting = waiting }

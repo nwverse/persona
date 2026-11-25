@@ -488,7 +488,7 @@ struct SlotCard: View {
                         .padding(.vertical, 2.5)
                         .background(tone.tint, in: .capsule)
                     Spacer(minLength: 4)
-                    StatusDot(state: session.state, size: 9, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
+                    StatusDot(session: session, size: 9, muted: muted)
                 }
             }
             Text(session.displayTitle(preferTab: preferHerdrTabName)).font(Theme.Font.secondaryStrong).lineLimit(2)
@@ -522,7 +522,7 @@ struct SlotCard: View {
             // Beside its tab mates the tab's chip names the agent already.
             if agent, pane == nil, tabChip != session.agentLabel { Chip(text: session.agentLabel, look: .outline) }
             Spacer(minLength: 4)
-            StatusDot(state: session.state, size: 9, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
+            StatusDot(session: session, size: 9, muted: muted)
         }
     }
 }

@@ -29,6 +29,9 @@ nonisolated enum StatusPalette {
     static let backgroundWaiting = StatusTone(dot: working.dot.opacity(0.6), text: .secondary, tint: working.dot.opacity(0.08))
     /// A card that waits for you (the Agents list's State Cards, #2530): Needs You's blue, washed out.
     static let needsYouWash = Palette.systemBlue.opacity(0.1)
+    /// Error (docs/protocol/agent-states.md "Five phases"): a model error, a usage limit, a refused start or an interrupted
+    /// run stopped its work until the owner acts. Red, dark enough for small text.
+    static let error = StatusTone(dot: Color(light: 0xD1342C, dark: 0xFF6961), text: Color(light: 0xB3261E, dark: 0xFF6961))
     /// Seen / Unknown.
     static let idle = StatusTone(dot: Color.secondary.opacity(0.55), text: .secondary, tint: Color.secondary.opacity(0.12))
     /// Not running.

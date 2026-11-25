@@ -130,18 +130,23 @@ nonisolated enum AssistantEntries {
         var interrupted = false, limit = false, unread = false, working = false, waiting = false
         for a in active {
             if let e = a.startError, !e.isEmpty { continue } // a failed start counts as stopped
-            let s = lookup?(a.machineID, a.sessionID)
-            let st = s?.state ?? .offline
-            if st == .needsYou { return .needsYou }
-            let stopped = st == .unread || st == .idle
-            let error = !(s?.turnError ?? "").isEmpty
-            if error, s?.turnErrorKind == "usage_limit", stopped { limit = true }
-            else if error, stopped, TurnErrorReason.invalid(s) { interrupted = true }
-            else if active.count > 1, st != .working, s?.waitsToBeWoken == true { waiting = true }
-            else if error, stopped { interrupted = true }
-            else if st == .unread { unread = true }
-            else if s?.waitsToBeWoken == true { waiting = true }
-            else if st == .working || s?.starting == true { working = true }
+            // Where each Agent stands is its five-phase view (`Session.agentView`): an error stops the task, a usage
+            // limit says so, a finished turn nobody saw is unread.
+            guard let s = lookup?(a.machineID, a.sessionID) else { continue }
+            let view = s.agentView
+            switch view.phase {
+            case .needsYou: return .needsYou
+            case .error:
+                if case .usageLimit = view.reason { limit = true } else { interrupted = true }
+            case .working:
+                if s.waitsToBeWoken { waiting = true } else { working = true }
+            case .done:
+                if active.count > 1, s.waitsToBeWoken { waiting = true }
+                else if view.isUnseen { unread = true }
+                else if s.waitsToBeWoken { waiting = true }
+            case .idle, .unknown:
+                if s.waitsToBeWoken { waiting = true } else if s.starting == true { working = true }
+            }
         }
         if interrupted, !working, !waiting, todo.supervision?.state != "parked" { return .interrupted }
         if limit { return .usageLimit }

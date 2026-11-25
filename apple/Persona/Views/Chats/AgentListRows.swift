@@ -77,9 +77,9 @@ struct AgentListRows {
         return own + w.children.flatMap(worktree)
     }
 
-    /// By Status: a section per rank, each foldable (Seen starts folded).
+    /// By Status: a section per phase, each foldable (Idle starts folded).
     func states(_ live: [Session]) -> [Session] {
-        let byRank = Dictionary(grouping: live, by: order.rank)
+        let byRank = Dictionary(grouping: live, by: order.section)
         return AgentListOrder.stateKeys.indices.flatMap { i in
             folded("state/" + AgentListOrder.stateKeys[i]) ? [] : order.ordered(byRank[i] ?? [])
         }

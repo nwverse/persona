@@ -529,27 +529,6 @@ struct FetchHint: Equatable {
         put(parent, ChildSessions.merge(held: heldNow[parent] ?? [], changes: [child], removals: [], baseline: false))
     }
 
-    /// Flip any held folded child/side matching `keys` to locally seen immediately (#13524): on a paged hub a side row
-    /// lives here rather than in `sessionsByMachine`, so marking it seen updates its parent's folded state at once.
-    @discardableResult
-    func markLocallySeen(_ keys: Set<SessionKey>) -> Bool {
-        guard !keys.isEmpty else { return false }
-        var changed = false
-        for (parent, rows) in heldNow {
-            var updated = rows
-            var rowChanged = false
-            for i in updated.indices where keys.contains(updated[i].key) && updated[i].needsSeen() {
-                updated[i].markLocallySeen()
-                rowChanged = true
-            }
-            if rowChanged {
-                put(parent, updated)
-                changed = true
-            }
-        }
-        return changed
-    }
-
     /// One read of the parent's children. `since` follows the checkpoint. A 409 `revision_expired` reads once more
     /// from the start. Any other failure keeps the checkpoint. No timer: the caller asks on `sessions_list`.
     func refresh(parent: SessionKey, api: APIClient, transform: ([Session]) -> [Session] = { $0 }) async {

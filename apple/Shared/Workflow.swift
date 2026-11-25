@@ -530,24 +530,24 @@ extension Session {
         isJustFinished(muted: muted) && !awaitsReply && !isWaiting
     }
 
-    /// The underlying state word and its background qualifier; review words additionally require the mute preference.
-    var stateLabel: String {
-        if waitsInBackground { return String(localized: "Waiting in the background") }
-        return isBackgroundWorking ? String(localized: "Working (Background)") : state.label
-    }
+    /// The row's word for where it stands: its view's reason (`AgentView.reasonText`), the phase being its section's
+    /// heading, with the background qualifiers. This plain one reads as a muted row's would: a finished turn's review
+    /// words additionally require the mute preference.
+    var stateLabel: String { stateLabel(muted: true) }
     /// The list word, including an unmuted pending reply or recently finished turn.
     func stateLabel(muted: Bool) -> String {
-        if awaitsYourReply(muted: muted) { return StateName.awaitsReply.text }
-        if showsJustFinished(muted: muted) { return StateName.justFinished.text }
-        return stateLabel
+        if waitsInBackground { return AgentViewWords.backgroundWaiting }
+        if isBackgroundWorking { return AgentViewWords.backgroundWorking }
+        let view = agentView
+        return view.reasonText(muted: muted || (view.isJustFinished && isWaiting))
     }
-    /// The colors of `stateLabel`: Waiting in the Background lighter (`StatusPalette.backgroundWaiting`), else the state's.
-    var stateTone: StatusTone { waitsInBackground ? StatusPalette.backgroundWaiting : state.tone }
+    /// The colors of `stateLabel`: Waiting in the Background lighter (`StatusPalette.backgroundWaiting`), else the view's.
+    var stateTone: StatusTone { stateTone(muted: true) }
     /// The list tone follows the same review priority as the word.
     func stateTone(muted: Bool) -> StatusTone {
-        if awaitsYourReply(muted: muted) { return StatusPalette.awaitingReply }
-        if showsJustFinished(muted: muted) { return StatusPalette.unread }
-        return stateTone
+        if waitsInBackground { return StatusPalette.backgroundWaiting }
+        let view = agentView
+        return view.tone(muted: muted || (view.isJustFinished && isWaiting))
     }
 }
 

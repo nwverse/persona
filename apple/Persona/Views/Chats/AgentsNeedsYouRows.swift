@@ -75,10 +75,43 @@ nonisolated extension AgentsNeedsYou {
         ChildSessions.fold(sessions.filter { $0.hiddenByDirectory != true }).filter { !$0.assistant && $0.countedState == .needsYou }
     }
 
-    /// The Agents tab's badge: its rows less the ones that are not the tab's to announce (`TabBadges.place`): the
-    /// muted agents and spaces, and a quiet task's agents, which the main conversation tells about.
-    static func badge(_ rows: [Row], place: (SessionKey) -> TabBadges.Place) -> Int {
-        rows.count { place($0.key) == .agents }
+    /// The Agents tab's badge: its rows less the ones that are not the tab's to announce (`counts`).
+    static func badge(_ rows: [Row], session: (SessionKey) -> Session? = { _ in nil },
+                      place: (SessionKey) -> TabBadges.Place) -> Int {
+        rows.count { counts($0, session: session, place: place) }
+    }
+
+    /// Whether a row counts in the Agents tab's Needs you: a session the hub sent a view for counts exactly when its view
+    /// says so (`AgentView.counted`, fleetcount's decision, never recomputed); for a sessionless card and a hub without
+    /// `agent_view`, the rows that are the tab's to announce (`TabBadges.place`): no muted agents and spaces, and no
+    /// quiet task's agents, which the main conversation tells about.
+    static func counts(_ row: Row, session: (SessionKey) -> Session?, place: (SessionKey) -> TabBadges.Place) -> Bool {
+        if let view = session(row.key)?.view { return view.counted == true }
+        return place(row.key) == .agents
+    }
+
+    /// The row each session of `sessions` is in, as the hub's fleetcount decides it, for a hub that sends no view
+    /// (`AgentViewFallback.Row`): `rows` (all of them, `rows(cards:waiting:)`) and its `counted` subset, and the pending
+    /// `cards` (supervisor-held ones included). Replayed against spec/fixtures/agent-view.
+    static func fallbackRows(_ sessions: [Session], rows: [Row], counted: [Row], cards: [Interaction]) -> [SessionKey: AgentViewFallback.Row] {
+        let countedKeys = Set(counted.map(\.key))
+        var out: [SessionKey: AgentViewFallback.Row] = [:]
+        for r in rows {
+            if r.cards.first?.isSessionless == true { continue }
+            let owners = r.cards.contains { $0.delegating != true }
+            // A row none of whose cards is the owner's yet (all questions the assistant still decides on) counts nowhere
+            // on the hub (D11), though this app's badge still counts it for a hub without views (the needs-you
+            // fixture's known difference).
+            out[r.key] = r.cards.isEmpty ? .dialog(counted: countedKeys.contains(r.key))
+                : .cards(n: r.cards.count, held: !owners, counted: owners && countedKeys.contains(r.key))
+        }
+        for s in sessions where out[s.key] == nil {
+            let own = cards.filter { !$0.isSessionless && $0.sessionKey == s.key }
+            if own.isEmpty { out[s.key] = AgentViewFallback.Row.noRow; continue }
+            if own.allSatisfy(\.supervisorHeld) { out[s.key] = .supervised; continue }
+            out[s.key] = .elsewhere(n: own.count, held: !own.contains { $0.delegating != true })
+        }
+        return out
     }
 }
 

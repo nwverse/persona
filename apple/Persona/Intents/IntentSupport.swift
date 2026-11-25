@@ -260,7 +260,7 @@ nonisolated enum IntentPicker {
     /// left out, by the same rule as the waiting cards (`TabBadges.place`).
     static func working(_ sessions: [Session], mutes: [String: Pins]) -> Int {
         sessions.filter { s in
-            s.state == .working && TabBadges.place(s.key, session: s, quiet: s.quiet, mutes: mutes[s.group]) == .agents
+            s.agentView.phase == .working && TabBadges.place(s.key, session: s, quiet: s.quiet, mutes: mutes[s.group]) == .agents
         }.count
     }
 

@@ -37,12 +37,13 @@ nonisolated struct AgentListOrder {
     }
 
     func justFinished(_ s: Session) -> Bool {
-        guard s.isJustFinished(muted: false) || (heldPlace(s) == .justFinished && s.state == .idle) else { return false }
+        guard s.isJustFinished(muted: false) || (heldPlace(s) == .justFinished && s.agentView.isSeen) else { return false }
         return !isMuted(s)
     }
 
-    /// The sections of By Status, in rank order.
-    static let stateKeys = ["needs", "unread", "awaiting", "working", "background", "just_finished", "waiting", "muted", "idle"]
+    /// The sections of By Status, in rank order: the five phases (docs/protocol/agent-states.md "Five phases"), a muted
+    /// row last in its own phase.
+    static let stateKeys = AgentPhaseSection.allCases.map(\.key)
 
     /// Awaiting Reply (#5096): seen, stopped on a question nobody answered yet, and not muted (a muted one folds with
     /// the idle ones, as it did before). The one rule is `Session.awaitsYourReply(muted:)`, which the rows use too.
@@ -54,25 +55,20 @@ nonisolated struct AgentListOrder {
         !s.isQuiet || heldPlace(s) == .unread || isPinned(s.key) || s.isWaiting || awaitsReply(s) || justFinished(s)
     }
 
-    /// One order for every grouping (inside a space, a machine, and the sections of By Status):
-    /// Needs You → Unread → Awaiting Reply → Working → Waiting in the Background (`Session.waitsInBackground`, #6045) →
-    /// Just finished → Waiting → Muted → Seen. Muted agents that are working, finished-unread or waiting rank as Muted; one that needs
-    /// you stays first. The index into `stateKeys`.
+    /// One order for every grouping (inside a space, a machine, and the sections of By Status): the view's rank
+    /// (`AgentView.rank`, docs/protocol/agent-states.md "Rank"), which the hub computes for every client: needs you, error,
+    /// working, done, idle, a muted one last in its phase. The app sorts by it and never derives its own; a row held in
+    /// the place it was shown in (`heldPlace`) keeps Done's place for it while it is seen.
     func rank(_ s: Session) -> Int {
-        if s.state == .needsYou { return 0 }
-        let unread = s.state == .unread || (heldPlace(s) == .unread && s.isQuiet)
-        let live = s.state == .working || unread || s.isWaiting
-        if live && isMuted(s) { return 7 }
-        if unread { return 1 }
-        if awaitsReply(s) { return 2 }
-        switch s.state {
-        case .unread: return 1
-        case .working: return s.waitsInBackground ? 4 : 3
-        default:
-            if s.isWaiting { return 6 }
-            return justFinished(s) ? 5 : 8
-        }
+        let muted = isMuted(s)
+        let view = s.agentView(muted: muted)
+        guard view.isQuiet, let place = heldPlace(s) else { return view.rank }
+        let held = place == .unread ? AgentViewFallback.Rank.doneUnseen : AgentViewFallback.Rank.doneJustFinished
+        return muted ? AgentViewFallback.Rank.muted(held) : held
     }
+
+    /// The By Status section `s` is listed in: its rank's phase, an index into `stateKeys`.
+    func section(_ s: Session) -> Int { AgentPhaseSection(rank: rank(s)).rawValue }
 
     /// By rank, then the most recently updated (working: most recently started) first, then by session id and, for the
     /// same session id on two machines, by the complete id (hub group, machine, session), so equal times never swap
@@ -119,10 +115,10 @@ nonisolated struct AgentListOrder {
 
     /// The fold ids of the sections shown now (Collapse All): one per machine with live agents, or one per rank in use.
     func sectionIDs(_ sessions: [Session], byMachine: Bool) -> [String] {
-        let live = sessions.filter { $0.state.isLive }
+        let live = sessions.filter { $0.agentView.legacyState.isLive }
         if byMachine { return Set(live.map(\.machineRef.path)).map { "machine/" + $0 } }
-        let ranks = Set(live.map(rank))
-        return Self.stateKeys.enumerated().filter { ranks.contains($0.offset) }.map { "state/" + $0.element }
+        let sections = Set(live.map(section))
+        return Self.stateKeys.enumerated().filter { sections.contains($0.offset) }.map { "state/" + $0.element }
     }
 }
 

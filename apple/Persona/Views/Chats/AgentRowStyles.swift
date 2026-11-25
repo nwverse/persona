@@ -105,7 +105,7 @@ struct AgentAvatar: View {
             .background(Theme.Fill.well, in: Circle())
             .overlay(alignment: .bottomTrailing) {
                 if dot {
-                    StatusDot(state: session.state, size: dense ? Theme.Size.dot : Theme.Size.dotXL, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
+                    StatusDot(session: session, size: dense ? Theme.Size.dot : Theme.Size.dotXL, muted: muted)
                         .padding(Theme.Size.rule)
                         .background(Theme.card, in: Circle())
                         .offset(x: Theme.Size.rule, y: Theme.Size.rule)
@@ -125,16 +125,16 @@ extension SlotRow {
     }
 
     /// Spelled out at the end of the latest words (A) or before them (B): the agent waits for you.
-    var needsYouPill: Bool { session.state == .needsYou && !muted && !hideState && !pendingCount }
+    var needsYouPill: Bool { session.agentView.phase == .needsYou && !muted && !hideState && !pendingCount }
 
     @MainActor private var needsYouChip: some View {
-        Chip(text: session.state.label, look: .tint(StatusPalette.needsYou.text), compact: true)
+        Chip(text: AgentViewWords.needsYou, look: .tint(StatusPalette.needsYou.text), compact: true)
             .fixedSize()
     }
 
     @MainActor private var titleText: some View {
         UltracodeMark.after(rowTitle, on: ultracodeMark)
-            .font(session.state == .unread ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
+            .font(session.agentView.isUnseen ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
             .lineLimit(1)
             .animation(UltracodeMark.motion, value: ultracodeMark)
     }
@@ -216,7 +216,7 @@ extension SlotRow {
 
     @MainActor private var twoLineRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            if dot { StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted)) }
+            if dot { StatusDot(session: session, size: Theme.Size.dot, muted: muted) }
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 TimeBesideOrUnder {
                     HStack(spacing: Theme.Space.xs) {
@@ -257,9 +257,10 @@ extension SlotRow {
 
     @MainActor private var cardRow: some View {
         let tone = session.stateTone(muted: muted)
-        let waits = session.state == .needsYou && !muted
+        let view = session.agentView
+        let waits = view.phase == .needsYou && !muted
         // Its state in words, but not a quiet one's (Seen) nor where the section says it.
-        let word = hideState || muted || (session.state == .idle && !showsReviewWord) ? nil : session.stateLabel(muted: muted)
+        let word = hideState || muted || (view.isSeen && !showsReviewWord) ? nil : session.stateLabel(muted: muted)
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             TimeBesideOrUnder {
                 HStack(spacing: Theme.Space.xs) {

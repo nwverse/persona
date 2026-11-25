@@ -2726,31 +2726,27 @@ private struct AgentsList: View {
     private func rank(_ s: Session) -> Int { order.rank(s) }
     private func ordered(_ list: [Session]) -> [Session] { order.ordered(list) }
 
-    private static let stateTitles: [(key: String, title: String, tint: StatusTone)] = [
-        ("needs", StateName.needsYou.text, StatusPalette.needsYou), ("unread", StateName.unread.text, StatusPalette.unread),
-        ("awaiting", StateName.awaitsReply.text, StatusPalette.awaitingReply),
-        ("working", StateName.working.text, StatusPalette.working),
-        ("background", String(localized: "Waiting in the background"), StatusPalette.backgroundWaiting),
-        ("just_finished", StateName.justFinished.text, StatusPalette.unread),
-        ("waiting", StateName.waiting.text, StatusTone(dot: Theme.loop, text: Theme.loop)),
-        ("muted", String(localized: "Muted [Chats View b66705]"), StatusPalette.idle), ("idle", StateName.seen.text, StatusPalette.idle),
-    ]
+    /// By Status's sections: the five phases (docs/protocol/agent-states.md "Five phases"), in rank order.
+    private static var stateTitles: [(key: String, title: String, tint: StatusTone)] {
+        AgentPhaseSection.allCases.map { (key: $0.key, title: $0.title, tint: $0.tone) }
+    }
 
     /// The fold ids of the sections By Status / By Machine shows now (Collapse All).
     private func sectionIDs(_ sessions: [Session]) -> [String] { order.sectionIDs(sessions, byMachine: grouping == .machine) }
 
     private func stateSectionCount(_ key: String, loaded: Int) -> Int {
-        let filters: [String: AgentFilter] = ["needs": .needsYou, "unread": .unread, "working": .working]
+        let filters: [String: AgentFilter] = ["needs": .needsYou, "working": .working]
         guard model.sessionLists.paged, let filter = filters[key] else { return loaded }
         return model.sessionLists.stateCounts?[filter] ?? 0
     }
 
-    /// A section per rank (`rank`); Seen starts folded, it is the long tail, and its header is its one fold: no
-    /// "N more idle" row inside it as well (2026-10-31: it took two taps where the other states take one). Waiting: nothing new
-    /// yet, but a /loop or background work will bring some.
+    /// A section per phase (`AgentListOrder.section`), its rows by the view's rank; Idle starts folded, it is the long
+    /// tail, and its header is its one fold: no "N more idle" row inside it as well (2026-10-31: it took two taps where
+    /// the other states take one). Error, Done and Idle rows say their reason under the phase; Needs You and Working
+    /// ones need no word, the section says it.
     @ViewBuilder private func stateSections(_ live: [Session]) -> some View {
         let order = self.order
-        let byRank = Dictionary(grouping: live, by: order.rank)
+        let byRank = Dictionary(grouping: live, by: order.section)
         let buckets = Self.stateTitles.enumerated().map { i, t in (key: t.key, title: t.title, rows: byRank[i] ?? [], tint: t.tint) }
         // Rows read during this visit and kept in place, drawn as Seen (#12514): not counted, a section counts what is still
         // in its state, and its Clear Seen lets them go, all but the one whose chat is open (it goes when it is left). With
@@ -2766,11 +2762,10 @@ private struct AgentsList: View {
             if !rows.isEmpty {
                 listSection(foldable: true) {
                     if isFolded(id) {
-                    } else if b.key == "idle" {
-                        cappedRows(rows, key: id) { s in slotRow(s, context: true, inStateSection: true) }
                     } else {
-                        // Muted mixes states: each row says its own. Loops and background work stay off the rows (the chat shows them).
-                        cappedRows(rows, key: id) { s in slotRow(s, context: true, inStateSection: b.key != "muted") }
+                        // A phase with several reasons says each row's; loops and background work stay off the rows (the chat shows them).
+                        let says = b.key == AgentPhaseSection.needsYou.key || b.key == AgentPhaseSection.working.key
+                        cappedRows(rows, key: id) { s in slotRow(s, context: true, inStateSection: says) }
                     }
                 } header: {
                     stateSectionHeader(key: b.key, id: id, title: b.title, count: stateSectionCount(b.key, loaded: counted),
@@ -2792,8 +2787,7 @@ private struct AgentsList: View {
                 FoldButton(title: title, folded: isFolded(id),
                            detail: String(localized: "\(count) [Chats View cb60bd]"),
                            topPadding: topPadding, bottomPadding: bottomPadding) { toggleFold(id) } label: {
-                    SectionHeader(title: title, count: count, tone: tint,
-                                  symbol: key == "background" ? Theme.Icon.backgroundWaiting : nil)
+                    SectionHeader(title: title, count: count, tone: tint, symbol: nil)
                 }
                 .accessibilityIdentifier("agents.section")
             } else {
@@ -2802,15 +2796,14 @@ private struct AgentsList: View {
                            identifier: "agents.section",
                            topPadding: topPadding, bottomPadding: bottomPadding,
                            action: { toggleFold(id) }) {
-                    SectionHeader(title: title, count: count, tone: tint,
-                                  symbol: key == "background" ? Theme.Icon.backgroundWaiting : nil)
+                    SectionHeader(title: title, count: count, tone: tint, symbol: nil)
                 } accessory: {
                     clearSeenButton(seen)
                 }
             }
         }
         .modifier(FoldAnchor(id: id, reader: feed.reader))
-        if key == "just_finished" {
+        if key == AgentPhaseSection.done.key {
             header.contextMenu {
                 if rows.contains(where: { $0.needsSeen() }) {
                     Button { model.markSeen(rows.map(\.key)) } label: {

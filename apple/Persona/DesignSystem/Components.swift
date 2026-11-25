@@ -10,6 +10,8 @@ struct StatusDot: View {
     /// It only waits in the background (`Session.waitsInBackground`).
     var waiting = false
     var justFinished = false
+    /// Its view's phase is error (docs/protocol/agent-states.md "Five phases"): a red dot.
+    var error = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The needs-you ring: one breath every `breath` seconds, out to `1 + breathScale` times the dot as it fades.
@@ -44,11 +46,21 @@ struct StatusDot: View {
                         .accessibilityHidden(true)
                     }
             } else {
-                Circle().fill(justFinished ? StatusPalette.unread.dot : state.color)
+                Circle().fill(error ? StatusPalette.error.dot : justFinished ? StatusPalette.unread.dot : state.color)
             }
         }
         .frame(width: size, height: size)
-        .accessibilityLabel(justFinished ? StateName.justFinished.text : (state == .working && waiting ? String(localized: "Waiting in the background") : state.label))
+        .accessibilityLabel(error ? AgentViewWords.error : justFinished ? StateName.justFinished.text
+            : (state == .working && waiting ? AgentViewWords.backgroundWaiting : state.label))
+    }
+}
+
+extension StatusDot {
+    /// A session's dot, read off its five-phase view (`Session.agentView`).
+    init(session: Session, size: CGFloat = 9, muted: Bool) {
+        let view = session.agentView(muted: muted)
+        self.init(state: view.legacyState, size: size, waiting: session.waitsInBackground,
+                  justFinished: session.showsJustFinished(muted: muted), error: view.phase == .error)
     }
 }
 

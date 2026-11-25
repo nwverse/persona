@@ -105,10 +105,8 @@ nonisolated struct SeenOutbox {
             else if lists[key.machineRef] != nil { pending[key.machineRef, default: [:]][key.sessionID] = (key, mark) }
         }
 
-        var out = lists
         for (machine, var remaining) in pending {
-            guard var list = lists[machine] else { continue }
-            var changed = false
+            guard let list = lists[machine] else { continue }
             for i in list.indices {
                 if remaining.isEmpty { break }
                 guard let (key, mark) = remaining.removeValue(forKey: list[i].sessionID) else { continue }
@@ -119,17 +117,15 @@ nonisolated struct SeenOutbox {
                     marks[key] = nil
                 } else if recorded {
                     if marks[key]?.recordedAt == nil { marks[key]?.recordedAt = now }
-                } else if s.needsSeen(), s.seenAt == mark.seenBefore {
-                    list[i].markLocallySeen()
-                    changed = true
                 }
+                // A mark the hub has not recorded yet leaves the row as the hub sent it: no optimistic state
+                // (docs/plans/plan-typed-core.md 2.4); the mark is sent again until it is recorded.
             }
-            if changed { out[machine] = list }
             if dropMissing {
                 for entry in remaining.values { marks[entry.key] = nil } // gone from this machine's list
             }
         }
-        return out
+        return lists
     }
 
     /// Apply and settle pending marks onto a partial list of rows (e.g. a parent's fetched child/side sessions) without

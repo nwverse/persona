@@ -434,37 +434,7 @@ import Observation
 }
 
 extension SessionListModel where Row == Session {
-    /// Apply pending local receipts to this window without changing its cursor, revision or row order. Only counts
-    /// embedded in the same answer as a held row move; standalone hub counts stay authoritative (#12770).
-    func keepSeen(where marked: (Session) -> Bool) {
-        var visible = rows
-        var changed = false
-        var unread = 0
-        var justFinished = 0
-        for i in visible.indices where visible[i].needsSeen() && marked(visible[i]) {
-            if countRowIDs?.contains(id(visible[i])) == true {
-                // A folded parent with unread sides stays Unread even after its own row is marked seen (#13524).
-                if visible[i].state == .unread, (visible[i].children?.sidesUnread ?? 0) == 0 {
-                    unread += 1
-                    seenAdjustedUnreadIDs.insert(id(visible[i]))
-                }
-                if visible[i].work?.justFinished == true { justFinished += 1 }
-            }
-            visible[i].markLocallySeen()
-            changed = true
-        }
-        if changed {
-            rows = visible
-            if var held = counts, unread > 0 || justFinished > 0 {
-                if unread > 0 {
-                    held.state["unread"] = max(0, (held.state["unread"] ?? 0) - unread)
-                    held.state["idle"] = (held.state["idle"] ?? 0) + unread
-                }
-                if justFinished > 0, let count = held.justFinished {
-                    held.justFinished = max(0, count - justFinished)
-                }
-                counts = held
-            }
-        }
-    }
+    /// Pending local receipts change nothing in this window: its rows and counts stay as the hub sent them until its
+    /// next answer says they are seen (an optimistic update never invents a state, docs/plans/plan-typed-core.md 2.4).
+    func keepSeen(where marked: (Session) -> Bool) {}
 }

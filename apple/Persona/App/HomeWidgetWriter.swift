@@ -328,7 +328,7 @@ extension AppModel {
             sessions: sessions, place: place, session: { byKey[$0] }, machineName: { names[$0] },
             isTask: { tasks.task(of: $0) != nil })
         // Persona answering in one of its own conversations: the face thinks (`FleetPersona`'s `assistant`).
-        s.agents.assistantAnswering = sessions.contains { $0.assistant && $0.state == .working }
+        s.agents.assistantAnswering = sessions.contains { $0.assistant && $0.agentView.phase == .working }
         let loads = Dictionary(mergedFleet().stats?.loads.map { ($0.id, $0.percent) } ?? [], uniquingKeysWith: { a, _ in a })
         s.machines = machines.prefix(8).map { m in
             let rows = s.agents.rows.filter { $0.machine == m.id }
@@ -473,7 +473,7 @@ enum HomeAgents {
                       session: (SessionKey) -> Session?, machineName: (String) -> String?,
                       isTask: (SessionKey) -> Bool) -> HomeSnapshot.Agents {
         var rows: [HomeSnapshot.AgentRow] = []
-        for r in needsYou where place(r.key) == .agents {
+        for r in needsYou where AgentsNeedsYou.counts(r, session: session, place: place) {
             let s = session(r.key)
             rows.append(.init(id: r.key.machineID + "/" + r.key.sessionID, title: s?.displayTitle ?? r.cards.first?.title ?? "",
                               state: .needsYou, kind: isTask(r.key) ? .assistant : .coding, machine: r.key.machineID,
