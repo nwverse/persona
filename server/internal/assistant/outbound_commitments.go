@@ -428,9 +428,11 @@ func (s *Service) outboundFeishuSourceTopic(ctx context.Context, chat, message s
 	}
 	lookup, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	items, err := s.botMessages(lookup, message)
-	if err == nil {
-		for _, m := range items {
+	var response struct {
+		Items []botcard.Item `json:"items"`
+	}
+	if err := s.appCall(lookup, AppFeishu, FeishuMessages, map[string]any{"message_id": message}, &response); err == nil {
+		for _, m := range response.Items {
 			if m.MessageID == message && m.ChatID == chat && m.ThreadID != "" && !m.Deleted && m.UpperMessageID == "" {
 				return "lark-bot/" + chat + "/" + m.ThreadID
 			}

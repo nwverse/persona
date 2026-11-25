@@ -1,4 +1,4 @@
-Apply only supplied fields now; no confirmation. "" clears notes/due/remind/project/part_of/audience/direction_id; [] clears after. Use todo_complete/todo_reopen. outward_reply only records sent replies: original HTTPS topic, permalink, verbatim text, RFC3339 provider time. Retry recording only. promise overrides detection; due_at overrides 24h.{{template "shared/mcp_language" .}}
+Set supplied fields now; no prompt. "" clears notes/due/remind/project/part_of/audience/direction_id; [] clears after. Use todo_complete/todo_reopen. outward_reply records only: HTTPS source topic, sent permalink, exact text, RFC3339 time. Retry recording only. promise overrides detection; due_at defaults 24h.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -7,15 +7,15 @@ Apply only supplied fields now; no confirmation. "" clears notes/due/remind/proj
   "properties": {
     "id": {"type": "string"},
     "title": {"type": "string"},
-    "notes": {"type": "string", "description": "Replace; keep needed text."},
-    "due": {"type": "string", "description": "YYYY-MM-DD, local or RFC3339."},
-    "remind": {"type": "string", "description": "Future local/RFC3339 or 30m/2h/1d. Renotifies."},
+    "notes": {"type": "string", "description": "Keep needed text."},
+    "due": {"type": "string", "description": "Date or local/RFC3339."},
+    "remind": {"type": "string", "description": "Future time or 30m/2h/1d; renotifies."},
     "priority": {"type": "string", "enum": ["high", "normal", "low"]},
-    "project": {"type": "string", "description": "Existing KB project slug/name; no duplicates."},
-    "audience": {"type": "string", "description": "human or autonomous."},
-    "direction_id": {"type": "string", "description": "Direction ID."},
-    "part_of": {"type": "string", "description": "Request id; changing clears after."},
-    "after": {"type": "array", "items": {"type": "string"}, "description": "Replace sibling piece IDs."},
+    "project": {"type": "string", "description": "Existing KB slug/name; no dupes."},
+    "audience": {"type": "string", "description": "human/autonomous."},
+    "direction_id": {"type": "string"},
+    "part_of": {"type": "string", "description": "Request ID; change clears after."},
+    "after": {"type": "array", "items": {"type": "string"}, "description": "Sibling IDs."},
     "outward_reply": {
       "type": "object",
       "required": ["topic_url", "sent_url", "text", "sent_at"],
