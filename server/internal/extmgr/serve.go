@@ -749,6 +749,9 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 	case assistant && h.memoryWithheld(name): // memory_sources.go
 		return memoryWithheldResult(name), true
 	case h.connectors.Offers(name) && (assistant || h.connectors.ForAgents(name)):
+		if !assistant {
+			ctx = connector.WithoutOwnerCaller(ctx)
+		}
 		return h.callConnector(ctx, asker{machine, session}, name, args), true
 	case assistant && name == larkImageTool:
 		return h.callLarkImage(ctx, args), true
