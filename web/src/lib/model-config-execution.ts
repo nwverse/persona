@@ -185,7 +185,8 @@ export function permissionModesForProvider(p: ModelPurpose, chosen: ModelProvide
   return permissionModesForLauncher(chosen, agent);
 }
 
-export const modelConfiguration = (manager?: string) => api<ModelConfigurationBody>("/model-config", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+/** `dedupe: false`: send its own read rather than join an identical one still on its way (lib/api.ts, #15944). */
+export const modelConfiguration = (manager?: string, o: { dedupe?: boolean } = {}) => api<ModelConfigurationBody>("/model-config", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined, dedupe: o.dedupe });
 export function draftFor(p: ModelPurpose): ModelDraft {
   const runtime = runtimeChoices(p).length ? p.override?.runtime || p.effective?.runtime || "cli" : "";
   const draft: ModelDraft = {

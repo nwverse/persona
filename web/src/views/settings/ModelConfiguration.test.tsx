@@ -457,3 +457,34 @@ describe("API-kind purpose CLI backend badges (#12027)", () => {
     expect(effortValues()).not.toContain("ultra");
   });
 });
+
+describe("the list's Refresh while a read is on its way (#15944)", () => {
+  beforeEach(() => {
+    use = LARK;
+    current = child();
+    readonly = { ...child(), id: TWIN.id, name: "Inbox Agent", fields: [] };
+  });
+
+  it("sends its own read and keeps the newer answer when the older one lands last", async () => {
+    // each list read answers with the hub's state when it was sent, and waits until the test lets it land
+    const held: (() => void)[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const answer = await hub(input, init);
+      if (String(input).split("?")[0].endsWith("/model-config")) await new Promise<void>((land) => held.push(land));
+      return answer;
+    }));
+    await render();
+    expect(held).toHaveLength(1);
+    current = child({ model: "default-model" });
+    await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-modelconfiguration.refresh")}"]`)!.click());
+    await flush();
+    // joining the first read would give Refresh the answer from before the change
+    expect(held).toHaveLength(2);
+    await act(async () => held[1]());
+    await flush();
+    expect(row().textContent).toContain("单独设置");
+    await act(async () => held[0]());
+    await flush();
+    expect(row().textContent).toContain("单独设置");
+  });
+});

@@ -135,7 +135,8 @@ export function runtimeLabel(id: string | undefined, agent?: string): string {
   return RUNTIMES.find((r) => r.id === (id || "cli"))?.label ?? id!;
 }
 
-export const modelPurpose = (id: string, manager?: string) => api<ModelPurposeBody>(`/model-config/purposes/${enc(id)}`, { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
+/** `dedupe: false`: send its own read rather than join an identical one still on its way (lib/api.ts, #15944). */
+export const modelPurpose = (id: string, manager?: string, o: { dedupe?: boolean } = {}) => api<ModelPurposeBody>(`/model-config/purposes/${enc(id)}`, { headers: manager ? { [MANAGER_HEADER]: manager } : undefined, dedupe: o.dedupe });
 
 /** A provider's name for the page: its own, or nothing for one of the hub's old built-in ones (`legacy.*`) that is not
  *  set up, whose id means nothing to a person (docs/assistant/onboarding.md 4.5). */

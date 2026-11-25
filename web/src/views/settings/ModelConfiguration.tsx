@@ -72,7 +72,8 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   // Each load's number: only the latest one's answer is shown, so an older GET still on its way (the first one, a
-  // Refresh) cannot put back what a save's reload has just replaced.
+  // Refresh) cannot put back what a save's reload has just replaced. Each load sends its own reads (`dedupe: false`):
+  // joining an older identical GET would give the newest load that older answer (#15944).
   const loads = useRef(0);
   const load = async () => {
     const at = ++loads.current;
@@ -81,8 +82,8 @@ function ModelConfigurationForManager({ manager, open, onOpen, onProviders }: { 
       // catalog; one before that answers it by its own id only, so only then is it asked for. There, only a hub that
       // says it has none (404) lists none: any other failure is the page's error, with its retry, not a missing row
       const absent = (e: unknown) => { if (e instanceof ApiError && e.status === 404) return undefined; throw e; };
-      const catalog = await modelConfiguration(manager);
-      const supervise = catalogLists(catalog, SUPERVISE_PURPOSE) ? undefined : await modelPurpose(SUPERVISE_PURPOSE, manager).catch(absent);
+      const catalog = await modelConfiguration(manager, { dedupe: false });
+      const supervise = catalogLists(catalog, SUPERVISE_PURPOSE) ? undefined : await modelPurpose(SUPERVISE_PURPOSE, manager, { dedupe: false }).catch(absent);
       if (at !== loads.current) return;
       // each use set apart from a category right after it (#7980): the In-meeting conversation after the supervisor,
       // Meeting minutes after Information processing
@@ -233,12 +234,13 @@ function PurposeEditor({ manager, id, sourceName, catalog, onClose, onSaved }: {
     if (!id) return;
     const at = ++loads.current;
     try {
-      const r = await modelPurpose(id, manager);
+      // its own reads, as the list's load (#15944): a Retry must not take the answer of an older read still on its way
+      const r = await modelPurpose(id, manager, { dedupe: false });
       if (!alive.current || at !== loads.current) return;
       // A direct link can outlive the catalog request. A saved model override hides the parent model that clearing it
       // will inherit, so load that parent before offering model-specific efforts; failure keeps the retry visible.
       const parent = !catalog && r.purpose.override.model && r.purpose.parent
-        ? (await modelPurpose(r.purpose.parent, manager)).purpose : undefined;
+        ? (await modelPurpose(r.purpose.parent, manager, { dedupe: false })).purpose : undefined;
       if (!alive.current || at !== loads.current) return;
       setLinkedParent(parent);
       setData(r);
