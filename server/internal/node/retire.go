@@ -60,13 +60,19 @@ type retireActivityGuard struct {
 	ExpectedPane      string
 }
 
-func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit bool, cause proto.StopCause) (done bool, err error) {
-	return n.retireGuarded(ctx, id, closeTerminal, afterExit, cause, retireActivityGuard{})
-}
-
-func (n *Node) retireGuarded(ctx context.Context, id string, closeTerminal, afterExit bool, cause proto.StopCause, guard retireActivityGuard) (done bool, err error) {
+func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit bool, cause proto.StopCause, guards ...retireActivityGuard) (done bool, err error) {
+	var guard retireActivityGuard
+	if len(guards) > 0 {
+		guard = guards[0]
+	}
 	if !closeTerminal {
+		if guard.Active {
+			return false, refusal(notRetirable, "guarded retire requires close_terminal", nil)
+		}
 		return n.stopWithCause(ctx, id, true, proto.StopUnknown)
+	}
+	if guard.Active && !guard.HasExpectedRev && guard.ExpectedUpdatedAt.IsZero() {
+		return false, refusal(notRetirable, "guarded retire requires activity version or timestamp", nil)
 	}
 	release := n.recovery.lock(id)
 	defer release()
@@ -75,7 +81,7 @@ func (n *Node) retireGuarded(ctx context.Context, id string, closeTerminal, afte
 		return false, err
 	}
 	if !ok {
-		if !afterExit {
+		if !afterExit || guard.Active {
 			return false, nil
 		}
 		return n.closeExited(ctx, id)
@@ -106,12 +112,15 @@ func (n *Node) verifyRetireActivityGuardLocked(ctx context.Context, id string, g
 	if !ok {
 		return false, nil
 	}
+	if guard.ExpectedPane != "" && a.PaneID != guard.ExpectedPane {
+		return false, refusal(notRetirable, "session pane changed", nil)
+	}
 	kind := host.ParsePane(a.PaneID).Kind
 	h := n.hosts.Get(kind)
 	if h == nil {
 		return false, refusal(notRetirable, "this session host is not available", nil)
 	}
-	if err := n.refreshHostInventory(ctx, true, h); err != nil {
+	if err := n.refreshHostForPaneStrict(ctx, h, a.PaneID); err != nil {
 		return false, refusal(notRetirable, "could not verify live session state: "+err.Error(), nil)
 	}
 	a, ok = n.agent(id)

@@ -24,10 +24,12 @@ type recordingIdleAuditStore struct {
 	mu                   sync.Mutex
 	failAuditLoad        bool
 	failAuditWrite       bool
+	failAllWrites        bool
 	failAuditWriteOnCall int
 	auditWriteCalls      int
 	onPutSetting         func(key string)
 	onAuditPersisted     func()
+	onPluginAudit        func()
 	rows                 []struct {
 		plugin, action, actor string
 		detail                json.RawMessage
@@ -51,6 +53,12 @@ func (r *recordingIdleAuditStore) PutSetting(ctx context.Context, key string, va
 	if hook != nil {
 		hook(key)
 	}
+	r.mu.Lock()
+	failAll := r.failAllWrites
+	r.mu.Unlock()
+	if failAll {
+		return errors.New("store write failed")
+	}
 	if key == idleArchiveAuditKey {
 		r.mu.Lock()
 		r.auditWriteCalls++
@@ -72,11 +80,15 @@ func (r *recordingIdleAuditStore) PutSetting(ctx context.Context, key string, va
 
 func (r *recordingIdleAuditStore) AddExtensionAudit(_ context.Context, id, action, actor string, detail json.RawMessage) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.rows = append(r.rows, struct {
 		plugin, action, actor string
 		detail                json.RawMessage
 	}{plugin: id, action: action, actor: actor, detail: append(json.RawMessage(nil), detail...)})
+	onAudit := r.onPluginAudit
+	r.mu.Unlock()
+	if onAudit != nil {
+		onAudit()
+	}
 	return nil
 }
 
@@ -824,9 +836,9 @@ func TestIdleArchiveAdversarialReviewRegressions(t *testing.T) {
 		if wArch.Code != http.StatusOK {
 			t.Fatalf("pre-archive failed: %d %s", wArch.Code, wArch.Body.String())
 		}
-		// During session.retire, simulate the agent writing an exit transcript line and the node pushing
+		// During session.retire_guarded, simulate the agent writing an exit transcript line and the node pushing
 		// an updated session list before retire returns.
-		ft.f.answerNode(deviceSessionRetire, func(_ string, _ json.RawMessage) (any, error) {
+		ft.f.answerNode(deviceSessionRetireGuarded, func(_ string, _ json.RawMessage) (any, error) {
 			bumped := row
 			bumped.UpdatedAt = time.Now().UTC()
 			ft.d.setSessions("mac", []proto.Session{bumped})
@@ -835,7 +847,7 @@ func TestIdleArchiveAdversarialReviewRegressions(t *testing.T) {
 			} else if changed {
 				t.Errorf("mid-close exit transcript write unexpectedly changed archive state")
 			}
-			return map[string]any{"closed": true}, nil
+			return map[string]any{"closed": true, "guard_verified": true}, nil
 		})
 		wClose := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"close_terminal":true}`)
 		if wClose.Code != http.StatusOK {
@@ -1024,13 +1036,13 @@ func TestIdleArchiveP1AuditReviewFixes(t *testing.T) {
 		retireEntered := make(chan struct{})
 		retireRelease := make(chan struct{})
 		var gotParams sessionRetireParams
-		ft.f.answerNode(deviceSessionRetire, func(_ string, raw json.RawMessage) (any, error) {
+		ft.f.answerNode(deviceSessionRetireGuarded, func(_ string, raw json.RawMessage) (any, error) {
 			if err := json.Unmarshal(raw, &gotParams); err != nil {
 				t.Errorf("unmarshal retire params: %v", err)
 			}
 			close(retireEntered)
 			<-retireRelease
-			return map[string]any{"closed": true}, nil
+			return map[string]any{"closed": true, "guard_verified": true}, nil
 		})
 
 		closeDone := make(chan *httptest.ResponseRecorder, 1)
@@ -1043,8 +1055,8 @@ func TestIdleArchiveP1AuditReviewFixes(t *testing.T) {
 			t.Fatal("timed out waiting for retire call")
 		}
 
-		// Verify manager passed activity version and pane guard to node retire.
-		if !gotParams.GuardActivity || !gotParams.HasExpectedRev || gotParams.ExpectedRev != 4096 ||
+		// Verify manager passed activity version and pane guard to dedicated guarded node retire.
+		if !gotParams.CloseTerminal || !gotParams.HasExpectedRev || gotParams.ExpectedRev != 4096 ||
 			!gotParams.ExpectedUpdatedAt.Equal(row.UpdatedAt) || gotParams.ExpectedPane != "w2:p3" {
 			t.Fatalf("unexpected node retire guard params: %+v", gotParams)
 		}
@@ -1267,6 +1279,361 @@ func TestIdleArchiveP1AuditReviewFixes(t *testing.T) {
 		}
 		if len(saved) != 1 || saved[0].ID != resp.AuditID || saved[0].Outcome != idleArchiveOutcomeArchivedAndClosed {
 			t.Fatalf("background finalized entries = %+v", saved)
+		}
+	})
+}
+
+func TestIdleArchiveMixedVersionOldNodeRefusesUnguardedDowngrade(t *testing.T) {
+	now := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+
+	t.Run("old node without session.retire_guarded fails closed without calling session.retire", func(t *testing.T) {
+		ft, rec, row := idleArchiveTestSetup(t, now, nil)
+		unguardedCalled := false
+		ft.f.answerNode(deviceSessionRetire, func(_ string, _ json.RawMessage) (any, error) {
+			unguardedCalled = true
+			return map[string]any{"closed": true}, nil
+		})
+		ft.f.answerNode(deviceSessionRetireGuarded, func(_ string, _ json.RawMessage) (any, error) {
+			return nil, &rpc.Error{Message: "unknown method " + deviceSessionRetireGuarded}
+		})
+
+		w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"mixed-version"}`)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("old node got %d (%s), want 409", w.Code, w.Body.String())
+		}
+		var refusal assistantwire.IdleArchiveRefusalResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil {
+			t.Fatal(err)
+		}
+		if refusal.Code != idleArchiveCodeCloseRefused || refusal.CloseOutcome != archiveCloseRefused || !refusal.AuditPersisted || refusal.AuditID == "" {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if unguardedCalled || len(retiredOf(ft)) != 0 {
+			t.Fatalf("old node silently degraded to unguarded close: unguardedCalled=%v retired=%v", unguardedCalled, retiredOf(ft))
+		}
+		if archivedIDs(t, ft.s)[row.SessionID] {
+			t.Fatal("provisional archive was not rolled back after old-node refusal")
+		}
+		if rec.count() != 1 {
+			t.Fatalf("plugin_audit rows = %d, want 1", rec.count())
+		}
+	})
+
+	t.Run("node omitting guard_verified confirmation fails closed", func(t *testing.T) {
+		ft, rec, row := idleArchiveTestSetup(t, now, nil)
+		ft.f.answerNode(deviceSessionRetireGuarded, func(_ string, _ json.RawMessage) (any, error) {
+			return map[string]any{"closed": true}, nil
+		})
+
+		w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("unconfirmed node got %d (%s), want 409", w.Code, w.Body.String())
+		}
+		var refusal assistantwire.IdleArchiveRefusalResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil {
+			t.Fatal(err)
+		}
+		if refusal.Code != idleArchiveCodeCloseRefused || refusal.CloseOutcome != archiveCloseRefused || !refusal.AuditPersisted {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if archivedIDs(t, ft.s)[row.SessionID] {
+			t.Fatal("provisional archive was not rolled back on missing guard_verified")
+		}
+		if rec.count() != 1 {
+			t.Fatalf("plugin_audit rows = %d, want 1", rec.count())
+		}
+	})
+
+	t.Run("guarded close never degrades to unguarded session.close for capabilities.close", func(t *testing.T) {
+		closeAllowed := true
+		ft, rec, row := idleArchiveTestSetup(t, now, func(s *proto.Session) {
+			s.Capabilities = &proto.SessionCapabilities{Close: &closeAllowed}
+		})
+		sessionCloseCalled := false
+		ft.f.answerNode("session.close", func(_ string, _ json.RawMessage) (any, error) {
+			sessionCloseCalled = true
+			return map[string]any{"ok": true}, nil
+		})
+
+		w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10}`)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("runtime close capability got %d (%s), want 409", w.Code, w.Body.String())
+		}
+		var refusal assistantwire.IdleArchiveRefusalResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &refusal); err != nil {
+			t.Fatal(err)
+		}
+		if refusal.Code != idleArchiveCodeCloseRefused || refusal.CloseOutcome != archiveCloseRefused || !refusal.AuditPersisted {
+			t.Fatalf("unexpected refusal: %+v", refusal)
+		}
+		if sessionCloseCalled {
+			t.Fatal("guarded idle archive degraded to unguarded session.close")
+		}
+		if archivedIDs(t, ft.s)[row.SessionID] {
+			t.Fatal("provisional archive was not rolled back")
+		}
+		if rec.count() != 1 {
+			t.Fatalf("plugin_audit rows = %d, want 1", rec.count())
+		}
+	})
+}
+
+func TestIdleArchiveAuditFinalizationRecoversAcrossServiceRestart(t *testing.T) {
+	now := time.Date(2026, 11, 26, 0, 30, 0, 0, time.UTC)
+
+	startRestartedService := func(t *testing.T, st Store) (*Service, context.CancelFunc, <-chan struct{}) {
+		t.Helper()
+		f := newFakeHub()
+		d := newFleetDevs()
+		d.add("mac", "Mac")
+		svc := New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Devices: d})
+		runCtx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			svc.Run(runCtx)
+			close(done)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Errorf("restarted service did not stop cleanly")
+			}
+		})
+		return svc, cancel, done
+	}
+
+	t.Run("persisted pending outbox finalizes audit and plugin_audit after manager restart", func(t *testing.T) {
+		ft, rec, row := idleArchiveTestSetup(t, now, nil)
+		rec.mu.Lock()
+		rec.failAuditWriteOnCall = 2 // 1st write persists close_attempted; 2nd write (finalization) fails
+		rec.mu.Unlock()
+
+		w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"restart-outbox"}`)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("got %d (%s), want 503", w.Code, w.Body.String())
+		}
+		var resp assistantwire.IdleArchiveResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.OK || resp.Code != idleArchiveCodeAuditFinalizationPending || resp.AuditID == "" || !resp.AuditFinalizationPending {
+			t.Fatalf("unexpected 503 response: %+v", resp)
+		}
+		// Simulate manager crash/restart before background retry completes.
+		ft.s.stopIdleArchiveAuditRetry()
+
+		var beforeEntries []assistantwire.IdleArchiveAuditEntry
+		if _, err := rec.Store.Setting(context.Background(), idleArchiveAuditKey, &beforeEntries); err != nil {
+			t.Fatal(err)
+		}
+		if len(beforeEntries) != 1 || beforeEntries[0].Outcome != idleArchiveOutcomeCloseAttempted {
+			t.Fatalf("expected persisted close_attempted before restart, got %+v", beforeEntries)
+		}
+		var beforePending []idleArchivePendingAudit
+		if _, err := rec.Store.Setting(context.Background(), idleArchiveAuditPendingKey, &beforePending); err != nil {
+			t.Fatal(err)
+		}
+		if len(beforePending) != 1 || beforePending[0].Entry.ID != resp.AuditID || beforePending[0].Entry.Outcome != idleArchiveOutcomeArchivedAndClosed {
+			t.Fatalf("expected durable pending outbox before restart, got %+v", beforePending)
+		}
+		if rec.count() != 0 {
+			t.Fatalf("plugin_audit count before restart = %d, want 0", rec.count())
+		}
+
+		// Storage recovers and a fresh Service instance starts against the same persistent Store.
+		mirroredCh := make(chan struct{}, 2)
+		rec.mu.Lock()
+		rec.failAuditWriteOnCall = 0
+		rec.onPluginAudit = func() {
+			select {
+			case mirroredCh <- struct{}{}:
+			default:
+			}
+		}
+		rec.mu.Unlock()
+
+		svc2, _, _ := startRestartedService(t, rec)
+		select {
+		case <-mirroredCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("restarted service did not finalize and mirror pending audit")
+		}
+
+		aw := getIdleArchiveAudit(svc2, "?session_id="+row.SessionID, roleExtension, "guardrail-ext")
+		if aw.Code != http.StatusOK {
+			t.Fatalf("restarted audit query got %d: %s", aw.Code, aw.Body.String())
+		}
+		var auditResp assistantwire.IdleArchiveAuditResponse
+		if err := json.Unmarshal(aw.Body.Bytes(), &auditResp); err != nil {
+			t.Fatal(err)
+		}
+		if len(auditResp.Entries) != 1 || auditResp.Entries[0].ID != resp.AuditID ||
+			auditResp.Entries[0].Outcome != idleArchiveOutcomeArchivedAndClosed ||
+			auditResp.Entries[0].CloseOutcome != archiveCloseClosed ||
+			auditResp.Entries[0].Reason != "restart-outbox" {
+			t.Fatalf("restarted finalized entries = %+v", auditResp.Entries)
+		}
+		if rec.count() != 1 {
+			t.Fatalf("plugin_audit rows after restart = %d, want 1", rec.count())
+		}
+		rec.mu.Lock()
+		var detail idleArchivePluginAuditDetail
+		if err := json.Unmarshal(rec.rows[0].detail, &detail); err != nil {
+			rec.mu.Unlock()
+			t.Fatal(err)
+		}
+		rec.mu.Unlock()
+		if detail.AuditID != resp.AuditID || detail.Outcome != idleArchiveOutcomeArchivedAndClosed || detail.CloseOutcome != archiveCloseClosed {
+			t.Fatalf("mirrored plugin_audit detail = %+v", detail)
+		}
+		var afterPending []idleArchivePendingAudit
+		if _, err := rec.Store.Setting(context.Background(), idleArchiveAuditPendingKey, &afterPending); err != nil {
+			t.Fatal(err)
+		}
+		if len(afterPending) != 0 {
+			t.Fatalf("pending outbox was not cleared after restart recovery: %+v", afterPending)
+		}
+	})
+
+	t.Run("orphaned close_attempted reconciles after total DB outage and manager restart", func(t *testing.T) {
+		ft, rec, row := idleArchiveTestSetup(t, now, nil)
+		// Allow provisional archive + close_attempted write, then simulate total DB outage during close/finalization
+		// so neither idleArchiveAuditKey nor idleArchiveAuditPendingKey can be written before manager stops.
+		ft.f.answerNode(deviceSessionRetireGuarded, func(_ string, _ json.RawMessage) (any, error) {
+			rec.mu.Lock()
+			rec.failAllWrites = true
+			rec.mu.Unlock()
+			return map[string]any{"closed": true, "guard_verified": true}, nil
+		})
+
+		w := postIdleArchive(ft.s, "mac", row.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"restart-orphan"}`)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("got %d (%s), want 503", w.Code, w.Body.String())
+		}
+		var resp assistantwire.IdleArchiveResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		ft.s.stopIdleArchiveAuditRetry()
+
+		var beforePending []idleArchivePendingAudit
+		if _, err := rec.Store.Setting(context.Background(), idleArchiveAuditPendingKey, &beforePending); err != nil {
+			t.Fatal(err)
+		}
+		if len(beforePending) != 0 {
+			t.Fatalf("expected empty pending outbox under total DB outage, got %+v", beforePending)
+		}
+		if rec.count() != 0 {
+			t.Fatalf("plugin_audit count before restart = %d, want 0", rec.count())
+		}
+
+		// DB recovers and a brand-new Service restarts; it must reconcile close_attempted from sessions.archived.
+		mirroredCh := make(chan struct{}, 2)
+		rec.mu.Lock()
+		rec.failAllWrites = false
+		rec.onPluginAudit = func() {
+			select {
+			case mirroredCh <- struct{}{}:
+			default:
+			}
+		}
+		rec.mu.Unlock()
+
+		svc2, _, _ := startRestartedService(t, rec)
+		select {
+		case <-mirroredCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("restarted service did not reconcile orphaned close_attempted")
+		}
+
+		var afterEntries []assistantwire.IdleArchiveAuditEntry
+		if _, err := rec.Store.Setting(context.Background(), idleArchiveAuditKey, &afterEntries); err != nil {
+			t.Fatal(err)
+		}
+		if len(afterEntries) != 1 || afterEntries[0].ID != resp.AuditID ||
+			afterEntries[0].Outcome != idleArchiveOutcomeArchivedAndClosed ||
+			afterEntries[0].CloseOutcome != archiveCloseClosed ||
+			afterEntries[0].Reason != "restart-orphan" {
+			t.Fatalf("reconciled audit entries = %+v", afterEntries)
+		}
+		if rec.count() != 1 {
+			t.Fatalf("plugin_audit rows after orphan reconciliation = %d, want 1", rec.count())
+		}
+		_ = svc2
+	})
+
+	t.Run("orphaned close_attempted after rolled-back refusal reconciles to refused on restart", func(t *testing.T) {
+		ft2, rec2, row2 := idleArchiveTestSetup(t, now, nil)
+		ft2.f.answerNode(deviceSessionRetireGuarded, func(_ string, _ json.RawMessage) (any, error) {
+			return nil, &rpc.Error{Code: "not_retirable", Message: "the agent is working"}
+		})
+		archiveWrites := 0
+		rec2.mu.Lock()
+		rec2.onPutSetting = func(key string) {
+			if key == agentArchivesKey {
+				rec2.mu.Lock()
+				archiveWrites++
+				n := archiveWrites
+				rec2.mu.Unlock()
+				if n == 2 {
+					// Rollback is running; fail audit + pending outbox writes right after rollback.
+					rec2.mu.Lock()
+					rec2.failAuditWrite = true
+					rec2.mu.Unlock()
+				}
+			} else if key == idleArchiveAuditPendingKey {
+				rec2.mu.Lock()
+				rec2.failAllWrites = true
+				rec2.mu.Unlock()
+			}
+		}
+		rec2.mu.Unlock()
+
+		w := postIdleArchive(ft2.s, "mac", row2.SessionID, roleExtension, "guardrail-ext", `{"idle_minutes":10,"reason":"restart-refused"}`)
+		if w.Code != http.StatusConflict {
+			t.Fatalf("got %d (%s), want 409", w.Code, w.Body.String())
+		}
+		ft2.s.stopIdleArchiveAuditRetry()
+
+		if archivedIDs(t, ft2.s)[row2.SessionID] {
+			t.Fatal("provisional archive should have been rolled back")
+		}
+		if rec2.count() != 0 {
+			t.Fatalf("plugin_audit count before restart = %d, want 0", rec2.count())
+		}
+
+		mirroredCh := make(chan struct{}, 2)
+		rec2.mu.Lock()
+		rec2.failAuditWrite = false
+		rec2.failAllWrites = false
+		rec2.onPutSetting = nil
+		rec2.onPluginAudit = func() {
+			select {
+			case mirroredCh <- struct{}{}:
+			default:
+			}
+		}
+		rec2.mu.Unlock()
+
+		startRestartedService(t, rec2)
+		select {
+		case <-mirroredCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("restarted service did not reconcile rolled-back close_attempted")
+		}
+
+		var afterEntries []assistantwire.IdleArchiveAuditEntry
+		if _, err := rec2.Store.Setting(context.Background(), idleArchiveAuditKey, &afterEntries); err != nil {
+			t.Fatal(err)
+		}
+		if len(afterEntries) != 1 || afterEntries[0].Outcome != idleArchiveOutcomeRefused ||
+			afterEntries[0].RefusalCode != idleArchiveCodeCloseFailed {
+			t.Fatalf("reconciled refused entries = %+v", afterEntries)
+		}
+		if rec2.count() != 1 {
+			t.Fatalf("plugin_audit rows after refused orphan reconciliation = %d, want 1", rec2.count())
 		}
 	})
 }

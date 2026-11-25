@@ -27,6 +27,7 @@ import (
 
 const (
 	idleArchiveAuditKey        = "sessions.idle_archive_audit"
+	idleArchiveAuditPendingKey = "sessions.idle_archive_audit_pending"
 	idleArchiveAuditMaxEntries = 500
 	idleArchiveAuditDefaultLim = 50
 	idleArchiveAuditMaxLim     = 200
@@ -125,11 +126,19 @@ type idleArchiveLiveObs struct {
 	fromConnect bool
 }
 
+type idleArchivePendingAudit struct {
+	Entry      assistantwire.IdleArchiveAuditEntry `json:"entry"`
+	MirrorOnly bool                                `json:"mirror_only,omitempty"`
+}
+
 type idleArchiveAuditBook struct {
 	mu             sync.Mutex
 	loaded         bool
+	recovered      bool
 	entries        []assistantwire.IdleArchiveAuditEntry
-	pendingUpdates []assistantwire.IdleArchiveAuditEntry
+	pendingUpdates []idleArchivePendingAudit
+	pendingDirty   bool
+	activeAttempts map[assistantwire.IdleArchiveAuditID]struct{}
 	inFlight       map[[2]string]chan struct{}
 	now            func() time.Time
 	retryRunning   bool
@@ -715,24 +724,188 @@ func sessionIsExternalOrDesktop(s proto.Session) bool {
 	return s.SourceKind != "" || s.AgentSurface == transcript.SurfaceDesktop
 }
 
-func (svc *Service) ensureIdleArchiveAuditLoaded(ctx context.Context) error {
+func (b *idleArchiveAuditBook) pendingIndexLocked(id assistantwire.IdleArchiveAuditID) int {
+	for i := range b.pendingUpdates {
+		if b.pendingUpdates[i].Entry.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (b *idleArchiveAuditBook) upsertPendingLocked(item idleArchivePendingAudit) {
+	if idx := b.pendingIndexLocked(item.Entry.ID); idx >= 0 {
+		b.pendingUpdates[idx] = item
+		return
+	}
+	if len(b.pendingUpdates) >= idleArchiveAuditMaxEntries {
+		b.pendingUpdates = append(b.pendingUpdates[1:], item)
+		return
+	}
+	b.pendingUpdates = append(b.pendingUpdates, item)
+}
+
+func (svc *Service) trackIdleArchiveAttempt(id assistantwire.IdleArchiveAuditID) {
+	if id == "" {
+		return
+	}
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	if b.activeAttempts == nil {
+		b.activeAttempts = map[assistantwire.IdleArchiveAuditID]struct{}{}
+	}
+	b.activeAttempts[id] = struct{}{}
+	b.mu.Unlock()
+}
+
+func (svc *Service) untrackIdleArchiveAttempt(id assistantwire.IdleArchiveAuditID) {
+	if id == "" {
+		return
+	}
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	delete(b.activeAttempts, id)
+	b.mu.Unlock()
+}
+
+func (svc *Service) loadIdleArchiveArchiveRecords(ctx context.Context) (map[string]agentArchive, error) {
+	readCtx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
+	defer cancel()
+	b := &svc.agentArchives
+	if err := b.lock(readCtx); err != nil {
+		return nil, err
+	}
+	defer b.unlock()
+	if err := svc.loadAgentArchivesLocked(readCtx); err != nil {
+		return nil, err
+	}
+	return maps.Clone(b.records), nil
+}
+
+func (svc *Service) ensureIdleArchiveAuditRecovered(ctx context.Context) error {
 	store := svc.store()
 	if store == nil {
 		return errors.New("no database")
 	}
 	readCtx, cancel := context.WithTimeout(ctx, agentArchiveTimeout)
 	defer cancel()
-	svc.idleArchiveAudit.mu.Lock()
-	defer svc.idleArchiveAudit.mu.Unlock()
-	if svc.idleArchiveAudit.loaded {
+
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	if b.loaded && b.recovered {
+		b.mu.Unlock()
 		return nil
 	}
-	var saved []assistantwire.IdleArchiveAuditEntry
-	if _, err := store.Setting(readCtx, idleArchiveAuditKey, &saved); err != nil {
+	if !b.loaded {
+		var saved []assistantwire.IdleArchiveAuditEntry
+		if _, err := store.Setting(readCtx, idleArchiveAuditKey, &saved); err != nil {
+			b.mu.Unlock()
+			return err
+		}
+		var savedPending []idleArchivePendingAudit
+		if _, err := store.Setting(readCtx, idleArchiveAuditPendingKey, &savedPending); err != nil {
+			b.mu.Unlock()
+			return err
+		}
+		b.entries = saved
+		b.loaded = true
+		if len(savedPending) > 0 {
+			b.pendingDirty = true
+			finalized := make(map[assistantwire.IdleArchiveAuditID]bool, len(saved))
+			for _, e := range saved {
+				if e.Outcome != idleArchiveOutcomeCloseAttempted {
+					finalized[e.ID] = true
+				}
+			}
+			for _, p := range savedPending {
+				if p.Entry.ID == "" || b.pendingIndexLocked(p.Entry.ID) >= 0 {
+					continue
+				}
+				if finalized[p.Entry.ID] {
+					p.MirrorOnly = true
+				}
+				b.upsertPendingLocked(p)
+			}
+		}
+	}
+	var orphans []assistantwire.IdleArchiveAuditEntry
+	for _, e := range b.entries {
+		if e.Outcome != idleArchiveOutcomeCloseAttempted {
+			continue
+		}
+		if _, active := b.activeAttempts[e.ID]; active {
+			continue
+		}
+		if b.pendingIndexLocked(e.ID) >= 0 {
+			continue
+		}
+		orphans = append(orphans, e)
+	}
+	if len(orphans) == 0 {
+		b.recovered = true
+		b.mu.Unlock()
+		return nil
+	}
+	b.mu.Unlock()
+
+	records, err := svc.loadIdleArchiveArchiveRecords(readCtx)
+	if err != nil {
 		return err
 	}
-	svc.idleArchiveAudit.entries = saved
-	svc.idleArchiveAudit.loaded = true
+
+	b.mu.Lock()
+	stillAttempted := make(map[assistantwire.IdleArchiveAuditID]bool, len(b.entries))
+	for _, e := range b.entries {
+		if e.Outcome == idleArchiveOutcomeCloseAttempted {
+			stillAttempted[e.ID] = true
+		}
+	}
+	for _, orphan := range orphans {
+		if !stillAttempted[orphan.ID] {
+			continue
+		}
+		if _, active := b.activeAttempts[orphan.ID]; active {
+			continue
+		}
+		if b.pendingIndexLocked(orphan.ID) >= 0 {
+			continue
+		}
+		mid, sid := string(orphan.MachineID), string(orphan.SessionID)
+		rec, ok := records[runtimeListID(mid, sid)]
+		if !ok {
+			if raw, listed := svc.nodeSession(mid, sid); listed {
+				if alt := archiveSessionOf(raw); alt != "" && alt != sid {
+					rec, ok = records[runtimeListID(mid, alt)]
+				}
+			}
+		}
+		reconciled := orphan
+		if ok && rec.Archived && !rec.ClosedAt.IsZero() {
+			reconciled.Outcome = idleArchiveOutcomeArchivedAndClosed
+			reconciled.CloseOutcome = archiveCloseClosed
+		} else {
+			reconciled.Outcome = idleArchiveOutcomeRefused
+			reconciled.RefusalCode = idleArchiveCodeCloseFailed
+			reconciled.CloseOutcome = archiveCloseFailed
+		}
+		b.upsertPendingLocked(idleArchivePendingAudit{Entry: reconciled})
+	}
+	b.recovered = true
+	b.mu.Unlock()
+	return nil
+}
+
+func (svc *Service) ensureIdleArchiveAuditLoaded(ctx context.Context) error {
+	if err := svc.ensureIdleArchiveAuditRecovered(ctx); err != nil {
+		return err
+	}
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	needsRetry := len(b.pendingUpdates) > 0 || b.pendingDirty
+	b.mu.Unlock()
+	if needsRetry {
+		svc.ensureIdleArchiveAuditRetryRunning()
+	}
 	return nil
 }
 
@@ -764,11 +937,11 @@ func mergeIdleArchiveAuditEntries(base []assistantwire.IdleArchiveAuditEntry, pe
 	return next
 }
 
-func (svc *Service) mirrorIdleArchivePluginAudit(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) {
+func (svc *Service) mirrorIdleArchivePluginAudit(ctx context.Context, entry assistantwire.IdleArchiveAuditEntry) error {
 	store := svc.store()
 	extAudit, ok := store.(extensionAuditWriter)
 	if !ok {
-		return
+		return nil
 	}
 	plugin := entry.Extension
 	if plugin == "" {
@@ -790,11 +963,69 @@ func (svc *Service) mirrorIdleArchivePluginAudit(ctx context.Context, entry assi
 		CloseOutcome:        entry.CloseOutcome,
 		Reason:              entry.Reason,
 	}
-	if raw, err := json.Marshal(detail); err == nil {
-		if err := extAudit.AddExtensionAudit(ctx, plugin, action, entry.Actor, raw); err != nil {
-			svc.logf("idle archive plugin_audit: %v", err)
-		}
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		svc.logf("idle archive plugin_audit marshal: %v", err)
+		return err
 	}
+	if err := extAudit.AddExtensionAudit(ctx, plugin, action, entry.Actor, raw); err != nil {
+		svc.logf("idle archive plugin_audit: %v", err)
+		return err
+	}
+	return nil
+}
+
+func idleArchiveAuditEntrySameOutcome(a, b assistantwire.IdleArchiveAuditEntry) bool {
+	return a.ID == b.ID && a.Outcome == b.Outcome && a.CloseOutcome == b.CloseOutcome && a.RefusalCode == b.RefusalCode
+}
+
+func (svc *Service) settleMirroredIdleArchivePending(ctx context.Context, saved []assistantwire.IdleArchiveAuditEntry, mirrored []assistantwire.IdleArchiveAuditEntry) bool {
+	store := svc.store()
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	remaining := b.pendingUpdates[:0]
+	for _, cur := range b.pendingUpdates {
+		done := false
+		for _, m := range mirrored {
+			if idleArchiveAuditEntrySameOutcome(cur.Entry, m) {
+				done = true
+				break
+			}
+		}
+		if done {
+			continue
+		}
+		if !cur.MirrorOnly {
+			for _, s := range saved {
+				if idleArchiveAuditEntrySameOutcome(cur.Entry, s) {
+					cur.MirrorOnly = true
+					break
+				}
+			}
+		}
+		remaining = append(remaining, cur)
+	}
+	b.pendingUpdates = remaining
+	nextPending := slices.Clone(b.pendingUpdates)
+	dirty := b.pendingDirty || len(nextPending) > 0
+	b.mu.Unlock()
+
+	if !dirty || store == nil {
+		return true
+	}
+	if err := store.PutSetting(ctx, idleArchiveAuditPendingKey, nextPending); err != nil {
+		svc.logf("idle archive audit pending update: %v", err)
+		b.mu.Lock()
+		b.pendingDirty = true
+		b.mu.Unlock()
+		return false
+	}
+	b.mu.Lock()
+	if len(b.pendingUpdates) == 0 {
+		b.pendingDirty = false
+	}
+	b.mu.Unlock()
+	return true
 }
 
 // persistIdleArchiveAuditEntry writes entry (appending new or updating an existing ID) to sessions.idle_archive_audit
@@ -813,44 +1044,54 @@ func (svc *Service) persistIdleArchiveAuditEntry(ctx context.Context, entry assi
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
 	defer cancel()
 
-	var flushed []assistantwire.IdleArchiveAuditEntry
+	if err := svc.ensureIdleArchiveAuditRecovered(writeCtx); err != nil {
+		svc.logf("idle archive audit load: %v", err)
+		return "", false
+	}
+
+	var pendingSnap []idleArchivePendingAudit
+	var savedEntries []assistantwire.IdleArchiveAuditEntry
 	persisted := false
-	svc.idleArchiveAudit.mu.Lock()
-	if !svc.idleArchiveAudit.loaded {
-		var saved []assistantwire.IdleArchiveAuditEntry
-		if _, err := store.Setting(writeCtx, idleArchiveAuditKey, &saved); err != nil {
-			svc.logf("idle archive audit load: %v", err)
-		} else {
-			svc.idleArchiveAudit.entries = saved
-			svc.idleArchiveAudit.loaded = true
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
+	pendingSnap = slices.Clone(b.pendingUpdates)
+	for _, p := range pendingSnap {
+		if !p.MirrorOnly {
+			savedEntries = append(savedEntries, p.Entry)
 		}
 	}
-	if svc.idleArchiveAudit.loaded {
-		pendingSnap := slices.Clone(svc.idleArchiveAudit.pendingUpdates)
-		next := mergeIdleArchiveAuditEntries(svc.idleArchiveAudit.entries, pendingSnap, &entry)
-		if err := store.PutSetting(writeCtx, idleArchiveAuditKey, next); err != nil {
-			svc.logf("idle archive audit save: %v", err)
-		} else {
-			svc.idleArchiveAudit.entries = next
-			svc.idleArchiveAudit.pendingUpdates = nil
-			for _, p := range pendingSnap {
-				if p.ID != entry.ID {
-					flushed = append(flushed, p)
-				}
-			}
-			persisted = true
-		}
+	next := mergeIdleArchiveAuditEntries(b.entries, savedEntries, &entry)
+	if err := store.PutSetting(writeCtx, idleArchiveAuditKey, next); err != nil {
+		svc.logf("idle archive audit save: %v", err)
+	} else {
+		b.entries = next
+		persisted = true
 	}
-	svc.idleArchiveAudit.mu.Unlock()
+	b.mu.Unlock()
 
 	if !persisted {
 		return "", false
 	}
-	for _, p := range flushed {
-		svc.mirrorIdleArchivePluginAudit(writeCtx, p)
+	var mirrored []assistantwire.IdleArchiveAuditEntry
+	for _, p := range pendingSnap {
+		if p.Entry.ID == entry.ID {
+			continue
+		}
+		if err := svc.mirrorIdleArchivePluginAudit(writeCtx, p.Entry); err == nil {
+			mirrored = append(mirrored, p.Entry)
+		}
 	}
 	if mirrorPlugin {
-		svc.mirrorIdleArchivePluginAudit(writeCtx, entry)
+		if err := svc.mirrorIdleArchivePluginAudit(writeCtx, entry); err == nil {
+			mirrored = append(mirrored, entry)
+		} else {
+			svc.enqueueIdleArchiveAuditMirrorRetry(entry)
+		}
+	}
+	if len(pendingSnap) > 0 {
+		if !svc.settleMirroredIdleArchivePending(writeCtx, append(savedEntries, entry), mirrored) {
+			svc.ensureIdleArchiveAuditRetryRunning()
+		}
 	}
 	return entry.ID, true
 }
@@ -875,24 +1116,39 @@ func (svc *Service) finalizeIdleArchiveAudit(ctx context.Context, entry assistan
 	return ok
 }
 
-func (svc *Service) enqueueIdleArchiveAuditRetry(entry assistantwire.IdleArchiveAuditEntry) {
+func (svc *Service) enqueueIdleArchiveAuditPending(item idleArchivePendingAudit) {
 	b := &svc.idleArchiveAudit
 	b.mu.Lock()
-	replaced := false
-	for i := range b.pendingUpdates {
-		if b.pendingUpdates[i].ID == entry.ID {
-			b.pendingUpdates[i] = entry
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		if len(b.pendingUpdates) >= idleArchiveAuditMaxEntries {
-			b.pendingUpdates = append(b.pendingUpdates[1:], entry)
+	b.upsertPendingLocked(item)
+	pendingSnap := slices.Clone(b.pendingUpdates)
+	b.mu.Unlock()
+
+	if store := svc.store(); store != nil {
+		writeCtx, cancel := context.WithTimeout(context.Background(), agentArchiveTimeout)
+		err := store.PutSetting(writeCtx, idleArchiveAuditPendingKey, pendingSnap)
+		cancel()
+		if err != nil {
+			svc.logf("idle archive audit pending save: %v", err)
 		} else {
-			b.pendingUpdates = append(b.pendingUpdates, entry)
+			b.mu.Lock()
+			b.pendingDirty = true
+			b.mu.Unlock()
 		}
 	}
+	svc.ensureIdleArchiveAuditRetryRunning()
+}
+
+func (svc *Service) enqueueIdleArchiveAuditRetry(entry assistantwire.IdleArchiveAuditEntry) {
+	svc.enqueueIdleArchiveAuditPending(idleArchivePendingAudit{Entry: entry})
+}
+
+func (svc *Service) enqueueIdleArchiveAuditMirrorRetry(entry assistantwire.IdleArchiveAuditEntry) {
+	svc.enqueueIdleArchiveAuditPending(idleArchivePendingAudit{Entry: entry, MirrorOnly: true})
+}
+
+func (svc *Service) ensureIdleArchiveAuditRetryRunning() {
+	b := &svc.idleArchiveAudit
+	b.mu.Lock()
 	if b.retryWake == nil {
 		b.retryWake = make(chan struct{}, 1)
 	}
@@ -928,6 +1184,18 @@ func (svc *Service) stopIdleArchiveAuditRetry() {
 	}
 }
 
+// recoverIdleArchiveAudit scans persisted pending finalizations and orphaned close_attempted records on manager
+// startup, finalizing them and mirroring plugin_audit. If storage is temporarily unavailable, it arms the
+// background retry worker so recovery completes automatically once storage returns.
+func (svc *Service) recoverIdleArchiveAudit(ctx context.Context) {
+	if svc.store() == nil {
+		return
+	}
+	if !svc.flushIdleArchiveAuditRetries(ctx) {
+		svc.ensureIdleArchiveAuditRetryRunning()
+	}
+}
+
 func (svc *Service) flushIdleArchiveAuditRetries(ctx context.Context) bool {
 	store := svc.store()
 	if store == nil {
@@ -936,37 +1204,58 @@ func (svc *Service) flushIdleArchiveAuditRetries(ctx context.Context) bool {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentArchiveTimeout)
 	defer cancel()
 
+	if err := svc.ensureIdleArchiveAuditRecovered(writeCtx); err != nil {
+		svc.logf("idle archive audit retry recover: %v", err)
+		return false
+	}
+
 	b := &svc.idleArchiveAudit
 	b.mu.Lock()
 	if len(b.pendingUpdates) == 0 {
+		dirty := b.pendingDirty
 		b.mu.Unlock()
+		if dirty {
+			if err := store.PutSetting(writeCtx, idleArchiveAuditPendingKey, []idleArchivePendingAudit{}); err != nil {
+				svc.logf("idle archive audit pending clear: %v", err)
+				return false
+			}
+			b.mu.Lock()
+			if len(b.pendingUpdates) == 0 {
+				b.pendingDirty = false
+			}
+			b.mu.Unlock()
+		}
 		return true
 	}
-	if !b.loaded {
-		var saved []assistantwire.IdleArchiveAuditEntry
-		if _, err := store.Setting(writeCtx, idleArchiveAuditKey, &saved); err != nil {
+	pendingSnap := slices.Clone(b.pendingUpdates)
+	var toSave []assistantwire.IdleArchiveAuditEntry
+	for _, p := range pendingSnap {
+		if !p.MirrorOnly {
+			toSave = append(toSave, p.Entry)
+		}
+	}
+	if len(toSave) > 0 {
+		next := mergeIdleArchiveAuditEntries(b.entries, toSave, nil)
+		if err := store.PutSetting(writeCtx, idleArchiveAuditKey, next); err != nil {
 			b.mu.Unlock()
-			svc.logf("idle archive audit retry load: %v", err)
+			svc.logf("idle archive audit retry save: %v", err)
 			return false
 		}
-		b.entries = saved
-		b.loaded = true
+		b.entries = next
 	}
-	pendingSnap := slices.Clone(b.pendingUpdates)
-	next := mergeIdleArchiveAuditEntries(b.entries, pendingSnap, nil)
-	if err := store.PutSetting(writeCtx, idleArchiveAuditKey, next); err != nil {
-		b.mu.Unlock()
-		svc.logf("idle archive audit retry save: %v", err)
-		return false
-	}
-	b.entries = next
-	b.pendingUpdates = nil
 	b.mu.Unlock()
 
+	var mirrored []assistantwire.IdleArchiveAuditEntry
+	allMirrored := true
 	for _, p := range pendingSnap {
-		svc.mirrorIdleArchivePluginAudit(writeCtx, p)
+		if err := svc.mirrorIdleArchivePluginAudit(writeCtx, p.Entry); err != nil {
+			allMirrored = false
+			continue
+		}
+		mirrored = append(mirrored, p.Entry)
 	}
-	return true
+	settled := svc.settleMirroredIdleArchivePending(writeCtx, toSave, mirrored)
+	return allMirrored && settled
 }
 
 func (svc *Service) runIdleArchiveAuditRetry(stopCh, doneCh chan struct{}) {
@@ -990,12 +1279,16 @@ func (svc *Service) runIdleArchiveAuditRetry(stopCh, doneCh chan struct{}) {
 		select {
 		case <-stopCh:
 			b.mu.Lock()
-			b.retryRunning = false
+			if b.retryDone == doneCh {
+				b.retryRunning = false
+			}
 			b.mu.Unlock()
 			return
 		case <-runDone:
 			b.mu.Lock()
-			b.retryRunning = false
+			if b.retryDone == doneCh {
+				b.retryRunning = false
+			}
 			b.mu.Unlock()
 			return
 		case <-wake:
@@ -1010,8 +1303,10 @@ func (svc *Service) runIdleArchiveAuditRetry(stopCh, doneCh chan struct{}) {
 		case <-timer.C:
 			if svc.flushIdleArchiveAuditRetries(context.Background()) {
 				b.mu.Lock()
-				if len(b.pendingUpdates) == 0 {
-					b.retryRunning = false
+				if len(b.pendingUpdates) == 0 && !b.pendingDirty && b.recovered {
+					if b.retryDone == doneCh {
+						b.retryRunning = false
+					}
 					b.mu.Unlock()
 					return
 				}
@@ -1662,6 +1957,8 @@ func (svc *Service) handleAgentIdleArchive(w http.ResponseWriter, r *http.Reques
 			Outcome:             idleArchiveOutcomeCloseAttempted,
 			Reason:              req.Reason,
 		}
+		svc.trackIdleArchiveAttempt(attemptEntry.ID)
+		defer svc.untrackIdleArchiveAttempt(attemptEntry.ID)
 		auditID, attemptPersisted := svc.recordIdleArchiveAuditAttempt(ctx, attemptEntry)
 		if !attemptPersisted {
 			if rbErr := svc.rollbackIdleArchiveRecord(ctx, st); rbErr != nil {
