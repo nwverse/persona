@@ -100,7 +100,7 @@ struct TodoListView: View {
         .modifier(TodosViewOptions(model: model, place: title, asCalendar: $upcomingCalendar))
         .pageSearchable(text: $model.query, placement: Self.searchPlacement, prompt: String(localized: "Search To-dos [To-dos Search]"))
         // The search narrows the list or gives it back: it no longer rests where a scroll left it.
-        .onChange(of: model.query) { _, _ in sight.moved() }
+        .onChange(of: model.searchedWords) { _, _ in sight.moved() }
         .modifier(TodosFootBar(model: model, place: title, creating: $creating))
         .sheet(item: Binding(get: { model.dating.flatMap { key in model.item(key).map { DueTarget(key: key, item: $0) } } },
                              set: { model.dating = $0?.key })) { target in
@@ -167,10 +167,13 @@ struct TodoListView: View {
                 model.hold.set(.scrolling, phase != .idle)
                 sight.scrolling = phase != .idle
                 if phase != .idle { model.settleArrivals() } // nothing fades in under a finger
-                // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn.
+                // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn. A search's
+                // results are no place's list: the place keeps where it rested.
                 if phase == .idle, old != .idle {
                     sight.rested()
-                    if let top = sight.top(in: model.groups) { workspace.rested(model.place.id, at: top, shown: shownHere) }
+                    if !model.searching, let top = sight.top(in: model.groups) {
+                        workspace.rested(model.place.id, at: top, shown: shownHere)
+                    }
                 }
             }
             .onAppear {
@@ -362,10 +365,9 @@ struct TodoListView: View {
         if let offline = app.assistantManagerOffline, !model.hasRows {
             AssistantOfflineNotice(manager: offline)
         } else if model.searching {
-            // Nothing open matches: the line under it widens the search to the chats.
-            EmptyStateView(symbol: Theme.Icon.search,
-                           title: String(localized: "No Results for “\(model.query.trimmingCharacters(in: .whitespacesAndNewlines))”"),
-                           message: String(localized: "Search looks through the titles and notes of your open to-dos. [To-dos Search]"))
+            // Nothing matches, open or closed: the line under it widens the search to the chats.
+            EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Results for “\(model.searchedWords)”"),
+                           message: String(localized: "Search looks through the titles and notes of all your to-dos, including done ones. [To-dos Search]"))
         } else if model.placeIsEmpty {
             TodoPlaceEmptyState(place: model.place, title: title, comingUp: model.comingUp) { places.show($0) }
         } else {
@@ -914,15 +916,17 @@ private struct TodosOfflineLine: View {
     }
 }
 
-/// "⌕ Search Chats for “kyoto” ›": the search's last row, which takes the words to the app's search over Persona's chats.
-/// A view of its own, so only it follows the words (P5).
+/// "⌕ Search Chats for “kyoto” ›": the search's last row, which takes the words in the field to the app's search over
+/// Persona's chats; drawn under the results, once the list searches. A view of its own, so only it follows the words (P5).
+/// Its identifier says whether the results drawn are the field's words' yet (a look lands a moment after the key), so a
+/// UI test waits for them; nothing a person sees or hears changes.
 private struct TodosSearchChatsRow: View {
     var model: TodosListModel
     var open: (String) -> Void
 
     var body: some View {
-        let words = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !words.isEmpty {
+        let words = TodoSearch.words(model.query)
+        if model.searching && !words.isEmpty {
             Section {
                 Button {
                     Haptics.tap()
@@ -944,7 +948,7 @@ private struct TodosSearchChatsRow: View {
                 // Plain, so its glyph and chevron are the grays they say, not the accent a list's button tints them.
                 .buttonStyle(.plain)
                 .listRowInsets(TodoListCell.insets)
-                .accessibilityIdentifier("todos.searchChats")
+                .accessibilityIdentifier(model.searchedWords == words ? "todos.searchChats" : "todos.searchChats.looking")
             }
         }
     }

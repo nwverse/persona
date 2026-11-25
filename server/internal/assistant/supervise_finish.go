@@ -24,10 +24,17 @@ func (s *Service) promoteSupervision(self string) error {
 
 func (s *Service) promoteSupervisionLocked(ctx context.Context, key string) error {
 	b := &s.supervise
-	if hold := b.holds[key]; hold.active(time.Now()) && !hold.Visible {
-		hold.Visible = true
-		b.holds[key] = hold
-		b.holdsDirty = true
+	now := time.Now()
+	if hold := b.holds[key]; hold.active(now) {
+		if !hold.Visible {
+			hold.Visible = true
+			b.holds[key] = hold
+			b.holdsDirty = true
+		}
+		if err := s.saveSupervisionHoldsLocked(ctx); err != nil {
+			return err
+		}
+		return s.markStalledHandledLocked(ctx, hold.Stalled, now)
 	}
 	return s.saveSupervisionHoldsLocked(ctx)
 }
@@ -90,6 +97,9 @@ func (s *Service) toolSupervisionFinish(ctx context.Context, self string, args j
 			b.mu.Unlock()
 			return "", err
 		}
+	} else if err := s.markStalledHandledLocked(ctx, hold.Stalled, time.Now()); err != nil {
+		b.mu.Unlock()
+		return "", err
 	}
 	b.mu.Unlock()
 	body, err := json.Marshal(map[string]string{"visibility": a.Visibility, "summary": a.Summary, "level": level})

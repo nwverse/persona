@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -118,6 +119,57 @@ func TestExternalBindingManyToManyPersistenceAndDeletion(t *testing.T) {
 	}
 	if got := lookup(t, next.Store, mail); len(got.Matches) != 0 || got.Matches == nil {
 		t.Fatalf("deleted to-do has a binding: %+v", got)
+	}
+}
+
+func TestExternalLookupProjectsLegacyLarkTopicWithoutCopyingIt(t *testing.T) {
+	d := open(t)
+	ctx := t.Context()
+	const todo = "legacy_topic_todo"
+	createTodo(t, d, todo)
+	group := ref{Provider: "lark", Container: node{Kind: "chat", ID: "oc_example"}}
+	topic := ref{Provider: "lark", Container: group.Container, Item: node{Kind: "thread", ID: "omt_example"}}
+	thread := db.TodoThread{Channel: "feishu", ChatID: "oc_example", ThreadID: "omt_example"}
+	if err := d.SetTodoThread(ctx, todo, thread, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	exact := func(got assistantwire.ExternalBindingLookup) []assistantwire.ExternalBindingMatch {
+		return slices.DeleteFunc(got.Matches, func(m assistantwire.ExternalBindingMatch) bool { return m.ExternalRef != topic })
+	}
+	explicit := createBinding(t, d.Store, assistantwire.ExternalBindingInput{ExternalRef: topic, TargetKind: "todo", TargetID: todo})
+	for _, store := range []*externalsourcestore.Store{d.Store, open(t).Store} {
+		got := exact(lookup(t, store, topic))
+		if len(got) != 2 || got[0].BindingID != explicit.ID ||
+			got[1].Source != "lark_topic" || got[1].TargetID != todo || got[1].BindingID != "" {
+			t.Fatalf("legacy topic matches: %+v", got)
+		}
+		path, err := externalbindingadapt.Path(topic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if configured, err := store.ConfiguredExternalRefs(ctx, path); err != nil || len(configured) != 0 {
+			t.Fatalf("a projection enabled forwarding: %+v, %v", configured, err)
+		}
+		if routes, err := store.ExternalRoutingConfiguration(ctx, path); err != nil || len(exact(routes.Lookup)) != 2 {
+			t.Fatalf("routing lookup: %+v, %v", routes, err)
+		}
+	}
+	other := topic
+	other.Channel = "2"
+	if got := lookup(t, d.Store, other); len(got.Matches) != 0 {
+		t.Fatalf("legacy thread matched another account: %+v", got)
+	}
+	if err := d.DeleteExternalBinding(ctx, explicit.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := exact(lookup(t, d.Store, topic)); len(got) != 1 || got[0].TargetID != todo {
+		t.Fatalf("removing an explicit link removed the legacy binding: %+v", got)
+	}
+	if _, err := d.ClearTodoThread(ctx, todo, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := exact(lookup(t, d.Store, topic)); len(got) != 0 {
+		t.Fatalf("thread projection outlived the native link: %+v", got)
 	}
 }
 

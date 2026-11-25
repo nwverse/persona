@@ -414,8 +414,9 @@ func TestBudgetStopsAsPartialWithFinishedCursorsOnly(t *testing.T) {
 	}
 }
 
-// A chat whose budget runs out part way hands nothing of it over and keeps its cursor.
-func TestBudgetInTheMiddleOfAChatDropsIt(t *testing.T) {
+// A chat whose budget runs out between pages commits the pages already finished, advances its cursor to the newest
+// committed message, and marks the run Partial so the next run resumes forward without livelock.
+func TestBudgetInTheMiddleOfAChatCommitsCompletedPages(t *testing.T) {
 	clk := &fakeClock{t: testNow}
 	f := newFakeOpen(t, clk)
 	f.step = 40 * time.Second
@@ -423,18 +424,57 @@ func TestBudgetInTheMiddleOfAChatDropsIt(t *testing.T) {
 	b := binding(f, "primary~a1", larksyncwire.TierFull)
 	b.Budget = time.Minute
 	f.data("/open-apis/im/v1/chats", map[string]any{"items": []any{map[string]any{"chat_id": "oc_a"}}})
-	f.data("/open-apis/im/v1/messages", map[string]any{"items": []any{textMsg("om_1", "oc_a", "ou_peer", "hi", testNow.Add(-time.Hour))}, "has_more": true, "page_token": "p2"})
+	t1 := testNow.Add(-2 * time.Hour)
+	t2 := testNow.Add(-time.Hour)
+	f.handle("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page_token") == "" {
+			writeData(w, map[string]any{"items": []any{textMsg("om_1", "oc_a", "ou_peer", "page 1", t1)}, "has_more": true, "page_token": "p2"})
+			return
+		}
+		writeData(w, map[string]any{"items": []any{textMsg("om_2", "oc_a", "ou_peer", "page 2", t2)}})
+	})
 
 	idx := newMemIndex()
 	res, err := s.Run(t.Context(), b, staticToken("tok"), nil, idx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Partial || len(res.Messages) != 0 || len(res.Cursors) != 0 || len(res.Errors) != 0 {
-		t.Fatalf("result = %+v", res)
+	if !res.Partial || len(res.Errors) != 0 {
+		t.Fatalf("result = %+v, want partial with no errors", res)
 	}
-	if idx.puts != 0 {
-		t.Error("the index was written for a chat that was not handed over")
+	if len(res.Messages) != 1 || res.Messages[0].ID != "om_1" {
+		t.Fatalf("messages = %+v, want completed page 1 (om_1)", res.Messages)
+	}
+	if got := res.Cursors["im:oc_a"]; got != msgTime(t1) {
+		t.Fatalf("cursor im:oc_a = %q, want %q", got, msgTime(t1))
+	}
+	if idx.puts == 0 {
+		t.Error("expected committed page 1 to be indexed")
+	}
+
+	// Next run with enough budget resumes from im:oc_a cursor and delivers page 2 without re-emitting om_1.
+	f.step = 0
+	b.Budget = 5 * time.Minute
+	emptySearch(f)
+	emptyDocs(f)
+	f.handle("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.URL.Query().Get("start_time"), strconv.FormatInt(t1.Unix()-300, 10); got != want {
+			t.Errorf("run 2 start_time = %q, want %q", got, want)
+		}
+		writeData(w, map[string]any{"items": []any{
+			textMsg("om_1", "oc_a", "ou_peer", "page 1", t1),
+			textMsg("om_2", "oc_a", "ou_peer", "page 2", t2),
+		}})
+	})
+	res2, err := s.Run(t.Context(), b, staticToken("tok"), res.Cursors, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Partial || len(res2.Messages) != 1 || res2.Messages[0].ID != "om_2" {
+		t.Fatalf("run 2 = %+v, want only new om_2", res2)
+	}
+	if got := res2.Cursors["im:oc_a"]; got != msgTime(t2) {
+		t.Fatalf("run 2 cursor = %q, want %q", got, msgTime(t2))
 	}
 }
 
@@ -1140,5 +1180,420 @@ func TestP2PDiscoveryIsolatesFailingChatAndProtectsGroupChatType(t *testing.T) {
 	}
 	if saved["oc_p2p_ok"] != "Name ou_ok" {
 		t.Errorf("oc_p2p_ok name = %q", saved["oc_p2p_ok"])
+	}
+}
+
+// ModeIM hitting a large backlog topic group commits completed pages/threads up to the per-chat cap, advances its
+// cursor, continues forward on the next run without livelocking, and never starves subsequent group chats, known p2p
+// chats, p2p discovery, or linked cloud docs.
+func TestModeIMLargeTopicBacklogAdvancesCursorAndNeverStarvesOtherChatsOrSteps(t *testing.T) {
+	clk := &fakeClock{t: testNow}
+	f := newFakeOpen(t, clk)
+	s := newTestSyncer(t, clk)
+	b := binding(f, "primary~a1", larksyncwire.TierFull)
+	b.Mode = larksyncwire.ModeIM
+	b.Budget = 5 * time.Minute
+
+	// 8 pages of a large backlog topic group (exceeds imChatPagesMost=5) plus a second group chat and a p2p chat
+	// discovered via search:p2p and a cloud doc link in the second group chat.
+	f.data("/open-apis/im/v1/chats", map[string]any{"items": []any{
+		map[string]any{"chat_id": "oc_big", "name": "Backlog Topic", "chat_mode": "topic"},
+		map[string]any{"chat_id": "oc_after", "name": "Later Group", "chat_mode": "group"},
+	}})
+
+	baseAt := testNow.Add(-10 * time.Hour)
+	bigMsgs := make([]map[string]any, 8)
+	bigReplies := map[string][]any{}
+	for i := range bigMsgs {
+		at := baseAt.Add(time.Duration(i+1) * time.Hour)
+		id := "om_big_" + strconv.Itoa(i+1)
+		th := "omt_big_" + strconv.Itoa(i+1)
+		m := textMsg(id, "oc_big", "ou_poster", "topic "+strconv.Itoa(i+1), at)
+		m["thread_id"] = th
+		bigMsgs[i] = m
+		rep := textMsg("om_rep_"+strconv.Itoa(i+1), "oc_big", "ou_reply", "reply "+strconv.Itoa(i+1), at.Add(time.Minute))
+		rep["thread_id"] = th
+		bigReplies[th] = []any{m, rep}
+	}
+	afterAt := testNow.Add(-5 * time.Minute)
+	p2pAt := testNow.Add(-3 * time.Minute)
+
+	f.handle("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		cid := q.Get("container_id")
+		switch {
+		case cid == "oc_big":
+			startSec, _ := strconv.ParseInt(q.Get("start_time"), 10, 64)
+			var filtered []map[string]any
+			for _, m := range bigMsgs {
+				ms := parseUnix(m["create_time"].(string))
+				if ms/1000 >= startSec {
+					filtered = append(filtered, m)
+				}
+			}
+			idx := 0
+			if tok := q.Get("page_token"); tok != "" {
+				idx, _ = strconv.Atoi(tok)
+			}
+			if idx >= len(filtered) {
+				writeData(w, map[string]any{"items": []any{}})
+				return
+			}
+			hasMore := idx+1 < len(filtered)
+			nextTok := ""
+			if hasMore {
+				nextTok = strconv.Itoa(idx + 1)
+			}
+			writeData(w, map[string]any{"items": []any{filtered[idx]}, "has_more": hasMore, "page_token": nextTok})
+		case strings.HasPrefix(cid, "omt_big_"):
+			writeData(w, map[string]any{"items": bigReplies[cid]})
+		case cid == "oc_after":
+			writeData(w, map[string]any{"items": []any{
+				textMsg("om_after_1", "oc_after", "ou_other", "doc: https://my.feishu.cn/file/boxAfter1", afterAt),
+			}})
+		case cid == "oc_p2p_new":
+			writeData(w, map[string]any{"items": []any{
+				textMsg("om_p2p_1", "oc_p2p_new", "ou_friend", "hello dm", p2pAt),
+			}})
+		default:
+			t.Errorf("unexpected container %q", cid)
+		}
+	})
+	f.handle("/open-apis/search/v2/message", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["chat_type"] != searchChatTypeP2P {
+			t.Errorf("ModeIM unexpected search body %v", body)
+		}
+		writeData(w, map[string]any{"items": []string{"om_p2p_1"}})
+	})
+	f.data("/open-apis/im/v1/messages/om_p2p_1", map[string]any{"items": []any{
+		textMsg("om_p2p_1", "oc_p2p_new", "ou_friend", "hello dm", p2pAt),
+	}})
+	f.data("/open-apis/drive/v1/metas/batch_query", map[string]any{"metas": []any{
+		map[string]any{"doc_token": "boxAfter1", "doc_type": "file", "title": "notes.md", "latest_modify_time": secs(afterAt), "url": "https://my.feishu.cn/file/boxAfter1"},
+	}})
+	f.handle("/open-apis/drive/v1/files/boxAfter1/download", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("linked doc body"))
+	})
+
+	idx := newMemIndex()
+	cursors := map[string]string{
+		"im:oc_big":   msgTime(baseAt),
+		"im:oc_after": msgTime(testNow.Add(-15 * time.Minute)),
+	}
+
+	// Run 1: oc_big hits imChatPagesMost (5 pages) and commits pages 1..5 + their replies; oc_after, readP2PDiscovery,
+	// and readLinkedDocs ALL still run in the same round!
+	res1, err := s.Run(t.Context(), b, staticToken("tok"), cursors, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res1.Errors) != 0 {
+		t.Fatalf("run 1 errors = %+v", res1.Errors)
+	}
+	wantCur1 := msgTime(baseAt.Add(time.Duration(imChatPagesMost) * time.Hour))
+	if got := res1.Cursors["im:oc_big"]; got != wantCur1 {
+		t.Fatalf("run 1 im:oc_big cursor = %q, want %q", got, wantCur1)
+	}
+	byID1 := map[string]larksyncwire.Message{}
+	for _, m := range res1.Messages {
+		byID1[m.ID] = m
+	}
+	for i := 1; i <= imChatPagesMost; i++ {
+		if _, ok := byID1["om_big_"+strconv.Itoa(i)]; !ok {
+			t.Errorf("run 1 missing om_big_%d", i)
+		}
+		if _, ok := byID1["om_rep_"+strconv.Itoa(i)]; !ok {
+			t.Errorf("run 1 missing om_rep_%d", i)
+		}
+	}
+	if _, ok := byID1["om_after_1"]; !ok {
+		t.Errorf("run 1 starved later group chat oc_after")
+	}
+	if _, ok := byID1["om_p2p_1"]; !ok {
+		t.Errorf("run 1 starved readP2PDiscovery")
+	}
+	if len(res1.Docs) != 1 || res1.Docs[0].ObjToken != "boxAfter1" || res1.Docs[0].Body != "linked doc body" {
+		t.Fatalf("run 1 starved readLinkedDocs: docs = %+v", res1.Docs)
+	}
+
+	// Run 2: merges cursors and continues forward on oc_big to read pages 6..8!
+	nextCursors := map[string]string{}
+	for k, v := range cursors {
+		nextCursors[k] = v
+	}
+	for k, v := range res1.Cursors {
+		nextCursors[k] = v
+	}
+	clk.advance(15 * time.Minute)
+	res2, err := s.Run(t.Context(), b, staticToken("tok"), nextCursors, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCur2 := msgTime(baseAt.Add(8 * time.Hour))
+	if got := res2.Cursors["im:oc_big"]; got != wantCur2 {
+		t.Fatalf("run 2 im:oc_big cursor = %q, want %q", got, wantCur2)
+	}
+	byID2 := map[string]larksyncwire.Message{}
+	for _, m := range res2.Messages {
+		byID2[m.ID] = m
+	}
+	for i := imChatPagesMost + 1; i <= 8; i++ {
+		if _, ok := byID2["om_big_"+strconv.Itoa(i)]; !ok {
+			t.Errorf("run 2 missing om_big_%d", i)
+		}
+		if _, ok := byID2["om_rep_"+strconv.Itoa(i)]; !ok {
+			t.Errorf("run 2 missing om_rep_%d", i)
+		}
+	}
+}
+
+// Even when readIM exhausts its 60% budget slice in ModeIM on a slow chat, readP2PDiscovery and readLinkedDocs still
+// execute inside their reserved slices, and the next ModeIM round rotates past the slow chat via im:rr so subsequent
+// chats are read first.
+func TestModeIMReservedSlicesAndRoundRobinRotation(t *testing.T) {
+	clk := &fakeClock{t: testNow}
+	f := newFakeOpen(t, clk)
+	// Each API call advances 1 minute; total budget 5 minutes -> readIM slice is 3 minutes (60%).
+	f.step = time.Minute
+	s := newTestSyncer(t, clk)
+	b := binding(f, "primary~a1", larksyncwire.TierFull)
+	b.Mode = larksyncwire.ModeIM
+	b.Budget = 5 * time.Minute
+
+	f.data("/open-apis/im/v1/chats", map[string]any{"items": []any{
+		map[string]any{"chat_id": "oc_slow", "name": "Slow Group", "chat_mode": "group"},
+		map[string]any{"chat_id": "oc_next", "name": "Next Group", "chat_mode": "group"},
+	}})
+	tSlow1 := testNow.Add(-5 * time.Hour)
+	tSlow2 := testNow.Add(-4 * time.Hour)
+	tNext := testNow.Add(-10 * time.Minute)
+	tP2P := testNow.Add(-5 * time.Minute)
+
+	var seenOrder []string
+	var omu sync.Mutex
+	f.handle("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		cid := q.Get("container_id")
+		omu.Lock()
+		seenOrder = append(seenOrder, cid)
+		omu.Unlock()
+		switch cid {
+		case "oc_slow":
+			if q.Get("page_token") == "" {
+				writeData(w, map[string]any{
+					"items":      []any{textMsg("om_s1", "oc_slow", "ou_a", "slow p1 https://my.feishu.cn/file/boxSlow1", tSlow1)},
+					"has_more":   true,
+					"page_token": "p2",
+				})
+				return
+			}
+			writeData(w, map[string]any{"items": []any{textMsg("om_s2", "oc_slow", "ou_a", "slow p2", tSlow2)}})
+		case "oc_next":
+			writeData(w, map[string]any{"items": []any{textMsg("om_n1", "oc_next", "ou_b", "next msg", tNext)}})
+		case "oc_p2p":
+			writeData(w, map[string]any{"items": []any{textMsg("om_p1", "oc_p2p", "ou_c", "p2p msg", tP2P)}})
+		default:
+			t.Errorf("unexpected container %q", cid)
+		}
+	})
+	p2pRan := atomic.Bool{}
+	f.handle("/open-apis/search/v2/message", func(w http.ResponseWriter, _ *http.Request) {
+		p2pRan.Store(true)
+		writeData(w, map[string]any{"items": []string{}})
+	})
+	linkedMetaRan := atomic.Bool{}
+	f.handle("/open-apis/drive/v1/metas/batch_query", func(w http.ResponseWriter, _ *http.Request) {
+		linkedMetaRan.Store(true)
+		writeData(w, map[string]any{"metas": []any{
+			map[string]any{"doc_token": "boxSlow1", "doc_type": "file", "title": "info.bin", "latest_modify_time": secs(tSlow1)},
+		}})
+	})
+
+	idx := newMemIndex()
+	// Run 1: listChats (1m) + oc_slow p1 (2m) + oc_slow p2 (3m -> hits readIM 60% slice = 3m!).
+	// readIM stops before oc_next and saves im:rr="oc_slow"; readP2PDiscovery runs at t=3m..4m; readLinkedDocs at t=4m..5m!
+	res1, err := s.Run(t.Context(), b, staticToken("tok"), map[string]string{
+		"im:oc_slow": msgTime(testNow.Add(-6 * time.Hour)),
+		"im:oc_next": msgTime(testNow.Add(-20 * time.Minute)),
+	}, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res1.Partial {
+		t.Fatalf("expected run 1 to be partial after readIM hit its slice")
+	}
+	if !p2pRan.Load() {
+		t.Fatalf("readP2PDiscovery was starved when readIM hit its 60%% budget slice")
+	}
+	if !linkedMetaRan.Load() {
+		t.Fatalf("readLinkedDocs was starved when readIM hit its 60%% budget slice")
+	}
+	if got := res1.Cursors[imRoundRobinCursor]; got != "oc_slow" {
+		t.Fatalf("im:rr = %q, want oc_slow", got)
+	}
+
+	// Run 2: even though oc_slow STILL has an older cursor than oc_next, im:rr="oc_slow" rotates oc_next ahead of oc_slow.
+	clk.advance(15 * time.Minute)
+	f.step = 0
+	omu.Lock()
+	seenOrder = nil
+	omu.Unlock()
+	res2, err := s.Run(t.Context(), b, staticToken("tok"), map[string]string{
+		"im:oc_slow":       res1.Cursors["im:oc_slow"],
+		"im:oc_next":       msgTime(testNow.Add(-20 * time.Minute)),
+		imRoundRobinCursor: res1.Cursors[imRoundRobinCursor],
+	}, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Partial {
+		t.Fatalf("run 2 unexpectedly partial")
+	}
+	omu.Lock()
+	order := append([]string(nil), seenOrder...)
+	omu.Unlock()
+	if len(order) < 2 || order[0] != "oc_next" {
+		t.Fatalf("run 2 chat order = %v, want oc_next first due to round-robin rotation past oc_slow", order)
+	}
+}
+
+// ResolveUserNames skips non-user/bot ids, deduplicates ids, ignores per-user lookup failures, and reports scope errors.
+func TestResolveUserNames(t *testing.T) {
+	clk := &fakeClock{t: testNow}
+	f := newFakeOpen(t, clk)
+	s := newTestSyncer(t, clk)
+	b := binding(f, "primary~a1", larksyncwire.TierFull)
+
+	f.handle("/open-apis/contact/v3/users/ou_missing", func(w http.ResponseWriter, _ *http.Request) {
+		writeCode(w, http.StatusBadRequest, 41001, "not found")
+	})
+	f.handle("/open-apis/contact/v3/users/cli_bot", func(w http.ResponseWriter, _ *http.Request) {
+		t.Errorf("contact lookup must skip cli_* bots")
+		writeCode(w, http.StatusBadRequest, 99992402, "invalid")
+	})
+
+	names, err := s.ResolveUserNames(t.Context(), b, staticToken("tok"), []string{"cli_bot", "ou_a", "ou_a", "ou_missing", "ou_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names["ou_a"] != "Name ou_a" || names["ou_b"] != "Name ou_b" || len(names) != 2 {
+		t.Fatalf("names = %v, want ou_a and ou_b", names)
+	}
+	if n := f.count("/open-apis/contact/v3/users/ou_a"); n != 1 {
+		t.Errorf("ou_a looked up %d times, want 1", n)
+	}
+
+	// Missing contact scope returns ErrKindScope alongside already-resolved names.
+	f.handle("/open-apis/contact/v3/users/ou_denied", func(w http.ResponseWriter, _ *http.Request) {
+		writeCode(w, http.StatusBadRequest, 99991679, "missing scope")
+	})
+	names, err = s.ResolveUserNames(t.Context(), b, staticToken("tok"), []string{"ou_a", "ou_denied", "ou_never"})
+	if e := asSyncError(err); e == nil || e.Kind != larksyncwire.ErrKindScope {
+		t.Fatalf("err = %v, want ErrKindScope", err)
+	}
+	if names["ou_a"] != "Name ou_a" || f.count("/open-apis/contact/v3/users/ou_never") != 0 {
+		t.Fatalf("after scope error: names=%v neverCount=%d", names, f.count("/open-apis/contact/v3/users/ou_never"))
+	}
+}
+
+// A ModeIM topic chat with a multi-page thread (exceeding imThreadPagesMost=3) commits the completed thread pages,
+// records im_thread:<th>, and resumes the remaining replies on the next run; similarly, a burst of >imChatThreadsMost
+// topics within the 5-minute overlap skips already-indexed overlap roots on the next run so it never livelocks.
+func TestModeIMThreadPaginationResumeAndOverlapBurstProgress(t *testing.T) {
+	clk := &fakeClock{t: testNow}
+	f := newFakeOpen(t, clk)
+	s := newTestSyncer(t, clk)
+	b := binding(f, "primary~a1", larksyncwire.TierFull)
+	b.Mode = larksyncwire.ModeIM
+	b.Budget = 5 * time.Minute
+
+	f.data("/open-apis/im/v1/chats", map[string]any{"items": []any{
+		map[string]any{"chat_id": "oc_th", "name": "Mega Thread", "chat_mode": "topic"},
+	}})
+	f.data("/open-apis/search/v2/message", map[string]any{"items": []string{}})
+
+	baseAt := testNow.Add(-2 * time.Hour)
+	root := textMsg("om_root", "oc_th", "ou_a", "root topic", baseAt)
+	root["thread_id"] = "omt_mega"
+	// 5 pages of replies (1 reply per page), exceeding imThreadPagesMost=3.
+	threadPages := make([]map[string]any, 5)
+	for i := range threadPages {
+		m := textMsg("om_tr_"+strconv.Itoa(i+1), "oc_th", "ou_b", "reply "+strconv.Itoa(i+1), baseAt.Add(time.Duration(i+1)*10*time.Minute))
+		m["thread_id"] = "omt_mega"
+		threadPages[i] = m
+	}
+
+	f.handle("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch q.Get("container_id") {
+		case "oc_th":
+			writeData(w, map[string]any{"items": []any{root}})
+		case "omt_mega":
+			startSec, _ := strconv.ParseInt(q.Get("start_time"), 10, 64)
+			var filtered []map[string]any
+			for _, m := range threadPages {
+				if parseUnix(m["create_time"].(string))/1000 >= startSec {
+					filtered = append(filtered, m)
+				}
+			}
+			idx := 0
+			if tok := q.Get("page_token"); tok != "" {
+				idx, _ = strconv.Atoi(tok)
+			}
+			if idx >= len(filtered) {
+				writeData(w, map[string]any{"items": []any{}})
+				return
+			}
+			hasMore := idx+1 < len(filtered)
+			nextTok := ""
+			if hasMore {
+				nextTok = strconv.Itoa(idx + 1)
+			}
+			writeData(w, map[string]any{"items": []any{filtered[idx]}, "has_more": hasMore, "page_token": nextTok})
+		default:
+			t.Errorf("unexpected container %q", q.Get("container_id"))
+		}
+	})
+
+	idx := newMemIndex()
+	res1, err := s.Run(t.Context(), b, staticToken("tok"), nil, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantThCur := msgTime(baseAt.Add(time.Duration(imThreadPagesMost) * 10 * time.Minute))
+	if got := res1.Cursors[threadCursorStem+"omt_mega"]; got != wantThCur {
+		t.Fatalf("run 1 thread cursor = %q, want %q", got, wantThCur)
+	}
+	byID1 := map[string]bool{}
+	for _, m := range res1.Messages {
+		byID1[m.ID] = true
+	}
+	for _, want := range []string{"om_root", "om_tr_1", "om_tr_2", "om_tr_3"} {
+		if !byID1[want] {
+			t.Errorf("run 1 missing %s", want)
+		}
+	}
+
+	// Run 2 resumes omt_mega from im_thread:omt_mega, delivers om_tr_4 & om_tr_5, marks im_thread:omt_mega "done",
+	// and advances im:oc_th.
+	clk.advance(15 * time.Minute)
+	res2, err := s.Run(t.Context(), b, staticToken("tok"), res1.Cursors, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res2.Cursors[threadCursorStem+"omt_mega"]; got != "done" {
+		t.Fatalf("run 2 thread cursor = %q, want done", got)
+	}
+	if got := res2.Cursors["im:oc_th"]; got != msgTime(baseAt) {
+		t.Fatalf("run 2 chat cursor = %q, want %q", got, msgTime(baseAt))
+	}
+	byID2 := map[string]bool{}
+	for _, m := range res2.Messages {
+		byID2[m.ID] = true
+	}
+	if !byID2["om_tr_4"] || !byID2["om_tr_5"] {
+		t.Fatalf("run 2 missing remaining replies: %v", byID2)
 	}
 }

@@ -181,7 +181,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			}
 		}
 	}
-	if (reminder == nil || !reminder.botAttempted) && s.divertAnswer(ctx, "push", cards) {
+	if (reminder == nil || !reminder.botAttempted) && s.divertAnswer(ctx, assistantwire.NoticePush(), cards) {
 		s.markPushed(channel.Feishu, machine, session)
 		r.went(channel.Feishu, nil)
 		return nil
@@ -353,7 +353,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 	ctx = feishuSendAs(ctx, kind, m.target.MachineID, m.target.SessionID)
 	// A scheduled task's result goes to a notifications companion when one takes the notices (feishu_companions.go);
 	// the main conversation's turns stay in the chat, where a reply continues them.
-	if !m.main && s.divertAnswer(ctx, "task", m.cards) {
+	if !m.main && s.divertAnswer(ctx, assistantwire.NoticeTask(), m.cards) {
 		if m.sent != nil {
 			m.sent()
 		}
