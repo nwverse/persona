@@ -63,10 +63,10 @@ export function OverviewMachineRows({ machines, agentCounts, offlineText }: {
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate text-[13px] font-medium text-ink">{m.name}</span>
-                {hub && <span className="shrink-0 truncate text-[11.5px] text-ink-3">{hub}</span>}
+                <span className="truncate text-meta font-medium text-ink">{m.name}</span>
+                {hub && <span className="shrink-0 truncate text-submeta text-ink-3">{hub}</span>}
               </span>
-              <span className="block truncate text-[11.5px] text-ink-3" title={!m.online && m.error && offlineText(m) !== m.error ? m.error : undefined} data-machine-line>{line}</span>
+              <span className="block truncate text-submeta text-ink-3" title={!m.online && m.error && offlineText(m) !== m.error ? m.error : undefined} data-machine-line>{line}</span>
             </span>
             <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
           </a>
