@@ -199,7 +199,9 @@ def hand_copies(schemas, read, tracked):
         for language in sorted(set(doc["x-out"]) | set(doc.get("x-guard", []))):
             suffixes = LANGUAGES[language][0]
             for rel in tracked:
-                if rel in generated or not rel.endswith(suffixes):
+                # Fixtures under a testdata directory are inputs to other checks, not code a client builds: the domain
+                # rules plant named ID types there on purpose (archguard's contract-bare-id cases).
+                if rel in generated or not rel.endswith(suffixes) or "/testdata/" in "/" + rel:
                     continue
                 exempt = set().union(*[n for lang, part, n in OPAQUE_COUNTERPARTS if lang == language and part in "/" + rel])
                 out += [(rel, name) for name in declared(language, read(rel), names) if name not in exempt]
@@ -359,6 +361,15 @@ class WireSchema(unittest.TestCase):
             ("harmony/Widget.ets", "Widget"), ("server/group.go", "Later"), ("server/local.go", "Widget"),
             ("web/generic.ts", "Thing"), ("web/thing.ts", "Thing"),
         ])
+
+    def test_testdata_fixtures_are_not_copies(self):
+        schemas = {"ids.schema.json": {"x-out": {"go": "server/internal/wireids/ids_gen.go"}, "$defs": {"InteractionID": {}}}}
+        files = {
+            "server/internal/archguard/testdata/domainrules/planted/internal/assistantwire/wire.go": "type InteractionID string\n",
+            "server/internal/assistantwire/wire.go": "type InteractionID string\n",
+        }
+        self.assertEqual(hand_copies(schemas, files.__getitem__, sorted(files)),
+                         [("server/internal/assistantwire/wire.go", "InteractionID")])
 
     def test_agentref_exemption_is_narrow(self):
         schemas = {"ids.schema.json": {"x-out": {"go": "server/internal/wireids/ids_gen.go"}, "$defs": {"SessionID": {}, "TodoID": {}}}}
