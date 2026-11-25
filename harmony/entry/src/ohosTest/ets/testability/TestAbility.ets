@@ -13,6 +13,7 @@ import nativeAlarmsTests from '../test/NativeAlarms.test';
 import nativeMeetingServicesTests from '../test/NativeMeetingServices.test';
 import nativePhoneTests from '../test/NativePhone.test';
 import nativeCoreTests from '../test/NativeCore.test';
+import nativeXiaoYiTests from '../test/NativeXiaoYi.test';
 import { bindNativeTestContext } from '../test/NativeContext';
 
 export default class TestAbility extends UIAbility {
@@ -34,7 +35,8 @@ export default class TestAbility extends UIAbility {
       else if (fixtureArgument('meetingReminderFixture')==='synthetic') nativeMeetingServicesTests();
       else if (fixtureArgument('recordingFixtureId')) nativeRecordingTests();
       else if (fixtureArgument('phoneCheck')) nativePhoneTests();
-      else { nativeStorageTests(); nativeRFBTests(); if (fixtureArgument('fixtureAddress')) nativeTransportTests(); if (fixtureArgument('previewCheck')) nativePreviewTests(); }
+      else if (fixtureArgument('xiaoYiCheck') === '1') nativeXiaoYiTests();
+      else { nativeStorageTests(); nativeXiaoYiTests(); nativeRFBTests(); if (fixtureArgument('fixtureAddress')) nativeTransportTests(); if (fixtureArgument('previewCheck')) nativePreviewTests(); }
     });
   }
 }
