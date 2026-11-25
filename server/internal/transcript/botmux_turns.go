@@ -334,7 +334,7 @@ func botmuxFromInbound(inbound []BotmuxTurnInbound, existing *proto.Botmux) *pro
 			// Display name only: never fall back to openId.
 			if name := strings.TrimSpace(m.Sender.Name); name != "" {
 				b.Sender = name
-				b.SenderType = strings.TrimSpace(m.Sender.Type)
+				b.SenderType = proto.BotmuxSenderType(strings.TrimSpace(m.Sender.Type))
 			}
 		}
 		if strings.TrimSpace(m.QuotedMessageID) != "" {
@@ -352,9 +352,9 @@ func botmuxFromInbound(inbound []BotmuxTurnInbound, existing *proto.Botmux) *pro
 				}
 			}
 			meta = append(meta, proto.BotmuxAttachment{
-				Kind:     strings.TrimSpace(a.Kind),
+				Kind:     proto.BotmuxAttachmentKind(strings.TrimSpace(a.Kind)),
 				Name:     name,
-				MimeType: strings.TrimSpace(a.MimeType),
+				MimeType: proto.MIMEType(strings.TrimSpace(a.MimeType)),
 			})
 		}
 		for _, mn := range m.Mentions {

@@ -172,7 +172,7 @@ func botmuxFacts(b *proto.Botmux, blocks map[string][]string) {
 	}
 	if m := botmuxSenderRe.FindStringSubmatch(first("sender")); m != nil {
 		a := botmuxAttrs(m[1])
-		b.Sender, b.SenderType = a["name"], a["type"]
+		b.Sender, b.SenderType = a["name"], proto.BotmuxSenderType(a["type"])
 	}
 	for _, m := range botmuxMentionRe.FindAllStringSubmatch(first("mentions"), -1) {
 		if name := botmuxAttrs(m[1])["name"]; name != "" {

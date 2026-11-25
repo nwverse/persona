@@ -337,11 +337,11 @@ type Visualization struct {
 // Botmux is a BotMux-wrapped item's own words and the facts the apps show as tags (docs/protocol/protocol.md
 // "BotMux messages"). Only display names leave the node: never a Lark open_id, email or message id.
 type Botmux struct {
-	Kind string `json:"kind"` // BotmuxMessage | BotmuxTrigger | BotmuxReply
-	Text string `json:"text"`
+	Kind BotmuxKind `json:"kind"` // BotmuxMessage | BotmuxTrigger | BotmuxReply
+	Text string     `json:"text"`
 	// Sender is the Lark sender's display name and SenderType its kind ("user", "bot"…), when BotMux named one.
-	Sender     string `json:"sender,omitempty"`
-	SenderType string `json:"sender_type,omitempty"`
+	Sender     string           `json:"sender,omitempty"`
+	SenderType BotmuxSenderType `json:"sender_type,omitempty"`
 	// Quoted: the message quoted another one; TopicContext: the topic had messages before the agent joined it.
 	Quoted       bool `json:"quoted,omitempty"`
 	TopicContext bool `json:"topic_context,omitempty"`
@@ -361,17 +361,39 @@ type Botmux struct {
 
 // BotmuxAttachment is safe attachment metadata from BotMux's structured turn record (never a local path or Lark id).
 type BotmuxAttachment struct {
-	Kind     string `json:"kind"`
-	Name     string `json:"name,omitempty"`
-	MimeType string `json:"mime_type,omitempty"`
+	Kind     BotmuxAttachmentKind `json:"kind"`
+	Name     string               `json:"name,omitempty"`
+	MimeType MIMEType             `json:"mime_type,omitempty"`
 }
+
+// BotmuxKind identifies the role of a BotMux-decoded transcript item.
+type BotmuxKind string
 
 // Botmux kinds.
 const (
-	BotmuxMessage = "message"
-	BotmuxTrigger = "trigger"
-	BotmuxReply   = "reply"
+	BotmuxMessage BotmuxKind = "message"
+	BotmuxTrigger BotmuxKind = "trigger"
+	BotmuxReply   BotmuxKind = "reply"
 )
+
+// Valid reports whether k is one of the known BotMux item kinds.
+func (k BotmuxKind) Valid() bool {
+	return k == BotmuxMessage || k == BotmuxTrigger || k == BotmuxReply
+}
+
+// BotmuxSenderType identifies the sender category reported by BotMux (for example "user" or "bot").
+type BotmuxSenderType string
+
+const (
+	BotmuxSenderUser BotmuxSenderType = "user"
+	BotmuxSenderBot  BotmuxSenderType = "bot"
+)
+
+// BotmuxAttachmentKind identifies the kind of an attachment reported by BotMux (for example "image", "file", "audio").
+type BotmuxAttachmentKind string
+
+// MIMEType is an IANA media type reported on wire metadata (for example "image/png" or "application/pdf").
+type MIMEType string
 
 // TokenUsage is what model requests used, as the transcript records it (#5426): tokens by kind, the way the usage
 // meter counts them (UsageBucket: Input excludes the cache). Model is the model the transcript names (never Claude
