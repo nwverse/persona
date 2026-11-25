@@ -3234,7 +3234,7 @@ second switch, so there is one place to change it.
 The Labs reminder (#15802) helps people who want to try a feature find it in Settings. The main sidebar's Settings
 entry and the Settings category list put a still accent dot beside their existing labels when an experiment is available,
 off and unseen. The labels include the reminder for screen readers. The dots clear on opening the Labs category. Each new
-card keeps a small `Pill` beside its heading for that visit, using the existing experiment description.
+card keeps a small `Pill` beside the experiment's title for that visit, using the existing description.
 
 Admit a temporary trial of a real feature or a choice between the stable and new implementations of one capability.
 Keep the stable default and a lossless rollback, with a linked tracking issue for graduation or removal. Put shipped

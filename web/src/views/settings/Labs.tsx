@@ -13,7 +13,7 @@ import { integrationsV2LabsSource } from "../../lib/labs-integrations-v2";
 import { todosV2LabsSource } from "../../lib/labs-todos-v2";
 import { workGuideLabsSource } from "../../lib/labs-work-guide";
 import { useChosenManager, useKnownDefault } from "../../lib/manager-choice";
-import { terminalLabsSource } from "../../lib/labs-terminal";
+import { TERMINAL_LABS_FIELD, terminalLabsSource } from "../../lib/labs-terminal";
 import { Dialog, Loading } from "../../ui/atoms";
 import { ConfigurationForm } from "./configuration/ConfigurationForm";
 import { Group, Pill, SettingsHint } from "./SettingsParts";
@@ -33,7 +33,10 @@ const assistantSources = {
 function LabCards({ manager, newIds = [] }: { manager: string; newIds?: readonly LabId[] }) {
   const card = (id: LabId, source: ConfigurationSource) => (
     <div key={source.key} className="mb-6">
-      <ConfigurationForm source={source} headingBadge={newIds.includes(id) ? <Pill tone="accent">{t("settings-labs.new_badge")}</Pill> : undefined} />
+      <ConfigurationForm source={source} fieldBadge={newIds.includes(id) ? {
+        id: id === TERMINAL_LABS_ID ? TERMINAL_LABS_FIELD : id,
+        content: <Pill tone="accent">{t("settings-labs.new_badge")}</Pill>,
+      } : undefined} />
     </div>
   );
   return (

@@ -87,7 +87,7 @@ const settings = () => host.querySelector<HTMLAnchorElement>('a[href="/settings"
 const labs = () => host.querySelector<HTMLButtonElement>('[data-settings-nav-group="labs"] button')!;
 const general = () => [...host.querySelectorAll<HTMLButtonElement>('nav button')].find((b) => b.textContent === TAB_INFO.general.label)!;
 const newCards = () => [...host.querySelectorAll("[data-configuration]")]
-  .filter((e) => e.querySelector("h2")?.parentElement?.textContent?.endsWith(t("settings-labs.new_badge")))
+  .filter((e) => [...e.querySelectorAll("[data-configuration-field] span")].some((label) => label.textContent === t("settings-labs.new_badge")))
   .map((e) => e.getAttribute("data-configuration"));
 const writes = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT");
 

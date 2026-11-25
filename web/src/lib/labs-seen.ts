@@ -88,7 +88,7 @@ export function pendingLabsSeen(manager: string, ids: readonly LabId[]) {
 const webglEnabled = () => readTerminalRenderer().value === "webgl";
 
 function matches(assistant: AssistantInfo | null, manager: string): assistant is AssistantInfo {
-  return !!assistant && (!assistant.manager || assistant.manager === manager);
+  return typeof assistant?.machine_id === "string" && (!assistant.manager || assistant.manager === manager);
 }
 
 function useLabsInputs(manager: string, legacy: boolean) {
