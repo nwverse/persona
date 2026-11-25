@@ -22,7 +22,7 @@ type superviseFingerprint struct {
 	At        time.Time `json:"at"`
 	Key       string    `json:"key,omitempty"` // the stretch reserved by this fingerprint; empty before #5732
 	Permanent bool      `json:"permanent,omitempty"`
-	// Todo bounds inactivity, daily-summary and unhandled-event fingerprints by the task's lifetime.
+	// Todo bounds inactivity, daily summaries, and durable source fingerprints by the task's lifetime.
 	// Other non-permanent kinds retain the short semantic-deduplication window.
 	Todo string `json:"todo,omitempty"`
 }
@@ -199,7 +199,8 @@ func (s *Service) reserveSupervisionDelivery(ctx context.Context, entries []prom
 		if signals[i].Kind == sigAllStopped || signals[i].Kind == sigParkedSummary || signals[i].Kind == sigPREvent || signals[i].Kind == sigPRMerged || signals[i].Kind == sigNeedsUserExternalInfo || signals[i].Kind == sigRecovered || keptUntilChange(signals[i]) {
 			fingerprint.Todo = signals[i].Todo
 		}
-		if g := signals[i]; g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
+		if g := signals[i]; g.Kind == sigTodoReady || g.Kind == sigParentCloseout || g.Kind == sigOutageRecovery || g.Kind == sigTopicFollowup ||
+			g.externalPRReview() || g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled" {
 			fingerprint.Todo = g.Todo
 		}
 		next[key] = fingerprint

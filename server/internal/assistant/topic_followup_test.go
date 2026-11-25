@@ -613,10 +613,30 @@ func TestLinkedTopicFollowupSupervisorAckWriteIsRetryable(t *testing.T) {
 		!slices.Contains(pendingKinds(s, task.ID), "topic_followup") {
 		t.Fatal("lost acknowledgment was hidden or falsely committed")
 	}
+	// The supervisor took the digest, but the receipt write is still pending.
+	// Age the stored fingerprint past the normal deduplication window.
+	ctx := t.Context()
+	history := map[string]superviseFingerprint{}
+	if _, err := database.Setting(ctx, superviseDedupKey, &history); err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("expected one confirmed delivery fingerprint, got %v", history)
+	}
+	for key, seen := range history {
+		seen.At = now.Add(-2 * superviseDedupWindow)
+		history[key] = seen
+	}
+	if err := database.PutSetting(ctx, superviseDedupKey, history); err != nil {
+		t.Fatal(err)
+	}
 	store.down.Store(false)
 	flushLinkedFollowup(s)
 	if linkedFollowupStoredPending(t, database, task.ID)["supervisor_told"] != true {
 		t.Fatal("acknowledgment was not recovered through the existing delivery/dedup path")
+	}
+	if got := len(f.notices()); got != 1 {
+		t.Fatalf("confirmed supervisor delivery repeated after deduplication window: got %d notices, want 1", got)
 	}
 	s.sweepDeploys(now.Add(time.Minute))
 	if pending := linkedFollowupStoredPending(t, database, task.ID); pending != nil {
