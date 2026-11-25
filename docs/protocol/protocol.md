@@ -49,6 +49,8 @@ App 核对 state 并向原 HTTPS 地址兑换 code，禁止重定向。跳转链
 
 ## Authentication
 
+- Tell Health (#14714) adds only `POST /api/v1/assistant/health/tell` to the watch's `answer` allowlist. Full devices may also call it; no extension scope opens it. Neighboring paths and other methods remain forbidden to the watch. See "Tell Health".
+
 - Prefer `Authorization: Bearer <token>`. The current implementation has not locked down URL tokens: when there is no Authorization value, every authenticated API (WebSocket included) still falls back to `?token=`, not only on loopback or for WS. Clients should use the header so credentials stay out of URLs.
 - The workspace board (#1646) adds GET `/api/v1/workspace-board` and `/api/v1/workspaces` to the `answer` read allowlist; changing the board still requires `full`. See "Workspace board".
 - Health intake (#13175) adds only `GET /api/v1/assistant/health/intake` and `POST /api/v1/assistant/health/intake` to the watch's `answer` allowlist. The changes feed and undo require `full`; no extension scope opens any intake route. Other paths under this prefix, including detail-page actions and imports, remain forbidden to `answer` credentials. See "Health intake".
@@ -310,8 +312,10 @@ The authenticated WS `hello.features` always lists server capabilities; trusted 
   - `recording_day` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): all-day recordings and their daily recap (#4741): the upload's `kind: "day"` with `day`, `tz`, `part` and `coverage`, `POST …/segments`, `detail.recap`, `recap_state`, `recap_final` and `recap_final_at`; see "All-day recordings (#4741)". The phone uploads a day recording only to a hub that lists it, since an older hub refuses the kind.
   - `assistant_search` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): `GET /api/v1/assistant/search`, the assistant's chats found by what was said in them (see "Assistant chat search (#6282)"). Without it the apps filter titles and last messages as before; a non-default manager from before it answers the route 404, which the apps take the same way.
   - `assistant_pages` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it; #15017, [dashboards.md](../assistant/dashboards.md)): the assistant's pages, Dashboards. The built-in manager names it whenever it keeps pages, the switch on or off: the reserved extension `-pages` among `GET /api/v1/extensions/-/ui`'s places and its pages at `POST /api/v1/extensions/-pages/-/ui/{index|pg_…}`, the top-level boolean `dashboards` of `GET` / `PUT /api/v1/assistant` (absent or false: off) and the `assistant_pages` event. The apps show the **Let Persona make dashboards** switch in Settings › Assistant only while the hub lists it.
+  - `health_tell` only while the default manager is connected and names it in `manager.hello`; extension reports cannot enable it. The core keeps it available without the Health data module. See "Tell Health".
   - `health_items` only while the default manager names it in its hello: ordered health items and revisions (see "Health items"). Extension reports cannot enable it.
   - `health_intake` only while the default manager is connected and names it in its `manager.hello` capabilities (an extension's report cannot add it): built-in water and protein records, daily totals, undo markers and the changes feed (see "Health intake"). Clients check this feature before offering intake controls; an older hub may refuse a watch request with 403 rather than 404.
+  - `health_strength` only while the default manager names it in its `manager.hello`: strength exercises, sets, drafts, managed cards and pages under the reserved `-health-intake` id (see "Strength training"). Extension reports cannot enable it. It follows the Health module, independently of whether the owner added strength training.
   - `starred_messages` means the hub relays the starred-message routes. Clients load the index only after seeing the feature. A selected assistant from before those routes answers 404.
   - `direction_sessions` only while the default manager is connected and names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): the owner can file a session under a direction with `PUT /api/v1/assistant/sessions/{mid}/{sid}/direction`, read one current or ended direction with `GET /api/v1/assistant/directions/{id}`, and see the additive active `sessions` on the direction tree (#11391). Without it clients show no filing or single-direction entry and keep the old task-only tree; an older manager answers the new routes 404.
   - `remote_images` only while the default manager names it in its `manager.hello` capabilities, the same way (an extension's report cannot add it): `GET /api/v1/remote-image`, the pictures a reply names by address fetched, checked and scaled by the manager for the apps (see "Remote images (#9473)"). Without it iOS loads such pictures from their host as before and the web keeps its tap-to-load placeholder (#8162).
@@ -2220,6 +2224,7 @@ Clients report their errors and crashes only while `features` has `error_reports
 | GET | `/api/v1/assistant/search?q=&limit=` | The assistant's chats found by their title, the user's words or the replies (`assistant_search`); see "Assistant chat search (#6282)" |
 | GET | `/api/v1/assistant/health/items` | `{catalog:[{id,source}],items:[id],revision,saved}`. Full devices only; see "Health items". Omit manager selection to use the default. |
 | PUT | `/api/v1/assistant/health/items` | `{items:[id],revision}` → current state; stale revision returns 409 with current state. Full devices only. |
+| POST | `/api/v1/assistant/health/tell` | `{client_id,text}` → 202 stored `{id,status:"received"}`; duplicate ID → 200 `{id,status,duplicate:true}`. Full or answer role; no extension scope. Only canonical Health chats; see "Tell Health". |
 | GET | `/api/v1/assistant/health/intake?days=7&space=health` | `{items:[id],water:{today,goal,entries},protein:{today,goal,entries},days:[{date,water,protein}],zone,water_extension?}`. Full or answer role; no extension scope. See "Health intake" for types, defaults and limits. Omit manager selection to use the default; `space` does not route. |
 | POST | `/api/v1/assistant/health/intake?space=health` | `{id,kind,amount?,at?,note?}` → `{entry,today:{water,protein},zone}`. The caller's UUID makes retries idempotent, including after undo. Full or answer role; see "Health intake". Omit manager selection to use the default; `space` does not route. |
 | DELETE | `/api/v1/assistant/health/intake/{id}?space=health` | Undo from any date → `{today:{water,protein},zone}`. Repeating an undo succeeds; unknown id 404. Full role only; see "Health intake". Omit manager selection to use the default; `space` does not route. |
@@ -2682,6 +2687,99 @@ in Health. Intake HTTP writes/imports and the Apple Health changes feed ignore t
 older-client compatibility. The default manager's item event wakes widgets like intake events.
 Without the Health module the routes are absent and hello omits `health_items`.
 
+## Strength training
+
+The Health module owns `health_strength` (#14713). The tool matches and manages exercises, logs or undoes confirmed
+sets, reads history, creates drafts and shows an existing draft in the caller's Health conversation. Execution requires
+a known Health caller. Both `health_intake` and `health_strength` are listed only in Health conversations by node
+`mcp.tools` and targeted hub `ToolsFor`. Before the first session snapshot, discovery uses the node's attested
+`caller_cwd` (#14855). Without directory evidence, including older nodes, Windows and runtime-hosted sessions, the
+next discovery heartbeat adds the tools within 30 seconds after the snapshot arrives; its cursor includes the
+effective space. Creating, updating or logging requires the added `strength` item; existing pages and stored data remain
+available after the item is removed. See docs/assistant/health.md "Strength training" for storage and workout linking.
+
+`history` accepts optional `id` and `days` (default 30, 1–366): it groups records by owner-local day. Without `id` it
+returns the latest 500 sets across all exercises; with `id`, the existing per-exercise range behavior is retained.
+
+`-health-intake` is the Health module's reserved page id for water, protein **and strength training**. All use
+`POST /api/v1/assistant/health/intake/ui`, a full-device route, with the existing `UIRequest` / `ActionResult` contract.
+The extension-style entry is `/extension/-health-intake/pages?state=<JSON>`. Strength state selects:
+
+| `page` | Additional state | Result |
+| --- | --- | --- |
+| `strength.overview` | `manage`, `exercises_offset`, `drafts_offset`, `muscles_offset`, optional `exercise`, `field` (`rename`, `setting`, `rule`) and `edit_value` (a rejected name retained for correction) | Pending drafts, exercises with last/best, weekly primary-muscle working sets, latest session, next open plan and exercise management |
+| `strength.exercise` | `exercise` UUID, `metric` (`weight` or `e1rm`), `days` (30/90/365), `offset` | Daily best chart, individual sets and Undo; only currently listed sets may be undone |
+| `strength.edit` | `draft` UUID, `rev`, optional `work` (at most 40 sets) | Working copy; Save updates the draft and card in one transaction, Cancel writes nothing, stale revisions reload; actions after settlement redraw the read-only result |
+| `strength.home` | None | Latest session, a bar chart of working sets over the last seven owner-local days including today (excluding warm-ups and undone sets; empty days are zero), and up to three recent personal records; opens the overview |
+
+Omitted `days` / `metric` default to 30 / `weight`. The client returns state opaquely. Page rendering negotiates
+`min(context.ui_version, hub UI version)` and uses the normal page fitting; clients below UI version 6 get a read-only
+draft with an update hint. Locale comes from page context before the request and owner defaults. Invalid strength state
+returns 400 with strength-specific copy. Duplicate exercise names return the page with a toast and retain the input.
+For UI version 6 or later, a Save/stepper/add/remove action on an already saved or discarded draft returns 200 with
+a read-only page and its status; UI versions below 6 retain their existing invalid-edit response. A missing Health
+module leaves the shared page route at 404 and announces no `health_strength` capability.
+`health_strength` events have no measurements or identifiers: open strength pages and home cards reload themselves.
+
+Managed cards keep the existing assistant-view schema. Keys beginning `health-strength-` belong to the module, with a
+draft UUID and an optional move revision suffix. `POST /api/v1/assistant/conversations/{id}/views/{key}/actions` dispatches
+those keys to the module before the generic action outbox. It checks conversation, Health space, declared action,
+card version and durable draft revision. Save confirms all sets once; Don't save writes no sets. The draft and card
+commit together, followed by `assistant_view` and `health_strength`; no model turn or push is required. A plan uses
+the latest-starting workout on its owner-local `plan_day` as its sets' timestamp, then the normal window matching;
+with no workout on that day it uses the confirmation time. If an exercise on a card has been deleted, Save returns
+400 (`bad_request`, `retryable: false`) with guidance to discard or adjust; it writes no sets. The response
+contains the existing synthetic action receipt with `status: sent`. Retrying the same click with its original version
+returns the receipt; another click returns `already_answered`, and an open stale card returns `view_changed`.
+Adjust opens `strength.edit`; without a public URL the card points the owner to the Health overview. Moving a draft
+with `show` makes the old card read-only. `view_update` and HTML actions cannot rewrite these keys. With Health absent,
+the card remains stored but its actions return 404.
+
+## Tell Health
+
+`POST /api/v1/assistant/health/tell` (#14714, feature `health_tell`) hands the owner's sentence to Health.
+The core manager stores it in Postgres before answering, without a node call or model work in the receipt path.
+Full and answer-only devices are allowed; extensions and scoped devices are refused before forwarding and again
+by the manager. The source is always `shortcut`; the sentence is not vouched as an in-app owner message or approval.
+
+| Request / response | Contract |
+| --- | --- |
+| Request | `{client_id,text}`; `client_id` is 8–128 ASCII letters, digits, dots, dashes, underscores or colons, reused on every retry. Text is trimmed, must be nonempty valid UTF-8, and is limited to 8 KB; controls except newline and tab are removed. Body limit: 16 KB (invalid input: 400). |
+| First receipt | `202 {id:"tell_<16 hex>",status:"received"}` after the insert commits. Receipt is not delivery or execution. |
+| Retry | `200 {id,status,duplicate:true}` for the same client_id, even with different text. The first sentence wins. |
+| States | `received`: waiting; `delivered`: handed to the Health conversation, stored text cleared; `failed`: delivery abandoned, original text retained for recovery. Missing storage: 503; failed insert: 500. |
+
+Unknown fields are ignored. `space`, `main`, `session_id`, `machine_id`, `source`, `via` and client times cannot
+select a target or change the receipt day. Messages go only to the canonical Health conversation directory on the
+current assistant computer. The first Tell Health message or successfully assembled strength workout report for
+a local day starts that day's training chat; later messages and strength reports continue it. A missing or invalid
+or deleted chat is replaced; an offline computer waits, preserving sentence order without counting attempts.
+
+Before a continuation is dispatched, its machine and session are saved on the received row. A retry uses only that
+target and the same once-only key, without reselecting the training-chat pointer. Only a definite pre-delivery
+refusal, including `conversation_deleted`, allows a new start; reserving the start clears the old continuation
+target atomically. The hub lookup has no current-connection list-readiness marker. Before a sentence is bound,
+a transient session lookup failure can therefore replace the training pointer and split the day's training across
+chats. An already-bound continuation is not redirected by that lookup failure or a manager restart.
+
+The worker runs on receipt and every 30 seconds. Failed attempts for the same row are at least 30 seconds apart;
+new receipts cannot accelerate retries, and later rows keep waiting in order. Continuing a chat uses a stable
+`health-tell:<id>` once-only key; new starts reserve a session ID before dispatch so Claude Code can acknowledge an
+existing start after a restart.
+Other launchers may choose their own IDs: a reported uncertain start is abandoned rather than repeated, but a manager
+restart after a new chat starts and before delivery is recorded can repeat the sentence once. Delivery expires after
+24 hours or five failed attempts. Each worker round sends at most one fixed Health notification for newly abandoned
+rows, saying delivery could not be confirmed without including original text. Responses use
+the existing fixed Health title/body and respect notification settings; even a quick response qualifies for a
+completion notification. Receipt latency and delivery latency are logged separately without sentence content.
+
+The receipt's day uses the manager's receipt time in the owner's time zone. A strength report uses the workout's
+start day: a 23:30 workout reported at 00:40 continues the previous day's chat unless a sentence after midnight has
+already opened the new day's chat. A new sentence at 00:10 starts the new day; when it has done so, the late previous-day
+report opens a separate chat. Only the latest day's pointer is retained; an older late report cannot replace it. Simultaneous
+first messages and reports can start separate chats. Tell Health and its capability stay available without the
+Health data module; strength report assembly and its training-chat selection require that module.
+
 ## Health intake
 
 Built-in water and protein intake belongs to the assistant manager's Health space (#13175).
@@ -2985,6 +3083,7 @@ Server → client:
 | `assistant_starred` | No snapshot payload. After a star is added or removed, the selected assistant’s clients re-read `GET /api/v1/assistant/starred`. The hub stamps `manager` on another manager’s update. |
 | `health_items` | `{revision:integer}`: the ordered health items changed. Reload GET health items and intake; the default manager also advances the widget revision. See "Health items" |
 | `health_intake` | No payload: a water or protein record was added or undone. Reload `GET /api/v1/assistant/health/intake`; the default manager's update also advances the hub's widget revision, throttled to 15 minutes without changing the fleet. See "Health intake" |
+| `health_strength` | No payload: a strength exercise, set or draft changed, or sets joined a workout. Reload open strength pages and home cards under `-health-intake`. This event does not advance the water/protein widget revision. See "Strength training" |
 | `agents.triage` | `triage` (the switches as `GET /api/v1/agents/triage` returns them: `enabled`, `auto_continue`, `wake`, `decide`, `tool_loop`, `closeout`, `closeout_ask`, `reply_reminder?`, `reply_reminder_minutes?`, `transient_retry?`): the session triage switches were saved, and what they turned off has stopped ([agent-work.md](../assistant/agent-work.md) "Switches") |
 | `launcher_health` | `record` (one record as `GET /api/v1/launchers/health` lists it: `machine`, `launcher`, `state`, `kind`, `error`, `checked_at`, `source`, `fails`, `repair?`, `blocked_reason?`, `resets_at?`, `limit_models?`, `limit_resets?`): a launcher's health state changed; only to connected clients, not a push ([launcher-health.md](../server/launcher-health.md) "API for the board") |
 | `meeting_live` | `recording_id`, `changed` (an open set: `room`, `asks`, `private`, `followup`, from phase 2 `lines` and `topics`, from phase 2b `highlights`, from phase 3 `photos`; later phases add more) and `revs` (each changed part's revision, numbers only; for `lines` the live log's length): a meeting's parts changed, at most one a second per recording, content-free; clients read only the newer parts with `GET /api/v1/recordings/{id}/live?parts=…` ([meeting-minutes.md](../assistant/meeting-minutes.md) "The `meeting_live` event", #3862) |
@@ -3003,6 +3102,7 @@ Server → client:
 | `todo_send_state` | `todo_id`, `client_op_id` (the request's `X-Persona-Op-Id`, lower case), `state` (`processing` / `delivered` / `failed` / `unknown`), `at` (UTC RFC3339Nano): a transport receipt for a to-do's message on `POST /api/v1/assistant/conversations/{id}/route` (`todo_id` the body's) or an answer on `POST /api/v1/todos/{id}/asks/{ask}/answer` (`todo_id` the path's), sent with `X-Persona-Op-Id` (#10465). Only to full devices that declared `todo_send_state` (`?features=` or `client_hello.features`); not in the event log. Processing goes out once the hub has claimed the op id, before the manager has the write (none when the body names no to-do); the final state once the relay answered and the receipt is stored, `failed` only when the answer shows nothing was taken. Final HTTP (or the op id's receipt) remains authoritative. Trust only when the current authenticated `hello` has top-level `todo_send_state: 1`. See "Message feedback (#5258)" below, its "To-do writes". |
 | `delta` | `machine_id`, `session_id`, `text` (the whole text the headless assistant is generating; an empty string means the turn is over. A Claude session Persona started sends it too: the message Claude is showing in its terminal, as far as the transcript does not have it yet, "" once it does; whole lines every 0.1–1 s; see `docs/integrations/claude-integration.md` "Live replies (MessageDisplay)". The live text is never the source: the transcript's items replace it). At most one every 80 ms, and what came after the last one goes out 80 ms after it, so the end of a burst of model output never waits for the next burst (#6651). The App draws each chat at most 5 times a second, the first one after a pause immediately and then the latest; an empty string is drawn immediately; anything not yet drawn is dropped when the message lands in the transcript or on reconnect (`DeltaPacer`). The streaming view reveals what was drawn a few characters a frame (`StreamReveal`); the web staggers new words at the stream's pace (`web/src/ui/stream/wordFade.ts`) |
 | `live` | `machine_id`, `session_id`, `live` (`SessionLive` or `null`): the status line of a working Claude, only sent to connections subscribed to that session that declared `session_live`; see "Live status" below |
+| `live_tools` | `machine_id`, `session_id`, `tools` (`[{id, name}]`, `[]` clears), `summary`?, `thinking`?, `active`?, `retry_attempt`? / `retry_max`?, `compacting`?: a watched Codex turn's calls still waiting for their results, only sent to connections subscribed to that session that declared `session_live_tools`; see "Live tools" below |
 | `screen` | `machine_id`, `session_id`, `text`, `status`, `ts` (the node no longer samples the screen per subscription: the terminal page reads `/screen` itself on demand, and old Apps not receiving this doesn't matter) |
 | `fs_changed` | #2439: `machine_id`, `cwd`, `dirs` (folders in this page's `fs_watch` that changed), `git` (the Git status of `cwd` changed). Only sent to pages that did `fs_watch`; not in the event log and not replayed on reconnect (the page refreshes itself once after reconnecting) |
 | `terminal_control` | `machine_id`, `session_id`, `state`: `active` (took control, with `cols`, `rows`), `busy` (another program on the computer holds it; ask the user whether to `takeover`; mirror in the meantime), `taken` (grabbed by another device or program), `lost` (the node let go itself), `unsupported` (old node / herdr, mirror only); `error` is a human-readable reason |
@@ -3677,6 +3777,15 @@ The web shows ordinary live status; the web and Apple watched Agent chats show t
   or in `client_hello.features`. The hub doesn't cache or replay: a newly subscribed client waits for the next change (within about a second while working). Old Apps don't declare it and don't get it; other events are unchanged.
 - `hello.features` currently doesn't list `session_live`: clients just declare it anyway, and an old hub that doesn't know the event simply doesn't send it.
 
+### Live tools (`session_live_tools`)
+
+A Codex turn records a tool call when it starts and its output when it ends, but the paged history only shows finished work. The live tools snapshot tells a watching client which calls are still running, without writing anything into the conversation history.
+
+- Type `proto.LiveToolState` (`server/internal/proto/live.go`): `tools` (`proto.LiveTool` `{id, name}`, the provider's call id and its public tool name), `summary` (the public heading of the current step, when one was recorded), `thinking`, `active` (the turn is still running), `retry_attempt` / `retry_max` (an upstream model retry the runtime recorded, with its original counts), `compacting`. Missing fields are omitted; `tools` is always present, `[]` when nothing is pending.
+- node → hub event `session.live_tools {session_id, …LiveToolState}`: only while the session is watched, for a Codex rollout or a Codex App chat whose history comes from its database (`node/watch_tools.go`, `node/codex_live_tools.go`). One read at a time per watch, sent only when the snapshot changed. Raw tool input and output never leave the node.
+- hub → client `{"type":"live_tools","machine_id","session_id",…LiveToolState}`: only to connections subscribed to this session that declared `session_live_tools` (`?features=` or `client_hello.features`). The hub keeps the latest snapshot per watched session (`hub/live_tools.go`) and replays it on `subscribe` and when a hello first declares the feature; it forgets it when the last watcher leaves or the conversation is deleted, and sends `tools: []` to subscribers when the node's connection ends.
+- Clients drop the snapshot on unsubscribe, reconnect or when the turn's receipts arrive in the history. Old clients don't declare the feature and get nothing.
+
 ### New session
 
 The existing creation endpoint also accepts desktop launchers from `launchers.list`: `claude-desktop` (`source: "claude_desktop", agent: "claude"`) and `codex-app` (`source: "codex_app", agent: "codex"`). They create sessions in the corresponding desktop app without a terminal engine. Model, effort and permission behavior follow the supported routes of each desktop launcher, as described in its integration doc. A supplied `cwd` may be an existing absolute directory or a new final child under an existing parent; an empty one uses the launcher's temporary-session folder. `codex-app` requires a nonblank prompt (`codex_needs_prompt` otherwise). Desktop project IDs must not be passed as terminal `workspace_id` values. See [Claude desktop creation](../integrations/claude-integration.md#new-sessions-in-the-desktop-app) and [Codex App creation](../integrations/codex.md#new-chats-in-the-codex-app) for the metadata/import and message-delivery routes.
@@ -4280,7 +4389,9 @@ with one item of `kind: fold` (`transcript.FoldWork`):
 - `fold.errors` is how many of the run's tool results were errors (`is_error`, as the runtime reports it), and `fold.tool_names` the tools the run called,
   each once in the order first called, at most 10 (`proto.FoldToolNamesMax`); `[]` for a run of thoughts only. They let a reader that does not open folds,
   such as an extension looking for where a session went wrong (`docs/extensions/extensions.md` "Folded work"), pick the run to open. A fold from an
-  older node has neither (`tool_names` absent): unknown, not zero. The apps ignore both.
+  older node has neither (`tool_names` absent): unknown, not zero. A fold ending in a Bash call can carry the first
+  line of that call's public description in the item's optional `text` (up to 160 characters), so a chat can keep
+  its action title when fetching history. The count remains available when the description is absent.
 - `fold.tasks` is an optional array of ordered task-list snapshots. It only includes successful TodoWrite / TaskCreate / TaskUpdate / TaskList results from this run,
   and carries no raw tool input or output; it is omitted when there is no usable snapshot. Results that are missing, have `is_error: true`, have `success: false`, or have a non-null `error` are not counted;
   a malformed list does not clear earlier tasks. Old iOS ignores this nested field; the fold's existing counts, range and expansion stay the same.
@@ -4804,7 +4915,7 @@ events `herdr.client.input {client_id, data | b64}`, `.resize {client_id, cols, 
 Focus sync (feature `herdr_focus`, `docs/integrations/terminal.md` section 28): hub → node event `herdr.client.focus {client_id, session_id}` (the page is showing another pane: the node has herdr focus it; requests for the same view replace each other; if the pane isn't one the host lists or the view is gone, nothing happens); node → hub event `herdr.focus.changed {workspace_id, tab_id, pane_id, session_id?, source, client_id?}` (herdr's focus changed: `persona` = just requested on behalf of `client_id`'s view, `client` = that client was actually typed in / clicked within 1.5 s, `other` = anything else; herdr's event itself doesn't say who changed it).
 
 node → hub events: `session.mode_set {session_id, from?, to, actor?}` (#10308: a plan hook returned a selected permission mode with authenticated display provenance; manager-only, "Session mode changes"), `session.mode_restart {session_id, mode, outcome, reason?}` (#10297: what became of a queued restart into a permission mode, `done`, `failed` or `dropped` with why; the manager keeps it and passes it on to no one, "Session mode changes"), `fs.changed {dirs?, git?}` (#2439: the listing of a folder in `fs.watch` changed (names, sizes, times), or a Git directory's `git status` changed; the hub turns it into `fs_changed` for the relevant pages), `terminal.frame {session_id, epoch, seq, full, cols, rows, data}` (frames less than 30 ms apart are merged by the node into one: diff bytes are concatenated, and a full frame drops the diffs before it), `terminal.end {session_id, error, control?, taken?}` (the stream stopped and can't restart: the session isn't running, herdr keeps refusing; with `control`, the takeover ended: `taken` means someone else grabbed it, otherwise the lease expired),
-`session.items {session_id, items, history, from_seq, to_seq}`, `session.delta {session_id, text}` (the message being written as one text, "" when there is none: the headless assistant's from its stream, a Claude session Persona started from its MessageDisplay hook while the session is watched, a runtime's as it sends it; `docs/integrations/claude-integration.md` "Live replies (MessageDisplay)"), `session.live {session_id, live}` (status line of a watched, working Claude (on hosts that can read the screen: herdr, herdr-core, Orca), sent only on change, with a trailing `null` when it ends; see "Live status"), `session.echo {session_id, client_msg_id, text, images, sent_at, after_seq, line?, in?, parts?}` (pushed once when the node records a send and once when it recognizes its line, again when it finds the line anew in the transcript a runtime's session moved to (`in`, "Matching pending messages"); `parts`: the ids of its items in a line several sends share; the hub stores it in `sent_messages.echo`; an already-recognized one is never overwritten by a late "still waiting"), `sessions.changed {sessions}` (a list byte-identical to the last one written on this connection is not written again; after a `sessions.revs`, an answer to `sessions.list`, an engine switch or a reconnect the next list goes even when it is the same, #2439),
+`session.items {session_id, items, history, from_seq, to_seq}`, `session.delta {session_id, text}` (the message being written as one text, "" when there is none: the headless assistant's from its stream, a Claude session Persona started from its MessageDisplay hook while the session is watched, a runtime's as it sends it; `docs/integrations/claude-integration.md` "Live replies (MessageDisplay)"), `session.live_tools {session_id, tools, …}` (a watched Codex turn's pending calls; see "Live tools"), `session.live {session_id, live}` (status line of a watched, working Claude (on hosts that can read the screen: herdr, herdr-core, Orca), sent only on change, with a trailing `null` when it ends; see "Live status"), `session.echo {session_id, client_msg_id, text, images, sent_at, after_seq, line?, in?, parts?}` (pushed once when the node records a send and once when it recognizes its line, again when it finds the line anew in the transcript a runtime's session moved to (`in`, "Matching pending messages"); `parts`: the ids of its items in a line several sends share; the hub stores it in `sent_messages.echo`; an already-recognized one is never overwritten by a late "still waiting"), `sessions.changed {sessions}` (a list byte-identical to the last one written on this connection is not written again; after a `sessions.revs`, an answer to `sessions.list`, an engine switch or a reconnect the next list goes even when it is the same, #2439),
 `sessions.revs {revs}` (checked every second, only changed revs are sent; when the list itself changes, revs go with `sessions.changed`),
 `usage {buckets:[{minute, model, launcher?, agent?, in, cache_write, cache_read, out, req}], full?, add?, load?, cpus?, launchers?}` (every 10 seconds, only changed minutes, with full per-minute values;
 a minute has a bucket per model, launcher and agent (`agent`: `proto.Session.Agent`'s names, absent from an older node, #9984); `launchers: true`: the buckets name their launcher;
@@ -5838,6 +5949,7 @@ The knowledge base belongs to a manager (the assistant). The hub forwards these 
 | GET | `/api/v1/kb/{kind}/{id}` | `{detail,agents?}`; for a project, can also return related online Agents |
 | PUT | `/api/v1/kb/{kind}/{id}` | body is a `kb.Update` (projects also take `unmerge: true`; removals take `lock_lists`, and `allow_people` / `allow_chats` / `allow_projects` lift a removed link, "Removed links" in [knowledge.md](../assistant/knowledge.md)); can update name, tags, importance, summary and project properties; returns `{id}`; fields in [knowledge.md](../assistant/knowledge.md) |
 | DELETE | `/api/v1/kb/projects/{id}` | Soft-deletes a project into the knowledge base's trash and unlinks it from its chats, people and items; returns the trash entry `{id, kind, slug, name, deleted_at, unlinked}`; `404` for unknown or merged projects, `403 kb_read_only` when read-only ([knowledge.md](../assistant/knowledge.md) "Deleting a project") |
+| DELETE | `/api/v1/kb/recordings/{id}` | Deletes a stored recording from the knowledge base (its files, index row and project links; its tombstone stays for `recording_days`); `{"deleted": bool}`, `false` when there was none; `400` for an id that is no UUID, `403 kb_read_only` when read-only. Answers with or without the recording module ([knowledge.md](../assistant/knowledge.md) "Recordings without the recording module"); `DELETE /api/v1/recordings/{id}` below is the module's, for the phone |
 | GET | `/api/v1/kb-trash` | `{items}`: deleted projects' trash entries, newest first |
 | POST | `/api/v1/kb-trash/{id}/restore` | Restores a deleted project and its recorded links; returns the entry; `404` if there is no such entry, `409` if a project with its slug exists again, `403 kb_read_only` when read-only |
 | GET | `/api/v1/kb-search?q=&messages=0&kind=` | `{hits}`; includes messages by default, `messages=0` excludes them; `kind` (one of `projects`, `chats`, `people`, `docs`, `meetings`, `events`, `recordings`, `topics`) searches that kind only, as `kb_search` does, with `results=1` too (#3862 phase 6: `recordings` for meetings); another `kind` is a `400`, and a hub from before ignores it and searches every kind |
@@ -5932,7 +6044,7 @@ Minutes for a meeting recording ([meeting-minutes.md](../assistant/meeting-minut
 - The retention window is the assistant setting `recording_days` (default 14, 1–365): `GET /api/v1/assistant` includes the effective value, `PUT /api/v1/assistant {"recording_days": 30}` changes it, and `assistant.recording_days` in `persona_settings` can also read and change it.
   On every pass the manager deletes recordings whose start time is past the retention window, together with their files and index.
   A recording with minutes is trimmed instead (#3780): it keeps `meta.json` (with `trimmed_at`), `minutes.json` and `minutes.md`, loses its transcript, summary and live log, and is deleted by retention only once its start is past a finite `minutes_days` (`GET` / `PUT /api/v1/assistant`, `assistant.minutes_days` in `persona_settings`; forever by default: unset or `0`, otherwise 1–3650, never below `recording_days`; the settings tool also accepts `"forever"`). A trimmed recording stays in reconciliation at its revision with `trimmed_at`, an upload of it is `expired`, `GET /api/v1/kb/recordings/{id}` returns its meta and minutes with no `segments`, and its to-dos can still be confirmed. Tombstones keep the `recording_days` window either way ([meeting-minutes.md](../assistant/meeting-minutes.md) "Privacy").
-- Reading: `GET /api/v1/kb/recordings` (each item's `extra` is the device, and `recording_kind` its kind: `meeting`, `note` or `day`, so the apps' Meetings list can mark notes and all-day recordings; absent from a hub before #8731; `meeting_id` the id of its imported meeting as `GET /api/v1/kb/meetings` lists it, so the Meetings list shows the two as one row; absent before a match and from a hub before #8872), `GET /api/v1/kb/recordings/{id}` (`detail.meta` is the fields above except `segments` and `spoken`, with `attendance` and `attending_session` as below, plus `name` and tags; `detail.summary`; `detail.segments`, Persona's echo among them with `echo: true`); `kb-search` finds the full transcript text.
+- Reading: `GET /api/v1/kb/recordings` (each item's `extra` is the device, and `recording_kind` its kind: `meeting`, `note` or `day`, so the apps' Meetings list can mark notes and all-day recordings; absent from a hub before #8731; `meeting_id` the id of its imported meeting as `GET /api/v1/kb/meetings` lists it, so the Meetings list shows the two as one row; absent before a match and from a hub before #8872), `GET /api/v1/kb/recordings/{id}` (`detail.meta` is the fields above except `segments` and `spoken`, with `attendance` and `attending_session` as below, plus `name` and tags; `detail.summary`; `detail.segments`, Persona's echo among them with `echo: true`); `kb-search` finds the full transcript text. These three answer the same with the recording module switched off or left out of the build. A hub without the module adds `paused: "module_off"` to the list item and the `detail` of a recording whose stored state is in flight (not `complete`, minutes or recap `pending`, a hub transcription `live` or `finishing`): derived for the response, never stored, absent otherwise and from an older hub ([knowledge.md](../assistant/knowledge.md) "Recordings without the recording module").
 
 #### Attending a meeting (#2981)
 

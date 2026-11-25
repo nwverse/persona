@@ -4,6 +4,26 @@ Status: revised design for review, no code moved. First written 2026-11-25 on `o
 on `origin/main` at 06f0bc7db (every line number and count below is from that commit unless it says otherwise).
 Audience: maintainers of the server core and of the `recording` module.
 
+**PR 2 has landed** (the reader / kept-write / writer split, the write-side `Provider` with `recordingwire.NoProvider`,
+the gated lanes, the Core delete route `DELETE /api/v1/kb/recordings/{id}`, the derived `paused` field and the
+module-off checks; `docs/architecture/core-and-modules.md` "Recording" describes the result). Where the code differed
+from this plan, the code was followed:
+
+- `CleanRecordingUpload` (section 1, `recording_space.go`, R) stays with the writers: its only caller is the upload
+  of a recording saved into a track, reached through the module's route, and its call closure is the whole upload
+  cleaner (`cleanUpload`, the calendar and day checks, the echo marks).
+- Two more files split: `echo.go` (`MeetingLines` is read by the transcript of record) and `minutes_timeout.go` (the
+  planners read `minutesTimeoutTries`). `recordLocked` (`hub_segments.go`) is a kept write: the commit renders the
+  transcript of record with it. `clipRunes` (`minutes.go`) is read by the topics code and stays with the readers.
+- Declarations follow their users: the `recordingwire` aliases, constants and file names that reader or kept code
+  names moved with it, found by building the package without the writer files. What that build still misses is the
+  three calls the provider now carries (`AudioDropped`, `AudioClosed`, `AfterPrune`) and the store's `audioRec` field
+  type, which PR 4 moves with the audio writers.
+- The provider's rounds hang on the engine and its audio touch points on the store (`kb.Engine.SetRecordingProvider`
+  sets both): the trim is a `Store` method, and a manager makes a new engine over the same store when its settings change.
+- Retention with the module off (section 7, question 1) is one constant, `kb.RetentionWithoutRecordingModule`
+  (`server/internal/kb/recording_port.go`), `true` as recommended; the owner's confirmation is still open.
+
 ## Decision (2026-11-25): a module that is off must not hide or change what the user already has
 
 The owner decided a rule for every module move (https://github.com/nwverse/persona/issues/13430#issuecomment-7149471360, "A rule for every module move in this tracker", posted 2026-11-25): **switching a module off must

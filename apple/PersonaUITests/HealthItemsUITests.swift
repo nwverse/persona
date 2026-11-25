@@ -68,7 +68,9 @@ final class HealthItemsUITests: XCTestCase {
         XCTAssertEqual(water.value as? String, "0", app.debugDescription)
         let handles = app.buttons.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "Reorder", "重新排序"))
         XCTAssertGreaterThanOrEqual(handles.count, 3, app.debugDescription)
-        let source = handles.element(boundBy: handles.count - 1)
+        let trendsRow = app.cells.containing(.switch, identifier: "health-item-trends").firstMatch
+        let rowHandle = trendsRow.buttons.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "Reorder", "重新排序")).firstMatch
+        let source = rowHandle.exists ? rowHandle : handles.matching(NSPredicate(format: "label CONTAINS %@ OR label CONTAINS %@", "Health Trends", "健康趋势")).firstMatch
         source.press(forDuration: 0.5, thenDragTo: handles.element(boundBy: 0))
         XCTAssertTrue(protein.exists)
         app.buttons["health-items-save"].tap()
