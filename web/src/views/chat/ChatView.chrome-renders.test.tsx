@@ -56,13 +56,18 @@ vi.mock("./chat-actions", async (load) => {
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
-import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
+import { applyCompleteSessions, applyMachine, getState, reset, type ItemsEvent } from "../../lib/store";
 import { whenComposer } from "../../lib/links";
 import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
 import { useShortcuts } from "../../lib/use-shortcuts";
 import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
-import type { Item, Session } from "../../lib/types";
+import { withContexts } from "../../lib/context-xml";
+import { inlineBody } from "../../lib/inline-message";
+import { skillContext } from "../../lib/skill-mentions";
+import { currentRoster, resetRoster, setRoster } from "../../lib/managers";
+import { resetManagerChoice } from "../../lib/manager-choice";
+import type { Item, Machine, Session } from "../../lib/types";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
 
@@ -77,6 +82,11 @@ const push = (seq: number, x: Partial<Item> = {}) => act(async () => {
   await new Promise((resolve) => setTimeout(resolve, ITEM_COALESCE_MS));
 });
 const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
+const updateNotice = () => host.querySelector<HTMLElement>("[data-assistant-update]");
+const waitForUpdateNotice = (label: string) => vi.waitFor(async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
+  expect(updateNotice()?.textContent).toContain(label);
+});
 
 let host: HTMLDivElement;
 let root: Root;
@@ -94,7 +104,7 @@ beforeEach(() => {
   opened = "";
   localStorage.clear();
   // the first page has one reply already, so the assistant's face starts from what the pushes keep showing
-  fetcher = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+  fetcher = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : String(url).endsWith("/managers") ? currentRoster() ?? {} : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
   vi.stubGlobal("fetch", fetcher);
   host = document.createElement("div");
   document.body.append(host);
@@ -106,6 +116,8 @@ afterEach(() => {
   host.remove();
   live.listeners.clear();
   reset();
+  resetRoster();
+  resetManagerChoice();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -118,7 +130,7 @@ async function open(view: React.ReactElement<{ assistant?: boolean }>, session =
     root = createRoot(host);
   }
   opened = session.session_id;
-  act(() => root.render(view));
+  await act(async () => root.render(view));
   for (let i = 0; i < 6; i++) await settle();
   const title = view.props.assistant && getState().assistant?.main === session.session_id ? "Persona" : "Checks";
   await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe(title)); // session-derived props are stable
@@ -187,11 +199,36 @@ it("a pushed reply renders its own words once, mounting them fading, and no othe
   await vi.waitFor(() => expect(words).toEqual([{ text: "row 4", fade: true }]));
 });
 
+it("a pushed inline reference and its disclosure leave the header and composer alone", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  const ref = skillContext({ id: "review", name: "Review", source: "Project", description: "Look for edge cases." });
+  await push(1, { role: "user", text: withContexts([ref], inlineBody(["Use ", ref, "."])) });
+  const token = () => host.querySelector<HTMLButtonElement>("[data-bubble-text] button[aria-expanded]");
+  await vi.waitFor(async () => {
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(token()?.textContent).toBe("Review");
+  });
+  act(() => token()!.click());
+  expect(host.textContent).toContain("Look for edge cases.");
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
+});
+
 // the first page: this many exchanges, a question and its reply each
 const serve = (exchanges: number) => {
   const items = Array.from({ length: exchanges }, (_, i) => [item(2 * i, { role: "user", text: `ask ${i}` }), item(2 * i + 1)]).flat();
   fetcher.mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items, to_seq: items.length - 1 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
 };
+
+it("shows the latest finished reply's actions at rest when replies share a timestamp", async () => {
+  serve(2);
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ status: "idle", state: "idle" }));
+  const bars = () => [...host.querySelectorAll<HTMLElement>('[data-reply-bar]:not([data-reply-bar="loading"])')];
+  await vi.waitFor(() => expect(bars()).toHaveLength(2));
+  const [earlier, latest] = bars();
+  expect(earlier.querySelector("time")?.closest(".opacity-0")).toBe(earlier);
+  expect(latest.querySelector("time")?.closest(".opacity-0")).toBeNull();
+  expect(latest.querySelector("button")?.closest(".opacity-0")).toBeNull();
+});
 
 it("a turn starting or ending renders the message actions of its own exchange only", async () => {
   const flip = async (sid: string, exchanges: number) => {
@@ -277,6 +314,67 @@ it("the assistant: the header draws again only when what its face reads changes"
   await push(11, { role: "user" });
   expect(renders.info).toBe(1);
   expect(renders.chips).toBe(0);
+});
+
+it("follows the conversation owner's computer update and pending restart without drawing the chat chrome again", async () => {
+  const owner = { id: "work", name: "Work assistant", online: true, machine_uid: "work-host", host: "work-box" };
+  const other = { id: "assistant", name: "Personal assistant", online: true, pending_restart: true };
+  const node: Machine = { id: "linked", name: "Work computer", online: true, machine_uid: "work-host" };
+  const lookalike: Machine = { id: "different", name: "Other computer", online: true, hostname: "work-box", deploy_phase: "transferring" };
+  const roster = (pending_restart: boolean) => ({ managers: [other, { ...owner, pending_restart }], default: other.id });
+  act(() => {
+    setRoster(roster(false));
+    getState().machines = [lookalike, node];
+  });
+  await open(<ChatView mid="mac" sid="s1" assistant />, row({ manager: owner.id }));
+  const update = (deploy_phase?: Machine["deploy_phase"]) => act(async () => { applyMachine({ ...node, deploy_phase }); });
+  expect(updateNotice()).toBeNull();
+  await act(async () => {
+    applyMachine({ ...lookalike, deploy_phase: "restarting" });
+    setRoster(roster(false));
+  });
+  expect(updateNotice()).toBeNull();
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
+
+  for (const phase of ["waiting_idle", "transferring", "restarting", "confirming"] as const) {
+    await update(phase);
+    await waitForUpdateNotice(t(`chat-assistantupdate.${phase}`));
+    expect(updateNotice()?.getAttribute("role")).toBe("status");
+    expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.reconnect"));
+  }
+  act(() => setRoster(roster(true)));
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.confirming"));
+  await update();
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.pending_restart"));
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.restart_when_idle"));
+  act(() => setRoster(roster(false)));
+  expect(updateNotice()).toBeNull();
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
+});
+
+it("matches a legacy host by hostname and keeps the notice out of Agent sessions", async () => {
+  const manager = { id: "work", name: "Work assistant", online: true, host: "work-box" };
+  const node: Machine = { id: "linked", name: "Work computer", online: true, hostname: "WORK-BOX", deploy_phase: "transferring" };
+  act(() => {
+    setRoster({ managers: [manager], default: manager.id });
+    getState().machines = [node];
+  });
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ manager: manager.id }));
+  expect(updateNotice()).toBeNull();
+  await open(<ChatView mid="mac" sid="s2" assistant />, row({ session_id: "s2", manager: manager.id }));
+  await waitForUpdateNotice(t("chat-assistantupdate.transferring"));
+});
+
+it("follows a conversation's own computer on a hub that predates the roster and deploy phases", async () => {
+  const node: Machine = { id: "mac", name: "Example computer", online: true };
+  getState().machines = [node];
+  await open(<ChatView mid="mac" sid="s1" assistant />);
+  expect(updateNotice()).toBeNull();
+  await act(async () => { applyMachine({ ...node, deploying: true }); });
+  await waitForUpdateNotice(t("chat-assistantupdate.updating"));
+  act(() => applyMachine({ ...node, deploying: false }));
+  expect(updateNotice()).toBeNull();
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 });
 
 it("the main conversation's composer has the model pill, without an effort chip (#5032, #5033)", async () => {

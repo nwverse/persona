@@ -2,7 +2,7 @@ import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
-import { href } from "../lib/router";
+import { href, useRoute } from "../lib/router";
 import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +14,8 @@ import { install, useInstall, type InstallState } from "../lib/pwa";
 import { useStore } from "../lib/store";
 import { composing } from "../lib/send-history";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast, useMenu } from "../ui/atoms";
+import { NoticeDot } from "../ui/NoticeDot";
+import { useHasUnseenLabs } from "../lib/labs-seen";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
@@ -28,7 +30,6 @@ import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
 import { KnowledgeSelection } from "./settings/KnowledgeSelection";
 import { SavedPrompts } from "./settings/SavedPrompts";
-import { SourcesUI } from "./subscriptions/SourcesUI";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
@@ -39,7 +40,7 @@ import { StartPageGroup } from "./settings/StartPage";
 import { AgentsDisplayRow } from "./settings/AgentsDisplayRow";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
-import { PersonaPicker } from "./assistant/Persona";
+import { PersonaPicker } from "./assistant/PersonaPicker";
 import { TriageSettings } from "./settings/TriageSettings";
 import { TranslationSettings } from "./settings/TranslationSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
@@ -52,6 +53,7 @@ import { settingsTarget } from "../lib/channels";
 import { extensionsRoute, routeSub } from "../lib/extension-market";
 import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
+import { RecoverySettings } from "./settings/RecoverySettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
@@ -67,6 +69,7 @@ import { ProviderLinkCopy } from "./settings/ProviderLinkCopy";
 import { builtinRows, loadLaunchers, rcFilesOf, rcGroups, syncStateText, type LauncherSync } from "../lib/launcher-list";
 import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
+import { SeenRowsRow } from "./settings/SeenRowsSetting";
 import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
 import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
 import { moduleFeaturesSource } from "../core/module-features";
@@ -157,10 +160,11 @@ export function tokens(n: number): string {
 const Extensions = lazyPage(() => import("./settings/Extensions").then((m) => m.Extensions));
 const Connectors = lazyPage(() => import("./settings/Connectors").then((m) => m.Connectors));
 const Integrations = lazyPage(() => import("./settings/Integrations").then((m) => m.Integrations));
+const SourcesUI = lazyPage(() => import("./subscriptions/SourcesUI").then((m) => m.SourcesUI));
 // Labs and the shared configuration form load on first use.
 const LabsSettings = lazyPage(() => import("./settings/Labs").then((m) => m.LabsSettings));
 const ModuleFeaturesForm = lazyPage(() => import("./settings/configuration/ConfigurationForm").then((m) => m.ConfigurationForm));
-const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors, integrations: Integrations };
+const TAB_PAGES: Partial<Record<Tab, { preload: () => Promise<unknown> }>> = { extensions: Extensions, connectors: Connectors, integrations: Integrations, sources: SourcesUI };
 // a failed load is not kept (lazyPage): opening the page asks again, and PageBoundary shows the failure then
 const preloadTab = (k: Tab) => void TAB_PAGES[k]?.preload().catch(() => {});
 
@@ -196,6 +200,16 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const now = settingsAt(location.search, location.hash);
     setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
   }, [integrationsMode, at.tab, at.sub]);
+  // External in-app navigation to /settings (e.g. "Change in Settings" from the sidebar while Settings is already open).
+  const route = useRoute();
+  const initialRoute = useRef(true);
+  useEffect(() => {
+    if (initialRoute.current) { initialRoute.current = false; return; }
+    const path = stripBase(location.pathname);
+    if (path !== "/settings" && !path.startsWith("/settings/")) return;
+    const now = readSettingsLocation(integrationsModeRef.current);
+    setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
+  }, [route]);
   // Back from a category opened from the list: the URL went back, the page follows it.
   useEffect(() => {
     const back = () => {
@@ -230,7 +244,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   useEffect(() => {
     if (!at.section || listed) return;
     const section = document.getElementById(`settings-${at.section}`);
-    if (!section) return;
+    if (!section) {
+      setScrollAnchor(at.section);
+      return;
+    }
     section.scrollIntoView?.({ block: "start" });
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => section.scrollIntoView?.({ block: "start" }));
@@ -245,10 +262,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Inbox Sources (#5278) only with a manager that draws them; a link to it still opens it
   const hasSources = useInboxSourcesShown();
   const shown = (k: Tab) => {
-    if (integrationsV2) {
-      if (isLegacyIntegrationTab(k)) return false;
-      return k !== "sources" || hasSources || tab === "sources";
-    }
+    if (integrationsV2) return !isLegacyIntegrationTab(k);
     if (k === "integrations") return false;
     return (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
       (k !== "sources" || hasSources || tab === "sources");
@@ -272,7 +286,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     }
     setAt({ tab: k, sub: id, section: section ?? null });
     // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
-    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : null, section);
+    let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : (resolved.manager ?? null), section);
     if (k === "integrations" && !id && resolved.filter && resolved.filter !== "all") {
       to += `${to.includes("?") ? "&" : "?"}filter=${encodeURIComponent(resolved.filter)}`;
     }
@@ -303,6 +317,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const search = searchSettings(query, integrationsV2);
   // Inbox Sources' relationship view (#5741) takes the wide page while it is shown; the list keeps its width.
   const [sourcesGraph, setSourcesGraph] = useState(false);
+  // Wide extension plugin_page views (code/diff/split/columns/graph/scene/map) expand to the full extension page width.
+  const [extensionPageWide, setExtensionPageWide] = useState(false);
   const [scrollAnchor, setScrollAnchor] = useState<string | null>(null);
   useEffect(() => {
     if (!scrollAnchor) return;
@@ -353,6 +369,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     pick(g.tab, g.sub ?? null, agent);
     setScrollAnchor(g.anchor);
   };
+  const onExtensionPage =
+    (tab === "extensions" && extensionsRoute(sub).kind === "page") ||
+    (tab === "integrations" && parseIntegrationsSub(sub).kind === "page");
   const integrationsSplit =
     !listed &&
     !phone &&
@@ -402,7 +421,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               className={
                 integrationsSplit
                   ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
-                  : cx("mx-auto px-5 py-6 sm:px-8", tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph) ? "max-w-[1120px]" : "max-w-[760px]")
+                  : cx(
+                      "mx-auto px-5 py-6 sm:px-8",
+                      onExtensionPage && extensionPageWide
+                        ? "max-w-[1680px]"
+                        : tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph)
+                          ? "max-w-[1120px]"
+                          : "max-w-[760px]",
+                    )
               }
               style={{ animation: `fade-up 320ms ${EASE} both` }}
             >
@@ -417,7 +443,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "notifications" && <NotificationSettings />}
               {tab === "knowledge" && <KnowledgeSelection />}
               {tab === "prompts" && <SavedPrompts />}
-              {tab === "sources" && <SourcesUI title={TAB_INFO.sources.label} onGraph={setSourcesGraph} />}
+              {tab === "sources" && (
+                <Suspense fallback={<Loading />}>
+                  <SourcesUI title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
+                </Suspense>
+              )}
               {tab === "models" && <>
                 <section id="settings-providers" className="scroll-mt-4">
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
@@ -440,6 +470,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                     headerBack={phone}
                     initialFilter={normalizeIntegrationFilter(new URLSearchParams(location.search).get("filter"))}
                     onOpen={(id) => pick("integrations", id)}
+                    onPageWide={setExtensionPageWide}
                     onSettings={(url) => {
                       const target = settingsTarget(url);
                       if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
@@ -479,15 +510,15 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
                 </div>
               ) : (
-                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
+                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} onPageWide={setExtensionPageWide} />
               )}</Suspense>}
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
               {tab === "devices" && <Devices />}
-              {tab === "hub" && <>
-                <HubSettings />
+              {tab === "hub" && (sub === "recovery" ? <RecoverySettings onBack={() => pick("hub")} /> : <>
+                <HubSettings onOpenRecovery={() => pick("hub", "recovery")} />
                 <AgentGroup />
-              </>}
+              </>)}
               {tab === "managers" && <ManagersSettings />}
               {!isCoreTab(tab) && <ModuleSettingsPage tab={tab} />}
             </div>
@@ -584,6 +615,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
   contentId: string;
 }) {
   const nav = useRef<HTMLElement>(null);
+  const labsUnseen = useHasUnseenLabs();
   // A deep link or a width change can select a category below the sidebar's fold.
   useEffect(() => {
     nav.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
@@ -623,7 +655,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
       <nav ref={nav} aria-label={t("settings.categories")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
         {query ? (
           <>
-            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
             {groups.length > 0 && <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{t("settings.search_in_page")}</div>}
             {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}/${g.group}`} g={g} onGroup={onGroup} />)}
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
@@ -638,7 +670,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
                   <span className="min-w-0 flex-1"><GroupTitle group={g.key} compact /></span>
                   <GroupAction group={g.key} />
                 </div>
-                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
                 {hasFooter(g.key) && <p className="px-3 pt-1 pb-1.5 text-[11px] leading-snug text-ink-3"><GroupFooter group={g.key} /></p>}
               </div>
             );
@@ -649,7 +681,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
   );
 }
 
-function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean; contentId: string; onPick: (k: Tab) => void }) {
+function NavRow({ k, selected, notice, contentId, onPick }: { k: Tab; selected: boolean; notice: boolean; contentId: string; onPick: (k: Tab) => void }) {
   const info = tabInfo(k);
   return (
     <button
@@ -659,6 +691,7 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
       onFocus={() => preloadTab(k)}
       aria-current={selected ? "page" : undefined}
       aria-controls={contentId}
+      aria-label={notice ? `${info.label}, ${t("sidebar.labs_unseen")}` : undefined}
       className={cx(
         "relative flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] transition-colors",
         selected ? "bg-accent-tint font-medium text-accent-ink" : "text-ink-2 hover:bg-hover hover:text-ink",
@@ -667,6 +700,7 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
       {selected && <span aria-hidden className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />}
       <Icon name={info.icon} size={15} className="shrink-0" />
       <span className="truncate" title={info.label}>{info.label}</span>
+      {notice && <NoticeDot />}
     </button>
   );
 }
@@ -686,6 +720,7 @@ function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup)
 
 /** The phone's first page of Settings: the categories in grouped cards, each opening its page (as on iOS). */
 function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => boolean; integrationsV2: boolean; onPick: (k: Tab) => void }) {
+  const labsUnseen = useHasUnseenLabs();
   return (
     <nav aria-label={t("settings.categories")}>
       {navGroups(integrationsV2).map((g) => {
@@ -694,7 +729,9 @@ function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => bo
         return (
           <Group key={g.key} anchor={`nav-${g.key}`} title={<GroupTitle group={g.key} />} right={<GroupAction group={g.key} />} footer={hasFooter(g.key) ? <GroupFooter group={g.key} /> : undefined}>
             {tabs.map((k) => (
-              <Row key={k} icon={tabInfo(k).icon} label={tabInfo(k).label} hint={tabInfo(k).hint} onClick={() => onPick(k)} />
+              <Row key={k} icon={tabInfo(k).icon} label={tabInfo(k).label} hint={tabInfo(k).hint} onClick={() => onPick(k)}>
+                {k === "labs" && labsUnseen ? <><NoticeDot /><span className="sr-only">{t("sidebar.labs_unseen")}</span></> : undefined}
+              </Row>
             ))}
           </Group>
         );
@@ -813,6 +850,7 @@ function AgentPreferences() {
   return (
     <Group title={t("settings.agent_preferences")} anchor="agent-preferences">
       <AgentOpenRow />
+      <SeenRowsRow />
       <TerminalModeRow />
       {!workBrowserReady && <Row label={t("settings.sidebar_terminals")} hint={t("settings.sidebar_terminals_hint")} wrapHint>
         <Switch on={sidebarTerminals} onChange={setSidebarTerminals} label={t("settings.sidebar_terminals")} />

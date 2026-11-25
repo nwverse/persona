@@ -67,6 +67,7 @@ import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
 import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
+import { healthReadOnly } from "./lib/health-archive";
 import { connectModuleHub, moduleExtensionAt, moduleTitle, useModuleStates } from "./core/module-host";
 import { ModuleExtensionPage, ModulePage } from "./core/ModulePage";
 
@@ -570,9 +571,13 @@ function Shell() {
     case "module":
       main = <ModulePage key={route.module} route={route} onToggleSidebar={toggle} />;
       break;
-    case "track":
-      main = route.sid ? <Space key={`${route.slug}/${route.sid}`} slug={route.slug} sid={route.sid} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
+    case "track": {
+      // Health's existing data stays in the default panel without its module (including a core-only build), rather
+      // than depending on the optional Space Conversations extension or opening an editable new-conversation home.
+      const archive = healthReadOnly(route.slug);
+      main = route.sid || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
       break;
+    }
     case "track-new":
       main = <SpaceExtensionEntry fresh />;
       break;
@@ -595,7 +600,7 @@ function Shell() {
       main = <WorkspaceBoard onToggleSidebar={toggle} />;
       break;
     case "todos":
-      main = <TodosView selectedId={route.id} view={route.view} mode={route.mode} date={route.date} onToggleSidebar={toggle} />;
+      main = <TodosView selectedId={route.id} directionId={route.direction} manager={route.manager} view={route.view} mode={route.mode} date={route.date} onToggleSidebar={toggle} />;
       break;
     case "agents":
       main = <AgentsView key={route.id ?? ""} id={route.id} onToggleSidebar={toggle} />;
@@ -645,7 +650,7 @@ function Shell() {
 
   return (
     // #root is 100dvh (index.html); with a soft keyboard up (iOS) the shell is only the part above it (lib/viewport.ts)
-    <div ref={shell} data-app-shell className="flex h-full overflow-hidden bg-page">
+    <div ref={shell} data-app-shell data-sidebar-hidden={!sidebarShown(layout) || undefined} className="flex h-full overflow-hidden bg-page">
       {/* wide: a fixed column; narrow: a drawer over the page, clear of a landscape notch and the home indicator */}
       <div
         ref={drawerBox}
@@ -664,7 +669,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}

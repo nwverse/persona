@@ -4,10 +4,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatDate, t } from "../../i18n";
 import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/feed";
+import { chooseManager, resetManagerChoice } from "../../lib/manager-choice";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { loadPages } from "../../lib/lazy-page";
 import { getState, putTodo, refresh, refreshTodos, reset, upsertSession } from "../../lib/store";
+import { interactionID } from "../../lib/ids-wire";
 import type { Todo } from "../../lib/todos";
 import { stateName } from "../../lib/state-labels";
 import { usageLimitLabel } from "../../lib/usage-limit";
@@ -77,15 +79,6 @@ afterEach(() => {
   delete getFeedState().taskCards[conversation];
   vi.unstubAllGlobals();
 });
-const settleHeldPushRead = async () => {
-  await act(async () => {
-    vi.advanceTimersByTime(0);
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-  const fetchMock = vi.mocked(fetch);
-  expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/push/ln-mode"))).toBe(true);
-};
 
 const entries = () => [...host.querySelectorAll<HTMLButtonElement>("[data-assistant-actionbar] [data-tray-entry]")];
 const entry = (key: string) => host.querySelector<HTMLButtonElement>(`[data-assistant-actionbar] [data-tray-entry="${key}"]`)!;
@@ -898,7 +891,6 @@ describe("Assistant Needs you / In progress trays", () => {
       await refresh();
       for (const s of moreSessions) upsertSession(s);
     });
-    await settleHeldPushRead();
     expect(entries().map((button) => button.textContent)).toEqual([`${label.needs}1`, `${label.running}2`]);
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="agent:demo/by-hand-asks"]')?.textContent).toContain("Keep the old file?");
@@ -922,7 +914,6 @@ describe("Assistant Needs you / In progress trays", () => {
       await refresh();
       upsertSession(moreSessions[0]);
     });
-    await settleHeldPushRead();
     act(() => entry("needs").click());
     await openRows();
     const row = host.querySelector<HTMLElement>(`[data-needs-row="${kind === "task" ? "task:tray-task" : "agent:demo/by-hand-asks"}"]`)!;
@@ -1207,7 +1198,11 @@ describe("Assistant Needs you / In progress trays", () => {
       const group = host.querySelector('[data-needs-supervisor="another-chat"]')!;
       expect(group).not.toBeNull();
       expect(group.getAttribute("aria-label")).toBe(t("assistant-tasks.needs_group_another"));
-      expect(group.querySelector("[data-open-task=held-elsewhere]")).not.toBeNull();
+      // WaitingTaskRow is a lazy chunk: its supervisor group can commit before its action buttons do.
+      await vi.waitFor(async () => {
+        await act(async () => {});
+        expect(group.querySelector("[data-open-task=held-elsewhere]")).not.toBeNull();
+      });
       const close = group.querySelector<HTMLButtonElement>("[data-close-task=held-elsewhere]")!;
       expect(close).not.toBeNull();
       act(() => close.click());
@@ -1259,7 +1254,6 @@ describe("Assistant Needs you / In progress trays", () => {
       await refreshTodos();
       upsertSession(moreSessions[0]);
     });
-    await settleHeldPushRead();
     expect(entry("needs").textContent).toBe(label.needs);
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="task:tray-task"]')).toBeNull();
@@ -1267,7 +1261,7 @@ describe("Assistant Needs you / In progress trays", () => {
 
     // Plain unescalated screen card on a quiet task (even with view needs_you / agent_asks): stays out of main chat
     // Needs you per D19 until explicitly escalated via ask_escalate.
-    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: screenID }] } };
+    todo = { ...todo, quiet: true, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0, asks: [{ id: "run:demo/worker", kind: "question", home: "run", interaction: interactionID(screenID) }] } };
     moreInteractions = [{ ...baseScreen, delegating: false }];
     await act(async () => {
       await refresh();
@@ -1341,10 +1335,12 @@ describe("Assistant Needs you / In progress trays", () => {
       await refreshTodos();
       for (const s of moreSessions) upsertSession(s);
     });
-    await settleHeldPushRead();
 
     // Only the escalated task permission counts; the unescalated standalone Agent permission stays out of main chat Needs you.
     expect(entry("needs").textContent).toBe(`${label.needs}1`);
+    // Held pushes stay out of the primary main chat composer bar (surfaced in secondary views instead).
+    expect(host.querySelector("[data-held-pushes-entry]")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/push/intercepts") || String(url).includes("/push/ln-mode"))).toBe(false);
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="agent:demo/by-hand-perm"]')).toBeNull();
     await openRows("task:tray-task");
@@ -1366,5 +1362,57 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(writes.slice(before)).toEqual([`/api/v1/interactions/${permID}/resolve`]);
     const call = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url) === `/api/v1/interactions/${permID}/resolve` && init?.method === "POST");
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ allow: true });
+  });
+
+  it("excludes another manager's tasks and standalone agents from ActionBar trays and TaskDock (#15645)", async () => {
+    mainChat = conversation;
+    todo = { ...todo, manager: "assistant" };
+    const secondTodo: Todo = {
+      id: "second-task",
+      manager: "m-second",
+      title: "Second assistant task",
+      origin: conversation,
+      created_at: at,
+      updated_at: at,
+      agents: [{ machine_id: "box-second", session_id: "sec-worker", linked_at: at }],
+    };
+    const defaultDecision: Todo = {
+      id: "default-decision",
+      manager: "assistant",
+      title: "Default assistant decision",
+      origin: "default-main",
+      created_at: at,
+      updated_at: at,
+      supervision: { supervisor: "default-main", state: "needs_user", reviews: [], updated_at: at },
+    };
+    moreTodos = [secondTodo, defaultDecision];
+    moreSessions = [
+      { machine_id: "demo", session_id: "default-solo", manager: "assistant", title: "Default solo agent", cwd: "/demo", state: "working", status: "working", updated_at: at } as Session,
+      { machine_id: "box-second", session_id: "sec-worker", manager: "m-second", title: "Second task agent", cwd: "/sec", state: "working", status: "working", updated_at: at } as Session,
+      { machine_id: "box-second", session_id: "sec-solo", manager: "m-second", title: "Second solo agent", cwd: "/sec", state: "working", status: "working", updated_at: at } as Session,
+    ];
+    const dockHost = document.createElement("div");
+    document.body.append(dockHost);
+    const dockRoot = createRoot(dockHost);
+    try {
+      act(() => chooseManager("m-second"));
+      await act(async () => {
+        await refresh();
+        await refreshTodos();
+        for (const s of moreSessions) upsertSession(s);
+      });
+      act(() => dockRoot.render(<StrictMode><TaskDock conversation={conversation} /></StrictMode>));
+      // Only m-second's task and standalone agent count; assistant's task, decision, and solo agent stay out.
+      expect(entry("needs").textContent).toBe(label.needs);
+      expect(entry("running").textContent).toBe(`${label.running}2`);
+      expect(dockHost.textContent).toContain("Second assistant task");
+      expect(dockHost.textContent).toContain("Second solo agent");
+      expect(dockHost.textContent).not.toContain("Default solo agent");
+      expect(dockHost.textContent).not.toContain("Demo task");
+    } finally {
+      act(() => dockRoot.unmount());
+      dockHost.remove();
+      act(() => resetManagerChoice());
+    }
   });
 });

@@ -1,6 +1,7 @@
 package kb
 
 import (
+	"context"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -34,20 +35,48 @@ func (c recordingCore) RecordSnapshot(id recordingwire.ID) (recordingwire.Files,
 	files, m, hub, err := c.e.Store.recordSnapshot(string(id))
 	return portFiles(files), m, hub, err
 }
-func (c recordingCore) TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
-	return TranscriptOfRecord(hubMode, device, hub)
-}
 func (c recordingCore) ReadMinutes(id recordingwire.ID) (*Minutes, error) {
 	return c.e.Store.ReadMinutes(string(id))
 }
 func (c recordingCore) ReadRecap(id recordingwire.ID) (*DayRecap, error) {
 	return c.e.Store.readRecap(string(id))
 }
-func (c recordingCore) PhotoTexts(id recordingwire.ID) []PhotoText  { return c.e.PhotoTexts(string(id)) }
 func (c recordingCore) PhotoWords(p PhotoText, clipped bool) string { return photoWords(p, clipped) }
 func (c recordingCore) PhotoBook(id recordingwire.ID) (recordingwire.PhotoBook, error) {
-	b, err := c.e.Store.readPhotos(string(id))
-	return storedPhotos{b, c.e.Store}, err
+	return c.e.Store.readPhotos(string(id))
+}
+func (c recordingCore) Tombstoned(id recordingwire.ID) bool {
+	_, gone := c.e.Store.tombstones()[string(id)]
+	return gone
+}
+func (c recordingCore) Deleted() []recordingwire.ID {
+	stones := c.e.Store.tombstones()
+	out := make([]recordingwire.ID, 0, len(stones))
+	for id := range stones {
+		out = append(out, recordingwire.ID(id))
+	}
+	return out
+}
+func (c recordingCore) RecordingFile(id recordingwire.ID, f recordingwire.File) ([]byte, error) {
+	return c.e.Store.recordingRead(string(id), string(f))
+}
+func (c recordingCore) RecordingDays() int { return recordingDays(c.e.RecordingDays()) }
+func (c recordingCore) TranscriptionReady() bool {
+	return c.e.TranscriptionReady != nil && c.e.TranscriptionReady()
+}
+func (c recordingCore) EarlierMeetings() bool { return c.e.EarlierMeetingsInAnswers }
+func (c recordingCore) Project(slug recordingwire.ProjectSlug) (recordingwire.EarlierProject, bool) {
+	p, ok := c.e.Store.Project(string(slug))
+	if !ok {
+		return recordingwire.EarlierProject{}, false
+	}
+	return recordingwire.EarlierProject{Slug: p.Slug, Name: p.Name, Status: p.Status}, true
+}
+func (c recordingCore) HubTranscriptLocked(id recordingwire.ID) (HubTranscript, error) {
+	return c.e.Store.readHubLocked(string(id))
+}
+func (c recordingCore) RenderTranscript(r *Recording, segs []RecordingSegment) string {
+	return c.e.Store.renderTranscript(r, segs)
 }
 func (c recordingCore) CalendarItems(kind recordingwire.CalendarKind) []recordingwire.CalendarItem {
 	items := c.e.Store.Items(string(kind))
@@ -73,27 +102,23 @@ func portFiles(files map[string][]byte) recordingwire.Files {
 	return out
 }
 
-// storedPhotos is a photo book as the minutes' writer asks it (recordingwire.PhotoBook).
-type storedPhotos struct {
-	b photoBook
-	s *Store
-}
-
-func (p storedPhotos) DropUnlisted(m *Minutes) { p.s.dropUnlistedPhotos(m, p.b) }
-func (p storedPhotos) CitedChanged(before, after map[int]bool) bool {
-	return citedChanged(p.b, before, after)
-}
-
 // The write-and-lock group.
 
 func (c recordingCore) Locks() recordingwire.Locks {
 	s := c.e.Store
-	return recordingwire.Locks{Recordings: &s.recMu, Files: &s.recFilesMu, Meta: &s.metaMu}
+	return recordingwire.Locks{Recordings: &s.recMu, Meeting: &s.meetMu, Files: &s.recFilesMu, Meta: &s.metaMu,
+		FilesRead: s.recFilesMu.RLocker()}
 }
 func (c recordingCore) RecoverRecording(id recordingwire.ID) error {
 	return c.e.Store.recoverRecordingLocked(string(id))
 }
 func (c recordingCore) WriteFile(path string, data []byte) error { return writeFile(path, data) }
+func (c recordingCore) WriteDurable(path string, data []byte) error {
+	return writeRecordingFile(path, data)
+}
+func (c recordingCore) CommitRecording(r *Recording, segs []RecordingSegment) error {
+	return c.e.Store.commitRecording(r, segs)
+}
 func (c recordingCore) PutMeta(r *Recording) error {
 	return c.e.Store.putEntity(KindRecording, r.ID, r, &r.Tagging, false)
 }
@@ -103,6 +128,24 @@ func (c recordingCore) PutSummary(id recordingwire.ID, text string) error {
 func (c recordingCore) BumpPhotosRev(id recordingwire.ID, start time.Time) error {
 	return c.e.Store.bumpPhotosRev(string(id), start)
 }
+func (c recordingCore) PutPhotoBook(id recordingwire.ID, b *recordingwire.PhotoBook, start time.Time, zone *time.Location) error {
+	return c.e.Store.putPhotosLocked(string(id), b, start, zone)
+}
+func (c recordingCore) PutPhotoText(id recordingwire.ID, b *recordingwire.PhotoBook, start time.Time, zone *time.Location) (bool, error) {
+	return c.e.Store.putPhotosTextLocked(string(id), b, start, zone)
+}
+func (c recordingCore) UpdateMeetingLocked(id recordingwire.ID, fn func(m *Meeting, r Recording) error) (Meeting, []recordingwire.MeetingPart, error) {
+	m, names, err := c.e.meetingUpdateLocked(string(id), fn)
+	var parts []recordingwire.MeetingPart
+	if names != nil {
+		parts = make([]recordingwire.MeetingPart, len(names))
+		for i, p := range names {
+			parts[i] = recordingwire.MeetingPart(p)
+		}
+	}
+	return m, parts, err
+}
+func (c recordingCore) PurgeSearch() { c.e.Store.SearchIndexPurge() }
 func (c recordingCore) Notify(id recordingwire.ID, what recordingwire.Change) {
 	c.e.Store.notify(KindRecording, string(id), string(what))
 }
@@ -115,9 +158,6 @@ func (c recordingCore) MeetingChanged(id recordingwire.ID, parts []recordingwire
 		names[i] = string(p)
 	}
 	c.e.meetingChanged(string(id), names)
-}
-func (c recordingCore) DropAudio(id recordingwire.ID, why error) error {
-	return c.e.dropAudio(string(id), why)
 }
 func (c recordingCore) Now() time.Time                  { return c.e.now() }
 func (c recordingCore) Logf(format string, args ...any) { c.e.logf(format, args...) }
@@ -134,6 +174,13 @@ func (c recordingCore) OutputLang(r *Recording) recordingwire.Language {
 func (c recordingCore) WritingOwner(lang recordingwire.Language) recordingwire.Owner {
 	o := c.e.writingOwner(i18n.Lang(lang))
 	return recordingwire.Owner{Name: o.Owner, Language: o.Language}
+}
+func (c recordingCore) Deferred(ctx context.Context, err error) bool { return deferred(ctx, err) }
+func (c recordingCore) Provider() recordingwire.Provider {
+	if c.e.Store == nil { // an engine with no store yet has no writers to share with (SetRecordingProvider allows one)
+		return recordingwire.NoProvider{}
+	}
+	return c.e.Store.recordingAudio()
 }
 func (c recordingCore) DayRecapClock() (recordingwire.Clock, bool) {
 	if c.e.DayRecapClock == nil {

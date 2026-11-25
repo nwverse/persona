@@ -203,7 +203,7 @@ func TestInboxTodoUndoDeleteFailureKeepsRowFiled(t *testing.T) {
 	}
 	t.Cleanup(database.Close)
 	failing := &undoDeleteFailStore{Store: h.st, todoStore: database, fail: true}
-	h.store = func() Store { return failing }
+	h.setStore(func() Store { return failing })
 	mergeItems(h)
 	code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/todo", `{"items":[{"id":"a"}]}`)
 	if code != 200 {

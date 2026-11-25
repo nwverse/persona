@@ -210,6 +210,10 @@ class CompileTests(unittest.TestCase):
         for name in ("contracts.txt", "domain_layers/undeclared.txt", "domain_layers/legacy_edges.txt",
                      "domain_layers/baseline.txt"):
             shutil.copy2(rules / "testdata" / name, lists / name)
+        # ReadLists also loads the bare-ID baseline from the repository root, even in this isolated module.
+        baseline = module / "scripts/ci/wire_types_baseline.json"
+        baseline.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / "scripts/ci/wire_types_baseline.json", baseline)
         cls.dirs = []
         for name, args in [("golden", GOLDEN_ARGS), *COMBINATIONS.items(), ("getter", GETTER_ARGS)]:
             done = scaffold(*args, root=module)

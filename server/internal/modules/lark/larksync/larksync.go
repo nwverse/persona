@@ -38,7 +38,12 @@ type Syncer struct {
 	lim    *limiter
 }
 
-var _ larksyncwire.Syncer = (*Syncer)(nil)
+var (
+	_ larksyncwire.Syncer                = (*Syncer)(nil)
+	_ larksyncwire.NameResolver          = (*Syncer)(nil)
+	_ larksyncwire.ChatNameResolver      = (*Syncer)(nil)
+	_ larksyncwire.PendingLinkBackfiller = (*Syncer)(nil)
+)
 
 // NewSyncer is a binding's reader. httpClient nil uses a client with a 60 s timeout; now nil is time.Now.
 func NewSyncer(httpClient *http.Client, now func() time.Time) *Syncer {
@@ -80,10 +85,42 @@ func (s *Syncer) Run(ctx context.Context, b larksyncwire.Binding, token func(ctx
 	return res, err
 }
 
-// read runs every reader in order. IM and search come first so the minutes their messages link to are found; the
-// documents follow, then the minutes from both.
+// read runs the binding's readers in order. In full mode, IM and search come first so the documents and minutes their
+// messages link to are found; Drive and Wiki follow, then linked cloud documents and minutes. In IM incremental mode
+// (larksyncwire.ModeIM), only IM chats, p2p chat discovery, and the cloud documents and minutes linked in those new
+// messages run, with reserved budget slices so a busy chat backlog cannot starve p2p discovery or linked docs.
 func (r *run) read(ctx context.Context) error {
-	steps := []func(context.Context) error{r.readIM, r.readSearch, r.readDrive, r.readWiki, r.readMinutes}
+	if r.b.Mode == larksyncwire.ModeIM {
+		if r.b.Tier != larksyncwire.TierFull {
+			return nil
+		}
+		budget := r.deadline.Sub(r.start)
+		steps := []struct {
+			fn       func(context.Context) error
+			deadline time.Time
+		}{
+			{r.readIM, r.start.Add(budget * 60 / 100)},
+			{r.readP2PDiscovery, r.start.Add(budget * 80 / 100)},
+			{r.readLinkedDocs, r.deadline},
+			{r.readMinutes, r.deadline},
+		}
+		for _, st := range steps {
+			if !r.s.now().Before(r.deadline) {
+				r.partial = true
+				return nil
+			}
+			r.stepDeadline = st.deadline
+			r.sess.deadline = st.deadline
+			err := st.fn(ctx)
+			r.stepDeadline = time.Time{}
+			r.sess.deadline = r.deadline
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	steps := []func(context.Context) error{r.readIM, r.readSearch, r.readDrive, r.readWiki, r.readLinkedDocs, r.readMinutes}
 	for _, step := range steps {
 		if r.overBudget() {
 			r.partial = true
@@ -94,6 +131,398 @@ func (r *run) read(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ResolveUserNames looks up Lark user display names by open_id using the binding's user token and per-binding rate
+// limiter (larksyncwire.NameResolver). Non-user ids (such as cli_* bots) and per-user errors are skipped; a missing
+// contact scope, refused token, or cancelled context stops lookups and returns that error alongside whatever names were
+// already resolved.
+func (s *Syncer) ResolveUserNames(ctx context.Context, b larksyncwire.Binding, token func(ctx context.Context) (string, error), openIDs []string) (map[string]string, error) {
+	if token == nil {
+		return nil, &larksyncwire.Error{Kind: larksyncwire.ErrKindAuth, Op: "user name", Msg: "no token"}
+	}
+	budget := cmpDuration(b.Budget, 2*time.Minute)
+	deadline := s.now().Add(budget)
+	runCtx, cancel := context.WithTimeout(ctx, budget+30*time.Second)
+	defer cancel()
+	sess := &session{s: s, base: botcard.ResolveDomain(b.App.Domain), token: token, deadline: deadline}
+	out := map[string]string{}
+	seen := map[string]bool{}
+	for _, id := range openIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] || !isContactUser(id, "") {
+			continue
+		}
+		seen[id] = true
+		if !s.now().Before(deadline) {
+			return out, context.DeadlineExceeded
+		}
+		var data struct {
+			User struct {
+				Name string `json:"name"`
+			} `json:"user"`
+		}
+		err := sess.getJSON(runCtx, request{
+			family: famIM,
+			op:     "user name",
+			path:   "/open-apis/contact/v3/users/" + pathEsc(id),
+			query:  map[string]string{"user_id_type": "open_id"},
+		}, &data)
+		if err != nil {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			if runCtx.Err() != nil {
+				return out, runCtx.Err()
+			}
+			if fatal(err) {
+				return out, err
+			}
+			if e := asSyncError(err); e != nil && e.Kind == larksyncwire.ErrKindScope {
+				return out, err
+			}
+			continue
+		}
+		if name := strings.TrimSpace(data.User.Name); name != "" {
+			out[id] = name
+		}
+	}
+	return out, nil
+}
+
+// ResolveNamesWithFallback resolves sender display names and unnamed p2p chat names for a binding's sender-name
+// backfill (larksyncwire.ChatNameResolver) using the binding's user token and per-binding rate limiter:
+//  1. contact/v3/users/:open_id for human senders (same-tenant directory);
+//  2. GET /open-apis/im/v1/chats/:chat_id/members cached per chat when contact/v3 misses external users;
+//  3. GET /open-apis/im/v1/chats/:chat_id + chat members for unnamed p2p chats (peer name + bot DM name);
+//  4. Message-carried sender/mention names via GET /open-apis/im/v1/messages/:id for remaining unresolved senders.
+//
+// A missing chat-members scope silently disables only the chat-members fallback; a missing contact scope stops
+// contact/v3 calls and is returned alongside partial results if any requested human open_id remains unresolved.
+func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Binding, token func(ctx context.Context) (string, error), req larksyncwire.NameResolveRequest) (larksyncwire.NameResolveResult, error) {
+	out := larksyncwire.NameResolveResult{
+		UserNames:    map[string]string{},
+		P2PChatNames: map[string]string{},
+	}
+	if token == nil {
+		return out, &larksyncwire.Error{Kind: larksyncwire.ErrKindAuth, Op: "user name", Msg: "no token"}
+	}
+	budget := cmpDuration(b.Budget, 2*time.Minute)
+	deadline := s.now().Add(budget)
+	runCtx, cancel := context.WithTimeout(ctx, budget+30*time.Second)
+	defer cancel()
+	sess := &session{s: s, base: botcard.ResolveDomain(b.App.Domain), token: token, deadline: deadline}
+	overBudget := func() bool { return !s.now().Before(deadline) }
+	owner := openIDOf(b.AccountID)
+
+	contactTried := map[string]string{}
+	contactOff := false
+	var contactScopeErr error
+	lookupContact := func(id string) (string, error) {
+		id = strings.TrimSpace(id)
+		if id == "" || !isContactUser(id, "") {
+			return "", nil
+		}
+		if name, tried := contactTried[id]; tried {
+			return name, nil
+		}
+		if contactOff {
+			return "", nil
+		}
+		if overBudget() {
+			return "", context.DeadlineExceeded
+		}
+		var data struct {
+			User struct {
+				Name string `json:"name"`
+			} `json:"user"`
+		}
+		err := sess.getJSON(runCtx, request{
+			family: famIM,
+			op:     "user name",
+			path:   "/open-apis/contact/v3/users/" + pathEsc(id),
+			query:  map[string]string{"user_id_type": "open_id"},
+		}, &data)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if runCtx.Err() != nil {
+				return "", runCtx.Err()
+			}
+			if fatal(err) {
+				return "", err
+			}
+			if e := asSyncError(err); e != nil && e.Kind == larksyncwire.ErrKindScope {
+				contactOff = true
+				contactScopeErr = err
+				return "", nil
+			}
+			contactTried[id] = ""
+			return "", nil
+		}
+		name := strings.TrimSpace(data.User.Name)
+		contactTried[id] = name
+		if name != "" {
+			out.UserNames[id] = name
+		}
+		return name, nil
+	}
+
+	requestedSenders := map[string]bool{}
+	for _, rawID := range req.OpenIDs {
+		if id := strings.TrimSpace(string(rawID)); id != "" {
+			requestedSenders[id] = true
+		}
+	}
+	for _, sids := range req.ChatSenders {
+		for _, sid := range sids {
+			if sid = strings.TrimSpace(sid); sid != "" {
+				requestedSenders[sid] = true
+			}
+		}
+	}
+
+	chatMembers := map[string]map[string]string{}
+	chatMembersOff := false
+	ensureMembers := func(chatID string) (map[string]string, error) {
+		if chatID == "" {
+			return nil, nil
+		}
+		if m, ok := chatMembers[chatID]; ok {
+			return m, nil
+		}
+		if chatMembersOff {
+			return nil, nil
+		}
+		if overBudget() {
+			return nil, context.DeadlineExceeded
+		}
+		members, scopeDenied, err := loadChatMembers(runCtx, sess, chatID, overBudget)
+		if scopeDenied {
+			chatMembersOff = true
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			if runCtx.Err() != nil {
+				return nil, runCtx.Err()
+			}
+			return nil, err
+		}
+		if members == nil {
+			members = map[string]string{}
+		}
+		chatMembers[chatID] = members
+		for id, name := range members {
+			if name != "" && requestedSenders[id] && out.UserNames[id] == "" {
+				out.UserNames[id] = name
+			}
+		}
+		return members, nil
+	}
+
+	// Pass 1: resolve senders chat-by-chat; once a chat has a contact/v3 miss, load its member list once and serve
+	// every remaining member in that chat from the cache without repeating failed contact/v3 lookups.
+	for _, chatID := range sortedKeys(req.ChatSenders) {
+		for _, sid := range req.ChatSenders[chatID] {
+			sid = strings.TrimSpace(sid)
+			if sid == "" || out.UserNames[sid] != "" || !isContactUser(sid, "") {
+				continue
+			}
+			if members, loaded := chatMembers[chatID]; loaded {
+				if name := members[sid]; name != "" {
+					out.UserNames[sid] = name
+					continue
+				}
+			}
+			name, err := lookupContact(sid)
+			if err != nil {
+				return out, err
+			}
+			if name != "" {
+				continue
+			}
+			members, err := ensureMembers(chatID)
+			if err != nil {
+				return out, err
+			}
+			if mname := members[sid]; mname != "" {
+				out.UserNames[sid] = mname
+			}
+		}
+	}
+
+	// Pass 2: resolve any remaining OpenIDs not associated with a chat in ChatSenders.
+	for _, rawID := range req.OpenIDs {
+		id := strings.TrimSpace(string(rawID))
+		if id == "" || out.UserNames[id] != "" || !isContactUser(id, "") {
+			continue
+		}
+		if _, err := lookupContact(id); err != nil {
+			return out, err
+		}
+	}
+
+	// Pass 3: resolve unnamed p2p chats via resolved peer senders, chat info, and chat members; if a p2p chat's peer
+	// name is found (including a bot DM's chat name), also fill any unnamed non-owner sender in that 1-on-1 chat.
+	seenP2P := map[string]bool{}
+	for _, rawChatID := range req.P2PChatIDs {
+		chatID := strings.TrimSpace(string(rawChatID))
+		if chatID == "" || seenP2P[chatID] {
+			continue
+		}
+		seenP2P[chatID] = true
+		peer := ""
+		for _, sid := range req.ChatSenders[chatID] {
+			sid = strings.TrimSpace(sid)
+			if sid != "" && sid != owner && out.UserNames[sid] != "" {
+				peer = out.UserNames[sid]
+				break
+			}
+		}
+		var targetID string
+		if peer == "" {
+			if overBudget() {
+				return out, context.DeadlineExceeded
+			}
+			var data struct {
+				Name          string `json:"name"`
+				OwnerID       string `json:"owner_id"`
+				P2PTargetID   string `json:"p2p_target_id"`
+				P2PTargetType string `json:"p2p_target_type"`
+			}
+			err := sess.getJSON(runCtx, request{
+				family: famIM,
+				op:     "chat info",
+				path:   "/open-apis/im/v1/chats/" + pathEsc(chatID),
+				query:  map[string]string{"user_id_type": "open_id"},
+			}, &data)
+			if err != nil {
+				if ctx.Err() != nil {
+					return out, ctx.Err()
+				}
+				if runCtx.Err() != nil {
+					return out, runCtx.Err()
+				}
+				if fatal(err) {
+					return out, err
+				}
+			} else {
+				if name := strings.TrimSpace(data.Name); name != "" {
+					peer = name
+				} else {
+					if data.P2PTargetID != "" && isContactUser(data.P2PTargetID, data.P2PTargetType) {
+						targetID = data.P2PTargetID
+					} else if data.OwnerID != "" && data.OwnerID != owner && isContactUser(data.OwnerID, "") {
+						targetID = data.OwnerID
+					}
+					if targetID != "" {
+						if name := out.UserNames[targetID]; name != "" {
+							peer = name
+						} else {
+							name, cerr := lookupContact(targetID)
+							if cerr != nil {
+								return out, cerr
+							}
+							peer = name
+						}
+					}
+				}
+			}
+		}
+		if peer == "" {
+			members, err := ensureMembers(chatID)
+			if err != nil {
+				return out, err
+			}
+			if targetID != "" && members[targetID] != "" {
+				peer = members[targetID]
+			} else if p := uniqueP2PPeerName(members, owner); p != "" {
+				peer = p
+			}
+		}
+		if peer != "" {
+			out.P2PChatNames[chatID] = peer
+			for _, sid := range req.ChatSenders[chatID] {
+				sid = strings.TrimSpace(sid)
+				if sid != "" && sid != owner && out.UserNames[sid] == "" {
+					out.UserNames[sid] = peer
+				}
+			}
+		}
+	}
+
+	// Pass 4: fallback to message-carried sender/mention info for any sender still unresolved.
+	msgNames := map[string]string{}
+	for _, sid := range sortedKeys(req.SampleMessages) {
+		if sid == "" || out.UserNames[sid] != "" {
+			continue
+		}
+		if name := msgNames[sid]; name != "" {
+			out.UserNames[sid] = name
+			continue
+		}
+		msgID := strings.TrimSpace(req.SampleMessages[sid])
+		if msgID == "" {
+			continue
+		}
+		if overBudget() {
+			return out, context.DeadlineExceeded
+		}
+		var data struct {
+			Items []apiMessage `json:"items"`
+		}
+		err := sess.getJSON(runCtx, request{
+			family: famIM,
+			op:     "get message",
+			path:   "/open-apis/im/v1/messages/" + pathEsc(msgID),
+			query:  map[string]string{"user_id_type": "open_id"},
+		}, &data)
+		if err != nil {
+			if ctx.Err() != nil {
+				return out, ctx.Err()
+			}
+			if runCtx.Err() != nil {
+				return out, runCtx.Err()
+			}
+			if fatal(err) {
+				return out, err
+			}
+			continue
+		}
+		for _, am := range data.Items {
+			extractMessageNames(am, msgNames)
+		}
+		if name := msgNames[sid]; name != "" {
+			out.UserNames[sid] = name
+		}
+	}
+	// If Pass 4 learned a peer's name for a still-unnamed p2p chat, populate P2PChatNames too.
+	for _, rawChatID := range req.P2PChatIDs {
+		chatID := strings.TrimSpace(string(rawChatID))
+		if chatID == "" || out.P2PChatNames[chatID] != "" {
+			continue
+		}
+		for _, sid := range req.ChatSenders[chatID] {
+			sid = strings.TrimSpace(sid)
+			if sid != "" && sid != owner && out.UserNames[sid] != "" {
+				out.P2PChatNames[chatID] = out.UserNames[sid]
+				break
+			}
+		}
+	}
+
+	if contactScopeErr != nil {
+		for _, rawID := range req.OpenIDs {
+			id := strings.TrimSpace(string(rawID))
+			if id != "" && isContactUser(id, "") && out.UserNames[id] == "" {
+				return out, contactScopeErr
+			}
+		}
+	}
+	return out, nil
 }
 
 // Media fetches a message's image or file by its attachment Ref ("<binding key>|<message id>|<key>|<image|file>"),

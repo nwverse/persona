@@ -18,5 +18,8 @@
   "summary": "Questions in the main chat",
   "summary_working": "{count} in progress",
   "summary_unread": "{count} unread",
-  "summary_open": "Open the main chat"
+  "summary_open": "Open the main chat",
+  "loading_preview": "Loading preview…",
+  "load_earlier": "Load earlier messages",
+  "load_later": "Load later messages"
 }

@@ -825,9 +825,6 @@
    "PathInfo.HubID": 1,
    "PathInfo.ID": 1,
    "PendingPost.ID": 1,
-   "Photo.ID": 1,
-   "PhotoRef.ID": 1,
-   "PhotoUpload.ID": 1,
    "Placement.MachineID": 1,
    "PluginNodeCall.ID": 1,
    "PluginNodeEvent.ID": 1,
@@ -1258,7 +1255,6 @@
    "KBUpdateResult.Before": 2,
    "LookPackage.Item": 1,
    "LookTexts.AdditionalProperties": 1,
-   "MCPTool.InputSchema": 1,
    "MachineEntry.Entry": 1,
    "MachineExtras.Browser": 1,
    "MachineExtras.Computer": 1,
@@ -1949,8 +1945,6 @@
    "boardPerson.Newbie.Status": 1,
    "botmuxDaemon.Probe.Status": 1,
    "botmuxRow.Raw.PreviewBotState": 1,
-   "briefBodyPRFollowup.State": 1,
-   "briefBodyPRFollowup.WatchStatus": 1,
    "browserLoginFlow.State": 1,
    "checkJSON.State": 1,
    "checkJSON.Status": 1,
@@ -2344,8 +2338,6 @@
    "assistantProc.turnErrorKind": 1,
    "boundTarget.Kind": 1,
    "breakerFallback.Kind": 1,
-   "briefBodyProgress.StageKind": 1,
-   "briefProgress.StageKind": 1,
    "calendarEntry.Kind": 1,
    "cindyDBRow.AgentKind": 1,
    "cindyDBRow.WorkspaceKind": 1,
@@ -3533,9 +3525,6 @@
    "PhoneToolRegistration.CredentialID": 1,
    "PhoneToolRegistration.DeviceID": 1,
    "PhoneWrite.ID": 1,
-   "Photo.ID": 1,
-   "PhotoRef.ID": 1,
-   "PhotoUpload.ID": 1,
    "Pin.MessageID": 1,
    "Pin.OperatorID": 1,
    "Place.ID": 1,
@@ -4192,13 +4181,6 @@
    "botmuxRow.Raw.RootMessageID": 1,
    "boundTarget.MachineID": 1,
    "boundTarget.SessionID": 1,
-   "briefBodyDone.ID": 1,
-   "briefBodyPRFollowup.TodoID": 1,
-   "briefBodyProgress.ID": 1,
-   "briefBodyRow.ID": 1,
-   "briefBodyRow.MachineID": 1,
-   "briefBodyRow.SessionID": 1,
-   "briefProgress.ID": 1,
    "briefRecord.ID": 1,
    "browserLoginFlow.DeviceID": 1,
    "bundleRef.PreviewID": 1,
@@ -4736,7 +4718,6 @@
    "storageDirTarget.categoryID": 1,
    "storageDirTarget.targetID": 1,
    "storeToolArgs.KeyID": 1,
-   "storedPhoto.ID": 1,
    "strengthSettlement.ClientMsgID": 1,
    "strengthToolArgs.ID": 1,
    "subagentLink.A2ATaskID": 1,
@@ -5155,7 +5136,7 @@
    "LarkSyncOutbox.Payload": 1,
    "LookPackage.Item": 1,
    "LookTexts.AdditionalProperties": 1,
-   "MCPTool.InputSchema": 2,
+   "MCPTool.InputSchema": 1,
    "Machine.raw": 1,
    "MachineAudit.Detail": 1,
    "MachineEntry.Entry": 1,
@@ -5639,8 +5620,6 @@
    "authStatus.ExpiresAt": 1,
    "autonameReceiptCard.ResolvedAt": 1,
    "autonameReceiptSnapshot.NamedAt": 1,
-   "briefBodyPRFollowup.LastObservedAt": 1,
-   "briefBodyPRFollowup.WatchUpdatedAt": 1,
    "candidateHeadroom.RecoversAt": 1,
    "capacityAccount.recovery": 1,
    "checkRun.CompletedAt": 1,
@@ -5943,6 +5922,216 @@
    "usageSourceInput.Enabled": 1,
    "wireNode.Enabled": 1,
    "worktreeCreateParams.OpenWorkspace": 1
+  }
+ },
+ "exceptions": {
+  "bare-enum-kind": {
+   "BriefBodyProgress.StageKind": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefConfirmationCount.Kind": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefFailure.Kind": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTaskProgress.StageKind": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTodoProgress.StageKind": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   }
+  },
+  "bare-enum-state": {
+   "BriefDayRecording.RecapState": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefPRFollowup.State": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefPRFollowup.WatchStatus": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   }
+  },
+  "bare-id": {
+   "BriefBoardRow.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefBodyDone.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefBodyProgress.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefBodyRow.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefBodyRow.MachineID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefBodyRow.SessionID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefConfirmationCount.MachineID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefConfirmationCount.SessionID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefConfirmationCount.TodoID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefDayRecapAction.TodoID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefDayRecording.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefDevice.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefDone.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefFailure.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefFallbackSend.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefInboxSignal.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefPRFollowup.TodoID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefScheduleRun.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefScheduleRun.MachineID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefScheduleRun.RefID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefScheduleRun.SessionID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefSetupSuggestion.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTaskInfo.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTaskInfo.MachineID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTaskInfo.RunSessionID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTaskInfo.SessionID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTaskProgress.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefTodoProgress.ID": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   }
+  },
+  "ptr-time": {
+   "BriefInboxSignal.CheckAt": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefInboxSignal.WaitingSince": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefPRFollowup.LastObservedAt": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   },
+   "BriefPRFollowup.WatchUpdatedAt": {
+    "count": 1,
+    "pr": "#15513",
+    "why": "The briefing module exports this existing weak field under its public modapi type; keep its wire representation while the inventory is migrated."
+   }
   }
  }
 }

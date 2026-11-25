@@ -29,6 +29,8 @@ var ScopesDocs = []string{
 	"offline_access",
 	"search:message",
 	"drive:drive:readonly",
+	// batch_query accepts metadata:readonly, not drive:readonly (linked documents in both tiers).
+	"drive:drive.metadata:readonly",
 	"docx:document:readonly",
 	"docs:document.content:read",
 	"sheets:spreadsheet:readonly",
@@ -43,12 +45,16 @@ var ScopesDocs = []string{
 // ScopesFullExtra are what TierFull adds to ScopesDocs.
 var ScopesFullExtra = []string{
 	"im:chat:read",
+	// GET chats/:chat_id (the p2p name fallback) has a separate read permission from listing chats.
+	"im:chat:readonly",
 	"im:message:readonly",
 	"im:message.group_msg:get_as_user",
 	"im:message.p2p_msg:get_as_user",
 	"drive:file:download",
 	// The senders' names, so a message the Lark gateway already put in the knowledge base is recognized.
 	"contact:user.base:readonly",
+	// GET contact/v3/users/:open_id needs API access as well as the name field permission above.
+	"contact:contact.base:readonly",
 }
 
 // ScopesFor is a tier's user scopes; an unknown tier is TierDocs.
@@ -94,6 +100,10 @@ const (
 	ResDrive   = "drive"
 	ResWiki    = "wiki"
 	ResMinutes = "minutes"
+
+	// PendingLinksCursor is the per-binding cursor key in lark_sync_cursors holding the persistent queue of unfetched
+	// or retryable linked cloud documents discovered in synced messages.
+	PendingLinksCursor = "links_queue"
 )
 
 // Canonical-key prefixes: one piece of content has one key whichever bot, account or entry point read it.
@@ -214,10 +224,11 @@ const (
 
 // Error is an open-platform failure.
 type Error struct {
-	Kind string
-	Op   string
-	Code int
-	Msg  string
+	Kind       string
+	Op         string
+	Code       int
+	HTTPStatus int
+	Msg        string
 	// RetryAfter is how long the platform asked to wait (rate limits), 0 when it did not say.
 	RetryAfter time.Duration
 }
@@ -229,6 +240,13 @@ func (e *Error) Error() string {
 	return "lark " + e.Op + ": " + e.Kind + " " + e.Msg
 }
 
+// Sync modes (Binding.Mode): ModeFull ("", the default) runs the full daily sync; ModeIM runs only the lightweight
+// IM incremental sync (new messages since cursors, plus cloud document and minutes links in those messages).
+const (
+	ModeFull = ""
+	ModeIM   = "im"
+)
+
 // Binding is one (account, bot) pair a run reads for.
 type Binding struct {
 	Key       string // stable: "<bot_id>~<account_id>"
@@ -237,11 +255,18 @@ type Binding struct {
 	// Label is the account's name the owner gave it ("Work"), for logs and the sources.
 	Label string
 	Tier  string
-	App   App
+	// Mode selects which readers run: ModeFull ("") runs every reader; ModeIM reads only IM messages since cursors
+	// and follows linked cloud documents and minutes found in those messages.
+	Mode string
+	App  App
 	// Backfill is how far back the first run reads (no cursor yet).
 	Backfill time.Duration
 	// Budget bounds one run; what is left is read next time, from where the cursors stopped.
 	Budget time.Duration
+	// AuthorizedAt and GrantedScopes describe the binding's current user authorization, so readers can detect
+	// re-authorization or newly granted scopes and immediately retry previously blocked linked documents.
+	AuthorizedAt  time.Time
+	GrantedScopes []string
 }
 
 // Attachment is a file or image of a message; the knowledge base fetches it lazily through the connector
@@ -281,6 +306,7 @@ type Doc struct {
 	Revision int64       `json:"revision"`
 	Title    string      `json:"title"`
 	URL      string      `json:"url,omitempty"`
+	Note     string      `json:"note,omitempty"` // why a body was not read (e.g. forbidden, export disabled, non-text file)
 	Body     string      `json:"body,omitempty"` // Markdown, bounded
 	BodyHash string      `json:"body_hash,omitempty"`
 	At       time.Time   `json:"at"` // last edited
@@ -372,6 +398,79 @@ type Syncer interface {
 	Run(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), cursors map[string]string, idx Index) (Result, error)
 	// Media fetches an attachment by its Ref.
 	Media(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), ref string, limit int64) ([]byte, string, error)
+}
+
+// NameResolver is optionally implemented by a Syncer to resolve user display names by open_id using a binding's user
+// access token (used by the one-time sender-name backfill for pre-#15486 messages). Non-user ids and per-user lookup
+// errors are omitted; a missing contact scope or auth/context error is returned alongside any names resolved so far.
+type NameResolver interface {
+	ResolveUserNames(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), openIDs []string) (map[string]string, error)
+}
+
+// OpenID is a Feishu/Lark user open_id in the sync contract.
+type OpenID string
+
+// ChatID is a Feishu/Lark chat_id (oc_…) in the sync contract.
+type ChatID string
+
+// NameResolveRequest describes the unnamed senders and chats a binding's sender-name backfill wants to resolve.
+type NameResolveRequest struct {
+	// OpenIDs are unique human sender open_ids to look up.
+	OpenIDs []OpenID
+	// ChatSenders maps chat_id -> unique unnamed sender_ids seen in that chat (group, topic, or p2p), used to
+	// fetch GET /open-apis/im/v1/chats/:chat_id/members per chat when contact/v3 misses external users.
+	ChatSenders map[string][]string
+	// P2PChatIDs are unnamed p2p chat_ids whose display name should be resolved via chat info and chat members.
+	P2PChatIDs []ChatID
+	// SampleMessages maps sender_id -> a sample message_id from that sender for message-carried fallback when
+	// both contact/v3 and chat members miss.
+	SampleMessages map[string]string
+}
+
+// NameResolveResult holds display names resolved for senders and unnamed p2p chats.
+type NameResolveResult struct {
+	// UserNames maps sender_id -> display name.
+	UserNames map[string]string
+	// P2PChatNames maps p2p chat_id -> peer display name.
+	P2PChatNames map[string]string
+}
+
+// ChatNameResolver is optionally implemented by a Syncer (alongside NameResolver) to resolve sender display names
+// and unnamed p2p chat names with chat-scoped fallbacks (GET im/v1/chats/:chat_id/members, GET im/v1/chats/:chat_id,
+// and message-carried sender/mention info) when contact/v3 cannot see external users.
+type ChatNameResolver interface {
+	ResolveNamesWithFallback(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), req NameResolveRequest) (NameResolveResult, error)
+}
+
+// LinkObjType is the canonical cloud object type of a Feishu / Lark document or wiki link.
+type LinkObjType string
+
+// Supported cloud object types for linked documents.
+const (
+	LinkObjDocx     LinkObjType = "docx"
+	LinkObjDoc      LinkObjType = "doc"
+	LinkObjSheet    LinkObjType = "sheet"
+	LinkObjBitable  LinkObjType = "bitable"
+	LinkObjFile     LinkObjType = "file"
+	LinkObjMindnote LinkObjType = "mindnote"
+	LinkObjSlides   LinkObjType = "slides"
+	LinkObjWiki     LinkObjType = "wiki"
+)
+
+// PendingLinkCandidate is a cloud document or wiki link extracted from a synced message during one-time remediation.
+type PendingLinkCandidate struct {
+	Token     string
+	ObjType   LinkObjType
+	URL       string
+	MessageAt time.Time
+}
+
+// PendingLinkBackfiller is optionally implemented by a Syncer to extract cloud document and wiki links from
+// already-synced messages and merge missing ones into a binding's PendingLinksCursor payload without duplicating
+// queued tokens or overwriting higher-priority live entries.
+type PendingLinkBackfiller interface {
+	ExtractDocLinks(text string) []PendingLinkCandidate
+	MergePendingLinks(existingCursor string, add []PendingLinkCandidate) (updatedCursor string, added int)
 }
 
 // Provider is what the Lark module provides for the sync (botport.Provider.Sync).

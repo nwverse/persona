@@ -16,7 +16,7 @@ vi.mock("../../lib/extension-slots", () => ({
 }));
 vi.mock("../settings/ExtensionView", () => ({
   // the page's view, drawn: it says its title as the hub wrote it
-  ExtensionUI: (props: { onTitle?: (title?: string) => void }) => {
+  ExtensionUI: (props: { onTitle?: (title?: string) => void; onWide?: (wide: boolean) => void }) => {
     data.props.push(props);
     const { onTitle } = props;
     useEffect(() => {
@@ -27,7 +27,9 @@ vi.mock("../settings/ExtensionView", () => ({
 }));
 const routes = vi.hoisted(() => [] as unknown[]);
 vi.mock("../../lib/router", async (original) => ({ ...(await original<typeof import("../../lib/router")>()), navigate: (to: unknown) => routes.push(to) }));
-import { ExtensionNavPage } from "./ExtensionSlots";
+import { ExtensionNavPage, OverviewCards } from "./ExtensionSlots";
+import { arrangeOverview, type ArrangedCard } from "../../lib/overview-cards";
+import type { UIPlace } from "../../lib/extension-ui";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const RUN = "pg_3f9a1c0d5e7b2a41";
@@ -122,5 +124,71 @@ describe("a Dashboards page's top bar (#15017)", () => {
     expect(openPage({ ui: "index", state: "rename" })).toBe(false);
     expect(openPage({ ui: RUN, state: "rename" })).toBe(false);
     expect(routes).toHaveLength(1);
+  });
+
+  it("widens the workspace container to 1680px when a view requests wide mode and resets on page change", async () => {
+    const container = () => host.querySelector<HTMLElement>("[data-extension-page-container]")!;
+    await open("example-net", "topology");
+    expect(container().className).toContain("max-w-[880px]");
+    expect(container().className).not.toContain("max-w-[1680px]");
+
+    const reportWide = data.props.at(-1)!.onWide as (wide: boolean) => void;
+    await act(async () => reportWide(true));
+    expect(container().className).toContain("max-w-[1680px]");
+    expect(container().className).not.toContain("max-w-[880px]");
+
+    await act(async () => reportWide(false));
+    expect(container().className).toContain("max-w-[880px]");
+
+    await act(async () => reportWide(true));
+    expect(container().className).toContain("max-w-[1680px]");
+
+    // Switching to another page before it calls onWide immediately resets to the standard column width.
+    await open("example-plain", "summary");
+    expect(container().className).toContain("max-w-[880px]");
+    expect(container().className).not.toContain("max-w-[1680px]");
+  });
+});
+
+describe("Dashboards phase 2 Overview cards (#13020)", () => {
+  const WATCH_CARDS: UIPlace[] = [
+    { extension: "-pages", extension_name: "Persona", id: "g_1a2b3c4d5e6f7081", title: "Elm Street rent", placement: "overview_card", size: "compact", opens: "pg_1a2b3c4d5e6f7081" },
+    { extension: "-pages", extension_name: "Persona", id: "g_4d5e6f708192a3b4", title: "Morning weight", placement: "overview_card", size: "compact", opens: "pg_4d5e6f708192a3b4" },
+  ];
+
+  async function renderCards(prefs: Parameters<typeof arrangeOverview>[1] = []) {
+    await initI18n("en");
+    const items = arrangeOverview(WATCH_CARDS, prefs);
+    const cards = items.filter((i): i is ArrangedCard<UIPlace> => "card" in i);
+    await act(async () => root.render(<OverviewCards cards={cards} items={items} />));
+    await act(async () => { await Promise.resolve(); });
+  }
+
+  it("draws -pages g_ overview cards as ordinary Overview cards and opens /extension/-pages/<pg id> on click", async () => {
+    await renderCards();
+    const first = host.querySelector<HTMLElement>('[data-extension-card="-pages/g_1a2b3c4d5e6f7081"]')!;
+    const second = host.querySelector<HTMLElement>('[data-extension-card="-pages/g_4d5e6f708192a3b4"]')!;
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(first.querySelector("a")!.getAttribute("href")).toBe("/extension/-pages/pg_1a2b3c4d5e6f7081");
+    expect(first.querySelector("[data-extension-name]")!.textContent).toBe("Persona");
+    expect(data.props).toEqual(expect.arrayContaining([
+      expect.objectContaining({ extension: "-pages", ui: "g_1a2b3c4d5e6f7081", compact: true, remember: true }),
+      expect.objectContaining({ extension: "-pages", ui: "g_4d5e6f708192a3b4", compact: true, remember: true }),
+    ]));
+
+    await act(async () => first.click());
+    expect(routes).toEqual([{ name: "extension", extension: "-pages", ui: "pg_1a2b3c4d5e6f7081" }]);
+  });
+
+  it("arranges, widens and hides -pages g_ cards like any Overview card", async () => {
+    await renderCards([
+      { extension: "-pages", id: "g_4d5e6f708192a3b4", span: "full" },
+      { extension: "-pages", id: "g_1a2b3c4d5e6f7081", hidden: true },
+    ]);
+    expect(host.querySelector('[data-extension-card="-pages/g_1a2b3c4d5e6f7081"]')).toBeNull();
+    const visible = host.querySelector<HTMLElement>('[data-extension-card="-pages/g_4d5e6f708192a3b4"]')!;
+    expect(visible.className).toContain("col-span-full");
+    expect(data.props.map((p) => p.ui)).toEqual(["g_4d5e6f708192a3b4"]);
   });
 });

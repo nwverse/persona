@@ -107,6 +107,7 @@ type historyParams struct {
 	FoldWork   bool   `json:"fold_work"`
 	Strict     bool   `json:"strict_read"`
 	UserInputs bool   `json:"user_inputs"`
+	MetaOnly   bool   `json:"meta_only"`
 }
 
 type historyPage struct {
