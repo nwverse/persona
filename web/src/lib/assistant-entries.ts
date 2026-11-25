@@ -6,6 +6,7 @@ import { finishedAt, hubNeedsYou, JUST_DONE_MS, openByView, supersededFailedStar
 import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
+import { sameManager } from "./manager-choice";
 import type { Interaction, Session } from "./types";
 
 /**
@@ -133,7 +134,14 @@ export function decisionLaterKey(todo: Todo): string {
 }
 
 export function assistantEntries(input: AssistantEntriesInput): AssistantEntries {
-  const { conversation, main, todos, sessions, interactions, plans, feed } = input;
+  const { conversation, main, feed } = input;
+  const owns = (owner: string | undefined) => !input.manager || sameManager(owner, input.manager);
+  const todos = input.manager ? input.todos.filter((t) => owns(t.manager)) : input.todos;
+  const sessions = input.manager ? input.sessions.filter((s) => owns(s.manager)) : input.sessions;
+  const interactions = input.manager ? input.interactions.filter((ix) => owns(ix.manager)) : input.interactions;
+  const plans = input.manager
+    ? Object.fromEntries(Object.entries(input.plans).filter(([, plan]) => owns(plan.manager)))
+    : input.plans;
   const now = input.now ?? Date.now();
   const lookup = withInteractionLookup(input.lookup ?? makeSessionLookup(sessions), interactions);
   const isMain = !!main && main === conversation;
@@ -249,7 +257,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)
-    .filter((plan) => ((isMain && plan.space !== "health") || plan.conversation === conversation) && plan.state === "open" && (!input.manager || !plan.manager || plan.manager === input.manager))
+    .filter((plan) => ((isMain && plan.space !== "health") || plan.conversation === conversation) && plan.state === "open")
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id))
     .map((plan) => ({ kind: "plan", key: `plan:${plan.id}`, plan }));
   const messages: NeedsYouItem[] = feed.filter((it) => messageWaits(it, input.deferred)).map((item) => ({ kind: "message", key: `message:${item.id}`, item }));
