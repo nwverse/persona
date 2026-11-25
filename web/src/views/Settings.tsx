@@ -38,7 +38,7 @@ import { StartPageGroup } from "./settings/StartPage";
 import { AgentsDisplayRow } from "./settings/AgentsDisplayRow";
 import { AgentGroup } from "./settings/AgentGroup";
 import { AssistantSettings } from "./settings/AssistantSettings";
-import { PersonaPicker } from "./assistant/Persona";
+import { PersonaPicker } from "./assistant/PersonaPicker";
 import { TriageSettings } from "./settings/TriageSettings";
 import { TranslationSettings } from "./settings/TranslationSettings";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
