@@ -2,6 +2,7 @@ import { decisionSourceLabel } from "../lib/todo-decision-label";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
 import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { hasRequestPieces } from "../lib/request-pieces";
+import { ExternalSourcesEntry } from "../features/external-sources/ExternalSourcesEntry";
 import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
@@ -106,8 +107,15 @@ import type { MenuItem } from "../ui/menu-model";
 import { foldGoalTasks, type GoalFoldResult, type GoalSummary } from "../lib/todo-goal-fold";
 import { findSelectedBlocker, matchesSharedBlocker, parseSharedBlockers } from "../lib/todo-shared-blockers";
 import { SharedBlockersStrip } from "../components/SharedBlockersStrip";
-import { reorganizeDirectionOptions, reorganizeTodos, type TodoReorganizeRequest } from "../lib/todo-reorganize";
+import {
+  reorganizeDirectionOptions,
+  reorganizeTodos,
+  resolveDirectionSections,
+  type ReorganizeDirectionOption,
+  type TodoReorganizeRequest,
+} from "../lib/todo-reorganize";
 import { BatchReorganizeBar } from "../components/BatchReorganizeBar";
+import { TodoDirectionPicker } from "../components/TodoDirectionPicker";
 import {
   classifyTodoDetailTemplate,
   resolveWorkGoalActions,
@@ -199,20 +207,36 @@ function boardRoute(id?: string): Route {
   return { name: "todos", view: "board", ...(id ? { id } : {}) };
 }
 
-export function TodosView({
-  selectedId,
-  view,
-  mode: routeMode,
-  date,
-  onToggleSidebar,
-}: {
+type TodosViewProps = {
   selectedId?: string;
   /** The calendar (#2029) or read-only progress board (#12713) rather than the list; calendar mode/day from the address. */
   view?: "calendar" | "board";
   mode?: CalendarMode;
   date?: string;
   onToggleSidebar?: () => void;
-}) {
+  manager?: string;
+};
+
+const DirectionDetail = lazyPage(() => import("../features/external-sources/DirectionDetail").then((m) => m.DirectionDetail), { listed: false });
+
+export function TodosView({ directionId, ...props }: TodosViewProps & { directionId?: string }) {
+  return directionId
+    ? <PageBoundary page="direction-detail">
+        <Suspense fallback={<Loading />}>
+          <DirectionDetail id={directionId} manager={props.manager} onToggleSidebar={props.onToggleSidebar} />
+        </Suspense>
+      </PageBoundary>
+    : <TodoListView {...props} />;
+}
+
+function TodoListView({
+  selectedId,
+  manager: selectedManager,
+  view,
+  mode: routeMode,
+  date,
+  onToggleSidebar,
+}: TodosViewProps) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
   const repositoryManager = useShownManager();
   // with several assistants, the current one's to-dos (docs/assistant/managers.md "Clients"); a link to another assistant's
@@ -220,9 +244,15 @@ export function TodosView({
   const everyTodo = useStore((s) => s.todos);
   const ownTodos = useScoped(everyTodo);
   const todos = useMemo(() => {
+    if (selectedId && selectedManager) {
+      const chosen = everyTodo.find((td) => td.id === selectedId && sameManager(td.manager, selectedManager));
+      if (chosen && ownTodos.includes(chosen)) return ownTodos;
+      const others = ownTodos.filter((td) => td.id !== selectedId);
+      return chosen ? [...others, chosen] : others;
+    }
     const linked = selectedId && !ownTodos.some((x) => x.id === selectedId) ? everyTodo.filter((x) => x.id === selectedId) : [];
     return linked.length ? [...ownTodos, ...linked] : ownTodos;
-  }, [everyTodo, ownTodos, selectedId]);
+  }, [everyTodo, ownTodos, selectedId, selectedManager]);
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosError = useStore((s) => s.todosError);
   const todosSupported = useStore((s) => s.todosSupported);
@@ -326,6 +356,7 @@ export function TodosView({
   // Direction metadata shared by the direction grouping, batch reorganize, and todos_v2 slim row meta (#14830).
   const directionTree = useDirectionTree();
   const leaderTitles = useStore((s) => s.assistant?.conversations);
+  const directionMenu = useMenu();
   const cachedDirectionNames = useCachedDirectionNames();
   const reorganizeDirections = useMemo(
     () => (todosV2 ? reorganizeDirectionOptions(directionTree, leaderTitles, assistant?.leaders) : []),
@@ -456,6 +487,23 @@ export function TodosView({
     } finally {
       setReorganizeSubmitting(false);
     }
+  }, []);
+
+  // Single-item direction change from TodoDetail under todos_v2 (#15653).
+  const applyDetailReorganize = useCallback(async (req: TodoReorganizeRequest): Promise<void> => {
+    const res = await reorganizeTodos(req);
+    await refreshTodos();
+    if (req.direction_id !== undefined) {
+      void refreshDirectionTree().catch(() => {});
+    }
+    const updatedCount = res.updated?.length ?? req.ids.length;
+    const transferredCount = res.transferred_ids?.length ?? 0;
+    toast(
+      transferredCount > 0
+        ? t("todos.reorganize_success_transferred", { count: updatedCount, transferred: transferredCount })
+        : t("todos.reorganize_success", { count: updatedCount }),
+      "ok",
+    );
   }, []);
 
   const chooseFilter = (f: TodoListFilter) => {
@@ -609,14 +657,19 @@ export function TodosView({
   );
   // The tree lists only open to-dos (server/internal/assistant/direction_tree.go, the same countsAsOpen rule), so a
   // direction holds the open ones it lists: one ticked here leaves at once, not when the tree's push comes.
+  // Under todos_v2 (#15653), explicit `todo.direction_id` takes precedence over runtime supervision membership so
+  // reorganizing updates the direction grouping immediately without interrupting running Agents.
   const directionSections = useMemo(() => {
     if (grouping !== "direction" || !byDirection) return [];
-    const open = new Map(filteredUncompleted.filter((td) => placed.open.has(td.id)).map((td) => [td.id, td]));
-    return directionTree.directions
-      .map((d) => ({ d, todos: (d.tasks ?? []).map((task) => open.get(task.id)).filter((td): td is Todo => !!td) }))
-      .filter((g) => g.todos.length > 0)
-      .map(({ d, todos }) => ({ d, todos, title: directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title) }));
-  }, [grouping, byDirection, directionTree, filteredUncompleted, placed, leaderTitles]);
+    const openTodos = filteredUncompleted.filter((td) => placed.open.has(td.id));
+    return resolveDirectionSections({
+      tree: directionTree,
+      openTodos,
+      todosV2,
+      resolveDirectionName: (d) => directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title),
+      resolveFallbackName: directionLabel,
+    });
+  }, [grouping, byDirection, directionTree, filteredUncompleted, placed, todosV2, leaderTitles, directionLabel]);
   // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it
   // (server/internal/assistant/direction_tree.go), so the page says how many and where to see them rather than hide them
   const directionUnlisted = useMemo(() => {
@@ -949,6 +1002,14 @@ export function TodosView({
           </div>
         </div>
         <div className="flex items-center gap-2.5">
+          {byDirection && <IconButton icon="target" label={t("external-sources.direction_details")}
+            onClick={directionMenu.open} active={Boolean(directionMenu.anchor)} />}
+          {byDirection && directionMenu.anchor && <Menu anchor={directionMenu.anchor} onClose={directionMenu.close} align="right"
+            items={directionTree.directions.filter((direction) => !direction.secretary).map((direction) => ({
+              key: direction.id,
+              label: direction.name || leaderTitles?.find((row) => row.session_id === direction.id)?.title || t("external-sources.untitled"),
+              onSelect: () => navigate({ name: "todos", direction: direction.id, manager: repositoryManager }),
+            }))} />}
           {todosV2 && (
             <a
               href={settingsHref("labs", null, false)}
@@ -1487,6 +1548,8 @@ export function TodosView({
                     activeTodo.direction_id
                   : undefined
               }
+              directions={todosV2 ? reorganizeDirections : undefined}
+              onReorganizeDirection={todosV2 ? applyDetailReorganize : undefined}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-[13px] text-ink-3">
@@ -3447,6 +3510,8 @@ function TodoDetail({
   parentTodo,
   childTodos = [],
   directionName,
+  directions = [],
+  onReorganizeDirection,
 }: {
   todo: Todo;
   owner: string;
@@ -3468,6 +3533,8 @@ function TodoDetail({
   parentTodo?: Todo;
   childTodos?: readonly Todo[];
   directionName?: string;
+  directions?: readonly ReorganizeDirectionOption[];
+  onReorganizeDirection?: (req: TodoReorganizeRequest) => Promise<void>;
 }) {
   const title = useTodoField({
     remote: todo.title, owner, allowEmpty: false,
@@ -3486,6 +3553,13 @@ function TodoDetail({
   // Under todos_v2 (#14851), all right-pane sections including participated history start expanded by default.
   const [releasedOpenV2, setReleasedOpenV2] = useState(true);
   const releasedVisible = todosV2 === true ? releasedOpenV2 : showReleased;
+  // Single-item direction picker strictly gated behind todos_v2 (#15653).
+  const [directionPickerOpen, setDirectionPickerOpen] = useState(false);
+  const canChangeDirection =
+    todosV2 === true &&
+    Boolean(onReorganizeDirection) &&
+    (directions.length > 0 || Boolean(todo.direction_id));
+  const showDirectionPicker = canChangeDirection && directionPickerOpen;
 
   const template = useMemo(
     () => (todosV2 === true ? classifyTodoDetailTemplate(todo, childTodos.length, { repositoryCount }) : undefined),
@@ -3637,7 +3711,32 @@ function TodoDetail({
                 </span>
               </>
             )}
+            {canChangeDirection && (
+              <Button
+                tone="quiet"
+                size="sm"
+                icon="folder"
+                expanded={showDirectionPicker}
+                testId="todo-detail-change-direction"
+                onClick={() => setDirectionPickerOpen((v) => !v)}
+                className="ml-auto h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+              >
+                {t("todos.detail_change_direction")}
+              </Button>
+            )}
           </div>
+          {showDirectionPicker && onReorganizeDirection && (
+            <TodoDirectionPicker
+              key={`${todo.id}:${todo.direction_id ?? ""}`}
+              todoId={todo.id}
+              currentDirectionId={todo.direction_id}
+              currentDirectionLabel={directionName}
+              childCount={childTodos.length}
+              directions={directions}
+              onApply={onReorganizeDirection}
+              onClose={() => setDirectionPickerOpen(false)}
+            />
+          )}
           <div
             data-testid="todo-detail-status-summary"
             aria-label={t("todos.detail_status_summary_region")}
@@ -3703,6 +3802,19 @@ function TodoDetail({
           placeholder={t("todos.title_placeholder")}
           className="min-w-0 flex-1 bg-transparent text-[22px] font-bold text-ink outline-none transition-colors focus:border-b focus:border-accent"
         />
+        {!isWorkGoalV2 && canChangeDirection && (
+          <Button
+            tone="quiet"
+            size="sm"
+            icon="folder"
+            expanded={showDirectionPicker}
+            testId="todo-detail-change-direction"
+            onClick={() => setDirectionPickerOpen((v) => !v)}
+            className="h-7 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+          >
+            {t("todos.detail_change_direction")}
+          </Button>
+        )}
         <IconButton icon="more" label={t("todos.more_options")} onClick={menu.open} active={Boolean(menu.anchor)} />
         {menu.anchor && (
           <Menu
@@ -3721,6 +3833,20 @@ function TodoDetail({
           />
         )}
       </div>
+      {!isWorkGoalV2 && showDirectionPicker && onReorganizeDirection && (
+        <div className="mt-2.5">
+          <TodoDirectionPicker
+            key={`${todo.id}:${todo.direction_id ?? ""}`}
+            todoId={todo.id}
+            currentDirectionId={todo.direction_id}
+            currentDirectionLabel={directionName}
+            childCount={childTodos.length}
+            directions={directions}
+            onApply={onReorganizeDirection}
+            onClose={() => setDirectionPickerOpen(false)}
+          />
+        </div>
+      )}
 
       {/* Meta Line */}
       <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
@@ -3820,9 +3946,11 @@ function TodoDetail({
 
       <TodoImages todo={todo} owner={owner} />
 
-      <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
-        prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2}
-        onRepositoriesCount={todosV2 === true ? setRepositoryCount : undefined} />
+      <ExternalSourcesEntry manager={todo.manager ?? defaultManager()} kind="todo" id={todo.id} title={todo.title}>
+        <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
+          prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2}
+          onRepositoriesCount={todosV2 === true ? setRepositoryCount : undefined} />
+      </ExternalSourcesEntry>
       {isWorkGoalV2 && childTodos.length > 0 && (
         <section className="mt-6" data-testid="todo-detail-subtasks">
           <div className="mb-2 text-submeta font-medium tracking-[0.04em] text-ink-3">

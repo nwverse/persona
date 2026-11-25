@@ -1236,6 +1236,10 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 - **Machines**: a card per computer, with current CPU / memory / disk values and CPU chart for the last hour (`/api/v1/metrics`, refresh every 10 seconds; gaps mean disconnections). Offline machines can reconnect; clicking the name or Details › opens the machine page.
   Load is load per core everywhere, one decimal (`perCoreText` / `perCoreLabel` in `src/lib/machine-alerts.ts`, #12519): the card's line under CPU ("Load 1.4 per core", the raw value only without a core count), the chip, the alert sheet and the machine page's Load tile (the raw value, the per-core figure under it).
   What load counts is one sentence (`lib-machine-alerts.load_definition`, [machines.md](../server/machines.md) ("What load counts")) under the cards, under the machine page's monitor and in the load alert sheet. The used-memory chip says "Memory used", not the operating system's memory pressure.
+  - **Redeploy in progress** (#15687) uses the existing phase label and disabled busy button on the card and detail page.
+    At narrow widths the controls can wrap below the phase description as a group. An update that starts elsewhere
+    withdraws the open confirmation and shows the current step. The card, detail and alert sheet admit one request per
+    computer until the request and its refresh settle. They check the latest machine state again before posting.
   - **Alerts and what fixes them** (#8037, `src/lib/machine-alerts.ts`, `src/views/machines/MachineAlertSheet.tsx` and its `Alert*.tsx` sections): each card has one chip per alert, worst first (offline with its classified reason, a failed update, memory, disk, CPU, load per core, failing launchers, the version), from the thresholds in [machines.md](../server/machines.md) ("App"), the latest metric sample and `GET /api/v1/launchers/health` (kept current by `launcher_health`, read again every minute). A chip is a `<button>` with icon and words (the icon's color says how bad, red only for critical; its `aria-label` starts with the severity), so the card's own click leaves it alone. Pending and never-connected computers keep their notices and get no chips; an offline card keeps its one red notice and its chip reads "Offline · What to check"; the version and a failed update stay in the deployment strip, which gains **Details**. Cards are ordered as the apps' `MachineConcern`: pending, offline, critical, warning, needs you, version, then the hub's order.
     A chip opens the alert sheet (one `Dialog` for the page, outside every card: a centred card on a desktop, a sheet on a phone), with the computer's alerts as tabs and three parts in a fixed order: what is wrong, why, what you can do. Memory, CPU and load: the numbers, the node's largest process groups (`GET /api/v1/machines/{mid}/diagnosis?sections=processes`, share of memory or of the cores, tagged Agent / engine / Persona / other; read only when the sheet opens, so the cards never shift), the computer's Agents as needs you / working / idle with how long; **Stop idle Agents** (a confirmation lists each one; only idle or finished Agents with nothing running, never working or needs-you ones; one at a time through `POST /sessions/{mid}/{sid}/close`, the conversation stays; then "Stopped N of M" with each failure) and **Hand work to another computer**. Disk: volumes, the largest folders under home (and that the scan was cut short), the rebuildable caches by name with their path (in-use ones disabled, the rest picked); **Clean selected** → a confirmation naming every folder and the total → `POST …/cleanup {ids}` → the bytes the volume really gained (`freed_bytes`) and each item's outcome, then the diagnosis again. Version / failed update: the hub's build (hello `server_version`) and the node's side by side with their build times and how far apart they are, how many Agents are working; **Redeploy** behind a confirmation, then a stepper the pushed `deploy_phase` drives (waiting for idle → transferring → restarting → confirming → done with the node's new build), or the error and **Try again**; the hub's reason when it cannot deploy. Offline: the reason, last seen, a numbered checklist per reason, the raw error under **Details**, **Reconnect** and, for a version reason, Redeploy. Launchers: each failing or blocked one (kind, error line, when checked, failures in a row, a usage limit's reset), the ones that work there, **Test again** (`POST /api/v1/launchers/health/check?machine=&launcher=`, the new record in place); the hub has no per-computer default launcher, so the sheet links to Settings › Models instead of switching it.
     A diagnosis the computer or hub cannot give says why and keeps every other action: 409 `node_outdated` "update Persona on this computer" (with Redeploy when the hub can), a 404 without a code "update the hub", 403 "only a fully trusted device", and Retry for the rest (`src/lib/machine-diagnosis.ts`).
@@ -1444,6 +1448,33 @@ in the list beside three extension nav pages. `node web/e2e/dashboards-watch.mjs
 `MOCK_DASHBOARDS=watch`: the four displays (empty, normal, alert), index rows, footer states, Overview watch cards,
 `zh-Hans` / `ja`, desktop platform context, and pixel-identical sidebar and Overview against `origin/main` in `off` and
 phase-1 (`1`) modes.
+
+### External sources (#15518)
+
+People who follow work in Inbox can connect updates from a chat, repository, mail account or subscription to a
+direction or to-do. On To-dos, **Direction details** opens any current direction, including one with no to-dos.
+The Pinned conversation's sidebar menu reaches the same detail. Directions and both to-do layouts show
+**External sources**. The section lists explicit connections and uses **Repositories and work** for the to-do's
+projected pull requests and issues, so each saved repository link appears once and keeps its work role.
+
+**Connect external source** opens the same editor from work and Inbox. Work preselects its destination. Inbox
+preselects the hub's most specific source on the message's `external_path`. The scope picker offers its parents
+and the same editable fields are available from each entry. A source already in Inbox can be picked by name.
+Expanding **Source details** shows the exact identity when needed. Older or internal Inbox items without a
+canonical path have no direct connect action.
+
+Forwarding is off until the owner opts in. The editor shows the inherited value and its source for each policy
+field when the hub supplies one. Choosing **Inherit** clears the override. The digest interval can be set while
+inheriting the forwarding mode, and choosing custom filters with their three lists empty clears an inherited
+filter. Explicit connections can be edited or disconnected on the destination. Use **Manage links** for saved
+repository links.
+
+Legacy Sources, Channels and Extensions and unified Integrations detail and Data Flow offer **Channel defaults**
+and **Connected work** links. The settings editor writes only the service and account scope, and **Restore defaults**
+followed by Save sends an empty policy. Connected work includes repository projections and opens the matching
+direction or to-do for the same assistant. The browser uses `/todos?direction=<id>` for a direction and can
+carry `manager` on either work link. The capability works in both presentations. The binding editor, channel
+policy panel and HTTP client load on demand. See [External source bindings](../protocol/protocol.md#external-source-bindings).
 
 ### Message sources (#2125)
 
@@ -3631,6 +3662,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connector items (GitHub, Telegram, Messages, extensions): source filter, chat page, reply or "Open in X", hand to AI | Yes | #1324, #2990 | GitHub timelines and Telegram bubbles are read-only plus reply; images in chats open in the image viewer (#2990); reactions, forwarding, and downloading attachments are not done |
 | Mute this repository / chat / sender, a "Muted" list and unmute | Yes | #2968 | The App uses long press on a row; the web uses right click on a row, or the mute button next to the item page title (for touch); "Muted" is in the list's ⋯ menu, as a dialog |
 | Rule for this repository / chat / sender (tier and AI twin), a "Rules" list with edit and remove | Yes | #2140 | The App's entries sit after the mute options: long press on a row (iOS, Android), right click (Mac), the item page's ⋯ (iOS); "Rules" is in the list's ⋯ menu (Mac: the toolbar and the Inbox menu). The App lists the default manager's rules only |
+| Connect an Inbox source to a direction or to-do | Web first | #15518 | Inbox and work details share the same editor. Legacy and unified Settings show channel defaults and read-only links to work. |
 
 ### Machines and settings
 

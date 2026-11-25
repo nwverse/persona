@@ -5,6 +5,7 @@
 // under a way back to it.
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
+import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { lazyPage } from "../../lib/lazy-page";
 import { useInboxSourcesGraphShown } from "../../lib/subscriptions";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
@@ -26,11 +27,13 @@ export function SourcesUI({
   state,
   onGraph,
   initialView = "list",
+  manager,
 }: {
   title: string;
   state?: string;
   onGraph?: (shown: boolean) => void;
   initialView?: "list" | "graph";
+  manager?: string;
 }) {
   const name = usePersona().name;
   const context = useMemo(() => ({ assistant: name }), [name]);
@@ -60,7 +63,8 @@ export function SourcesUI({
       <ExtensionUI key={first ?? ""} extension={SUBSCRIPTIONS_UI} ui="pages" title={title} bare state={first} context={context} onDepth={setDepth} />
     </ExtensionOwnerScope>
   );
-  if (!offered) return <div data-settings-group="inbox-sources">{pages(state)}{!state && <InboxForwardSetting />}</div>;
+  const connectedWork = !state && <ExternalSourceSettingsEntry manager={manager} />;
+  if (!offered) return <div data-settings-group="inbox-sources">{pages(state)}{!state && <InboxForwardSetting />}{connectedWork}</div>;
   if (graph && opened)
     return (
       <div data-settings-group="inbox-sources">
@@ -93,11 +97,13 @@ export function SourcesUI({
             <SourcesGraphView assistant={name} onOpen={(page) => show(true, page)} onAsk={askAssistant} />
           </Suspense>
           <InboxForwardSetting />
+          {connectedWork}
         </>
       ) : (
         <>
           {pages()}
           {depth <= 1 && <InboxForwardSetting />}
+          {depth <= 1 && connectedWork}
         </>
       )}
     </div>

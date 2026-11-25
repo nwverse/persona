@@ -12,8 +12,10 @@ is read or touched. Then, for every module id in --modules:
   server-side parts answer (SERVER below); in Chrome, light and dark, its entry (WEB below) is there and opens;
 - off: the `modules` settings row {"disabled": [...]} is written into the disposable database and the hub restarted:
   the flag is gone from the hello while the marker stays, the manager leaves the module out, its extension, connector
-  and routes are absent (404), its entry is gone, an address of its page answers like a removed page, and none of its
-  chunks is requested;
+  and routes are absent (404), its entry points and new activity are gone (its entry, an address of its page, which
+  answers like a removed page), and none of its chunks is requested. The exception is data the user already has
+  (#13430), which stays listed and readable: a WEB entry with an `off` block is such data, and off it asserts the
+  opposite of "gone" (below);
 - back on: the row is deleted and the hub restarted: everything returns;
 - what the user already has stays (#13430: a module that is off must not hide or change it), for a module with a
   `kept` row in SERVER. Recording: two recordings a hub with the module wrote (one with its transcript and minutes,
@@ -21,7 +23,11 @@ is read or touched. Then, for every module id in --modules:
   before the hub first starts. In every phase they are listed, opened and found by search through the knowledge
   base's own routes; off, the opened recording's detail equals the on phase's, the one in flight says
   `paused: module_off` in the response only, and every file under recordings/ is byte for byte what it was when the
-  off phase began;
+  off phase began. In the web app (the `off` block of the recording row in WEB, #15530), off: the recording uploaded
+  while on and a stored meeting with minutes are still listed under Knowledge › Meetings, each opens in the default
+  panel's read-only detail (the transcript, and the minutes of the one that has them), none of the module's controls
+  is there (rename, make or regenerate minutes, hand to an Agent, the private mark, the questions asked in the meeting), and none of
+  the module's chunks is requested, the detail opened inside the app included;
 - older hub: against the mock hub (scripts/mock/mock_hub.py) without the `modules` marker every module is on, the
   composer's voice button included; with the marker and without the module's flags they are off.
 
@@ -115,6 +121,9 @@ SERVER = {
 #   has conversations); page: the address it lives on; ready: what shows that page rendered, on or off; selector (CSS)
 #   or text (a regular expression): the entry itself, visible while on, absent off; opens: what clicking it shows while
 #   on (selector, text or url); off_page: an address of the module's own that answers like a removed page while off.
+#   off: for an entry that is data the user already has, which a module that is off must not hide (#13430). It replaces
+#   "absent off": kept is the items still listed on the page while off (name; selector or text; shows: what its opened
+#   page must show, each with a name), hides is the module's controls none of those opened pages may show.
 # chunks: regular expressions for the module's own files as the production build names them (web/dist/assets) and as
 #   the dev server serves them; none may be requested while off. chunk_when_on: the hubs where one must load while on.
 NOT_FOUND = r"no page|not found|doesn.t exist|isn.t here|no longer"
@@ -187,7 +196,27 @@ WEB = {
         "entries": [
             {"name": "Knowledge › Meetings recording", "hubs": ["test"], "page": "/kb/meetings",
              "ready": {"text": r"^Meetings$"}, "text": r"Module gate sample recording",
-             "opens": {"selector": "main :text('A made-up sample line')"}},
+             "opens": {"selector": "main :text('A made-up sample line')"},
+             # Off, both stay (#13430, #15530): the default panel's read-only detail (RecordingReadOnlyDetail.tsx) shows
+             # what is stored and no control of the module's. The second is core-only-smoke's seeded meeting
+             # (KEPT_RECORDING: "Kept recording", with minutes). The controls are the module's English labels
+             # (web/src/i18n/locales/en: recording.rename, recording.minutes_make, recording.minutes_regenerate,
+             # recording-handoff.title, recording.private_label, recording.asks_title).
+             "off": {
+                 "kept": [
+                     {"name": "the recording uploaded while on", "text": r"Module gate sample recording",
+                      "shows": [{"name": "its transcript", "selector": "main :text('A made-up sample line')"}]},
+                     {"name": "a stored meeting with minutes", "text": r"^Kept recording$",
+                      "shows": [{"name": "its minutes", "selector": "main :text('wombat checklist')"},
+                                {"name": "its transcript", "selector": "main :text('quokka transcript')"}]},
+                 ],
+                 "hides": [{"name": "rename", "selector": "main button:has-text('Rename')"},
+                           {"name": "make minutes", "selector": "main button:has-text('Make minutes')"},
+                           {"name": "regenerate", "selector": "main button:has-text('Regenerate')"},
+                           {"name": "hand to an Agent", "selector": "main button:has-text('Hand to Agent')"},
+                           {"name": "private mark", "selector": "main :text('Private meeting')"},
+                           {"name": "questions asked in the meeting", "selector": "main :text('Questions in the meeting')"}],
+             }},
         ],
         "chunks": [r"/assets/RecordingDetail-[\w-]+\.js", r"/src/modules/recording/"],
         "chunk_when_on": ["test"],

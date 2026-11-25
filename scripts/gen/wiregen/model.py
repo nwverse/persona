@@ -62,12 +62,26 @@ class Def:
     count_unknown: bool = False  # x-unknown "count": decoding an unknown value calls the file's defect hook
     strict: bool = False  # x-decode "strict": decoding throws on a missing or mistyped field instead of defaulting
     reason: str = ""  # x-opaque: why this JSON stays open
+    keyed: str = ""  # a struct made from an enum-keyed map: the closed enum its fields are the values of
+    external: str = ""  # an x-id definition of a shared file (ids.schema.json) a property names: used, never emitted
 
 
 # The opt-in keywords and the values they take.
 ENUM_MODES = ("closed",)
 UNKNOWN_MODES = ("count",)
 DECODE_MODES = ("strict",)
+# The keywords that make types of what is otherwise a string or a map. A target a schema lists in x-typed-except is
+# generated with them taken out, as if the schema had none of them (see load's typed).
+TYPED_KEYWORDS = ("x-enum", "x-unknown", "x-id", "x-text", "x-tristate")
+
+
+def untyped(s):
+    """s without the typed keywords, at any depth."""
+    if isinstance(s, dict):
+        return {k: untyped(v) for k, v in s.items() if k not in TYPED_KEYWORDS}
+    if isinstance(s, list):
+        return [untyped(v) for v in s]
+    return s
 
 
 # Keywords that name a definition and may stand on a property in place of a $ref to it, with the property's JSON type.
@@ -78,13 +92,28 @@ def is_scalar(s: dict) -> bool:
     return s.get("type") in ("string", "integer", "number", "boolean") and "enum" not in s
 
 
-def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
+def load(schema_dir: Path, schema_files: list[str], *, shared: tuple[str, ...] = (), typed: bool = True) -> dict[str, Def]:
+    """The definitions of schema_files. shared names files in schema_dir (ids.schema.json) whose x-id definitions a
+    property's x-id may name when schema_files define no such name: such a definition is returned with external set to
+    its file, for the generators to refer to and never write. typed=False reads every file without the typed keywords
+    (TYPED_KEYWORDS), as if the schemas had none: closed enums are open ones, IDs and enum-keyed structs strings and
+    maps."""
     raw: dict[str, tuple[str, dict]] = {}
+    shared_raw: dict[str, tuple[str, dict]] = {}
+    externals: dict[str, Def] = {}
     sides: dict[str, str] = {}
     decode: dict[str, str] = {}  # a file's x-decode: the default of its objects
     synthesized: dict[str, tuple[str, Def]] = {}  # structs made from enum-keyed maps, with the file of their owner
+    for f in shared:
+        if f in schema_files or not (schema_dir / f).exists():
+            continue
+        for name, s in json.loads((schema_dir / f).read_text()).get("$defs", {}).items():
+            if s.get("x-id") == name:
+                shared_raw[name] = (f, s)
     for f in schema_files:
         doc = json.loads((schema_dir / f).read_text())
+        if not typed:
+            doc = untyped(doc)
         sides[f] = doc.get("x-side", "")
         decode[f] = doc.get("x-decode", "")
         if decode[f] and decode[f] not in DECODE_MODES:
@@ -131,8 +160,12 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
             if key not in s:
                 continue
             # A property may name its ID, label or three-state type in place of a $ref: the definition with that
-            # keyword, in these files.
+            # keyword, in these files, or (an ID) in a shared file (ids.schema.json).
             name = s[key]
+            if key == "x-id" and t == json_type and name not in raw and name in shared_raw:
+                f, target = shared_raw[name]
+                externals[name] = Def(name, "id", target.get("description", ""), external=f)
+                return TypeRef("ref", ref=name)
             if t != json_type or name not in raw or raw[name][1].get(key) != name:
                 raise SchemaError(f"{at}: {key} {name!r} is not a {json_type} definition with that {key}")
             return TypeRef("bool", ref=name) if key == "x-tristate" else TypeRef("ref", ref=name)
@@ -178,7 +211,8 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
         if name in raw or (name in synthesized and synthesized[name][1].fields[0].type != value):
             raise SchemaError(f"{at}: the struct {name} its enum-keyed map makes is also defined elsewhere")
         doc = f"One field for each {enum} of {at}."
-        synthesized[name] = (raw[owner][0], Def(name, "struct", doc, fields=[Field(k, value, True) for k in es["enum"]]))
+        synthesized[name] = (raw[owner][0], Def(name, "struct", doc, fields=[Field(k, value, True) for k in es["enum"]],
+                                                keyed=enum))
         return TypeRef("ref", ref=name)
 
     defs: dict[str, Def] = {}
@@ -275,6 +309,7 @@ def load(schema_dir: Path, schema_files: list[str]) -> dict[str, Def]:
     for name, (f, d) in synthesized.items():
         d.side, d.strict = sides[f], decode[f] == "strict"
         defs[name] = d
+    defs.update(externals)
 
     for u in [d for d in defs.values() if d.kind == "union"]:
         for v in u.variants:

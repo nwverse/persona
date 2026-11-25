@@ -491,6 +491,10 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/assistant/start-defaults":                "manager",
 		"PUT /api/v1/assistant/start-defaults":                "manager",
 		"POST /api/v1/assistant/start-defaults/preview":       "manager",
+		"GET /api/v1/assistant/machine-resources":             "manager",
+		"GET /api/v1/assistant/placement/pending":             "manager",
+		"POST /api/v1/assistant/placement/{todo_id}/assign":   "manager",
+		"POST /api/v1/assistant/placement/{todo_id}/defer":    "manager",
 		"GET /api/v1/todos":                                   "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"GET /api/v1/todos/{id}": "manager", "GET /api/v1/todos/places": "manager", // TestTodoViewRoutesStayOnTheirManager
 		"GET /api/v1/todos/{id}/timeline":                     "manager", // TestTodoViewRoutesStayOnTheirManager
