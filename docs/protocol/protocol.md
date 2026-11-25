@@ -2590,6 +2590,84 @@ contains no storage error, target, tool name, arguments, policy or credential.
 
 Layer / preview and push-layer integration are follow-up work, not part of this contract.
 
+## External source bindings
+
+Owners can opt into connecting external updates to directions and to-dos. These routes use full credentials and the
+selected assistant manager, via `X-Persona-Manager` or `manager`, with the usual default manager fallback.
+Unconfigured sources have forwarding off and ask the owner about new work. The API is available independently of
+Labs. This phase stores and previews configuration for the routing and editor work in #15515.
+
+### Reference paths
+
+An `ExternalRef` is a JSON object containing `provider`, an optional `channel`, and optional `container` and `item`
+nodes of the form `{"kind":"…","id":"…"}`. The channel names the provider's account or connection. An omitted
+channel selects the provider's default channel. The lookup path starts at the specified node and removes the item
+and then the container to reach the channel. Each request stays within that channel.
+
+| Provider | Channel | Container | Item |
+| --- | --- | --- | --- |
+| `lark` (also accepts `feishu`) | Optional account or connection | `chat` with the chat's ID | `thread` with the topic's ID |
+| `github` | Omit for public GitHub. For a self-hosted instance use its HTTP or HTTPS origin | `repository` with `owner/repo` | `issue` or `pull_request` with the positive decimal number as a string |
+| `mail` (also accepts `email`) | Required account ID | Optional `mailbox` or `label` with its ID | `thread` with the thread ID. An account-wide thread can omit the container |
+| Subscriptions and future providers | Optional account or connection | A provider-defined kind and ID, such as `source` with a feed ID | A provider-defined kind and ID, such as `item` with a feed entry ID |
+
+Provider and kind names are lowercased. They start with a letter or digit, may also contain dots, dashes and
+underscores, and have a 64-byte limit. Other IDs are trimmed UTF-8 text of up to 512 bytes and retain case, except
+that GitHub uses the repository association's canonical instance and repository path and strips a trailing `.git`.
+A GitHub issue and a pull request with the same number have separate identities. Opaque IDs can include slashes,
+as the JSON key boundaries keep them distinct. All providers except mail require a container for an item.
+Omit an unused node entirely. Empty and null nodes are invalid.
+
+For a GitHub pull request, a reference is
+`{"provider":"github","container":{"kind":"repository","id":"example/web"},"item":{"kind":"pull_request","id":"17"}}`.
+The `external_ref` query parameter is this JSON object percent-encoded as one query value.
+
+### Bindings and policies API
+
+Every node can bind to any number of directions and to-dos. Each explicit binding has an opaque `id`,
+`external_ref`, `target_kind` of `direction` or `todo`, `target_id`, and a sparse `policy`. The target must
+exist on the selected manager. Use the IDs from its direction and to-do APIs.
+
+| Method | Route | Contract |
+| --- | --- | --- |
+| GET | `/api/v1/assistant/external-source-bindings` | Returns `{"bindings":[…]}` with explicit bindings. Optional `target_kind`, `target_id`, `provider` and exact `external_ref` filters combine. |
+| POST | `/api/v1/assistant/external-source-bindings` | Creates a binding from `{external_ref,target_kind,target_id,policy?}` and returns it with status 201. |
+| PUT | `/api/v1/assistant/external-source-bindings/{id}` | Replaces the binding using the same body and returns it with the same ID. |
+| DELETE | `/api/v1/assistant/external-source-bindings/{id}` | Deletes the explicit binding and returns 204. |
+| GET | `/api/v1/assistant/external-source-bindings/lookup` | Takes `external_ref` and returns `{path,matches}`. Matches include all ancestors in most-specific-first order. |
+| GET | `/api/v1/assistant/external-source-bindings/summary` | Returns the read-only `{"bindings":[…]}` data-flow list with explicit and projected connections. Filter by `provider` and optionally by its `channel`. An empty `channel` selects that provider's default channel. |
+| GET | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and returns `{external_ref,policy}` with saved overrides for that exact node. An unset node returns an empty policy. |
+| PUT | `/api/v1/assistant/external-source-policies` | Takes `external_ref` and replaces that node's policy with the JSON body. Send `{}` to restore inheritance. Returns the saved scope and policy. |
+| GET | `/api/v1/assistant/external-source-policies/effective` | Takes `external_ref` and optional `binding_id` and returns `{external_ref,policy,provenance}`. The binding must be on that reference path. |
+
+Each policy field inherits independently. A channel policy supplies the first override, followed by the container
+and then the item. A selected binding overrides the node at its own level. A more specific node can supersede it.
+Omitting a field in a replacement clears its previous override. An explicit empty `pre_filter` clears the
+inherited filter.
+
+| Policy field | Values |
+| --- | --- |
+| `mode` | `off` (default), `realtime`, `digest` or `on_demand` |
+| `digest_interval_minutes` | Optional integer from 1 to 525,600 minutes. Set it with `digest` or on its own to override an inherited interval. It appears in the effective result only when the effective mode is `digest` and an interval was supplied. |
+| `action_role` | `owner` or `fyi` (default) |
+| `new_item_policy` | `ask_owner` (default) or `auto_todo` |
+| `pre_filter` | Optional `keywords`, `mentions` and `senders` lists with at most 32 entries each. Entries are trimmed, deduplicated and ordered, with a 256-byte UTF-8 limit per entry. Keywords are lowercased. The default is an empty filter. |
+
+Each resolved field has a matching provenance entry with a `source` of `default`, `channel`, `container`,
+`item` or `binding`. A configured source also includes its canonical `external_ref`. A binding source additionally
+includes `binding_id`.
+
+Lookup and summary entries have `external_ref`, `target_kind`, `target_id`, and `source`. An explicit entry has
+`source: "explicit"` and its `binding_id`. A saved GitHub repository link gives a separate read-only
+`source: "repository_link"` entry with `repository_role` of `delivery` or `reference`. Omitted roles on old links
+mean `delivery`. Projected links match only their exact GitHub item and coexist with explicit matches for that item.
+The lookup lists explicit entries first at the same node and returns empty arrays when there are no matches.
+
+A duplicate explicit reference and target pair returns 409 `external_binding_exists`. Missing or unrelated
+bindings and missing targets return 404 with `external_binding_not_found` or `external_target_not_found`.
+Invalid references, targets, policies and malformed JSON return 400. An unavailable store returns 503
+`external_sources_unavailable`.
+
 ## Organization runtime snapshot (#11774)
 
 `GET /api/v1/assistant/organization/snapshot` is an Assistant read for the owner. It assembles the existing direction records, to-do SOP, task supervision, the session lists behind `agents_list`, admission counts and transcript-recorded model observations. It does not read report cards, work-log prose, digest text or a model's summary as runtime evidence, and it does not invoke a model. Client rendering is separate; the shared synthetic cases are in `spec/fixtures/organization-snapshot/`.
@@ -6325,6 +6403,11 @@ the trailer available separately. `readInlineBody` in `web/src/lib/inline-messag
 against its matching context. Quote prefixes and description enrichment leave this lookup intact. A missing or
 unmatched anchor keeps its ordinary text, and unreferenced blocks keep their context display.
 
+In sent Web bubbles (#15410), the matching anchors become inline buttons and open the existing context details.
+Only anchors drawn in the prose consume a context from the collapsed Context row. The parser and bubble controls
+load when a rendered bubble has both a trailer and contexts. Copy, Forward, search and navigation previews use
+the prose. Editing the last sent message still reads the original trailer to restore the selections.
+
 ### Quote and comment blocks at the start of messages (web and iOS, #2427, #2437, #151)
 
 Web "Quote" and "Comment" use no tags or structured fields: on send they become `> ` blocks at the start of the message (`withQuoteBlock` in `web/src/lib/drafts.ts`, `web/src/lib/comments.ts`); the assistant and Agents on computers read them as text, and other clients that don't recognize them simply see `>` lines.
@@ -6383,6 +6466,7 @@ On reading back, web only recognizes blocks after the first block whose first li
 | `notice` | A notification relayed by Persona, such as a delivery PR update, task closeout, relay refusal, spawned conversation result, or incoming chat update | `title` labels the source. Persona supplies its own name |
 | `scheduled_task` | An automatic input from an external scheduler, such as a Codex heartbeat | `text` is the visible task instructions, not the runtime envelope; no Persona `injected` follow-up or patrol is implied |
 | `meeting` | A batch from a recorded meeting this session attends: live sentences, questions and answers since the last batch, the end of the meeting (#2981, [meeting-minutes.md](../assistant/meeting-minutes.md) "Feeding the attending session") | `title` is the meeting's name; no `conversation_id` |
+| `extension` | An event an extension reported to the main conversation (`assistant.event`, [extensions.md](../extensions/extensions.md) "Assistant events") | `title` is the extension's name from its manifest |
 
 The manager persists explicit provenance in the native transcript with a leading context block, rendered by `shared/message_source.md`:
 

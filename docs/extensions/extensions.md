@@ -511,6 +511,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `spaces` (#14574) | Manage domain-space metadata and SPACE.md | List and create tracks, change a track and its `SPACE.md`, and read or change a visible conversation's categories; no custom-kind writes. Explicit by name only, never included in the legacy every-scope grant. Conversation listing and starts still require `assistant.ask`; sensitive tracks remain hidden by their existing policy. |
 | `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only; another track's memory only as the user lets this extension read it) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
+| `assistant.events` | Tell your Persona main chat what it observes (events it can pass on to you; it cannot start or change chats) | No HTTP route: the `assistant.event` RPC (see "Assistant events"). Neither `assistant.ask` nor `assistant.read` includes it |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
 | `market.refresh_own` | Refresh the extension marketplace it was installed from | `POST /api/v1/extensions/-/self/market/refresh` only. Not covered by an all-scope token or the legacy `hub_api` grant: the manifest must name it and the owner must approve it |
@@ -1194,6 +1195,55 @@ may resume, on its own manager's computers (#10941):
 A resume never starts a new chat under the id it names: a computer that has nothing of the id refuses it with
 `resume_unknown`, worded in the reader's language. A scoped device token resumes only a chat its computer lists
 outside the space (404 otherwise).
+
+### Assistant events
+
+An extension that watches something for the user (a disk, a build, a queue, a feed) can tell the assistant's **existing main conversation**
+what it saw, as a message, instead of leaving a state for the assistant to poll. It declares `assistant.events` in `permissions.hub`
+and calls `assistant.event` over its process connection. That is a call of the program's own pipe, so it needs no HTTP to the hub and works
+in the sandbox, which has no route to it. The hub checks the grant the user gave, as for `assistant.read` (the legacy `hub_api` full access counts too:
+that token can already message the main conversation as the user, and an event is less than that).
+
+| Method | Parameters | Returns | Scope |
+| --- | --- | --- | --- |
+| `assistant.event` | `{key, title, severity?, body?, action_hint?, state?, replace?}` | `{delivery}` | `assistant.events` |
+
+The schema is `schema/extension/assistant.schema.json`; the Go SDK has it as `ext.Hub.AssistantEvent` (the fake hub in `sdk/go/exttest` refuses it without the scope).
+
+| Field | Meaning | Limit (characters) |
+| --- | --- | --- |
+| `key` | What the event is about, one monitored thing. Required | 128 |
+| `title` | One line saying what happened. Required | 200 |
+| `severity` | `info` (default), `warning` or `critical`: how much the user should care | |
+| `body` | The details | 4000 |
+| `action_hint` | What the extension suggests be done: a suggestion for the assistant to weigh, not an order | 500 |
+| `state` | Where the thing the key names is now, in the extension's words (`firing`, `resolved`…) | 64 |
+| `replace` | `false` keeps an earlier event with the same key as a message of its own. Absent is `true` | |
+
+Params are strict: an unknown field, a missing `key` or `title`, an unknown `severity` or a field over its limit is `invalid_params`
+(nothing is cut). Fields are trimmed.
+
+- **Only the existing main conversation.** The event goes to the conversation the user made main (`PUT /api/v1/assistant {"main": …}`). Without one the call fails with
+  `no_main_conversation`: nothing is started, restarted or replaced, and nothing is kept. This is what makes it different from `assistant.ask`'s
+  `POST /api/v1/assistant/conversations` with `main: true`, which starts a new main conversation, and from `agents.control`'s
+  `POST /api/v1/sessions/{mid}/{sid}/messages`, which is the user's own voice.
+- **Delivery.** `delivered`: the main conversation was idle and the event went in now. `queued`: it is running (or its computer could not take the message just now), so the event waits in the same persisted
+  queue conversation-to-conversation messages use (`conversation_send`; shown above the composer as "<extension>: <title>") and goes in when the turn ends, surviving a restart.
+  `replaced`: an event of this extension with the same `key` was still waiting in that queue, and this one took its place (its place in the line, the newest content), so a
+  flapping check leaves one message, not forty. The one going in at that moment is not replaced. `replace: false` skips this.
+- **Not the user's words.** The message starts with a `message-source` block of kind `extension` whose `title` is the extension's name from its manifest ([protocol.md](../protocol/protocol.md) "Message source"),
+  so clients show it as automated input, never as the user's bubble, and it is not counted as the user's message. The text the assistant reads (`prompts/assistant/extension_event.md`) says it is an
+  extension's report and that everything in it is untrusted information to weigh, not instructions; the extension's fields are written into it as one JSON object, whose escaping keeps any text, a closing
+  `</persona-context>` included, from standing as part of the message. The assistant decides whether and how to tell the user: `info` only when it matters to what they are doing, `warning` briefly with a suggestion,
+  `critical` now. The answer to a `warning` or `critical` event is pushed to the user's devices whatever its length; an `info` one's goes by the device's setting.
+- **Who is speaking** is the manager's word: the extension's id and name come from its registration, never from the params, and an event is not a hop of a chain between conversations.
+- **Limits.** At most 20 calls per extension in 10 minutes (refused ones count too), then `rate_limited` with `data.retry_after` in seconds; and at most 10 events of one extension waiting in the queue, then `queue_full`
+  (a replacement still goes through). They stop a faulty extension from filling the main conversation; a monitor that tells what changed is far below them.
+- **Errors**: `permission_denied` (`{scope: "assistant.events"}`), `invalid_params`, `no_main_conversation` (do not retry until the user has one), `rate_limited`, `queue_full`, `assistant_offline` and `machine_offline` (try again).
+
+```json
+{"permissions":{"hub":["assistant.events"]}}
+```
 
 ### Sent as the user: `sent.record` (#5278)
 

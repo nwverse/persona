@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { chatLines } from "./turns";
+import { indexedNavTicks } from "./nav-rail";
 import type { Item } from "./types";
-import { containsInput, indexedNavTicks, userInputRevision, validUserInputIndex, windowUserInputs, type UserInputIndex } from "./user-input-index";
+import { containsInput, userInputRevision, validUserInputIndex, windowUserInputs, type UserInputIndex } from "./user-input-index";
 
 const index: UserInputIndex = { total: 36, history: "fixture", inputs: Array.from({ length: 36 }, (_, i) => ({ id: `input-${i}#0`, seq: i * 2 + 1 })) };
 const items: Item[] = index.inputs.slice(-2).flatMap((input) => [
@@ -63,6 +64,14 @@ describe("progressive user-input positions", () => {
     const withoutReply = items.slice(0, -1);
     expect(indexedNavTicks(rich, chatLines(withoutReply), withoutReply)[35])
       .toMatchObject({ preview: "A synthetic input", answerExcerpt: "Indexed answer." });
+  });
+
+  it("skips an inline trailer when the preview falls back to a leading quote", () => {
+    const raw = '> Review\n\n<!-- persona-inline-v1 [[6,6,"opaque-anchor"';
+    const indexed = { total: 1, history: "fixture", inputs: [{ id: "inline#0", seq: 1, preview: raw }] };
+    const item: Item = { id: "inline#0", seq: 1, role: "user", kind: "text", text: raw };
+    expect(indexedNavTicks(indexed, [], [])[0].preview).toBe("Review");
+    expect(indexedNavTicks(indexed, chatLines([item]), [item])[0].preview).toBe("Review");
   });
 
   it("validates the additive preview fields without requiring them", () => {

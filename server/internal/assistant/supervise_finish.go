@@ -5,19 +5,31 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
 // promoteSupervision is monotone within a wake-up: a later silent finish cannot hide a user action.
-func (s *Service) promoteSupervision(self string) {
-	key := s.supervisionHoldKey(context.Background(), self)
+func (s *Service) promoteSupervision(self string) error {
+	ctx := context.Background()
+	key := s.supervisionHoldKey(ctx, self)
 	b := &s.supervise
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.init()
-	if _, held := b.hold[key]; held {
-		b.visible[key] = true
+	if err := s.loadSupervisionHoldsLocked(ctx); err != nil {
+		return err
 	}
+	return s.promoteSupervisionLocked(ctx, key)
+}
+
+func (s *Service) promoteSupervisionLocked(ctx context.Context, key string) error {
+	b := &s.supervise
+	if hold := b.holds[key]; hold.active(time.Now()) && !hold.Visible {
+		hold.Visible = true
+		b.holds[key] = hold
+		b.holdsDirty = true
+	}
+	return s.saveSupervisionHoldsLocked(ctx)
 }
 
 // quietInternalAcceptedReview uses only the current plan binding and supervision
@@ -62,15 +74,22 @@ func (s *Service) toolSupervisionFinish(ctx context.Context, self string, args j
 	key := s.supervisionHoldKey(ctx, self)
 	b := &s.supervise
 	b.mu.Lock()
-	_, held := b.hold[key]
-	if !held || a.Visibility == "silent" && b.visible[key] {
+	if err := s.loadSupervisionHoldsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return "", err
+	}
+	hold := b.holds[key]
+	if !hold.active(time.Now()) || a.Visibility == "silent" && hold.Visible {
 		b.mu.Unlock()
 		return "", errors.New("this is not an unpromoted supervision turn; normal user messages cannot be hidden")
 	}
 	level := "triage"
 	if a.Visibility == "user" {
 		level = "user"
-		b.visible[key] = true
+		if err := s.promoteSupervisionLocked(ctx, key); err != nil {
+			b.mu.Unlock()
+			return "", err
+		}
 	}
 	b.mu.Unlock()
 	body, err := json.Marshal(map[string]string{"visibility": a.Visibility, "summary": a.Summary, "level": level})
