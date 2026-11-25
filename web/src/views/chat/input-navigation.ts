@@ -46,7 +46,7 @@ export async function readInputWindow(mid: string, sid: string, target: UserInpu
     if (history && page.history !== history) return "stale";
     if (typeof page.history !== "string" || typeof later !== "boolean" ||
         !Number.isSafeInteger(from) || !Number.isSafeInteger(to) ||
-        from !== Math.max(0, target.seq - RADIUS - 1) || to > target.seq + RADIUS || to < target.seq ||
+        from < Math.max(0, target.seq - RADIUS - 1) || from >= target.seq || to > target.seq + RADIUS || to < target.seq ||
         page.items.some((item) => !item || typeof item.id !== "string" || !Number.isSafeInteger(item.seq) || item.seq <= from || item.seq > to) ||
         !containsInput(page.items, target)) throw new Error("Invalid target window");
     return { items: page.items, history: page.history, before: page.has_more ? from + 1 : undefined, after: later ? to : undefined };

@@ -45,6 +45,7 @@ export function useUserInputs(mid: string, sid: string, history: string | undefi
         if (scopeNow.current !== scope) return;
         if (history && index.history && index.history !== history) {
           // A complete scan can discover a historical rewrite outside the tail. Refresh bodies before accepting it.
+          setState(null);
           reloadNow.current?.();
           return;
         }

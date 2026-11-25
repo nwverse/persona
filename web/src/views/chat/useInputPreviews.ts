@@ -64,7 +64,7 @@ export function useInputPreviews(mid: string, sid: string, scope: string, index:
       if (!id || !ticks[at].loadPreview) return;
       return {
         excerpt: cache.resolved.get(id),
-        loading: cache.pending.has(id) || (!cache.unavailable && !cache.resolved.has(id) && !cache.failed.has(id)),
+        loading: !cache.unavailable && !cache.resolved.has(id) && !cache.failed.has(id),
       };
     },
   };
