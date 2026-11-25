@@ -85,7 +85,7 @@ func AgentsNeedsYou(on Surface, agents Agents, cards Cards) Tally {
 	return Tally{}
 }
 
-// mark is what the cards say of one agent: bits of agentMarks, for the agents that count.
+// mark is what the cards say of one agent that counts on the surface, as the bits below.
 type mark struct{ mark uint8 }
 
 const (

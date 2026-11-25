@@ -80,9 +80,6 @@ type typedFinding struct {
 }
 
 func TestDomainTyped(t *testing.T) {
-	if testing.Short() {
-		t.Skip("type-checks packages from source")
-	}
 	start := time.Now()
 	pkgs, err := domainrules.Load(serverDir, serverModule)
 	if err != nil {
@@ -138,9 +135,6 @@ func TestDomainTyped(t *testing.T) {
 // Every typed rule fails on its planted case and passes its compliant twin (testdata/domaintyped, one package per
 // layer, each case marked with a "planted: <rule>" comment on its line; a twin names none).
 func TestDomainTypedPlanted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("type-checks packages from source")
-	}
 	planted := filepath.Join("testdata", "domaintyped")
 	units := []typedUnit{
 		{path: "planted/app", layer: "application"},
