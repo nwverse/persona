@@ -10,7 +10,7 @@ import (
 // closeAfterExit finishes an explicit Close whose Agent exited before lookup.
 // Its caller holds the session's recovery and typing locks. Only Herdr's marked
 // retained shells are handled here; other engines keep their existing behavior.
-func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState) error {
+func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState, beforeClose func() error) error {
 	pane := st.Pane
 	if pane == "" {
 		if p, ok := n.keptPane(id); ok {
@@ -98,5 +98,10 @@ func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState) e
 	}
 	// Snapshot checks and close are separate calls, not an atomic engine claim.
 	// Close just this pane; Herdr removes its parent tab only if it becomes empty.
+	if beforeClose != nil {
+		if err := beforeClose(); err != nil {
+			return err
+		}
+	}
 	return target.c.PaneClose(ctx, target.id)
 }

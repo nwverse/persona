@@ -170,6 +170,14 @@ or one of this machine's, never a name or an address the machine no longer has, 
 A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
 the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
 
+## Handover notifications follow the machine state they announce (#6819)
+
+A configured machine's durable assignment and its cached `Machine.owner` are updated in separate steps. Publish the
+forced viewer refresh only after the cached owner and offline state are updated, even when the scoped report already
+uses the new assignment. A test with only a configured entry never exercises the cached machine's handover; create
+that machine too, and block the first notification write to check its state instead of accepting any later matching
+report.
+
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
 The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the

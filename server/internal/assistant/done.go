@@ -1340,6 +1340,13 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 		s.turnJudged(ctx, t.ID, taskDoneCheck{}, nil, "done") // nothing to judge: the sweep does not ask again
 		return
 	}
+	if err == nil && c.Verdict == verdictDone {
+		if active := s.taskCloseActivityError(ctx, t, time.Now()); active != nil {
+			s.deferTurnJudgment(ctx, t.ID)
+			s.logf("task %s: judgment deferred: %v", t.ID, active)
+			return
+		}
+	}
 	if ai.IsNotConfigured(err) && c.Verdict != verdictNeedsUser {
 		// A missing provider is not a transient judge failure: keep the same localized explanation the settings row shows.
 		// A deterministic owner-only action remains actionable without a judge and must reach the visible wait (#5732).
@@ -1378,6 +1385,10 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 			ok, err := s.finishCurrentTask(ctx, t.ID, reason, work)
 			switch {
 			case err != nil:
+				var hold *taskCloseHoldError
+				if errors.As(err, &hold) {
+					s.deferTurnJudgment(ctx, t.ID)
+				}
 				s.logf("task %s: auto done: %v", t.ID, err)
 			case ok:
 				s.logf("task %s: done (auto): %s", t.ID, reason)
