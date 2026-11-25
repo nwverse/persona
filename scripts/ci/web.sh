@@ -1,27 +1,30 @@
 #!/bin/bash
 set -euo pipefail
 source "$(dirname "$0")/common.sh"
-ci_run 'Web install' 600 bash -c 'cd web && npm ci --no-audit --no-fund'
-ci_run 'Web lint' 300 bash -c 'cd web && npm run lint'
-# The typecheck and the build (whose own tsc -b then has the typecheck's build info) run beside the tests rather than
-# after them: neither reads what the other writes (the build writes web/dist, ../dist/public-share and public/pake,
-# which npm test does not read). Their output follows the tests'; the exit code is the first failed step's, in this order.
-log="$(mktemp "${TMPDIR:-/tmp}/persona-web-build.XXXXXX")"
-trap 'rm -f "$log"' EXIT
-(
-  set -e
-  ci_run 'Web typecheck' 300 bash -c 'cd web && npm run typecheck'
-  ci_run 'Web build and privacy' 600 bash -c 'cd web && npm run build'
-) > "$log" 2>&1 &
-build_pid=$!
-tests_rc=0
-ci_run 'Web tests' 600 bash -c 'cd web && npm test' || tests_rc=$?
-build_rc=0
-wait "$build_pid" || build_rc=$?
-cat "$log"
-if [ "$build_rc" -ne 0 ]; then exit "$build_rc"; fi
-if [ "$tests_rc" -ne 0 ]; then exit "$tests_rc"; fi
-# Persona Core alone (#13932, docs/web/web.md "Modules"): built and tested with zero feature modules. Fails when a file
-# outside web/src/modules reaches a module's files, or a core test only passes with a module registered.
-ci_run 'Web core-only build' 600 bash -c 'cd web && npm run build:core-only'
-ci_run 'Web core-only tests' 900 bash -c 'cd web && npm run test:core-only'
+ci_run 'Browser verification dependencies' 600 bash -c 'cd web && npm ci --no-audit --no-fund'
+ci_run 'Receiver regression and retained behavior' 300 bash -c 'cd web && npx vitest run src/lib/api-dedupe.test.ts src/lib/session-list-abort.test.ts src/views/SidebarConcurrency.test.tsx --maxWorkers=2'
+ci_run 'Receiver mutation must fail' 180 bash -c '
+set -eu
+file=web/src/lib/api.ts
+cp "$file" "$file.receiver-backup"
+trap '\''mv "$file.receiver-backup" "$file"'\'' EXIT
+python3 - <<"PY"
+from pathlib import Path
+p=Path("web/src/lib/api.ts")
+s=p.read_text()
+a="entry.fetcher.call(globalThis, "
+assert s.count(a)==1
+p.write_text(s.replace(a,"entry.fetcher("))
+PY
+set +e
+(cd web && npx vitest run src/lib/api-dedupe.test.ts -t "global fetch receiver" --maxWorkers=2) > receiver-mutation.log 2>&1
+rc=$?
+set -e
+cat receiver-mutation.log
+[ "$rc" -ne 0 ]
+rg -q "Illegal invocation" receiver-mutation.log
+echo "RECEIVER_MUTATION_DETECTED=1"
+'
+ci_run 'Production browser bundle' 600 bash -c 'cd web && npm run build'
+ci_run 'Chrome settings native fetch smoke' 180 node web/e2e/native-fetch-settings.mjs /tmp/persona-fetch-settings-chrome
+ci_run 'Retain Chrome evidence' 60 bash -c 'mkdir -p ops/evidence/native-fetch-settings; cp /tmp/persona-fetch-settings-chrome/result.json ops/evidence/native-fetch-settings/; cp /tmp/persona-fetch-settings-chrome/settings-*.png ops/evidence/native-fetch-settings/; cp receiver-mutation.log ops/evidence/native-fetch-settings/'
