@@ -227,6 +227,45 @@ func TestInboxItemKBChat(t *testing.T) {
 	}
 }
 
+// A chat its connector files under another name (an archive source of its manifest, connectorwire.ChatBatch.Source)
+// is still its: the chat's page lists the connector's items of that thread, and such an item names the chat. A chat
+// of the same thread another connector wrote, under the same name, is neither; nor is a chat of another id, since
+// nothing in the connector protocol relates an Inbox thread to an archive chat of another id (only kbChatOf does, for
+// the sources it knows).
+func TestKBChatInboxArchiveSourceAlias(t *testing.T) {
+	f := newKBInboxFixture(t)
+	alias := &kb.Chat{ID: kb.ChatID("larkx-posts", "p9"), Source: "larkx-posts", SourceID: "p9", Connector: "larkx", Kind: "group", Name: "Posts"}
+	decoy := &kb.Chat{ID: kb.ChatID("feeds", "q7"), Source: "feeds", SourceID: "q7", Connector: "feedsx", Kind: "group", Name: "Feed"}
+	elsewhere := &kb.Chat{ID: kb.ChatID("larkx", "room-r5"), Source: "larkx", SourceID: "room-r5", Connector: "larkx", Kind: "group", Name: "Room"}
+	for _, c := range []*kb.Chat{alias, decoy, elsewhere} {
+		if err := f.e.Store.PutChat(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	it := kbConnectorItem("larkx:p9:1", "larkx", "p9", f.at)
+	notDecoy := kbConnectorItem("larkx:q7:1", "larkx", "q7", f.at) // feeds-q7 is feedsx's
+	notElsewhere := kbConnectorItem("larkx:r5:1", "larkx", "r5", f.at)
+	f.add(it, notDecoy, notElsewhere)
+	if list, _ := f.inbox(alias.ID, ""); !slices.Equal(kbInboxIDs(list), []string{it.ID}) {
+		t.Fatalf("the alias chat's page lists %v", kbInboxIDs(list))
+	}
+	for _, c := range []*kb.Chat{decoy, elsewhere} {
+		if list, _ := f.inbox(c.ID, ""); len(list) != 0 {
+			t.Fatalf("%s lists %v", c.ID, kbInboxIDs(list))
+		}
+	}
+	raw, ok := f.get("/api/v1/inbox/"+it.ID, "")["kb_chat"]
+	var c inboxKBChat
+	if !ok || json.Unmarshal(raw, &c) != nil || c.ID != alias.ID || c.Path != "/kb/chats/"+alias.ID {
+		t.Fatalf("the item names %s", raw)
+	}
+	for _, x := range []*InboxItem{notDecoy, notElsewhere} {
+		if raw, ok := f.get("/api/v1/inbox/"+x.ID, "")["kb_chat"]; ok {
+			t.Fatalf("%s names %s", x.ID, raw)
+		}
+	}
+}
+
 // The rows of the chat's recent messages an item received link to it: the same sender and text (a cut one by its
 // start) within the minutes the item's chain says they came in; another sender, another text and a time outside
 // stay unlinked.

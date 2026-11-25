@@ -261,12 +261,19 @@ func kbRecentDay(l string) (string, bool) {
 }
 
 // itemKBChat is the knowledge base chat it came from, when the knowledge base has one: the chat its connector
-// archives its thread under (the connector's own archive), or the one kbChatOf names. nil without, or with the
-// knowledge base off or not open.
+// archives its thread under, or the one kbChatOf names. nil without, or with the knowledge base off or not open.
+//
+// The connector's chat is "<source>-<thread>" (kb.ChatID), where source is the connector's id or one of its
+// manifest's ArchiveSources (connectorwire.ChatBatch.Source), and the chat keeps the connector as its Connector
+// whichever name it is filed under. So it is looked up under the connector's id first, then among the chats whose id
+// ends in "-<thread>", each held to fromKBChat (its Connector and SourceID). A chat whose id kb.SafeID cut short is not
+// found that way.
 func (s *Service) itemKBChat(ctx context.Context, it *InboxItem) *inboxKBChat {
 	var ids []string
+	thread := ""
 	if x := it.Connector; x != nil && x.Thread != "" {
-		ids = append(ids, kb.ChatID(it.Source, x.Thread))
+		thread = x.Thread
+		ids = append(ids, kb.ChatID(it.Source, thread))
 	}
 	b := &s.inbox
 	if id := b.kbChatOf(it); id != "" {
@@ -279,9 +286,26 @@ func (s *Service) itemKBChat(ctx context.Context, it *InboxItem) *inboxKBChat {
 	if e == nil {
 		return nil
 	}
-	for _, id := range ids {
+	found := func(id string) *inboxKBChat {
 		if c, ok := e.Store.Chat(id); ok && b.fromKBChat(it, c) {
 			return &inboxKBChat{ID: c.ID, Path: deeplink.KnowledgeEntry(kb.KindChat, c.ID)}
+		}
+		return nil
+	}
+	for _, id := range ids {
+		if c := found(id); c != nil {
+			return c
+		}
+	}
+	if thread == "" {
+		return nil
+	}
+	suffix := kb.SafeID("-" + thread) // what kb.ChatID ends in, whatever the source before it
+	for _, id := range e.Store.IDs(kb.KindChat) {
+		if strings.HasSuffix(id, suffix) && !slices.Contains(ids, id) {
+			if c := found(id); c != nil {
+				return c
+			}
 		}
 	}
 	return nil

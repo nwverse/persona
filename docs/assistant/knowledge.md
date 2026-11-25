@@ -1112,8 +1112,10 @@ A chat's page leads to the Inbox items that came from it, and an item leads back
 
 - **Which items**: an item is a chat's when its connector and thread are the chat's `connector` (in an older file, its
   `source`) and `source_id`, whatever the connector, or when the chat is the one the AI twin reads for it (`kbChatOf` in
-  `assistant/inbox_agent.go`: a Feishu chat, a mail correspondent, a subscription's thread). A row merged into another counts
-  for the one it was merged into, which is the row the Inbox lists.
+  `assistant/inbox_agent.go`: a Feishu chat, a mail correspondent, a subscription's thread). The chat's `connector` is the
+  connector that wrote it whatever name it is filed under, its id or one of its manifest's archive sources, so a chat
+  filed under an archive source counts too. Nothing else relates an Inbox thread to an archive chat of another id. A row
+  merged into another counts for the one it was merged into, which is the row the Inbox lists.
 - **`GET /api/v1/kb/chats/{id}`** adds `inbox`: the chat's items as the Inbox list has them (with `sources=all`: the open ones
   and the done ones the list still carries), the open ones first, each group newest first, at most 50. Each has `id`,
   `title`, `tier`, `status` (an open item's section), `summary`, `preview`, `updated_at`, `done_at` and `messages`: the rows
@@ -1124,7 +1126,8 @@ A chat's page leads to the Inbox items that came from it, and an item leads back
   received entry before it (the item's start for the first) to its own entry. A row goes to the newest item that holds it.
   A chat with no items has no `inbox`.
 - **`GET /api/v1/inbox/{id}`** adds `kb_chat: {id, path}` when the knowledge base has the item's chat: the one its
-  connector archives the thread under (`<connector>-<thread>`) or the one the AI twin reads; `path` is its page
+  connector archives the thread under (`<connector>-<thread>`, else a chat ending in `-<thread>` that it wrote under an
+  archive source) or the one the AI twin reads; `path` is its page
   (`deeplink.KnowledgeEntry`). Not in the Inbox list: the apps read it when an item is opened.
 - **Who gets them**: only the user's own apps (a full-access device). An extension's token reads the knowledge base and
   the Inbox by its own scopes (`kb.read`, `inbox.read`), so neither route tells it about the other; the watch reads
