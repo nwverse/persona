@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -28,6 +29,9 @@ type suggestionReq struct {
 	Version int     `json:"version"`
 	Action  string  `json:"action"`
 	Text    *string `json:"text"`
+	// Changes is the exact document-move selection a legacy mirror confirmation made. Nil preserves the card's stored
+	// selection; a non-nil empty slice explicitly deselects every stored move.
+	Changes *[]DocChange `json:"changes,omitempty"`
 	// Due is a to-do suggestion's due time as the user left it (a day or a moment, "" none); absent keeps the suggestion's.
 	Due      *string `json:"due"`
 	ClientID string  `json:"client_id"`
@@ -89,6 +93,93 @@ func (s *Service) inboxSuggestionRoutes() {
 // (the watch): it may only confirm a reply or a conclusion, as text.
 func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionReq, full bool) (InboxItem, error) {
 	inboxCfg := s.inboxConfig(ctx)
+	var preVeto *InboxReplyPolicySnapshot
+	var vetoErr error
+	if in.Action == suggestConfirm {
+		b := &s.inbox
+		b.mu.Lock()
+		it := b.items[id]
+		policyConfirm, policyReply, edited := false, false, false
+		var itemData replyPolicyItemData
+		if it != nil {
+			g := currentSuggestion(it)
+			if g != nil && g.Kind == SuggestReply && !g.Handback && g.Version == in.Version {
+				if a := suggestionAttempt(it, g.Version); a != nil && (a.Status == suggestionSending || a.Status == suggestionUnknown) {
+					out := it.listed()
+					b.mu.Unlock()
+					return out, unknownSuggestionReply()
+				}
+				if g.ReplyPublicationFailed || g.ReplyPublicationPending {
+					out := it.listed()
+					b.mu.Unlock()
+					return out, errInboxNotPersisted
+				}
+			}
+			policyReply = g != nil && g.Kind == SuggestReply && !g.Handback && g.Version == in.Version
+			policyConfirm = g != nil && (g.Kind == SuggestReply || g.Kind == SuggestAgent) && g.Version == in.Version
+			if policyConfirm && in.Text != nil {
+				proposed := strings.TrimSpace(*in.Text)
+				edited = proposed != "" && proposed != g.Text
+				if edited {
+					itemData = snapshotItemForReplyPolicyLocked(it)
+					instruction := it.ReplyInstruction
+					if instruction == nil {
+						instruction = chainReplyInstruction(it.Chain)
+					}
+					itemData = replyPolicyItemWithInstruction(itemData, instruction)
+				}
+			}
+		}
+		b.mu.Unlock()
+		if policyConfirm {
+			// Reply and Agent confirmations use fresh authorization. The edit veto runs before consuming any card or
+			// reserving a send, and a second fresh read closes a policy transition during its model call.
+			vetoCfg, err := s.inboxConfigFresh(ctx)
+			if err != nil {
+				return InboxItem{}, errReplyPolicyBlocked
+			}
+			vetoPolicy := compileReplyPolicy(vetoCfg.ReplyPolicy)
+			b.mu.Lock()
+			vetoApplies := vetoPolicy.appliesToItem(b.items[id])
+			b.mu.Unlock()
+			if edited && vetoApplies {
+				preVeto, vetoErr = s.gateReplyPolicySend(ctx, vetoPolicy, itemData, strings.TrimSpace(*in.Text))
+			}
+			freshCfg, err := s.inboxConfigFresh(ctx)
+			if err != nil {
+				return InboxItem{}, errReplyPolicyBlocked
+			}
+			freshPolicy := compileReplyPolicy(freshCfg.ReplyPolicy)
+			b.mu.Lock()
+			live := b.items[id]
+			configChanged := live != nil && freshPolicy.appliesToItem(live) &&
+				(!vetoPolicy.appliesToItem(live) || !reflect.DeepEqual(vetoCfg.ReplyPolicy, freshCfg.ReplyPolicy))
+			b.mu.Unlock()
+			// A stable reply veto uses the existing failed-attempt path so the exact edited text and proposal remain durable.
+			// The classifier has already run before any state was consumed. Agent vetoes and policy transitions still return
+			// immediately, preserving their no-reservation guarantee.
+			recordVeto := vetoErr != nil && policyReply && !configChanged && freshPolicy.enabled &&
+				reflect.DeepEqual(vetoCfg.ReplyPolicy, freshCfg.ReplyPolicy)
+			if (vetoErr != nil || configChanged) && !recordVeto {
+				return InboxItem{}, errReplyPolicyBlocked
+			}
+			if vetoErr == nil {
+				// Agent starts and handbacks otherwise consume their card before their final authorization runs. Check those
+				// paths before any state transition. Ordinary replies keep the durable failed-attempt path below.
+				b.mu.Lock()
+				live := b.items[id]
+				g := currentSuggestion(live)
+				denied := live != nil && g != nil && g.Version == in.Version &&
+					(g.Kind == SuggestAgent || g.Kind == SuggestReply && g.Handback) &&
+					verifyReplyPolicySuggestionLocked(live, g, nil, freshPolicy) != nil
+				b.mu.Unlock()
+				if denied {
+					return InboxItem{}, errReplyPolicyBlocked
+				}
+			}
+			inboxCfg = freshCfg
+		}
+	}
 	enabled := inboxCfg.Agent.Enabled
 	policy := compileReplyPolicy(inboxCfg.ReplyPolicy)
 	b := &s.inbox
@@ -124,7 +215,7 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 		return InboxItem{}, errAnswerOnly
 	}
 	if g != nil && g.Kind == SuggestReply && in.Action == suggestConfirm && !g.Handback {
-		return s.confirmSuggestionReplyLocked(ctx, it, g, in, policy)
+		return s.confirmSuggestionReplyLocked(ctx, it, g, in, policy, preVeto, vetoErr)
 	}
 	if g != nil && g.Conversation != nil {
 		resetInboxFollowChecks(it)
@@ -139,7 +230,13 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	l := b.userLang()
 	edited := g != nil && text != g.Text
 	// The suggestion is taken now, under the lock: a second confirmation of it (another device, a retry) is stale.
+	if g != nil && g.OnDemand && (in.Action == suggestReject || in.Action == suggestInstruct) {
+		rememberRejectedReplyDraft(it, g.Text)
+	}
 	it.Suggestion = nil
+	if in.Action == suggestConfirm || in.Action == suggestReject {
+		it.ReplyInstruction = nil
+	}
 	if it.Agent.State == AgentDrafted {
 		it.Agent.State = AgentSkipped
 	}
@@ -153,6 +250,8 @@ func (s *Service) actOnSuggestion(ctx context.Context, id string, in suggestionR
 	case in.Action == suggestInstruct:
 		words := strings.TrimSpace(*in.Text)
 		b.chainAdd(it, instructedEntry(l, words, now))
+		instruction := it.Chain[len(it.Chain)-1]
+		it.ReplyInstruction = &instruction
 		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteInstructed, Text: words}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
@@ -211,6 +310,19 @@ func confirmedEntry(l i18n.Lang, text string, edited bool, now time.Time) InboxC
 	return InboxChainEntry{Kind: ChainConfirmed, At: now.UTC(), Text: i18n.T(l, key), Detail: text, Edited: edited}
 }
 
+func rememberRejectedReplyDraft(it *InboxItem, text string) {
+	if it == nil || text == "" {
+		return
+	}
+	it.RejectedReplyDraft = text
+	for _, old := range it.RejectedReplyDrafts {
+		if old == text {
+			return
+		}
+	}
+	it.RejectedReplyDrafts = append(it.RejectedReplyDrafts, text)
+}
+
 func rejectedEntry(l i18n.Lang, text string, now time.Time) InboxChainEntry {
 	return InboxChainEntry{Kind: ChainRejected, At: now.UTC(), Text: i18n.T(l, "assistant-inbox_chain.rejected"), Detail: clip(text, 600)}
 }
@@ -264,16 +376,31 @@ func (s *Service) confirmAgent(ctx context.Context, it *InboxItem, g *InboxSugge
 	b.mu.Lock()
 	self := it.Agent.SessionID
 	b.mu.Unlock()
+	hubMachine := s.settings(ctx).MachineID
 	machine := g.MachineID
 	if machine == "" {
-		machine = s.settings(ctx).MachineID
+		machine = hubMachine
 	}
 	cwd := g.Cwd
 	if cwd == "" {
 		cwd = "~"
 	}
 	args, _ := json.Marshal(map[string]string{"machine": machine, "cwd": cwd, "prompt": text})
-	res, err := s.runTool(ownerConfirmed(ctx), s.settings(ctx).MachineID, self, "agent_start", args)
+	// Settings resolution can block. Reauthorize the live item and exact suggestion immediately before agent_start.
+	freshCfg, err := s.queryInboxConfig(ctx)
+	if err != nil {
+		err = errReplyPolicyBlocked
+	} else {
+		b.mu.Lock()
+		if verifyReplyPolicySuggestionLocked(it, g, nil, compileReplyPolicy(freshCfg.ReplyPolicy)) != nil {
+			err = errReplyPolicyBlocked
+		}
+		b.mu.Unlock()
+	}
+	res := ""
+	if err == nil {
+		res, err = s.runTool(ownerConfirmed(ctx), hubMachine, self, "agent_start", args)
+	}
 	enabled := s.inboxConfig(ctx).Agent.Enabled
 	now := time.Now()
 	b.mu.Lock()

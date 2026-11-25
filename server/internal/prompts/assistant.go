@@ -1427,11 +1427,13 @@ func RenderTodoDirection(d DirectionNotes) string {
 
 // SegmentHandoff continues the same logical conversation on a new engine.
 type SegmentHandoff struct {
-	Language string
-	Summary  string
-	Recent   []HandoffTurn
-	Text     string
-	Partial  bool
+	Language     string
+	FromLauncher string
+	FromModel    string
+	Summary      string
+	Recent       []HandoffTurn
+	Text         string
+	Partial      bool
 }
 
 func RenderSegmentHandoff(h SegmentHandoff) string { return render("assistant/segment_handoff", h) }

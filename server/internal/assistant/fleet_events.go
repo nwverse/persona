@@ -304,6 +304,7 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 		if json.Unmarshal(params, &c) == nil {
 			s.fleet.mu.Lock()
 			before := s.fleet.clients.Viewing
+			wasOnline := s.fleet.clients.AppOnline
 			s.fleet.clients = c
 			s.fleet.mu.Unlock()
 			for _, ref := range c.Viewing {
@@ -314,6 +315,9 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 					// Leaving a quiet page is the last owner activity, not its old transcript time.
 					s.rememberSessionActivity(ctx, ref.MachineID, ref.SessionID)
 				}
+			}
+			if c.AppOnline && !wasOnline {
+				go s.ownerAppeared(context.WithoutCancel(ctx), "app_online", "")
 			}
 		}
 	case assistantwire.EventMutes:
@@ -332,6 +336,11 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 			if m, ok := s.fleetMachine(p.MachineID); ok {
 				s.markSeen(ctx, m.ID, p.SessionID)
 			}
+		}
+	case assistantwire.EventInteractionSeen:
+		var p assistantwire.FleetInteractionSeen
+		if json.Unmarshal(params, &p) == nil && p.InteractionID != "" {
+			s.markInteractionSeen(ctx, p.InteractionID)
 		}
 	default:
 		return false
