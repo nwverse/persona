@@ -228,6 +228,7 @@ func TestInboxReplyPolicyFailedPublicationUnmarkedRowCannotSendAfterReload(t *te
 }
 
 func TestInboxReplyPolicyWorkbenchTransientDraftDoesNotBorrowLiveMirrorVersion(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()
@@ -269,6 +270,7 @@ func TestInboxReplyPolicyWorkbenchTransientDraftDoesNotBorrowLiveMirrorVersion(t
 }
 
 func TestInboxReplyPolicyWorkbenchTransientSendRechecksPolicyAfterMutexWait(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	for _, tc := range []struct {
 		name     string
 		activate bool
@@ -346,6 +348,7 @@ func TestInboxReplyPolicyWorkbenchTransientSendRechecksPolicyAfterMutexWait(t *t
 }
 
 func TestInboxReplyPolicyUnversionedWorkbenchCardCannotRetryFailedAttempt(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	const text = "Same text on an old card and its replacement"
 	newAttempt := func(t *testing.T) (*inboxHub, *recoveryReplier, *InboxItem, map[string]any, map[string]any, chan struct{}) {
 		t.Helper()

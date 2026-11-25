@@ -515,6 +515,7 @@ func TestInboxReplyPolicyOnDemandDraftGate(t *testing.T) {
 }
 
 func TestInboxReplyPolicyWorkbenchDraftRejectedBeforeSend(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	h, lark, it := handledHub(t)
 	h.setConfig(func(c *assistantwire.InboxConfig) { c.ReplyPolicy = replyPolicyTestConfig() })
 	{
