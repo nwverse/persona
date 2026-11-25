@@ -678,6 +678,7 @@ func TestReadOnlySuppressesFiveSideEffectsAndFiltersData(t *testing.T) {
 
 	var sessionItemEvents atomic.Int64
 	var fleetClientEvents atomic.Int64
+	busBarrier := make(chan struct{}, 4)
 	mgr := connectGuardManager(t, h, srv.URL, "assistant", func(string, json.RawMessage) (any, error) {
 		return map[string]any{}, nil
 	})
@@ -688,9 +689,22 @@ func TestReadOnlySuppressesFiveSideEffectsAndFiltersData(t *testing.T) {
 			sessionItemEvents.Add(1)
 		case assistantwire.EventClients:
 			fleetClientEvents.Add(1)
+		case "test.barrier":
+			busBarrier <- struct{}{}
 		}
 	}
 	mgr.mu.Unlock()
+	flushAssistantBus := func() {
+		t.Helper()
+		if err := h.notifyBus("assistant", "test.barrier", nil); err != nil {
+			t.Fatalf("notifyBus barrier: %v", err)
+		}
+		select {
+		case <-busBarrier:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for assistant bus barrier")
+		}
+	}
 
 	ro := mintReadOnlySession(t, mux, h.cfg.Token, `{"label":"side-effect-check"}`)
 	store.insertRawToken("jd_full_compare", db.DeviceToken{ID: "dev_full_compare", Name: "Full", Kind: "web", Role: roleFull})
@@ -700,7 +714,7 @@ func TestReadOnlySuppressesFiveSideEffectsAndFiltersData(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("readonly items/full: %d %s", rec.Code, rec.Body.String())
 	}
-	time.Sleep(50 * time.Millisecond)
+	flushAssistantBus()
 	if got := sessionItemEvents.Load(); got != 0 {
 		t.Fatalf("readonly items/full triggered %d EventSessionItems notifications, want 0", got)
 	}
@@ -931,7 +945,7 @@ func TestReadOnlySuppressesFiveSideEffectsAndFiltersData(t *testing.T) {
 	if !subPublic || subSpace {
 		t.Fatalf("readonly subs: public=%v (want true), space=%v (want false)", subPublic, subSpace)
 	}
-	time.Sleep(40 * time.Millisecond)
+	flushAssistantBus()
 	if fleetClientEvents.Load() != fleetBeforeHello {
 		t.Fatalf("readonly client_hello fired fleetClientsChanged: before=%d after=%d", fleetBeforeHello, fleetClientEvents.Load())
 	}
