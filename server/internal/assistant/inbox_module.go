@@ -56,7 +56,7 @@ func (s *Service) inboxCollectedCall(ctx context.Context, p assistantwire.InboxR
 
 // inboxItemCall is inbox.item: one item as it is stored, for an extension's inbox_item slot.
 func (s *Service) inboxItemCall(ctx context.Context, p assistantwire.InboxItemParams) (assistantwire.InboxItemResult, error) {
-	raw, ok := s.InboxItemJSON(ctx, p.ID)
+	raw, ok := s.InboxItemJSON(ctx, string(p.ID))
 	return assistantwire.InboxItemResult{Item: raw, OK: ok}, nil
 }
 
@@ -81,8 +81,9 @@ func (s *Service) inboxMutesCall(ctx context.Context, p assistantwire.InboxMutes
 // inboxPostCall is inbox.post: whether the assistant may put its conversations into the Inbox, set first when asked
 // (inbox_post.go).
 func (s *Service) inboxPostCall(ctx context.Context, p assistantwire.InboxPostParams) (assistantwire.InboxPostResult, error) {
-	if p.On != nil {
-		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.InboxPost = p.On; return nil }); err != nil {
+	if p.On != assistantwire.InboxPostLeftOut {
+		on := p.On == assistantwire.InboxPostOn
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.InboxPost = &on; return nil }); err != nil {
 			return assistantwire.InboxPostResult{}, err
 		}
 	}
@@ -97,7 +98,7 @@ func (s *Service) inboxTriagePreviewCall(ctx context.Context, p assistantwire.In
 
 // inboxUnmuteCall is inbox.unmute: the user unmuted one on the Inbox Sources pages; what it filed stays done.
 func (s *Service) inboxUnmuteCall(ctx context.Context, p assistantwire.InboxUnmuteParams) (assistantwire.InboxAck, error) {
-	return assistantwire.InboxAck{}, s.InboxUnmute(ctx, p.ID)
+	return assistantwire.InboxAck{}, s.InboxUnmute(ctx, string(p.ID))
 }
 
 // inboxTurnSettled is the Inbox's settled-turn hook: when an open item's agent entry links agent, the Agent's stop is

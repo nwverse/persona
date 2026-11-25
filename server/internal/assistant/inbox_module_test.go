@@ -224,6 +224,8 @@ func TestInboxBusAnswersKeepTheirBytes(t *testing.T) {
 			map[string]any{"mutes": mutes}},
 		{assistantwire.MethodInboxPost, `{"from_a_newer_peer":1}`, busBytes(t, map[string]any{"on": h.inboxPostOn(ctx)}),
 			map[string]any{"on": h.inboxPostOn(ctx)}},
+		{assistantwire.MethodInboxPost, `{"on":false}`, `{"on":false}`, map[string]any{"on": false}},
+		{assistantwire.MethodInboxPost, `{"on":null}`, `{"on":false}`, map[string]any{"on": false}},
 		{assistantwire.MethodInboxTriagePreview, `{"source":"github","things":[],"from_a_newer_peer":1}`, `{"verdicts":[]}`,
 			map[string]any{"verdicts": []assistantwire.InboxTriageVerdict{}}},
 	} {
