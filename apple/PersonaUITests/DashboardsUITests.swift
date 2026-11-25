@@ -52,8 +52,8 @@ final class DashboardsUITests: XCTestCase {
     /// The drawer (the iPad's sidebar) lists Dashboards and the pinned page; the page opens with its View's title and
     /// the ownership line under it, and a tap on its button answers Received.
     @MainActor func testThePinnedPageOpensFromTheSidebar() throws {
-        let iPad = UIDevice.current.userInterfaceIdiom == .pad
-        let app = try launch(["-tab", "assistant"] + (iPad ? [] : ["-openAssistantSidebar", "YES"]))
+        let app = try launch(["-tab", "assistant"])
+        openDrawer(app) // by its button: opened at launch, its rows are sometimes missing from the accessibility tree
         let index = app.descendants(matching: .any)["sidebar-extension--pages-index"].firstMatch
         let notice = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
         for _ in 0..<15 where !index.waitForExistence(timeout: 2) {
