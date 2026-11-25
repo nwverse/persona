@@ -71,9 +71,11 @@ func (t Tally) Accept(v TallyVisitor) {
 //   - The Live Activity and Persona Link list an agent by its first card that stands for it, as the cards come, then the
 //     agents waiting in a terminal dialog, in the agents' order; neither folds, nor lists a card from no session. Persona
 //     Link's card is the first one handed to the owner while the agent has one (its summary orders the rows newest first
-//     itself). An agent whose every card its task's supervisor holds is none of theirs.
+//     itself). An agent whose every card its task's supervisor holds is none of theirs, and neither is a quiet task's
+//     agent or a directory-hidden one (Visibility.LeftOut), with its cards.
 //
-// The zero Surface is a defect.
+// So one list of agents and cards serves every surface: the caller hands in the quiet and the hidden with the rest. The
+// zero Surface is a defect.
 func AgentsNeedsYou(on Surface, agents Agents, cards Cards) Tally {
 	switch on {
 	case SurfaceBadge():

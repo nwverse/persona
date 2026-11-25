@@ -264,9 +264,10 @@ func keyOf(sess *proto.Session) agentKey { return agentKey{sess.MachineID, sess.
 
 // liveCounted says whether an agent is on the Live Activity at all, by fleetcount's rule (Agent.Counts): muted agents
 // and subtasks are not (Codex sub-agents, and a runtime's session another one started, which its parent's row stands
-// for until it needs the user). A session fleetcount refuses counts nowhere. A side session folded under its parent is
-// not either: buildFleetIn counts it under that row first (foldSidesIn, #7944). foldSidesIn asks it of the rows it
-// folds; a round's own rows read it from what the round built (fleetRound.onLive).
+// for until it needs the user), nor quiet tasks' and directory-hidden agents, which fleetInputsInto leaves out first.
+// A session fleetcount refuses counts nowhere. A side session folded under its parent is not either: buildFleetIn
+// counts it under that row first (foldSidesIn, #7944). foldSidesIn asks it of the rows it folds; a round's own rows
+// read it from what the round built (fleetRound.onLive).
 func liveCounted(a fleetInput) bool {
 	agent, failed := kitoutcome.Unpack(fleetcountadapt.Agent(a.Session, a.Muted, 0))
 	return failed == nil && agent.Counts(fleetcount.SurfaceLiveActivity())

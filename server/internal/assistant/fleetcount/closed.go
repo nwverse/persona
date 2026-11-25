@@ -63,7 +63,9 @@ func VisibilityQuiet() Visibility { return Visibility{visibility: 2} }
 func VisibilityHiddenByDirectory() Visibility { return Visibility{visibility: 3} }
 
 // LeftOut says whether the fleet's Live Activity and Persona Link's summary leave the agent out: a quiet task's agent
-// and a directory-hidden one are none of theirs. The zero Visibility is a defect.
+// and a directory-hidden one are none of theirs, nor are their cards. Agent.Counts asks it for both surfaces, so an
+// agent it leaves out counts on neither whoever hands it in; a caller that drops such an agent before it builds one asks
+// the same. The zero Visibility is a defect.
 func (v Visibility) LeftOut() bool {
 	if v == (Visibility{}) {
 		defect.Raise("fleetcount.Visibility.LeftOut", "the zero Visibility")

@@ -279,6 +279,25 @@ func TestASupervisorsCardsAreNotTheOwners(t *testing.T) {
 	expect(t, tally(t, fleetcount.SurfaceBadge(), agents, cards), "agent 1 by card 2 needs_you\ntotal 1")
 }
 
+// A quiet task's agent and a directory-hidden one count on neither the Live Activity nor Persona Link, nor do their
+// cards, though the caller hands them in; the Agents list lists the quiet one's row without counting it and leaves the
+// hidden one out. So the same agents and cards serve all three surfaces.
+func TestTheFleetLeavesQuietAndHiddenAgentsOut(t *testing.T) {
+	agents := []agent{
+		{session: "quiet", i: 0, m: 1, state: fleetcount.StateNeedsYou(), shown: fleetcount.VisibilityQuiet()},
+		{session: "hidden", i: 1, m: 2, state: fleetcount.StateNeedsYou(), shown: fleetcount.VisibilityHiddenByDirectory()},
+		waiting("listed", 2, 3),
+	}
+	cards := []card{
+		{session: "hidden", i: 0, m: 4, telling: fleetcount.TellingTold()},
+		{session: "quiet", i: 1, m: 5, telling: fleetcount.TellingTold()},
+	}
+	expect(t, tally(t, fleetcount.SurfaceLiveActivity(), agents, cards), "agent 2 needs_you since 09:03\ntotal 1")
+	expect(t, tally(t, fleetcount.SurfaceLink(), agents, cards), "agent 2 held since 09:03\ntotal 1")
+	expect(t, tally(t, fleetcount.SurfaceBadge(), agents, cards),
+		"agent 2 needs_you since 09:03\nagent 0 by card 1 quiet\ntotal 1")
+}
+
 // Persona Link counts every agent whose row says it waits, muted ones included and quiet ones not; its card is the
 // first one handed to the owner, and a row none of whose cards was handed is held.
 func TestPersonaLinkCountsAsTheWebBadge(t *testing.T) {

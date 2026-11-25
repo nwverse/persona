@@ -89,18 +89,20 @@ func (b AgentBuilder) Build() (out outcome.Of[Agent, Fail]) {
 	return out.Ok(a)
 }
 
-// Counts says whether the agent can count on a surface at all. The Live Activity leaves out muted agents and
-// subtasks, whose parent's row stands for them; Persona Link's summary counts, as the web app's badge does, every agent
-// whose row says it needs you but the assistant's conversations and quiet tasks' agents, muted ones included; the
-// Agents list leaves out the assistant's conversations, directory-hidden agents, and muted and quiet agents, which it
-// lists without counting them. The zero Agent and the zero Surface are defects.
+// Counts says whether the agent can count on a surface at all. The Live Activity and Persona Link's summary leave out
+// every agent its visibility leaves out (LeftOut: a quiet task's agent and a directory-hidden one), and with it its
+// cards; beyond that, the Live Activity leaves out muted agents and subtasks, whose parent's row stands for them, and
+// Persona Link's summary counts, as the web app's badge does, every agent whose row says it needs you but the
+// assistant's conversations, muted ones included. The Agents list leaves out the assistant's conversations,
+// directory-hidden agents, and muted and quiet agents, which it lists without counting them. The zero Agent and the
+// zero Surface are defects.
 func (a Agent) Counts(on Surface) bool {
 	a.known("fleetcount.Agent.Counts")
 	switch on {
 	case SurfaceLiveActivity():
-		return a.lineage == LineageRoot() && a.muting == MutingHeard()
+		return !a.visibility.LeftOut() && a.lineage == LineageRoot() && a.muting == MutingHeard()
 	case SurfaceLink():
-		return a.role == RoleWorker() && a.visibility != VisibilityQuiet() && a.state == StateNeedsYou()
+		return !a.visibility.LeftOut() && a.role == RoleWorker() && a.state == StateNeedsYou()
 	case SurfaceBadge():
 		return a.listed() && a.muting == MutingHeard() && a.visibility == VisibilityListed()
 	}
