@@ -59,9 +59,9 @@ func (s *Service) checkUnparkedPRMerged(ctx context.Context, t Todo, prURL strin
 		return nil, false, nil
 	}
 	// A park that waits on this PR is woken by its own sigReview path (applyPRStatus). Any other park (a date, someone
-	// else, another task) stays parked, but its supervisor still hears that the delivery is complete (#14049).
+	// else, a handoff to another task) stays parked, but its supervisor still hears that the delivery is complete (#14049).
 	held := t.Supervision.parking()
-	if parkWaitsOnPR(held, prURL) || held != nil && held.Handoff != nil {
+	if parkWaitsOnPR(held, prURL) {
 		return nil, false, nil
 	}
 	switch t.Supervision.state(t) {

@@ -711,9 +711,11 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		s.evaluateTodoAfterDependents(ctx, t.ID)
 	} else if status.State == "closed" && !parkWoke && !needsUserMergeHandled {
 		// The last open delivery PR closed unmerged after another merged: the delivery is as complete as it gets, which
-		// its supervisor hears through the merged one (#14049).
+		// its supervisor hears through the merged one (#14049). This closing is that completion, whether or not the closed
+		// PR was ever read open (its earlier reads may have failed); a closing already recorded is not news again.
 		if u := s.mergedDeliveryPR(ctx, t.ID); u != "" {
-			s.maybeEmitUnparkedPRMerged(ctx, t.ID, u, held, parkWoke, wasOpen, preStage)
+			newlyClosed := old == nil || !strings.EqualFold(old.State, "closed")
+			s.maybeEmitUnparkedPRMerged(ctx, t.ID, u, held, parkWoke, newlyClosed, preStage)
 		}
 	}
 	return nil
