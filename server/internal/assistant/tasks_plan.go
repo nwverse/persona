@@ -338,16 +338,17 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 					t.Permission = "bypassPermissions"
 				}
 			}
-			// traex, omp…: no mode, no effort (launcher_modes.go). One the call names is refused now, rather than by
-			// the computer once the task starts; one a tier filled in is dropped. pi, cursor: dropped either way.
+			// Check the caller's choices before saving a plan for a launcher with limited start options.
 			if takesModes = startTakesModes(fit.agent); !takesModes {
 				if err := startModesRefused(cmp.Or(t.Launcher, resolvedLauncher), fit.agent, asked, own.effort); err != nil {
 					return "", fmt.Errorf("task %d: %w", i+1, err)
 				}
-				t.Effort = ""
 				if asked != "" { // a work agent's, not refused: the card shows none, as none will run
 					t.Permission = ""
 				}
+			}
+			if !startTakesEffort(fit.agent) {
+				t.Effort = ""
 			}
 		}
 		// Unset: settled on the computer it lands on, so the card shows what will run (tasks_permission.go). An agent

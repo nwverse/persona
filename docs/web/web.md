@@ -686,12 +686,13 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
       The Workflow step and its card stay inside the folded execution summary; they are inspectable after manual expansion, whether running or ended (#2602).
       When the hub folded the turn's work (`fold_work`), its folds are fetched only when the reader opens the summary, live or ended, whether the hub still lists the run or not: again each time the chat's transcript loads afresh, and a failed fetch shows a retry in the group (`WorkGroup`). No such run listed (an older hub, a run over a day old, one not read yet): the call's row as before, folding like any step.
       The agents' clocks tick every second only while their rows show (a card opened in place, or the panel's detail).
+      What opens below the card in place and the panel's detail are `views/chat/WorkflowRun.tsx`, a chunk of its own: the chat's first screen carries only the call's card (`WorkflowCallCard`), the tap that opens a run in place starts the chunk (`lazyPage`), and the Background tasks panel brings it with its own chunk (`WorkflowRun.lazy.test.ts` keeps it off every other static import).
     - **Phase blocks** (a run's detail in the Background tasks panel, and a chat card opened in place): one block per phase (`phase_stats`; an older hub's are counted from the agents listed), its head "done/started" with `+` while more may start there, lit (`ai-tint`) while the run is in that phase. A block with agents running is open, one whose agents are all back is folded; the reader's click wins.
       The phase the run is in stays open between one agent and the next. A phase whose agents are back with some failed shows a red ✕ instead of the ✓.
       Agents are listed in the order they started (never reordered as they finish); at most 12 rows a block, running rows always shown, the quiet rest folded into "n more" placed where they are left out, which opens exactly those. The hub lists a run's newest 60 agents and drops the oldest as new ones start anywhere in the run: a block it cut into says "n earlier ones not listed" above its first row and shows its last 12 rows instead of its first, so its rows stay put as the cap moves on. Each row: status mark, label, (wide) model and latest tool, elapsed, its last words on hover. A row only reads: a workflow agent never opens as a conversation of its own (#5030, as in cindy's workflow tree).
       The run's progress bar has parts for done, running, failed (`agents_failed`, when the hub sends it) and stopped, each moved by `transform: translateX() scaleX()` (never `width`), with a legend and the tool-call count.
     - **Motion** (`ui/motion.ts`, the durations are set there): only when a value changes, never on the first draw, and not at all with `prefers-reduced-motion`: counts and times roll (`Rolling`), the lit phase moves to the next block and the ✓ of the one before fades in, a new agent fades in in place (opacity only), a finished run's chip changes color and its words fade in. No looping animation is added.
-    - **A run's detail** (`WorkflowCard` in the Background tasks panel): always open. Head: mark, name, status chip, count, elapsed; below it "Now <phase>: <agent>" while it runs, its summary (and a failed run's error) once it ended; then the progress bar and the phase blocks, with "Show in chat" bringing the launching call into view (#2719's jump; on a narrow screen the panel closes first, since it covers the chat).
+    - **A run's detail** (`WorkflowCard` in `views/chat/WorkflowRun.tsx`, in the Background tasks panel): always open. Head: mark, name, status chip, count, elapsed; below it "Now <phase>: <agent>" while it runs, its summary (and a failed run's error) once it ended; then the progress bar and the phase blocks, with "Show in chat" bringing the launching call into view (#2719's jump; on a narrow screen the panel closes first, since it covers the chat).
     - **The running bar**: once the hub says the turn is over, the last exchange is drawn finished and background work takes over in this order: workflow, background subagents, commands that only wait, then a working background command or Monitor. The workflow line says "Background workflow · <phase> · 169/185+" ("· 1 more" with other runs), timed from the workflow's `started_at`; on a narrow bar the words before the count give way first and the count stays whole. The status lines use neutral text, an accent icon and tabular time where available. A working command uses the active, working presentation instead: **Background task**, then the first shell / Monitor's description or its command on one line. A scheduled command uses the first line of its prompt. The description is followed by **N more** for the rest. The clock starts at the command's `started_at` and appears when that time is available. It never uses the turn's clock, tokens or speed; with only the flag and no listed work the label stands alone, while a payload listing only background agents or workflows keeps its previous rendering. Streaming, an outgoing message or an awaiting answer makes the turn live again, and a foreground turn or older hub without `background_working` is unchanged.
       A Persona foreground turn keeps the existing in-stream Processing feedback while its transcript reloads, including on the generic session route. Once the live work line returns, the fallback goes away; the dock never repeats that foreground state. An explicit send's receipt state still wins, and background-only work keeps its dock bar without this Processing fallback.
       A hub from before #3127 sends no `background_working` (a current one leaves it out only when it is false, and sends each run's `tool_use_id` and each agent's `status`): there the bar says the same only while a workflow runs and no turn of the agent's own shows: no status line, no call it still waits on (a subagent launched in the foreground, whose call the bar names instead), and not the chat's ticking "Working…".
@@ -2804,25 +2805,31 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   of its bottom row, before voice / Stop / Send (`Composer`'s `trailing` slot, `views/chat/ModelPill.tsx`). The permission
   chip stays at the left; the thinking-effort chip, a Persona chat's launcher chip and an Agent's "launcher · model" text
   are gone, and the context bar below the composer does not name the model.
-- **What the pill shows**: `[engine][model][effort][⚡][⌄]`: the mark of the Agent the launcher runs, drawn once and first
+- **What the pill shows**: `[engine][model][effort][speed][⌄]`: the mark of the Agent the launcher runs, drawn once and first
   (#5497: `AgentMark`, as in the Agents list; an Agent with no mark of its own gets the generic `agent` icon, never a
   letter, unless its runtime names it, #8142), the model as its launcher's list names it (before that list is in, a short form of the ID such as `opus 5.5`),
-  the thinking effort in the text colour, a filled bolt for Codex's Fast, and the workflow mark while ultracode (or a
+  the thinking effort in the text colour, one filled bolt for Fast or two for Ultrafast, and the workflow mark while ultracode (or a
   Codex thread's ultra) is on. The pill, effort controls and settings use Minimal, Low, Medium, High, XHigh, Max and Ultra
   in all three languages. Explanations use the page's language. When the pill shows a tier, it drops the effort qualifier
   from the model name and retains context sizes. An Antigravity variant can supply the pill's tier from its catalog ID.
   No frame at rest; on hover and while the panel is open, a 1 px `--line-strong` capsule on `--hover`. Tooltip:
-  "Claude Code · Opus 5.5 · gateway · High[ · Fast]"; accessible name "Select model. Current: Opus 5.5, thinking effort: High".
+  "Claude Code · Opus 5.5 · gateway · High[ · Fast]". The accessible name also includes the speed when shown.
   One of Paseo's providers is its own engine (#8142): its mark, and its label in the tooltip ("Grok · Grok 4 · grok"),
   never `paseo`; the panel's rows, its Agent block and its reasons name it the same way.
+- The wide panel's footer and the narrow model flyout show the same ordered **Speed** selector. Standard / Fast
+  stay a compact pair where those are the only choices. Codex may offer Ultrafast or other catalog tiers, and
+  supported Claude Code sessions offer Standard / Fast. The selector and model rows use the same bolts as the pill.
+  Standard has no mark. The selected speed follows session acknowledgment. Saved
+  setups that used the old Fast flag still read as Fast, and saved setups without a speed read as Standard where
+  the model offers it. Choosing a different model sends no speed request based on the previous model's tiers.
 - **Widths**: the composer card is a container (`@container/composer`). From 600 px the pill takes 72–320 px; under 600 it
   takes the width its words need with the name at most 108 px, and a name's trailing qualifier in brackets is left out
   there ("Default (recommended)" reads "Default", "GPT-5 (beta)" "GPT-5"), except a context size, which names another
   model and stays as a short mark, as the model change divider has it ("Opus 5.5 (1M context)" and "Opus 5.5 [1m]" read
   "Opus 5.5 1M"; `pillShortName`, the tooltip and the accessible name keep the whole name). A fixed 148 px used to cut "Opus 5.5" to "Opus …" beside free room (web usability
   audit 2026-11-14, item 50). It shrinks only when the row is short of room: the name gives way first, the engine mark stays, and the effort truncates only
-  once the name has no room left (Cindy lets both shrink alike; her own rule says the name goes first); under 520 its text is 12 px and its marks a step smaller; under 420 it is 64 px: the engine's mark and the chevron; only a
-  waiting switch's clock makes it grow there (a spinner or a warning stays within the 64 px).
+  once the name has no room left. Under 520 px its text is 12 px and its marks a step smaller. Under 420 px the
+  compact pill is 64 px for the engine mark and chevron, and grows to fit a speed mark or a waiting switch's clock.
 - **Agent launcher label (#10248)**: an explicit session launcher is shown as **launcher · model**, matching its
   model-panel row. The launcher's name and shortened model remain visible on phones, with full names in the tooltip
   and accessible name. The engine mark remains; a pending switch names the target launcher even across engines and
@@ -2993,21 +3000,21 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   at once as the session's `model_pick` and put back with the hub's words when it says no (`launcher_out_of_scope`,
   `launcher_own_service`, `launcher_missing`, `launcher_other_kind`, a launcher that can't run assistant chats);
   **Follow default** / **Undo pick** is a `DELETE`. It holds from the next message on every device; the messages carry nothing of it. An effort set
-  in the flyout of the model that runs is kept the same way; Codex's Fast is the speed request. On an older hub the pick
+  in the flyout of the model that runs is kept the same way. Codex speed changes use the speed request. On an older hub the pick
   lives on this page and goes with each message (`launcher`, `model`) and the effort with `POST …/modes`, as the old
   chips did, and a pick of a launcher the list no longer offers goes back to the default with a word. The new-chat page
   keeps its pick for the start (`POST /assistant/conversations` `{launcher, model?, effort?}`), which the new chat keeps
   as its own pick on a hub with `assistant_model_pick` (an older hub ignores the model and keeps nothing). While the
   roster's default manager is in use and the hub lists `assistant_start_service_tier` from that manager's hello, a new
-  chat whose selected model natively advertises `priority` in `service_tiers` also offers Fast in the same Customize
-  flyout: its independent local choice adds `service_tier: "priority"` to the first request, and the node acknowledges
-  it before the first turn. Effort changes preserve Fast and Fast changes preserve effort; enabling Fast pins every
-  displayed start option (launcher, model and effort), so a cleared main cannot revive a carried value. Model or provider
-  switches keep Fast only with the destination row's own setup and advertised support. A manager change disarms the
+  chat offers Fast and Ultrafast in the Customize flyout when the selected Codex model advertises them. The first request
+  sends the chosen tier (`priority` or `ultrafast`), and the node acknowledges it before the first turn. Speed and effort
+  can change independently. Choosing a faster speed pins the displayed launcher, model and effort, so a cleared main
+  cannot revive a carried value. Model or provider switches keep a speed only with the destination row's own setup and
+  advertised support. A manager change disarms the
   draft before the destination catalog answers, even while the panel is closed; the always-mounted pill also clears it
   after a hub downgrade or a native catalog change. An untouched start omits the tier, a refused start retains it for
   retry, and success, Follow default or a dropped pick clears it. An older hub or a non-default manager gets no pre-start
-  Fast control or tier field; an older manager gets 501 `assistant_service_tier_manager_outdated` for an explicit tier,
+  speed control or tier field. An older manager gets 501 `assistant_service_tier_manager_outdated` for an explicit tier,
   and an older node refuses it rather than running Standard. New Agent has no start speed setting.
   If Model configuration › Main chat later changes to another agent kind, the existing main conversation does not migrate:
   with no pick and a confirmed cross-kind mismatch, its pill and setup use the actual session launcher / model / effort,

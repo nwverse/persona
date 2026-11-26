@@ -1321,7 +1321,20 @@ func startEngine(info proto.NodeInfo) string {
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
 func startsAsync(asked bool, resume, launcher, agentType string) bool {
-	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy"))
+	if !asked || resume != "" {
+		return false
+	}
+	if agentType != "" {
+		return agentType == "claude"
+	}
+	// An untyped launcher is inferred as Claude unless its name identifies an agent that owns its session ID.
+	// Keep the Hub's acknowledgement and deadline aligned with the Node's launcherAgentType/workAgentKind rules.
+	switch launcher {
+	case "codex", "traex", "omp", "agy", "pi", "cursor":
+		return false
+	default:
+		return true
+	}
 }
 
 // startBudget is how long a start may take: one acknowledged before the session is ready a moment, one answered only

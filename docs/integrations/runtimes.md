@@ -610,6 +610,10 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+A row may report a long `title` or `last_text` (a whole opening prompt, a whole reply): the node lists the row with the
+title cut to 256 characters and `last_text` to 200, as it cuts its own rows, after reading the question a long reply
+ends with into `asks` (#16343). The conversation items keep the whole text.
+
 agy leaves print-mode (`agy -p`) conversations untitled. Before falling back to the folder name, the session title uses
 the first non-empty line of the cached metadata `summary.Preview`, with agy's request wrapper and Persona's context
 removed, cut to 60 characters (#14629). Several one-shot runs in one folder then show their own prompts. Such a title
@@ -840,7 +844,9 @@ end, and following user-input count are checked against `GetCascadeTrajectory`. 
 identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
 index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
 native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
-token. This survives companion restarts without modifying native transcript files.
+token. This survives companion restarts without modifying native transcript files. When the export instead numbers
+later steps after the abandoned tail, they show behind the kept steps once `GetCascadeTrajectory` confirms them, and a
+later rewind cuts at the matching visible step (#14297).
 A reused lower index is not proof of a rewind: when the export goes past the replaced steps before the replacement run
 reaches their last index, another process wrote the same conversation. The bridge then keeps both runs, ordered by
 step index (old steps first), and changes the content revision (#14626). If the replacement run later exports an index

@@ -168,7 +168,7 @@
   "thread_unbind_confirm": "トピック「{name}」とこのToDoの紐づけを解除しますか？トピック内のメッセージは削除されません。解除後は、このToDoの進捗はトピックに投稿されず、トピックでの返信もこのToDoには届きません。",
   "thread_unbound": "トピックの紐づけを解除しました",
   "thread_unbind_failed": "紐づけを解除できませんでした：{error}",
-  "thread_empty": "このToDoにはトピックが紐づいていません。/topics で登録したグループチャットでトピックを作ると、新しいToDoが作られて紐づきます。エージェントにこのToDoをトピックに紐づけさせることもできます。",
+  "thread_empty": "このToDoにはトピックが紐づいていません。Agentに紐づけを頼めます。/topics で登録したグループで新しいToDoを作るには、トピックで /todo に続けてやりたいことを送ってください。",
   "thread_mark": "トピックに紐づいています",
   "check_section": "完了状況の確認",
   "check_action": "完了状況を確認",

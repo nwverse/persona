@@ -1709,12 +1709,12 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   mark of the Agent the launcher runs (#5497: `AgentMark` at 15 px, `ink-2` for the one-colour marks, 4 px before the
   name; an Agent with no mark of its own gets the generic `agent` icon, never a letter, unless its runtime names it
   (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the canonical effort label in the
-  text colour 4 px after it, a filled bolt for Fast and the workflow
-  `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
+  text colour 4 px after it, the shared speed mark when present, the workflow
+  `UltraMark` (`ink-2`), and a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px the width its words need (name ≤ 108 px without a trailing bracketed qualifier, a context size kept as a short
   mark, "Opus 5.5 1M"; the whole name in the tooltip;
   shrinking only when the row is short, the name truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
-  mark and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
+  engine mark, speed mark when set, and chevron. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
   pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
   the target engine's mark and the launcher's name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
@@ -1770,9 +1770,10 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   (160 px; entries 32 px high with the mark, the launcher's own name, an accent dot on the current one, the quota
   percentage and an ⓘ whose tooltip says why one can't take a pick), the models (single-line rows, a check on the one
   that runs, no effort word), and the thinking efforts of the model picked (156 px; one 32 px button per level, a check
-  on the one in use, "Recommended" after the default). The footer gives that model's speed as a two-segment Standard /
-  Fast control on `--hover-2` and Claude Code's ultracode where offered. A pick there keeps the panel open; outside or
-  Esc closes it. The reason a launcher can't take a pick shows once, above its models, never as a line under each one. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
+  on the one in use, "Recommended" after the default). The footer gives the model an ordered speed selector on
+  `--hover-2` when the session offers choices, and Claude Code's ultracode where offered. Standard / Fast stay a
+  compact pair, and Ultrafast and other advertised tiers get their own segments. A pick there keeps the panel open; outside or
+  Esc closes it. The reason a launcher can't take a pick shows once, above its models, never as a line under each one. Customize opens a 264 px flyout to the panel's left: the effort slider, the same speed selector, the engine, an exact catalog
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.
@@ -3526,11 +3527,15 @@ changing (principle 3).
 
 ## Codex speed controls (#3865)
 
-An Agent's Codex thread sets its speed with Fast in the model panel's flyout of the model it runs (#5032, the model pill
-and unified model panel in 3.8); a Persona chat running Codex does the same since #5033, its effort chip and Speed
-submenu retired. Fast is a toggle showing the current value, and its label explains the increased usage. A change
-waits for native acknowledgment and the session push; turning Fast off is the reversible choice. Settings > Agents >
-Codex uses the existing agent-settings row for the native default. No account or session is automatically switched to Fast.
+In the web model panel, Agents can change the speed of a writable Codex thread or a supported Claude Code
+terminal session. The same segmented control sits in the wide footer and the narrow flyout. The track sizes to its
+labels and wraps whole segments if space runs out. It lists only advertised choices and keeps the acknowledged
+selection visible while a change is pending. The composer pill, model row and speed selector share `SpeedMark`.
+Standard has no mark. Fast uses the filled `bolt`, and Ultrafast uses `bolt-double`, two offset filled bolts drawn in
+one icon. Both icons share the same height and stroke weight. The pill names Fast and Ultrafast in its tooltip and
+accessible label. A faster option explains the extra usage, and Claude Code's Fast detail explains that the runtime
+may save the preference for future sessions. To undo a speed change, pick the previous option. Settings > Agents > Codex still owns the
+native default for new Codex sessions.
 
 The iOS main Assistant conversation offers the same current-session choice inside its existing composer Model / Thinking
 Effort menu (#10244), not in Settings and not on other chats. A native **Speed** section is present only when the session
@@ -3544,10 +3549,10 @@ component, style or navigation pattern.
 
 A new Persona conversation on the web reuses that same model flyout (#6240), inside Agents-facing customization rather
 than adding an everyday-facing setting. While the default manager is in use, the hub feature
-`assistant_start_service_tier` comes from that manager's hello, and a selected model whose native `service_tiers`
-advertise `priority` has its Fast toggle available before the first message; other models, managers and older hubs do not
-show it. The local Fast choice and reasoning effort are independent (principle 5), enabling Fast pins the displayed
-launcher, model and effort, and an untouched start preserves the native default (principle 1). The first request carries
+`assistant_start_service_tier` comes from that manager's hello, and a selected Codex model whose native `service_tiers`
+advertise Fast or Ultrafast offers those speeds before the first message. Other models, managers and older hubs do not
+show it. The local speed choice and reasoning effort are independent (principle 5). Picking a faster speed pins the displayed
+launcher, model and effort. An untouched start preserves the native default (principle 1). The first request carries
 only an explicit choice, which must be natively acknowledged before the first turn; a refusal is recoverable and never
 silently means Standard (principles 3 and 7). A successful start, Follow default, a dropped pick or a manager change
 clears the one-off draft; a refused start retains it. New Agent has no start speed control.
@@ -4546,6 +4551,8 @@ New copy ships in English, Simplified Chinese and Japanese. Evidence:
 ## Lark topic group policy (#10238)
 
 Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
+
+Each enrolled group on the web has a labeled native select for when to open a to-do (#11813). It defaults to **Answer only** and uses the same acknowledged save as the mention switch. The home choice is saved separately.
 
 ## Shared botmux display setting (#10241)
 

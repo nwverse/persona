@@ -654,6 +654,9 @@ func (s *Service) feedItems(ctx context.Context, conversation string, since time
 	if err != nil {
 		return nil, err
 	}
+	for i, item := range items {
+		items[i] = readTaskNotice(item)
+	}
 	s.settleCards(ctx, items)
 	s.fileCards(ctx, items)
 	return s.resolveInterruptions(ctx, conversation, items), nil
