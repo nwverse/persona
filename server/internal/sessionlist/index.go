@@ -225,8 +225,9 @@ type Page struct {
 	SearchHits map[string]SearchHit `json:"search_hits,omitempty"`
 	Sessions   []any                `json:"sessions"`
 	Remove     []string             `json:"remove"`
-	// Added identifies rows created after a delta's baseline, not existing rows that only changed or entered its filter.
-	// It is always an array so a client can distinguish no creations from an older hub that omits the field (#11801).
+	// Added identifies rows created or newly entering the filter after a delta's baseline, not rows that already
+	// matched and only changed. It is always an array so a client can distinguish no additions from an older hub that
+	// omits the field (#11801, #16389).
 	Added      []string `json:"added"`
 	HasMore    bool     `json:"has_more"`
 	NextCursor string   `json:"next_cursor,omitempty"`
@@ -320,7 +321,7 @@ type event struct {
 	id      string
 	updated time.Time
 	value   *record // nil means a removal
-	added   bool    // created after a delta's baseline; full pages and filter entrances leave this false
+	added   bool    // created or newly entering the filter after a delta's baseline; full pages leave this false
 }
 
 type result struct {

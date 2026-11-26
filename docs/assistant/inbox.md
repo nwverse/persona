@@ -5,6 +5,22 @@ The Inbox tab is Persona's information entry point: Lark messages and mail from 
 
 Android's navigation badge counts each unread open item in Needs you once, including separate items from the same source conversation; Web and Apple use the same item-level rule. The current hub `status` decides, with the existing tier fallback; FYI, Noise, In progress, read and completed items do not count. Reading an item never files it: read-but-pending items remain in their hub sections and keep their completion state, and Android has no separate read-pending section. Zero keeps the existing hidden-badge behavior. The roster's `inbox_needs_you` and the home page's pending count retain their separate meaning: open items requiring action, including ones already read. A receipt can precede the next item-list update, so Android's badge also reads the reconciled `InboxConversations` state rather than only the cached item flags.
 
+## Opt-in automatic replies (#9762)
+
+Suggested replies still wait for Send by default. A scoped `send` standing
+authorization can enable plain-text Lark via lark-cli replies for an exact
+group/chat (or explicitly all chats in that channel), scenario `inbox_reply`,
+and one sender identity. Configure and revoke it in Web Settings > Persona;
+see [Scoped outward messages](assistant.md#scoped-outward-messages-9762).
+
+The suggestion must be persisted before the existing version-checked
+confirmation path consumes it. Handbacks, document writes, conclusions, and
+Agent/to-do suggestions remain manual. Each automatic attempt is durably
+audited before transport. Each source message permits only one automatic reply
+attempt per sender, even across rewording, suggestion versions, or a manager restart.
+Failure or uncertain delivery needs inspection and a deliberate manual retry.
+Revocation and identity changes serialize with the final grant check/send.
+
 ## Ownership: the manager owns the Inbox (2026-11-04)
 
 The Inbox belongs to the **manager** (assistant process `personad assistant`; `docs/assistant/assistant.md`, "Boundary with hub"): items and their state (pre-admission triage,

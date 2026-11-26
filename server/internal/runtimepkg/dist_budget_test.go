@@ -53,9 +53,11 @@ import (
 // Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
 // its matching visible step (#14297) add 304 B (281,196 B).
 // Applying the configured Antigravity model before the first prompt after ACP resume (#15537) adds 67 B (281,263 B).
+// Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings
+// (#15546), adding 1,397 B (282,660 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 281_263
+	const budget = 282_660
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

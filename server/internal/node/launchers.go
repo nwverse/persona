@@ -20,11 +20,12 @@ import (
 
 var launcherCache struct {
 	sync.Mutex
-	at         time.Time
-	list       []proto.Launcher
-	generation uint64             // incremented whenever a discovery publishes a new list
-	fetch      singleflight.Group // concurrent asks share the login shell's result, including failure
-	fetching   bool               // a background refresh (cachedLaunchers) is running
+	at          time.Time
+	list        []proto.Launcher
+	generation  uint64             // incremented whenever a discovery publishes a new list
+	invalidated uint64             // incremented when local PATH/config changes invalidate cached discovery
+	fetch       singleflight.Group // concurrent asks share the login shell's result, including failure
+	fetching    bool               // a background refresh (cachedLaunchers) is running
 	// codex: how each Codex launcher runs (codex_start.go), its words as the shell would run them.
 	codex map[string][]string
 	// codexAliases distinguishes configured aliases from the plain PATH/bundled launchers, even when their argv matches.
@@ -33,6 +34,18 @@ var launcherCache struct {
 	settings map[string]string
 	// scripts: where each wrapper script on PATH is (pathlaunchers.go).
 	scripts map[string]string
+}
+
+// invalidateLauncherCache clears cached shell/PATH launcher discovery after local environment
+// changes (such as node.configure updating extra_path) so the next launchers.list re-scans.
+func invalidateLauncherCache() {
+	launcherCache.Lock()
+	launcherCache.at = time.Time{}
+	launcherCache.invalidated++
+	launcherCache.Unlock()
+	lastPathScan.Lock()
+	lastPathScan.got = nil
+	lastPathScan.Unlock()
 }
 
 // launcherScript lists the login shell's launchers in one go (sourcing ~/.zshrc takes a while): what the
@@ -111,16 +124,24 @@ func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher
 	}
 
 	type discovery struct {
-		list       []proto.Launcher
-		generation uint64
+		list        []proto.Launcher
+		generation  uint64
+		invalidated uint64
+		published   bool
 	}
 	read := func() (any, error) {
 		// A scan may have completed between the initial cache read and entry into the group.
 		launcherCache.Lock()
-		current := discovery{list: launcherCache.list, generation: launcherCache.generation}
+		inv := launcherCache.invalidated
+		current := discovery{
+			list:        launcherCache.list,
+			generation:  launcherCache.generation,
+			invalidated: inv,
+			published:   true,
+		}
 		fresh := time.Since(launcherCache.at) < time.Minute
 		launcherCache.Unlock()
-		if current.list != nil && (current.generation != observed || (!forced && fresh)) {
+		if current.list != nil && fresh && (current.generation != observed || !forced) {
 			return current, nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -129,18 +150,32 @@ func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher
 		// Only a scan that has started outlives its caller. It can still populate the cache for a later ask.
 		scanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
-		out, err := scanLaunchers(scanCtx)
+		out, err := scanLaunchersFunc(scanCtx)
 		if err != nil {
 			return nil, err
 		}
 		list, codex, settings, scripts := mergeLaunchers(string(out))
 		aliases := codexAliasNames(string(out))
 		launcherCache.Lock()
-		launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings = time.Now(), list, codex, settings
-		launcherCache.codexAliases = aliases
-		launcherCache.scripts = scripts
-		launcherCache.generation++
-		current = discovery{list: list, generation: launcherCache.generation}
+		if launcherCache.invalidated == inv {
+			launcherCache.at, launcherCache.list, launcherCache.codex, launcherCache.settings = time.Now(), list, codex, settings
+			launcherCache.codexAliases = aliases
+			launcherCache.scripts = scripts
+			launcherCache.generation++
+			current = discovery{
+				list:        list,
+				generation:  launcherCache.generation,
+				invalidated: inv,
+				published:   true,
+			}
+		} else {
+			current = discovery{
+				list:        list,
+				generation:  launcherCache.generation,
+				invalidated: inv,
+				published:   false,
+			}
+		}
 		launcherCache.Unlock()
 		return current, nil
 	}
@@ -169,11 +204,22 @@ func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher
 			return lastLaunchers(err)
 		}
 		got := shared.Val.(discovery)
+		launcherCache.Lock()
+		curInv := launcherCache.invalidated
+		launcherCache.Unlock()
+		// An invalidation that raced with the shared scan makes pre-invalidation output stale; re-scan.
+		if !got.published || got.invalidated != curInv {
+			continue
+		}
 		// An ordinary cache hit shared through the group cannot satisfy a forced request for newer data.
 		if !forced || got.generation != observed {
 			return got.list, nil
 		}
 	}
+}
+
+var scanLaunchersFunc = func(ctx context.Context) ([]byte, error) {
+	return scanLaunchers(ctx)
 }
 
 func scanLaunchers(ctx context.Context, env ...string) ([]byte, error) {
