@@ -565,6 +565,64 @@ class OutboxMessageSenderTest {
         runCurrent()
     }
 
+    @Test fun automaticImmediateRetryDoesNotOverwriteAComposerOperation() = runTest {
+        val store = ImmediateRetryInterleavedOutboxStore()
+        store.enqueue(OutboxEntry("visible", session, "hello", state = OutboxState.Refused, createdAt = 100))
+        val transport = object : MessageTransport {
+            override val readyToSend = MutableStateFlow(true)
+            override val supportsClientOps = true
+            override suspend fun send(request: MessageRequest): MessageTransportResult {
+                if (request.headers["X-Persona-Op-Id"] == "manual-operation") error("The automatic attempt adopted the composer operation")
+                return MessageTransportResult.NoReceipt
+            }
+        }
+        val sender = OutboxMessageSender(scope, store, transport, backgroundScope, reviewTimeoutMillis = 1)
+        runCurrent()
+
+        val automatic = async { sender.retry("visible") }
+        val manual = withContext(Dispatchers.Default) {
+            withTimeoutOrNull(10_000) { store.automaticRetryWritten.await() } ?:
+                error("Automatic immediate retry did not start; transitions=${store.transitions}")
+            async(start = CoroutineStart.UNDISPATCHED) { sender.beginComposerRetry("visible", "manual-operation") }.also {
+                store.continueAutomatic.complete(Unit)
+            }
+        }
+        withTimeoutOrNull(10_000) { manual.join() } ?:
+            error("Manual retry did not finish; transitions=${store.transitions} state=${store.entries.value}")
+        withTimeoutOrNull(10_000) { automatic.join() } ?:
+            error("Automatic retry did not finish; transitions=${store.transitions} state=${store.entries.value}")
+        runCurrent()
+
+        val current = store.entries.value.single { it.clientMessageId == "visible" }
+        assertEquals(OutboxState.Sending, current.state)
+        assertEquals("manual-operation", current.operationId)
+        sender.recordComposerDelivery("visible", ComposerDelivery(DeliveryState.Sent), "manual-operation", MessageTransportResult.Accepted)
+        assertEquals(OutboxState.Sent, store.entries.value.single().state)
+        sender.close()
+        runCurrent()
+    }
+
+    /** Pauses the same-attempt Unknown→Sending write after a manual claim, not the earlier settlement. */
+    private class ImmediateRetryInterleavedOutboxStore : OutboxStore {
+        val automaticRetryWritten = CompletableDeferred<Unit>()
+        val continueAutomatic = CompletableDeferred<Unit>()
+        val transitions = mutableListOf<Pair<Set<OutboxState>, OutboxState>>()
+        private val delegate = MemoryOutboxStore()
+        override val entries = delegate.entries
+        override suspend fun enqueue(entry: OutboxEntry) = delegate.enqueue(entry)
+        override suspend fun recoverInterrupted() = delegate.recoverInterrupted()
+        override suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?): Boolean {
+            transitions += from to to
+            if (from == setOf(OutboxState.Unknown) && to == OutboxState.Sending) {
+                automaticRetryWritten.complete(Unit)
+                continueAutomatic.await()
+            }
+            return delegate.transition(id, from, to, error)
+        }
+        override suspend fun transition(id: String, from: Set<OutboxState>, to: OutboxState, error: String?, opId: String): Boolean =
+            delegate.transition(id, from, to, error, opId)
+    }
+
     private class InterleavedOutboxStore : OutboxStore {
         val automaticStateWritten = CompletableDeferred<Unit>()
         val automaticSendingWritten = CompletableDeferred<Unit>()
@@ -738,6 +796,56 @@ class OutboxMessageSenderTest {
         transport.readyToSend.value = true
         runCurrent()
         assertEquals(listOf("refused", "waiting"), transport.requests.map { it.clientMessageId })
+        sender.close()
+    }
+
+    /**
+     * An agy open in a terminal (409 `agy_in_terminal`, delivered none, #16531): the refused message keeps the hub's
+     * sentence with its code, and Undo puts both back; a retry leaves none of it. A refusal without words, a bare status,
+     * the code itself, an internal failure's detail, a refusal without a code and a wait keep no words.
+     */
+    @Test fun aRefusalKeepsTheHubsWordsWithItsCode() = runTest {
+        val words = "This Antigravity conversation is open in agy in a terminal on that computer. Nothing was sent."
+        val store = MemoryOutboxStore()
+        val transport = FakeTransport(online = true)
+        val sender = OutboxMessageSender(scope, store, transport, backgroundScope)
+        transport.answers += MessageTransportResult.HubError("agy_in_terminal", "none", words, retryable = false)
+        sender.send(session, "to agy", "agy")
+        runCurrent()
+        val refused = sender.outbox.value.single { it.clientMessageId == "agy" }
+        assertEquals(DeliveryState.Refused, refused.state)
+        assertEquals("agy_in_terminal", refused.error)
+        assertEquals(words, refused.reason)
+        assertTrue(sender.cancel("agy"))
+        runCurrent()
+        sender.restore(refused)
+        runCurrent()
+        assertEquals(refused, sender.outbox.value.single { it.clientMessageId == "agy" })
+        transport.answers += MessageTransportResult.Accepted
+        assertTrue(sender.retry("agy"))
+        runCurrent()
+        assertEquals(OutboxState.Sent, store.state("agy"))
+        assertEquals(null, store.entries.value.single { it.clientMessageId == "agy" }.reason)
+
+        val cases = listOf(
+            "no words" to MessageTransportResult.HubError("agy_in_terminal", "none", retryable = false),
+            "a bare status" to MessageTransportResult.HubError("agy_in_terminal", "none", "HTTP 409", retryable = false),
+            "the code itself" to MessageTransportResult.HubError("agy_in_terminal", "none", "agy_in_terminal", retryable = false),
+            "an internal detail" to MessageTransportResult.HubError("internal", "none", "rpc: connection closed", retryable = false),
+            "no code" to MessageTransportResult.HubError(null, "none", "Refused without a code", retryable = false),
+            "a wait" to MessageTransportResult.HubError("assistant_offline", "none", "The assistant is restarting", retryable = true),
+        )
+        for ((index, case) in cases.withIndex()) {
+            val (label, answer) = case
+            transport.answers += answer
+            sender.send(session, label, "case-$index")
+            runCurrent()
+            val entry = store.entries.value.single { it.clientMessageId == "case-$index" }
+            val expected = if (answer.retryable) OutboxState.WaitingForNetwork else OutboxState.Refused
+            assertEquals(label, expected, entry.state)
+            assertEquals(label, null, entry.reason)
+            if (answer.retryable) assertTrue(sender.cancel("case-$index"))
+        }
         sender.close()
     }
 

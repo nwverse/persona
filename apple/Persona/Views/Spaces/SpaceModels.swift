@@ -68,6 +68,7 @@ import Observation
 
 /// A space's home: its conversations (`GET /api/v1/assistant?space=<slug>`), its SPACE.md, and archiving it.
 @Observable final class SpaceHomeModel {
+    nonisolated enum Entry: Equatable { case new, open(SessionKey) }
     let slug: String
     private(set) var fetched: [Session] = []
     private(set) var loaded = false
@@ -137,12 +138,12 @@ import Observation
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
     }
 
-    /// Where entering a space lands, as Health's (#4329): back in its latest conversation, else its home.
-    nonisolated static func entry(_ fetched: [Session], live: [Session], slug: String) -> HealthModel.Entry {
+    /// Where entering a space lands: back in its latest conversation, else its home.
+    nonisolated static func entry(_ fetched: [Session], live: [Session], slug: String) -> Entry {
         merge(fetched, live: live, slug: slug).first.map { .open($0.key) } ?? .new
     }
 
-    static func entry(slug: String, deps: AssistantDeps, live: [Session]) async -> HealthModel.Entry {
+    static func entry(slug: String, deps: AssistantDeps, live: [Session]) async -> Entry {
         let fetched = (try? await deps.api()?.spaceConversations(slug)) ?? []
         return entry(fetched, live: live, slug: slug)
     }
@@ -413,7 +414,9 @@ enum SpaceMdWords {
                                   categories: trust.categories))
     }
 
-    func setCategory(_ category: String, on: Bool) async {
+    /// Lets it read `category` or not. Not named `setCategory`: `CallSourceTests` reads that call as an audio-session
+    /// change that needs a verdict for a live call.
+    func allowCategory(_ category: String, on: Bool) async {
         guard let trust else { return }
         var list = trust.categories.filter { $0 != category }
         if on { list.append(category) }

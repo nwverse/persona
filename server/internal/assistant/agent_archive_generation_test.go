@@ -71,7 +71,7 @@ func archiveGenerationDrainNative(s *Service, sid string) {
 
 func archiveGenerationFixture(t *testing.T, row proto.Session) (*fleetTest, *db.DB, *archiveGenerationStore) {
 	t.Helper()
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +563,7 @@ func TestAgentArchiveGenerationForcePublishUsesCompletionMark(t *testing.T) {
 func TestAgentArchiveGenerationOrdinaryCloseRetriesNativeAfterMetadataFailure(t *testing.T) {
 	ft, row := closeTestService(t, func(s *proto.Session) { s.Agent = "codex" })
 	store := &archiveGenerationCloseFailureStore{fleetMem: ft.st}
-	ft.s.store = func() Store { return store }
+	ft.s.setStore(func() Store { return store })
 	t.Cleanup(func() { archiveGenerationDrainNative(ft.s, row.SessionID) })
 	native := playNativeNode(ft, "mac")
 	terminalClosed := make(chan struct{})
@@ -604,7 +604,7 @@ func TestAgentArchiveGenerationOrdinaryCloseReadErrorDoesNotReplaceRestore(t *te
 		restoreErr = ft.s.noteAgentArchive(context.Background(), row, false)
 		ft.s.nativeArchiveAwaited(context.Background(), "mac", row.SessionID)
 		store := &archiveFailStore{fleetMem: ft.st, failRead: true}
-		ft.s.store = func() Store { return store }
+		ft.s.setStore(func() Store { return store })
 		ft.s.agentArchives.loaded = false // force close completion to fail before it can inspect the newer restore
 		return map[string]any{"closed": true}, nil
 	})
@@ -628,7 +628,7 @@ func TestAgentArchiveGenerationOrdinaryCloseReadErrorDoesNotReplaceRestore(t *te
 func TestAgentArchiveGenerationCancelledTaskPublishesAfterMetadataFailure(t *testing.T) {
 	ft, row := closeTestService(t, func(s *proto.Session) { s.Status, s.State = proto.StatusOffline, proto.StateOffline })
 	store := &archiveGenerationCloseFailureStore{fleetMem: ft.st}
-	ft.s.store = func() Store { return store }
+	ft.s.setStore(func() Store { return store })
 	t.Cleanup(func() { archiveGenerationDrainNative(ft.s, row.SessionID) })
 	before := len(ft.toldOf(assistantwire.EventFleetSessions))
 	ft.s.stopCancelledAgent(context.Background(), "todo-close-metadata", "mac", row.SessionID)

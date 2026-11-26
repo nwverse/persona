@@ -151,6 +151,38 @@ func setSessions(m *Machine, ss ...proto.Session) {
 	m.mu.Unlock()
 }
 
+func TestUpdateViewReleaseTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		released time.Time
+		wantJSON string
+	}{
+		{name: "omitted"},
+		{name: "published", released: time.Date(2026, 11, 20, 15, 4, 5, 0, time.UTC), wantJSON: `"2026-11-20T15:04:05Z"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			h.upd.release = &update.Published{Manifest: &update.Manifest{Version: "v1.0.0", Build: 202611201504, Released: tc.released}}
+			data, err := json.Marshal(h.upd.view())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status struct {
+				Latest map[string]json.RawMessage `json:"latest"`
+			}
+			if err := json.Unmarshal(data, &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.Latest == nil {
+				t.Fatal("latest release missing from update status")
+			}
+			if got := string(status.Latest["released"]); got != tc.wantJSON {
+				t.Errorf("latest.released = %q, want %q", got, tc.wantJSON)
+			}
+		})
+	}
+}
+
 // Nothing restarts while a conversation is working or waiting for the user; once all is idle the new binary is in
 // place, the old one kept, the marker written, and the hub runs the new one.
 func TestUpdateWaitsForIdle(t *testing.T) {
@@ -729,8 +761,8 @@ func TestUpdateNodesBinariesInPlace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.gz")); !os.IsNotExist(err) {
 		t.Fatal("the download itself went in with the binaries")
 	}
-	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.version")); !os.IsNotExist(err) {
-		t.Fatal("the old build's version file stayed beside the release's")
+	if b, err := os.ReadFile(filepath.Join(nodes, "personad-darwin-arm64.version")); err != nil || string(b) != "v2\n" {
+		t.Fatalf("package version = %q, %v", b, err)
 	}
 	_ = local // the manager decides what to redeploy (internal/devices TestUpdateNodesSkipsTheHubsOwn)
 }

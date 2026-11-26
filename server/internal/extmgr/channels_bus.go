@@ -8,10 +8,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -132,6 +133,9 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		Events     []botcard.CotEvent `json:"events"`
 		Reason     string             `json:"reason"`
 		ChatID     string             `json:"chat_id"`   // feishu.post / feishu.text: the chat to send into (default: the owner's)
+		Handoff    string             `json:"handoff"`   // feishu.text: a proxy reply (bots_handoff.go)
+		Confirmed  bool               `json:"confirmed"` // feishu.text: the owner approved the draft
+		Outcome    string             `json:"outcome"`   // feishu.handoff_end
 		InThread   bool               `json:"in_thread"` // feishu.post / feishu.text: a reply goes into the parent's thread
 		Exclusive  bool               `json:"exclusive"` // feishu.pin: the bot's other pins in the chat come off
 		CardID     string             `json:"card_id"`   // feishu.card_*: the card entity
@@ -218,6 +222,12 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		}
 		return map[string]any{"message_id": id}, err
 	case assistantwire.FeishuText:
+		if a.Handoff != "" {
+			return h.handoffText(ctx, api, set, struct {
+				ChatID, ReplyTo, Text, Handoff string
+				Confirmed, FullAnswer          bool
+			}{a.ChatID, a.ReplyTo, a.Text, a.Handoff, a.Confirmed, a.FullAnswer})
+		}
 		if a.FullAnswer && (!set.SourceReportFullReply || a.ReplyTo == "") {
 			return nil, errBotSourceReply
 		}
@@ -245,7 +255,7 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		if k := callerKey(a.UUID, feishuMaxUUID); k != "" {
 			replyUUID = k
 		}
-		msgType, content := feishubot.TypeText, botcard.TextContent(a.Text)
+		msgType, content := botcard.TypeText, botcard.TextContent(a.Text)
 		if a.FullAnswer {
 			msgType, content, err = h.feishuAnswerContent(ctx, api, a.ReplyTo, replyUUID, a.Text)
 			if err != nil {
@@ -270,6 +280,8 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 			h.rememberMessageChat(id, firstNonEmpty(parent, chatID))
 		}
 		return map[string]any{"message_id": id}, err
+	case assistantwire.FeishuHandoffEnd:
+		return map[string]any{}, h.endHandoff(ctx, a.Handoff, a.Outcome)
 	case assistantwire.FeishuUpdateCard:
 		return map[string]any{}, api.UpdateCard(ctx, a.MessageID, a.Card)
 	case assistantwire.FeishuCardCreate:
@@ -344,7 +356,7 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 		return map[string]any{"name": h.botName(ctx, api, a.OpenID)}, nil
 	case assistantwire.FeishuResource:
 		data, mime, err := api.Resource(ctx, a.MessageID, a.Key, a.Kind, botFileMax)
-		if errors.Is(err, feishubot.ErrTooLarge) {
+		if errors.Is(err, botcard.ErrTooLarge) {
 			return map[string]any{"too_large": true, "name": a.Key}, nil
 		}
 		if err != nil {
@@ -376,7 +388,7 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 			return nil, noDevice(a.MachineID)
 		}
 		data, _, err := api.Resource(ctx, a.MessageID, a.Key, a.Kind, botFileMax)
-		if errors.Is(err, feishubot.ErrTooLarge) {
+		if errors.Is(err, botcard.ErrTooLarge) {
 			return map[string]any{"too_large": true}, nil // the rest of the message still goes
 		}
 		if err != nil {
@@ -411,7 +423,8 @@ func (h *Manager) channelsCall(ctx context.Context, method string, params json.R
 	}
 	switch method {
 	case assistantwire.ChannelsList:
-		return map[string]any{"channels": h.channelList(ctx)}, nil
+		list, overrides := h.channelListWithOverrides(ctx)
+		return map[string]any{"channels": list, "target_overrides": overrides}, nil
 	case assistantwire.ChannelsSend:
 		return h.channelSendPiece(ctx, a.Channel, a.SendParams)
 	case assistantwire.ChannelsTyping:
@@ -447,7 +460,7 @@ func feishuCoded(err error) error {
 // checkReactTarget refuses an emoji (or taking one away) on a message of a chat the bot may not use: the owner's private
 // chat, the groups opted in, and the messages the owner's "@bot /ai" was taken from (aiSource, which carries its chat) are
 // the only places it reacts. Where a message is is found as for a reply's parent (checkReplyParent).
-func (h *Manager) checkReactTarget(ctx context.Context, api *feishubot.Client, set FeishuBotSettings, messageID string) error {
+func (h *Manager) checkReactTarget(ctx context.Context, api botport.Client, set FeishuBotSettings, messageID string) error {
 	if messageID == "" {
 		return errors.New("feishu: a reaction needs a message")
 	}
@@ -463,7 +476,7 @@ var errNotBotDMMessage = errors.New("feishu: only the bot's own messages in the 
 
 // checkOwnDMMessage: messageID is a message the bot sent in the owner's private chat, the only ones feishu.pin and
 // feishu.recall take (the workbench's cards).
-func checkOwnDMMessage(ctx context.Context, api *feishubot.Client, set FeishuBotSettings, messageID string) error {
+func checkOwnDMMessage(ctx context.Context, api botport.Client, set FeishuBotSettings, messageID string) error {
 	if messageID == "" || set.Owner == nil || set.Owner.ChatID == "" {
 		return errNotBotDMMessage
 	}
@@ -482,7 +495,7 @@ func checkOwnDMMessage(ctx context.Context, api *feishubot.Client, set FeishuBot
 }
 
 // unpinBotOthers takes off the pins the bot made in chatID, but keep's; the owner's own pins stay.
-func unpinBotOthers(ctx context.Context, api *feishubot.Client, chatID, keep string) error {
+func unpinBotOthers(ctx context.Context, api botport.Client, chatID, keep string) error {
 	pins, err := api.Pins(ctx, chatID)
 	if err != nil {
 		return err

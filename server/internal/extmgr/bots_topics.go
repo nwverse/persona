@@ -10,10 +10,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -66,6 +67,19 @@ type BotAISource struct {
 	// Kind is what the owner asked with: "" for "/ai" (#6146), botSourceRead for "/read" (#11803, bots_read.go), whose
 	// answer is cards under the message rather than one short line.
 	Kind string `json:"kind,omitempty"`
+	// HandoffID is the hub's id of a proxy reply ("bh_" + 16 hex); the rest of these fields belong to one too.
+	HandoffID string `json:"handoff_id,omitempty"`
+	// Confirm: the owner approves the draft before the bot posts (decided when the handoff was taken).
+	Confirm bool `json:"confirm,omitempty"`
+	// InThread puts an anchored reply into the anchor's thread.
+	InThread bool `json:"in_thread,omitempty"`
+	// By is who handed it over: "extension:<id>" or the device actor.
+	By string `json:"by,omitempty"`
+	// Ref is the caller's idempotency key; RefSum is the sha256 of the caller, the ref and the payload.
+	Ref    string `json:"ref,omitempty"`
+	RefSum string `json:"ref_sum,omitempty"`
+	// Ended is how a proxy reply finished: posted, declined, expired, no_reply or failed.
+	Ended string `json:"ended,omitempty"`
 }
 
 const (
@@ -109,6 +123,9 @@ func (s FeishuBotSettings) aiSource(messageID string, now time.Time) *BotAISourc
 		return nil
 	}
 	for i := range s.AISources {
+		if s.AISources[i].Kind == botSourceProxyReply {
+			continue // a handoff is never an /ai or /read source (handoffSource finds it)
+		}
 		if s.AISources[i].MessageID == messageID && now.Sub(s.AISources[i].At) <= botAISourcesKeepFor {
 			return &s.AISources[i]
 		}
@@ -296,7 +313,7 @@ func topicsCmd(text string, mentions []botcard.Mention) (cmd string, ok bool) {
 // botGroupMessage takes a message from a group chat (not the bot's private chat): see the five conditions above, and
 // the owner's "@bot /ai …" from a group that is not on the list (botAIElsewhere). Every one that fails is a plain return:
 // no note, no reaction, nothing in the chat.
-func (h *Manager) botGroupMessage(api *feishubot.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
+func (h *Manager) botGroupMessage(api botport.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
 	msg := ev.Message
 	if set.Owner == nil || ev.Sender.SenderID.OpenID != set.Owner.OpenID || msg.ChatID == "" {
 		return // not paired, or not the owner: in a group anyone could write to the owner's Persona
@@ -346,7 +363,7 @@ func (h *Manager) botGroupMessage(api *feishubot.Client, set FeishuBotSettings, 
 // rich-text message (a merged forward is nothing to run), that @-mentions the bot, whose words, the leading @ of the bot
 // taken off, start with /ai. It is kept as a source (the bot may reply to it, aiSourceReply), audited, and handed to the
 // assistant marked FeishuFromElsewhere. Anything else is dropped without a word, as every message of such a group was.
-func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
+func (h *Manager) botAIElsewhere(api botport.Client, set FeishuBotSettings, ev botcard.MessageEvent, raw json.RawMessage, since time.Time, pass func()) {
 	msg := ev.Message
 	if msg.MessageType != "text" && msg.MessageType != "post" || msg.MessageID == "" {
 		return
@@ -378,7 +395,7 @@ func (h *Manager) botAIElsewhere(api *feishubot.Client, set FeishuBotSettings, e
 
 // botOpenID is the bot's own open id, which tells its @ from anyone else's: read at start-up, and once more here when
 // that did not work.
-func (h *Manager) botOpenID(api *feishubot.Client) string {
+func (h *Manager) botOpenID(api botport.Client) string {
 	b := &h.bots
 	b.mu.Lock()
 	id := b.info.OpenID
@@ -427,7 +444,13 @@ func (h *Manager) takeAISource(chatID, messageID, kind string) {
 		return
 	}
 	now := b.clock().UTC()
-	kept := slices.DeleteFunc(slices.Clone(b.set.AISources), func(s BotAISource) bool { return now.Sub(s.At) > botAISourcesKeepFor })
+	kept := slices.DeleteFunc(slices.Clone(b.set.AISources), func(s BotAISource) bool {
+		keep := botAISourcesKeepFor
+		if s.Kind == botSourceProxyReply {
+			keep = botHandoffKeepFor
+		}
+		return now.Sub(s.At) > keep
+	})
 	kept = append(kept, BotAISource{ChatID: chatID, MessageID: messageID, At: now, Kind: kind})
 	if len(kept) > botAISourcesKeep {
 		kept = kept[len(kept)-botAISourcesKeep:]
@@ -556,7 +579,7 @@ var errBotReplyChat = &rpc.Error{Code: assistantwire.CodeChatDenied, Message: "f
 // chat the bot may use). A parent that is withdrawn or deleted cannot be replied to at all, so the send falls back to
 // the chat the call names (replyOrSend), which botSendChat checked: the chat returned is "" then. A chat that cannot be
 // told is refused. With no parent there is nothing to check.
-func (h *Manager) checkReplyParent(ctx context.Context, api *feishubot.Client, set FeishuBotSettings, replyTo string) (string, error) {
+func (h *Manager) checkReplyParent(ctx context.Context, api botport.Client, set FeishuBotSettings, replyTo string) (string, error) {
 	if replyTo == "" {
 		return "", nil
 	}

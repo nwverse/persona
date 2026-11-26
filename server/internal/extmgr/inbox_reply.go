@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/cliwire"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	adapter "github.com/nwverse/persona/server/internal/larkcli"
 	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -77,7 +78,7 @@ func inboxSendOutcome(err error) string {
 	case err == nil:
 		return sendDelivered
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled), errors.Is(err, rpc.ErrDropped),
-		adapter.KindOf(err) == adapter.KindTimeout, // lark-cli stopped by its own deadline: the message may be out
+		cliwire.KindOf(err) == cliwire.KindTimeout, // lark-cli stopped by its own deadline: the message may be out
 		errors.Is(err, mailwire.ErrMaybeSent):      // the SMTP server has the whole mail and never answered it (#9166)
 		return sendUnknown
 	}

@@ -28,6 +28,7 @@ func (w *botWorld) readOn(t *testing.T) {
 // The switch is off by default: the owner's "@bot /read …" in a group that is not opted in is dropped without a word,
 // as any other command there, and in a topic of an opted-in group it is an ordinary topic message.
 func TestReadGroupOffByDefault(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -56,6 +57,7 @@ func TestReadGroupOffByDefault(t *testing.T) {
 // in a topic or not; it is kept as a source of its own kind and audited without the words. The group does not become one
 // the bot sends into.
 func TestReadGroupOwnerCommandIsHandedMarked(t *testing.T) {
+	needsLarkModule(t)
 	for _, c := range []struct{ name, chat, thread, text string }{
 		{"a group that is not opted in", askChat, "", "@_user_1 /read 看下这几条告警"},
 		{"no words", askChat, "", "@_user_1 /read"},
@@ -104,6 +106,7 @@ func TestReadGroupOwnerCommandIsHandedMarked(t *testing.T) {
 
 // Anything short of "the owner, @-ing the bot, starting with /read" does nothing and says nothing, with the switch on.
 func TestReadGroupEverythingElseIsDroppedSilently(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -152,6 +155,7 @@ func TestReadGroupEverythingElseIsDroppedSilently(t *testing.T) {
 // chat and no other; a send into the group, a card under any other message, a reply naming another chat and a full
 // answer are refused; a reply whose original is gone is not turned into a message of the group.
 func TestReadGroupAnswerGoesUnderTheMessageOnly(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -227,6 +231,7 @@ func TestReadGroupAnswerGoesUnderTheMessageOnly(t *testing.T) {
 
 // An "/ai" source keeps its own rule: a card under it is still refused, the read switch on or off.
 func TestReadGroupLeavesAISourcesAsTheyWere(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.readOn(t)

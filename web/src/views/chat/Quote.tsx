@@ -2,7 +2,7 @@
 // two-line plain summary, × to drop it; in a sent bubble, the leading `> ` block as a three-line card that opens to
 // the whole passage. The message itself still carries the `> ` block (lib/drafts.ts withQuoteBlock / splitQuote). A
 // task's card quotes as its title (and todo id, on the block's first line) and what its agent said last.
-import { useLayoutEffect, useRef, useState } from "react";
+import { Suspense, useLayoutEffect, useRef, useState } from "react";
 import { openSpot } from "../../lib/comments";
 import { parseQuote, parseQuotes, useQuotes, type DraftQuote } from "../../lib/drafts";
 import { getSession } from "../../lib/store";
@@ -11,7 +11,9 @@ import { plainMarkdown } from "../../lib/plain-markdown";
 import { cx, EASE } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
-import { CommentBlock, goToComment, CommentCard } from "./CommentCard";
+import { CommentBlock, goToComment, LazyDraftCommentCard } from "./CommentCard";
+import type { CommentImagePicker } from "./DraftCommentCard";
+import { OverlayBoundary } from "../LazyOverlay";
 import { t } from "../../i18n";
 
 /** "Quoting Persona · 16:45" / "Quoting task "…" · 16:45": who said it, or which task, and when, as far as is known. */
@@ -52,30 +54,25 @@ export function QuoteBar({ quote, onRemove }: { quote: DraftQuote; onRemove: () 
 }
 
 /** Everything waiting above the input: the message quote (at most one), then the comments numbered in order. */
-export function QuoteBars({ draftKey, quotes, onRemove }: { draftKey: string; quotes: readonly DraftQuote[]; onRemove: (id: string) => void }) {
+export function QuoteBars({ draftKey, quotes, onRemove, onAddCommentImages }: {
+  draftKey: string; quotes: readonly DraftQuote[]; onRemove: (id: string) => void; onAddCommentImages?: CommentImagePicker;
+}) {
   const { editing } = useQuotes(draftKey);
-  const list = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const scroller = list.current;
-    const note = scroller?.querySelector("textarea");
-    if (!scroller || !note) return;
-    // CommentCard focuses without scrolling the page; reveal its note only within this bounded list.
-    let top = 0;
-    for (let el: HTMLElement | null = note; el && el !== scroller; el = el.offsetParent as HTMLElement | null) top += el.offsetTop;
-    const bottom = top + note.offsetHeight;
-    if (bottom > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = bottom - scroller.clientHeight;
-    else if (top < scroller.scrollTop) scroller.scrollTop = top;
-  }, [editing]);
   let n = 0;
   return (
-    <div ref={list} className="relative flex max-h-[25dvh] flex-col gap-1.5 overflow-y-auto overscroll-contain px-0.5 pt-0.5 [&>div]:shrink-0" data-quotes data-scroll-box>
-      {quotes.map((q) =>
-        q.comment ? (
-          <CommentCard key={q.id} draftKey={draftKey} quote={q} n={++n} editing={editing === q.id} onRemove={() => onRemove(q.id!)} />
-        ) : (
-          <QuoteBar key={q.id} quote={q} onRemove={() => onRemove(q.id!)} />
-        ),
-      )}
+    <div className="relative flex max-h-[25dvh] flex-col gap-1.5 overflow-y-auto overscroll-contain px-0.5 pt-0.5 [&>div]:shrink-0" data-quotes data-scroll-box>
+      {quotes.map((q) => {
+        const remove = () => onRemove(q.id!);
+        const preview = <QuoteBar quote={q} onRemove={remove} />;
+        return q.comment ? (
+          <OverlayBoundary key={q.id} open onClose={() => {}} fallback={preview}>
+            <Suspense fallback={preview}>
+              <LazyDraftCommentCard draftKey={draftKey} quote={q} n={++n} editing={editing === q.id} onRemove={remove}
+                onAddImages={q.comment.spot || q.comment.element ? undefined : onAddCommentImages} />
+            </Suspense>
+          </OverlayBoundary>
+        ) : <QuoteBar key={q.id} quote={q} onRemove={remove} />;
+      })}
     </div>
   );
 }

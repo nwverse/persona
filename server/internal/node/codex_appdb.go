@@ -49,7 +49,12 @@ type codexAppThread struct {
 	includeRunning bool
 }
 
-func (t codexAppThread) updated() time.Time { return time.UnixMilli(t.UpdatedAtMs) }
+func (t codexAppThread) updated() time.Time {
+	if t.UpdatedAtMs <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(t.UpdatedAtMs).UTC()
+}
 
 // origin is where the thread came from as its database row says, for a row whose rollout is gone (codexThreadOrigin):
 // its source is the rollout's session_meta source, a plain string ("vscode", "exec") or a subagent's object
@@ -69,6 +74,9 @@ type codexAppDB struct {
 	at    time.Time // when the database was last looked at
 	stamp string    // the database's files and the sidebar's ids when last read
 	byID  map[string]codexAppThread
+	// sqliteMissingUntil backs off database reads (and their path Globs) after the system sqlite3 CLI was found absent.
+	// Unlike at, this also bounds fresh callers, which otherwise bypass the refresh TTL on every high-frequency re-entry.
+	sqliteMissingUntil time.Time
 }
 
 var codexAppDBs = struct {
@@ -210,7 +218,7 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 	q := func(settings string) string {
 		// Native threads can store the whole opening prompt in title. Project unnamed titles before caching or sending them.
 		return `SELECT id, rollout_path AS rolloutPath, COALESCE(NULLIF(name, ''), substr(title, 1, 256)) AS title, cwd, source, ` +
-			`COALESCE(updated_at_ms, updated_at * 1000) AS updatedAtMs` + settings + ` FROM threads WHERE ` + where
+			`COALESCE(NULLIF(updated_at_ms, 0), updated_at * 1000) AS updatedAtMs` + settings + ` FROM threads WHERE ` + where
 	}
 	target := codexDBTarget(db)
 	query := func(settings string) ([]byte, error) {

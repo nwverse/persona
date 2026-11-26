@@ -345,6 +345,7 @@ func TestConversationRouteAnswerInDoubtSaysAnAnswer(t *testing.T) {
 // reached the Agent says so and to look first, never "nothing was changed; you can try again". The decision still
 // waits, so the button works again.
 func TestLarkSaysTheRecommendationMayHaveArrived(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, todo, _, notes := conclusionService(t, false)
 	ctx := context.Background()
 	waitsForReview(t, s, f, todo.ID, "Three ryokan fit the dates.")
@@ -354,7 +355,7 @@ func TestLarkSaysTheRecommendationMayHaveArrived(t *testing.T) {
 	inDoubt := i18n.T(s.botLang(ctx), answerInDoubtKeys["unknown"])
 	press := &botcard.CardAction{}
 	press.Action.Value = map[string]any{"a": "accept", "id": todo.ID}
-	if r := s.botCardAction(ctx, press, ""); r == nil || r.Toast == nil || r.Toast.Type != "error" || r.Toast.Content != inDoubt {
+	if r := s.larkModule().Action(ctx, press, ""); r == nil || r.Toast == nil || r.Toast.Type != "error" || r.Toast.Content != inDoubt {
 		t.Fatalf("the Lark button: %+v", r)
 	}
 	s.acceptReply(ctx, "om_ok", "OK", false, a.MessageID)

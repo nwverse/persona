@@ -53,16 +53,20 @@ const (
 	cardAgentSecretForm    = "agent_secret_form"    // an Agent's card asking for a password, fields or an MCP form (elicitation)
 	cardConfirmOutbound    = "confirm_outbound"     // health.go confirmOutbound: a conversation hands sensitive words to another Agent
 	cardOutboundWrite      = "outbound_write"       // a connector's write the gate left to the owner (mail_send, a chat message, a comment)
-	cardLeaderNeedsUser    = "leader_needs_user"    // supervise_events.go: a task waits on the owner (needs_user)
+	cardLeaderNeedsUser    = "leader_needs_user"    // a task waited on the owner (needs_user); before decision rights it was pushed straight to them, kept for the history it counts
 	cardDecision           = "decision"             // todo_ask.go pushDecision: a to-do's decision with a recommendation
 	cardTodoRemind         = "todo_remind"          // todo_plan.go: a reminder the owner set
 	cardHealthWater        = "health_water"         // health_water.go: the water reminders the owner switched on
+	cardPageAlert          = "page_alert"           // pages_alert.go: a watch page's alert rule newly tripped
 	cardMinutesReady       = "minutes_ready"        // kb_minutes.go: a recording's minutes
 	cardDayRecap           = "day_recap"            // kb_day.go: the day's recap
 	cardBriefFallback      = "brief_fallback"       // briefing_fallback.go: the briefing itself, when its run failed
 	cardAgentDone          = "agent_done"           // fleet_push.go: a turn finished (the devices' "done" pushes setting)
 	cardAskEscalated       = "ask_escalated"        // ask_route.go: a supervisor's ask_escalate rang an Agent's card to the owner
 	cardPlanWaiting        = "plan_waiting"         // tasks_plan.go: a plan waits for Start
+	cardPlanMoney          = "plan_money"           // tasks_plan.go: a plan waits for Start: a task spends money
+	cardPlanOutward        = "plan_outward"         // tasks_plan.go: a plan waits for Start: a task speaks outward as the owner
+	cardPlanIrreversible   = "plan_irreversible"    // tasks_plan.go: a plan waits for Start: an irreversible step not agreed
 	cardAgentPlan          = "agent_plan"           // an Agent's plan approval card
 	cardTaskFailed         = "task_failed"          // supervise_events.go notifyTaskFailed
 	cardAgentPermission    = "agent_permission"     // an Agent's tool approval
@@ -99,6 +103,11 @@ var cardCategories = map[string]int{
 
 	// 3, outward as the owner: a connector's write (mail, a chat message, a comment) goes out under their name.
 	cardOutboundWrite: cardCatOutward,
+	cardPlanOutward:   cardCatOutward, // a planned task says it speaks outward as the owner
+
+	// 4, money; 5, irreversible and never said: a planned task says so (task_plan owner_step).
+	cardPlanMoney:        cardCatMoney,
+	cardPlanIrreversible: cardCatIrreversible,
 
 	// 1, goals and direction: a supervisor's review judged the owner must decide, and the decision it raises.
 	cardLeaderNeedsUser: cardCatDirection,
@@ -110,6 +119,7 @@ var cardCategories = map[string]int{
 	// their pushes are theirs to get.
 	cardTodoRemind:    cardCatDirection, // a reminder the owner set
 	cardHealthWater:   cardCatDirection, // a reminder the owner switched on
+	cardPageAlert:     cardCatDirection, // a watch page alert the owner switched on
 	cardMinutesReady:  cardCatDirection, // the minutes of a recording the owner made
 	cardDayRecap:      cardCatDirection, // the recap the owner subscribed to
 	cardBriefFallback: cardCatDirection, // the briefing the owner subscribed to, when its run failed
@@ -203,7 +213,7 @@ func hubCardSource(ix proto.Interaction) string {
 			return cardDeviceControl
 		}
 	}
-	if slices.Contains(outboundVerbs, connector.WriteVerb(ix.ToolName)) {
+	if ix.OutwardWrite || slices.Contains(outboundVerbs, connector.WriteVerb(ix.ToolName)) {
 		return cardOutboundWrite
 	}
 	return cardExtensionApproval
@@ -224,6 +234,8 @@ func (s *Service) inputCardSource(ix proto.Interaction, escalated bool) string {
 	switch {
 	case secretOrForm(ix):
 		return cardAgentSecretForm
+	case ix.Kind == proto.IxPermission && ix.OutwardWrite:
+		return cardOutboundWrite
 	case escalated:
 		return cardAskEscalated
 	case ix.Kind == proto.IxPermission:
@@ -352,9 +364,6 @@ func (s *Service) cardsLoadedLocked(ctx context.Context) bool {
 
 // cardStore is the database the counts are kept in, nil for none.
 func (s *Service) cardStore() Store {
-	if s.store == nil {
-		return nil
-	}
 	return s.store()
 }
 
@@ -426,6 +435,9 @@ func cardLedgerReport(day string, rows []cardCount) string {
 		fmt.Fprintf(&b, " — %s", strings.Join(parts, ", "))
 	}
 	b.WriteString(".\nFor you, not the owner: settle what is none of the six with the supervisors or yourself, and do not pass this on to the owner.")
+	if len(t.Bugs) > 0 {
+		b.WriteString(" Each source above is a platform defect: hand each one, unless a task for it is open already, to the platform's supervisor as a task to fix where the card is made.")
+	}
 	return b.String()
 }
 
@@ -457,7 +469,11 @@ func (s *Service) reportCardLedger(ctx context.Context, now time.Time) {
 	}
 	rows := slices.Clone(b.days[day])
 	b.mu.Unlock()
-	if text := cardLedgerReport(day, rows); text != "" {
+	text := cardLedgerReport(day, rows)
+	if u := unattendedReport(s.unattendedHandedOut()); u != "" {
+		text = strings.TrimSpace(text + "\n\n" + u)
+	}
+	if text != "" {
 		if main == "" {
 			return // nobody to tell yet: tried again on the next tick
 		}

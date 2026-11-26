@@ -189,6 +189,14 @@ func scopeSnapshot(snap prompts.Snapshot, scope string) prompts.Snapshot {
 	mine := func(o prompts.SnapshotOwner) bool { return scope == "" || o.Origin == scope || o.Supervisor == scope }
 	snap.Scoped = scope != ""
 	snap.Tasks, _ = firstOf(snap.Tasks, snapshotTaskLimit, func(t prompts.SnapshotTask) bool { return mine(t.Owner) })
+	if snap.Scoped {
+		for i := range snap.Tasks {
+			if snap.Tasks[i].Owner.Supervisor == scope || snap.Tasks[i].Owner.Origin == scope {
+				snap.Tasks[i].OriginID, snap.Tasks[i].OriginTitle, snap.Tasks[i].OriginLink = "", "", ""
+				snap.Tasks[i].SupervisedElsewhere = false
+			}
+		}
+	}
 	snap.Approvals, _ = firstOf(snap.Approvals, snapshotApprovalLimit, func(a prompts.SnapshotApproval) bool { return mine(a.Owner) })
 	var accepts int
 	snap.Unaccepted, accepts = firstOf(snap.Unaccepted, snapshotAcceptLimit, func(a prompts.SnapshotAccept) bool { return mine(a.Owner) })
@@ -423,7 +431,7 @@ func (s *Service) snapshotAgents(ctx context.Context, devices []Device, web stri
 	for _, m := range devices {
 		list, off, _ := s.sessionsMuted(ctx, m.ID)
 		for _, c := range list {
-			if c.Assistant || c.HiddenByDirectory() || c.FoldedUnder() != "" {
+			if c.Assistant || c.HiddenByDirectory() || c.FoldedUnder() != "" || c.IsSubagent || c.IsCodexSubagent() {
 				continue
 			}
 			c.State = c.FoldedState()

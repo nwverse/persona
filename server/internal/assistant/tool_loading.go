@@ -42,7 +42,7 @@ var workGuideTools = []string{
 	"agent_supervise", "agent_transfer", "task_plan", "task_plan_withdraw", "task_scope", "task_retry",
 	"task_start_screen", "task_start_keys", "task_review", "task_decided", "leader_progress", "direction_name",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"conversations_list", "conversation_read", "conversation_rename", "conversation_tags_set", "conversation_new",
+	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_tags_set", "conversation_new",
 	"conversation_send", "conversation_archive", "conversation_unarchive", "repositories_list", "repository_get",
 	"repository_add", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_add", "todo_repository_links_set",
 }
@@ -57,6 +57,7 @@ func (s *Service) withToolLoading(ctx context.Context, self string, tools []prot
 	cleanRound := guide && s.cleanRoundSession(self)
 	deferring = deferring && !(settings.LoadAllTools != nil && *settings.LoadAllTools)
 	leader := deferring && s.isLeader(ctx, self)
+	pageRoutine := deferring && s.isPageRoutineSession(ctx, self)
 	out := slices.Clone(tools)
 	for i := range out {
 		// Keep planning and its allowed preflight reads directly available in a granted round.
@@ -64,7 +65,8 @@ func (s *Service) withToolLoading(ctx context.Context, self string, tools []prot
 		out[i].WorkGuideTool = guide && slices.Contains(workGuideTools, out[i].Name) &&
 			!(cleanRound && (out[i].Name == "task_plan" || grantSafeTools[out[i].Name]))
 		out[i].DeferLoading = deferring && !slices.Contains(coreTools, out[i].Name) &&
-			!(leader && slices.Contains(leaderCoreTools, out[i].Name))
+			!(leader && slices.Contains(leaderCoreTools, out[i].Name)) &&
+			!(pageRoutine && out[i].Name == pageToolName)
 	}
 	return out
 }

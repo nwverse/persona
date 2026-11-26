@@ -12,15 +12,17 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // Key construction: deterministic for replies (parent + purpose + content), random for unanchored sends, always within
 // the gateway's 50-char cap.
 func TestFeishuUUIDKeys(t *testing.T) {
+	needsLarkModule(t)
 	if got := feishuReplyUUID("om_1", "c", "card-a"); got != feishuReplyUUID("om_1", "c", "card-a") {
 		t.Fatalf("reply uuid is not deterministic: %q", got)
 	}
@@ -49,6 +51,7 @@ func TestFeishuUUIDKeys(t *testing.T) {
 // A reply into the parent's thread has its own key: the same parent and content as a plain reply must not be dropped
 // by the gateway as a repeat. Not in a thread, the key is byte for byte what it was before the flag existed.
 func TestFeishuReplyUUIDThreadFlag(t *testing.T) {
+	needsLarkModule(t)
 	plain, thread := feishuReplyUUIDIn("om_1", "c", "card-a", false), feishuReplyUUIDIn("om_1", "c", "card-a", true)
 	if plain == thread {
 		t.Fatalf("a thread reply shares the plain reply's key %q", plain)
@@ -79,6 +82,7 @@ func TestFeishuReplyUUIDThreadFlag(t *testing.T) {
 // Through the bus: a plain reply and then a thread reply to the same message with the same text go out under two
 // keys, and each repeat of one keeps its own.
 func TestChannelFeishuThreadReplyKeepsItsOwnKey(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	const text = "same words 5279"
@@ -122,7 +126,7 @@ func newFakeUUIDAPI(t *testing.T) *fakeUUIDAPI {
 		var in map[string]any
 		_ = json.Unmarshal(body, &in)
 		f.mu.Lock()
-		reject := in["msg_type"] == feishubot.TypeInteractive && strings.HasSuffix(r.URL.Path, "/reply") && f.rejectCardN > 0
+		reject := in["msg_type"] == botcard.TypeInteractive && strings.HasSuffix(r.URL.Path, "/reply") && f.rejectCardN > 0
 		if reject {
 			f.rejectCardN--
 		}
@@ -153,13 +157,14 @@ func (f *fakeUUIDAPI) uuids() []string {
 // Every send/reply the bot's chat path makes carries a stable key: the reply card is deterministic per content, two
 // cards of one turn get two keys, the rich-text fallback gets its own key, and unanchored sends never repeat a key.
 func TestBotPostJSONUUIDs(t *testing.T) {
+	needsLarkModule(t)
 	cardA := botcard.NewCard("t", "green", "a").Markdown("card-a").JSON()
 	cardB := botcard.NewCard("t", "green", "b").Markdown("card-b").JSON()
 
 	t.Run("reply cards are deterministic and content-distinct", func(t *testing.T) {
 		f := newFakeUUIDAPI(t)
 		h := newTestManager(t)
-		api := feishubot.New("cli", "sec", f.srv.URL)
+		api := botport.New("cli", "sec", f.srv.URL)
 		ctx := context.Background()
 		for _, card := range []string{cardA, cardA, cardB} { // a replayed, then the second card of the turn
 			if _, err := h.botPostJSON(ctx, api, "chat", "om_p", card, "fb"); err != nil {
@@ -178,7 +183,7 @@ func TestBotPostJSONUUIDs(t *testing.T) {
 		f := newFakeUUIDAPI(t)
 		f.rejectCardN = 1 << 30 // every card reply is rejected
 		h := newTestManager(t)
-		api := feishubot.New("cli", "sec", f.srv.URL)
+		api := botport.New("cli", "sec", f.srv.URL)
 		for range [2]int{} {
 			if _, err := h.botPostJSON(context.Background(), api, "chat", "om_p", cardA, "fallback text"); err != nil {
 				t.Fatal(err)
@@ -196,7 +201,7 @@ func TestBotPostJSONUUIDs(t *testing.T) {
 		f := newFakeUUIDAPI(t)
 		f.rejectCardN = 1
 		h := newTestManager(t)
-		api := feishubot.New("cli", "sec", f.srv.URL)
+		api := botport.New("cli", "sec", f.srv.URL)
 		if _, err := h.botPostJSON(context.Background(), api, "chat", "om_p", cardA, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -211,7 +216,7 @@ func TestBotPostJSONUUIDs(t *testing.T) {
 	t.Run("send into the chat uses a fresh random key each time", func(t *testing.T) {
 		f := newFakeUUIDAPI(t)
 		h := newTestManager(t)
-		api := feishubot.New("cli", "sec", f.srv.URL)
+		api := botport.New("cli", "sec", f.srv.URL)
 		for range [2]int{} {
 			if _, err := h.botPostJSON(context.Background(), api, "chat", "", cardA, "fb"); err != nil {
 				t.Fatal(err)
@@ -226,9 +231,10 @@ func TestBotPostJSONUUIDs(t *testing.T) {
 
 // botNote's reply key is the deterministic note key; two calls with the same message and text keep it.
 func TestBotNoteReplyUUID(t *testing.T) {
+	needsLarkModule(t)
 	f := newFakeUUIDAPI(t)
 	h := newTestManager(t)
-	api := feishubot.New("cli", "sec", f.srv.URL)
+	api := botport.New("cli", "sec", f.srv.URL)
 	h.botNote(context.Background(), api, "chat", "om_n", "cannot send")
 	h.botNote(context.Background(), api, "chat", "om_n", "cannot send")
 	got := f.uuids()
@@ -242,6 +248,7 @@ var uuidInCall = regexp.MustCompile(`"uuid":"([^"]+)"`)
 
 // The assistant's feishu.text transport: replies keep one key, unanchored texts vary.
 func TestChannelFeishuTextUUID(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	const text = "uuid probe answer 4077"
@@ -288,6 +295,7 @@ func TestChannelFeishuTextUUID(t *testing.T) {
 // A text reply whose parent was withdrawn (230011) is rerouted into the chat with a fresh one-shot key; 230110 takes
 // the same helper branch and is covered for both codes by TestBotPostDetoursWithdrawnReplyToSend.
 func TestChannelFeishuTextDetoursWithdrawnReplyToSend(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.api.rejectReply = 230011
@@ -303,9 +311,10 @@ func TestChannelFeishuTextDetoursWithdrawnReplyToSend(t *testing.T) {
 
 // A send into the chat with the caller's key uses it, the same each time it is sent (Feishu lands it once).
 func TestBotPostJSONKeyed(t *testing.T) {
+	needsLarkModule(t)
 	f := newFakeUUIDAPI(t)
 	h := newTestManager(t)
-	api := feishubot.New("cli", "sec", f.srv.URL)
+	api := botport.New("cli", "sec", f.srv.URL)
 	card := botcard.NewCard("t", "green", "a").Markdown("card-a").JSON()
 	for range [2]int{} {
 		if _, err := h.botPostJSONKeyed(context.Background(), api, "chat", "", card, "fb", "mcafe00a10", false); err != nil {
@@ -322,6 +331,7 @@ func TestBotPostJSONKeyed(t *testing.T) {
 // parent are two messages, not a repeat Feishu drops. The key is cut to Feishu's cap; without one the key is what it
 // always was.
 func TestChannelFeishuTextCallerKey(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.api.inChat("om_5279k", "oc_p2p")
@@ -346,9 +356,10 @@ func TestChannelFeishuTextCallerKey(t *testing.T) {
 
 // The same for a card: under the caller's key a reply is not keyed by its parent and content.
 func TestBotPostJSONKeyedReply(t *testing.T) {
+	needsLarkModule(t)
 	f := newFakeUUIDAPI(t)
 	h := newTestManager(t)
-	api := feishubot.New("cli", "sec", f.srv.URL)
+	api := botport.New("cli", "sec", f.srv.URL)
 	card := botcard.NewCard("t", "green", "a").Markdown("card-a").JSON()
 	for _, key := range []string{"k1", "k2", ""} {
 		if _, err := h.botPostJSONKeyed(context.Background(), api, "chat", "om_parent", card, "fb", key, true); err != nil {
@@ -364,6 +375,7 @@ func TestBotPostJSONKeyedReply(t *testing.T) {
 // With no_detour a reply whose parent is gone (230011 / 230110) fails and says why, whether or not it is in a thread; nothing is
 // sent into the chat. Without it the detour is as it always was, in a thread or not (TestBotReplyDetoursIntoTheCallsChat).
 func TestChannelFeishuNoDetourReplyToGoneParentFails(t *testing.T) {
+	needsLarkModule(t)
 	for _, code := range []int{230011, 230110} {
 		for _, inThread := range []bool{true, false} {
 			w := newBotWorld(t)
@@ -398,6 +410,7 @@ func TestChannelFeishuNoDetourReplyToGoneParentFails(t *testing.T) {
 // have had without one), text and card alike. A long one is cut, never in the middle of a character, and the key is
 // at most 50 characters.
 func TestChannelFeishuCallerKeyIsChecked(t *testing.T) {
+	needsLarkModule(t)
 	if got := cutUTF8("ab你好", 3); got != "ab" {
 		t.Fatalf("cutUTF8 split a character: %q", got)
 	}

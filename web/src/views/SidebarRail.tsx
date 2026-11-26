@@ -2,13 +2,14 @@
 // Imports only SidebarParts among the sidebar's files.
 import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../i18n";
-import { stateOf } from "../lib/format";
+import { activityOf } from "../lib/format";
 import { href, type Route } from "../lib/router";
 import { pickMainChat } from "../lib/handoff";
 import { useStore } from "../lib/store";
 import { BREATHING, connStatus, phaseTone } from "../lib/connection";
 import { cx, Menu } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
+import { NoticeDot } from "../ui/NoticeDot";
 import { AppMark } from "../ui/AppMark";
 import { Icon } from "../ui/icons";
 import { formatChord, jumpHint, useBindings } from "../lib/shortcuts";
@@ -71,7 +72,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
   const activeKey = useActiveKey(route);
   const go = useGo();
   const status = connStatus(phase, online, total);
-  const st = main ? stateOf(main) : undefined;
+  const st = main ? activityOf(main) : undefined;
   const mainWaiting = useMainWaiting(main);
   const pending = mainWaiting.count;
   // `color`: a page's icon color (NavPage.color, #10822), kept under the pointer as well
@@ -119,8 +120,9 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
           p.to,
           pageLabel(p),
           <Icon name={p.icon} size={16} stroke={1.8} />,
-          p.badge !== undefined ? <span aria-hidden className={cx("absolute top-1.5 right-1.5 size-2 rounded-full ring-2 ring-canvas", DOT_CLASS[p.badgeTone ?? "accent"])} /> : null,
-          [p.title ?? p.label, p.badge ?? p.hint].filter((x) => x !== undefined).join(" · "),
+          p.notice ? <NoticeDot className="absolute top-1.5 right-1.5 ring-2 ring-canvas" />
+            : p.badge !== undefined ? <span aria-hidden className={cx("absolute top-1.5 right-1.5 size-2 rounded-full ring-2 ring-canvas", DOT_CLASS[p.badgeTone ?? "accent"])} /> : null,
+          [p.title ?? (p.notice ? pageLabel(p) : p.label), p.badge ?? p.hint].filter((x) => x !== undefined).join(" · "),
           p.color,
         ))}
         {more.length > 0 && (
