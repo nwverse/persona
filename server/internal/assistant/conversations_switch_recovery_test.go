@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -398,13 +400,21 @@ func TestConversationSwitchRestoreCancelSurvivesACrash(t *testing.T) {
 	conversationSwitchTestWaitSwitch(t, r, item, "in_doubt", "fake receipt unavailable")
 	conversationSwitchTestSettle(t, r.s)
 
-	// Before the cancel: a receipt check holds the conversation's lock, so the saved cancel cannot run yet.
-	hold := conversationSwitchTestHoldOn(r, "assistant.segment.receipt")
-	go r.s.logicalSweep(context.Background())
-	select {
-	case <-hold.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("no receipt check started")
+	// A concurrent action holds the epoch lock, so the saved cancel cannot run yet.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	lock, err := pgx.Connect(ctx, os.Getenv("PERSONA_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close(context.Background())
+	tx, err := lock.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 FOR SHARE`, item.Machine, item.ConversationID); err != nil {
+		t.Fatal(err)
 	}
 	code, raw := conversationSwitchTestCall(t, r.s, http.MethodPost, "/api/v1/assistant/conversation-switches", "", `{"restore_batch_id":"`+started.BatchID+`"}`)
 	restoring := conversationSwitchTestDecode(t, code, raw)
@@ -414,8 +424,9 @@ func TestConversationSwitchRestoreCancelSurvivesACrash(t *testing.T) {
 	if op, _ := r.d.ConversationSwitch(context.Background(), item.Machine, item.ConversationID, item.OperationID); op.Phase != "in_doubt" {
 		t.Fatalf("cancelled under the lock: %+v", op)
 	}
-	close(hold.release)
-	conversationSwitchTestSettle(t, r.s)
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	restarted := withSettings(t, r.f, New(Options{Hub: r.f, Store: func() Store { return r.d }, Logf: testLogf(t)}))
 	conversationSwitchTestDrive(t, restarted, restoring.BatchID, map[string]string{"fresh-chat": "switched"})

@@ -68,7 +68,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-schedule.bad_permission_mode", i18n.Args{"mode": strconv.Quote(in.DefaultPermissionMode)}))
 		return
 	}
-	if (in.Permission != nil || in.WorkGuide != nil || in.TodosV2 != nil || in.IntegrationsV2 != nil) && !s.explicitSettingsTarget(w, r) {
+	if (in.Permission != nil || in.WorkGuide != nil || in.TodosV2 != nil ||
+		in.TodosV2AutoSeen != "" || in.TodosV2PendingReviewSLAHours != nil ||
+		in.TodosV2CanWaitSLAHours != nil || in.TodosV2FoldChildren != nil ||
+		in.IntegrationsV2 != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
 	if in.Readonly != nil {
@@ -554,9 +557,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
 		if before.Main != "" {
-			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main)  // its open tasks follow the main conversation (main_handover.go)
+			s.handOverMainAlways(context.WithoutCancel(ctx), before.Main, in.Main) // its Always-allow grants follow once (#16158)
 		} else {
 			s.handOverFormerMainTasks(context.WithoutCancel(ctx)) // after newMain / clearMain, old main sits in Former
+			if len(before.Former) > 0 && before.Former[0].SessionID != "" && before.Former[0].SessionID != in.Main {
+				s.handOverMainAlways(context.WithoutCancel(ctx), before.Former[0].SessionID, in.Main)
+			}
 		}
 	}
 	apierr.WriteJSON(w, s.view(ctx, false))
