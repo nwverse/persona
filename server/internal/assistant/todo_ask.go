@@ -94,6 +94,7 @@ type listedTodo struct {
 	Wait                 *assistantwire.TodoWait    `json:"wait,omitempty"`
 	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
 	ItemType             string                     `json:"item_type,omitempty"`
+	ChildSummary         *todoChildSummary          `json:"child_summary,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.
