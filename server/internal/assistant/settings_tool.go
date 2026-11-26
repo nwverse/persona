@@ -176,7 +176,7 @@ func (s *Service) allOwnSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return readonlyModeOf(s.settings(ctx)), nil },
 			set: s.setReadonlyMode},
 		{Setting: Setting{Key: "assistant.task_workspace_preference", Title: "Task workspace preference", Actions: getSet,
-			About: "prefer-existing (default): reuse the task directory if free; prefer-new: isolate writable Git tasks. Read-only defaults to none, busy directories to new; explicit task workspace wins. Paths come from the machine engine",
+			About: "prefer-existing (default) reuses a free task directory. prefer-new isolates writable Git tasks. Read-only tasks use their original directory. Busy Git directories use a new workspace. Explicit choices take precedence. New workspaces follow naming rules on supported computers",
 			Value: "prefer-existing or prefer-new"},
 			get: func(ctx context.Context) (string, error) { return s.taskWorkspacePreference(ctx), nil },
 			set: s.setTaskWorkspacePreference},
@@ -503,17 +503,23 @@ func (s *Service) allOwnSettings() []ownSetting {
 		{Setting: Setting{Key: todosV2PendingReviewSLASettingKey, Title: "Pending review quiet SLA hours (todos_v2)", Actions: getSet,
 			About: "how many hours pending_review tasks stay quiet in Working under todos_v2=true before escalating to Needs you: 0 (off, immediate Needs you), 12, 24 (default), or 48; no effect when todos_v2 is off",
 			Value: "0, 12, 24 or 48"},
-			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.settings(ctx).todosV2PendingReviewSLAHours()), nil },
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).todosV2PendingReviewSLAHours()), nil
+			},
 			set: s.setTodosV2PendingReviewSLAHours},
 		{Setting: Setting{Key: todosV2CanWaitSLASettingKey, Title: "Can-wait decision aging SLA hours (todos_v2)", Actions: getSet,
 			About: "how many hours non-critical can_wait decisions wait under todos_v2=true before aging into Needs you: 0 (off, never auto-escalate), 24, 48 (default), or 72; no effect when todos_v2 is off",
 			Value: "0, 24, 48 or 72"},
-			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.settings(ctx).todosV2CanWaitSLAHours()), nil },
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).todosV2CanWaitSLAHours()), nil
+			},
 			set: s.setTodosV2CanWaitSLAHours},
 		{Setting: Setting{Key: todosV2FoldChildrenSettingKey, Title: "Fold child tasks under parent goals (todos_v2)", Actions: getSet,
 			About: "on (default): non-urgent child tasks fold under their top-level parent goal in todos_v2 board projection; off: show child tasks flat; no effect when todos_v2 is off",
 			Value: "true or false"},
-			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.settings(ctx).todosV2FoldChildrenOn()), nil },
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).todosV2FoldChildrenOn()), nil
+			},
 			set: s.setTodosV2FoldChildren},
 		s.trustSetting(),
 		s.urgentRulesSetting(), // urgent_call_rules.go
