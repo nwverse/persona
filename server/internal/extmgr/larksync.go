@@ -54,8 +54,13 @@ const (
 	larkSyncBodyMost    = int64(1 << 20)       // request bodies of the sync's routes
 	larkSyncChangesMost = 100                  // chat batches one Changes call hands over by default
 	larkSyncStaleAuth   = larkSyncAuthFor + time.Minute
-	// larkSyncBackfillVersion triggers the one-time idempotent sender-name backfill for pre-#15486 outbox messages.
-	larkSyncBackfillVersion = 1
+	// larkSyncBackfillVersion triggers the one-time idempotent sender-name backfill for outbox messages:
+	// v1 resolved contact/v3 names for pre-#15486 rows; v2 adds chat-member, p2p chat-info, and message-carried
+	// fallbacks (plus unnamed DM chat name repair) for personal/external tenants where contact/v3 misses.
+	larkSyncBackfillVersion = 2
+	// larkSyncLinksBackfillVersion triggers the one-time idempotent remediation that scans already-synced chat
+	// outbox messages and enqueues cloud document / wiki links missing body content in lark_sync_index.
+	larkSyncLinksBackfillVersion = 1
 )
 
 // larkSyncBackoff is the wait after the third, fourth and later consecutive failed runs (a binding's circuit).
@@ -141,6 +146,8 @@ type larkSyncBinding struct {
 	Failures int `json:"failures,omitempty"`
 	// BackfillVersion records the highest completed one-time data repair version for this binding (larkSyncBackfillVersion).
 	BackfillVersion int `json:"backfill_version,omitempty"`
+	// LinksBackfillVersion records the highest completed one-time dropped-links remediation version (larkSyncLinksBackfillVersion).
+	LinksBackfillVersion int `json:"links_backfill_version,omitempty"`
 	// An authorization under way: browser (State, the PKCE verifier and the redirect), or device (the device code).
 	AuthState       string    `json:"auth_state,omitempty"`
 	AuthVerifierEnc string    `json:"auth_verifier_enc,omitempty"`

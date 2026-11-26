@@ -156,6 +156,7 @@ type fleetBook struct {
 type fleetReport struct {
 	mu        sync.RWMutex
 	got       bool
+	seq       uint64                 // highest sequenced Snapshot.Seq applied (0: none yet)
 	sessions  map[string]SessionView // by session id
 	work      map[[2]string]proto.WorkState
 	workOn    bool
@@ -204,6 +205,29 @@ func guard(err *error) {
 func (g guardedStore) InsertInteraction(ctx context.Context, ix proto.Interaction) (err error) {
 	defer guard(&err)
 	return g.st.InsertInteraction(ctx, ix)
+}
+
+// interactionDeadlineUpdater is the durable counterpart of publishing an extended prepared-approval deadline.
+// A store that keeps interaction history but cannot update it must not leave the database advertising a stale expiry.
+type interactionDeadlineUpdater interface {
+	UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error
+}
+
+func (g guardedStore) UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(interactionDeadlineUpdater)
+	if !ok {
+		return errNoTable
+	}
+	return st.UpdateInteractionDeadline(ctx, id, created, expires)
+}
+
+func (s *Service) updateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error {
+	st := s.fleetStore()
+	if st == nil {
+		return nil // no interaction table: the in-memory card is the only card
+	}
+	return st.(interactionDeadlineUpdater).UpdateInteractionDeadline(ctx, id, created, expires)
 }
 
 // resolvedInteractionInserter is the atomic history write and final outcome update used by reversible-setting

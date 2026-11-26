@@ -39,26 +39,38 @@ type run struct {
 	partial      bool
 	p2pLoaded    bool
 
-	res           map[string]*resourceState
-	errs          []larksyncwire.ResourceError
-	known         map[string]knownRecord
-	msgs          map[string]*msgState
-	msgOrder      []string
-	docs          map[string]*docState
-	docOrder      []string
-	chats         map[string]chatInfo
-	readChats     map[string]bool         // chat ids whose history readChat already attempted this run
-	p2pChats      map[string]string       // known p2p chat_id -> peer display name (persisted in im:p2p_chats)
-	chatMetaTried map[string]bool         // p2p chat ids already queried via GET /open-apis/im/v1/chats/:chat_id this run
-	wikiNodes     map[string]wikiNodeInfo // wiki node_token -> resolved object info learned during this run
-	docLeads      []docLead
-	leads         []minuteLead
-	// names are the senders' display names read this run (open id -> name); namesOff stops asking after a missing
-	// contact scope: names are a help for matching the gateway's copy, never a reason to fail.
+	res                map[string]*resourceState
+	errs               []larksyncwire.ResourceError
+	known              map[string]knownRecord
+	msgs               map[string]*msgState
+	msgOrder           []string
+	docs               map[string]*docState
+	docOrder           []string
+	chats              map[string]chatInfo
+	readChats          map[string]bool         // chat ids whose history readChat already attempted this run
+	p2pChats           map[string]string       // known p2p chat_id -> peer display name (persisted in im:p2p_chats)
+	chatMetaTried      map[string]bool         // p2p chat ids already queried via GET /open-apis/im/v1/chats/:chat_id this run
+	wikiNodes          map[string]wikiNodeInfo // wiki node_token -> resolved object info learned during this run
+	docLeads           []docLead
+	leads              []minuteLead
+	pendingLinks       map[string]*pendingLink // token -> pending linked doc persisted in links_queue
+	pendingLinksLoaded bool
+	docLeadsEnqueued   bool
+	pendingLinksDirty  bool
+	pendingLinksAuth   string
+	// names are the senders' display names read via contact/v3 this run (open id -> name); namesOff stops contact/v3
+	// lookups after a missing contact scope: names are a help for matching the gateway's copy, never a reason to fail.
+	// chatMembers caches GET /open-apis/im/v1/chats/:chat_id/members per chat (chat_id -> open_id -> name) as a
+	// fallback when contact/v3 misses external users; memberNames aggregates learned member names across chats;
+	// msgNames caches display names carried in message payloads (sender.name, mentions, post @-nodes).
 	// senderTypes records each sender id's sender_type ("user", "app", …) seen in messages this run.
-	names       map[string]string
-	senderTypes map[string]string
-	namesOff    bool
+	names          map[string]string
+	chatMembers    map[string]map[string]string
+	memberNames    map[string]string
+	msgNames       map[string]string
+	senderTypes    map[string]string
+	namesOff       bool
+	chatMembersOff bool
 }
 
 // resourceState is how one resource (a cursor key) ended: failed (its content is dropped), abandoned (the budget ran
@@ -94,6 +106,7 @@ type docState struct {
 	fetched   bool   // doc holds the content of doc.Revision
 	hasMeta   bool   // a docx's revision was asked for (metaRev; 0 when it could not be read)
 	metaRev   int64
+	lastErr   error // non-nil when consider recorded a revision-0 unreadable stub for this document
 	sightings []sighting
 }
 
@@ -105,6 +118,8 @@ type chatInfo struct {
 // docLead is a cloud document or wiki link found in a synced message.
 type docLead struct {
 	token, objType, url, resource, entry string
+	messageAt                            int64 // unix seconds of the message that contained the link
+	backfill                             bool  // true for historical backfill messages (lower priority than live links)
 }
 
 // wikiNodeInfo caches a resolved wiki node (node_token -> underlying cloud object).
@@ -134,6 +149,9 @@ func newRun(s *Syncer, b larksyncwire.Binding, token func(context.Context) (stri
 		msgs:          map[string]*msgState{},
 		docs:          map[string]*docState{},
 		names:         map[string]string{},
+		chatMembers:   map[string]map[string]string{},
+		memberNames:   map[string]string{},
+		msgNames:      map[string]string{},
 		senderTypes:   map[string]string{},
 		chats:         map[string]chatInfo{},
 		readChats:     map[string]bool{},
@@ -310,6 +328,8 @@ func (r *run) finish(ctx context.Context) (larksyncwire.Result, error) {
 			}
 		}
 	}
+
+	r.savePendingLinks()
 
 	keys = keys[:0]
 	for _, k := range r.docOrder {

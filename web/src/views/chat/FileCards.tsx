@@ -6,7 +6,7 @@ import { fileThumbURL } from "../../lib/api";
 import { documentKind, isDarkPage, isDocument, MAX_DOCUMENT_CARDS } from "../../lib/documents";
 import { usePathLinks, type PathStat } from "../../lib/path-presence";
 import { bytes } from "../../lib/format";
-import { openPanel } from "../../lib/panel";
+import { openPanel, useReadOnlyFile } from "../../lib/panel";
 import { formatDuration, mediaKindOf, replyPaths, type AttachedFile } from "../../lib/turns";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
@@ -19,8 +19,8 @@ import { t } from "../../i18n";
 const FOLD_AT = 4;
 const FOLDED = 3;
 
-function openFilePanel(mid: string, path: string, cwd?: string) {
-  openPanel(cwd ? { kind: "file", mid, path, cwd } : { kind: "file", mid, path });
+function openFilePanel(mid: string, path: string, cwd?: string, readOnly?: boolean) {
+  openPanel({ kind: "file", mid, path, ...(cwd ? { cwd } : {}), ...(readOnly ? { readOnly: true } : {}) });
 }
 
 export interface FileCardsProps {
@@ -74,6 +74,7 @@ function FileCard({
   onOpenFile?: (file: AttachedFile) => void;
   resolveDownloadURL?: (path: string, options: { inline?: boolean }) => string;
 }) {
+  const readOnly = useReadOnlyFile();
   // the length the file really has wins over the one the message says (it may be rounded, or wrong)
   const [real, setReal] = useState<number | undefined>(undefined);
   const duration = real ?? f.duration;
@@ -100,7 +101,7 @@ function FileCard({
   return (
     <button
       type="button"
-      onClick={() => (onOpenFile ? onOpenFile(f) : openFilePanel(mid, f.path, cwd))}
+      onClick={() => (onOpenFile ? onOpenFile(f) : openFilePanel(mid, f.path, cwd, readOnly))}
       className="flex max-w-[360px] min-w-0 items-center gap-2 rounded-[12px] bg-inset px-3 py-2 text-left shadow-hairline hover:bg-hover"
       title={f.path}
     >
@@ -202,13 +203,14 @@ function DocumentCard({
   onOpenFile?: (file: AttachedFile) => void;
   resolveThumbURL?: (path: string, size: number) => string;
 }) {
+  const readOnly = useReadOnlyFile();
   // no thumbnail (an old hub, a machine that cannot draw it, the file gone) or a dark page (Quick Look in dark mode):
   // the file's glyph, as iOS falls back to its symbol
   const [failed, setFailed] = useState(false);
   return (
     <button
       type="button"
-      onClick={() => (onOpenFile ? onOpenFile(f) : openFilePanel(mid, f.path, cwd))}
+      onClick={() => (onOpenFile ? onOpenFile(f) : openFilePanel(mid, f.path, cwd, readOnly))}
       title={f.path}
       className="flex h-16 w-60 max-w-full shrink-0 items-center gap-3 rounded-[14px] bg-inset px-2 text-left shadow-hairline outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-accent"
       style={{ animation: "fade-in 220ms ease-out both" }}

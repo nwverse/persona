@@ -19,6 +19,7 @@ import re
 import uuid
 from urllib.parse import unquote
 
+import hub_modules_mock
 import mock_domains
 
 MAIL_ACCOUNTS = [{"id": "acc1", "name": "个人邮箱", "email": "me@example.com", "provider": "imap", "auth": "password",
@@ -153,7 +154,39 @@ def route(h, req):
     return False
 
 
+def mail_off():
+    """The hub publishes module flags and mail is not among them (MOCK_HUB_MODULES, hub_modules_mock.py): a hub that
+    turned the mail module off."""
+    listed = hub_modules_mock.flags(hub_modules_mock.MODE)
+    return bool(listed) and "module.mail" not in listed
+
+
+def stored_context(hub, item):
+    """The text a hub keeps with a mail's inbox item (server/internal/assistant/inbox_mail.go readMailBody): lines for
+    the model, then up to 3,000 characters of the newest mail's text."""
+    uid = item["mail"]["uids"][-1]
+    whole = hub.MAIL_MESSAGES.get(uid) or {}
+    sender = whole.get("from") or item["mail"].get("from") or {}
+    text = (whole.get("text") or hub.MAIL_BODIES.get(uid) or item.get("preview") or "").strip()[:3000]
+    return "邮箱 %s 收到的未读邮件（共 %d 封，下面是最新一封）：\n发件人：%s <%s>\n收件人：%s\n抄送：%s\n时间：%s\n主题：%s\n\n%s" % (
+        "me@example.com", len(item["mail"]["uids"]), sender.get("name", ""), sender.get("email", ""), "me@example.com",
+        ", ".join(c.get("email", "") for c in whole.get("cc") or []), item.get("updated_at", ""), item.get("title", ""), text)
+
+
+def stored_item(h, req, hub):
+    """GET /api/v1/inbox/{id} of a mail with mail off: the item with the context the hub stored (the Inbox's own route
+    answers whether or not the hub has mail)."""
+    item = next((x for x in hub.INBOX + hub.INBOX_HISTORY if x["id"] == unquote(req.match["id"]) and x.get("mail")), None)
+    if item is None:
+        return False
+    return h.send_json(dict(item, context=item.get("context") or stored_context(hub, item)))
+
+
 def register(d):
     load(d.hub)
     d.route("GET", "/mock/mail", route)
+    if mail_off():  # no mail routes, as extmgr answers without the module; what the hub stored stays readable (#15995)
+        d.route(mock_domains.METHODS, r"/api/v1/mail/.*", lambda h, req: h.send_json({"error": "mail is not set up"}, 404))
+        d.route("GET", r"/api/v1/inbox/(?P<id>mail(?::|%3A)[^/]+)", lambda h, req: stored_item(h, req, d.hub))
+        return
     d.route(mock_domains.METHODS, r"/api/v1/mail/.*", route)
