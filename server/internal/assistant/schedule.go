@@ -1752,6 +1752,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.delayedWaitsRecoveryLoop(ctx)     // usage-limit retries and task receipt rechecks left by the previous manager
 	go s.failedStartBatchRecoveryLoop(ctx) // deferred leader failures, including when every failed to-do is closed
 	go s.taskCloseLoop(ctx)                // the agents of finished tasks (tasks_close.go)
+	go s.projectReviewLoop(ctx)            // owner input and task events to the configured review session (project_review.go)
 	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
 	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
@@ -3001,11 +3002,18 @@ const turnPollInterval = 2 * time.Second
 // it was seen working, a changed last item also means it ended: an immediate failure (a bad model) is idle before
 // the first poll sees it working.
 func (s *Service) waitTurnEnd(ctx context.Context, machine, sid string) (ended, ran bool) {
+	return s.waitTurnEndOnReady(ctx, machine, sid, nil)
+}
+
+func (s *Service) waitTurnEndOnReady(ctx context.Context, machine, sid string, onReady func()) (ended, ran bool) {
 	poll := turnPollInterval
 	if s.turnPoll > 0 {
 		poll = s.turnPoll
 	}
 	before, beforeOK := s.lastItemID(ctx, machine, sid)
+	if onReady != nil {
+		onReady()
+	}
 	idle := 0
 	for {
 		select {

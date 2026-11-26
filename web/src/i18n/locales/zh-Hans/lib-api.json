@@ -1,5 +1,6 @@
 {
   "cant_reach_hub": "连不上 hub",
+  "page_error": "页面出错了：{detail}",
   "hub_no_response": "hub 太久没有回应：可能正在重启，或者网络不通。稍后再试。",
   "not_found": "找不到内容，或当前版本不支持此功能，请刷新页面或检查 hub 和电脑端是否需要更新。（{detail}）",
   "server_error": "服务暂时出错，请稍后重试；若一直失败，请检查 hub 是否正常运行。（{detail}）",
@@ -11,7 +12,7 @@
   "computer_offline": "这台电脑不在线。请确认它已开机、已联网，并且 Persona Link 正在运行，然后再试。",
   "computer_dropped": "和这台电脑的连接断了。请重新连接，确认刚才的操作是否已生效，然后再试。",
   "computer_timeout": "请求超时：电脑可能正忙或网络不稳。请先确认刚才的操作是否已生效，稍后再试。",
-  "agent_stopped": "这个 Agent 已停止，不再接收消息。可以在它的终端页恢复。",
+  "agent_stopped": "此会话已结束，无法接收消息。可以从终端页面恢复。",
   "dialog_open": "电脑上的终端正开着一个对话框。先关掉终端里的对话框，再试一次。",
   "model_unavailable": "还没有能直接调用的模型。请在 设置 › 模型供应商 添加带 Key 的接入，再到 设置 › 模型配置 为这项选择它。"
 }
