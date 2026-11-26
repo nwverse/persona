@@ -9,6 +9,7 @@ import { t as tr } from "../i18n";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
 import { api, enc, errorText } from "../lib/api";
 import { readinessChanged } from "../lib/readiness";
+import "./machines/machine-views.css";
 import { stateCount } from "../lib/state-labels";
 import { stateOf } from "../lib/format";
 import { hubLabel, routeText } from "../lib/mesh";
@@ -84,6 +85,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const saved = storedValue(VIEW_KEY);
     return saved === "capabilities" || saved === "toolchain" || saved === "files" || saved === "services" || saved === "storage" ? saved : "cards";
   });
+  const [selectedMid, setSelectedMid] = useState("");
   const fleetView = view === "cards" || view === "capabilities";
   const chooseView = (v: MachinesView) => {
     if (v === "cards" || v === "capabilities" || v === "toolchain" || v === "services" || v === "files" || v === "storage") storeValue(VIEW_KEY, v);
@@ -94,8 +96,14 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const [sheet, setSheet] = useState<{ mid: string; kind: AlertKind } | null>(null);
   // The disk map in reclaim mode (#14576): from a disk alert here, or a computer's disk figure on its page (history state)
   const [storageFocus, setStorageFocus] = useState<{ mid: string; mode: "reclaim"; seq: number } | undefined>(undefined);
+  const selectMachine = useCallback((mid: string) => {
+    setSelectedMid(mid);
+    setStorageFocus(undefined);
+  }, []);
+  const toolProps = { machines, selectedMid, onSelectMachine: selectMachine };
   const openUsageMap = useCallback((mid: string) => {
     setSheet(null);
+    setSelectedMid(mid);
     storeValue(VIEW_KEY, "storage");
     setView("storage");
     setStorageFocus((f) => ({ mid, mode: "reclaim", seq: (f?.seq ?? 0) + 1 }));
@@ -169,7 +177,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {machines.length > 0 && canAdd && add}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
+        <div className="machine-views mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
           <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
             { v: "cards", label: t("machines.view_cards") },
             { v: "capabilities", label: t("machines.view_capabilities") },
@@ -209,42 +217,42 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           {view === "procs" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <PortsProcessesPanel machines={machines} />
+                <PortsProcessesPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "toolchain" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <ToolchainPanel machines={machines} />
+                <ToolchainPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "services" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <ServicesPanel machines={machines} />
+                <ServicesPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "files" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <FileBrowserPanel machines={machines} />
+                <FileBrowserPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "network" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <NetworkPanel machines={ordered} />
+                <NetworkPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "storage" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <StoragePanel machines={machines} focus={storageFocus} />
+                <StoragePanel {...toolProps} focus={storageFocus} />
               </Suspense>
             </div>
           )}
