@@ -295,7 +295,6 @@
   "lib-extension-ui",
   "lib-feed",
   "lib-format",
-  "lib-hub-update.notice_",
   "lib-hub-update.state_",
   "lib-hubs",
   "lib-inbox",

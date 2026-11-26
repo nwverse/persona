@@ -195,10 +195,7 @@ export function hubNotice(s: HubUpdateStatus | null | undefined, dismissed: read
   }) ?? null;
 }
 
-export function hubNoticeText(n: HubNotice): string {
-  if (n.kind === "rolled_back") return n.why;
-  return t(`lib-hub-update.notice_${n.kind}`, n);
-}
+export { hubNoticeText } from "./hub-notice-text";
 
 const DISMISSED_KEY = "persona.hubNotice.dismissed";
 
