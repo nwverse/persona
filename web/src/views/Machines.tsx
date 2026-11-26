@@ -9,6 +9,7 @@ import { t as tr } from "../i18n";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
 import { api, enc, errorText } from "../lib/api";
 import { readinessChanged } from "../lib/readiness";
+import { stateCount } from "../lib/state-labels";
 import { stateOf } from "../lib/format";
 import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
@@ -124,7 +125,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // the cards with something wrong first, as the apps order them (MachineConcern)
   const ordered = useMemo(() => orderMachines(machines, (m) => {
     const mm = metrics?.find((x) => x.machine_id === m.id);
-    return concernOf(m, machineAlerts({ machine: m, metrics: mm, launchers: issues.get(m.id) ?? 0, managerOffline: !!offlineManagerOf(roster, m) }), agents.get(m.id)?.[2] ?? 0);
+    return concernOf(m, machineAlerts({ machine: m, metrics: mm, launchers: issues.get(m.id) ?? 0, managerOffline: !!offlineManagerOf(roster, m) }), agents.get(m.id)?.needsYou ?? 0);
   }), [machines, metrics, issues, roster, agents]);
 
   // Stable callbacks, so the memoized cards keep their props when the page renders again.
@@ -250,8 +251,10 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 onAddAgain={addAgain}
                 managerOffline={offlineManagerOf(roster, m)?.name}
                 hostedManagers={hostedByMachine.get(m.id) ?? NO_MANAGERS}
-                agents={agents.get(m.id)?.[0] ?? 0}
-                working={agents.get(m.id)?.[1] ?? 0}
+                agents={agents.get(m.id)?.total ?? 0}
+                working={agents.get(m.id)?.working ?? 0}
+                needsYou={known === "yes" ? agents.get(m.id)?.needsYou ?? 0 : undefined}
+                waitingSid={agents.get(m.id)?.waitingSid}
                 known={known}
                 launcherIssues={issues.get(m.id) ?? 0}
                 onAlert={openAlert}
@@ -288,6 +291,8 @@ type CardProps = {
   /** Its agents that are not offline, and how many of them work; `known`: whether the list they come from is in. */
   agents: number;
   working: number;
+  needsYou?: number;
+  waitingSid?: string;
   known: AgentsKnown;
   /** Launchers failing or blocked on it (docs/server/launcher-health.md). */
   launcherIssues: number;
@@ -300,8 +305,9 @@ type AgentsKnown = "yes" | "loading" | "failed";
 // One computer's card. It is memoized and gets its own computer's agents as numbers: a change to another computer's
 // agents leaves its props as they were, so it (and its Stat, Spark, MachineDeploy) does not render again. Nor does a
 // machines push that only moved last_seen on (sameCard).
-const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline, hostedManagers, agents, working, known, launcherIssues, onAlert }: CardProps) {
+const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline, hostedManagers, agents, working, needsYou, waitingSid, known, launcherIssues, onAlert }: CardProps) {
   const detail = { name: "machine" as const, mid: m.id };
+  const waiting: Route = waitingSid ? { name: "session", mid: m.id, sid: waitingSid } : detail;
   const deployment = machineDeployment(m);
   const { expectedDisconnect } = deployment;
   const pending = isPending(m);
@@ -333,6 +339,14 @@ const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, rout
           </div>
           <p className="truncate text-[11.5px] text-ink-3">{[m.system?.name || m.os, m.system?.model, m.system?.cpu].filter(Boolean).join(" · ") || m.hostname}</p>
         </a>
+        {needsYou !== undefined && needsYou > 0 && (
+          <a href={href(waiting)} onClick={(e) => onLinkClick(e, waiting)}
+            className="inline-flex min-h-11 shrink-0 items-center rounded-control focus-visible:outline-accent">
+            <span className="whitespace-nowrap rounded-full bg-attention-tint px-2 py-1 text-submeta font-medium text-attention">
+              {stateCount("needs_you", needsYou)}
+            </span>
+          </a>
+        )}
         {!m.online && !expectedDisconnect && !pending && !managerOffline && (
           <Button tone="secondary" icon="retry" onClick={() => onReconnect(m.id)}>
             {t("machines.reconnect")}
@@ -462,19 +476,21 @@ function sameHostedManagers(a: readonly Manager[], b: readonly Manager[]): boole
 
 const cardKey = (m: Machine) => JSON.stringify({ ...m, last_seen: !!m.last_seen });
 
-/** By computer: its agents that are not offline (the assistant's conversations are not agents), and how many of them
- *  work. */
-function agentCounts(list: readonly Session[]): Map<string, readonly [number, number, number]> {
-  const by = new Map<string, [number, number, number]>();
+/** Counts use the same folded session list as the Agents page. */
+function agentCounts(list: readonly Session[]) {
+  const by = new Map<string, { total: number; working: number; needsYou: number; waitingSid?: string }>();
   for (const s of list) {
     if (s.assistant) continue;
-    const st = stateOf(s);
-    if (st === "offline") continue;
-    const n = by.get(s.machine_id) ?? [0, 0, 0];
-    n[0]++;
-    if (st === "working") n[1]++;
-    if (st === "needs_you") n[2]++;
-    by.set(s.machine_id, n);
+    const state = stateOf(s);
+    if (state === "offline") continue;
+    const counts = by.get(s.machine_id) ?? { total: 0, working: 0, needsYou: 0 };
+    counts.total++;
+    if (state === "working") counts.working++;
+    if (state === "needs_you") {
+      counts.needsYou++;
+      counts.waitingSid ??= s.session_id;
+    }
+    by.set(s.machine_id, counts);
   }
   return by;
 }
