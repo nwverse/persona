@@ -384,6 +384,7 @@ Reduce Motion:
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
 - The web sidebar's page icons are the neutral ink: `--ink-3`, the open page's `--ink` on its fill, never a page's own color. **Colored** sidebar icons are an opt-in (Settings › Appearance › Sidebar icons, #10822) that gives each page a named color; Monochrome stays the default, pixel-identical. The map and its contrast: "Sidebar icon colors" below.
+- Each built-in entry of the web sidebar has a glyph of its own, so a monochrome sidebar and the folded rail tell them apart (#16282): the main chat `home` (iOS `house`, Android `House`), Overview `gauge` (as the admin console's Overview), Scheduled tasks `clock` (iOS `alarm`, Android `Clock`), History `calendar` (its sessions listed by day, #10240; Recent keeps `history`), All Persona chats `list`; the pages' own in the "Sidebar icon colors" table below. `web/src/views/SidebarDistinctIcons.test.tsx` renders the sidebar and fails when two of them draw the same glyph.
 - `pullDown` (#10422, an alias of `expand`'s chevron) follows an action's words that open a menu of how far the action goes (a pull-down, as UIKit draws one): the Inbox group titles' **Mark All Seen ⌄** / **Clear All ⌄** (`docs/assistant/inbox.md` "Group titles"). A value that opens a menu of choices keeps `choices`; the web draws its `chevron`.
 - `someday` (#10465, `moon.stars.fill`, drawn as written in every style, being a menu's and a swipe's `Label`; Android's Phosphor `couch`, since `moon-stars` is `quietHours`') is Someday on a to-do, the owner's own "not now": the To-dos row's swipe and menu (iOS, hubs with `todo_view`, from #10465's switch-on). Not `time`, the clock that marks Waiting. Its swipe is `Theme.somedayTint` (the system indigo), beside Done's `positive`; Remove from Someday, its opposite, is `undo`.
 - `sideSessions` (#7944) is a session's side sessions on every platform: SF Symbol `rectangle.stack` on Apple, its Phosphor match on Android, Lucide's gallery-vertical-end on the web.
@@ -3371,7 +3372,7 @@ With Colored:
 
 | Page | Icon | Color | Light: on `--canvas` / `--hover` | Dark: on `--canvas` / `--hover` |
 | --- | --- | --- | --- | --- |
-| Overview | `home` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
+| Overview | `gauge` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
 | Inbox | `inbox` | orange | 3.01 / 3.09 | 7.16 / 6.01 |
 | Health | `heart` | pink | 3.82 / 3.93 | 6.44 / 5.41 |
 | Messages | `chat` | green | 3.25 / 3.34 | 6.87 / 5.76 |
