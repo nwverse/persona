@@ -101,6 +101,10 @@ func (s *Service) feishuTodoPush(ctx context.Context, machine, session, title, b
 // feishuPushToldTodo is feishuPushTold, with a to-do only on the reminder path. Ordinary notify_user passes nil and
 // keeps its conversation link, context-free reply routing and body exactly as before.
 func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, title, body, key string, r *copyReport, todo *Todo) error {
+	if s.larkAbsent() {
+		r.skipped(channel.Feishu) // no module: nothing to send, nothing to retry, nothing failed
+		return nil
+	}
 	reminder, _ := ctx.Value(todoReminderSendKey{}).(*todoReminderSend)
 	private, space := false, ""
 	if todo != nil {
@@ -177,7 +181,7 @@ func (s *Service) feishuPushToldTodo(ctx context.Context, machine, session, titl
 			}
 		}
 	}
-	if (reminder == nil || !reminder.botAttempted) && s.divertAnswer(ctx, "push", cards) {
+	if (reminder == nil || !reminder.botAttempted) && s.divertAnswer(ctx, assistantwire.NoticePush(), cards) {
 		s.markPushed(channel.Feishu, machine, session)
 		r.went(channel.Feishu, nil)
 		return nil
@@ -349,7 +353,7 @@ func (s *Service) feishuMirrorPost(ctx context.Context, m *mirrorSend, attempt i
 	ctx = feishuSendAs(ctx, kind, m.target.MachineID, m.target.SessionID)
 	// A scheduled task's result goes to a notifications companion when one takes the notices (feishu_companions.go);
 	// the main conversation's turns stay in the chat, where a reply continues them.
-	if !m.main && s.divertAnswer(ctx, "task", m.cards) {
+	if !m.main && s.divertAnswer(ctx, assistantwire.NoticeTask(), m.cards) {
 		if m.sent != nil {
 			m.sent()
 		}

@@ -73,9 +73,18 @@ type codexPaneRead struct {
 	result  codexPaneMatch
 }
 
+// codexPaneReadRetry is the cooldown before an unfinished pane lookup may be superseded by a fresh bounded read,
+// so a wedged syscall or stale query does not leave a recovered pane unlisted indefinitely.
+var codexPaneReadRetry = 5 * time.Second
+
+// codexPaneMaxInflight bounds concurrent unfinished lookups for a single pane so one permanently wedged mount
+// cannot exhaust codexPaneReadSlots for healthy panes.
+const codexPaneMaxInflight = 2
+
 type codexPaneReads struct {
 	sync.Mutex
-	pending map[string]*codexPaneRead
+	pending  map[string]*codexPaneRead
+	inflight map[string]int
 }
 
 // Reserve work for live panes even when every history-index worker is already in a slow filesystem.
@@ -86,12 +95,15 @@ var codexPaneReadSlots = make(chan struct{}, 8)
 func (p *codexPaneReads) retain(panes []host.Agent) {
 	p.Lock()
 	defer p.Unlock()
-	for id := range p.pending {
+	for id, read := range p.pending {
 		if !slices.ContainsFunc(panes, func(a host.Agent) bool { return a.PaneID == id }) {
 			select {
-			case <-p.pending[id].done:
+			case <-read.done:
 				delete(p.pending, id)
 			default:
+				if time.Since(read.started) >= codexPaneReadRetry {
+					delete(p.pending, id)
+				}
 			}
 		}
 	}
@@ -99,7 +111,8 @@ func (p *codexPaneReads) retain(panes []host.Agent) {
 
 // Even an old/archived thread can be the current pane. Its history and title lookups
 // can block in the filesystem. Share one outstanding lookup per pane, limit workers
-// across nodes, and never reuse another pane identity's result after a timeout.
+// across nodes, supersede an expired pending read after a bounded cooldown, and never
+// reuse another pane identity's result after a timeout.
 func (n *Node) codexPaneIdentity(a host.Agent, bound string, waiting bool, taken map[string]host.Agent, deadline time.Time) (codexPaneMatch, bool) {
 	q := codexPaneQuery{reported: a.SessionID(), bound: bound, title: a.Title, waiting: waiting}
 	q.home, q.verified = n.codexPaneOwner(a, q.reported, bound)
@@ -140,27 +153,48 @@ func (n *Node) codexPaneIdentity(a host.Agent, bound string, waiting bool, taken
 			}
 			read = nil
 		default:
-			if read.query != q {
+			if time.Since(read.started) >= codexPaneReadRetry && p.inflight[a.PaneID] < codexPaneMaxInflight {
+				// Cooldown elapsed: allow a fresh bounded lookup while per-pane and global caps hold.
+				read = nil
+			} else if read.query != q {
 				p.Unlock()
 				return codexPaneMatch{}, false
 			}
 		}
 	}
 	if read == nil {
+		if p.inflight[a.PaneID] >= codexPaneMaxInflight {
+			p.Unlock()
+			return codexPaneMatch{}, false
+		}
 		select {
 		case codexPaneReadSlots <- struct{}{}:
 		default:
 			p.Unlock()
 			return codexPaneMatch{}, false
 		}
+		if p.inflight == nil {
+			p.inflight = make(map[string]int)
+		}
+		p.inflight[a.PaneID]++
 		read = &codexPaneRead{query: q, started: time.Now(), done: make(chan struct{})}
 		p.pending[a.PaneID] = read
 		var used map[string]host.Agent
 		if q.taken != "" {
 			used = maps.Clone(taken) // the host merge continues after its wait expires
 		}
+		paneID := a.PaneID
 		go func() {
-			defer func() { <-codexPaneReadSlots }()
+			defer func() {
+				p.Lock()
+				if p.inflight[paneID] > 1 {
+					p.inflight[paneID]--
+				} else {
+					delete(p.inflight, paneID)
+				}
+				p.Unlock()
+				<-codexPaneReadSlots
+			}()
 			read.result = n.readCodexPane(q, a, used)
 			close(read.done)
 		}()

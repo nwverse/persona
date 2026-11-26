@@ -105,6 +105,7 @@ func finalReviewSendAction(t *testing.T, raw string) map[string]any {
 }
 
 func TestInboxReplyPolicyWorkbenchOldCardCannotConfirmReplacementLegacySchema(t *testing.T) {
+	needsLarkLayer(t) // the integrated Workbench renderer and actions are the lark module's
 	c := &recoveryReplier{}
 	h, _, it := handledHub(t)
 	h.in.mu.Lock()

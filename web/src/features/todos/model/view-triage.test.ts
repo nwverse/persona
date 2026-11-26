@@ -7,7 +7,8 @@ import { drawnFromView, openAsDrawn } from "./view-triage";
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const ago = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString();
 const todo = (id: string, more: Partial<Todo> = {}): Todo => ({ id, title: `Errand ${id}`, created_at: ago(5), updated_at: ago(5), ...more });
-const view = (section: string, reason: string, more: Partial<TodoSummary> = {}): TodoSummary => ({ phase: "todo", section, reason, rank: 0, ...more });
+// The view as the wire carries it: raw strings, which may be a newer hub's values the closed types do not know.
+const view = (section: string, reason: string, more: object = {}): TodoSummary => ({ phase: "todo", section, reason, rank: 0, ...more }) as TodoSummary;
 const ids = (r: TriageResult) => Object.fromEntries(TRIAGE_SECTIONS.map((s) => [s, r.sections[s].map((g) => g.members.map((m) => m.id))]).filter(([, rows]) => rows.length));
 
 describe("drawnFromView", () => {

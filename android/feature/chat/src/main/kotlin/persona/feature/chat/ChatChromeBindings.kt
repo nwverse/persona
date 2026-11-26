@@ -5,6 +5,7 @@ import persona.core.contracts.api.ChatActions
 import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.SessionFiles
 import persona.core.domain.sort.SessionRenamer
+import persona.core.navigation.DecisionSource
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -40,6 +41,9 @@ data class ChatChromeBindings(
      */
     val waiting: List<WaitingRequest> = emptyList(),
     val onOpenRequest: ((SessionKey, requestId: String) -> Unit)? = null,
+    val decisionSource: DecisionSource? = null,
+    /** A task's source chat opens over the pager and keeps the Assistant's selection. */
+    val onOpenDecisionSource: ((SessionKey, toolUseId: String?) -> Unit)? = null,
     /** Opens an assistant conversation (a branch of the Persona conversation, web `forkAt`); null: assistant branches are not offered. */
     val onOpenAssistant: ((SessionKey) -> Unit)? = null,
     val onConnectionDetails: (() -> Unit)? = null,
@@ -82,6 +86,8 @@ data class ChatChromeBindings(
     val forkActions: ChatActions? = actions,
     /** Explicit Codex takeover / continuation actions, also available when previewing an offline codex_history session. */
     val takeoverActions: ChatActions? = actions,
+    /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and uses the unified Rename dialog (#13899). */
+    val preferHerdrTabName: Boolean = false,
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

@@ -174,4 +174,22 @@ describe("Close…", () => {
     await act(async () => buttonNamed(t("close-agent.close_agent"))!.click());
     expect(posted()).toEqual(["/sessions/m/claude-1/close"]);
   });
+
+  it("lets an off-page session close anyway after a 409 archive refusal even when appArchiveDeps.restore briefly adds it", async () => {
+    const offPage: Session = { ...claude, session_id: "off-page-busy" };
+    vi.spyOn(appArchiveDeps, "refresh").mockImplementation(async () => {
+      // Simulates hub reconciliation dropping the off-page session back out of the store.
+      reset();
+      Object.assign(getState(), { features: ["agent_session_archives", "agent_session_archive_close"] });
+    });
+    fetcher.mockReset().mockImplementation(async (url: string) =>
+      String(url).includes("/archive") ? json({ error: "busy", code: "agent_busy" }, 409) : json({ ok: true }));
+    await act(async () => root.render(<CloseAgentDialog session={offPage} machineName="Example computer" open onClose={closed} />));
+    await act(async () => buttonNamed(t("close-agent.archive_close"))!.click());
+    expect(closed).not.toHaveBeenCalled();
+    expect(dialog().querySelector("[data-close-busy]")?.textContent).toBe(t("close-agent.busy_working"));
+    await act(async () => buttonNamed(t("close-agent.close_anyway"))!.click());
+    expect(posted()).toEqual(["/sessions/m/off-page-busy/archive?close=1", "/sessions/m/off-page-busy/close"]);
+    expect(closed).toHaveBeenCalledOnce();
+  });
 });

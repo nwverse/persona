@@ -163,10 +163,12 @@ type memoryPageShape struct {
 	Tagged  *bool              `json:"tagged"`
 	HasMore *bool              `json:"has_more"`
 	After   *string            `json:"after"`
+	// StandingBytes is the budget the program wants for its standing entries; the assistant caps it.
+	StandingBytes *int64 `json:"standing_bytes"`
 }
 
 // memoryPageOf is raw as a page: refused whole when it is over most bytes or its own fields (entries as an array of at
-// most 500, tagged, has_more, after of at most 512 characters) do not hold to the schema. An entry that is not an
+// most 500, tagged, has_more, after of at most 512 characters, standing_bytes of at least 0) do not hold to the schema. An entry that is not an
 // entry object is dropped alone; memoryExtensionBatchOf (the assistant's) checks the rest of each entry's rules.
 func memoryPageOf(raw json.RawMessage, most int) (wire.MemoryEntriesResult, error) {
 	if len(raw) > most {
@@ -185,10 +187,16 @@ func memoryPageOf(raw json.RawMessage, most int) (wire.MemoryEntriesResult, erro
 		return wire.MemoryEntriesResult{}, fmt.Errorf("a page of %d entries, over %d", len(*shape.Entries), memoryPageEntriesMost)
 	case shape.After != nil && utf8.RuneCountInString(*shape.After) > memoryAfterMost:
 		return wire.MemoryEntriesResult{}, fmt.Errorf("a cursor over %d characters", memoryAfterMost)
+	case shape.StandingBytes != nil && *shape.StandingBytes < 0:
+		return wire.MemoryEntriesResult{}, errors.New("a negative standing_bytes")
 	}
 	page := wire.MemoryEntriesResult{Tagged: *shape.Tagged, HasMore: *shape.HasMore, Entries: make([]wire.MemoryEntry, 0, len(*shape.Entries))}
 	if shape.After != nil {
 		page.After = *shape.After
+	}
+	if shape.StandingBytes != nil {
+		// Past any budget the assistant allows: kept at its cap there (memoryExtensionStandingMost), never wrapped.
+		page.StandingBytes = int(min(*shape.StandingBytes, 1<<30))
 	}
 	for _, e := range *shape.Entries {
 		var w wire.MemoryEntry

@@ -39,6 +39,38 @@ class HealthIntakeMockTests(unittest.TestCase):
                                               json.dumps(body).encode() if body is not None else b""))
         return handler
 
+    def test_health_items_save_conflict_and_intake_share_the_selection(self):
+        def request(method, value=None):
+            handler = Handler()
+            intake.health_items_route(handler, method, "/api/v1/assistant/health/items", {"space": ["health"]},
+                                      json.dumps(value).encode() if value is not None else b"")
+            return handler
+        self.enterContext(patch.object(intake, "HEALTH_STRENGTH_MODE", "off"))
+        self.enterContext(patch.object(intake, "HEALTH_ITEMS_MODE", "existing"))
+        intake.health_items_reset()
+        self.addCleanup(intake.health_items_reset)
+        first = request("GET")
+        self.assertFalse(first.result["saved"])
+        self.assertEqual(first.result["revision"], 0)
+        self.assertEqual([v["id"] for v in first.result["catalog"]], ["water", "protein", "activity", "trends"])
+        saved = request("PUT", {"items": ["protein"], "revision": 0})
+        self.assertEqual(saved.status, 200)
+        self.assertTrue(saved.result["saved"])
+        self.assertEqual(saved.result["revision"], 1)
+        self.assertEqual(self.events, [{"type": "health_items", "revision": 1}])
+        self.assertEqual(self.request().result["items"], ["protein"])
+        conflict = request("PUT", {"items": ["water"], "revision": 0})
+        self.assertEqual(conflict.status, 409)
+        self.assertEqual(conflict.result, saved.result)
+        self.assertEqual(len(self.events), 1)
+        for value in [{"items": None, "revision": 1}, {"items": ["future"], "revision": 1},
+                      {"items": ["water", "water"], "revision": 1}, {"items": [], "revision": True}]:
+            self.assertEqual(request("PUT", value).status, 400)
+        intake.HEALTH_ITEMS_MODE = "off"
+        self.assertNotIn("items", self.request().result)
+        self.assertEqual(request("GET").status, 404)
+        intake.HEALTH_ITEMS_MODE = "existing"
+
     def test_snapshot_has_goals_records_and_zero_filled_days(self):
         response = self.request(query={"space": ["health"], "days": ["30"]})
         self.assertEqual(response.status, 200)
@@ -221,6 +253,21 @@ class HealthItemsMockTests(unittest.TestCase):
         self.assertEqual((got["items"], got["revision"], got["saved"]), (["water", "protein", "activity", "trends"], 0, False))
         self.request(path="/mock/health-items", query={"mode": ["fresh"]})
         self.assertEqual(self.request().result["items"], ["activity", "trends"])
+
+    def test_native_controls_share_the_main_state_and_reset_the_current_mode(self):
+        self.request(path="/mock/health-items", query={"mode": ["fresh"]})
+        seeded = self.request(path="/mock/health-items", query={"items": ["protein"], "saved": ["1"]}).result
+        self.assertEqual(seeded["mode"], "fresh")
+        self.assertEqual((seeded["items"], seeded["revision"], seeded["saved"]), (["protein"], 1, True))
+        self.assertEqual(self.request().result, {k: v for k, v in seeded.items() if k != "mode"})
+        self.request(path="/mock/health-items", query={"saved": ["0"]})
+        self.assertFalse(self.request().result["saved"])
+        reset = self.request(path="/mock/health-items", query={"reset": ["1"]}).result
+        self.assertEqual((reset["mode"], reset["items"], reset["revision"], reset["saved"]),
+                         ("fresh", ["activity", "trends"], 0, False))
+        saved = self.request("PUT", {"items": ["protein"], "revision": 0})
+        self.assertEqual((saved.status, saved.result["revision"], saved.result["saved"]), (200, 1, True))
+        self.assertEqual(self.events, [{"type": "health_items", "revision": 1}])
 
     def test_save_bumps_the_revision_once_and_says_so(self):
         saved = self.request("PUT", {"items": ["protein", "activity", "water", "trends"], "revision": 0})

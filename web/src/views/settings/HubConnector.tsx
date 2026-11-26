@@ -8,7 +8,7 @@
 import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
 import {
   canSendStep, CI_MODES, deleteIMessageData, imessageAIFooter, imessageStatus, setIMessageAI, connectorBrand, connectorLogin, connectorLogout, connectorState, connectorSummary, connectorTone, deleteConnectorArchive,
@@ -19,7 +19,7 @@ import {
 } from "../../lib/connectors";
 import { useChannels } from "../../lib/channels";
 import { ago } from "../../lib/format";
-import { useLarkOn } from "../../lib/store";
+import { useLarkOn, useStore } from "../../lib/store";
 import { latestRequest } from "../../lib/visible-poll";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
@@ -31,6 +31,7 @@ import { Group, Row, Switch } from "./SettingsParts";
 import { scoped, useScope } from "../../lib/current-assistant";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
+import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 
 const DOT: Record<ConnectorTone, string> = { green: "bg-green", orange: "bg-orange", red: "bg-red", idle: "bg-line-strong" };
 const fieldClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -215,6 +216,7 @@ export function ConnectorDetail({ id, manager, onBack, onChannel }: { id: string
       {onChannel && <ChannelLink id={id} manager={manager} onOpen={onChannel} />}
       {/* source subscriptions (#2041) are the default manager's */}
       {c && !manager && <SubscriptionsEntry pick={(l) => l.connector === id} scope={{ c: id }} />}
+      {c && <ConnectorExternalSourceSettings ids={[id]} manager={manager} />}
       {c && id !== "imessage" && !signsInHere(c) && !undescribed(c) && (
         <p className="-mt-4 mb-6 px-1 text-[11.5px] leading-relaxed text-ink-3">{t("settings-hubconnector.hub_side_note")}</p>
       )}
@@ -573,6 +575,8 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
     return () => void (live.current = false);
   }, []);
   // Also a channel (WeChat): a step this page cannot draw can be done in Settings › Channels instead.
+  const manager = useShownManager();
+  const integrationsV2 = useStore((s) => s.assistant?.integrations_v2 === true && sameManager(s.assistant.manager, manager));
   const isChannel = useChannels().some((x) => x.id === c.id);
 
   /** True when signing in is done. */
@@ -623,6 +627,7 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
       values={values}
       busy={busy}
       isChannel={isChannel}
+      integrationsV2={integrationsV2}
       onChange={(name, v) => setValues((cur) => ({ ...cur, [name]: v }))}
       onSubmit={() => void send(prompt.step ?? "", values)}
       onRestart={() => (cancel(), void send("", {}))}
@@ -638,12 +643,13 @@ export function SignInSteps({ c, reload, footer, startLabel, startTone = "accent
 }
 
 /** One sign-in step as the hub sent it: its hint and error, then fields, a device code, a QR code, or why it can't be drawn. */
-export function SignInStep({ name, prompt, values, busy, isChannel, onChange, onSubmit, onRestart, onCancel }: {
+export function SignInStep({ name, prompt, values, busy, isChannel, integrationsV2, onChange, onSubmit, onRestart, onCancel }: {
   name: string;
   prompt: ConnectorPrompt;
   values: Record<string, string>;
   busy: boolean;
   isChannel?: boolean;
+  integrationsV2?: boolean;
   onChange: (field: string, value: string) => void;
   onSubmit: () => void;
   onRestart: () => void;
@@ -689,7 +695,7 @@ export function SignInStep({ name, prompt, values, busy, isChannel, onChange, on
       ) : view === "qr_link" ? (
         <QRLinkStep url={prompt.url!} app={name} onCancel={onCancel} />
       ) : view === "unsupported" ? (
-        <UnsupportedStep elsewhere={isChannel ? t("settings-hubconnector.bind_in_channels", { name }) : undefined} onRestart={onRestart} onCancel={onCancel} />
+        <UnsupportedStep elsewhere={isChannel ? t(integrationsV2 ? "settings-hubconnector.bind_in_integrations" : "settings-hubconnector.bind_in_channels", { name }) : undefined} onRestart={onRestart} onCancel={onCancel} />
       ) : (
         <form
           className="flex flex-col"

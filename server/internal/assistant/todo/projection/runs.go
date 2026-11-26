@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"cmp"
 	"strings"
 	"time"
 
@@ -87,6 +88,17 @@ func parkInteractionID(f *Facts, a Agent) string {
 	return parkEvidenceInteractionID(f)
 }
 
+// cardForRun reports whether pending interaction c belongs to run a directly or via a folded child or side session.
+func cardForRun(c *proto.Interaction, a Agent) bool {
+	if c.MachineID == a.MachineID && c.SessionID == a.SessionID {
+		return true
+	}
+	if c.FoldedUnder != "" && c.FoldedUnder == a.SessionID && cmp.Or(c.FoldedUnderMachineID, c.MachineID) == a.MachineID {
+		return true
+	}
+	return c.FoldedSide != "" && c.FoldedSide == a.SessionID && c.MachineID == a.MachineID
+}
+
 // linkedParkCard is the exact pending card a current external-event park names for this worker, if it still exists.
 func linkedParkCard(f *Facts, a Agent) *proto.Interaction {
 	id := parkInteractionID(f, a)
@@ -95,7 +107,7 @@ func linkedParkCard(f *Facts, a Agent) *proto.Interaction {
 	}
 	for i := range f.Interactions {
 		c := &f.Interactions[i]
-		if c.ID == id && c.MachineID == a.MachineID && c.SessionID == a.SessionID {
+		if c.ID == id && cardForRun(c, a) {
 			return c
 		}
 	}
@@ -119,14 +131,24 @@ func activeRuns(f *Facts, now time.Time) []run {
 				break
 			}
 		}
+		var userCard, heldCard *proto.Interaction
 		for i := range f.Interactions {
 			c := &f.Interactions[i]
-			if c.MachineID != a.MachineID || c.SessionID != a.SessionID {
+			if !cardForRun(c, a) {
 				continue
 			}
-			if r.card == nil || asksBefore(c, r.card) {
-				r.card = c
+			if c.Delegating {
+				if heldCard == nil || asksBefore(c, heldCard) {
+					heldCard = c
+				}
+			} else if userCard == nil || asksBefore(c, userCard) {
+				userCard = c
 			}
+		}
+		if userCard != nil {
+			r.card = userCard
+		} else {
+			r.card = heldCard
 		}
 		if linked != nil {
 			r.card = linked
@@ -134,9 +156,12 @@ func activeRuns(f *Facts, now time.Time) []run {
 		r.kind = runReading(r, now)
 		if linked != nil {
 			r.kind = runAsks
-		} else if r.kind == runAsks && r.card != nil && r.card.Delegating {
-			// The card went to the conversation supervising it (or Persona decides whether to answer it): Persona's work
-			// until that conversation passes it up, not the owner's.
+		} else if userCard != nil && r.found && (userCard.SessionID != a.SessionID || userCard.MachineID != a.MachineID) {
+			// A folded child/side session has an un-delegated owner card while its parent session is working or idle.
+			r.kind = runAsks
+		} else if (r.kind == runAsks || r.kind == runIdle) && userCard == nil && heldCard != nil {
+			// Every pending card on this run (direct or folded) went to its supervising conversation (or Persona
+			// decides whether to answer it): Persona's work until that conversation passes it up, not the owner's.
 			r.kind = runPersona
 		} else if r.card == nil && r.kind == runAsks && r.s.Work != nil && r.s.Work.InteractionID == parkInteractionID(f, a) {
 			// The exact linked card is gone; this is its stale session state, not a new owner question.
@@ -404,6 +429,30 @@ func pendingReviewSince(f *Facts) time.Time {
 		return *f.Supervision.PendingSince
 	}
 	return f.Supervision.UpdatedAt
+}
+
+// pendingReviewSLADuration returns the effective pending_review quiet window under todos_v2=true.
+// ok is false when quiet sinking is disabled (surfaces immediately to needs_you).
+func pendingReviewSLADuration(f *Facts) (time.Duration, bool) {
+	if f.PendingReviewSLADisabled {
+		return 0, false
+	}
+	if f.PendingReviewSLAHours > 0 {
+		return time.Duration(f.PendingReviewSLAHours) * time.Hour, true
+	}
+	return pendingReviewEscalateAfter, true
+}
+
+// canWaitSLADuration returns the effective can_wait auto-escalation window under todos_v2=true.
+// ok is false when auto-escalation is disabled (can_wait never ages into active needs_you).
+func canWaitSLADuration(f *Facts) (time.Duration, bool) {
+	if f.CanWaitSLADisabled {
+		return 0, false
+	}
+	if f.CanWaitSLAHours > 0 {
+		return time.Duration(f.CanWaitSLAHours) * time.Hour, true
+	}
+	return canWaitEscalateAfter, true
 }
 
 // openAsk is the to-do's own ask when a whole one waits.

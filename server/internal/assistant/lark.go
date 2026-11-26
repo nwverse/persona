@@ -54,6 +54,13 @@ func (s *Service) larkModule() larkhost.Layer {
 // chat is the outbound channel port: the lark module's layer, or larkhost.None without the module.
 func (s *Service) chat() larkhost.Outbound { return s.larkModule() }
 
+// larkAbsent says the lark module is not in this hub (built out or switched off), as opposed to on with the bot not
+// ready: its pushes have nowhere to go and are skipped, not failed.
+func (s *Service) larkAbsent() bool {
+	_, none := s.larkModule().(larkhost.None)
+	return none
+}
+
 // setLarkTiming sets one of the lark module's times (tests).
 func (s *Service) setLarkTiming(name string, d time.Duration) {
 	s.lark.mu.Lock()

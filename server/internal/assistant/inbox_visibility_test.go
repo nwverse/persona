@@ -319,7 +319,7 @@ func TestInboxVisibilityRecheckAfterReservationSave(t *testing.T) {
 	st := &recoveryBeforeWriteStore{inboxMemStore: h.st, before: func() {
 		h.setConfig(func(c *assistantwire.InboxConfig) { c.Visibility = visibilityTestConfig() })
 	}}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err == nil {
 		t.Fatal("reply was confirmed after its chat became excluded during persistence")
 	}

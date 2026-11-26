@@ -1,5 +1,6 @@
 import { AgentReadingHeader } from '../models/AgentReadingHeader';
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 
 @ComponentV2
@@ -16,7 +17,7 @@ export struct AgentReadingBar {
     this.state.attach(owner,this.covered,(value:number):void => {
       if (!this.state.owns(owner)) return;
       if (nativeEnvironment.reduceMotion) this.state.collapse=value;
-      else this.getUIContext().animateTo({duration:350,curve:Curve.EaseOut},() => { this.state.collapse=value; });
+      else this.getUIContext().animateTo(Motion.reveal(false),() => { this.state.collapse=value; });
     });
   }
   aboutToDisappear():void { this.state.detach(this.owner); }

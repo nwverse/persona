@@ -37,6 +37,8 @@ interface AgentCreationService {
      * unified model configuration.
      */
     suspend fun newAgentModel(): ModelPurposeDetail? = null
+    /** The same purpose on the hub that owns a preselected computer. */
+    suspend fun newAgentModel(machineId: String): ModelPurposeDetail? = newAgentModel()
 
     /**
      * The models [launcher]'s agent offers in its own /model menu, for "New Agent"'s model picker: the node keeps the
@@ -79,7 +81,13 @@ interface AgentCreationService {
 }
 
 /** A complete response replaces the inventory. A partial response updates returned rows but does not remove missing ones. */
-data class AgentWorkspaceCatalog(val workspaces: List<AgentWorkspace>, val complete: Boolean = true)
+data class AgentWorkspaceCatalog(
+    val workspaces: List<AgentWorkspace>,
+    /** Completeness as used by the New Agent picker. The list tracks failures for each source separately. */
+    val complete: Boolean = true,
+    val failedSources: Set<String> = emptySet(),
+    val unscopedFailure: Boolean = false,
+)
 
 /**
  * One workspace of the hub's catalog (`GET /api/v1/workspaces`, docs/protocol/protocol.md): a start with
@@ -180,13 +188,13 @@ data class AgentModel(
 
 private val gptModelId = Regex("^gpt-([a-z0-9]+(?:\\.[a-z0-9]+)*(?:-[a-z0-9]+(?:\\.[a-z0-9]+)*)*)$", RegexOption.IGNORE_CASE)
 
-/** Display only: explicit names win, and GPT versions and variants retain every component of their id. */
+/** Display only: explicit names win, and GPT versions and variants preserve the GPT- prefix and every component. */
 fun modelName(id: String?, name: String? = null): String {
     val raw = id.orEmpty()
     if (!name.isNullOrBlank() && !name.equals(raw, ignoreCase = true)) return name
     val label = name?.takeIf { it.isNotBlank() } ?: raw
     val model = gptModelId.matchEntire(label)?.groupValues?.get(1) ?: return label
-    return model.split('-').mapIndexed { index, part ->
+    return "GPT-" + model.split('-').mapIndexed { index, part ->
         if (index == 0) part else part.replaceFirstChar { it.titlecase(java.util.Locale.ROOT) }
     }.joinToString(" ")
 }
@@ -305,6 +313,20 @@ data class UnavailableLauncher(
     val title: String get() = launcherTitle(name, agent, displayName?.trim()?.takeIf(String::isNotEmpty))
 }
 
+private val BUILTIN_LAUNCHER_TITLES = mapOf(
+    "claude" to "Claude Code",
+    "codex" to "Codex",
+    "claude-desktop" to "Claude Desktop",
+    "codex-app" to "Codex App",
+    "traex" to TraeCliDisplayName,
+    "traecli" to TraeCliDisplayName,
+    "trae-cli" to TraeCliDisplayName,
+    "agy" to "Antigravity CLI",
+    "omp" to "Oh My Pi",
+    "cursor" to "Cursor",
+    "gemini" to "Gemini CLI",
+)
+
 internal fun launcherTitle(
     name: String, agent: String?, displayName: String?, baseUrl: String? = null, source: String? = null,
 ): String {
@@ -315,7 +337,8 @@ internal fun launcherTitle(
         agent == PaseoAgent && isTraeCliId(name) -> unknownAgentName(agent, displayName, name)
         (legacyMachineCli || isTraeCliId(agent)) && isTraeCliId(name) &&
             (displayName == null || isTraeCliLabel(displayName)) -> TraeCliDisplayName
-        else -> displayName ?: name
+        displayName != null && !displayName.equals(name, ignoreCase = true) -> displayName
+        else -> BUILTIN_LAUNCHER_TITLES[name.lowercase(java.util.Locale.ROOT)] ?: displayName ?: name
     }
 }
 

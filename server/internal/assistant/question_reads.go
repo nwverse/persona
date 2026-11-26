@@ -30,9 +30,6 @@ type questionReadStore interface {
 var errNoQuestionReads = errors.New("this hub keeps no question read marks")
 
 func (s *Service) questionReadStore() questionReadStore {
-	if s.store == nil {
-		return nil
-	}
 	st, _ := s.store().(questionReadStore)
 	return st
 }

@@ -118,6 +118,45 @@ discards it. Launcher execution health is a separate status; an API probe does n
 The iOS and Android purpose editors do not yet provide this draft test; Android also retains its free-text purpose effort
 field. Native parity is tracked in #6887.
 
+### Managed sample diagnostics with `model_probe`
+
+The assistant's `model_probe` MCP tool runs 1–10 caller-supplied samples through one **saved** provider. Unlike the web
+editor's draft connection test, its public input has no draft connection fields: a caller can select only the registered
+provider name, `messages` or `chat` on that same gateway, and optional model/effort overrides. The manager alone resolves
+the sealed key, custom headers, proxy and `via_machine` route. Unknown fields, including `api_key`, `headers` and
+`base_url`, are rejected before any request is sent, and neither credentials nor arbitrary connection overrides appear
+in the result.
+
+This is configuration-read-only, not side-effect-free: every sample is a real provider inference request and may consume
+quota. It does not write settings, profiles, purposes, launchers, conversation state, launcher health, or Chat
+compatibility cache entries. Restricted Inbox handling chats do not receive the tool.
+
+Each sample has a required nonempty `user` and optional `system`, `id`, and `label`. Combined system+user input is at most
+16 KiB per sample; IDs and labels are at most 128 Unicode code points. Concurrency is 1–4 (default 1), `max_tokens` is 1–1024 (default
+256), and each sample's end-to-end timeout is 1–30 seconds (default 30). A direct provider response is read up to 1 MiB.
+A `via_machine` response is first buffered by the existing `model.http` transport under its separate 16 MiB cap, then
+subject to the same 1 MiB probe parsing cap. Returned text is credential-redacted and UTF-8-safely truncated to 8 KiB;
+redaction replaces every occurrence of a stored credential/header value, even when it appears as ordinary answer text.
+Provider-controlled block types and `Retry-After` are redacted too. A usage entry whose field name requires redaction is
+omitted rather than returned under a colliding `***` key; ordinary numeric usage is unchanged.
+Results remain in input order and report `index`,
+optional `id`/`label`, `ok`, full sample `ms`, `http_status`, redacted `error`, ordered unique `block_types`, bounded
+`text`, separate `text_truncated` (the 8 KiB output cap) and `generation_truncated` (the provider's token limit), optional
+numeric `usage`, and the number of compatibility `attempts`. Messages block types include `thinking` and
+`text`; Chat reports `reasoning_content` and `text` without returning reasoning as answer text. The top level reports the
+resolved provider/API/model/effort and total/succeeded/failed/total_ms.
+
+Messages requests use non-streaming responses; Chat uses the normal SSE stream. `effort:"off"` always puts
+`thinking:{"type":"disabled"}` on the Messages wire and `reasoning_effort:"none"` on Chat rather than silently using a
+model-specific low-effort fallback. Existing bounded Chat compatibility retries may remove a rejected effort field,
+rename `max_tokens` to `max_completion_tokens`, or remove `stream_options` after a 400/422 rejection; the per-sample
+`effort` describes the final attempt and becomes empty
+when effort was removed, while the top-level `effort` remains the requested/resolved value. A 429 is never retried: its
+status and credential-redacted `Retry-After` header are returned (ordinary values are unchanged). HTTP, network, timeout, malformed-response, stream-error,
+HTTP-200 provider errors, refusals and empty/unfinished-stream failures remain attached to their sample instead of being
+silently counted as successes. A provider token-limit ending remains a successful inference with
+`generation_truncated:true` so partial text cannot be mistaken for a complete answer.
+
 ## Sending through a computer (#4775)
 
 API purposes are HTTP requests the manager sends from its own machine. When that machine has no route to the provider
@@ -267,6 +306,16 @@ The web catalog includes the separate row and a reset-to-follow action. Android 
 - **Unchanged elsewhere**: saving changes neither Agents nor Lark /agent, and running handling chats keep the launcher they started on. Provider deletion is refused while only this override uses the provider; category-default assignment never writes it; model profiles switch categories only.
 
 Clients find these rows by data, not by ID: a purpose with `parent: "agent.new"` and writable `fields` is an Agents override (web `agentsOverride`, Android `agentsOverride`, Apple `ModelConfigurationModel.followsAgents`), shown with "Separately configured" / "Follow Agents". An older hub that still sends `inbox.agent` with `fields: []` keeps it a read-only use of Agents.
+
+## Claude's desktop app as Agents' launcher (#13117)
+
+Agents (`agent.new`) can run on **Claude's desktop app** (`launcher.claude-desktop`, `models_desktop.go`): a person's New Agent then opens its session in the app by default (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"). Settings › Model providers does not list it, as it has no command, gateway or test of its own; Model configuration adds it as a provider named "Claude desktop app" with the computers whose launcher list offers it.
+
+- **Agents only:** `provider_ids` holds it for `agent.new` alone. The main chat, scheduled tasks, the background supervisor, the in-meeting conversation and API uses run headless or through `model.run`, which an app cannot; the Inbox AI twin's and Lark /agent's own choices don't offer it either. The Codex App's `codex-app` is not offered anywhere (`docs/integrations/launchers.md`).
+- **The AI twin and Lark /agent:** they run headless, so while they follow Agents and Agents runs on the app, they run on Claude Code's default launcher; "Inherited from" says why. Set apart, they keep their own choice.
+- **Saving:** a model is saved without a node check (the app has no command to probe; its node checks the ID at the start). The permission mode Plan is refused: the app runs no read-only plan start.
+- **Computers without the app:** `GET /api/v1/machines/{mid}/launchers` answers `default` with the launcher a start there gives way to (`launcherInstead`, "Launcher-picker defaults"), with its own model and effort, so New Agent shows what will run; the start itself falls back the same way, with no error (#2640).
+- **Starts Persona makes itself:** a task, `agent_start` and a message resuming an Agent started outside Persona do not open the app from the default. A start in the app brings the app to the front and runs on the app's own settings, which an unattended start should not do. They run on that same fallback launcher, with a model the caller named kept, and the task's why or the tool's answer says so (`assistant-tasks.launcher_desktop_default`, `launcher_desktop_default_model`). Naming `claude-desktop` explicitly still opens the app.
 
 ## Meeting minutes and the in-meeting conversation (#7980)
 
@@ -500,6 +549,8 @@ The model panel of a Persona chat switches that conversation to another launcher
 - A body without `split` and `hide_aliases` (iOS, Android, older web clients) merges every group and hides nothing; the env passthrough and `own_service: use` apply to every import.
 - **One alias** (#5193, feature `launcher_import_parse`): `GET …/import?machine=&alias=` and `POST` with `alias` read only that alias of the computer, so the groups are that alias's alone; an alias the computer does not have previews nothing. “Found on your computers” on the web and iPhone opens the import this way.
 
+The assistant exposes the same engine as the managed MCP tool `launcher_import` (`assistant/launcher_import_tool.go`). `{action:"preview", machine, names?}` is read-only; a preview provider name selects its whole group, while a raw alias or variant name selects that alias, and omitting `names` previews all groups. Its explicit response DTO contains only `name`, `aliases`, `base_url`, `models`, `has_key`, `has_headers`, `has_env`, `env_names`, `existing`, `create_as`, `differs` and `variants`. `{action:"commit", machine, names, split?, hide_originals?}` requires a nonempty selection and produces one ordinary owner-confirmation card. Approval recomputes discovery, grouping, landing and collision names; a different proposal is stale and writes nothing. The approved operation uses the existing `importLaunchers` sealing, model merge and hiding path, then returns only created/updated/hidden names and safe stored-provider readback (`id`, `name`, `base_url`, `models` and credential-presence booleans). The strict JSON decoder rejects every unknown field, including `api_key`, `headers`, `env` and `base_url`; neither preview nor commit accepts connection overrides. Model-facing errors use fixed redacted messages rather than node/store error text. Restricted Inbox conversations cannot call this tool.
+
 ## Starting a provider from a pasted configuration (#5193)
 
 `POST /api/v1/launchers/import/parse` `{text}` reads what a user already has into drafts for the web and iPhone wizards (API in `docs/protocol/protocol.md`, “Model providers and per-purpose configuration”). It is read-only: it reads no computer, saves nothing and keeps nothing; the wizard is filled with a draft and the user saves it as any provider. The readers are pure functions in the manager (`assistant/models_import_formats.go`), so import links call the same ones on their decoded payload. What it reads (`format`):
@@ -527,7 +578,7 @@ The text is never logged. At most 256 KiB is read, and the answer stays small: a
 
 ## Launcher-picker defaults
 
-`GET /api/v1/machines/{mid}/launchers` includes `default: {provider, model, effort}`, the effective value for the corresponding purpose in “Model Settings” (`?purpose=`, default `agent.new`; the main-chat picker sends `assistant`). An older hub adds `runtime` for `assistant`, which current clients do not need. Clients use it to show “Default: …” without separately querying model configuration.
+`GET /api/v1/machines/{mid}/launchers` includes `default: {provider, model, effort}`, the effective value for the corresponding purpose in “Model Settings” (`?purpose=`, default `agent.new`; the main-chat picker sends `assistant`). For `agent.new` on a computer without Claude's desktop app while Agents runs on it, `default` is the launcher the start runs there instead ("Claude's desktop app as Agents' launcher (#13117)"). An older hub adds `runtime` for `assistant`, which current clients do not need. Clients use it to show “Default: …” without separately querying model configuration.
 
 ## Choosing a model for a new Agent (#794)
 
@@ -535,6 +586,7 @@ After choosing a launcher for a new Agent, select this run's model from the “M
 
 - **Start host**: New Agent requests the catalog for the selected host and keeps separate lists for each host on the same computer. Without an explicit selection, the catalog and the start both use the machine's default host. Changing the host, including by selecting or clearing a workspace, clears Antigravity's selected model, effort, and preset. An explicit Antigravity pick uses the launcher's native effort unless the user picks an effort for this start.
 - **Ask the CLI, not configuration files**: settings.json, config.toml, and launcher environment variables contain only defaults and gateway addresses. The CLI combines its own aliases with the gateway's `/models` response; parsing configuration yourself misses variables set by ~/.zshrc launchers and alias mappings. node starts the CLI once using the launcher as-is (`node/launcher_models.go`): Claude Code receives an `initialize` control request in headless streaming-JSON mode; the response's `models` is the `/model` menu (default / opus / sonnet / haiku resolve to actual models under this launcher's settings, plus every gateway model). Codex uses `model/list` from `codex app-server` (paginated, excluding `hidden`). Kill the entire process group once the list arrives; no messages are sent and no model is called. This Claude run uses `disableAllHooks` (merged with the launcher's own `--settings`), so neither Persona nor user hooks mistake it for a session start.
+- **In the user's shell**: a shell launcher runs in the shell the node runs every launcher in (`interactiveShell`; `docs/integrations/launchers.md`, "Which shell"). On a Mac that is the account's own bash or zsh as a login shell (`-lic`), so a `claude` that nvm puts on PATH only from `~/.bash_profile`, or Homebrew from `~/.zprofile`, is found as in Terminal; before #16217 the launchd node ran `zsh -ic` and the list failed with `command not found: claude` while sessions, typed into a login tab, started.
 - **A managed provider's gateway models, read by the node** (#8417): with `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` on, Claude Code adds the gateway's `/v1/models` entries ("From gateway") to `/model`. It keeps them in one file per config directory (`<config dir>/cache/gateway-models.json`) for the base URL it fetched last, and fetches in the background. The `initialize` answer therefore holds the list of whichever provider was asked about before. For a managed Claude Code provider whose discovery is on, the node makes the same request while the CLI starts (`node/launcher_gateway_models.go`): `GET <base>/v1/models?limit=1000` with the launch's credential, `anthropic-version`, custom headers and proxy. The switch, the headers and the proxy are read as Claude Code reads them: the provider's env, then the user's settings env, then the environment. The credential is only the provider's own (its key, or one its env sets): a token from the user's settings or the shell belongs to another gateway, and a launch never sends it there. Anthropic's own API (`*.anthropic.com`) is not asked, as Claude Code does not ask it. The node keeps only the IDs Claude Code keeps (`claude` or `anthropic` in the ID) and adds those the CLI's answer lacks after it, matching by ID or by what an alias resolves to, with or without `[1m]`. Discovery off, no credential of the provider's own (a withheld provider before its pull), a failed request or a non-2xx answer: the CLI's answer stands alone. The models run with the provider's context settings like any picked model (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`).
 - **One row per model** (#10365): Claude Code lists each tier alias as a row of its own, and on a gateway provider whose tiers all name one model (Persona fills a tier left empty with the provider's model) they all read the same: such a provider's live list showed `opus`, `fable`, `sonnet` and `haiku` as four "Opus 5.5" rows, and the gateway's entry for another route of that model (`kiro/claude-opus-5-5`) as a fifth. The manager folds the list once, after the provider's and its preset's models are added (`foldModels` in `assistant/models_launchers_fold.go`), so every picker on every client gets it (`purpose=assistant`, New Agent, Model configuration, Lark's `/model`): within one launcher, the rows that run the same model (what an alias resolves to, else the ID) with the same context window become one row, at the first one's place. The window is the one the provider declares for that model (a model over 200K runs as `<id>[1m]` with it, so both spellings count it), else 1M for a `[1m]` name, else Claude Code's own: `x` and `x[1m]` stay two rows unless the provider declares `x` over 200K. The Default row never folds (it sends no model and follows the launcher's configuration), nor `opusplan` (outside plan mode it runs another model), nor an ID typed before. On a Persona-managed provider (a launcher, or a Messages API provider, which is started as Claude Code too) whose effective Base URL (its env's `ANTHROPIC_BASE_URL` over its own) is not Anthropic's API, the row's ID is the concrete model (a member that runs as itself, else what the aliases resolve to), so a pick sends an ID the gateway serves; elsewhere it is the first member's, which Claude Code resolves. Its name is the first member's own name, its efforts and speeds the first member's that lists any. The other spellings are the row's `aliases` and stay the launcher's: a kept pick, a Model configuration model or an Agent preset naming `opus` keeps working (`listsModel`, `launcherModelSet` and the alias map readiness reads), is not remembered as a typed ID, and selects the row in the web. Nothing folds across launchers, routes or windows: `kiro/claude-opus-5-5` may reach another upstream service than `claude-opus-5-5`. Rows of one launcher that still read the same with different IDs get the route before the ID's `/` after the name, "Opus 5.5 (kiro)" (`assistant-models.model_route_name`), and the one without a route keeps the plain name. The node's own list, whose order the assistant's fallback follows, is not folded. Apple and Android match a saved pick by exact row ID first, then against `aliases`, so the existing folded row is selected without a duplicate typed row or a redundant write: Apple in its conversation, starter, running-model and New Agent pickers, Android (which decodes `proto.AgentModel.aliases`) in the Persona, running-Agent and New Agent panels.
 - **Cache**: node caches by “launcher + managed-launcher settings” for 10 minutes, sharing one CLI invocation across simultaneous requests. After that, a list up to 24 hours old is still answered at once while the CLI is asked again in the background, so the picker does not wait for it every ten minutes (#1501). `?refresh=1` (pull to refresh or retry after an error in the app) asks again and waits. Measured: about 4 seconds for Claude Code, under 1 second for Codex.

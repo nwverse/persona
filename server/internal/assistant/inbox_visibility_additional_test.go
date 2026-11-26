@@ -411,7 +411,7 @@ func TestInboxVisibilityQuarantineRetainsAuditAcrossReload(t *testing.T) {
 
 	next := newInboxHub(t)
 	st := h.st
-	next.store = func() Store { return st }
+	next.setStore(func() Store { return st })
 	next.setConfig(func(c *assistantwire.InboxConfig) { c.Visibility = visibilityTestConfig() })
 	if err := next.inboxReady(t.Context()); err != nil {
 		t.Fatal(err)

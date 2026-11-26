@@ -5,7 +5,8 @@ import { t } from "../i18n";
 import { checkUpdate, CONFIGURATION_VERSION, ConfigurationError, type ConfigurationDocument, type ConfigurationField, type ConfigurationSource, type ConfigurationUpdate } from "../lib/configuration/contract";
 import { getState } from "../lib/store";
 import { hubServes, moduleState, registeredModules, subscribeModules } from "./module-host";
-import { MODULE_SWITCH_KEY, moduleSwitchedOff, setModuleSwitchedOff } from "./module-switch";
+import { MODULE_SWITCH_KEY, moduleSwitchedOff } from "./module-switch";
+import { setModuleSwitchedOff } from "./module-switch-write";
 
 export const MODULE_FEATURES_ID = "features";
 

@@ -1263,17 +1263,14 @@ func TestBoundTurnEndsBeforeTheLinkSubscribes(t *testing.T) {
 	if n, sub := hub.subscribes("a1"); n != 1 || sub["since_seq"] != float64(0) {
 		t.Fatalf("subscribed %d times, from %v; want the empty conversation's base", n, sub["since_seq"])
 	}
-	// Finish after the delayed subscription, not at an arbitrary point in its flight. From base 0 the empty
-	// conversation has no backlog, so this still proves that the turn's end travels over the new link.
-	hub.subscribed("a1")
-	if _, sub := hub.subscribes("a1"); sub["since_seq"] != float64(0) {
-		t.Fatalf("the new link starts at %v, want 0", sub["since_seq"])
-	}
+	// The turn ends while that subscription waits at the hub (subReady): only what the hub sends back when it lets the
+	// subscription in can bring the turn's end to the link.
 	hub.status("a1", "working")
 	hub.add("a1", proto.Item{Role: "assistant", Kind: proto.KindText, Text: "测试在后台跑了，单元测试都过了。"})
 	hub.edit("a1", func(s *fakeSession) { s.background = 1 })
 	hub.end("a1")
 	release()
+	hub.subscribed("a1")
 	waitFor(t, "the link to receive the backlog through the turn end", func() bool {
 		pl.link.mu.Lock()
 		defer pl.link.mu.Unlock()
