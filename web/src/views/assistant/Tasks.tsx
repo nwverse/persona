@@ -85,6 +85,7 @@ import { lazyPage } from "../../lib/lazy-page";
 const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEditDialog));
 // "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
 const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
+const TaskWaitInfo = lazyPage(() => import("./TaskWaitInfo").then((m) => m.TaskWaitInfo));
 const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRows));
 // the Finished tray's rows, seeing one and its empty line come with its first opening, in the Parked rows' chunk (#10922)
 const FinishedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.FinishedTaskRows));
@@ -95,7 +96,7 @@ import { machineStartBlocked, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { requestHome, requestHomeMachine } from "../../lib/child-sessions";
-import { stateName, type WaitReason } from "../../lib/state-labels";
+import { stateName, waitSummary, type WaitReason } from "../../lib/state-labels";
 import { statusWord, waitOf } from "../../lib/todo-wait-reason";
 import { EDITABLE } from "../../lib/shortcuts";
 
@@ -798,7 +799,7 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
         t: todo,
         st,
         ask: st === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined,
-        limit: st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
+        limit: todo.wait != null ? waitSummary(todo.wait) : st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
       };
     });
 }
@@ -880,7 +881,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const agentActive = !finished && state !== "cancelled" && task?.active;
   const active = liveWork || agentActive || ["working", "waiting", "unread"].includes(state);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
-  const parked = active || finished || state === "cancelled" ? undefined : parkedLine(todo);
+  const parked = todo?.wait != null || active || finished || state === "cancelled" ? undefined : parkedLine(todo);
   // the status column is the Agent's own state, drawn with the Agents' marks; the to-do's own state is its chip (#6492)
   const agentKey = agentRowKey({ live: !!liveWork, status: state, lead: task?.lead, todo: !!todo, starting });
   const rowIsFinished = !countsOpen && finished;
@@ -892,7 +893,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const reviewing = !!supervisorReview && !liveWork && !finished && state !== "cancelled";
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
   // what a waiting task waits for (#3274): its agent's own line for it
-  const waits = useStore((s) => (todo && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
+  const waits = useStore((s) => (todo && todo.wait == null && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
   // stopped and not done: the hub's completion check says why (#3180); an agent's open question or waiting line says more
   const why = ask || waits ? undefined : stoppedReason(todo, state);
   const stopped = why === undefined ? undefined : why ? t("assistant-tasks.progress_stopped_reason", { reason: why }) : t("assistant-tasks.progress_stopped");
@@ -900,11 +901,11 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const orphan = todo && !ask ? orphanedLine(todo) : undefined;
   const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
   // a usage limit says what stopped it and when it goes on (the status word on the right says only that it did)
-  const limit = state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
+  const limit = todo?.wait == null && state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
     : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
-  return (
+  const row = (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => {
       onOpen?.();
       if (card.todo_id) openTask(card.todo_id);
@@ -918,7 +919,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
           <span className="min-w-0 truncate text-sm font-semibold" title={title}>{title}</span>
           {chip && <span data-task-todo-state className="max-w-1/2 shrink-0 truncate rounded-full bg-field px-1.5 text-xs text-ink-2">{todoChipLabel(chip)}</span>}
         </div>
-        <Suspense fallback={null}><TaskActivityDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} todo={active && todo?.supervision?.parked?.waiting_on === "date" ? todo : undefined} /></Suspense>
+        {(todo?.wait == null || liveWork) && <Suspense fallback={null}><TaskActivityDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} todo={todo?.wait == null && active && todo?.supervision?.parked?.waiting_on === "date" ? todo : undefined} /></Suspense>}
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
       {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
@@ -931,6 +932,8 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
       </span>
     </button>
   );
+  if (todo?.wait == null) return row;
+  return <div>{row}<div className="px-3 pb-2.5"><Suspense fallback={null}><TaskWaitInfo todo={todo} /></Suspense></div></div>;
 }
 
 /** An honest count meter with a readable value and a larger hover target on its task row. */
@@ -949,6 +952,7 @@ function TaskProgressMeter({ value, total, blocked, title }: { value: number; to
 /** The task's line in Needs you when no card of its agent stands for it: what it waits for (a waiting one's, `wait`,
  *  #11090). */
 export function waitsLabel(todo: Todo, status: TodoStatus, wait?: WaitReason): string {
+  if (todo.wait != null) return waitSummary(todo.wait);
   if (todo.supervision?.state === "pending_review") return t("assistant-tasks.review_pending");
   if (todo.supervision?.state === "needs_user") return t("assistant-tasks.review_needs_user");
   return TODO_STATUS_INFO[status] ? statusWord(status, wait) : t("assistant-tasks.review_needs_user");

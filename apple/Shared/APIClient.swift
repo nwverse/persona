@@ -1370,6 +1370,8 @@ nonisolated struct APIClient: Sendable {
     struct DeviceTokens: Decodable, Sendable {
         var tokens: [DeviceToken]
         var current: String?
+        /// Credential IDs with a live connection to the hub; nil from an older hub.
+        var online: [String]?
         /// Per credential, the push way of the device it registered last; nil from an older hub.
         var push: [String: PushRoute]?
         /// Which device takes the phone tools' calls (docs/apple/phone-tools.md); nil from an older hub.
@@ -1383,8 +1385,19 @@ nonisolated struct APIClient: Sendable {
     }
 
     /// Trades this credential for a device's own (kind "watch": answer-only).
-    func createToken(name: String, kind: String) async throws -> NewToken {
-        try JSON.decoder.decode(NewToken.self, from: try await request("POST", "/api/v1/auth/tokens", body: ["name": name, "kind": kind]))
+    /// When `replaces` names an earlier credential of the same kind, the hub revokes it alongside the exchange.
+    func createToken(name: String, kind: String, replaces: String? = nil) async throws -> NewToken {
+        let base = ["name": name, "kind": kind]
+        if let replaces, !replaces.isEmpty {
+            var withReplaces = base
+            withReplaces["replaces"] = replaces
+            do {
+                return try JSON.decoder.decode(NewToken.self, from: try await request("POST", "/api/v1/auth/tokens", body: withReplaces))
+            } catch let error as APIError where error.status == 400 {
+                // An older hub that rejects unknown fields on /auth/tokens answers 400; retry once without `replaces`.
+            }
+        }
+        return try JSON.decoder.decode(NewToken.self, from: try await request("POST", "/api/v1/auth/tokens", body: base))
     }
     func deviceTokens(timeout: TimeInterval = 30) async throws -> DeviceTokens {
         try JSON.decoder.decode(DeviceTokens.self, from: try await request("GET", "/api/v1/auth/tokens", timeout: timeout))
