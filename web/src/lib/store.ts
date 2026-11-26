@@ -303,7 +303,7 @@ onRuntimeChanges((upsert, remove) => {
 });
 
 /** What a summary row (`waiting` present) says by leaving a field out: none (docs/protocol/protocol.md "Summary rows"). */
-const SUMMARY_FLAGS = ["quiet", "awaits_reply", "starting", "awaiting_first_message", "start_error", "start_error_code",
+const SUMMARY_FLAGS = ["view", "locallySeen", "quiet", "awaits_reply", "starting", "awaiting_first_message", "start_error", "start_error_code",
   "turn_error", "turn_error_kind", "turn_error_code", "turn_error_resets_at", "turn_error_resumes"] as const;
 
 /** `row` as a changed list row says it is now: a complete row is the row; a summary row goes over the fields it
