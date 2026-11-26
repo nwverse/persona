@@ -69,4 +69,3 @@ describe("OperationSteps", () => {
     expect(failed).toContain("命令行程序没装上：example-cli：校验不对");
   });
 });
-

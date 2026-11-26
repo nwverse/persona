@@ -329,13 +329,18 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 		if err := s.retryOn(ctx, &pt, m, with); err != nil {
 			return "", err
 		}
+	} else {
+		pt.RetryFromAgent, pt.RetryFromAllowAll = "", false
+		if m, ok := s.machineByName(ctx, pt.Machine); ok {
+			s.rememberRetryFrom(ctx, &pt, m, from)
+		}
 	}
 	st, claimed := s.claimTaskStart(todo.ID)
 	if !claimed {
 		return "", errors.New("it is starting again already")
 	}
-	moved := pt.Launcher != p.Tasks[i].Launcher || pt.Model != p.Tasks[i].Model // retryOn pinned another
-	switched := pt.Launcher != p.Tasks[i].Launcher && pt.Launcher != from       // not the launcher that failed
+	moved := pt.Launcher != p.Tasks[i].Launcher || pt.Model != p.Tasks[i].Model || pt.Tier != p.Tasks[i].Tier // retryOn pinned another launch or cleared its tier
+	switched := pt.Launcher != p.Tasks[i].Launcher && pt.Launcher != from                                     // not the launcher that failed
 	inPane := ""
 	if time.Now().Before(pt.Start.Until) && !switched && pt.Model == p.Tasks[i].Model {
 		inPane = pt.Start.Pane // another launcher starts in a new tab: an agent of the old one may hold the kept tab
@@ -344,6 +349,10 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 		if moved {
 			t.Launcher, t.Model, t.Tier, t.Effort, t.Permission, t.Why = pt.Launcher, pt.Model, pt.Tier, pt.Effort, pt.Permission, pt.Why
 		}
+		if with.launcher != "" {
+			t.LauncherDefaultModel = pt.LauncherDefaultModel
+		}
+		t.RetryFromAgent, t.RetryFromAllowAll = pt.RetryFromAgent, pt.RetryFromAllowAll
 		t.Start.Attempt, t.Start.By, t.Start.At = attempt, "assistant", time.Now().UTC()
 		t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", nil, nil
 	}); err != nil {
@@ -499,21 +508,26 @@ func (s *Service) remedyGoesTo(to string, list []superviseSignal) {
 // remedyTurnEnded: conversation id's turn ended. A supervision turn that carried a failed start (remedySeen, by its
 // hold, in the conversation the message was for) ends what it left: a start still being remedied and not starting
 // again fails for good; a failure the turn did not tell the user about gets the hub's notice.
-func (s *Service) remedyTurnEnded(ctx context.Context, id string) {
+func (s *Service) remedyTurnEnded(ctx context.Context, id string) supervisionEnd {
+	end := s.endSupervisionTurn(ctx, id, time.Now(), false)
+	s.remedyFinishedStarts(ctx, end)
+	return end
+}
+
+func (s *Service) remedyFinishedStarts(ctx context.Context, end supervisionEnd) {
+	if end.hold.At.IsZero() {
+		return
+	}
 	b := &s.supervise
 	b.mu.Lock()
-	held, ok := b.hold[id]
-	told := b.visible[id]
 	var due []string
-	if ok {
-		for todo, seen := range b.failSeen {
-			if seen.to != "" && seen.to != id {
-				continue // another conversation's message carried it
-			}
-			if !held.Before(seen.at) {
-				due = append(due, todo)
-				delete(b.failSeen, todo)
-			}
+	for todo, seen := range b.failSeen {
+		if seen.to != "" && seen.to != end.key {
+			continue // another conversation's message carried it
+		}
+		if !end.hold.At.Before(seen.at) {
+			due = append(due, todo)
+			delete(b.failSeen, todo)
 		}
 	}
 	b.mu.Unlock()
@@ -523,10 +537,10 @@ func (s *Service) remedyTurnEnded(ctx context.Context, id string) {
 			continue
 		}
 		if t.DoneAt == nil {
-			s.giveUpStart(ctx, todo, "assistant", told)
+			s.giveUpStart(ctx, todo, "assistant", end.hold.Visible)
 			continue
 		}
-		if t.StartError != "" && !told && !t.Cancelled() {
+		if t.StartError != "" && !end.hold.Visible && !t.Cancelled() {
 			s.failedStartNotice(ctx, t.Origin, t, "", t.StartError)
 		}
 	}

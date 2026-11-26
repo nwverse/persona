@@ -120,7 +120,7 @@ object ForwardMessage {
     private fun quoteHeading(c: MessageContext, resources: Resources): String = when {
         c.kind == KIND -> heading(c.attributes, resources)
         c.kind == ChatLinkContext.QUOTE && c.title == ChatLinkContext.QUOTE_ME -> resources.getString(R.string.chat_quote_yours)
-        c.url?.startsWith(SESSION_CONTEXT_URL) == true -> resources.getString(R.string.chat_quote_session, c.title)
+        c.url?.let(::isSessionContextUrl) == true -> resources.getString(R.string.chat_quote_session, c.title)
         else -> resources.getString(R.string.chat_quote_from,
             c.title.ifBlank { c.url ?: resources.getString(R.string.chat_forward_messages) })
     }
@@ -473,7 +473,7 @@ internal fun deliverForward(target: ForwardTarget, messages: List<ForwardPlaceme
  * (the whole of it read when it goes, if cut). [session] and [machine] are the chat's, as its page has them.
  */
 internal fun forwardDraftOf(target: MessageTarget, key: SessionKey, session: Session?, machine: Machine?, style: ChatRenderStyle,
-    forwarding: ChatForwarding): ForwardDraft {
+    forwarding: ChatForwarding, maxPhotos: Int = persona.core.contracts.ImageLimits.DEFAULT_PER_MESSAGE): ForwardDraft {
     val persona = style == ChatRenderStyle.Assistant || session?.assistant == true
     val role = when {
         target.from != null -> ForwardMessage.Role.Other
@@ -488,5 +488,5 @@ internal fun forwardDraftOf(target: MessageTarget, key: SessionKey, session: Ses
         project = if (persona) null else session?.forwardProject, machine = if (persona) null else machine?.displayName,
         time = parseTime(target.time))
     return ForwardDraft(source, target.raw, target.cut,
-        photos = if (role == ForwardMessage.Role.User) messageModel(target.raw, user = true).images.take(MAX_COMPOSER_MEDIA) else emptyList())
+        photos = if (role == ForwardMessage.Role.User) messageModel(target.raw, user = true).images.take(maxPhotos) else emptyList())
 }
