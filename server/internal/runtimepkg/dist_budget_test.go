@@ -46,8 +46,9 @@ import (
 // After preserving Antigravity modes (#16300), the packages measured 278,334 B. Filtering botmux marker
 // lines before shortening runtime previews adds 549 B (#16310).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
+// Keeping the selected Antigravity model across ACP resumes and effort changes adds 749 B.
 func TestDistBudget(t *testing.T) {
-	const budget = 278_883
+	const budget = 279_632
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
