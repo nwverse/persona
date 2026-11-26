@@ -488,5 +488,13 @@
   "causal_trace_cat_blocker": "Blocker",
   "causal_trace_cat_recovery": "Recovery",
   "causal_trace_cat_review": "Review",
-  "causal_trace_cat_pr": "PR"
+  "causal_trace_cat_pr": "PR",
+  "status_pr_conflicts": "Merge conflicts",
+  "status_pr_changes_requested": "Changes requested",
+  "status_pr_checks_failed": "Checks failed",
+  "status_pr_in_review": "In review",
+  "status_pr_checks_pending": "Checks running",
+  "status_pr_waiting_merge": "Waiting to merge",
+  "status_parked": "Parked",
+  "status_tracking": "Tracking"
 }

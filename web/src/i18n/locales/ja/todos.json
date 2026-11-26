@@ -476,5 +476,13 @@
   "causal_trace_cat_blocker": "ブロッカー",
   "causal_trace_cat_recovery": "復旧",
   "causal_trace_cat_review": "レビュー",
-  "causal_trace_cat_pr": "PR"
+  "causal_trace_cat_pr": "PR",
+  "status_pr_conflicts": "マージ競合あり",
+  "status_pr_changes_requested": "修正依頼あり",
+  "status_pr_checks_failed": "チェック失敗",
+  "status_pr_in_review": "レビュー待ち",
+  "status_pr_checks_pending": "チェック中",
+  "status_pr_waiting_merge": "マージ待ち",
+  "status_parked": "保留中",
+  "status_tracking": "追跡中"
 }

@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
+import persona.core.contracts.generated.TodoWait
 
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md; docs/protocol/protocol.md "Tasks and the chat feed"): the plans the
 // assistant hands the user, the todos that are tasks, and the items the hub inserts into a conversation (its feed).
@@ -232,6 +233,8 @@ data class Todo(
     val orphaned: TodoOrphaned? = null,
     /** Empty for an ordinary to-do or task; "concern" for one of the owner's concerns. Unknown values stay ordinary. */
     val kind: String = "",
+    /** Hub-projected wait summary (PR merge blockers, parked wait, etc.); null on older hubs or non-waiting items. */
+    val wait: TodoWait? = null,
 ) {
     val isDone: Boolean get() = doneAt != null
     /** Closed by cancellation, including the legacy supervision-only representation; never counted as completed (#5732). */

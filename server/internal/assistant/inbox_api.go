@@ -86,10 +86,16 @@ func (s *Service) inboxRoutes() {
 			apierr.Write(w, http.StatusNotFound, errNoInboxItem)
 			return
 		}
+		// Its knowledge base chat (kb_inbox.go), for the user's own apps.
+		var chat *inboxKBChat
+		if fullRole(r) {
+			chat = s.itemKBChat(r.Context(), &c)
+		}
 		apierr.WriteJSON(w, struct {
 			InboxItem
 			ReplyTarget *inboxMailTarget `json:"reply_target,omitempty"`
-		}{c, mailTarget(c)})
+			KBChat      *inboxKBChat     `json:"kb_chat,omitempty"`
+		}{c, mailTarget(c), chat})
 	})
 	s.handle("POST /api/v1/inbox/{id}/done", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
