@@ -123,7 +123,7 @@ func main() {
 		os.Exit(sandbox.Run(os.Args[2:], os.Stderr))
 	}
 	var err error
-	if handled, nerr := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad}); handled {
+	if handled, nerr := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad, Edition: update.ThisEdition}); handled {
 		finish(nerr)
 		return
 	}
