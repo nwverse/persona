@@ -181,8 +181,14 @@ func (m *Machine) startDeployOf(auto bool) (*deployRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	if auto && (pkg.Fallback || pkg.Version != m.d.hubVersion()) {
-		return nil, errFallbackOnRedeploy
+	if auto {
+		cfg := m.d.config()
+		if !cfg.AutoUpdateNodes {
+			return nil, errAutoNodeUpdatesDisabled
+		}
+		if pkg.Fallback || pkg.Version != cfg.HubVersion {
+			return nil, errFallbackOnRedeploy
+		}
 	}
 	// A temporary local node takes the manager's build when spawned. For a
 	// resident, never put a stand-in release into a shared local executable.
@@ -433,19 +439,11 @@ func (d *Devices) updateNodes(ctx context.Context) {
 			}
 			continue
 		}
-		if !online {
+		if !online || !buildDiffers(d.hubVersion(), info.Version) {
 			continue
 		}
-		// The build its platform resolves to (the hub's, or the newest release this manager drives); not known while
-		// the release site is away, and then left alone. A fallback build is offered, sent only on Redeploy.
-		pkg, known := d.resolvedPackageKnown(ctx, info)
-		if !known || !buildDiffers(pkg.Version, info.Version) {
-			continue
-		}
-		if pkg.Fallback {
-			d.logf("update: [%s] node %s is not build %s, a fallback (not the hub's version): sent only on Redeploy", m.cfg.ID, info.Version, pkg.Version)
-			continue
-		}
+		// An explicit package check must look beyond a cached fallback. A
+		// private publisher may have activated the exact build since then.
 		if err := m.startAutoDeploy(); err != nil {
 			d.logf("update: [%s] %v", m.cfg.ID, err)
 			continue

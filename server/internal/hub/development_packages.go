@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -162,7 +163,8 @@ func (h *Hub) serveDevelopmentPackage(w http.ResponseWriter, r *http.Request) {
 
 func servePublishedPackage(w http.ResponseWriter, r *http.Request, t devicewire.DevelopmentTarget) {
 	w.Header().Set(devicewire.DevelopmentCommitHeader, t.Commit)
-	root, err := os.OpenRoot(identity.NodeBinaryDir())
+	dir := identity.NodeBinaryDir()
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			http.NotFound(w, r)
@@ -173,6 +175,15 @@ func servePublishedPackage(w http.ResponseWriter, r *http.Request, t devicewire.
 	}
 	defer root.Close()
 	index, err := root.Open(update.PackageIndex)
+	managed := false
+	if errors.Is(err, os.ErrNotExist) {
+		// The private release publisher has its own immutable directory.
+		// Its manifest pins the unpacked binaries without a second index.
+		if info, statErr := os.Lstat(dir); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			index, err = root.Open("manifest.json")
+			managed = true
+		}
+	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			http.NotFound(w, r)
@@ -195,6 +206,20 @@ func servePublishedPackage(w http.ResponseWriter, r *http.Request, t devicewire.
 	if m.Version != t.Version || m.Build != t.Build || m.Commit != t.Commit {
 		http.NotFound(w, r)
 		return
+	}
+	if managed {
+		useInstalledArtifacts(root, m.Files, "personad")
+		useInstalledArtifacts(root, m.Nodes["persona-node"], "persona-node")
+		useInstalledArtifacts(root, m.Programs["persona-manager"], "persona-manager")
+		if len(m.Files) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		data, err = json.Marshal(m)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 	}
 	name := r.PathValue("file")
 	if name == "manifest.json" {
@@ -222,6 +247,22 @@ func servePublishedPackage(w http.ResponseWriter, r *http.Request, t devicewire.
 		return
 	}
 	http.ServeContent(w, r, name, info.ModTime(), f)
+}
+
+func useInstalledArtifacts(root *os.Root, files map[string]update.File, program string) {
+	for platform, f := range files {
+		name := update.PackageName(program, platform)
+		if !developmentArchive.MatchString(name+".gz") || f.BinarySHA256 == "" {
+			delete(files, platform)
+			continue
+		}
+		info, err := root.Lstat(name)
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+			delete(files, platform)
+			continue
+		}
+		files[platform] = update.File{Name: name, Size: info.Size(), SHA256: f.BinarySHA256, BinarySHA256: f.BinarySHA256}
+	}
 }
 
 func listedPackageFile(m *update.Manifest, name string) bool {

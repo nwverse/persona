@@ -6,12 +6,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/procinfo"
 	"github.com/nwverse/persona/server/internal/update"
 	"github.com/nwverse/persona/server/internal/update/updatetest"
 )
@@ -143,18 +145,23 @@ func TestConfirmedUpdateRequestsOneManagedResidentHandover(t *testing.T) {
 			if exe, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", cmd.Process.Pid)); !strings.HasSuffix(exe, " (deleted)") {
 				t.Fatalf("fixture must still drain on the old inode: %q", exe)
 			}
-			if err := SyncLocalNode(t.Context(), p.ToVersion, p.ToBuild); err != nil {
-				t.Fatal(err)
-			}
 			waitFor(t, "main-pid HUP", func() bool {
 				data, _ := os.ReadFile(filepath.Join(root, "node.hup"))
 				return string(data) == "HUP\n"
 			})
+			if err := SyncLocalNode(t.Context(), p.ToVersion, p.ToBuild); err != nil {
+				t.Fatal(err)
+			}
 			if b, _ := os.ReadFile(filepath.Join(root, "node.hup")); string(b) != "HUP\n" {
 				t.Fatalf("MainPID received %q", b)
 			}
 			if _, err := os.Stat(filepath.Join(root, "child.hup")); !os.IsNotExist(err) {
 				t.Fatalf("child was signaled: %v", err)
+			}
+			ready, _ := os.ReadFile(filepath.Join(root, "child.ready"))
+			child, _ := strconv.Atoi(string(ready))
+			if procinfo.StartMark(child) == "" {
+				t.Fatal("the resident's child stopped")
 			}
 		})
 	}
