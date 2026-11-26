@@ -54,6 +54,9 @@ type TodoHandoff struct {
 	New       bool   `json:"new,omitempty"`
 	MachineID string `json:"machine_id,omitempty"`
 	Cwd       string `json:"cwd,omitempty"`
+	// Agent is the resolved target agent kind (e.g. "agy", "claude", "codex") when known,
+	// so Antigravity-specific byte-0 slash-command ordering applies only to agy targets.
+	Agent string `json:"agent,omitempty"`
 }
 
 // TodoHandoffResult is assistant.todo_handoff's answer: the todo (Found false: no such todo) and Text with the todo's

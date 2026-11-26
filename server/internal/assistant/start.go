@@ -465,6 +465,12 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	// in Persona's profile (#10859).
 	fromSetting := p.GuestTools == nil && purpose != purposeAgent && s.withNewConversationProfile(ctx, machine, params)
 	used, _ := params["launcher"].(string)
+	if handoff, ok := ctx.Value(startMainHandoffKey{}).(mainHandoff); ok && handoff.From != "" && (strings.TrimSpace(p.Text) != "" || len(p.Images) > 0) {
+		agyTarget := used != "" && s.isAgyTarget(withUnhidden(ctx, used), machine, "", used)
+		rendered := s.renderHandoff(ctx, handoff, p.Text, agyTarget)
+		params["text"] = rendered
+		p.Text = rendered
+	}
 	// Settle permission_mode after model resolution so Model Configuration's permission_mode applies before falling
 	// back to the assistant default / bypassPermissions, while preserving Inbox and guest safety boundaries.
 	switch {
@@ -785,6 +791,10 @@ func (s *Service) saveHandoff(ctx context.Context, h mainHandoff) error {
 	return nil
 }
 
+// startMainHandoffKey carries the pending main-conversation handoff into startOn so renderHandoff
+// can inspect the final resolved launcher before deciding whether to keep an AGY slash command at byte 0.
+type startMainHandoffKey struct{}
+
 // startMain starts a new main conversation with the user's first message: what the old one left goes before it
 // (prompts/assistant/main_handoff), once. Started without a message, it waits for the first one sent to it.
 func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, error) {
@@ -796,7 +806,7 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	}
 	empty := strings.TrimSpace(p.Text) == "" && len(p.Images) == 0
 	if handoff.From != "" && !empty {
-		p.Text = s.renderHandoff(ctx, handoff, p.Text)
+		ctx = context.WithValue(ctx, startMainHandoffKey{}, handoff)
 	}
 	p.MachineID, p.Purpose, p.Main = "", "", false
 	p.Origin, p.OriginRef, p.OpenedBy = OriginUser, "", "" // the main conversation is the user's, whatever channel opened it
@@ -1059,7 +1069,7 @@ func (s *Service) findSession(ctx context.Context, id, preferred string) (string
 
 // handoffFor is the text of a message to conversation sid: with what the old main conversation left before it when
 // sid is the new main one that was started empty and this is the first message to it.
-func (s *Service) handoffFor(ctx context.Context, sid, text string) string {
+func (s *Service) handoffFor(ctx context.Context, sid, text string, agyTarget bool) string {
 	if sid == "" {
 		return text
 	}
@@ -1073,16 +1083,21 @@ func (s *Service) handoffFor(ctx context.Context, sid, text string) string {
 		s.logf("assistant: clear what the old main conversation left: %v", err)
 		return text
 	}
-	return s.renderHandoff(ctx, handoff, text)
+	return s.renderHandoff(ctx, handoff, text, agyTarget)
 }
 
 // renderHandoff puts what the old main conversation left before text (prompts/assistant/main_handoff).
-func (s *Service) renderHandoff(ctx context.Context, handoff mainHandoff, text string) string {
+// Only Antigravity targets reorder allowlisted slash commands to byte 0 so other engines keep their exact order.
+func (s *Service) renderHandoff(ctx context.Context, handoff mainHandoff, text string, agyTarget bool) string {
 	hp := prompts.MainHandoff{FromID: handoff.From, Summary: handoff.Summary, Text: text}
 	local := handoff.Until.In(s.location(ctx))
 	hp.Until = fmt.Sprintf("%d月%d日 %02d:%02d", local.Month(), local.Day(), local.Hour(), local.Minute())
 	for _, t := range handoff.Recent {
 		hp.Recent = append(hp.Recent, prompts.HandoffTurn{Role: t.Role, Text: t.Text})
+	}
+	if agyTarget && proto.HasAgySlashCommand(text) {
+		hp.Text = ""
+		return proto.PrependPreservingAgySlashCommand(prompts.RenderMainHandoff(hp), text)
 	}
 	return prompts.RenderMainHandoff(hp)
 }
@@ -1528,7 +1543,22 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if text, ok := params["text"].(string); ok && !p.VerbatimText {
 		text, own = s.fillWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)
 		if main {
-			left := s.handoffFor(ctx, p.SessionID, text)
+			launcher, _ := params["launcher"].(string)
+			agent := ""
+			if current, known := s.session(ctx, p.MachineID, p.SessionID); known {
+				agent = current.Agent
+				if launcher == "" {
+					launcher = current.Launcher
+				}
+			}
+			execMachine := s.logicalExecutionMachine(ctx, p.MachineID, p.SessionID)
+			agyTarget := false
+			if launcher != "" {
+				agyTarget = s.isAgyTarget(withUnhidden(ctx, launcher), execMachine, "", launcher)
+			} else {
+				agyTarget = agent == "agy"
+			}
+			left := s.handoffFor(ctx, p.SessionID, text, agyTarget)
 			own = own && left == text // what the old main conversation left is not the sender's words
 			text = left
 		}

@@ -2255,14 +2255,15 @@ func (s *Service) TodoHandoff(ctx context.Context, h TodoHandoff) (TodoHandoffRe
 		return TodoHandoffResult{Text: h.Text, Status: http.StatusNotFound, Error: "todo not found"}, nil
 	}
 	text := h.Text
+	agyTarget := h.Agent == "agy"
 	if strings.TrimSpace(text) != "" {
-		text = s.withTodoDecisions(ctx, h.TodoID, text)
+		text = s.withTodoDecisionsForAgent(ctx, h.TodoID, agyTarget, text)
 		if h.New {
 			lead := ""
 			if t.Supervision != nil {
 				lead = t.Supervision.Supervisor
 			}
-			text = s.withProjectContextForTodo(ctx, h.MachineID, h.Cwd, lead, t, text) // a new agent: its project's background first
+			text = s.withProjectContextForTodoAgent(ctx, h.MachineID, h.Cwd, lead, t, agyTarget, text) // a new agent: its project's background first
 		}
 	}
 	res := TodoHandoffResult{Found: true, Title: t.Title, DoneAt: t.DoneAt, Text: text}

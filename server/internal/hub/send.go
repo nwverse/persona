@@ -304,10 +304,25 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			start, fresh = f, true
 		}
 	}
+	handoffAgent := ""
+	if target, ok := s, known; ok || func() bool { target, ok = m.session(sid); return ok }() {
+		handoffAgent = target.Agent
+		if handoffAgent == "" && target.Launcher != "" {
+			for _, launcher := range m.cfg.Launchers {
+				if launcher.Name == target.Launcher {
+					handoffAgent = launcher.AgentType
+					break
+				}
+			}
+			if handoffAgent == "" && target.Launcher == "agy" {
+				handoffAgent = "agy"
+			}
+		}
+	}
 	if todoID != "" {
 		// The manager checks the todo (404, 409, 503 assistant_offline while it is away); handed to the agent for it,
 		// the calls already made on it go first (#1618).
-		hand := assistantwire.TodoHandoff{TodoID: todoID, Text: text}
+		hand := assistantwire.TodoHandoff{TodoID: todoID, Text: text, Agent: handoffAgent}
 		if fresh {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, start.cwd
 		}
@@ -323,7 +338,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		}
 	} else if fresh {
 		decided, images := h.todoStartText(r.Context(), assistantwire.TodoHandoff{TodoID: start.todoID, Text: text, New: true,
-			MachineID: m.cfg.ID, Cwd: start.cwd})
+			MachineID: m.cfg.ID, Cwd: start.cwd, Agent: handoffAgent})
 		p["text"] = decided
 		if strings.TrimSpace(decided) != "" {
 			mergeTodoImages(p, images)

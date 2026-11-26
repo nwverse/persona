@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // What a finished task came to (#2820, docs/assistant/todos.md "Record conclusions on completion"). When a task the main conversation opened (its todo
@@ -626,10 +627,18 @@ func memoryVerification(r kb.ProjectMemoryRecord) (string, bool) {
 // of the directions the work belongs to (lead: the leader conversation supervising or starting it, "" none;
 // direction_notes.go) before that; the prompt as it is without any (or when it is empty: nothing to put it before).
 func (s *Service) withProjectContext(ctx context.Context, machine, dir, lead, prompt string) string {
-	return s.withProjectContextForTodo(ctx, machine, dir, lead, Todo{}, prompt)
+	return s.withProjectContextForTodoAgent(ctx, machine, dir, lead, Todo{}, false, prompt)
+}
+
+func (s *Service) withProjectContextForAgent(ctx context.Context, machine, dir, lead string, agyTarget bool, prompt string) string {
+	return s.withProjectContextForTodoAgent(ctx, machine, dir, lead, Todo{}, agyTarget, prompt)
 }
 
 func (s *Service) withProjectContextForTodo(ctx context.Context, machine, dir, lead string, t Todo, prompt string) string {
+	return s.withProjectContextForTodoAgent(ctx, machine, dir, lead, t, false, prompt)
+}
+
+func (s *Service) withProjectContextForTodoAgent(ctx context.Context, machine, dir, lead string, t Todo, agyTarget bool, prompt string) string {
 	if strings.TrimSpace(prompt) == "" {
 		return prompt
 	}
@@ -640,7 +649,13 @@ func (s *Service) withProjectContextForTodo(ctx context.Context, machine, dir, l
 		background = strings.TrimSpace(background + "\n\n" + memory)
 	}
 	if background != "" {
+		if agyTarget {
+			return proto.PrependPreservingAgySlashCommand(background, prompt)
+		}
 		return background + "\n\n" + prompt
+	}
+	if agyTarget {
+		return proto.PrependPreservingAgySlashCommand("", prompt)
 	}
 	return prompt
 }

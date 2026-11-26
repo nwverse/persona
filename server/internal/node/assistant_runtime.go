@@ -249,8 +249,11 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	// A message that is only a slash command goes on its own: with the context block in front, an agent that runs its own
 	// commands (Antigravity's /compact) takes the line for plain text, records it as `/compact/compact` and runs nothing.
 	// The snapshot is not marked as sent, so the next message carries it. A conversation's first message keeps its block:
-	// it holds the instructions the runtime needs.
-	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage
+	// it holds the instructions the runtime needs. Allowlisted Antigravity workflow commands (/boost, /teamwork, /swarm,
+	// /goal, /plan, /grill-me, etc.) are full turns, not control commands: they keep their live context snapshot, and the
+	// Antigravity companion places the user text block before the embedded context resource so byte 0 stays "/<cmd>".
+	agyPromptCommand := h.agent() == agyAgent && proto.HasAgySlashCommand(text)
+	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage && !agyPromptCommand
 	live, commit := "", func() {}
 	if !command {
 		if !public {
@@ -355,7 +358,11 @@ func runtimeCommandOnly(text string, images int) bool {
 
 // runtimeCommandWord is the lower-cased command at the start of text ("/compact"), "" when text does not start with one.
 func runtimeCommandWord(text string) string {
-	word, _, _ := strings.Cut(strings.TrimSpace(text), " ")
+	trimmed := strings.TrimSpace(text)
+	word := trimmed
+	if i := strings.IndexFunc(trimmed, unicode.IsSpace); i >= 0 {
+		word = trimmed[:i]
+	}
 	if len(word) < 2 || word[0] != '/' || !isASCIILetter(rune(word[1])) {
 		return ""
 	}

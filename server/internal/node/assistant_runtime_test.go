@@ -859,6 +859,106 @@ func TestAssistantOnARuntimeSendsASlashCommandOnItsOwn(t *testing.T) {
 	}
 }
 
+// Allowlisted Antigravity workflow commands (/boost, /teamwork, /swarm, /goal, /plan, /grill-me, etc.) are full
+// turns, not local control commands: they keep "/<cmd>" at byte 0 of text and still carry the live Assistant context
+// (placed after the text block by the Antigravity companion), while single-line /status and /compact stay bare (#10959)
+// and multiline filesystem paths are not misclassified.
+func TestAssistantOnAgyRuntimePreservesSlashCommandAndContext(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
+	hello["launchers"] = []map[string]any{{"name": agyAgent, "agent": agyAgent}}
+	host := dialRuntime(t, n, hello)
+	assistantDir := filepath.Join(n.home, ".persona", "assistant")
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": map[string]any{"session_id": "agy-asst-1", "cwd": assistantDir, "status": "idle"}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	sentAt := func(i int) (text, ctx string) {
+		t.Helper()
+		sends := host.got("session.send")
+		if len(sends) <= i {
+			t.Fatalf("%d sends, want more than %d", len(sends), i)
+		}
+		var p struct {
+			Text    string `json:"text"`
+			Context string `json:"context"`
+		}
+		_ = json.Unmarshal(sends[i], &p)
+		return p.Text, p.Context
+	}
+
+	// First turn: multiline /boost keeps byte 0 as "/boost" and still receives first-turn instructions + snapshot.
+	firstPrompt := "/boost investigate auth race\ncheck lock ordering and add regression test"
+	raw, err := nodeCall(t, n, "assistant.send", map[string]any{"launcher": agyAgent, "cwd": assistantDir, "text": firstPrompt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var startRes struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.Unmarshal(raw, &startRes)
+	sid := startRes.SessionID
+	if got, ctx := sentAt(0); got != firstPrompt || !strings.HasPrefix(got, "/boost ") || !strings.Contains(ctx, "测试时间") {
+		t.Fatalf("first turn /boost went as text=%q context=%q", got, ctx)
+	}
+
+	// Follow-up turns: single-line and multiline allowlisted commands keep byte 0 intact AND carry context.
+	sendIdx := 1
+	for _, prompt := range []string{
+		"/boost fix the retry loop",
+		"/teamwork split frontend and backend\nreport back with test logs",
+		"/swarm\ncoordinate three workers",
+		"/goal finish the migration\nkeep CI green",
+		"/plan design the rollout\nlist risks",
+		"/grill-me challenge every assumption\nfocus on rollback",
+	} {
+		if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": prompt, "client_msg_id": fmt.Sprintf("agy-cmd-%d", sendIdx)}); err != nil {
+			t.Fatal(err)
+		}
+		if got, ctx := sentAt(sendIdx); got != prompt || !strings.Contains(ctx, "测试时间") {
+			t.Fatalf("prompt %q went as text=%q context=%q", prompt, got, ctx)
+		}
+		sendIdx++
+	}
+
+	// Single-line control commands (/status, /compact) keep #10959 behavior: no context attached.
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "/status", "client_msg_id": "agy-status"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ctx := sentAt(sendIdx); got != "/status" || ctx != "" {
+		t.Fatalf("/status went as text=%q context=%q", got, ctx)
+	}
+	sendIdx++
+
+	if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": "/compact\tnow", "client_msg_id": "agy-compact"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ctx := sentAt(sendIdx); got != "/compact\tnow" || ctx != "" {
+		t.Fatalf("/compact with tab went as text=%q context=%q", got, ctx)
+	}
+	sendIdx++
+
+	// Non-allowlisted multiline paths stay ordinary messages carrying context.
+	for _, pathMsg := range []string{
+		"/Users/example/project/main.go\nplease inspect line 40",
+		"/tmp/report.md\nsummarize failures",
+		"/plan/spec.md\nreview the schema",
+		"/unknown\nnot a built-in command",
+	} {
+		if _, err := nodeCall(t, n, "session.send", map[string]any{"session_id": sid, "text": pathMsg, "client_msg_id": fmt.Sprintf("agy-path-%d", sendIdx)}); err != nil {
+			t.Fatal(err)
+		}
+		if got, ctx := sentAt(sendIdx); got != pathMsg || !strings.Contains(ctx, "测试时间") {
+			t.Fatalf("path message %q went as text=%q context=%q", pathMsg, got, ctx)
+		}
+		sendIdx++
+	}
+}
+
 func TestAssistantRuntimeStartPropagatesPermissionMode(t *testing.T) {
 	n, hub := runtimeNode(t)
 	assistantHub(hub)

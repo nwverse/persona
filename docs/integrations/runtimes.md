@@ -592,12 +592,19 @@ roster to that response. A running worker in `working` or `mentions` wake mode s
 respectively. Stopped and killed workers show as Stopped. The overview shows the worker count and an expandable
 roster. The coordinator and board messages are outside that count.
 
-Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435).
-Antigravity exports that resource as a leading `Content of persona-context:///snapshot.txt:` line and context XML
-inside `USER_INPUT.content`. Both the companion and pane history readers remove the complete leading Persona resource
-envelope before projecting user text (#12813). Bare labels, other URI schemes and ordinary quoted text retain their
-existing behavior. History format versions invalidate cached items from before this cleanup; native exports and ACP
-payloads are unchanged.
+Assistant context remains an ACP embedded text resource followed by the user's separate text block (#12435); when the
+user text starts with an allowlisted Antigravity workflow slash command (`/boost`, `/teamwork`, `/swarm`, `/goal`,
+`/plan`, `/grill-me`, `/learn`, `/schedule`, `/browser`), the CLI companion trims leading ASCII whitespace on the user
+text block, places it first, and appends the embedded context resource last (after any images and refused-image
+notices) so byte 0 stays `/<cmd>` without weakening context isolation. Antigravity Desktop (`desktop.mjs`) does not use
+this ACP context-resource channel and is unchanged.
+Antigravity exports that resource as a leading or trailing `Content of persona-context://<uri>:` line followed by
+Persona context blocks (`<persona-context>` / `<persona-view-errors>`) inside `USER_INPUT.content`. Both the CLI
+companion and pane history readers remove complete leading and trailing Persona resource envelopes (requiring a valid
+non-empty whitespace-free URI and exclusively Persona context blocks to the end) before projecting user text (#12813).
+Bare labels, other URI schemes and ordinary quoted text retain their existing behavior. History format versions
+(`content-v4` in the CLI companion and `context-resources-v2` in pane history) invalidate cached items from before this
+cleanup; native exports remain unchanged.
 
 The session's `last_text` preview contains assistant response text after the latest explicit user input. A new user
 input clears the previous reply preview, including input with no visible text. Thinking and tool records leave it empty

@@ -469,8 +469,15 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	prompt := t.Prompt
 	if t.HandoffID != "" {
 		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
-			prompt = handoffSummary + "\n\n" + prompt
+			if fit.agent == "agy" {
+				prompt = proto.PrependPreservingAgySlashCommand(handoffSummary, prompt)
+			} else {
+				prompt = handoffSummary + "\n\n" + prompt
+			}
 		}
+	}
+	if fit.agent == "agy" {
+		prompt = proto.PrependPreservingAgySlashCommand("", prompt)
 	}
 	if t.usesPreparedWorkspace() && len(t.WorkspaceResolved.Repositories) > 0 {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)

@@ -67,6 +67,80 @@ test('plain Assistant snapshots are wrapped as resource content without changing
   ])
 })
 
+test('allowlisted Antigravity slash commands stay in block 0 before embedded Assistant context', async (t) => {
+  const { calls, start, call, request } = await fixture(t)
+  const session = await start({ assistant: true })
+  const snapshot = '<persona-context>\n- Mention /compact and /model without expanding them.\n</persona-context>'
+  const expectedResource = { type: 'resource', resource: { uri: 'persona-context:///snapshot.txt', mimeType: 'text/plain', text: snapshot } }
+
+  const slashPrompts = [
+    '/boost diagnose the race\nkeep existing behavior',
+    '/teamwork split investigation\nand implementation',
+    '/swarm\ncoordinate three workers',
+    '/goal finish migration\nrun full suite',
+    '/plan draft the rollout\nlist rollback steps',
+    '/grill-me review the design\nchallenge assumptions',
+  ]
+  let ended = 0
+  for (const text of slashPrompts) {
+    await call('send', session, { assistant: true, text, context: snapshot })
+    ended++
+    await until(`prompt ${ended} completed`, () => calls().filter((entry) => entry.ended === toAgyId(session)).length === ended)
+    const blocks = request('session/prompt', session).params.prompt
+    assert.deepEqual(blocks, [{ type: 'text', text }, expectedResource])
+    assert.equal(blocks[0].text[0], '/')
+    assert.equal(blocks[1].type, 'resource')
+  }
+
+  // Leading ASCII whitespace on allowlisted slash commands is trimmed so byte 0 is strictly '/'.
+  await call('send', session, { assistant: true, text: ' \t\n/boost diagnose leading space\nline 2', context: snapshot })
+  ended++
+  await until(`trimmed slash prompt ${ended} completed`, () => calls().filter((entry) => entry.ended === toAgyId(session)).length === ended)
+  assert.deepEqual(request('session/prompt', session).params.prompt, [
+    { type: 'text', text: '/boost diagnose leading space\nline 2' },
+    expectedResource,
+  ])
+
+  // With refused damaged images, ctxBlock stays strictly LAST (after the refused-image notice).
+  const tinyPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+  const brokenPng = Buffer.from(tinyPng, 'base64').subarray(0, 20).toString('base64')
+  await call('send', session, {
+    assistant: true,
+    text: '/boost inspect images\nreport defects',
+    context: snapshot,
+    images: [
+      { mime: 'image/png', data: tinyPng },
+      { mime: 'image/png', data: brokenPng },
+    ],
+  })
+  ended++
+  await until(`image slash prompt ${ended} completed`, () => calls().filter((entry) => entry.ended === toAgyId(session)).length === ended)
+  assert.deepEqual(request('session/prompt', session).params.prompt, [
+    { type: 'text', text: '/boost inspect images\nreport defects' },
+    { type: 'image', data: tinyPng, mimeType: 'image/png' },
+    { type: 'text', text: '[1 attached picture was incomplete or damaged and not sent; tell the user and go on without it]' },
+    expectedResource,
+  ])
+
+  // Non-allowlisted multiline paths, unknown commands, and Unicode parity traps keep [resource, text] order untouched.
+  for (const text of [
+    '/Users/example/repo/file.go\ncheck line 12',
+    '/plan/spec.md\nreview section 1',
+    '/boost-extra\nnot allowlisted',
+    '/unknown\nline 2',
+    '/teamwor\u212a fix',
+    '\u0085/boost fix',
+    '\ufeff/boost fix',
+    '\u00a0/boost fix',
+  ]) {
+    await call('send', session, { assistant: true, text, context: snapshot })
+    ended++
+    await until(`non-command prompt ${ended} completed`, () => calls().filter((entry) => entry.ended === toAgyId(session)).length === ended)
+    const blocks = request('session/prompt', session).params.prompt
+    assert.deepEqual(blocks, [expectedResource, { type: 'text', text }])
+  }
+})
+
 test('Agents share their own worker; a stall, recycle, or crash there does not interrupt an Assistant', async (t) => {
   const { node, runtime, assistantDir, calls, pids, start, call, request } = await fixture(t, { promptInactivityMs: 200 })
   const assistant = await start({ cwd: assistantDir })

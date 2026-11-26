@@ -35,6 +35,22 @@ func liveTaskAgents(agents []proto.Session) (live []proto.Session, last proto.Se
 	return live, last
 }
 
+// isAgyTarget reports whether an agent/launcher pair resolves to Antigravity ("agy") on machine.
+// When neither agent nor launcher identifies Antigravity, it returns false so non-AGY engines keep
+// their exact original prompt order and leading whitespace.
+func (s *Service) isAgyTarget(ctx context.Context, machine, agent, launcher string) bool {
+	if agent != "" {
+		return agent == "agy"
+	}
+	if launcher == "" {
+		return false
+	}
+	if resolved := s.launcherAgent(ctx, machine, s.startLauncher(ctx, launcher)); resolved != "" {
+		return resolved == "agy"
+	}
+	return launcher == "agy"
+}
+
 // startTaskSuccessor starts a new agent for task t after its stopped agent last, with the user's text as its first
 // message, and links it to t.
 func (s *Service) startTaskSuccessor(ctx context.Context, t Todo, last proto.Session, text string) (proto.Session, error) {
@@ -45,9 +61,17 @@ func (s *Service) startTaskSuccessor(ctx context.Context, t Todo, last proto.Ses
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartTimeout)
 	defer cancel()
 	sctx = context.WithValue(sctx, placementTaskKey{}, t.ID)
-	prompt := prompts.RenderTaskSuccessor(prompts.TaskSuccessor{Previous: agentLabel(last), PreviousID: last.SessionID,
-		LastReply: clip(last.LastText, 2000), Files: prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale)), Text: text})
-	prompt = s.withTodoDecisions(sctx, t.ID, prompt)
+	agyTarget := s.isAgyTarget(sctx, m.ID, last.Agent, last.Launcher)
+	var prompt string
+	if agyTarget && proto.HasAgySlashCommand(text) {
+		preamble := prompts.RenderTaskSuccessor(prompts.TaskSuccessor{Previous: agentLabel(last), PreviousID: last.SessionID,
+			LastReply: clip(last.LastText, 2000), Files: prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale))})
+		prompt = proto.PrependPreservingAgySlashCommand(preamble, text)
+	} else {
+		prompt = prompts.RenderTaskSuccessor(prompts.TaskSuccessor{Previous: agentLabel(last), PreviousID: last.SessionID,
+			LastReply: clip(last.LastText, 2000), Files: prompts.RenderTaskFiles(answerLanguage(s.hello(ctx).Locale)), Text: text})
+	}
+	prompt = s.withTodoDecisionsForAgent(sctx, t.ID, agyTarget, prompt)
 	params := map[string]any{"cwd": last.Cwd, "launcher": last.Launcher, "model": "", "effort": "", "tab_name": t.Title,
 		"prompt": prompt}
 	if last.PermissionMode != "" {

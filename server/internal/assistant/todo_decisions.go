@@ -509,11 +509,21 @@ func contextText(s string) string {
 // withTodoDecisions puts the todo's and its continuation ancestors' decisions before text handed to an agent;
 // text as it is without any.
 func (s *Service) withTodoDecisions(ctx context.Context, todoID, text string) string {
+	return s.withTodoDecisionsForAgent(ctx, todoID, false, text)
+}
+
+func (s *Service) withTodoDecisionsForAgent(ctx context.Context, todoID string, agyTarget bool, text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}
 	if c := s.todoHandoffDecisionsContext(ctx, todoID); c != "" {
+		if agyTarget {
+			return proto.PrependPreservingAgySlashCommand(c, text)
+		}
 		return c + "\n\n" + text
+	}
+	if agyTarget {
+		return proto.PrependPreservingAgySlashCommand("", text)
 	}
 	return text
 }

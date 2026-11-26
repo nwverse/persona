@@ -1067,7 +1067,19 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		// The manager checks the todo (404, 409, 503 assistant_offline while it is away) and puts its decisions before
 		// the prompt, a new agent's project background before those (#1618, #2820); they go to the agent, not into
 		// its tab's name (nameFrom is taken from the prompt as sent).
-		hand := assistantwire.TodoHandoff{TodoID: p.TodoID, Text: p.Prompt}
+		handoffAgent := p.AgentType
+		if handoffAgent == "" && p.Launcher != "" {
+			for _, launcher := range m.cfg.Launchers {
+				if launcher.Name == p.Launcher {
+					handoffAgent = launcher.AgentType
+					break
+				}
+			}
+			if handoffAgent == "" && p.Launcher == "agy" {
+				handoffAgent = "agy"
+			}
+		}
+		hand := assistantwire.TodoHandoff{TodoID: p.TodoID, Text: p.Prompt, Agent: handoffAgent}
 		if p.ResumeSessionID == "" {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, startCwd(m, p.Cwd)
 		}

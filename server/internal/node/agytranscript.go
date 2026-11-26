@@ -370,10 +370,173 @@ func agyContextEndNames() string {
 }
 
 // Antigravity writes embedded ACP resources into USER_INPUT.content. Require the complete
-// leading Persona envelope so a quoted label or another URI scheme keeps its text.
+// leading or trailing Persona envelope so a quoted label or another URI scheme keeps its text.
 var agyContextResource = lazyre.New(`(?s)^(?:Content of persona-context://[^\r\n]*:\r?\n<persona-context>.*?</persona-context>` + agySpace + `*)+`)
 
 var agyTrimSpace = lazyre.New(`^` + agySpace + `+|` + agySpace + `+$`)
+var agyTrimEnd = lazyre.New(agySpace + `+$`)
+
+func isAgyJSSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ',
+		0x00A0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+		return true
+	default:
+		return r >= 0x2000 && r <= 0x200A
+	}
+}
+
+func agyValidResourceURI(uri string) bool {
+	if uri == "" {
+		return false
+	}
+	for _, r := range uri {
+		if r <= 0x20 || r == 0x7f || isAgyJSSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func agyMatchOpenTag(s string, pos int, name string) (int, bool) {
+	prefix := "<" + name
+	if !strings.HasPrefix(s[pos:], prefix) {
+		return 0, false
+	}
+	after := pos + len(prefix)
+	if after >= len(s) {
+		return 0, false
+	}
+	switch s[after] {
+	case '>':
+		return after + 1, true
+	case ' ', '\t', '\n', '\r':
+		gt := strings.IndexByte(s[after:], '>')
+		if gt < 0 || strings.IndexByte(s[after:after+gt], '<') >= 0 {
+			return 0, false
+		}
+		return after + gt + 1, true
+	default:
+		return 0, false
+	}
+}
+
+func agyCountInnerOpens(body, name string) int {
+	count := 0
+	prefix := "<" + name
+	for i := 0; i < len(body); {
+		rel := strings.Index(body[i:], prefix)
+		if rel < 0 {
+			break
+		}
+		at := i + rel
+		if next, ok := agyMatchOpenTag(body, at, name); ok {
+			count++
+			i = next
+		} else {
+			i = at + len(prefix)
+		}
+	}
+	return count
+}
+
+var (
+	agyContextTagNames = [3]string{"persona-context", "jarvis-context", "persona-view-errors"}
+	agyContextTagEnds  = [3]string{"</persona-context>", "</jarvis-context>", "</persona-view-errors>"}
+)
+
+func agyOnlyContextBlocks(s string, pos int, lastClose [3]int) bool {
+	blocks := 0
+	var unmatched [3]int
+	for pos < len(s) {
+		if blocks > 0 {
+			trimmed := strings.TrimLeftFunc(s[pos:], isAgyJSSpace)
+			pos = len(s) - len(trimmed)
+		}
+		if pos >= len(s) {
+			break
+		}
+		matched := false
+		for k, name := range agyContextTagNames {
+			if openEnd, ok := agyMatchOpenTag(s, pos, name); ok {
+				if openEnd > lastClose[k] {
+					return false
+				}
+				closeTag := agyContextTagEnds[k]
+				rel := strings.Index(s[openEnd:], closeTag)
+				if rel < 0 {
+					return false
+				}
+				c := openEnd + rel
+				unmatched[k] += agyCountInnerOpens(s[openEnd:c], name)
+				pos = c + len(closeTag)
+				blocks++
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		for k, closeTag := range agyContextTagEnds {
+			if unmatched[k] > 0 && strings.HasPrefix(s[pos:], closeTag) {
+				unmatched[k]--
+				pos += len(closeTag)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return blocks > 0
+}
+
+func agyStripTrailingContextResource(s string) string {
+	const header = "Content of persona-context://"
+	for {
+		t := agyTrimEnd.ReplaceAllString(s, "")
+		var lastClose [3]int
+		endsWithClose := false
+		for k, closeTag := range agyContextTagEnds {
+			lastClose[k] = strings.LastIndex(t, closeTag)
+			if lastClose[k] >= 0 && lastClose[k] == len(t)-len(closeTag) {
+				endsWithClose = true
+			}
+		}
+		if !endsWithClose {
+			return s
+		}
+		stripped := false
+		for searchEnd := len(t); searchEnd > 0; {
+			h := strings.LastIndex(t[:searchEnd], header)
+			if h < 0 {
+				break
+			}
+			uriStart := h + len(header)
+			if nlRel := strings.IndexByte(t[uriStart:], '\n'); nlRel >= 0 {
+				nlIdx := uriStart + nlRel
+				lineEnd := nlIdx
+				if lineEnd > uriStart && t[lineEnd-1] == '\r' {
+					lineEnd--
+				}
+				if lineEnd > uriStart && t[lineEnd-1] == ':' {
+					uri := t[uriStart : lineEnd-1]
+					if agyValidResourceURI(uri) && agyOnlyContextBlocks(t, nlIdx+1, lastClose) {
+						s = t[:h]
+						stripped = true
+						break
+					}
+				}
+			}
+			searchEnd = h
+		}
+		if !stripped {
+			return s
+		}
+	}
+}
 
 var agyInterruptedError = lazyre.New(`(?is)^(?:api error:\s*)?the stream was interrupted\.?(?:\s+please continue\b.*)?$`)
 
@@ -393,7 +556,8 @@ func agyUserText(text string) string {
 		text = m[1]
 	}
 	for {
-		clean := agyContextEnd.ReplaceAllString(agySnapshot.ReplaceAllString(agyContextResource.ReplaceAllString(text, ""), ""), "")
+		stripped := agyStripTrailingContextResource(agyContextResource.ReplaceAllString(text, ""))
+		clean := agyContextEnd.ReplaceAllString(agySnapshot.ReplaceAllString(stripped, ""), "")
 		if clean == text {
 			return agyTrimSpace.ReplaceAllString(text, "")
 		}
