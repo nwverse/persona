@@ -1212,6 +1212,8 @@ A herdr tab's workers are the same (web, #5180; the owner asked on 2026-11-12 th
 
 A row read from Unread or Just finished and held in that place ("Rows read during a visit" below) does not need the user: it is drawn and counted as Seen, so it never stands in for, or hides, one that does.
 
+On the web, people opening a computer see waiting Agents first. Each session has a conversation link and, when the hub supplies it, a separate to-do link. Workspaces with active sessions precede other known workspaces. Files, Terminal and New agent carry the selected computer and workspace. Configuration holds engine and session visibility controls (#16196).
+
 #### Finished work nobody has seen
 
 With Session Triage on, a turn the triage found done leaves Unread, but while it is new it is not filed with the
@@ -3287,6 +3289,14 @@ hint styles. A choice with consequences can request confirmation for a specific 
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
 
+For people choosing where new task folders are created, **Workspace naming** uses
+a separate Settings group and the same editor on To-do detail. Each template has
+a label above a full-width field. Inherited values wrap when space is tight.
+The inline preview shows one task path and each repository’s branch and starting
+point. Its secondary disclosure holds the computer, layout and repository choices.
+The footer offers **Use defaults** when there are overrides and **Save** for
+pending edits. See [workspace naming](../assistant/todos.md#backend-workspace-naming).
+
 ## External source connections on web (#15518)
 
 Inbox and work open one binding editor so the owner can set the same destination, source scope and update policy
@@ -4555,10 +4565,12 @@ People monitoring their computers see the number of waiting agents beside the co
 is known. The count opens the first waiting session. Fleet token usage belongs on Cards and Capabilities.
 The view bar starts with Cards, wraps to the available width and ends with assistant-scoped shared resources.
 
-Ports, Services, Files, Toolchain, Network and Storage share one computer selection. Their labeled native select
-lists available computers. A single choice becomes a compact name and status chip. If the current computer leaves
-or goes offline, tools select the first online computer. With all computers offline they show the offline state.
-A storage cleanup link opens reclaim mode only on its target computer.
+On the web, people working on one computer can bookmark its current view. Work leads with waiting Agents and
+workspace actions. The fleet shows one actionable card for a sole computer, and Add computer for an empty list.
+A wide detail pane keeps the fleet entry and a compact computer list beside the selected view. Each row shows
+connection state, waiting or working Agents when known, and the leading alert. Narrow panes keep one level visible.
+Use labeled links for subviews so people can open another tab or retrace their steps with Back and Forward.
+The URL identifies the computer even when it goes offline or disappears. Reclaim links open its Storage view.
 
 ## Usage treemap (#14576)
 

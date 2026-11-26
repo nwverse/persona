@@ -843,8 +843,9 @@ func stateDirOn(home, dataDir, name string) string {
 }
 
 type assistantView struct {
-	WorkspaceNamingVersion  string                `json:"workspace_naming_version"`
-	EffectiveWorkspaceRules workspacenaming.Rules `json:"effective_workspace_rules"`
+	WorkspaceNamingVersion  string                 `json:"workspace_naming_version"`
+	EffectiveWorkspaceRules workspacenaming.Rules  `json:"effective_workspace_rules"`
+	SystemDefaults          *workspacenaming.Rules `json:"system_defaults,omitempty"`
 	Settings
 	Manager                string             `json:"manager"`
 	PermissionDefaults     permissionDefaults `json:"permission_defaults"`
@@ -946,7 +947,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	}
 	v.Launcher = s.launcherNow(ctx)
 	effectiveRules, _ := workspacenaming.Effective(v.WorkspaceRules, workspacenaming.Rules{})
-	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
+	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, SystemDefaults: new(workspacenaming.Defaults()), Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
 		CacheKeepalive: cacheKeepaliveOf(v).Enabled, CacheKeepaliveMinutes: cacheKeepaliveOf(v).IntervalMinutes, CacheKeepaliveMax: cacheKeepaliveOf(v).MaxRequests,
