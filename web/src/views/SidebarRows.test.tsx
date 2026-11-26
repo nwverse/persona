@@ -47,8 +47,8 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
   const mark = (html: string) => html.match(/<span data-source="[^"]*"[^>]*>.*?<\/span>/)?.[0];
   it("draws a terminal pane's as the terminal icon, named but without words", () => {
     const html = render({ pane_id: "w1:p1" });
-    expect(mark(html)).toMatch(/aria-label="终端"/);
-    expect(mark(html)).toMatch(/title="终端"/);
+    expect(mark(html)).toMatch(/aria-label="在标签页中"/);
+    expect(mark(html)).toMatch(/title="在标签页中"/);
     expect(mark(html)).toContain("text-ink-3");
     expect(mark(html)).toContain('<rect x="2" y="4" width="20" height="16" rx="2.5"');
     expect(mark(html)).toContain("m6 9 3 3-3 3M12 15h5");
