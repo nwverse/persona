@@ -395,7 +395,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
 })
 
 // P1-1 (#16001): a lagging summary_behind row must be list-cacheable once its state is provably
-// static, and the .persona-turn-completion stat has to be part of the cache key (review CaC033).
+// static, and the .persona-turn-completion stat has to be part of the cache key.
 const BEHIND_RAW = '77777777-4444-4444-8444-777777777777'
 const BEHIND_SESSION = `agy-${BEHIND_RAW}`
 const behindRecords = [
@@ -531,7 +531,7 @@ test('a completion-marker-restored done summary_behind row lists once and invali
   api.counts.fullReadFile = 0
   const changed = await api.refresh('completion-marker-mutated')
   assert.equal(changed.status, 'done')
-  assert.ok(api.counts.fullReadFile >= 1, 'modifying .persona-turn-completion must invalidate the listed cache (CaC033)')
+  assert.ok(api.counts.fullReadFile >= 1, 'modifying .persona-turn-completion must invalidate the listed cache key')
 })
 
 test('a negatively checked static summary_behind row lists with zero reads and invalidates on step_count or marker changes', { timeout: 30_000 }, async (t) => {
