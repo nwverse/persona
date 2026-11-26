@@ -2614,6 +2614,13 @@ Extensions **do not run code in the app**: they return a View (a few fixed kinds
 and button actions go back to the extension. Views and components are defined in `schema/extension/view.schema.json` (the types on all four clients are generated from it, see [schema/extension/README.md](../../schema/extension/README.md));
 the hub first checks against the schema (`wire.Validate`, `sdk/go/wire`), then checks what the schema cannot express (item count per page, no duplicate field names, consistent labels across chart series), in `server/internal/extension/ui.go`.
 
+A full page (`nav_page`, `extension_page`) may also use an action's `open` to navigate to an existing Persona **session**
+(`persona://session/<machine>/<session>`) or **to-do** (`persona://task/<id>`). A tap only routes, using the same validated
+targets and in-app routes as assistant cards: it sends no message, changes no destination data, returns no destination
+content to the extension, and Back returns to the page with its state. Every other `open` target (https, knowledge files,
+machine files) and the other assistant-only action fields (`reply`, `pop`, a page `push`) stay unavailable to extensions;
+cards (`overview_card`, `capsule_card`) keep no `open` at all.
+
 **Where it goes** (the `placement` of a `ui` contribution): see the slot table in the next section, "UI slots". The first two:
 
 | placement | Appears in | Extra |
