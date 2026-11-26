@@ -748,13 +748,13 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
         {(detail || tags.length > 0) && (
           <span className={cx("mt-0.5 flex min-w-0 gap-1.5 text-[12.5px] leading-[18px] text-ink-2", actions ? "flex-col items-start gap-0.5" : "items-center")}>
             {tags.length > 0 && (
-              <span className="hidden shrink-0 items-center gap-1 sm:flex" data-row-tags>
+              <span className="hidden min-w-0 max-w-full items-center gap-1 sm:flex" data-row-tags>
                 {tags.map((x) => (
                   <span key={x} className="max-w-[12em] truncate rounded-chip bg-field px-1.5 text-[11px] leading-[17px] text-ink-3">{x}</span>
                 ))}
               </span>
             )}
-            {detail && <span className={cx("min-w-0", actions ? "line-clamp-3 w-full [overflow-wrap:anywhere]" : "flex-1 truncate")} title={actions ? detail : undefined}>{detail}</span>}
+            {detail && <span className={actions ? "line-clamp-3 w-full min-w-0 [overflow-wrap:anywhere]" : "min-w-1/2 flex-1 truncate"} title={actions ? detail : undefined}>{detail}</span>}
           </span>
         )}
       </span>
