@@ -60,11 +60,18 @@ type conversationSwitchTestRig struct {
 
 func newConversationSwitchTestRig(t *testing.T) *conversationSwitchTestRig {
 	t.Helper()
-	s, f, d, _ := historyFixture(t, func(string, ...any) {})
+	return newConversationSwitchTestRigWithHub(t, nil)
+}
+
+func newConversationSwitchTestRigWithHub(t *testing.T, wrapHub func(Hub) Hub) *conversationSwitchTestRig {
+	t.Helper()
+	s, f, d, _ := historyFixtureWithHub(t, func(string, ...any) {}, wrapHub)
 	r := &conversationSwitchTestRig{s: s, f: f, d: d}
+	f.mu.Lock()
 	for _, id := range []string{"fresh-chat", "busy-chat", "target-chat", "restored-chat", "independent-chat"} {
 		f.known[id] = true
 	}
+	f.mu.Unlock()
 	r.setTurn(proto.StatusWorking)
 	f.answerNode("assistant.segment.check", func(_ string, raw json.RawMessage) (any, error) {
 		var p map[string]any

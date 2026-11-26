@@ -439,7 +439,7 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 	lists, reached := s.agentSessionLists(ctx, undone)
 	cards := s.todoRunCards(wantCards)
 	heldOnly := s.heldOnlySessions()
-	tb := newTreeBuild(s, cfg.Main, leads, all, lists, cards, heldOnly, reached, now, s.location(ctx), cfg.todosV2On())
+	tb := newTreeBuild(s, cfg.Main, leads, all, lists, cards, heldOnly, reached, now, s.location(ctx), cfg)
 	return tb, cfg, names
 }
 
@@ -513,7 +513,7 @@ type treeAttach struct {
 }
 
 func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lists map[string][]proto.Session,
-	cards map[[2]string][]proto.Interaction, heldOnly map[[2]string]bool, reached map[string]bool, now time.Time, loc *time.Location, todosV2 bool) *treeBuild {
+	cards map[[2]string][]proto.Interaction, heldOnly map[[2]string]bool, reached map[string]bool, now time.Time, loc *time.Location, cfg Settings) *treeBuild {
 	tb := &treeBuild{s: s, main: main, leads: leads, todos: map[string]listedTodo{}, views: map[string]assistantwire.TodoSummary{},
 		carried: map[string]bool{}, heldOnly: heldOnly, reached: reached, now: now,
 		sessions: map[[2]string]proto.Session{}, lists: lists, listed: map[string]bool{}, codexKid: map[[2]string][]proto.Session{},
@@ -540,7 +540,7 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 	facts := make([]projection.Facts, len(all))
 	for i := range all {
 		f := projectionFacts(all[i], tb.sessions, loc)
-		f.TodosV2 = todosV2
+		applyTodosV2FactsConfig(&f, cfg)
 		if all[i].DoneAt == nil || all[i].StartError != "" {
 			f.Unreached = !reached[all[i].ID]
 			linked := hasParkInteractionLink(all[i].Supervision)
