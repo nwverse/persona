@@ -476,5 +476,13 @@
   "causal_trace_cat_blocker": "阻塞",
   "causal_trace_cat_recovery": "恢复",
   "causal_trace_cat_review": "验收",
-  "causal_trace_cat_pr": "PR"
+  "causal_trace_cat_pr": "PR",
+  "status_pr_conflicts": "存在合并冲突",
+  "status_pr_changes_requested": "需要修改",
+  "status_pr_checks_failed": "检查未通过",
+  "status_pr_in_review": "评审中",
+  "status_pr_checks_pending": "检查中",
+  "status_pr_waiting_merge": "等合入",
+  "status_parked": "已搁置",
+  "status_tracking": "跟进中"
 }

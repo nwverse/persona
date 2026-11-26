@@ -628,6 +628,42 @@ describe("an Agent's pill", () => {
     expect(getSession(s.machine_id, "s1")?.model).toBeUndefined();
   });
 
+  it("opens SessionModelPanel on a live terminal agy session and applies model and effort picks", async () => {
+    const s = agent({
+      agent: "agy",
+      launcher: undefined,
+      pane_id: "herdr:w1:p1",
+      model: "gemini-4-neon-high",
+      effort: "high",
+      efforts: ["low", "medium", "high", "xhigh"],
+      capabilities: { read: true, send: true, modes: false, model: true },
+    });
+    const agyCatalog = {
+      agent: "agy",
+      models: [
+        { id: "gemini-4-neon-low", name: "Gemini 4 Neon (Low)", efforts: ["low", "medium", "high", "xhigh"], default_effort: "low" },
+        { id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)", efforts: ["low", "medium", "high", "xhigh"], default_effort: "high" },
+      ],
+    };
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("/launchers/agy/models")) {
+        calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify(agyCatalog), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return origFetch(input, init);
+    }) as typeof fetch;
+
+    await show(s);
+    expect(pill()).not.toBeNull();
+    expect(calls.some((c) => c.url.includes("/launchers/agy/models") && !c.url.includes("host=agy"))).toBe(true);
+    await open();
+    expect(panel.props!.state.current).toMatchObject({ provider: "agy", model: "gemini-4-neon-high", effort: "high" });
+    expect(await act(() => panel.props!.onPick({ provider: "agy", model: "gemini-4-neon-low" }))).toBe(true);
+    expect(modes()).toEqual([{ model: "gemini-4-neon-low" }]);
+  });
+
   it("is a label where nothing switches (offline), and nothing at all without a model", async () => {
     await show(agent({ status: "offline", state: "offline" }));
     expect(pill()).toBeNull();

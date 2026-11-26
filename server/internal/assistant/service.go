@@ -802,12 +802,13 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend) {
-		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
-		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
-		// on its launcher's window (and never adopts the spare).
-		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
-			putMainCompactWindow(s.settings(ctx), p)
-		}
+		// The window the main conversation and each direction's lead are held to (main_compact_window.go), as sendModel
+		// puts it: a start, a relay, an internal message (a lead's supervision digest, #15318) and the spare warmed for
+		// the main conversation's next start carry it, or the node starts the conversation again on its launcher's
+		// window (and never adopts the spare). Put on every send, a value a caller set included: the node applies the
+		// window that comes with any conversation, so only this manager says which ones are held to it.
+		id, _ := p["session_id"].(string)
+		putMainCompactWindow(s.settings(ctx), p, s.isLeader(ctx, id))
 		// Interactive Claude Code (#10058) is part of what a process runs: every send and warm carries it, or the node
 		// restarts a conversation between the two kinds as messages without it come.
 		if _, set := p["claude_interactive"]; !set && s.claudeInteractive(ctx) {
