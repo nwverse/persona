@@ -2674,10 +2674,10 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
                     "meeting_glossary": [], "meeting_transcription_extension": "",
                     # How long recording audio stays (#16412, formerly recording_days; MOCK_RECORDING_DAYS), a recording's
-                    # text (MOCK_RECORDING_TEXT_DAYS) and a meeting's minutes after its transcript went (#3780,
+                    # text (forever until a PUT changes it) and a meeting's minutes after its transcript went (#3780,
                     # MOCK_MINUTES_DAYS): 0 means forever; finite minutes windows are never fewer than the text's.
                     "recording_audio_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
-                    "recording_text_days": int(os.environ.get("MOCK_RECORDING_TEXT_DAYS", "0")),
+                    "recording_text_days": 0,
                     "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0")),
                     # Knowledge points by topic (#3783), on by default; MOCK_KB_TOPICS_OFF=1 starts it off (#7251's empty map).
                     "kb_topics": os.environ.get("MOCK_KB_TOPICS_OFF") != "1",
