@@ -37,9 +37,26 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		Glossary               json.RawMessage `json:"meeting_glossary"`
 		TranscriptionExtension json.RawMessage `json:"meeting_transcription_extension"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		apierr.Write(w, http.StatusBadRequest, err)
 		return
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
+	labsSeen, err := normalizeLabsSeen(in.LabsSeen)
+	if err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.LabsSeen != nil {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) == nil && len(fields) == 1 {
+			s.putLabsSeen(w, ctx, labsSeen)
+			return
+		}
 	}
 	if in.Permission != nil {
 		if err := json.Unmarshal(in.Permission, &in.DefaultPermissionMode); err != nil {
@@ -90,6 +107,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		in.StartDefaults.By = "owner" // this route is full credentials only
 	}
 	before := s.settings(ctx)
+	if _, err := applyLabsSeen(&before, labsSeen); err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
 	machine := before.MachineID
 	if in.MachineID != "" {
 		if _, ok := s.device(ctx, in.MachineID); !ok {
@@ -166,6 +187,18 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("delivery_gate must be off, merged or live"))
 		return
 	}
+	if in.TodosV2AutoSeen != "" && !slices.Contains(todosV2AutoSeenModes, in.TodosV2AutoSeen) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_auto_seen must be off, subtasks or all_autonomous"))
+		return
+	}
+	if h := in.TodosV2PendingReviewSLAHours; h != nil && !slices.Contains(todosV2PendingReviewSLAOptions, *h) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_pending_review_sla_hours must be 0, 12, 24 or 48"))
+		return
+	}
+	if h := in.TodosV2CanWaitSLAHours; h != nil && !slices.Contains(todosV2CanWaitSLAOptions, *h) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_can_wait_sla_hours must be 0, 24, 48 or 72"))
+		return
+	}
 	if code := s.readMeetingTranscriptionSettings(&in.Settings, in.TranscriptionMode, in.Glossary, in.TranscriptionExtension); code != "" {
 		apierr.WriteCode(w, http.StatusBadRequest, code, i18n.Err("assistant-meeting."+code))
 		return
@@ -239,7 +272,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	errGuideChanged := errors.New("work guide setting changed")
 	errTodosV2Changed := errors.New("todos_v2 setting changed")
 	errIntegrationsV2Changed := errors.New("integrations_v2 setting changed")
-	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+	var labsSeenChanged bool
+	saved, err := s.updateSettings(ctx, func(v *Settings) error {
+		var err error
+		if labsSeenChanged, err = applyLabsSeen(v, labsSeen); err != nil {
+			return err
+		}
 		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != v.workGuideOn() {
 			return errGuideChanged
 		}
@@ -338,6 +376,18 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TodosV2 != nil {
 			v.TodosV2 = in.TodosV2
+		}
+		if in.TodosV2AutoSeen != "" {
+			v.TodosV2AutoSeen = in.TodosV2AutoSeen
+		}
+		if in.TodosV2PendingReviewSLAHours != nil {
+			v.TodosV2PendingReviewSLAHours = in.TodosV2PendingReviewSLAHours
+		}
+		if in.TodosV2CanWaitSLAHours != nil {
+			v.TodosV2CanWaitSLAHours = in.TodosV2CanWaitSLAHours
+		}
+		if in.TodosV2FoldChildren != nil {
+			v.TodosV2FoldChildren = in.TodosV2FoldChildren
 		}
 		if in.IntegrationsV2 != nil {
 			v.IntegrationsV2 = in.IntegrationsV2
@@ -456,13 +506,21 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		if errors.Is(err, errGuideChanged) || errors.Is(err, errTodosV2Changed) || errors.Is(err, errIntegrationsV2Changed) {
 			apierr.WriteCode(w, http.StatusConflict, "configuration_conflict", err)
 			return
 		}
+		if errors.Is(err, errLabsSeenLimit) {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
+	}
+	if labsSeenChanged {
+		s.publishLabsSeen(ctx, saved.LabsSeen)
 	}
 	if guideChanged {
 		s.mcpChanges.notify()
@@ -480,7 +538,11 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if in.SupervisionBatchMinutes != nil && supervisionBatchMinutesOf(s.settings(ctx)) != supervisionBatchMinutesOf(before) {
 		s.rescheduleSupervision()
 	}
-	if in.TodosV2 != nil && s.settings(ctx).todosV2On() != before.todosV2On() {
+	afterTodosV2 := s.settings(ctx)
+	if (in.TodosV2 != nil && afterTodosV2.todosV2On() != before.todosV2On()) ||
+		(afterTodosV2.todosV2On() && (afterTodosV2.todosV2PendingReviewSLAHours() != before.todosV2PendingReviewSLAHours() ||
+			afterTodosV2.todosV2CanWaitSLAHours() != before.todosV2CanWaitSLAHours() ||
+			afterTodosV2.todosV2FoldChildrenOn() != before.todosV2FoldChildrenOn())) {
 		s.todosPushSoon()
 	}
 	if in.MeetingTranscriptionExtension != nil {
@@ -491,7 +553,11 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		s.mcpChanges.notify()   // and the page tool with them, in every open conversation's list (pages_tool.go)
 	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
-		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+		if before.Main != "" {
+			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+		} else {
+			s.handOverFormerMainTasks(context.WithoutCancel(ctx)) // after newMain / clearMain, old main sits in Former
+		}
 	}
 	apierr.WriteJSON(w, s.view(ctx, false))
 }

@@ -2,6 +2,7 @@ package writers
 
 import (
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestSearchKind(t *testing.T) {
 		u := recUpload(1, start, true, texts...)
 		u.Title = title
 		if calendar != "" {
-			u.Calendar = &kb.RecordingCalendar{Title: calendar}
+			u.Calendar = &recordingwire.RecordingCalendar{Title: calendar}
 		}
 		putRecording(t, e, id, u, now)
 	}

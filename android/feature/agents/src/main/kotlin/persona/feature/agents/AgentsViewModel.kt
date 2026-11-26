@@ -675,6 +675,14 @@ internal class AgentsViewModel(
             else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName))
         }
     }
+    fun renameUnified(session: Session, name: String) {
+        val edit = SessionRename.unifiedChanges(session, name)
+        if (!edit.changed) return
+        change(session.machineId, R.string.agents_notice_renamed) {
+            if (renamer != null) renamer.renameUnified(session, name)
+            else it.session(session, AgentSessionEdit(title = edit.title, tab = edit.tabName), unified = true)
+        }
+    }
     fun renameSpace(session: Session, name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty() || trimmed == session.spaceName) return
@@ -1031,7 +1039,7 @@ internal class AgentsViewModel(
                     interactions.replyOwnerApproval(latest, phrase)
                     ResolveOutcome()
                 } ?: interactions.resolveOutcome(interaction.id, resolution,
-                    handoffCard = interaction.isSecretHandoff && resolution.allow == true)
+                    handoffCard = (latest.isSecretHandoff || latest.secretRun?.delivery == "env") && resolution.allow == true)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
                 val effective = if (outcome.already) outcome.resolution else resolution
                 // The notice outlives the card: it keeps the answer without a password card's typed value (#1581).

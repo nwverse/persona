@@ -188,13 +188,11 @@ func TestBriefingMirrorCompletion(t *testing.T) {
 			t.Fatal("the initial briefing was not posted")
 		}
 		// Replace immutable facts rather than modifying an object another run observer may still read.
-		e.s.brief.mu.Lock()
-		run := *e.s.brief.bySession[e.sess.SessionID]
-		facts := *run.facts
+		run := *e.s.briefOf(e.sess.SessionID)
+		facts := *run.Facts
 		facts.At = time.Now().Add(-briefKeep - time.Minute)
-		run.facts = &facts
-		e.s.brief.bySession[e.sess.SessionID] = &run
-		e.s.brief.mu.Unlock()
+		run.Facts = &facts
+		e.s.briefSetSessionRun(e.sess.SessionID, &run)
 		complete()
 		if got := len(e.cards()); got != 1 {
 			t.Errorf("same retained completion posted again after facts expired: %d cards", got)

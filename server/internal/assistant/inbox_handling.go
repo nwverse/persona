@@ -31,6 +31,7 @@ type InboxHandling struct {
 const (
 	SuggestReply      = "reply"      // one message to send
 	SuggestAgent      = "agent"      // an instruction for a new Agent
+	SuggestHandoff    = "handoff"    // hand off to an existing conversation (main, leader, or linked task) (#13562)
 	SuggestConclusion = "conclusion" // done: just read it
 	SuggestTodo       = "todo"       // a to-do to add: Text its title, Due when (#6480)
 )
@@ -44,10 +45,14 @@ type InboxSuggestion struct {
 	Note     string `json:"note,omitempty"`
 	Handback bool   `json:"handback"`
 	// Due is when a to-do suggestion is due: a day (2006-01-02, all day) or a moment (RFC 3339); "" none.
-	Due       string      `json:"due,omitempty"`
-	MachineID string      `json:"machine_id,omitempty"`
-	Changes   []DocChange `json:"changes,omitempty"`
-	At        time.Time   `json:"at"`
+	Due       string `json:"due,omitempty"`
+	MachineID string `json:"machine_id,omitempty"`
+	// SessionID and TargetTitle name the existing conversation a handoff suggestion targets (#13562).
+	// Conversation remains the author conversation that submitted a write-back suggestion.
+	SessionID   string      `json:"session_id,omitempty"`
+	TargetTitle string      `json:"target_title,omitempty"`
+	Changes     []DocChange `json:"changes,omitempty"`
+	At          time.Time   `json:"at"`
 	// Cwd is where an agent suggestion's Agent starts (the tool's cwd; "" home): kept, not listed.
 	Cwd string `json:"cwd,omitempty"`
 	// MailTarget is the message a reply suggestion answered when it was created: kept, not listed. Reading that mail
