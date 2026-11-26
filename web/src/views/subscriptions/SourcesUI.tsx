@@ -27,12 +27,14 @@ export function SourcesUI({
   title,
   state,
   onGraph,
+  onOpenSource,
   initialView = "list",
   manager,
 }: {
   title: string;
   state?: string;
   onGraph?: (shown: boolean) => void;
+  onOpenSource?: (page: string) => void;
   initialView?: "list" | "graph";
   manager?: string;
 }) {
@@ -96,7 +98,7 @@ export function SourcesUI({
         <>
           <p className="mb-4 px-1 text-[13px] text-ink-2">{t("subscriptions.graph_lead")}</p>
           <Suspense fallback={<Loading />}>
-            <SourcesGraphView assistant={name} onOpen={(page) => show(true, page)} onAsk={askAssistant} />
+            <SourcesGraphView assistant={name} onOpen={onOpenSource ?? ((page) => show(true, page))} onAsk={askAssistant} />
           </Suspense>
           <InboxForwardSetting manager={manager} />
           {connectedWork}

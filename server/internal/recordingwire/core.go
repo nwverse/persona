@@ -51,8 +51,8 @@ type Reader interface {
 	// RecordingFile is file f of recording id as committed (read through a pending undo journal, like every read);
 	// nil when it has none. A day's append reads the stored segments with it, not the whole snapshot.
 	RecordingFile(id ID, f File) ([]byte, error)
-	// RecordingDays is how many days recordings are kept (the owner's setting, the default without one): an upload
-	// or an append of a recording that started before them is answered as expired.
+	// RecordingDays is how many days a recording's text is kept (the owner's recording_text_days, the default without
+	// one; 0 means forever): an upload or an append of a recording that started before them is answered as expired.
 	RecordingDays() int
 	// TranscriptionReady: the hub can transcribe a meeting now (asked when the first upload of a meeting names the
 	// hub, under Locks().Meeting). EarlierMeetings: the material of an answer may hold earlier meetings (the owner's

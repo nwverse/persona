@@ -47,9 +47,10 @@ import (
 // lines before shortening runtime previews adds 549 B (#16310).
 // Reusing one read-only conversation_summaries connection, its stat-validated snapshot and the watch-poll
 // short-circuit (#16403) adds 1,944 B (280,827 B).
+// Antigravity detached pending approval turn cancellation (including sibling-ask withdrawal and stale-turn/racing-ask/refusal guards) and explicit deny-with-note refusal follow-up add 436 B (281,263 B combined).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 280_827
+	const budget = 281_263
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
