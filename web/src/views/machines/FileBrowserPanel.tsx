@@ -8,6 +8,7 @@ import { currentLanguage, formatDate, t } from "../../i18n";
 import { api, ApiError, enc, errorText, getToken, isAbort } from "../../lib/api";
 import { BASE } from "../../lib/base";
 import type { Machine } from "../../lib/types";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
 import { Button, cx, IconButton, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import {
@@ -257,16 +258,15 @@ function classifyTargetPath(dir: MachineFileListResponse | null, name: string): 
   return { sensitive: false, reason: "" };
 }
 
-export function FileBrowserPanel({ machines, initialMachineId }: { machines: Machine[]; initialMachineId?: string }) {
-  const defaultMid = useMemo(() => {
-    if (initialMachineId && machines.some((m) => m.id === initialMachineId)) return initialMachineId;
-    return machines.find((m) => m.online)?.id ?? machines[0]?.id ?? "";
-  }, [machines, initialMachineId]);
+export function FileBrowserPanel(props: MachineToolProps) {
+  return (
+    <MachineTool {...props}>
+      {(machine) => <FileBrowser machine={machine} />}
+    </MachineTool>
+  );
+}
 
-  const [selectedMid, setSelectedMid] = useState(defaultMid);
-  const activeMid = machines.some((m) => m.id === selectedMid) ? selectedMid : defaultMid;
-  const machine = machines.find((m) => m.id === activeMid);
-
+function FileBrowser({ machine }: { machine?: Machine }) {
   const [roots, setRoots] = useState<MachineFileRoot[]>([]);
   const [dir, setDir] = useState<MachineFileListResponse | null>(null);
   const [pathInput, setPathInput] = useState("~");
@@ -835,7 +835,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
     return classifySensitivePathClient(renameDest);
   }, [renameTarget, renameDest]);
 
-  if (machines.length === 0) {
+  if (!machine) {
     return (
       <section className="rounded-card bg-surface p-6 text-center text-sm text-ink-3 shadow-card" data-testid="machine-file-browser">
         {t("machines-files.no_machines")}
@@ -865,7 +865,7 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
 
   return (
     <section className="flex flex-col gap-3" data-testid="machine-file-browser">
-      {/* Top toolbar: machine switcher + quick root shortcuts + path navigation */}
+      {/* Directory shortcuts and path navigation */}
       <div className="rounded-card bg-surface p-4 shadow-card">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2">
@@ -873,21 +873,6 @@ export function FileBrowserPanel({ machines, initialMachineId }: { machines: Mac
             <h2 className="text-sm font-semibold text-ink">{t("machines-files.title")}</h2>
           </div>
           <div className="flex-1" />
-          <label className="flex items-center gap-2 text-xs text-ink-3">
-            <span>{t("machines-files.machine_label")}</span>
-            <select
-              aria-label={t("machines-files.machine_label")}
-              value={activeMid}
-              onChange={(e) => setSelectedMid(e.target.value)}
-              className="h-8 rounded-control bg-inset px-2.5 text-xs text-ink shadow-hairline outline-none"
-            >
-              {machines.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} {!m.online ? `(${t("machines.offline")})` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
 
         {!machine?.online ? (

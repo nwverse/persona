@@ -1,4 +1,5 @@
 {
+  "computer_label": "Computer",
   "reconnecting": "Reconnecting",
   "reconnect_failed": "Couldn't reconnect: {error}",
   "sidebar": "Sidebar",

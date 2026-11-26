@@ -67,6 +67,7 @@ import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
 import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
+import { healthReadOnly } from "./lib/health-archive";
 import { connectModuleHub, moduleExtensionAt, moduleTitle, useModuleStates } from "./core/module-host";
 import { ModuleExtensionPage, ModulePage } from "./core/ModulePage";
 
@@ -320,7 +321,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     if (route.at || route.standalone) return exact();
     const parentRow = pageRows(s, route.mid).find((r) => r.session_id === sub.parent);
     const dest = parentRow?.assistant
-      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow.manager)
+      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow)
       : { ...route, sid: sub.parent };
     return { link: undefined, to: routePath(dest), mid: route.mid, sid: undefined, parent: sub.parent, subagent: { mid: route.mid, sid: route.sid } };
   }
@@ -328,7 +329,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   const row = rows.find((r) => r.session_id === route.sid);
   // a Persona conversation's `/s/…` link (a push, a copied address): its own page, which draws its plan cards, questions
   // and tasks; the agent chat here shows none of them
-  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row.manager)), mid: route.mid, sid: undefined };
+  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row)), mid: route.mid, sid: undefined };
   // a lead's worker's (#5180): the lead's page, the worker in its Team panel
   const worker = workerTarget(rows, route.mid, row, inWorkView(route));
   if (worker && !route.standalone) return worker;
@@ -342,7 +343,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     if (route.at || route.standalone) return exact();
     const parentRow = pageRows(s, parentMid).find((r) => r.session_id === parent);
     const dest = parentRow?.assistant
-      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow.manager)
+      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow)
       : withWorkView({ name: "session", mid: parentMid, sid: parent }, inWorkView(route));
     return { link: undefined, to: routePath(dest), mid: parentMid, sid: undefined, parent, subagent: { mid: route.mid, sid: route.sid } };
   }
@@ -570,9 +571,13 @@ function Shell() {
     case "module":
       main = <ModulePage key={route.module} route={route} onToggleSidebar={toggle} />;
       break;
-    case "track":
-      main = route.sid ? <Space key={`${route.slug}/${route.sid}`} slug={route.slug} sid={route.sid} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
+    case "track": {
+      // Health's existing data stays in the default panel without its module (including a core-only build), rather
+      // than depending on the optional Space Conversations extension or opening an editable new-conversation home.
+      const archive = healthReadOnly(route.slug);
+      main = route.sid || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
       break;
+    }
     case "track-new":
       main = <SpaceExtensionEntry fresh />;
       break;
