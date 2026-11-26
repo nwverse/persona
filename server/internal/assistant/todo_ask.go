@@ -173,6 +173,7 @@ func (s *Service) askChanged(context.Context) {
 	s.trevision.changed()
 	s.todosPushSoon() // with the rest of the write that changed it
 	s.boardChanged()
+	s.directionTreeSoon()
 }
 
 // pushDecision pushes task id's decision that waits for the owner and recommends an option (a "decide" push): what is to
