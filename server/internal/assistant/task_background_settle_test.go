@@ -154,7 +154,9 @@ func TestDoneReportDoesNotSettleAnotherAgentOrNewTurn(t *testing.T) {
 	t.Run("relinked second Agent", func(t *testing.T) {
 		s, f, todo := newSupervisedService(t)
 		ctx := context.Background()
+		before := workMark(s, todo.ID)
 		listedDecorated(t, s, f, turnRow(proto.StatusWorking, 1, ""))
+		startTaken(t, s, todo.ID, before) // the turn's start clears a done report: take it before the report
 		args, _ := json.Marshal(map[string]any{"kind": "done", "text": "Agent A finished"})
 		if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", args); res.IsError {
 			t.Fatalf("report: %+v", res)
@@ -182,7 +184,9 @@ func TestDoneReportDoesNotSettleAnotherAgentOrNewTurn(t *testing.T) {
 	t.Run("new turn on same Agent", func(t *testing.T) {
 		s, f, todo := newSupervisedService(t)
 		ctx := context.Background()
+		before := workMark(s, todo.ID)
 		listedDecorated(t, s, f, turnRow(proto.StatusWorking, 1, ""))
+		startTaken(t, s, todo.ID, before) // the turn's start clears a done report: take it before the report
 		args, _ := json.Marshal(map[string]any{"kind": "done", "text": "Turn 1 finished"})
 		if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", args); res.IsError {
 			t.Fatalf("report: %+v", res)
@@ -282,7 +286,9 @@ func TestDoneReportSettlesWithMovedShellLeft(t *testing.T) {
 			s, f, todo := newSupervisedService(t)
 			ctx := context.Background()
 			sweeps(t, s, todo.ID, 1) // the turns' ledger is kept from here on
+			before := workMark(s, todo.ID)
 			listedDecorated(t, s, f, turnRow(proto.StatusWorking, 1, ""))
+			startTaken(t, s, todo.ID, before) // the turn's start clears a done report: take it before the report
 			args, _ := json.Marshal(map[string]any{"kind": "done", "text": "Login crash fixed; PR merged",
 				"evidence": []string{"PR 合并到 master: https://github.com/o/r/pull/901"}})
 			if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", args); res.IsError {
