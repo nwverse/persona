@@ -319,6 +319,80 @@ describe("ShortcutHelp controlled mode, snapshot caching, render purity, fencing
     expectNoDefaultSingletons();
   });
 
+  it("syncs getter scopeKey via shared deps.subscribe so Escape, close button, and openSettings remain responsive after scope switches", async () => {
+    const sharedListeners = new Set<() => void>();
+    const subscribe = (listener: () => void) => {
+      sharedListeners.add(listener);
+      return () => { sharedListeners.delete(listener); };
+    };
+    let currentScope = "s1";
+    const calls: Array<{ scope: string; signal: AbortSignal; gate: ReturnType<typeof deferred<void>> }> = [];
+    const onClose = vi.fn();
+    const openSettings = vi.fn((signal: AbortSignal) => {
+      const gate = deferred<void>();
+      calls.push({ scope: currentScope, signal, gate });
+      return gate.promise;
+    });
+
+    await act(async () => root.render(
+      <StrictMode>
+        <ShortcutHelp
+          deps={{
+            scopeKey: () => currentScope,
+            subscribe,
+            open: true,
+            bindings: { jump: "Mod+K" },
+            prefs: { off: false, disabled: [] },
+            platform: "mac",
+            shortcuts: SAMPLE_SHORTCUTS,
+            localShortcuts: SAMPLE_LOCAL,
+            onClose,
+            openSettings,
+          }}
+        />
+      </StrictMode>,
+    ));
+    expect(sharedListeners.size).toBeGreaterThan(0);
+
+    // Start an in-flight openSettings on s1, then switch scope s1 -> s2 through the shared subscriber only.
+    await act(async () => { editButton()!.click(); });
+    expect(calls).toHaveLength(1);
+    expect(editButton()?.getAttribute("aria-busy")).toBe("true");
+
+    currentScope = "s2";
+    await act(async () => { sharedListeners.forEach((l) => l()); });
+
+    // Shared subscribe must re-render and commit s2, aborting s1's in-flight work and clearing busy.
+    expect(calls[0].signal.aborted).toBe(true);
+    expect(editButton()?.getAttribute("aria-busy")).toBeNull();
+    await act(async () => {
+      calls[0].gate.resolve();
+      await Promise.resolve();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+
+    // After s1 -> s2 via shared subscribe, Escape, close button, and "Change in Settings" all respond normally.
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    const closeBtn = dialog()!.querySelector<HTMLButtonElement>(`button[aria-label="${t("ui-atoms.close")}"]`)!;
+    await act(async () => { closeBtn.click(); });
+    expect(onClose).toHaveBeenCalledTimes(2);
+
+    await act(async () => { editButton()!.click(); });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].scope).toBe("s2");
+    expect(calls[1].signal.aborted).toBe(false);
+    await act(async () => {
+      calls[1].gate.resolve();
+      await Promise.resolve();
+    });
+    expect(onClose).toHaveBeenCalledTimes(3);
+    expectNoDefaultSingletons();
+  });
+
   it("keeps committed scope and in-flight openSettings intact across an abandoned concurrent transition render", async () => {
     const suspendGate = deferred<void>();
     const settingsGate = deferred<void>();

@@ -422,7 +422,7 @@ export function ShortcutHelp(props?: ShortcutHelpProps): ReactElement;
 export function ShortcutHelp(props: ShortcutHelpProps & { open: boolean; onClose: () => void }): ReactElement;
 export function ShortcutHelp(props: ShortcutHelpProps = {}): ReactElement {
   const { open: propOpen, onClose: propOnClose, deps } = props;
-  const trackedScope = useTrackedScope(deps?.scopeKey, deps?.subscribeScopeKey);
+  const trackedScope = useTrackedScope(deps?.scopeKey, deps?.subscribeScopeKey ?? deps?.subscribe);
 
   // Keep controlled inputs and scope tracking in the identity-stable outer component so direct <-> getter+subscribe switches never remount.
   const controlledOpen = useCachedExternalValue(deps?.open, deps?.subscribeOpen ?? deps?.subscribe);
