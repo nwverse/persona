@@ -113,8 +113,10 @@ func developmentSteps(operation string, builtin bool) (string, []string) {
 	switch operation {
 	case "build":
 		return "building", []string{"fetch", "npm_install", "web_build", "runtime_packages", "go_build", "manifest"}
+	case "preflight":
+		return "backing_up", []string{"preflight"}
 	case "backup":
-		steps := []string{"quiesce", "database_dump", "archive_files", "archive_programs"}
+		steps := []string{"preflight", "quiesce", "database_dump", "archive_files", "archive_programs"}
 		if !builtin {
 			steps = append(steps, "resume_writers")
 		}
@@ -261,6 +263,23 @@ func ClearDevelopmentAdoption(dir string, p Pending) {
 //go:embed webdev.py
 var developmentHelper string
 
+type backupFailure struct {
+	Reason   string `json:"reason"`
+	ExitCode int    `json:"exit_code,omitempty"`
+}
+
+func (backupFailure) Error() string { return "development backup failed" }
+
+// DevelopmentBackupReason returns a catalog lookup code and numeric exit
+// status. Only a recognized translation may be shown to the user.
+func DevelopmentBackupReason(err error) (string, int) {
+	var failure backupFailure
+	if errors.As(err, &failure) {
+		return failure.Reason, failure.ExitCode
+	}
+	return "", 0
+}
+
 // DevelopmentRequest runs one bounded phase in an owned private directory. Raw
 // subprocess output stays in log, since tools/hooks may print private details.
 func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, operation string, input map[string]any, result any, report func(DevelopmentProgress)) error {
@@ -285,6 +304,16 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 		}
 	}()
 	logPath := filepath.Join(dir, operation+".log")
+	if operation == "backup" {
+		info, err := os.Lstat(logPath)
+		if err == nil && info.Size() > 0 {
+			if err := os.Rename(logPath, filepath.Join(dir, "backup.prev.log")); err != nil {
+				return err
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -346,7 +375,16 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 			<-drained
 		}
 	}
+	if ctx.Err() != nil {
+		return ctx.Err() // The helper and its child group have exited before work is removed.
+	}
 	if err != nil {
+		if operation == "backup" || operation == "preflight" {
+			var failure backupFailure
+			if ok, readErr := Load(filepath.Join(work, "failure.json"), &failure); ok && readErr == nil {
+				return failure
+			}
+		}
 		return fmt.Errorf("development %s failed; inspect update/development/%s.log on the Hub", operation, operation)
 	}
 	data, err = os.ReadFile(filepath.Join(work, "result.json"))

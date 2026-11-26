@@ -41,7 +41,7 @@ GO_TARGET = re.compile(
 # Older/divergent installations can still explicitly choose a manual update.
 HISTORY_LIMIT = 1024
 PROGRESS_INTERVAL = 0.75
-BACKUP_STEPS = ("quiesce", "database_dump", "archive_files", "archive_programs")
+BACKUP_STEPS = ("preflight", "quiesce", "database_dump", "archive_files", "archive_programs")
 
 
 class Progress:
@@ -117,7 +117,7 @@ def defer_cancellation():
     previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
         for s in previous:
-            signal.signal(s, lambda *_: pending.append(True))
+            signal.signal(s, lambda signum, _: pending.append(signum))
         yield pending
     finally:
         for s, handler in previous.items():
@@ -133,9 +133,17 @@ def interrupt(*_):
 
 def run(argv, cwd=None, env=None, output=False, timeout=1800, on_tick=None):
     # Do not echo argv: Git credentials, database URLs and hooks can be private.
-    with subprocess.Popen(argv, cwd=cwd, env=env, start_new_session=True,
-                          stdout=subprocess.PIPE if output else None, text=output) as process:
+    process = None
+    with contextlib.ExitStack() as stack:
         try:
+            # A cancellation during Popen must reach the cleanup below once the
+            # child group exists and its leader is available to signal and reap.
+            with defer_cancellation() as pending:
+                process = stack.enter_context(subprocess.Popen(
+                    argv, cwd=cwd, env=env, start_new_session=True,
+                    stdout=subprocess.PIPE if output else None, text=output))
+            if pending:
+                signal.raise_signal(pending[0])
             deadline = time.monotonic() + timeout
             while True:
                 remaining = max(0, deadline - time.monotonic())
@@ -147,6 +155,8 @@ def run(argv, cwd=None, env=None, output=False, timeout=1800, on_tick=None):
                         raise
                     on_tick()
         except BaseException:
+            if process is None:
+                raise
             with defer_cancellation():
                 # Signal the whole child group, first allowing hook cleanup.
                 # Timeout and cancellation share the same bounded escalation.
@@ -205,7 +215,7 @@ def lock_backup(lock):
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
-        raise ValueError("another backup or prepare is in progress") from exc
+        raise BackupValidationError("busy", "another backup or prepare is in progress") from exc
 
 
 def failure_detail(exc):
@@ -215,6 +225,30 @@ def failure_detail(exc):
     if isinstance(exc, subprocess.CalledProcessError):
         return f"CalledProcessError (exit {exc.returncode})"
     return type(exc).__name__
+
+
+class BackupValidationError(ValueError):
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason = reason
+
+
+def backup_failure_reason(exc):
+    if isinstance(exc, BackupValidationError):
+        return exc.reason
+    if isinstance(exc, InterruptedError):
+        return "interrupted"
+    if isinstance(exc, PermissionError):
+        return "permission"
+    if isinstance(exc, FileNotFoundError):
+        return "missing"
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return "timeout"
+    if isinstance(exc, subprocess.CalledProcessError):
+        return "command"
+    if isinstance(exc, OSError):
+        return "storage"
+    return "validation"
 
 
 def resolve(request):
@@ -397,14 +431,32 @@ def read_manifest(path):
     return m
 
 
-def archive_path(name):
+def archive_path(name, member=None):
     if (not isinstance(name, str) or not name or "\\" in name or "\x00" in name or
             name.startswith("/") or ntpath.splitdrive(name)[0]):
-        raise ValueError("unsafe history archive path")
+        raise ValueError(f"{member or name!r}: unsafe history archive path")
     parts = name.split("/")
     if any(p in ("", ".", "..") or ":" in p for p in parts):
-        raise ValueError("noncanonical history archive path")
+        raise ValueError(f"{member or name!r}: noncanonical history archive path")
     return PurePosixPath(name)
+
+
+def symlink_target(member):
+    # A sibling subtree needs leading ".." components. Only accept the canonical
+    # relative spelling, so no component traversed and then cancelled can be a link.
+    parent = posixpath.dirname(member.name)
+    target = posixpath.normpath(posixpath.join(parent, member.linkname))
+    path = archive_path(target, member.name)
+    if (len(path.parts) < 2 or path.parts[0] != member.name.split("/")[0] or
+            posixpath.relpath(target, parent) != member.linkname):
+        raise BackupValidationError("archive_link", f"{member.name!r}: symlink target must stay within its history root")
+    return target
+
+
+def validate_hardlink(member, by_name):
+    target = by_name.get(str(archive_path(member.linkname, member.name)))
+    if target is None or not target.isfile():
+        raise BackupValidationError("archive_link", f"{member.name!r}: hard link target is not an archived regular file")
 
 
 def history_members(archive, roots):
@@ -414,20 +466,23 @@ def history_members(archive, roots):
     for member in members:
         path = archive_path(member.name)
         if (path.parts[0] not in root_names or
-                not (member.isfile() or member.isdir() or member.issym()) or member.name in by_name):
-            raise ValueError("invalid or duplicate history archive member")
+                not (member.isfile() or member.isdir() or member.issym() or member.islnk()) or member.name in by_name):
+            raise ValueError(f"{member.name!r}: invalid or duplicate history archive member")
         by_name[member.name] = member
     for name, member in by_name.items():
         path = PurePosixPath(name)
         for parent in path.parents:
             if str(parent) != "." and (str(parent) not in by_name or not by_name[str(parent)].isdir()):
-                raise ValueError("history archive parent is not a directory")
+                raise ValueError(f"{name!r}: history archive parent is not a directory")
+        if member.islnk():
+            validate_hardlink(member, by_name)
         if member.issym():
-            target = str(path.parent / archive_path(member.linkname))
-            if target not in by_name or not (by_name[target].isfile() or by_name[target].isdir()):
-                raise ValueError("history symlink target is not an archived file or directory")
-    if any(f"root-{i}" not in by_name or not by_name[f"root-{i}"].isdir() for i in range(len(roots))):
-        raise ValueError("history archive is missing an inventory root")
+            target = by_name.get(symlink_target(member))
+            if target is None or not (target.isfile() or target.isdir() or target.islnk()):
+                raise BackupValidationError("archive_link", f"{name!r}: symlink target is not an archived file or directory")
+    for name in root_names:
+        if name not in by_name or not by_name[name].isdir():
+            raise ValueError(f"{name!r}: history archive is missing an inventory root")
     return members
 
 
@@ -491,7 +546,9 @@ def extract_history(path, destination):
         # No more file writes through archive paths once links exist. Validation
         # requires each target to be a direct, archived regular file/directory.
         for member in members:
-            if member.issym():
+            if member.islnk():
+                os.link(destination / member.linkname, destination / member.name)
+            elif member.issym():
                 (destination / member.name).symlink_to(member.linkname)
         for member in reversed(directories):
             os.utime(destination / member.name, (member.mtime, member.mtime))
@@ -521,15 +578,15 @@ def backup_store(request):
     if directory:
         if (not isinstance(directory, str) or not directory.startswith("/") or
                 "\x00" in directory or ".." in PurePosixPath(directory).parts):
-            raise ValueError("invalid backup directory")
+            raise BackupValidationError("directory", "invalid backup directory")
         if "\\" in directory and (posixpath.normpath(directory) != directory or
                                   has_new_backslash_component(Path(directory))):
-            raise ValueError("invalid backup directory")
+            raise BackupValidationError("directory", "invalid backup directory")
         store = Path(directory)
     else:
         store = Path(request["runtime"]).resolve(strict=True) / "update/development-backups"
     if store.is_symlink():
-        raise ValueError("linked backup directory")
+        raise BackupValidationError("directory", "linked backup directory")
     return store
 
 
@@ -640,7 +697,7 @@ class ConninfoOption(ctypes.Structure):
 
 def database_environment(database):
     if not isinstance(database, str) or not database or "\x00" in database:
-        raise ValueError("invalid database connection")
+        raise BackupValidationError("database", "invalid database connection")
     env = dict(os.environ)
     if "=" not in database and not database.startswith(("postgres://", "postgresql://")):
         env["PGDATABASE"] = database
@@ -649,7 +706,7 @@ def database_environment(database):
     # query options and keyword strings. Never put the connection string in argv.
     library = ctypes.util.find_library("pq")
     if not library:
-        raise ValueError("development backups require libpq beside PostgreSQL tools")
+        raise BackupValidationError("missing", "development backups require libpq beside PostgreSQL tools")
     pq = ctypes.CDLL(library)
     pq.PQconninfoParse.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
     pq.PQconninfoParse.restype = ctypes.POINTER(ConninfoOption)
@@ -661,12 +718,12 @@ def database_environment(database):
     try:
         encoded = database.encode()
     except UnicodeError as exc:
-        raise ValueError("invalid database connection encoding") from exc
+        raise BackupValidationError("database", "invalid database connection encoding") from exc
     options = pq.PQconninfoParse(encoded, ctypes.byref(error))
     if not options:
         if error.value:
             pq.PQfreemem(error)
-        raise ValueError("invalid database connection parameters")
+        raise BackupValidationError("database", "invalid database connection parameters")
     env.pop("PGDATABASE", None)
     try:
         i = 0
@@ -674,11 +731,11 @@ def database_environment(database):
             option = options[i]
             if option.val is not None:
                 if not option.envvar:
-                    raise ValueError("database parameter has no safe environment binding")
+                    raise BackupValidationError("database", "database parameter has no safe environment binding")
                 env[option.envvar.decode()] = option.val.decode()
             i += 1
     except UnicodeError as exc:
-        raise ValueError("invalid database connection encoding") from exc
+        raise BackupValidationError("database", "invalid database connection encoding") from exc
     finally:
         pq.PQconninfoFree(options)
     return env
@@ -700,7 +757,7 @@ def dump_database(target, env, progress, before):
     progress.update(bytes_done=before + size)
     with target.open("rb") as stream:
         if size < 5 or stream.read(5) != b"PGDMP":
-            raise ValueError("database dump is incomplete")
+            raise BackupValidationError("dump", "database dump is incomplete")
     run(["pg_restore", "--list", str(target)], output=True)
     return size
 
@@ -729,31 +786,67 @@ class HistoryReader:
         return chunk
 
 
+def write_history_symlinks(archive, links, by_name):
+    # Resolve source aliases using only the collected names. An excluded directory
+    # or an alias leading outside the root is never consulted on the host.
+    targets = {name: symlink_target(info) for name, info in links.items()}
+    for name, info in links.items():
+        target = targets[name]
+        # Match the usual filesystem limit, including cycles with a growing suffix.
+        for _ in range(40):
+            path = PurePosixPath(target)
+            alias = next((str(p) for p in (path, *path.parents) if str(p) in targets), None)
+            if alias is None:
+                break
+            target = str(PurePosixPath(targets[alias]) / path.relative_to(alias))
+        entry = by_name.get(target)
+        if entry is None or not (entry.isfile() or entry.isdir() or entry.islnk()):
+            raise BackupValidationError("archive_link", f"{name!r}: symlink target is not an archived file or directory")
+        info.linkname = posixpath.relpath(target, posixpath.dirname(name))
+        archive.addfile(info)
+
+
 def archive_history(roots, excluded, target, progress):
     # The metadata-only pass skips the same subtrees as the archive pass.
     # Counters track regular files and uncompressed bytes entering the archive.
     size = count = 0
+    linked_inodes = set()
     for _, _, info in history_entries(roots, excluded):
         if stat.S_ISREG(info.st_mode):
+            if info.st_nlink > 1:
+                inode = (info.st_dev, info.st_ino)
+                if inode in linked_inodes:
+                    continue
+                linked_inodes.add(inode)
             size += info.st_size
             count += 1
     progress.update(force=True, bytes_done=0, bytes_total=size, item_done=0, item_total=count)
     written = 0
+    by_name = {}
+    links = {}
+    root_paths = {f"root-{i}": str(root).rstrip("/") + "/" for i, root in enumerate(roots)}
     with tarfile.open(target, "w:gz", dereference=False, copybufsize=1024 * 1024) as archive:
         for path, name, _ in history_entries(roots, excluded):
             info = archive.gettarinfo(str(path), name)
             if info is None:
                 continue
             archive_path(info.name)
-            if info.islnk():
-                raise ValueError("history hard links require an explicit snapshot boundary")
-            if info.issym():
-                # Absolute and escaping links need their own inventoried root.
-                archive_path(info.linkname)
-            if not (info.isfile() or info.isdir() or info.issym()):
-                continue
             info.uid = info.gid = 0
             info.uname = info.gname = ""
+            if info.issym():
+                if info.linkname.startswith("/"):
+                    root = name.split("/")[0]
+                    prefix = root_paths[root]
+                    if not info.linkname.startswith(prefix):
+                        raise BackupValidationError("archive_link", f"{name!r}: absolute symlink target is outside its history root")
+                    relative = archive_path(info.linkname[len(prefix):], name)
+                    info.linkname = posixpath.relpath(f"{root}/{relative}", posixpath.dirname(name))
+                links[name] = info
+                continue
+            if info.islnk():
+                validate_hardlink(info, by_name)
+            elif not (info.isfile() or info.isdir()):
+                continue
             if info.isfile():
                 with path.open("rb") as source:
                     archive.addfile(info, HistoryReader(source, progress))
@@ -761,16 +854,17 @@ def archive_history(roots, excluded, target, progress):
                 progress.update(item_done=written)
             else:
                 archive.addfile(info)
+            by_name[name] = info
+        write_history_symlinks(archive, links, by_name)
     if written == 0:
         raise ValueError("no history or configuration files found")
     progress.emit(force=True)
 
 
-def snapshot(request, progress=None):
+@contextlib.contextmanager
+def backup_preflight(request):
     backup = request["config"]["backup"]
     builtin = backup.get("builtin") is True
-    progress = progress or Progress("backing_up", builtin=builtin)
-    progress.step("quiesce")
     runtime, roots, databases = inventory(request)
     database_envs = [database_environment(database) for database in databases]
     # The Hub pauses its own writers and says so (builtin); otherwise the
@@ -785,38 +879,64 @@ def snapshot(request, progress=None):
         raise ValueError("configure writer quiesce and resume commands before updating")
     retain = backup.get("retain") or 3
     if type(retain) is not int or not 1 <= retain <= 50:
-        raise ValueError("invalid snapshot retention")
+        raise BackupValidationError("retention", "invalid snapshot retention")
     store = backup_store(request)
     # A store that is a collected root or holds one cannot be left out of the
     # archive without dropping that root, so the snapshot would be hollow.
     resolved_store = store.resolve()
     for root in roots:
         if root == resolved_store or root.is_relative_to(resolved_store):
-            raise ValueError("the backup directory may not be the runtime or contain a collected root")
+            raise BackupValidationError("directory", "the backup directory may not be the runtime or contain a collected root")
     store.mkdir(mode=0o700, parents=True, exist_ok=True)
     if store.is_symlink():
-        raise ValueError("linked backup directory")
+        raise BackupValidationError("directory", "linked backup directory")
     if store.stat().st_mode & 0o077:
-        raise ValueError("backup directory must be private (0700)")
+        raise BackupValidationError("private_directory", "backup directory must be private (0700)")
     with (store / ".lock").open("a") as lock:
         lock_backup(lock)
         coordination = store / "coordination-pending.json"
-        if coordination.exists():
-            raise ValueError("previous writer coordination needs recovery; inspect the retained marker")
-        if any(store.glob(".incomplete-*")):
-            raise ValueError("an incomplete snapshot needs inspection before retrying")
+        if os.path.lexists(coordination):
+            raise BackupValidationError("coordination", "previous writer coordination needs recovery; inspect the retained marker")
+        for stale in store.glob(".incomplete-*"):
+            if stat.S_ISDIR(stale.lstat().st_mode):
+                shutil.rmtree(stale)
+                print("development backup: removed an incomplete snapshot from an earlier attempt", flush=True)
+        yield runtime, roots, databases, database_envs, store, resolved_store, retain
+
+
+def preflight(request):
+    with backup_preflight(request) as (_, _, _, _, store, _, _):
+        # An existing writable lock does not prove we can create a snapshot.
+        with tempfile.TemporaryDirectory(prefix=".incomplete-", dir=store):
+            return {}
+
+
+def snapshot(request, progress=None):
+    backup = request["config"]["backup"]
+    builtin = backup.get("builtin") is True
+    progress = progress or Progress("backing_up", builtin=builtin)
+    progress.step("preflight")
+    # Recheck under the same lock held through publication. The build and idle
+    # wait may have taken place since the early preflight released it.
+    with backup_preflight(request) as (runtime, roots, databases, database_envs, store, resolved_store, retain):
+        coordination = store / "coordination-pending.json"
         ident = "snapshot-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S%f") + "-" + request["candidate"]["commit"][:12]
-        temporary = Path(tempfile.mkdtemp(prefix=".incomplete-", dir=store))
+        if not NAME.fullmatch(ident):
+            raise ValueError("invalid snapshot commit")
         published = store / ident
         manifest = {"owner": OWNER, "id": ident, "commit": request["candidate"]["commit"],
                     "from_version": request.get("from_version", ""), "from_commit": request.get("from_commit", ""),
                     "from_build": request.get("from_build", 0), "from_updated_at": request.get("from_updated_at", ""),
                     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "platform": request.get("platform", ""),
                     "roots": [str(p) for p in roots], "databases": len(databases), "programs": {}, "nodes": {}, "files": {}}
-        if not builtin:
-            write_json(coordination, {"owner": OWNER, "snapshot": ident, "phase": "quiescing"})
-        snapshot_error = None
-        try:
+        with tempfile.TemporaryDirectory(prefix=".incomplete-", dir=store) as staging:
+            temporary = Path(staging) / ident
+            temporary.mkdir(mode=0o700)
+            progress.step("quiesce")
+            if not builtin:
+                write_json(coordination, {"owner": OWNER, "snapshot": ident, "phase": "quiescing"})
+                sync_dir(store)
+            snapshot_error = None
             try:
                 if builtin:
                     print("development backup: writers paused by the hub", flush=True)
@@ -917,14 +1037,12 @@ def snapshot(request, progress=None):
             progress.step("verify_snapshot")
             for member in temporary.iterdir():
                 sync_dir(member)
+            sync_dir(temporary)
+            verify(temporary, progress)
             os.rename(temporary, published)
             sync_dir(store)
-            verify(published, progress)
             progress.emit(force=True)
             print("development backup: verified " + ident, flush=True)
-        except BaseException:
-            # Interrupted/failed snapshots are never counted or pruned automatically.
-            raise
         pruned = []
         owned = []
         for path in store.iterdir():
@@ -958,15 +1076,25 @@ def main():
     signal.signal(signal.SIGINT, interrupt)
     signal.signal(signal.SIGTERM, interrupt)
     operation = request["operation"]
-    action = {"resolve": resolve, "build": build, "backup": snapshot,
+    action = {"resolve": resolve, "build": build, "preflight": preflight, "backup": snapshot,
               "backups": backups, "prepare_backup": prepare_backup}[operation]
     phase = {"build": "building", "backup": "backing_up", "prepare_backup": "applying_backup"}.get(operation)
     fd = request.get("progress_fd")
-    if phase and type(fd) is int and fd > 2:
-        progress = Progress(phase, progress_writer(fd), builtin=request["config"]["backup"].get("builtin") is True)
-        result = action(request, progress)
-    else:
-        result = action(request)
+    try:
+        if phase and type(fd) is int and fd > 2:
+            progress = Progress(phase, progress_writer(fd), builtin=request["config"]["backup"].get("builtin") is True)
+            result = action(request, progress)
+        else:
+            result = action(request)
+    except Exception as exc:
+        if operation in ("preflight", "backup"):
+            # Only a fixed reason code may cross into status. The private log
+            # retains local details, including archive member names.
+            failure = {"reason": backup_failure_reason(exc)}
+            if isinstance(exc, subprocess.CalledProcessError):
+                failure["exit_code"] = exc.returncode
+            write_json(Path(request["result"]).with_name("failure.json"), failure)
+        raise
     write_json(Path(request["result"]), result)
 
 

@@ -82,6 +82,7 @@ func (u *updater) beginDevelopmentRestore(ctx context.Context, id string) error 
 	u.release = r
 	u.running, u.now = true, false
 	u.opGen++
+	u.reserveDevelopmentLocked(ctx)
 	u.setLocked("applying_backup", "", "")
 	go u.installCandidate(ctx, false, r)
 	return nil

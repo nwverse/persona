@@ -2699,6 +2699,7 @@ def assistant_state(space="", archived=False):
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
+        out["integrations_v2"] = MANAGER_INTEGRATIONS_V2.get(MANAGERS["default"], False)
         out.update(work_guide=MANAGER_WORK_GUIDES.get(MANAGERS["default"], False), agent_tasks=cfg["agent_tasks"], task_lessons=cfg["task_lessons"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
@@ -4739,7 +4740,32 @@ def assistant_for_manager(h):
                                                            "meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension", "meeting_transcription_ready")}
     if "work_guide" in st:
         st["work_guide"] = MANAGER_WORK_GUIDES.get(mid, False)
+        st["integrations_v2"] = MANAGER_INTEGRATIONS_V2.get(mid, False)
     return (dict(st, manager=mid, conversations=[], tasks=[], notes=notes, notes_effective=notes), 200)
+
+
+def update_labs(h, body):
+    if os.environ.get("MOCK_LEGACY_HUB"):
+        return None
+    labs = {key: state for key, state in (("work_guide", MANAGER_WORK_GUIDES), ("integrations_v2", MANAGER_INTEGRATIONS_V2))
+            if body.get(key) is not None}
+    if labs:
+        header = h.headers.get("X-Persona-Manager")
+        query = (parse_qs(urlparse(h.path).query).get("manager") or [None])[0]
+        mid = header or query
+        if not mid or (header and query and header != query):
+            return ({"code": "bad_request"}, 400)
+        if is_read_only(h): return ({"code": "forbidden"}, 403)
+        with MANAGER_LABS_LOCK:
+            for key, state in labs.items():
+                expected = body.get("expected_" + key)
+                if type(body[key]) is not bool or (expected is not None and type(expected) is not bool):
+                    return ({"code": "bad_request"}, 400)
+                if expected is not None and expected != state.get(mid, False):
+                    return ({"code": "configuration_conflict"}, 409)
+            for key, state in labs.items():
+                state[mid] = body[key]
+    return None
 
 
 def other_manager(h):
@@ -4756,6 +4782,8 @@ def other_manager(h):
 
 # Each other manager's own 说明 (设置 › 助手 with its X-Persona-Manager): a whole assistant has its own.
 MANAGER_WORK_GUIDES = {}
+MANAGER_INTEGRATIONS_V2 = {}
+MANAGER_LABS_LOCK = threading.Lock()
 MANAGER_NOTES = {"m-3fa21c": "这是「工作」管理者：只管工作电脑上的事和工作邮箱。"}
 
 
@@ -26923,6 +26951,11 @@ class H(BaseHTTPRequestHandler):
             ]})
         if p == "/api/v1/assistant/conversations/" + ASK1 + "/always":
             return self.send_json({"grants": ALWAYS_GRANTS})
+        if SUBSCRIPTION_INBOX and p == "/api/v1/subscriptions":
+            return self.send_json({"subscriptions": [
+                {"id": source["id"], "label": source["name"], "connector": "mail", "extension": "mail",
+                 "source": source["read"], "source_name": source["name"], "recipe_origin": "catalog",
+                 "to_inbox": True, "to_kb": False, "state": "ok"} for source in SOURCES_GRAPH["sources"]]})
         if p == "/api/v1/subscriptions/-/graph": return self.send_json(SOURCES_GRAPH)
         if recordings_route(self, "GET", p): return
         if custom_models_route(self, "GET", p, q): return
@@ -29474,21 +29507,14 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.last_body or b"{}")
             PINS.update(spaces=list(body.get("spaces") or []), sessions=list(body.get("sessions") or []))
             return self.send_json(PINS)
-        if p == "/api/v1/assistant" and self.command == "PUT" and not os.environ.get("MOCK_LEGACY_HUB"):
-            body = json.loads(self.last_body or b"{}")
-            if "work_guide" in body:
-                mid = self.headers.get("X-Persona-Manager")
-                if not mid or type(body["work_guide"]) is not bool: return self.send_json({"code": "bad_request"}, 400)
-                other = assistant_for_manager(self)
-                if other and other[1] != 200: return self.send_json(*other)
-                if is_read_only(self): return self.send_json({"code": "forbidden"}, 403)
-                if body.get("expected_work_guide", MANAGER_WORK_GUIDES.get(mid, False)) != MANAGER_WORK_GUIDES.get(mid, False):
-                    return self.send_json({"code": "configuration_conflict"}, 409)
-                MANAGER_WORK_GUIDES[mid] = body["work_guide"]
+        if SUBSCRIPTION_INBOX and self.command == "POST" and p == "/api/v1/subscriptions/-/ui":
+            items = [{"type": "text", "text": source["name"]} for source in SOURCES_GRAPH["sources"]]
+            return self.send_json({"view": {"title": "Inbox sources", "sections": [{"items": items}]}})
         if p == "/api/v1/assistant" and self.command == "PUT" and (other := assistant_for_manager(self)) is not None:
             if other[1] != 200: return self.send_json(*other)
             body = json.loads(self.last_body or b"{}")
-            mid = self.headers.get("X-Persona-Manager") or (parse_qs(urlparse(self.path).query).get("manager") or [""])[0]
+            if error := update_labs(self, body): return self.send_json(*error)
+            mid = other[0]["manager"]
             if body.get("notes") is not None: MANAGER_NOTES[mid] = body["notes"]
             return self.send_json(assistant_for_manager(self)[0])
         if p == "/api/v1/assistant" and self.command == "PUT":  # Settings › Assistant: only the fields sent change
@@ -29511,12 +29537,10 @@ class H(BaseHTTPRequestHandler):
                 hours = body["idle_close_hours"]
                 if not isinstance(hours, int) or isinstance(hours, bool) or not 0 <= hours <= 8760:
                     return self.send_json({"error": "idle_close_hours must be 0–8760"}, 400)
-                ASSISTANT_CONFIG["idle_close_hours"] = hours
             if "archive_closed_days" in body:  # 0–3650, as the hub checks it (#3618)
                 days = body["archive_closed_days"]
                 if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650:
                     return self.send_json({"error": "archive_closed_days must be 0–3650"}, 400)
-                ASSISTANT_CONFIG["archive_closed_days"] = days
             # As the hub's profile_write.go: checked before anything changes; the session-name settings only from a
             # request that names its manager (#4965).
             naming = [k for k in ("agent_auto_naming", "agent_auto_naming_max", "agent_auto_naming_interval_hours") if k in body]
@@ -29531,7 +29555,12 @@ class H(BaseHTTPRequestHandler):
                 mode = body["default_permission_mode"]
                 if mode not in ("default", "acceptEdits", "plan", "auto", "bypassPermissions"):
                     return self.send_json({"error": "bad default_permission_mode"}, 400)
-                ASSISTANT_CONFIG["default_permission_mode"] = mode
+            if body.get("machine_id") and not any(m["id"] == body["machine_id"] for m in MACHINES):
+                return self.send_json({"error": "unknown machine"}, 400)
+            if error := update_labs(self, body): return self.send_json(*error)
+            for key in ("idle_close_hours", "archive_closed_days", "default_permission_mode"):
+                if key in body:
+                    ASSISTANT_CONFIG[key] = body[key]
             for key in ("start_requested_tasks", "agent_auto_naming"):
                 if isinstance(body.get(key), bool):
                     ASSISTANT_CONFIG[key] = body[key]
@@ -29555,8 +29584,6 @@ class H(BaseHTTPRequestHandler):
             if isinstance(body.get("claude_interactive"), bool):
                 ASSISTANT_CONFIG["claude_interactive"] = body["claude_interactive"]
             if body.get("machine_id"):
-                if not any(m["id"] == body["machine_id"] for m in MACHINES):
-                    return self.send_json({"error": "unknown machine"}, 400)
                 ASSISTANT_CONFIG["machine_id"] = body["machine_id"]
             if body.get("launcher"):
                 ASSISTANT_CONFIG["launcher"] = body["launcher"]
@@ -30492,8 +30519,23 @@ if CHANNELS_MODE:
             _s["channels"] = ["feishu"]
 
 
-def _channel_detail(c):
-    d = dict(c)
+CHANNEL_ROUTING = {}  # (manager, channel id) -> explicitly saved routing fields
+
+
+def _channel_view(c, manager):
+    if os.environ.get("MOCK_LEGACY_HUB") or c["source"] != "plugin" or not c["installed"] or c["kind"] not in ("im", "mention"):
+        return c
+    prefs = CHANNEL_ROUTING.get((manager, c["id"]), {})
+    inherit_topics = MANAGER_INTEGRATIONS_V2.get(manager) and c["capabilities"].get("threads")
+    return dict(c, thread_mode=prefs.get("thread_mode", "per_topic" if inherit_topics else "channel_default"),
+                **({"thread_idle_hours": prefs["thread_idle_hours"]} if prefs.get("thread_idle_hours") else {}))
+
+
+def _channel_detail(c, manager):
+    d = dict(_channel_view(c, manager))
+    override = {"per_topic": "topics", "per_group_and_topic": "groups_and_topics"}.get(d.get("thread_mode"))
+    if override and MANAGER_INTEGRATIONS_V2.get(manager):
+        d["target_override"] = {"mode": override}
     d["waiting"] = {"answers": 1 if c["id"] == "wechat" else 0, "asks": 0}
     if c["id"] in ("wechat", "feishu"):
         d["conversations"] = [{"machine_id": "server", "session_id": ASK1, "title": "今天要处理的事", "at": ago(minutes=3)},
@@ -30507,23 +30549,32 @@ def channels_route(handler, p, body):
     """MOCK_CHANNELS: GET /api/v1/channels, one channel's page, its settings, binding and test. False otherwise."""
     if not CHANNELS_MODE or not (p.startswith("/api/v1/channels") or p == "/mock/channels"):
         return False
+    manager = handler.headers.get("X-Persona-Manager") or (parse_qs(urlparse(handler.path).query).get("manager") or [MANAGERS["default"]])[0]
     method = handler.command
     if p == "/mock/channels":
         return handler.send_json({"tests": CHANNEL_TESTS}) or True
     if p == "/api/v1/channels" and method == "GET":
         order = {"app": 0}
         rank = lambda c: order.get(c["id"], 1 if c["state"] == "connected" else 3 if c["state"] == "not_installed" else 2)
-        return handler.send_json({"channels": sorted(CHANNELS.values(), key=rank)}) or True
+        return handler.send_json({"channels": [_channel_view(c, manager) for c in sorted(CHANNELS.values(), key=rank)]}) or True
     parts = p.split("/")  # ['', 'api', 'v1', 'channels', id, ...]
     c = CHANNELS.get(parts[4]) if len(parts) > 4 else None
     if c is None:
         return handler.send_json({"error": "no such channel", "code": "not_found"}, 404) or True
     rest, req = parts[5:], json.loads(body or b"{}") if body else {}
     if rest == [] and method == "GET":
-        return handler.send_json(_channel_detail(c)) or True
+        return handler.send_json(_channel_detail(c, manager)) or True
     if c.get("read_only") or c["source"] == "market":
         return handler.send_json({"error": c["name"] + " 不在这里设置", "code": "read_only"}, 409) or True
     if rest == [] and method == "PUT":
+        routing = {k: req[k] for k in ("thread_mode", "thread_idle_hours")
+                   if req.get(k) is not None and not os.environ.get("MOCK_LEGACY_HUB")}
+        if routing and c["source"] != "plugin":
+            return handler.send_json({"error": "Routing requires an extension channel", "code": "invalid"}, 400) or True
+        if "thread_mode" in routing and routing["thread_mode"] not in ("channel_default", "per_group_and_topic", "per_topic"):
+            return handler.send_json({"error": "Invalid thread_mode", "code": "invalid"}, 400) or True
+        if "thread_idle_hours" in routing and (type(routing["thread_idle_hours"]) is not int or not 0 <= routing["thread_idle_hours"] <= 87600):
+            return handler.send_json({"error": "Invalid thread_idle_hours", "code": "invalid"}, 400) or True
         if "enabled" in req:
             c["enabled"] = bool(req["enabled"])
             c["state"] = "disabled" if not c["enabled"] else ("connected" if c.get("account") else "not_connected")
@@ -30534,11 +30585,13 @@ def channels_route(handler, p, body):
             title = next((s["title"] for s in ASSISTANT if s["session_id"] == t.get("session_id")), None)
             c["target"] = {k: v for k, v in {"kind": t.get("kind"), "machine_id": t.get("machine_id"), "session_id": t.get("session_id"),
                                              "title": title}.items() if v}
+        if routing:
+            CHANNEL_ROUTING.setdefault((manager, c["id"]), {}).update(routing)
         for fid, on in (req.get("features") or {}).items():
             for f in c.get("features", []):
                 if f["id"] == fid:
                     f["on"] = bool(on)
-        return handler.send_json(_channel_detail(c)) or True
+        return handler.send_json(_channel_detail(c, manager)) or True
     if rest == ["bind"] and method == "POST":
         step = req.get("step") or ""
         if c["id"] == "wechat":
@@ -30580,7 +30633,7 @@ def channels_route(handler, p, body):
     if rest == ["binding"] and method == "DELETE":
         c.pop("account", None)
         c["state"] = "not_connected"
-        return handler.send_json(_channel_detail(c)) or True
+        return handler.send_json(_channel_detail(c, manager)) or True
     if rest == ["test"] and method == "POST":
         if c["state"] != "connected":
             return handler.send_json({"error": c["name"] + " 还没连上"}, 502) or True
@@ -30600,7 +30653,8 @@ _features_without_channels = features
 
 
 def features():
-    return _features_without_channels() + (["channels"] if CHANNELS_MODE else [])
+    return (_features_without_channels() + (["channels"] if CHANNELS_MODE else [])
+            + (["inbox_sources", "inbox_sources_graph"] if SUBSCRIPTION_INBOX and SUBSCRIPTION_INBOX != "old" else []))
 
 
 MOCK_HELP.append("MOCK_TASKS_CONTINUED=1|starting  (with MOCK_TASKS=1) One to-do two later plans continued: two released Agents and a running one, each plan's hand-off card its own Agent (#11854); starting: the newest Agent not linked yet")

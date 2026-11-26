@@ -9,6 +9,7 @@ import {
   nudgeLabel, pairBot, pairingLeft, testBot, unpairBot, updateBot,
   type BotCredentials, type FeishuBotStatus,
 } from "../../../lib/feishu-bot";
+import { useStore } from "../../../lib/store";
 import { ago } from "../../../lib/format";
 import { documentPage, visiblePoll } from "../../../lib/visible-poll";
 import { Button, copyText, cx, IconButton, Spinner, toast } from "../../../ui/atoms";
@@ -330,6 +331,7 @@ export function FeishuBotConnectionPanel({
 export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
   const { status, saving, run } = ctl;
   const fullReplyDetail = useId();
+  const machines = useStore((s) => s.machines);
   if (!status?.has_secret) return null;
 
   const features = status.features ?? DEFAULT_FEATURES;
@@ -432,7 +434,7 @@ export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
         <Group title={t("settings-feishubot.agents")}>
           {agents.map((a) => (
             <Row key={a.session_id} label={a.title}>
-              <span className="max-w-[160px] truncate">{a.machine_id}</span>
+              <span className="max-w-[160px] truncate">{machines.find((m) => m.id === a.machine_id)?.name || a.machine_id}</span>
             </Row>
           ))}
         </Group>
