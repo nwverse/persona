@@ -398,6 +398,80 @@ func TestViewsGuideReplacementIsNotManaged(t *testing.T) {
 	}
 }
 
+func TestViewsGuideCopiedMarkerDoesNotTransferOwnership(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	at := filepath.Join(dir, viewsGuideName)
+	marker, err := os.ReadFile(filepath.Join(at, viewsGuideOwnershipFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A file copy, unlike a hard link, gives the edited personal replacement a new inode.
+	if err := os.RemoveAll(at); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(at, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(at, viewsGuideOwnershipFile), marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(at, "SKILL.md"), []byte("Edited personal guide"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if viewsGuideInstalled(dir) {
+			t.Fatal("copying Persona's marker transferred managed ownership")
+		}
+		if err := Sync(dir, user, Selection{}, quiet); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(at, "SKILL.md"))
+		if err != nil || string(got) != "Edited personal guide" {
+			t.Fatalf("the edited personal copy was overwritten: %q, %v", got, err)
+		}
+	}
+}
+
+func TestViewsGuideCachedExtensionDisablesCompactReadiness(t *testing.T) {
+	cwd, user, plugins := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", plugins)
+	for _, runtime := range []string{".claude", ".agents"} {
+		if err := Sync(filepath.Join(cwd, runtime, "skills"), user, Selection{}, quiet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !ViewsGuideReady(cwd) {
+		t.Fatal("managed guides should be ready before the extension collision")
+	}
+	skill(t, plugins, viewsGuideName, "Extension guide")
+	if ViewsGuideReady(cwd) {
+		t.Fatal("a cached extension can replace the guide during a downgrade; compact instructions must stay disabled")
+	}
+}
+
+func TestViewsGuideStaleExtensionStampKeepsPersonalReplacement(t *testing.T) {
+	dir, user, plugins := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", plugins)
+	skill(t, dir, viewsGuideName, "Personal replacement")
+	if err := os.WriteFile(filepath.Join(dir, pluginsCopied), []byte(viewsGuideName+"=old-extension digest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, viewsGuideName, "SKILL.md"))
+	if err != nil || !strings.Contains(string(b), "Personal replacement") {
+		t.Fatalf("a stale extension stamp deleted or replaced the personal directory: %q, %v", b, err)
+	}
+	if viewsGuideInstalled(dir) {
+		t.Fatal("the preserved personal directory became Persona-managed")
+	}
+}
+
 func TestWorkGuideCatalogBudget(t *testing.T) {
 	dir, user := t.TempDir(), t.TempDir()
 	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())

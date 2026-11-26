@@ -263,9 +263,9 @@ func (s *Service) leaderPolicy(ctx context.Context, id, policy string, idle bool
 	return policy, nil
 }
 
-// directionRolesChanged records the role a conversation ran on immediately before leader membership changed. Older
-// records and side conversations without a direction record have no RoleInEffect yet; without this baseline their first
-// busy send after a pin or unpin would present the new role and the node would refuse the owner's message.
+// directionRolesChanged moves a proven supplement baseline onto a direction record before leader membership changes.
+// A pre-upgrade process with no recorded baseline stays unknown: assuming its old side/leader role would invent a
+// compact fingerprint it never received, so its working sends correctly retain the complete legacy policy instead.
 func (s *Service) directionRolesChanged(ctx context.Context, before, after []string) {
 	machine := s.settings(ctx).MachineID
 	b := &s.directions
@@ -297,8 +297,22 @@ func (s *Service) directionRolesChanged(ctx context.Context, before, after []str
 				b.m[id] = d
 			}
 			if d.RoleInEffect == "" {
-				d.RoleInEffect = string(transition.role)
-				changed = true
+				s.supRoles.mu.Lock()
+				if s.supRolesLocked(ctx) {
+					key := supervisionRoleKey(machine, id)
+					if held, ok := validSupervisionRole(s.supRoles.m[key]); ok && held == transition.role {
+						d.RoleInEffect = string(held)
+						delete(s.supRoles.m, key)
+						if err := s.saveSupervisionRolesLocked(ctx); err != nil {
+							s.supRoles.dirty = true
+							s.logf("move assistant supervision role onto its direction: %v", err)
+						} else {
+							s.supRoles.dirty = false
+						}
+						changed = true
+					}
+				}
+				s.supRoles.mu.Unlock()
 			}
 		}
 	}
@@ -402,6 +416,7 @@ type notesMove struct {
 type notesCarry struct {
 	id    string
 	move  *notesMove
+	role  *supervisionRoleMove
 	owner bool
 }
 
@@ -493,7 +508,7 @@ func (f *notesFlight) confirmed() (*string, prompts.SupervisionRole) {
 // once no other send in flight carries the block: when no later move is in flight the block before it is put back, so
 // the next messages of the same turn are not refused too; else the later move counts from that block.
 func (s *Service) notesSendOutcome(ctx context.Context, carry *notesCarry, taken bool) {
-	if carry == nil || carry.move == nil {
+	if carry == nil {
 		return
 	}
 	b := &s.directions
@@ -504,7 +519,13 @@ func (s *Service) notesSendOutcome(ctx context.Context, carry *notesCarry, taken
 
 // notesSettleLocked is notesSendOutcome with b.mu held.
 func (s *Service) notesSettleLocked(ctx context.Context, carry *notesCarry, taken bool) {
-	if carry == nil || carry.move == nil {
+	if carry == nil {
+		return
+	}
+	if carry.role != nil {
+		s.supervisionRoleSettle(ctx, carry, taken)
+	}
+	if carry.move == nil {
 		return
 	}
 	b := &s.directions

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -109,7 +110,7 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	s.todos.todos[todo.ID].Supervision.Supervisor = "lead1"
 	s.todos.mu.Unlock()
 	setSettings(t, s, func(v *Settings) { v.Leaders = nil })
-	if got := mustSupervisionInstructions(t, s, ctx, "server", "lead1"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
+	if got := dispatchedPolicy(t, s, "lead1"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
 		t.Fatal("former leader with remaining tasks did not become a side supervisor")
 	}
 	s.todos.mu.Lock()
@@ -124,6 +125,71 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	s.todos.mu.Unlock()
 	if mustSupervisionInstructions(t, s, ctx, "server", "side") != "" {
 		t.Fatal("side chat retained policy after its last task closed")
+	}
+}
+
+func TestSupervisionRoleKeyIsJSONSafeAndUnambiguous(t *testing.T) {
+	if key := supervisionRoleKey("server", "conv1"); strings.ContainsRune(key, '\x00') {
+		t.Fatalf("PostgreSQL jsonb rejects this object key: %q", key)
+	}
+	if supervisionRoleKey("a", "bc") == supervisionRoleKey("ab", "c") {
+		t.Fatal("machine and conversation ids have an ambiguous concatenation")
+	}
+}
+
+func TestSupervisionRoleRefusedIdleSendRestoresLegacyBaseline(t *testing.T) {
+	s, f, _ := newSupervisedService(t)
+	f.setSessions("server", proto.Session{SessionID: "conv1", Assistant: true, Status: proto.StatusIdle})
+	compact := mustSupervisionRole(t, prompts.SupervisionRoleMain)
+	if got := ownerMessage(t, s, "conv1", "stale-idle"); got != compact {
+		t.Fatal("the idle send did not propose its compact role")
+	}
+	// The session row was stale: the node was still running the legacy full policy and refused the fingerprint change.
+	f.setSessions("server", proto.Session{SessionID: "conv1", Assistant: true, Status: proto.StatusWorking})
+	hubSentID(s, "conv1", "stale-idle", assistantwire.ConversationFailed)
+	if got := ownerPolicy(t, s, "conv1"); got != prompts.RenderSupervisionInstructions() {
+		t.Fatal("a refused compact baseline survived into the next working send")
+	}
+}
+
+func TestSupervisionRoleUpgradeWaitsForAnIdlePolicyChange(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	setSettings(t, s, func(v *Settings) {
+		v.Leaders = []string{"lead1"}
+		v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "background", "server"
+	})
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].Supervision.Supervisor = "side"
+	s.todos.mu.Unlock()
+	roles := map[string]prompts.SupervisionRole{
+		"conv1": prompts.SupervisionRoleMain, "lead1": prompts.SupervisionRoleLeader,
+		"background": prompts.SupervisionRoleBackground, "side": prompts.SupervisionRoleSide,
+	}
+	setStatus := func(status string) {
+		sessions := make([]proto.Session, 0, len(roles))
+		for id := range roles {
+			sessions = append(sessions, proto.Session{SessionID: id, Assistant: true, Status: status})
+		}
+		f.setSessions("server", sessions...)
+	}
+	full := prompts.RenderSupervisionInstructions()
+	setStatus(proto.StatusWorking)
+	for id := range roles {
+		if got := ownerPolicy(t, s, id); got != full {
+			t.Fatalf("%s: an upgraded working legacy process received a changed policy", id)
+		}
+	}
+	setStatus(proto.StatusIdle)
+	for id, role := range roles {
+		if got := dispatchedPolicy(t, s, id); got != mustSupervisionRole(t, role) {
+			t.Fatalf("%s: the idle send did not select its role policy", id)
+		}
+	}
+	setStatus(proto.StatusWorking)
+	for id, role := range roles {
+		if got := ownerPolicy(t, s, id); got != mustSupervisionRole(t, role) {
+			t.Fatalf("%s: the recorded role was not retained while working", id)
+		}
 	}
 }
 
@@ -153,20 +219,22 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 			}
 		})
 	}
-	// The legacy preference no longer demotes main: it retains authority for its own tasks and lead escalations.
+	// This existing main conversation has not accepted a compact baseline. A policy-only lookup therefore retains the
+	// complete legacy policy; the legacy preference still must not demote it to no supervision at all.
+	legacy := prompts.RenderSupervisionInstructions()
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = nil })
-	if got := mustSupervisionInstructions(t, s, ctx, "server", s.settings(ctx).Main); got != policy {
-		t.Fatal("main lost its policy with the legacy preference unset")
+	if got := mustSupervisionInstructions(t, s, ctx, "server", s.settings(ctx).Main); got != legacy {
+		t.Fatal("existing main lost its fail-closed legacy policy with the legacy preference unset")
 	}
 	no := false
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &no })
-	if got := mustSupervisionInstructions(t, s, ctx, "server", s.settings(ctx).Main); got != policy {
-		t.Fatal("main lost its policy with the legacy preference off")
+	if got := mustSupervisionInstructions(t, s, ctx, "server", s.settings(ctx).Main); got != legacy {
+		t.Fatal("existing main lost its fail-closed legacy policy with the legacy preference off")
 	}
 	s.noBackground = false
 	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
-	if got := mustSupervisionInstructions(t, s, ctx, "server", "bg1"); got != mustSupervisionRole(t, prompts.SupervisionRoleBackground) {
-		t.Fatal("the existing legacy background supervisor lacks its role policy")
+	if got := mustSupervisionInstructions(t, s, ctx, "server", "bg1"); got != legacy {
+		t.Fatal("the existing legacy background supervisor lost its full-policy fallback")
 	}
 	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "", "" })
 	s.warm("")
@@ -209,6 +277,19 @@ func TestSupervisionBackgroundStartUsesBackgroundPolicy(t *testing.T) {
 	}
 	if got, want := send["supervision_instructions"], mustSupervisionRole(t, prompts.SupervisionRoleBackground); got != want {
 		t.Fatalf("background first start received %d bytes, want its %d-byte role policy", len(got.(string)), len(want))
+	}
+}
+
+func TestSupervisionStartupBaselineCoversFirstWorkingTurn(t *testing.T) {
+	s, f := newQuietService(t)
+	s.noBackground = false
+	id, err := s.startBackground(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.setSessions("server", proto.Session{SessionID: id, Assistant: true, Status: proto.StatusWorking})
+	if got := ownerPolicy(t, s, id); got != mustSupervisionRole(t, prompts.SupervisionRoleBackground) {
+		t.Fatal("a follow-up during the first turn lost the compact policy the node accepted at startup")
 	}
 }
 

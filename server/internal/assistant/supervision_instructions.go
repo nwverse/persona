@@ -96,13 +96,33 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	case leader:
 		role = prompts.SupervisionRoleLeader
 	}
-	policy, err := prompts.RenderSupervisionInstructionsForRole(role)
+	idle := leadIdle(c, known)
+	if idle {
+		if err := s.recordSupervisionRole(ctx, machine, id, role); err != nil {
+			// Role persistence must not add a new owner-send failure mode. Without a durable baseline, retain the legacy
+			// complete policy for this send and retry the compact selection on a later idle send.
+			policy := prompts.RenderSupervisionInstructions()
+			return s.leaderPolicy(ctx, id, policy, false, role)
+		}
+	}
+	policyRole := role
+	if known && !idle {
+		if held, ok := s.workingSupervisionRole(ctx, machine, id); ok {
+			policyRole = held
+		} else {
+			// A pre-role-filtering process has no baseline. Keep its complete legacy policy until an idle send instead of
+			// presenting a new fingerprint that the node must refuse as busy.
+			policy := prompts.RenderSupervisionInstructions()
+			return s.leaderPolicy(ctx, id, policy, false, role)
+		}
+	}
+	policy, err := prompts.RenderSupervisionInstructionsForRole(policyRole)
 	if err != nil {
 		return "", err
 	}
 	// A leader's own direction notes and leader/side role changes follow its role policy (direction_notes.go): both wait
 	// for an idle send and roll back together if that send is refused. Former leaders keep remaining tasks as side supervisors.
-	return s.leaderPolicy(ctx, id, policy, leadIdle(c, known), role)
+	return s.leaderPolicy(ctx, id, policy, idle, role)
 }
 
 func (s *Service) putSupervisionInstructions(ctx context.Context, machine, id string, p map[string]any) error {

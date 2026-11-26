@@ -73,6 +73,7 @@ const (
 	workGuideName           = "persona-work"
 	viewsGuideName          = "persona-views"
 	viewsGuideOwnershipFile = ".persona-managed"
+	viewsGuideOwnershipLink = ".persona-views-managed"
 	// MachineOpsSkillName is the built-in opt-in read-only machine diagnostics skill (#13053).
 	MachineOpsSkillName  = "persona-machine-ops"
 	machineOpsDigestFile = ".persona-machine-ops-digest"
@@ -240,12 +241,15 @@ func WorkGuideReady(cwd string) bool {
 		WorkGuideInstalled(filepath.Join(cwd, ".agents", "skills"))
 }
 
-// ViewsGuideReady reports whether both native skill roots contain the managed rich-view guide. Its ownership marker
-// lives inside the skill directory, so replacing that directory with a personal copy revokes readiness. The legacy
-// shared stamp deliberately omits persona-views: an older node removes unknown names from that stamp during a downgrade,
-// but leaves this directory and its marker in place for a process resumed before the next prepare.
+// ViewsGuideReady reports whether both native skill roots contain the managed rich-view guide. The marker inside the
+// skill and its ownership file beside it must be the same inode: copying and editing the directory therefore revokes
+// readiness instead of transferring Persona's ownership. The legacy shared stamp deliberately omits persona-views so
+// an older node cannot remove it as an unknown built-in. A cached same-name extension also disables compact selection:
+// an older node may copy that cache over the guide before this node can restore its full-instruction fallback. The
+// user's source directory is checked directly too: after a restart, the fallback runs without a connector-wide sync,
+// so a stale managed copy must not hide a newly added personal guide.
 func ViewsGuideReady(cwd string) bool {
-	if cwd == "" {
+	if cwd == "" || filePresent(filepath.Join(UserDir(), viewsGuideName, "SKILL.md")) || slices.Contains(pluginNames(PluginDir()), viewsGuideName) {
 		return false
 	}
 	for _, runtime := range []string{".claude", ".agents"} {
@@ -261,7 +265,12 @@ func viewsGuideInstalled(dir string) bool {
 }
 
 func ownsViewsGuide(dir string) bool {
-	return filePresent(filepath.Join(dir, viewsGuideName, viewsGuideOwnershipFile))
+	inside, err := os.Stat(filepath.Join(dir, viewsGuideName, viewsGuideOwnershipFile))
+	if err != nil || !inside.Mode().IsRegular() {
+		return false
+	}
+	outside, err := os.Stat(filepath.Join(dir, viewsGuideOwnershipLink))
+	return err == nil && outside.Mode().IsRegular() && os.SameFile(inside, outside)
 }
 
 const guideDigestFile = ".persona-work-digest"
@@ -448,6 +457,15 @@ func installBuiltins(dir string, mine []string, selection Selection) error {
 		_ = os.RemoveAll(final)
 		if err := os.Rename(tmp, final); err != nil {
 			return err
+		}
+		if name == viewsGuideName {
+			owner := filepath.Join(dir, viewsGuideOwnershipLink)
+			if err := os.Remove(owner); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if err := os.Link(filepath.Join(final, viewsGuideOwnershipFile), owner); err != nil {
+				return err
+			}
 		}
 	}
 	if guideLink == "" && slices.Contains(names, workGuideName) {

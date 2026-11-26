@@ -511,11 +511,11 @@ func TestCapableRuntimeLeaderAndBackgroundSupervisor(t *testing.T) {
 		t.Fatal("non-capable runtime background supervisor was treated as valid")
 	}
 	// Main keeps its policy for new main-supervised work (#5732); background and leader receive their own policies too.
-	if got := mustSupervisionInstructions(t, s, ctx, "server", main.SessionID); got != mustSupervisionRole(t, prompts.SupervisionRoleMain) {
-		t.Fatalf("main chat lost its supervision policy (%d bytes)", len(got))
-	}
-	for id, role := range map[string]prompts.SupervisionRole{bg.SessionID: prompts.SupervisionRoleBackground, lead.SessionID: prompts.SupervisionRoleLeader} {
-		if got := mustSupervisionInstructions(t, s, ctx, "server", id); got != mustSupervisionRole(t, role) {
+	// Use real owner dispatches: a policy-only lookup cannot manufacture a compact baseline the node has not accepted.
+	for id, role := range map[string]prompts.SupervisionRole{
+		main.SessionID: prompts.SupervisionRoleMain, bg.SessionID: prompts.SupervisionRoleBackground, lead.SessionID: prompts.SupervisionRoleLeader,
+	} {
+		if got := dispatchedPolicy(t, s, id); got != mustSupervisionRole(t, role) {
 			t.Fatalf("%s did not receive its %s supervision policy", id, role)
 		}
 	}

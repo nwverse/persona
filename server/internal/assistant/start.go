@@ -548,6 +548,15 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	}
 	sess.Effort, _ = params["effort"].(string)
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
+	if startup := ctx.Value(supervisionStartup{}); startup != nil && sess.SessionID != "" {
+		if role, ok := startup.(prompts.SupervisionRole); ok {
+			// The node has accepted both the compact policy and this id. Record that exact baseline before any follow-up
+			// can find the new process working; a pre-id record could not identify the process it belonged to.
+			if err := s.recordAcceptedSupervisionRole(context.WithoutCancel(ctx), machine, sess.SessionID, role); err != nil {
+				s.logf("record accepted assistant supervision role: %v", err)
+			}
+		}
+	}
 	return sess, nil
 }
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { AgyAcpClient } from '../lib/acp.js'
@@ -23,6 +23,7 @@ function fakeClient(t, mode, options = {}) {
   })
   const pids = () => (existsSync(pidFile) ? readFileSync(pidFile, 'utf8').split('\n').filter(Boolean).map(Number) : [])
   const cwds = () => (existsSync(`${pidFile}.cwds`) ? readFileSync(`${pidFile}.cwds`, 'utf8').split('\n').filter(Boolean) : [])
+  const configDirs = () => (existsSync(`${pidFile}.config-dirs`) ? readFileSync(`${pidFile}.config-dirs`, 'utf8').split('\n').filter(Boolean) : [])
   t.after(() => {
     const left = new Set([...pids(), client.proc?.pid].filter(Boolean))
     client.stop()
@@ -33,7 +34,7 @@ function fakeClient(t, mode, options = {}) {
     }
     rmSync(dir, { recursive: true, force: true })
   })
-  return { client, logs, pids, cwds }
+  return { client, logs, pids, cwds, configDirs }
 }
 
 function alive(pid) {
@@ -101,6 +102,31 @@ describe('agy acp process lifecycle', () => {
     const { client, cwds } = fakeClient(t, 'ok', { bin })
     await client.ensureStarted()
     assert.equal(cwds().length, 1)
+  })
+
+  it('resolves a relative ACP config directory against the launcher cwd', TIMEOUT, async (t) => {
+    const { client, configDirs } = fakeClient(t, 'echo', {
+      env: { ANTIGRAVITY_CLI_CONFIG_DIR: 'state/config' },
+    })
+    await client.ensureStarted()
+    assert.deepEqual(configDirs(), [join(process.cwd(), 'state/config')])
+  })
+
+  it('passes an absolute native log path when TMPDIR is relative', TIMEOUT, async (t) => {
+    const temporary = mkdtempSync(join(tmpdir(), 'agy-tmp-root-'))
+    const { client } = fakeClient(t, 'echo')
+    const previous = process.env.TMPDIR
+    process.env.TMPDIR = relative(process.cwd(), temporary)
+    t.after(() => {
+      if (previous === undefined) delete process.env.TMPDIR
+      else process.env.TMPDIR = previous
+      rmSync(temporary, { recursive: true, force: true })
+    })
+    await client.ensureStarted()
+    const [{ directory, file }] = [...client.nativeLogs.values()]
+    assert.ok(isAbsolute(directory), directory)
+    assert.ok(isAbsolute(file), file)
+    assert.equal(realpathSync(dirname(file)), realpathSync(directory))
   })
 
   it('a missing agy fails the start instead of crashing the process', TIMEOUT, async (t) => {
@@ -262,6 +288,21 @@ describe('ACP session recovery', () => {
     await client.ensureSessionLoaded('s1', '/nonexistent/removed-worktree')
     assert.equal(request.method, 'session/resume')
     assert.equal(request.params.cwd, process.env.HOME || '/tmp')
+  })
+
+  it('anchors session workspaces and additional directories at the manager cwd', async () => {
+    const client = new AgyAcpClient()
+    client.ensureStarted = async () => {}
+    const requests = []
+    client.call = async (method, params) => { requests.push({ method, params }); return {} }
+    await client.newSession({ cwd: '.', additionalDirectories: ['../shared', '/already/absolute'] })
+    await client.ensureSessionLoaded('s1', '.', [], ['../shared'])
+    assert.equal(requests[0].method, 'session/new')
+    assert.equal(requests[0].params.cwd, process.cwd() + '/.')
+    assert.deepEqual(requests[0].params.additionalDirectories, [process.cwd() + '/../shared', '/already/absolute'])
+    assert.equal(requests[1].method, 'session/resume')
+    assert.equal(requests[1].params.cwd, process.cwd() + '/.')
+    assert.deepEqual(requests[1].params.additionalDirectories, [process.cwd() + '/../shared'])
   })
 
   for (const message of ['Session not found', 'Invalid session', 'session_not_found', 'invalid_session']) {

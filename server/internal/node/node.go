@@ -2986,6 +2986,8 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
+		fullClaudeMD := a.ClaudeMD
+		compactViews := false
 		n.assistantSkillsMu.Lock()
 		defer n.assistantSkillsMu.Unlock()
 		// Before every message: a connector signed out since the last one takes its skill (and tg) away.
@@ -3017,6 +3019,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			case a.ViewsGuideMD != "" && assistantskills.ViewsGuideReady(dir) && (a.WorkGuideMD == "" || workReady):
 				// This is the final compact form: if work guidance was requested, its skill is ready too.
 				a.ClaudeMD = a.ViewsGuideMD
+				compactViews = true
 			case workReady:
 				// Keep the complete view procedure until its own managed skill is ready.
 				a.ClaudeMD = a.WorkGuideMD
@@ -3034,6 +3037,18 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				}
 			}
 			return map[string]any{"cwd": dir, "plugin_skills_need": need, "space_md_digest": digestOf(spaceMD)}, nil
+		}
+		// Keep the complete source beside compact instructions. A later per-send skill sync can revoke readiness;
+		// assistantRuntimeSkills restores these bytes instead of leaving a compact prompt with a personal guide.
+		mode := assistantInstructionModeFull
+		if compactViews {
+			mode = assistantInstructionModeViews
+		}
+		if err := writeIfChanged(filepath.Join(dir, assistantInstructionFallback), []byte(fullClaudeMD)); err != nil {
+			return nil, err
+		}
+		if err := writeIfChanged(filepath.Join(dir, assistantInstructionMode), []byte(mode)); err != nil {
+			return nil, err
 		}
 		// Bounded entry files and native rules preserve the same complete instructions for every launcher.
 		if err := writeAssistantInstructionFiles(dir, a.ClaudeMD); err != nil {

@@ -585,7 +585,7 @@ func TestDirectionFirstPinWhileSideWorksKeepsItsRole(t *testing.T) {
 	if got := dispatchedPolicy(t, s, "conv_side"); got != side {
 		t.Fatalf("side before its first pin: %q", got)
 	}
-	// No direction record existed for that side send, so no RoleInEffect was recorded either.
+	// The side send has no direction record; its accepted supplement baseline moves onto the new direction at the pin.
 	listLeads(f, proto.Session{SessionID: "conv_side", Status: proto.StatusWorking})
 	if _, err := s.makeDirection(ctx, "conv_side", "", "", ""); err != nil {
 		t.Fatal(err)
@@ -599,10 +599,62 @@ func TestDirectionFirstPinWhileSideWorksKeepsItsRole(t *testing.T) {
 	}
 }
 
+type directionRolePublicationStore struct {
+	Store
+	check func(Settings)
+}
+
+func (s *directionRolePublicationStore) PutSetting(ctx context.Context, key string, v any) error {
+	if key == settingsKey {
+		s.check(v.(Settings))
+	}
+	return s.Store.PutSetting(ctx, key, v)
+}
+
+func TestDirectionRoleBaselinePrecedesLeaderPublication(t *testing.T) {
+	s, f := notesEnv(t)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Keep the side work", "", "conv_side", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv_side", []string{"Kept"}, 30)
+	listLeads(f, proto.Session{SessionID: "conv_side", Status: proto.StatusIdle})
+	if got := dispatchedPolicy(t, s, "conv_side"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
+		t.Fatalf("side before its first pin: %q", got)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_side", Status: proto.StatusWorking})
+	base := s.store()
+	checked := false
+	wrapped := &directionRolePublicationStore{Store: base, check: func(cfg Settings) {
+		if !slices.Contains(cfg.Leaders, "conv_side") {
+			return
+		}
+		checked = true
+		s.directions.mu.Lock()
+		d := s.directions.m["conv_side"]
+		role := ""
+		if d != nil {
+			role = d.RoleInEffect
+		}
+		s.directions.mu.Unlock()
+		if role != string(prompts.SupervisionRoleSide) {
+			t.Errorf("new leader membership reached storage before its old-role baseline: %q", role)
+		}
+	}}
+	storeFn := func() Store { return wrapped }
+	s.storeFn.Store(&storeFn)
+	if _, err := s.makeDirection(ctx, "conv_side", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !checked {
+		t.Fatal("the leader settings write was not observed")
+	}
+}
+
 func TestDirectionFirstEndWhileLegacyLeaderWorksKeepsItsRole(t *testing.T) {
 	s, f := notesEnv(t)
 	ctx := context.Background()
-	leader := mustSupervisionRole(t, prompts.SupervisionRoleLeader)
 	todo, err := s.createTodo(ctx, "Keep the legacy lead", "", "conv_lead", "")
 	if err != nil {
 		t.Fatal(err)
@@ -612,9 +664,14 @@ func TestDirectionFirstEndWhileLegacyLeaderWorksKeepsItsRole(t *testing.T) {
 	if ended, err := s.endDirection(ctx, "conv_lead"); err != nil || !ended {
 		t.Fatalf("end: %v %v", ended, err)
 	}
-	// The pre-upgrade record had no RoleInEffect. The transition itself records the leader baseline.
-	if got := dispatchedPolicy(t, s, "conv_lead"); !strings.HasPrefix(got, leader) {
-		t.Fatalf("the first unpin changed a working legacy leader's policy: %q", got)
+	// The pre-upgrade record and supplement have no role baseline. Assuming a compact leader policy here would invent
+	// a fingerprint the working legacy process never received, so it keeps the complete policy until an idle send.
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != prompts.RenderSupervisionInstructions() {
+		t.Fatalf("the first unpin changed a working legacy leader's full policy: %q", got)
+	}
+	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusIdle})
+	if got := dispatchedPolicy(t, s, "conv_lead"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
+		t.Fatalf("the idle send did not select the former leader's side role: %q", got)
 	}
 }
 
@@ -628,6 +685,9 @@ func TestDirectionNotesFirstSaveWhileTheLeadWorks(t *testing.T) {
 	at := time.Now().UTC()
 	s.directions.mu.Lock()
 	s.directions.m["conv_other"].Notes, s.directions.m["conv_other"].NotesAt = "Infra rule: back up first.", &at
+	// This notes test starts with current role-filtered processes; the separate upgrade test covers an absent baseline.
+	s.directions.m["conv_lead"].RoleInEffect = string(prompts.SupervisionRoleLeader)
+	s.directions.m["conv_other"].RoleInEffect = string(prompts.SupervisionRoleLeader)
 	s.directions.mu.Unlock()
 	withOld := plain + "\n\n" + prompts.RenderDirectionNotes(s.directionPrompt(ctx, "conv_other"))
 	listLeads(f, proto.Session{SessionID: "conv_lead", Status: proto.StatusWorking},
