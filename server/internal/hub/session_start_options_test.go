@@ -82,11 +82,11 @@ func TestWorkSessionHealthIgnoresValidationRefusals(t *testing.T) {
 	var notices bytes.Buffer
 	h.bus.current = map[string]*busConn{assistantwire.AssistantID: {peer: rpc.New("manager", &notices)}}
 	params := map[string]any{"launcher": "work"}
-	h.startEnded("box", "", params, fmt.Errorf("node: %w", &rpc.Error{Code: "work_model_unavailable", Message: "model unavailable"}))
+	h.startEnded("box", "", params, nil, fmt.Errorf("node: %w", &rpc.Error{Code: "work_model_unavailable", Message: "model unavailable"}))
 	if notices.Len() != 0 {
 		t.Fatalf("validation went to launcher health: %s", &notices)
 	}
-	h.startEnded("box", "", params, &rpc.Error{Code: "terminal_not_ready", Message: "terminal could not start"})
+	h.startEnded("box", "", params, nil, &rpc.Error{Code: "terminal_not_ready", Message: "terminal could not start"})
 	var event struct {
 		Event  string                   `json:"event"`
 		Params assistantwire.StartEnded `json:"params"`

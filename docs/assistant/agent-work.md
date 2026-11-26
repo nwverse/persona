@@ -88,6 +88,21 @@ background's change count is left as it is (a request neither spends nor resets 
 cooldown are cleared by a successful request, and a failed request records nothing. Requests for one session
 share one model call. Persona's own conversations are refused.
 
+**Named after a start in Claude's desktop app (#13728).** A session the `claude-desktop` launcher starts is seeded
+under its folder's name, never its first message (`docs/integrations/claude-integration.md`, "New sessions in the
+desktop app"). When the hub's `session.start_ended` carries it (`started`, an app's start), or the manager's own
+`session.start` made it (`agent_start`, `dispatch_start` and its other starts: `desktopStartCalled`), the manager names
+it in the background from the start's first message or name hint (at most 2,000 characters), with the same prompt,
+model and validity check as the background pass
+(`agentNameFromDialogue`, `desktop_start_naming.go`); the dialogue is not read, so the seed's `/rename` line cannot
+name it. The start has already been answered. The result is recorded as a requested name over the placeholder:
+it is published with `title_source: "auto"`, holds until the native title changes or the user renames the session,
+and nothing is typed into the session. It respects the automatic-naming switch. Reports of one start, and an
+**Auto Rename** request meanwhile, share one model call; a session already named or renamed by hand is not asked
+about again, and a rename in Claude during the call wins. When the model is not set up, fails, times out or returns
+an unusable name, the placeholder stays, the static reason is logged and kept as `last_failure`, and nothing retries
+on its own: **Auto Rename** names it from the dialogue later.
+
 The assistant-only `agent_autoname` tool is a narrow second entry to that same request, for an explicitly requested
 name in a Persona conversation. It accepts only an exact machine and full session id, never a URL, credential or
 arbitrary request. The usual assistant-source check applies, so a task Agent cannot call it. Every invocation asks

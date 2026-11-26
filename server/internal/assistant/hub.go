@@ -74,6 +74,7 @@ type (
 	MessageCard         = assistantwire.MessageCard
 	DeviceSessions      = assistantwire.DeviceSessions
 	StartEnded          = assistantwire.StartEnded
+	StartedSession      = assistantwire.StartedSession
 	ConversationSent    = assistantwire.ConversationSent
 	HTTPRequest         = assistantwire.HTTPRequest
 	HTTPResponse        = assistantwire.HTTPResponse
