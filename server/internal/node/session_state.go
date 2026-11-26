@@ -475,6 +475,27 @@ func (s *stateFile) setPane(id, pane string) {
 	})
 }
 
+// forgetPane takes pane off every record that names it (Node.forgetPane).
+func (s *stateFile) forgetPane(pane string) {
+	s.mu.Lock()
+	var ids []string
+	for id, v := range s.Sessions {
+		if v.Pane == pane {
+			ids = append(ids, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.update(id, func(v *sessionState) bool {
+			if v.Pane != pane {
+				return false // bound to another pane since
+			}
+			v.Pane = ""
+			return true
+		})
+	}
+}
+
 // put reports only whether its persistence callback was invoked, not whether the
 // one-way notification reached durable storage.
 func (s *stateFile) put(id string, v sessionState) bool {
@@ -497,8 +518,9 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		if old.CreationID != "" {
 			v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
 		}
-		if v.StopCauseAt == 0 && old.StopCauseAt != 0 {
-			v.StopCauseAt = max(time.Now().UnixNano(), old.StopCauseAt+1)
+		// A send can save its metadata after an interrupt recorded a newer Stop.
+		if v.StopCauseAt < old.StopCauseAt {
+			v.StopCause, v.StopCauseAt = old.StopCause, old.StopCauseAt
 		}
 		if v.RanAt == 0 {
 			v.RanAt = old.RanAt // owned by recordRunning

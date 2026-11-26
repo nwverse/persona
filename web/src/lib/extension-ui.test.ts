@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
-  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, edgeLabels, extensionSettingsHref, extensionTrackRoute, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
+  actUI, applyBadge, askText, barSpans, blocks, chartExtent, compactNumber, composeText, edgeLabels, extensionSettingsHref, extensionTrackRoute, fieldValues, inboxItemPlace, inboxSourceItem, isHttps, isUnsupported, labelWidth, linear, niceTicks, numberProblem, outcome,
   percent, placesOf, pointText, readView, refreshDelay, renderUI, seriesColors, stackedShare, submitValues, thinLabels, toneOf, uiContext, uiIcon, uiPlaces, UI_VERSION, type UIPlace, type UIView,
 } from "./extension-ui";
 
@@ -263,6 +263,21 @@ describe("收件箱条目（inbox_item）", () => {
     expect(outcome({ open_url: link })).not.toHaveProperty("ask");
     expect(uiContext({ assistant: "Claude" })).toMatchObject({ assistant: "Claude" });
     expect(uiContext()).not.toHaveProperty("assistant");
+  });
+  it("reads an extension's own quick prompt for the composer (persona://compose?prompt=<id>)", () => {
+    expect(composeText("persona://compose?prompt=today&text=What%20happened%20today%3F")).toBe("What happened today?");
+    expect(composeText("jarvis://compose/?prompt=today%2Dplan&text=today-plan")).toBe("today-plan");
+    for (const bad of [
+      "persona://compose", "persona://compose?prompt=", "persona://compose?prompt=a", "persona://compose?text=a",
+      "persona://compose?prompt=%20&text=a", "persona://compose?prompt=a&text=", "persona://compose?prompt=a&text=%20",
+      "persona://compose?prompt=a&text=a&x=1", "persona://compose/x?prompt=a&text=a", "persona://user:pass@compose?prompt=a&text=a", "persona://compose?prompt=a&text=a#x",
+      "https://compose?prompt=a&text=a", "persona://compose?prompt=a&prompt=b&text=a",
+      "persona://compose?prompt=" + "a".repeat(65) + "&text=a", "persona://compose?prompt=a&text=" + "a".repeat(8001),
+    ]) {
+      expect(composeText(bad)).toBeUndefined();
+    }
+    expect(outcome({ open_url: "persona://compose?prompt=today&text=What%20happened%20today%3F" }, undefined, "example-gateway")).toMatchObject({ compose: "What happened today?", reload: false });
+    expect(outcome({ open_url: "persona://compose?prompt=today&text=What%20happened%20today%3F" }, undefined, "-subscriptions")).toMatchObject({ compose: "What happened today?" });
   });
   it("opens an extension's own settings in the app (persona://settings/extensions/<id>)", () => {
     expect(extensionSettingsHref("persona://settings/extensions/example-gateway")).toBe("/settings?tab=extensions&extension=example-gateway");
