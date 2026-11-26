@@ -59,6 +59,7 @@ import { workingTurnLabel } from '../core/PhoneDate';
 import { Motion } from '../design/Motion';
 import { MotionTokens } from '../core/MotionTokens';
 import { Haptics } from '../platform/Haptics';
+import { WorkingArcSpinner } from './StatusMotionMarks';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -741,6 +742,7 @@ export struct Conversation {
   @Local atEnd: boolean = true;
   @Local jumpAvailable: boolean = false;
   @Local private latestPressed: boolean = false;
+  @Local private sendPressed: boolean = false;
   private transcriptHeight: number = 0;
   private transcriptViewportChanged(height:number):void {
     if (!Number.isFinite(height) || height <= 0 || Math.abs(height-this.transcriptHeight) < 0.1) return;
@@ -1666,31 +1668,41 @@ export struct Conversation {
   @Builder messageBody(entry: RepeatItem<ConversationLine>) {
     Column({ space: Tokens.gap }) {
       if (entry.item.message!.role === 'work' && entry.item.message!.running && !entry.item.message!.work) {
-        Row({ space: 5 }) {
-          LoadingProgress().width(14).height(14).color(Colors.working)
+        Row({ space: 6 }) {
+          WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
           RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
         }.id('chat.work.' + entry.item.message!.id)
       } else if (entry.item.message!.work) {
         Button({ type: ButtonType.Normal }) {
           Row({ space: 7 }) {
-            if (entry.item.message!.running) LoadingProgress().width(14).height(14).color(Colors.working)
+            if (entry.item.message!.running) WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
             else SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(15).fontColor([Colors.secondary])
             if (entry.item.message!.running) RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
             else Text(tr('work_summary')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
             if (entry.item.message!.toolCount > 0) Text(tr('tool') + ' ' + String(entry.item.message!.toolCount)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
             if (entry.item.message!.thoughtCount > 0) Text(tr('phone_chat_thoughts') + ' ' + String(entry.item.message!.thoughtCount)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
-            SymbolGlyph(this.expanded.includes(entry.item.message!.id) ? Symbols.down : Symbols.expand).fontSize(12).fontColor([Colors.secondary])
+            SymbolGlyph(Symbols.down).fontSize(12).fontColor([Colors.secondary])
+              .rotate({ angle: this.expanded.includes(entry.item.message!.id) ? 0 : -90 })
+              .animation(Motion.state(this.environment.reduceMotion))
           }.constraintSize({ minHeight: 32 })
         }.padding({ left: 10, right: 10 }).borderRadius(12)
           .backgroundColor(this.model.style==='beautiful' ? this.composerSurface() : Colors.control)
-          .outline({width:this.model.style==='beautiful' ? 1 : 0,color:this.composerRim(),radius:12})
+          .outline({width:this.model.style==='beautiful' ? 1 : 0.5,color:this.model.style==='beautiful' ? this.composerRim() : Colors.divider,radius:12})
           .accessibilityText(tr('work_summary') + ' · ' + tr(this.expanded.includes(entry.item.message!.id) ? 'agent_collapse' : 'agent_expand'))
-          .onClick(() => { this.toggle(entry.item.message!.id); if (this.expanded.includes(entry.item.message!.id)) this.model.expandWork(entry.item.message!); })
+          .onClick(() => {
+            Haptics.tap();
+            Motion.run(this.getUIContext(), Motion.layout(this.environment.reduceMotion), () => {
+              this.toggle(entry.item.message!.id);
+            });
+            if (this.expanded.includes(entry.item.message!.id)) this.model.expandWork(entry.item.message!);
+          })
           .id('chat.work.' + entry.item.message!.id)
         if (this.expanded.includes(entry.item.message!.id)) {
           Text(entry.item.message!.work).fontFamily('monospace').fontSize(14).fontColor(Colors.secondary).lineHeight(21)
             .copyOption(CopyOptions.LocalDevice).onTextSelectionChange((start: number, end: number) => this.selectReadingText(entry.item.id, end > start))
-            .padding(12).width('100%').backgroundColor(Colors.control).borderRadius(12)
+            .padding(12).width('100%').backgroundColor(Colors.control).borderRadius(14)
+            .border({ width: 0.5, color: Colors.divider, radius: 14 })
+            .transition(Motion.slideFade(this.environment.reduceMotion, -6))
         }
       }
       if (entry.item.message!.localImageCount > 0) Text(tr('photos') + ' · ' + entry.item.message!.localImageCount).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
@@ -1794,6 +1806,21 @@ export struct Conversation {
       }
       Stack({ alignContent: Alignment.BottomEnd }) {
         this.transcriptList()
+        if (!this.legacyInterface && !Colors.stylePage) {
+          Row()
+            .width('100%')
+            .height(22)
+            .linearGradient({
+              direction: GradientDirection.Bottom,
+              colors: [
+                [this.environment.dark ? '#00000000' : '#00FFFFFF', 0],
+                [this.environment.dark ? '#E6000000' : '#E6FFFFFF', 1]
+              ]
+            })
+            .hitTestBehavior(HitTestMode.None)
+            .accessibilityLevel('no')
+            .id('chat.footer.fog')
+        }
         if (this.jumpAvailable) {
           Button({ type: ButtonType.Normal }) {
             Stack() {
@@ -2223,7 +2250,18 @@ export struct Conversation {
             .responseRegion(ButtonStyles.touchRegion(this.expandedComposer() ? this.composerActionSize() : 44))
             .backgroundColor(Color.Transparent)
             .enabled(this.primaryEnabled())
-            .onClick(() => { if (!this.sendCurrent()) return; if (this.primaryStop()) this.model.stop(() => this.sendCurrent()); else this.sendDraft(); }).id('chat.send')
+            .scale({ x: this.sendPressed ? 0.90 : 1, y: this.sendPressed ? 0.90 : 1 })
+            .animation(Motion.release(this.environment.reduceMotion))
+            .transition(Motion.fadeScale(this.environment.reduceMotion, 0.8))
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) this.sendPressed = true;
+              else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.sendPressed = false;
+            })
+            .onClick(() => {
+              if (!this.sendCurrent()) return;
+              if (this.primaryStop()) { Haptics.attention(); this.model.stop(() => this.sendCurrent()); }
+              else { Haptics.tap(); this.sendDraft(); }
+            }).id('chat.send')
           }.width('100%').height(this.composerActionSize()).alignItems(VerticalAlign.Center).justifyContent(FlexAlign.End)
             .padding({ right: this.expandedComposer() ? Tokens.fine : 0 })
         }
@@ -2231,7 +2269,8 @@ export struct Conversation {
     }.padding(this.composerPadding()).backgroundColor(this.composerSurface())
       .border({width:this.restingComposer() ? String(this.restingStrokePx()) + 'px' : this.composerStroke,
         color:this.composerRim(),radius:25}).borderRadius(25).width('100%').id('chat.composer')
-      .shadow({radius:this.model.style==='beautiful' ? 8 : 0,color:this.environment.dark ? '#38000000' : '#0D000000',offsetY:5})
+      .animation(Motion.layout(this.environment.reduceMotion))
+      .shadow({radius:this.model.style==='beautiful' ? 8 : 14,color:this.environment.dark ? '#40000000' : '#12000000',offsetY:this.model.style==='beautiful' ? 5 : 4})
   }
 
   @Builder taskDock(horizontalInset: number = 0) {

@@ -403,20 +403,21 @@ export function buildFleetLiveViewSpec(state: FleetLiveState, strings: FleetStri
   if (state.phase === 'needsYou') {
     title = formatCount(strings.needsYouCount, state.needsYou);
     capsuleBg = '#FFD93A3A';
-    capsuleTitle = formatCount(strings.capsuleNeeds, state.needsYou);
-    capsuleContent = state.working > 0 ? formatCount(strings.capsuleWorking, state.working) : strings.appTitle;
+    // Compact left capsule fits cleanly beside HarmonyOS pill cutouts (Mate 90 Pro / Mate X7).
+    capsuleTitle = state.working > 0 ? '!' + String(state.needsYou) : String(state.needsYou);
+    capsuleContent = state.working > 0 ? formatCount(strings.capsuleWorking, state.working) : formatCount(strings.capsuleNeeds, state.needsYou);
     extensionText = String(state.needsYou);
   } else if (state.phase === 'working') {
     title = formatCount(strings.workingCount, state.working);
     capsuleBg = '#FFB35400';
-    capsuleTitle = formatCount(strings.capsuleWorking, state.working);
-    capsuleContent = state.unread > 0 ? formatCount(strings.capsuleUnread, state.unread) : strings.appTitle;
+    capsuleTitle = String(state.working);
+    capsuleContent = state.unread > 0 ? formatCount(strings.capsuleUnread, state.unread) : formatCount(strings.capsuleWorking, state.working);
     extensionText = String(state.working);
   } else if (state.phase === 'done') {
     title = formatCount(strings.unreadCount, state.unread);
     capsuleBg = '#FF1D7A4C';
-    capsuleTitle = formatCount(strings.capsuleUnread, state.unread);
-    capsuleContent = strings.appTitle;
+    capsuleTitle = String(state.unread);
+    capsuleContent = formatCount(strings.capsuleUnread, state.unread);
     extensionText = String(state.unread);
   } else if (state.assistant) {
     title = strings.assistantReplying;
@@ -469,9 +470,10 @@ export function buildFleetLiveViewSpec(state: FleetLiveState, strings: FleetStri
     pickupContent = (state.details && first.detail ? first.detail : anonymousLine(first, strings)).slice(0, 96);
   }
 
-  // Deep-link rule matching docs/apple/live-activity.md:
-  // single active agent opens that session directly; multiple returns to App at current position.
-  const singleTarget = totalActive === 1 && first ? parseFleetTarget(first) : { machine: '', session: '' };
+  // Deep-link directly when there is a single active agent OR a single urgent Needs-You agent
+  // waiting for approval; when multiple agents need attention, return to the full triage list.
+  const canDirectTarget = totalActive === 1 || (state.phase === 'needsYou' && state.needsYou === 1);
+  const singleTarget = canDirectTarget && first ? parseFleetTarget(first) : { machine: '', session: '' };
 
   return {
     id: FLEET_LIVE_VIEW_ID,

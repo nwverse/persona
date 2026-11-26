@@ -8699,6 +8699,30 @@
     {
       "name": "live_view_unavailable",
       "value": "System Live View is unavailable on this device."
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 agent"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "Live Inspector"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "Fleet Pulse"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "Tri-Fold Workspace"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "Foldable Split"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "Tabletop Hover"
     }
   ]
 }

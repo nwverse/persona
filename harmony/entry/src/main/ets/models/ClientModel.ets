@@ -995,11 +995,13 @@ export class ClientModel {
   async openNotification(target: Record<string, Object>): Promise<void> {
     const id = Wire.text(target, 'profile'), manager = Wire.text(target, 'manager'), machine = Wire.text(target, 'machine'), session = Wire.text(target, 'session');
     if ([id, manager, machine, session].some((value: string) => value.length > 256) || !id || !machine || !session) return;
-    const saved = this.profiles.find((item: HubProfile) => item.id === id); if (!saved) return;
+    const isDemoTarget = this.demo && id === this.profile.id;
+    const saved = isDemoTarget ? this.profile : this.profiles.find((item: HubProfile) => item.id === id);
+    if (!saved) return;
     this.pendingNotification = Wire.payload(['profile', 'manager', 'machine', 'session'], [id, manager, machine, session]);
     this.notificationEpoch++;
     if (!this.foreground) return;
-    if (this.profile.id !== id || this.profile.manager !== manager || !this.connected) {
+    if (!isDemoTarget && (this.profile.id !== id || this.profile.manager !== manager || !this.connected)) {
       const profile = new HubProfile(saved.id, saved.name, saved.baseUrl); profile.addresses = saved.addresses.slice(); profile.hubId = saved.hubId; profile.pin = saved.pin; profile.manager = manager;
       await this.selectProfile(profile, this.profile.id === id && this.profile.manager === manager, true);
     }

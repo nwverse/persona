@@ -51,7 +51,7 @@ export struct AgentDirectoryRowContent {
   @Builder needsReply() {
     Text(tr('needs_you')).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(Colors.needs)
       .padding({left:6,right:6,top:1,bottom:1}).backgroundColor(Colors.selection).borderRadius(6)
-      .constraintSize({maxWidth:this.narrow ? '100%' : '41%'}).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
+      .constraintSize({maxWidth:this.narrow ? '100%' : '72%'}).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
   }
   private previewLeading(): LengthMetrics {
     // The two-line iPhone subtitle adds leading between baselines; a single line keeps its intrinsic height.

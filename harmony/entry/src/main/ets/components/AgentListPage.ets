@@ -29,6 +29,7 @@ import { DeviceLook, deviceLook } from '../models/DeviceLook';
 import { Motion } from '../design/Motion';
 import { MotionTokens } from '../core/MotionTokens';
 import { Haptics } from '../platform/Haptics';
+import { nativeLiveView } from '../platform/NativeLiveView';
 
 const QUICK_FILTERS: string[] = ['all', 'needsYou', 'unread', 'working', 'backgroundWaiting', 'feishu', 'terminal'];
 const QUICK_LABELS: Record<string,string> = { 'all':'all', 'needsYou':'needs_you', 'unread':'agent_group_unread', 'working':'working', 'backgroundWaiting':'agent_group_background', 'feishu':'agent_source_lark_group', 'terminal':'terminal' };
@@ -733,6 +734,8 @@ export struct AgentListPage {
             $r('app.color.phone_agent_session_separator') : Colors.divider).margin({left:20,right:20})
         }
       }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26 : 0 })
+        .shadow(this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
         .borderRadius({topLeft:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
           topRight:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
           bottomLeft:this.detachedDecisionRows || this.endsSurface(binding,'state/needs') ? 26:0,
@@ -1029,7 +1032,10 @@ export struct AgentListPage {
         value: tr('agent_mark_all_seen'),
         action: () => {
           this.workspace.markAllSeen().then((marked: number) => {
-            if (marked > 0) Haptics.success();
+            if (marked > 0) {
+              Haptics.success();
+              nativeLiveView.syncFromModel(this.model).catch(() => {});
+            }
           }).catch(() => { Haptics.error(); });
         }
       }
@@ -1061,6 +1067,8 @@ export struct AgentListPage {
       .width('100%')
       .padding(0)
       .backgroundColor(Colors.surface)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: this.compactRoot && !this.rail ? 22 : 13 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .borderRadius(this.compactRoot && !this.rail ? 22 : 13)
       .enabled(!this.workspace.busy)
       .accessibilityText(tr('agent_mark_all_seen') + ' · ' + String(this.workspace.unreadShownRows.length))
@@ -1084,44 +1092,62 @@ export struct AgentListPage {
         else this.searchControl()
       }
       Row({ space: this.compactRoot ? 0 : 6 }) {
-        Scroll(this.quickScroller) {
-          Row({ space: 4 }) {
-            ForEach(this.shownQuickFilters, (key: string) => {
-              Button({ type: ButtonType.Capsule }) {
-                Row({space:4}) {
-                  if (key !== 'all' && key !== 'feishu' && key !== 'terminal') Circle().width(5).height(5)
-                    .fill(key === 'needsYou' ? Colors.needs : key === 'unread' ? Colors.unread : key === 'working' ? Colors.working : Colors.secondary)
-                  Text(tr(QUICK_LABELS[key])).fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale))
-                    .fontWeight(this.workspace.quickFilter === key ? FontWeight.Bold : FontWeight.Normal)
-                    .fontColor(this.workspace.quickFilter === key ? Colors.link : Colors.ink).maxLines(1)
-                  if (key !== 'all' && this.workspace.filterCounts[key] !== undefined) Text(String(Wire.number(this.workspace.filterCounts,key)))
-                    .fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
-                }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(40)
-                  .backgroundColor(this.compactRoot && this.workspace.quickFilter === key ? Colors.selection : Color.Transparent)
+        Stack({ alignContent: Alignment.End }) {
+          Scroll(this.quickScroller) {
+            Row({ space: 4 }) {
+              ForEach(this.shownQuickFilters, (key: string) => {
+                Button({ type: ButtonType.Capsule }) {
+                  Row({space:4}) {
+                    if (key !== 'all' && key !== 'feishu' && key !== 'terminal') Circle().width(5).height(5)
+                      .fill(key === 'needsYou' ? Colors.needs : key === 'unread' ? Colors.unread : key === 'working' ? Colors.working : Colors.secondary)
+                    Text(tr(QUICK_LABELS[key])).fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale))
+                      .fontWeight(this.workspace.quickFilter === key ? FontWeight.Bold : FontWeight.Normal)
+                      .fontColor(this.workspace.quickFilter === key ? Colors.link : Colors.ink).maxLines(1)
+                    if (key !== 'all' && this.workspace.filterCounts[key] !== undefined) Text(String(Wire.number(this.workspace.filterCounts,key)))
+                      .fontSize(Tokens.interfaceFontVp(15,this.environment.fontScale)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+                  }.padding({left:8,right:8,top:4,bottom:4}).borderRadius(40)
+                    .backgroundColor(this.compactRoot && this.workspace.quickFilter === key ? Colors.selection : Color.Transparent)
+                    .animation(Motion.state(this.environment.reduceMotion))
+                }
+                  .height(this.quickHeight()).constraintSize({minWidth:this.quickHeight()}).padding(0)
+                  .backgroundColor(this.compactRoot ? Color.Transparent : this.workspace.quickFilter === key ? Colors.selection : Colors.control)
                   .animation(Motion.state(this.environment.reduceMotion))
-              }
-                .height(this.quickHeight()).constraintSize({minWidth:this.quickHeight()}).padding(0)
-                .backgroundColor(this.compactRoot ? Color.Transparent : this.workspace.quickFilter === key ? Colors.selection : Colors.control)
-                .animation(Motion.state(this.environment.reduceMotion))
-                .accessibilityText(tr(QUICK_LABELS[key]))
-                .accessibilityDescription(key !== 'all' && this.workspace.filterCounts[key] !== undefined ? String(Wire.number(this.workspace.filterCounts,key)) : '')
-                .accessibilitySelected(this.workspace.quickFilter === key)
-                .responseRegion({x:0,y:0,width:'100%',height:this.quickHeight()})
-                .onClick(() => {
-                  Haptics.tap();
-                  Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
-                    this.workspace.setQuickFilter(key);
-                  });
-                  this.revealQuickFilter(key);
-                }).id('agents.quick.' + key)
-            }, (key: string) => key)
-          }.padding({left:4,right:4})
-        }.layoutWeight(1).height(this.quickHeight()).align(Alignment.Start).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-          .id('agents.quick')
+                  .accessibilityText(tr(QUICK_LABELS[key]))
+                  .accessibilityDescription(key !== 'all' && this.workspace.filterCounts[key] !== undefined ? String(Wire.number(this.workspace.filterCounts,key)) : '')
+                  .accessibilitySelected(this.workspace.quickFilter === key)
+                  .responseRegion({x:0,y:0,width:'100%',height:this.quickHeight()})
+                  .onClick(() => {
+                    Haptics.tap();
+                    Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+                      this.workspace.setQuickFilter(key);
+                    });
+                    this.revealQuickFilter(key);
+                  }).id('agents.quick.' + key)
+              }, (key: string) => key)
+            }.padding({left:4,right:18})
+          }.width('100%').height(this.quickHeight()).align(Alignment.Start).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+            .id('agents.quick')
+          Row()
+            .width(24)
+            .height(this.quickHeight())
+            .linearGradient({
+              direction: GradientDirection.Right,
+              colors: this.compactRoot ? [
+                [this.environment.dark ? '#001C1C1E' : '#00FFFFFF', 0],
+                [this.environment.dark ? '#FF1C1C1E' : '#FFFFFFFF', 1]
+              ] : [
+                [this.environment.dark ? '#00000000' : '#00F2F2F7', 0],
+                [this.environment.dark ? '#FF000000' : '#FFF2F2F7', 1]
+              ]
+            })
+            .hitTestBehavior(HitTestMode.None)
+            .accessibilityLevel('no')
+        }.layoutWeight(1).height(this.quickHeight())
         if (this.compactRoot) Divider().vertical(true).strokeWidth(0.5).height(22*this.quickHeight()/44).color(Colors.divider)
         this.filterControl()
       }.width('100%').height(this.quickHeight()).borderRadius(this.compactRoot ? 44 : 0).clip(this.compactRoot)
-        .backgroundColor(this.compactRoot ? Colors.grouped : Color.Transparent)
+        .backgroundColor(this.compactRoot ? Colors.surface : Color.Transparent)
+        .shadow(this.compactRoot ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
         .outlineWidth(this.compactRoot ? 0.5 : 0).outlineColor(Colors.divider).outlineRadius(44)
       if (this.workspace.machineFilter) {
         Button({ type: ButtonType.Capsule }) {

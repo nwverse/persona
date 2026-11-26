@@ -8703,6 +8703,30 @@
     {
       "name": "live_view_unavailable",
       "value": "このデバイスではシステムライブビューを利用できません。"
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 個のエージェント"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "ライブインスペクタ"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "フリート状況"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "三つ折りワークスペース"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "折りたたみ分割"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "ホバーモード"
     }
   ]
 }

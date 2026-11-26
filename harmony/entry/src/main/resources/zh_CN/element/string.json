@@ -8703,6 +8703,30 @@
     {
       "name": "live_view_unavailable",
       "value": "当前设备或模拟器暂不支持系统实况窗服务。"
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 个代理"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "实时概览"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "代理态势"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "三折叠宽屏工作台"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "折叠双栏模式"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "悬停分屏模式"
     }
   ]
 }

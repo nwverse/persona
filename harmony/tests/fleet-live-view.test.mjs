@@ -153,7 +153,8 @@ test('FleetState decoding, privacy masking, single-vs-multi deep-link routing, a
     }
   };
 
-  // Lock screen privacy off -> masks titles & clears interaction IDs; multiple active items -> returns to app without deep-linking single session.
+  // Lock screen privacy off -> masks titles & clears interaction IDs; single Needs-You agent deep-links directly
+  // and capsule title stays ultra-compact (`!1`) for pill-cutout displays.
   const masked = decodeFleetState(hubFrame, false);
   assert.equal(masked.items[0].interaction, '');
   const maskedSpec = buildFleetLiveViewSpec(masked, strings, 1761700100000);
@@ -161,10 +162,31 @@ test('FleetState decoding, privacy masking, single-vs-multi deep-link routing, a
   assert.equal(maskedSpec.title, '1 need you');
   assert.equal(maskedSpec.content[0].text, 'A permission request is waiting +1');
   assert.equal(maskedSpec.capsuleKind, 'text');
+  assert.equal(maskedSpec.capsuleTitle, '!1');
+  assert.equal(maskedSpec.capsuleContent, 'Working 2');
   assert.equal(maskedSpec.capsuleBackgroundColor, '#FFD93A3A');
   assert.equal(maskedSpec.isMute, false);
-  assert.equal(maskedSpec.targetMachine, '');
-  assert.equal(maskedSpec.targetSession, '');
+  assert.equal(maskedSpec.targetMachine, 'mac');
+  assert.equal(maskedSpec.targetSession, 's1');
+
+  // Multiple Needs-You items -> returns to full triage list instead of picking one session.
+  const multiNeeds = decodeFleetState({
+    type: 'fleet',
+    fleet: {
+      phase: 'needsYou',
+      needsYou: 2,
+      working: 0,
+      unread: 0,
+      items: [
+        { id: 'mac/s1', title: 'A', kind: 'permission', detail: 'cmd' },
+        { id: 'mac/s2', title: 'B', kind: 'plan', detail: 'plan' }
+      ]
+    }
+  }, false);
+  const multiSpec = buildFleetLiveViewSpec(multiNeeds, strings, 1761700100000);
+  assert.equal(multiSpec.targetMachine, '');
+  assert.equal(multiSpec.targetSession, '');
+  assert.equal(multiSpec.capsuleTitle, '2');
 
   // Lock screen details on -> displays item titles and details.
   const detailed = decodeFleetState(hubFrame, true);

@@ -1,6 +1,9 @@
 import { Colors } from './Colors';
+import { Motion } from './Motion';
+import { MotionTokens } from '../core/MotionTokens';
 import { PhoneOutlineIcon } from './PhoneOutlineIcon';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
+import { Haptics } from '../platform/Haptics';
 import { Tokens } from './Tokens';
 
 // Compact iPhone's inset lists share their margins, hierarchy and grouped surfaces with the phone shell.
@@ -10,6 +13,13 @@ export class PhoneStyle {
     if (Colors.styleID === 'island') return {radius:20,color:Colors.styleShadow,offsetY:10};
     if (Colors.styleID === 'lark') return {radius:0,color:Color.Transparent};
     return fallback;
+  }
+  static cardElevation(dark: boolean): ShadowOptions {
+    return PhoneStyle.surfaceShadow({
+      radius: dark ? 10 : 12,
+      color: dark ? '#38000000' : '#0D000000',
+      offsetY: dark ? 2 : 3
+    });
   }
   static surfaceEdgeWidth(fallback: number): number {
     return Colors.styleID === 'clay' ? 1 : Colors.styleID === 'island' ? 0 : fallback;
@@ -76,6 +86,8 @@ export struct PhoneIconButton {
   @Param tint: ResourceColor = Colors.ink;
   @Param active: boolean = true;
   @Event action: () => void = () => {};
+  @Local private env: NativeEnvironment = nativeEnvironment;
+  @Local private pressed: boolean = false;
   build() {
     Button({ type: ButtonType.Circle }) {
       if (typeof this.symbol === 'string') {
@@ -83,10 +95,18 @@ export struct PhoneIconButton {
       } else {
         SymbolGlyph(this.symbol).fontSize(String(19 * this.controlDiameter / PhoneStyle.bar) + 'vp').fontColor([this.tint])
       }
-    }.width(this.controlDiameter).height(this.controlDiameter).padding(0).backgroundColor(Colors.surface)
+    }.width(this.controlDiameter).height(this.controlDiameter).padding(0)
+      .backgroundColor(Colors.styleID === 'glass' ? (this.env.dark ? '#CC1C1C1E' : '#E6FFFFFF') : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
       .border({ width: PhoneStyle.surfaceEdgeWidth(.5), color: Colors.styleEdge || Colors.divider, radius: this.controlDiameter / 2 })
-      .shadow(PhoneStyle.surfaceShadow({radius:0,color:Color.Transparent}))
-      .accessibilityText(this.label).bindTips(this.label).enabled(this.active).onClick(() => this.action()).id(this.identity)
+      .shadow(PhoneStyle.surfaceShadow({ radius: this.env.dark ? 8 : 10, color: this.env.dark ? '#33000000' : '#0E000000', offsetY: 2 }))
+      .scale({ x: this.pressed ? MotionTokens.pressScale : 1, y: this.pressed ? MotionTokens.pressScale : 1 })
+      .animation(Motion.release(this.env.reduceMotion))
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) this.pressed = true;
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.pressed = false;
+      })
+      .accessibilityText(this.label).bindTips(this.label).enabled(this.active).onClick(() => { Haptics.tap(); this.action(); }).id(this.identity)
   }
 }
 

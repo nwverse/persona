@@ -1,5 +1,6 @@
 import { bindingPermission } from '../core/PhoneSettingsPermissions';
-import { PhoneSectionTitle } from '../design/PhoneStyle';
+import { PhoneSectionTitle, PhoneStyle } from '../design/PhoneStyle';
+import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { Symbols } from '../design/Symbols';
 import { IconActions } from '../design/IconActions';
 import { ButtonStyles } from '../design/Controls';
@@ -1411,17 +1412,32 @@ export struct SettingsPage {
   @Builder notificationsPage() {
     List() {
       ListItem() {
-        Row() {
-          ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('message_alerts') }) }).layoutWeight(1)
-          Toggle({ type: ToggleType.Switch, isOn: this.model.alerts && this.notifications.granted })
-            .enabled(!this.notifications.changing && !this.model.demo)
-            .onChange((value: boolean) => this.notifications.setEnabled(this.model, value))
-            .accessibilityText(tr('message_alerts'))
+        Column() {
+          Row({ space: Tokens.inset }) {
+            Text(tr('message_alerts'))
+              .fontSize(Tokens.body)
+              .maxFontScale(Tokens.interfaceFontMaxScale)
+              .fontColor(Colors.ink)
+              .layoutWeight(1)
+            Toggle({ type: ToggleType.Switch, isOn: this.model.alerts && this.notifications.granted })
+              .enabled(!this.notifications.changing && !this.model.demo)
+              .onChange((value: boolean) => this.notifications.setEnabled(this.model, value))
+              .accessibilityText(tr('message_alerts'))
+              .id('settings.notifications.alerts')
+          }
+          .width('100%')
+          .constraintSize({ minHeight: 54 })
+          .padding({ left: Tokens.page, right: Tokens.page, top: 6, bottom: 6 })
         }
-      }
+        .width('100%')
+        .backgroundColor(Colors.surface)
+        .borderRadius(PhoneStyle.cardRadius)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: PhoneStyle.cardRadius })
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
       if (this.notifications.error) ListItem() { Text(trError(this.notifications.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.page) }
       ListItem() { LiveViewSettingsCard() }
-    }.width('100%').height('100%')
+    }.width('100%').height('100%').backgroundColor(Colors.grouped)
   }
 
   @Builder privacyPage() {

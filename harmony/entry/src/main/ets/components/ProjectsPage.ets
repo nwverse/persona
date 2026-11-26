@@ -20,6 +20,9 @@ import { WorktreeSheet } from './WorktreeSheet';
 import { AgentDirectoryRowContent } from './AgentDirectoryRowContent';
 import { deviceLook } from '../models/DeviceLook';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
+import { compactTreeInset } from '../core/FoldPosture';
+import { Motion } from '../design/Motion';
+import { Haptics } from '../platform/Haptics';
 
 @ComponentV2
 export struct ProjectsPage {
@@ -180,8 +183,13 @@ export struct ProjectsPage {
     return Math.max(1,Math.min(nativeEnvironment.fontScale,67/51));
   }
   private treeInset(level: number): number {
-    // The outline's mark and indentation track the interface type scale, including at accessibility sizes.
-    return PhoneStyle.inset + 22 * this.outlineControlScale() * Math.min(level,3);
+    // In compact phones AND narrow foldable split master panes (< 420vp), keep indentation tight
+    // so full agent titles stay legible without early ellipsis.
+    const widthVp = this.agentRepositories ? 340 : (nativeEnvironment.windowWidthPx > 0 ? this.getUIContext().px2vp(nativeEnvironment.windowWidthPx) : 0);
+    return compactTreeInset(level, widthVp, this.outlineControlScale());
+  }
+  private agentCountText(count: number): string {
+    return count === 1 ? tr('project_agent_count_one') : tr('project_agent_count').replace('{count}', String(count));
   }
   @Computed get detailTree(): ProjectWorktree | undefined {
     return this.page === 'project_tree' ? this.catalog.selectedWorktree(this.target) : undefined;
@@ -247,7 +255,8 @@ export struct ProjectsPage {
   private tabDescription(key: string): string {
     const row = this.tabRows.get(key);
     if (!row) return '';
-    return [row.tabTitle, row.tabLead?.row.title || '', tr('project_agent_count').replace('{count}',String(row.count)),
+    return [row.tabTitle, row.tabLead?.row.title || '',
+      row.count === 1 ? tr('project_agent_count_one') : tr('project_agent_count').replace('{count}',String(row.count)),
       this.filteringText() ? '' : tr(this.tabOpen(key) ? 'agent_collapse' : 'agent_expand')].filter((v:string) => !!v).join(' · ');
   }
   private tabTint(key: string): ResourceColor {
@@ -630,7 +639,9 @@ export struct ProjectsPage {
       .onClick(() => this.chooseAgent(agent)).bindContextMenu(this.cellActions(agent,treeKey),ResponseType.LongPress).id(this.agentRepositories ? 'agents.repo.session' : 'projects.inline_session')
   }
   @Builder foldChevron(open:boolean) {
-    SymbolGlyph(open ? Symbols.down : Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+    SymbolGlyph(Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
+      .rotate({ angle: open ? 0 : -90 })
+      .animation(Motion.state(nativeEnvironment.reduceMotion))
   }
   // A virtual row can outlive the projection object that created it. Keep only its scoped key in this builder.
   @Builder tabLine(key: string) {
@@ -693,12 +704,12 @@ export struct ProjectsPage {
         line.kind === 'host' ? this.hostSummary(line.project.hostKey) : this.count(line.count,'project_sessions'),
         tr(line.open ? 'agent_collapse' : 'agent_expand')]
         .filter((part: string) => !!part).join(' · '))
-      .onClick(() => this.openHeader(line)).id(this.agentRepositories ? (line.kind === 'host' ? 'agents.repo.machine' : 'agents.project') :
+      .onClick(() => { Haptics.tap(); this.openHeader(line); }).id(this.agentRepositories ? (line.kind === 'host' ? 'agents.repo.machine' : 'agents.project') :
         line.kind === 'host' ? 'projects.host' : 'projects.project')
   }
   private treeSummary(line:ProjectLine):string {
     return [line.tree!.main ? tr('project_checkout_primary') : '', this.treeDetail(line.tree!),
-      line.count ? tr('project_agent_count').replace('{count}',String(line.count)) : ''].filter((part:string) => !!part).join(' · ');
+      line.count ? this.agentCountText(line.count) : ''].filter((part:string) => !!part).join(' · ');
   }
   // A worktree inferred from sessions has no host workspace to open. Its whole row folds the group.
   private treeRowFolds(line:ProjectLine):boolean {
@@ -728,7 +739,7 @@ export struct ProjectsPage {
             .fontColor(line.tree!.workspaceKind === 'git' && !line.tree!.branch ? Colors.working : Colors.secondary)
             .layoutWeight(1).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
           else Blank().layoutWeight(1)
-          if (line.count) Text(!line.tree!.activeCount ? tr('project_worktree_idle') : tr('project_agent_count').replace('{count}',String(line.count)))
+          if (line.count) Text(!line.tree!.activeCount ? tr('project_worktree_idle') : this.agentCountText(line.count))
             .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).maxLines(1)
         }
         if (this.treeRowFolds(line)) this.foldChevron(line.open)
@@ -737,11 +748,11 @@ export struct ProjectsPage {
         .accessibilityGroup(true)
         .accessibilityText([line.tree!.title,this.treeDetail(line.tree!),line.tree!.cwd,this.count(line.count,'project_sessions'),
           this.treeRowFolds(line) ? tr(line.open ? 'agent_collapse' : 'agent_expand') : ''].filter((v:string) => !!v).join(' · '))
-        .onClick(() => { if (this.treeRowFolds(line)) this.toggle(line); else this.openTree(line.tree!); })
+        .onClick(() => { Haptics.tap(); if (this.treeRowFolds(line)) this.toggle(line); else this.openTree(line.tree!); })
         .bindContextMenu(this.actionMenu(line.tree!.key),ResponseType.LongPress).id(this.agentRepositories ? 'agents.worktree' : 'projects.worktree')
       if (line.tree!.source && !this.filteringText() && (line.count || line.tree!.children.length)) Button({type:ButtonType.Normal}) { this.foldChevron(line.open) }
         .width(44*this.outlineControlScale()).height(44*this.outlineControlScale()).padding(0).backgroundColor(Color.Transparent).accessibilityText(tr(line.open ? 'agent_collapse' : 'agent_expand'))
-        .onClick(() => this.toggle(line)).id('projects.fold')
+        .onClick(() => { Haptics.tap(); this.toggle(line); }).id('projects.fold')
     }.width('100%')
       .id('projects.tree_owner.' + line.tree!.machine + '.' + line.tree!.source + '.' + line.tree!.sourceId)
   }
