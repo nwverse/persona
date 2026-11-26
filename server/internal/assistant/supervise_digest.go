@@ -62,12 +62,21 @@ func (s *Service) sendDigestLocked(ctx context.Context) {
 	if b.timer != nil {
 		b.timer.Stop()
 	}
-	if !s.autoSupervisionOn(ctx) {
+	mode := s.supervisionMode(ctx)
+	if mode == supervisionModeOff {
 		// Switched off while this digest waited for its turn: nothing is taken out of the gather, and the withdrawal
 		// empties it.
 		b.mu.Unlock()
 		s.syncAutoSupervision(ctx)
 		return
+	}
+	if mode == supervisionModeOutcomes && slices.ContainsFunc(slices.Collect(maps.Values(b.pending)), func(g superviseSignal) bool {
+		return !supervisionSignalAllowed(mode, g)
+	}) {
+		// Switched to outcomes while this digest waited: its withdrawal takes the routine signals out first.
+		b.mu.Unlock()
+		s.syncAutoSupervision(ctx)
+		b.mu.Lock()
 	}
 	b.timer, b.timerAt = nil, time.Time{}
 	b.syncBatchInterval(batch)
@@ -1020,7 +1029,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
 		}
 	case sigParkedDue:
-		if r := v.parking(); st != reviewParked || r == nil || parkKey(r) != g.Key {
+		if r := v.parking(); st != reviewParked || r == nil || parkDueKey(r) != g.Key {
 			return prompts.SuperviseEntry{}, false // its agent works again, or it was reviewed again, meanwhile
 		}
 	case sigParkDecided:
@@ -1193,6 +1202,9 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	}
 	if g.Kind == sigParkedDue || g.Kind == sigParkedSummary {
 		e.Detail, e.Parked = "", s.parkedEntry(ctx, v.parking())
+	}
+	if g.Kind == sigParkedDue && e.Parked != nil {
+		e.Parked.Resent = parkedDueResend(v.parking())
 	}
 	if g.Kind == sigParkDecided && st == reviewParked { // parked again before this went: what it waits for now
 		e.Parked = s.parkedEntry(ctx, v.parking())

@@ -275,6 +275,10 @@ func (s *Service) createPieceTodo(ctx context.Context, conversation, title, note
 // todo it closes has its outcome recorded and a question's to-do answered as dropped. db.ErrTodoNotFound when it is not
 // there.
 func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo, error) {
+	return s.editTodoWithCloseActivity(ctx, id, e, false)
+}
+
+func (s *Service) editTodoWithCloseActivity(ctx context.Context, id string, e db.TodoEdit, checkActivity bool) (Todo, error) {
 	if e.Audience != nil {
 		if err := db.ValidateTodoAudience(*e.Audience); err != nil {
 			return Todo{}, err
@@ -335,6 +339,14 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 			s.supervise.writeMu.Unlock()
 		}
 	}
+	if e.Done != nil && *e.Done {
+		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+			if err := s.investigationCloseError(ctx, current); err != nil {
+				unlock()
+				return Todo{}, err
+			}
+		}
+	}
 	if links {
 		// Checked again with the graph held still: a write since the caller's check may have changed the request
 		// (todo_pieces.go). A *pieceError when it no longer holds.
@@ -346,6 +358,28 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		e.PartOf, e.After = l.PartOf, l.After
 	}
 	now := time.Now().UTC()
+	var closeGuard func(Todo) error
+	if e.Done != nil && *e.Done {
+		closeGuard = func(live Todo) error {
+			if checkActivity {
+				return s.taskCloseSnapshotError(live, time.Now())
+			}
+			if work := s.unconfirmedTaskClose(ctx, live); work != nil {
+				return &taskCloseHoldError{todo: id, work: work}
+			}
+			return nil
+		}
+		e.CloseGuard = func() error {
+			if live, ok := s.todoNow(id); ok {
+				return closeGuard(live)
+			}
+			return db.ErrTodoNotFound
+		}
+		if err := e.CloseGuard(); err != nil {
+			unlock()
+			return Todo{}, err
+		}
+	}
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -365,8 +399,19 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		e.Apply(&r, now)
 		row = &r
 	}
-	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
+	var beforeWrite func(*Todo) bool
+	var hold error
+	if closeGuard != nil && s.todoDB() == nil {
+		beforeWrite = func(live *Todo) bool {
+			hold = closeGuard(*live)
+			return hold == nil
+		}
+	}
+	out, doneKeys, applied := s.setTodoRow(id, *row, beforeWrite)
 	unlock()
+	if hold != nil {
+		return Todo{}, hold
+	}
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
