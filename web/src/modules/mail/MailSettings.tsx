@@ -1,4 +1,5 @@
-import { useEffect, useId, useState } from "react";
+import type { ModuleMailboxInboxSwitchProps, ModuleMailboxSettingsProps } from "../../core/module-host";
+import { useEffect, useId, useRef, useState } from "react";
 import { managerHeaderFor, sameManager, useChosenManager } from "../../lib/manager-choice";
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, signsInOnPhone, type MailForm, type MicrosoftConfig } from "./account-form";
 import { mailSummary, type MailAccount } from "../../lib/agent-settings";
@@ -10,18 +11,28 @@ import { Button, copyText, cx, Dialog, IconButton, Loading, Spinner, toast } fro
 import { Icon } from "../../ui/icons";
 import { Group, Pill, RowConfirm, Switch } from "../../views/settings/SettingsParts";
 
-export function Mail({ hideInboxSwitch = false, manager }: { hideInboxSwitch?: boolean; manager?: string } = {}) {
+export function Mail({ hideInboxSwitch = false, manager, reloadKey, onHasAccounts }: ModuleMailboxSettingsProps = {}) {
   const [accounts, setAccounts] = useState<MailAccount[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
-  const load = () =>
-    api<{ accounts: MailAccount[] }>("/mail/accounts")
-      .then((r) => (setAccounts(r.accounts ?? []), setError("")))
-      .catch((e) => setError(errorText(e)));
-  useEffect(() => void load(), []);
+  const read = useRef(0);
+  const load = async () => {
+    const n = ++read.current;
+    try {
+      const r = await api<{ accounts: MailAccount[] }>("/mail/accounts");
+      if (n === read.current) {
+        setAccounts(r.accounts ?? []);
+        setError("");
+      }
+    } catch (e) {
+      if (n === read.current) setError(errorText(e));
+    }
+  };
+  useEffect(() => void load(), [reloadKey]);
+  useEffect(() => onHasAccounts?.(!!accounts?.length), [accounts, onHasAccounts]);
 
   const remove = async (a: MailAccount) => {
     setDeleting(a.id);
@@ -105,7 +116,7 @@ export function Mail({ hideInboxSwitch = false, manager }: { hideInboxSwitch?: b
 
 /** Mail's Add to Inbox (#5307): the same switch as Settings › Inbox Sources' mail page; off, no account's mail comes into
  *  the Inbox (search, replies and the knowledge base go on). Only a hub that has the switch lists it (`inbox`). */
-export function MailInboxSwitch({ manager }: { manager?: string } = {}) {
+export function MailInboxSwitch({ manager, grouped }: ModuleMailboxInboxSwitchProps = {}) {
   const picked = useChosenManager();
   const [mail, setMail] = useState<HubConnector | null>(null);
   const [busy, setBusy] = useState(false);
@@ -132,13 +143,14 @@ export function MailInboxSwitch({ manager }: { manager?: string } = {}) {
       setBusy(false);
     }
   };
-  return (
+  const row = (
     <div className="flex items-center gap-3 px-4 py-2.5">
       <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{title}</span>
       {busy && <Spinner />}
       <Switch on={mail.inbox} disabled={busy} label={title} onChange={(v) => void change(v)} />
     </div>
   );
+  return grouped ? <Group>{row}</Group> : row;
 }
 
 const fieldClass = "h-9 w-full rounded-control bg-field px-3 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";

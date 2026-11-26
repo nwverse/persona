@@ -1,5 +1,6 @@
+import type { ModuleMailboxInboxSwitchProps, ModuleMailboxSettingsProps } from "../../core/module-host";
 import { useMailbox, useMailboxEnabled } from "../../lib/mail";
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { t } from "../../i18n";
 import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
@@ -81,12 +82,12 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
   );
 }
 
-export function Mail(props: { hideInboxSwitch?: boolean; manager?: string }) {
+export function Mail(props: ModuleMailboxSettingsProps) {
   const { mailbox } = useMailbox();
   return mailbox ? <mailbox.Settings {...props} /> : null;
 }
 
-export function MailInboxSwitch(props: { manager?: string }) {
+export function MailInboxSwitch(props: ModuleMailboxInboxSwitchProps) {
   const { mailbox } = useMailbox();
   return mailbox ? <mailbox.InboxSwitch {...props} /> : null;
 }
@@ -115,23 +116,25 @@ function LarkAccountRow({ a, isDefault }: { a: LarkAccount; isDefault: boolean }
   );
 }
 
-export function Feishu({ manager }: { manager?: string } = {}) {
+export function Feishu({ manager, reloadKey }: { manager?: string; reloadKey?: number } = {}) {
   const [st, setSt] = useState<LarkStatus | null>(null);
   const [accounts, setAccounts] = useState<LarkAccountList | null>(null);
   const [error, setError] = useState("");
   const [absent, setAbsent] = useState(false);
   const [loading, setLoading] = useState(true);
+  const read = useRef(0);
   const load = () => {
+    const n = ++read.current;
     setLoading(true);
     // the Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md "Multiple accounts"); a hub from before them has none to list
-    api<LarkAccountList>("/lark/accounts").then(setAccounts).catch(() => setAccounts(null));
+    api<LarkAccountList>("/lark/accounts").then((r) => n === read.current && setAccounts(r)).catch(() => n === read.current && setAccounts(null));
     api<LarkStatus>("/lark/status")
-      .then((r) => (setSt(r), setAbsent(false), setError("")))
+      .then((r) => n === read.current && (setSt(r), setAbsent(false), setError("")))
       // the current assistant has no such connector (its manager has no route for it): the group shows "not set up"
-      .catch((e) => (e instanceof ApiError && e.status === 404 ? (setSt({ configured: false, connected: false }), setAbsent(true), setError("")) : (setAbsent(false), setError(errorText(e)))))
-      .finally(() => setLoading(false));
+      .catch((e) => n === read.current && (e instanceof ApiError && e.status === 404 ? (setSt({ configured: false, connected: false }), setAbsent(true), setError("")) : (setAbsent(false), setError(errorText(e)))))
+      .finally(() => n === read.current && setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [reloadKey]);
 
   const state = !st ? (loading ? t("settings-connectors.checking") : t("settings-connectors.status_unknown")) : !st.configured ? t("settings-connectors.not_configured") : st.connected ? t("settings-connectors.connected") : t("settings-connectors.unreachable");
   const dot = !st ? "bg-line-strong" : st.connected ? "bg-green" : st.configured ? "bg-red" : "bg-line-strong";

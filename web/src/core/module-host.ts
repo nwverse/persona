@@ -239,13 +239,25 @@ export interface ModuleFilePreviewProps {
   onDownload: () => void;
 }
 
+export interface ModuleMailboxSettingsProps {
+  manager?: string;
+  hideInboxSwitch?: boolean;
+  reloadKey?: number;
+  onHasAccounts?: (hasAccounts: boolean) => void;
+}
+
+export interface ModuleMailboxInboxSwitchProps {
+  manager?: string;
+  grouped?: boolean;
+}
+
 /** A module's code, loaded on first use. */
 export interface ModuleCode {
   mailbox?: {
     Body: ComponentType<{ item: InboxItem; onLatest?: () => void }>;
     Compose: ComponentType<{ accounts: MailAccount[]; onClose: () => void }>;
-    Settings: ComponentType<{ manager?: string; hideInboxSwitch?: boolean }>;
-    InboxSwitch: ComponentType<{ manager?: string }>;
+    Settings: ComponentType<ModuleMailboxSettingsProps>;
+    InboxSwitch: ComponentType<ModuleMailboxInboxSwitchProps>;
     accounts: (manager?: string) => Promise<MailAccount[]>;
   };
   FilePreview?: ComponentType<ModuleFilePreviewProps>;
