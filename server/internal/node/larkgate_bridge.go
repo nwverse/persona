@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -148,9 +149,38 @@ func (n *Node) larkCLIBin(c *proto.LarkCLI) string {
 	return n.larkGateSession(g).Bin(c)
 }
 
+// larkCLIWrapperPrefix and larkCLIWrapperSuffix match the comment line in every lark-cli PATH wrapper Persona writes:
+// both the current modules/lark/larkgate wrapper and earlier node/larkcligate.go wrappers (manager.json and hub.json).
+const (
+	larkCLIWrapperPrefix = "# lark-cli as "
+	larkCLIWrapperSuffix = " lark.cli says ("
+)
+
+// removeStaleLarkCLIWrapper deletes a Persona-written lark-cli wrapper from dir when the lark module is absent or
+// switched off, so an ungated lark-cli wrapper cannot remain on the assistant's PATH while unrelated user files stay.
+func removeStaleLarkCLIWrapper(dir string) {
+	if dir == "" {
+		return
+	}
+	p := filepath.Join(dir, "lark-cli")
+	info, err := os.Lstat(p)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64*1024 {
+		return
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	s := string(b)
+	if strings.Contains(s, larkCLIWrapperPrefix) && strings.Contains(s, larkCLIWrapperSuffix) {
+		_ = os.Remove(p)
+	}
+}
+
 func (n *Node) writeLarkCLIWrapper(dir string, c *proto.LarkCLI) {
 	g := larkGate()
 	if g == nil {
+		removeStaleLarkCLIWrapper(dir)
 		return
 	}
 	n.larkGateSession(g).WriteWrapper(dir, c)

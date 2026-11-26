@@ -169,7 +169,7 @@ func (n *Node) assistantLarkEnvWithLease(cwd, session string, sessionScoped bool
 			}
 		}
 	}
-	n.writeLarkCLIWrapper(bin, cfg.CLI) // lark-cli, when hub.json has lark.cli and the lark module is on (larkgateport)
+	n.writeLarkCLIWrapper(bin, cfg.CLI) // lark-cli when hub.json has lark.cli and the lark module is on; removes any stale wrapper when off
 	// The profile goes in the environment too, which lark-cli reads as --profile: Claude Code runs each Bash command
 	// through the user's shell snapshot, which puts the login shell's PATH back, and that may find another lark-cli
 	// before the wrapper (#9123). The snapshot exports PATH alone; the gate refuses a command that sets this one.

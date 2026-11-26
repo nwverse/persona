@@ -23,11 +23,7 @@ func (a larkGateAdapter) MentionsCLI(text string) bool       { return a.g.Mentio
 func (a larkGateAdapter) NamesCLI(text string) bool          { return a.g.NamesCLI(text) }
 func (a larkGateAdapter) CheckCommandDeny(cmd string) string { return a.g.CheckCommandDeny(cmd) }
 func (a larkGateAdapter) ParseCLI(args []string, risk larkgateport.RiskLookup) (method, reqPath, query, body, riskLevel, deny string, ok bool) {
-	var fn func([]string) string
-	if risk != nil {
-		fn = risk
-	}
-	return a.g.ParseCLI(args, fn)
+	return a.g.ParseCLI(args, risk)
 }
 func (a larkGateAdapter) RiskReads(risk string) bool          { return a.g.RiskReads(risk) }
 func (a larkGateAdapter) RiskNote(method, risk string) string { return a.g.RiskNote(method, risk) }
@@ -40,11 +36,7 @@ func (a larkGateAdapter) FlagValue(flags []string, name string) string {
 }
 func (a larkGateAdapter) ShellJoin(args []string) string { return a.g.ShellJoin(args) }
 func (a larkGateAdapter) NewSession(shell larkgateport.ShellOutput) larkgateport.Session {
-	var fn func(context.Context, string) []byte
-	if shell != nil {
-		fn = shell
-	}
-	return larkGateSessionAdapter{s: a.g.NewSession(fn)}
+	return larkGateSessionAdapter{s: a.g.NewSession(shell)}
 }
 func (a larkGateAdapter) FetchCardContext(ctx context.Context, cfg proto.AssistantLark, kind, chatID, messageID string) (chat, replySender, replyText string, inTopic, ok bool) {
 	return a.g.FetchCardContext(ctx, cfg, kind, chatID, messageID)
