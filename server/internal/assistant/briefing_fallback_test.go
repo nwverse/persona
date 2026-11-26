@@ -305,13 +305,11 @@ func TestBriefReportFactsAreFallbackOnly(t *testing.T) {
 func TestBriefFallbackFeishuRetryUsesStableCardAndFailedTurn(t *testing.T) {
 	needsLarkLayer(t)
 	needsBriefingModule(t)
-	oldDelay, oldRetries := feishuMirrorRetry, feishuMirrorRetries
-	feishuMirrorRetry, feishuMirrorRetries = 10*time.Millisecond, 1
-	t.Cleanup(func() { feishuMirrorRetry, feishuMirrorRetries = oldDelay, oldRetries })
 	f := newFakeHub().withMachine()
 	capture := briefFallbackCapture(f)
 	capture.failNext = 1
 	s := newStorelessService(t, f)
+	s.setLarkTiming("mirror_retry", quickMirrorRetry)
 	initBriefFallbackState(s)
 	f.setItems(proto.Item{ID: "u1", Role: "user", Kind: proto.KindText, Text: "⏰ Morning briefing"},
 		proto.Item{ID: "a1", Role: "assistant", Kind: proto.KindText, Text: "API Error: 529"})

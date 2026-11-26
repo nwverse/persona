@@ -218,9 +218,7 @@ func TestFeishuTodoReminderOccurrenceKeys(t *testing.T) {
 	todo := Todo{ID: "todo_identity", Title: "Reminder", RemindAt: &at}
 	send := func(todo Todo) string {
 		t.Helper()
-		if err := s.feishuTodoPush(context.Background(), "server", "m1", todo.Title, "Notes", todo); err != nil {
-			t.Fatal(err)
-		}
+		sendTestLarkReminder(s, "server", "m1", todo.Title, "Notes", todo)
 		key, _ := (*posts)[len(*posts)-1]["uuid"].(string)
 		return key
 	}
@@ -270,7 +268,7 @@ func TestFeishuTodoReminderStopsObsoleteOccurrence(t *testing.T) {
 					}
 					return nil, errors.New("temporary send failure")
 				})
-				s.feishuTodoReminder("server", "m1", todo.Title, "Notes", todo)
+				sendTestLarkReminder(s, "server", "m1", todo.Title, "Notes", todo)
 				time.Sleep(time.Duration(feishuMirrorRetries+2) * feishuMirrorRetry) // sleep-ok: exhaust only virtual retry timers
 				synctest.Wait()
 				if posts, _ := capture.snapshot(); len(posts) != 1 {
@@ -360,7 +358,7 @@ func TestFeishuTodoReminderRetryAuthority(t *testing.T) {
 				if change == "initial companion" {
 					companion()
 				}
-				s.feishuTodoReminder("server", "m1", todo.Title, todo.Notes, todo)
+				sendTestLarkReminder(s, "server", "m1", todo.Title, todo.Notes, todo)
 				posts, _ := capture.snapshot()
 				notices, _ := s.boardProbe(t).NoticesState()
 				switch change {
@@ -433,7 +431,7 @@ func TestFeishuTodoReminderUnknownDuplicateReceipt(t *testing.T) {
 				at := time.Now().Add(-time.Minute)
 				todo := Todo{ID: "todo_unknown_receipt", Title: "Reminder", RemindAt: &at}
 				installRetryTodo(s, todo)
-				s.feishuTodoReminder("server", "m1", todo.Title, "Notes", todo)
+				sendTestLarkReminder(s, "server", "m1", todo.Title, "Notes", todo)
 				posts, accepted := capture.snapshot()
 				want := 1 + feishuMirrorRetries
 				if paused {
