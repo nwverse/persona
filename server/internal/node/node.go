@@ -47,6 +47,8 @@ type Node struct {
 	segmentStarts segmentStarts
 	segmentInputs segmentInputs
 	runtimeUsage  runtimeUsageReports
+	// usageDirs resolves the directories the usage names, while this connection's manager keeps them (usage_dirs.go).
+	usageDirs usageDirsOn
 
 	// Only the manager's initial node.info can negotiate source delivery on this connection.
 	managerInfoOnce sync.Once

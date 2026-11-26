@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -141,6 +142,7 @@ func (n *Node) backfillUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		firsts = append(firsts, q.first(ctx, n))
 	}
 	read, hours := 0, 0
+	resolved := map[string]*proto.UsageDir{} // with a manager that keeps directories: each one's resolution, once
 	// The weeks before the transcripts' first day hold nothing: start there (#9616).
 	for start := backfillStart(files, firsts, since); start.Before(before); {
 		end := start.Add(backfillSlice)
@@ -154,6 +156,9 @@ func (n *Node) backfillUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		buckets, agents := backfillWeek(buckets, ranges, start, end)
 		for _, req := range backfillRequests(buckets, end, end.Equal(before)) {
 			req["agents"] = agents
+			if dirs := n.backfillDirs(ctx, req["buckets"].([]proto.UsageBucket), resolved); len(dirs) > 0 {
+				req["dirs"] = dirs
+			}
 			var res struct {
 				Stored int `json:"stored"`
 			}
@@ -257,6 +262,10 @@ func (n *Node) backfillScan(ctx context.Context, files []backfillFile, queries [
 		st, _ := n.state.get(session)
 		return st.Launcher
 	}
+	if n.usageDirs.get() != nil { // this connection's manager keeps directories (usage_dirs.go)
+		m.fileDir = n.usageFileDirs()
+		m.recordDir = func(q usageQuery, session string) string { return n.usageSessionDir(session, q.dir(session)) }
+	}
 	for _, f := range files {
 		if !f.overlaps(start, end) {
 			continue
@@ -271,7 +280,7 @@ func (n *Node) backfillScan(ctx context.Context, files []backfillFile, queries [
 			return nil, err
 		}
 		for _, r := range recs {
-			m.add(&usageFile{}, r, start)
+			m.add(&usageFile{dir: m.dirOfRecord(q, r)}, r, start)
 		}
 	}
 	out := make([]proto.UsageBucket, 0, len(m.buckets))
@@ -313,7 +322,7 @@ func (m *usageMeter) scanSlice(ctx context.Context, f usagePath, start, end time
 	if err := lim.wait(ctx, int(probed)); err != nil { // the search's reads count against the rate too
 		return 0, err
 	}
-	uf := newUsageFile(f, off)
+	uf := m.newFile(f, off)
 	r := &limitedReader{ctx: ctx, r: io.NewSectionReader(fh, off, f.st.Size()-off), lim: lim}
 	past := 0
 	read = off + eachLineAt(r, func(line []byte, _, _ int64) bool {
@@ -372,4 +381,29 @@ func (r *limitedReader) Read(p []byte) (int, error) {
 		err = werr
 	}
 	return n, err
+}
+
+// backfillDirs is what the directories buckets name resolve to, for their request (the manager keeps them with the
+// hours): each resolved once a run (resolved, nil for one that is not there), here and now, as the backfill is in the
+// background anyway.
+func (n *Node) backfillDirs(ctx context.Context, buckets []proto.UsageBucket, resolved map[string]*proto.UsageDir) []proto.UsageDir {
+	var out []proto.UsageDir
+	seen := map[string]bool{}
+	for _, b := range buckets {
+		if b.Dir == "" || strings.HasPrefix(b.Dir, ":") || seen[b.Dir] {
+			continue
+		}
+		seen[b.Dir] = true
+		r, ok := resolved[b.Dir]
+		if !ok {
+			if got, found := resolveUsageDir(ctx, n.home, b.Dir); found {
+				r = &got
+			}
+			resolved[b.Dir] = r
+		}
+		if r != nil {
+			out = append(out, *r)
+		}
+	}
+	return out
 }
