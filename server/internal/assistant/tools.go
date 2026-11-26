@@ -444,6 +444,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// user (agent_resume.go, #8099). Ignored for an agent that runs.
 			Resume    bool   `json:"resume"`
 			ResumeWhy string `json:"resume_why"`
+			// ResumeTodoID: with resume, re-link this stopped agent onto the still-open to-do it last worked on,
+			// instead of adopting it as a new task (agent_resume.go, #13192).
+			ResumeTodoID string `json:"todo_id"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			return "", fmt.Errorf("arguments: %w", err)
@@ -475,23 +478,47 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			}
 		}
 		resume := ""
+		// A same-session resume onto the agent's own still-open to-do (#13192): non-empty only while the link is
+		// reactivated, so a failed start can release it again (sendFailed).
+		resumeTodo := ""
 		if stoppedAgent(c) { // read-only (#4754): a message does not start it; only a resume asked for does (#8099)
 			if exitText(a.Text) {
 				return fmt.Sprintf("%s has already stopped: nothing was sent.", agentLabel(c)), nil
 			}
 			if !a.Resume {
+				if strings.TrimSpace(a.ResumeTodoID) != "" {
+					return "", errors.New("todo_id on agent_send only works with resume: send again with resume true and resume_why")
+				}
 				return "", stoppedRefusal(c)
 			}
 			resume = cleanWhy(a.ResumeWhy)
+			if a.Task != nil && strings.TrimSpace(a.ResumeTodoID) != "" {
+				return "", errors.New("task and todo_id are alternatives: task adopts the agent as a new task, todo_id resumes it onto its existing to-do")
+			}
+			if strings.TrimSpace(a.ResumeTodoID) != "" {
+				todo, err := s.resumeTodoForAgent(ctx, self, am, c, a.ResumeTodoID)
+				if err != nil {
+					return "", fmt.Errorf("%w. Nothing was started or sent", err)
+				}
+				resumeTodo = todo.ID
+			}
 			if err := s.resumeAllowed(ctx, self, am, c, resume, a.Task); err != nil {
+				if resumeTodo != "" {
+					s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
+				}
 				return "", err
 			}
+		} else if strings.TrimSpace(a.ResumeTodoID) != "" {
+			return "", errors.New("todo_id on agent_send is for a stopped agent: this one is running, send it without todo_id")
 		}
 		atts, err := cleanAttachments(a.Attachments)
 		if err == nil {
 			atts, err = s.checkAttachments(ctx, machine, self, atts)
 		}
 		if err != nil {
+			if resumeTodo != "" {
+				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
+			}
 			return "", fmt.Errorf("%w; nothing was sent", err)
 		}
 		if a.Task != nil { // refused before the user is asked to confirm a send that would not go
@@ -510,8 +537,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
 		}
 		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
+			if resumeTodo != "" {
+				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
+			}
 			return "", err
 		} else if !ok {
+			if resumeTodo != "" {
+				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
+			}
 			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
 		}
 		var task *handedTask
@@ -566,6 +599,13 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if resume != "" {
 			receipt, err := s.resumeAndSend(ctx, self, am, c, params, resume, a.Text, handed.said(), task)
 			if err != nil {
+				if resumeTodo != "" && startResultUnknown(err) {
+					// The node may still start the session: keep the link so its next turn stays supervised.
+					return "", err
+				}
+				if resumeTodo != "" {
+					s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
+				}
 				return "", err
 			}
 			return finish(receipt), nil
