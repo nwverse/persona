@@ -381,7 +381,7 @@ describe("an Agent's pill", () => {
     await act(async () => panel.props!.onReload!("agy"));
     await flush();
     expect(calls.filter((c) => c.url.includes("/launchers/agy/models")).map((c) => c.url.split("?")[1]))
-      .toEqual(["host=agy", "host=agy", "host=agy"]);
+      .toEqual(["host=agy", "host=agy", "refresh=1&host=agy"]);
   });
 
   it("reads each provider's cached quota for this computer, without forcing a refresh", async () => {
