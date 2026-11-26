@@ -168,6 +168,32 @@ func normalizeOutsideDecision(in assistantwire.OutsideDecisionRequest) (reviewDe
 		return reviewDecision{}, "", false, "", outsideErr(http.StatusBadRequest, "invalid_decision", errors.New("reversible is required"))
 	}
 	reversible := *in.Reversible
+	if in.Write != nil {
+		// A write's owner-facing meaning comes from the fingerprint that will be
+		// checked again at consumption, never from a caller's claim that a POST is
+		// really a read. Neither the body nor the token audience goes on the card.
+		w := in.Write
+		target := w.Method + " " + w.Path
+		if w.Query != "" {
+			target += "?" + w.Query
+		}
+		account := w.Account
+		if account == "" {
+			account = "primary"
+		}
+		in.Title = "Agent API write: " + w.Method + " " + w.Path
+		in.Background = "Allow this exact Agent API request once: " + target +
+			". Account: " + account + ". The request body and credential are not included. Approval expires at " +
+			w.ExpiresAt.UTC().Format(time.RFC3339Nano) + "."
+		in.WhyOwner = "visible_to_others"
+		in.Options = []assistantwire.OutsideDecisionOption{
+			{Label: "Deny", LeadsTo: "Nothing is sent"},
+			{Label: "Approve", LeadsTo: "Run this exact request once"},
+		}
+		in.Recommend = "Deny"
+		in.CostOfWaiting = "The write stays blocked."
+		reversible = false
+	}
 	in.Title = textfmt.StripTerminalEscapes(in.Title)
 	in.Background = textfmt.StripTerminalEscapes(in.Background)
 	in.WhyOwner = textfmt.StripTerminalEscapes(in.WhyOwner)
@@ -240,7 +266,7 @@ func validateOutsideWrite(w *assistantwire.OutsideWriteApproval, options []Decis
 		return errors.New("write.audience must be 1–200 trimmed characters")
 	}
 	switch w.Method {
-	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions:
 	default:
 		return errors.New("write.method is not supported")
 	}
@@ -386,6 +412,17 @@ func (s *Service) raiseOutsideDecision(ctx context.Context, caller *outsideCalle
 		s.logf("outside decision %s: initial push: %v", id, err)
 	}
 	return &stored, true, nil
+}
+
+func (s *Service) hasOutsideDecision(ctx context.Context, id string) (bool, error) {
+	b := &s.accept
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.loadAcceptLocked(ctx) {
+		return false, outsideErr(http.StatusServiceUnavailable, "store_unavailable", errAcceptStore)
+	}
+	_, ok := b.outside[id]
+	return ok, nil
 }
 
 func (s *Service) outsideForCaller(ctx context.Context, caller *outsideCaller, id string) (*outsideDecision, error) {

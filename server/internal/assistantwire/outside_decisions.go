@@ -8,6 +8,10 @@ const (
 	MethodDecisionRaise    = "decision.raise"
 	MethodDecisionGet      = "decision.get"
 	MethodDecisionWithdraw = "decision.withdraw"
+	// MethodDecisionOwner is the manager-local, read-only lookup the extensions
+	// manager uses to answer the hub before a capability-only consume. It is not
+	// accepted from node.sock callers.
+	MethodDecisionOwner = "decision.owner"
 )
 
 // The states and answer provenance of an outside decision.

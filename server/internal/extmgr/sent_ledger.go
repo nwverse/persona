@@ -417,7 +417,7 @@ func (h *Manager) RecordNodeActionApproval(ctx context.Context, machineID string
 	if !validAgentAPIAudience(p.Audience) {
 		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: an Agent API audience is required"}
 	}
-	if err := h.actionApprovals.registerForAudience(p.ID, p.ExpiresAt, p.Audience); err != nil {
+	if err := h.actionApprovals.registerForAgent(p.ID, p.ExpiresAt, p.Audience, p.Account); err != nil {
 		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: " + err.Error()}
 	}
 	return map[string]any{"ok": true}, nil

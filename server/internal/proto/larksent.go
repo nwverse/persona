@@ -21,6 +21,7 @@ type LarkActionApproval struct {
 	ID        string    `json:"id"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Audience  string    `json:"audience"`
+	Account   string    `json:"account,omitempty"`
 }
 
 // How the node's gate let a write through (LarkSent.LetThrough.Kind), in the ledger's terms.

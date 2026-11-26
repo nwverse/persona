@@ -490,7 +490,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				v.unread = append(v.unread, gate)
 				continue
 			}
-			c, deny, ok := parseGateCall(g, words[1:], vars, cwd)
+			c, deny, ok := parseGateCall(g, words[1:], vars, env, cwd)
 			if deny != "" {
 				v.deny = deny
 				return v
@@ -1006,7 +1006,7 @@ func gateUnmatchedReadQuery(args []*syntax.Word, index int) bool {
 }
 
 // parseGateCall reads `METHOD PATH [BODY] [curl flags]` after a gated command.
-func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, cwd string) (larkCall, string, bool) {
+func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, env []string, cwd string) (larkCall, string, bool) {
 	expand := func(s string) (string, bool) {
 		if !strings.Contains(s, "$") {
 			return s, true
@@ -1043,6 +1043,8 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 	}
 	c.Path, c.Query, _ = strings.Cut(path, "?")
 	queryFlagSeen, queryFragment, get, hasData := false, false, false, false
+	accountHeader := gateAgentAccountHeader(g)
+	accountHeaderValue := ""
 	rest := args[2:]
 	if len(rest) > 0 && (strings.HasPrefix(rest[0], "{") || strings.HasPrefix(rest[0], "[")) {
 		c.Body, rest, hasData = rest[0], rest[1:], true
@@ -1077,8 +1079,13 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 		case "-G", "--get":
 			get = true
 		case "-H", "--header":
-			if h, _, _ := strings.Cut(val, ":"); !slices.Contains(g.Headers, strings.ToLower(strings.TrimSpace(h))) {
+			headerName, headerValue, _ := strings.Cut(val, ":")
+			headerName = strings.ToLower(strings.TrimSpace(headerName))
+			if !slices.Contains(g.Headers, headerName) {
 				return larkCall{}, "", false
+			}
+			if headerName == accountHeader {
+				accountHeaderValue = strings.TrimSpace(headerValue)
 			}
 		case "--upload":
 			c.Body = "上传文件 " + val
@@ -1152,6 +1159,24 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, c
 		// go, while larkCheck refuses to create a confirmation grant for a different request.
 		c.queryUnknown = true
 		c.dataInQuery = true
+	}
+	if _, agent := gateAgentToken(g); agent {
+		account := ""
+		if name := gateAgentAccountEnv(g); name != "" {
+			account = vars[name]
+			for _, assignment := range env {
+				if key, value, ok := strings.Cut(assignment, "="); ok && key == name {
+					account = value
+				}
+			}
+		}
+		if account == "" {
+			account = gateAgentQueryAccount(c.Query)
+		}
+		if accountHeaderValue != "" {
+			account = accountHeaderValue
+		}
+		c.Account = normalizeAgentAccount(account)
 	}
 	return c, "", true
 }

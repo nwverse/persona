@@ -108,10 +108,15 @@ func registerActionApproval(ctx context.Context, seed string) error {
 }
 
 func (c *Conn) Reply(ctx context.Context, r connector.InboxReply) error {
+	seed := "reply:" + r.ClientID
 	if r.ClientID == "" {
-		r.ClientID = actionRequestID()
+		// Preserve the connector's existing stable fallback instead of inventing
+		// a random ClientID here. The Agent API connector derives its approval
+		// from these fields, so a retry names the same reply without making every
+		// id-less reply share one capability.
+		seed = "reply:" + r.Thread + "\x00" + r.Last + "\x00" + r.Text
 	}
-	if err := registerActionApproval(ctx, "reply:"+r.ClientID); err != nil {
+	if err := registerActionApproval(ctx, seed); err != nil {
 		return err
 	}
 	return c.call(ctx, serve.MReply, r, nil)

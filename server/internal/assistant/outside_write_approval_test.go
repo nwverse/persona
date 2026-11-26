@@ -3,8 +3,11 @@ package assistant
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 func outsideWriteFingerprint() map[string]any {
@@ -56,6 +59,73 @@ func raiseOutsideWrite(t *testing.T, e *todoEnv) (string, string, map[string]any
 		t.Fatalf("raise write decision: %d %+v", code, out)
 	}
 	return out.Decision.ID, out.Decision.AskTodoID, write
+}
+
+func TestOutsideDecisionOwnerLookupUsesTheDurableBook(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	id, _, _ := raiseOutsideWrite(t, e)
+	helloed := make(chan struct{})
+	close(helloed)
+	bus := &BusHub{svc: e.s, helloed: helloed}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{{id, true}, {"odc_missing", false}} {
+		raw, _ := json.Marshal(map[string]string{"id": tc.id})
+		answer, err := bus.Answer(t.Context(), assistantwire.MethodDecisionOwner, raw)
+		var out map[string]bool
+		_ = json.Unmarshal(answer, &out)
+		if err != nil || out["found"] != tc.want {
+			t.Fatalf("owner lookup %s: %s, err=%v", tc.id, answer, err)
+		}
+	}
+}
+
+func TestOutsideWriteApprovalSupportsOptions(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	in, write := outsideWriteRequest(t)
+	write["method"] = http.MethodOptions
+	in["write"] = write
+	code, out := outsideCall(t, e, "agentapi", http.MethodPost, "/api/v1/decisions", in)
+	if code != http.StatusOK || out.Decision == nil {
+		t.Fatalf("raise OPTIONS write: %d %+v", code, out)
+	}
+	if rec := answerAsk(e.s, out.Decision.AskTodoID, map[string]string{"option": "Approve"}); rec.Code != http.StatusOK {
+		t.Fatalf("approve OPTIONS: %d %s", rec.Code, rec.Body)
+	}
+	if code, result := consumeOutsideWrite(t, e, out.Decision.ID, write); code != http.StatusOK || result["ok"] != true {
+		t.Fatalf("consume OPTIONS: %d %+v", code, result)
+	}
+}
+
+func TestOutsideWriteApprovalCardUsesTheVerifiedRequestNotCallerText(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	in, _ := outsideWriteRequest(t)
+	in["title"] = "Read messages"
+	in["background"] = "This harmless read only lists messages."
+	in["options"] = []map[string]any{
+		{"label": "Deny", "leads_to": "Nothing is read"},
+		{"label": "Approve", "leads_to": "Only read the messages"},
+	}
+	code, out := outsideCall(t, e, "agentapi", http.MethodPost, "/api/v1/decisions", in)
+	if code != http.StatusOK || out.Decision == nil {
+		t.Fatalf("raise: %d %+v", code, out)
+	}
+	got := out.Decision
+	if got.Title != "Agent API write: POST /agent/v1/conversations/123/messages" {
+		t.Fatalf("caller disguised the write title: %q", got.Title)
+	}
+	if !strings.Contains(got.Background, "POST /agent/v1/conversations/123/messages?clientId=abc") ||
+		strings.Contains(got.Background, "harmless read") {
+		t.Fatalf("card background does not describe the exact request: %q", got.Background)
+	}
+	if len(got.Options) != 2 || got.Options[0].Label != "Deny" || got.Options[1].Label != "Approve" ||
+		got.Options[1].LeadsTo != "Run this exact request once" {
+		t.Fatalf("caller controlled the write options: %+v", got.Options)
+	}
+	if got.Recommend != "Deny" || got.Reversible || got.WhyOwner != "visible_to_others" {
+		t.Fatalf("unsafe caller-controlled write semantics: %+v", got)
+	}
 }
 
 func TestOutsideWriteApprovalConsumesOnlyTheApprovedRequestOnce(t *testing.T) {

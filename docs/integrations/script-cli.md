@@ -105,7 +105,9 @@ Unlike `ask`, these commands never wait for an answer, reconnect to a blocking i
 
 ### One exact Agent API write
 
-A script running on a computer with a Persona node can ask for one Agent API write by adding `write` to the decision. The card names the real method and path; the request body and token do not need to appear on it. The fingerprint covers the raw query, canonical JSON or raw-byte body hash, account, instance audience and expiry. The option that permits the write must be named exactly, and `allow_default` must be `false`.
+A script running on a computer with a Persona node can ask for one Agent API write by adding `write` to the decision. The card names the real method and path; the request body and token do not need to appear on it. The fingerprint covers the raw query, canonical JSON or raw-byte body hash, account, instance audience and expiry. `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` and `OPTIONS` are supported when the target API classifies the call as a write. The option that permits the write is exactly `Approve`, and `allow_default` must be `false`.
+
+For a write decision, the manager ignores the caller's title, background, owner rationale, options, recommendation, waiting cost and reversibility. It derives the title and background from the fingerprint's real method, path, query, account and expiry, and installs fixed Deny/Approve choices. A caller therefore cannot present a write as a read or replace Approve with a milder-sounding custom option.
 
 ```json
 {
@@ -136,7 +138,18 @@ A script running on a computer with a Persona node can ask for one Agent API wri
 
 The Agent API's `ol.sh` implements this flow after `AGENT_APPROVAL_REQUIRED`: it raises the decision, waits for the owner, and retries the identical request once with `x-persona-decision` and `x-persona-decision-expires`. Denial never retries. The decision id is a 128-bit, one-use capability, not a long-term private key; changing any fingerprint field, using a default answer, or replaying it fails closed. The Agent API also persists consumption, so a restart does not make the id reusable.
 
-A write already approved through Persona's connector gate or node command gate does not raise this second decision. That gate's original card, rule, or **Always allow in this session** becomes a separate one-use action approval. A node gate sends that capability only to a concrete `/agent/v1/...` upstream and binds it to the injected Agent credential's hash; generic third-party gates receive no approval header. Session Always therefore covers repeated writes to the remembered route while every execution still consumes a fresh capability; without it, writes ask one at a time. Upgrade the manager before upgrading execution nodes and the Agent API server: an older manager cannot register an action approval, and the enforcing server refuses rather than bypassing it.
+A write already approved through Persona's connector gate or node command gate does not raise this second decision. That gate's original card, rule, or **Always allow in this session** becomes a separate one-use action approval. A node gate sends that capability only to a concrete `/agent/v1/...` upstream and binds it to the injected Agent credential's hash and the actual routed account; generic third-party gates receive no approval header. Session Always therefore covers repeated writes to the remembered route while every execution still consumes a fresh capability; without it, writes ask one at a time. Upgrade the manager before upgrading execution nodes and the Agent API server: an older manager cannot register an action approval, and the enforcing server refuses rather than bypassing it.
+
+### Other user-mode CLIs, including `feishu-cli --as user`
+
+A user-mode CLI that talks to Lark directly does not pass through the Agent API, so the `write` fingerprint above cannot consume or enforce its operation. Prefer routing that operation through the Agent API. If it has not been migrated, an administrator can install a fixed wrapper around the real binary:
+
+1. Map each supported subcommand to the real operation and target. Reject unknown subcommands instead of guessing whether they read or write. Do not put message text, document contents, tokens or keys in the decision document.
+2. Raise an ordinary (non-`write`) `personad decision` with that derived operation and target, `Deny` and `Approve` options, `recommend:"Deny"`, `reversible:false` and `allow_default:false`. Use a stable `ref` when retrying a lost raise response; a different operation needs a different ref.
+3. Poll `personad decision get <id>`. Execute the original, unchanged argv only when the state is `answered`, `answer.answered_by` is `owner` and `answer.option` is `Approve`. Denial, withdrawal, timeout and malformed replies execute nothing. Do not automatically execute again after an uncertain process exit.
+4. Expose only the wrapper to the calling environment. For example, its final step after that verified answer may be `exec feishu-cli --as user "$@"`; reaching this line without the three checks above is a wrapper bug.
+
+This wrapper is **advisory**, not a hard security boundary, while the original binary, its credentials or another user-mode API remain directly callable. For a hard boundary, remove those direct entries and credentials from the Agent environment and expose only the wrapper, or route the operation through the Agent API. The repository does not install or configure this wrapper; deployment is an administrator's explicit local choice.
 
 | Exit code | `decision` |
 | --- | --- |

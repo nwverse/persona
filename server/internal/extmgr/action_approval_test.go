@@ -66,6 +66,45 @@ func TestActionApprovalBookConsumesOnceAndChecksExpiry(t *testing.T) {
 	}
 }
 
+func TestActionApprovalBookRepeatedRegistrationDoesNotRevokeConsumption(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	book := actionApprovalBook{now: func() time.Time { return now }}
+	id := connector.ActionApprovalID("action:repeat-registration")
+	audience := "agent-api:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	expires := now.Add(10 * time.Minute)
+	if err := book.registerForAudience(id, expires, audience); err != nil {
+		t.Fatal(err)
+	}
+	in := actionFingerprint(expires)
+	in.Audience = audience
+	if _, err := book.consume(id, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := book.registerForAudience(id, expires, audience); err != nil {
+		t.Fatalf("the connector's identical retry was refused before its reply cache: %v", err)
+	}
+	if _, err := book.consume(id, in); err == nil || err.Error() != "the action approval was already consumed" {
+		t.Fatalf("re-registration resurrected the consumed approval: %v", err)
+	}
+	if err := book.registerForAudience(id, expires, "agent-api:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"); err == nil {
+		t.Fatal("a repeated id changed its token audience")
+	}
+}
+
+func TestActionApprovalBookAcceptsOptions(t *testing.T) {
+	book := actionApprovalBook{}
+	id := connector.ActionApprovalID("action:options")
+	expires := time.Now().Add(10 * time.Minute)
+	if err := book.register(id, expires); err != nil {
+		t.Fatal(err)
+	}
+	in := actionFingerprint(expires)
+	in.Method = http.MethodOptions
+	if _, err := book.consume(id, in); err != nil {
+		t.Fatalf("Agent API's OPTIONS write contract was refused: %v", err)
+	}
+}
+
 func TestActionApprovalBookPrunesEntriesAtExpiry(t *testing.T) {
 	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
 	book := actionApprovalBook{now: func() time.Time { return now }}
@@ -171,23 +210,69 @@ func TestInboxReplyInstallsTheActionApprovalRegistrar(t *testing.T) {
 	}
 }
 
+func TestDecisionOwnerLookupUsesTheRealManagerBooks(t *testing.T) {
+	h := newTestManager(t)
+	id := connector.ActionApprovalID("action:owner-lookup")
+	if err := h.registerActionApproval(t.Context(), id, time.Now().Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{{id, true}, {connector.ActionApprovalID("action:owner-missing"), false}} {
+		raw, _ := json.Marshal(extwire.DecisionOwner{ID: tc.id, Action: true})
+		out, handled, err := h.Request(t.Context(), extwire.MethodDecisionOwner, raw)
+		answer, ok := out.(extwire.DecisionOwnerAnswer)
+		if !handled || err != nil || !ok || answer.Found != tc.want {
+			t.Fatalf("action owner %s: handled=%v out=%+v err=%v", tc.id, handled, out, err)
+		}
+	}
+	h.opts.Assistant = func(_ context.Context, method string, params json.RawMessage) (json.RawMessage, error) {
+		if method != assistantwire.MethodDecisionOwner {
+			t.Fatalf("assistant method = %q", method)
+		}
+		var in extwire.DecisionOwner
+		_ = json.Unmarshal(params, &in)
+		return json.Marshal(extwire.DecisionOwnerAnswer{Found: in.ID == "odc_known"})
+	}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{{"odc_known", true}, {"odc_missing", false}} {
+		raw, _ := json.Marshal(extwire.DecisionOwner{ID: tc.id})
+		out, handled, err := h.Request(t.Context(), extwire.MethodDecisionOwner, raw)
+		answer, ok := out.(extwire.DecisionOwnerAnswer)
+		if !handled || err != nil || !ok || answer.Found != tc.want {
+			t.Fatalf("outside owner %s: handled=%v out=%+v err=%v", tc.id, handled, out, err)
+		}
+	}
+}
+
 func TestNodeActionApprovalBindsTheAgentAudience(t *testing.T) {
 	h := newTestManager(t)
 	h.opts.Devices = &mirrorDevices{ids: []string{"box"}, names: map[string]string{"box": "Box"}}
 	id := connector.ActionApprovalID("action:node-audience")
 	expires := time.Now().Add(10 * time.Minute).UTC()
 	audience := "agent-api:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	raw, _ := json.Marshal(map[string]any{"id": id, "expires_at": expires, "audience": audience})
+	raw, _ := json.Marshal(map[string]any{"id": id, "expires_at": expires, "audience": audience, "account": "2"})
 	if _, err := h.RecordNodeActionApproval(t.Context(), "box", raw); err != nil {
 		t.Fatal(err)
 	}
 	changed := actionFingerprint(expires)
 	changed.Audience = "agent-api:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	changed.Account = "2"
 	if _, err := h.actionApprovals.consume(id, changed); err == nil {
 		t.Fatal("a node capability was consumed for a different Agent credential")
 	}
+	changedAccount := actionFingerprint(expires)
+	changedAccount.Audience = audience
+	changedAccount.Account = "3"
+	if _, err := h.actionApprovals.consume(id, changedAccount); err == nil {
+		t.Fatal("a node capability was consumed for a different Agent API account")
+	}
 	matching := actionFingerprint(expires)
 	matching.Audience = audience
+	matching.Account = "2"
 	if _, err := h.actionApprovals.consume(id, matching); err != nil {
 		t.Fatalf("the matching audience could not consume: %v", err)
 	}

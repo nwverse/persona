@@ -26,6 +26,7 @@ type actionApprovalBook struct {
 type actionApprovalEntry struct {
 	expires  time.Time
 	audience string
+	account  string
 	consumed bool
 }
 
@@ -75,11 +76,18 @@ func (b *actionApprovalBook) register(id string, expires time.Time) error {
 }
 
 func (b *actionApprovalBook) registerForAudience(id string, expires time.Time, audience string) error {
+	return b.registerForAgent(id, expires, audience, "")
+}
+
+func (b *actionApprovalBook) registerForAgent(id string, expires time.Time, audience, account string) error {
 	if !validActionApprovalID(id) {
 		return actionApprovalErr(http.StatusBadRequest, "invalid_decision", "the action approval id is invalid")
 	}
 	if audience != "" && !validAgentAPIAudience(audience) {
 		return actionApprovalErr(http.StatusBadRequest, "invalid_decision", "the Agent API audience is invalid")
+	}
+	if audience != "" && (strings.TrimSpace(account) != account || len(account) > 64) {
+		return actionApprovalErr(http.StatusBadRequest, "invalid_decision", "the Agent API account is invalid")
 	}
 	now := b.clock()
 	if !expires.After(now) || expires.After(now.Add(15*time.Minute)) {
@@ -91,11 +99,25 @@ func (b *actionApprovalBook) registerForAudience(id string, expires time.Time, a
 		b.entries = map[string]actionApprovalEntry{}
 	}
 	b.pruneLocked(now)
-	if entry, ok := b.entries[id]; ok && (entry.consumed || entry.audience != audience) {
-		return actionApprovalErr(http.StatusConflict, "decision_consumed", "the action approval was already consumed or has a different audience")
+	if entry, ok := b.entries[id]; ok {
+		if entry.audience != audience || entry.account != account {
+			return actionApprovalErr(http.StatusConflict, "decision_consumed", "the action approval has a different audience or account")
+		}
+		// A connector retry reaches this registration before its successful-reply
+		// cache. Keep the original entry byte-for-byte: an identical retry is
+		// idempotent, but neither its expiry nor a consumed marker may be reset.
+		return nil
 	}
-	b.entries[id] = actionApprovalEntry{expires: expires.UTC(), audience: audience}
+	b.entries[id] = actionApprovalEntry{expires: expires.UTC(), audience: audience, account: account}
 	return nil
+}
+
+func (b *actionApprovalBook) has(id string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.pruneLocked(b.clock())
+	_, ok := b.entries[id]
+	return ok
 }
 
 func (b *actionApprovalBook) consume(id string, in assistantwire.OutsideWriteApproval) (time.Time, error) {
@@ -118,7 +140,7 @@ func (b *actionApprovalBook) consume(id string, in assistantwire.OutsideWriteApp
 	}
 	validMethod := false
 	switch in.Method {
-	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions:
 		validMethod = true
 	}
 	hash, err := hex.DecodeString(in.BodySHA256)
@@ -127,7 +149,7 @@ func (b *actionApprovalBook) consume(id string, in assistantwire.OutsideWriteApp
 		len(in.Path) > 8192 || len(in.Query) > 8192 || strings.ContainsAny(in.Query, "\r\n") ||
 		strings.TrimSpace(in.Account) != in.Account || len(in.Account) > 64 ||
 		err != nil || len(hash) != 32 || in.BodySHA256 != strings.ToLower(in.BodySHA256) || in.ApproveOption != "Approve" ||
-		(entry.audience != "" && in.Audience != entry.audience) {
+		(entry.audience != "" && (in.Audience != entry.audience || in.Account != entry.account)) {
 		return time.Time{}, actionApprovalErr(http.StatusForbidden, "decision_scope_mismatch", "the action approval fingerprint is invalid")
 	}
 	entry.consumed = true

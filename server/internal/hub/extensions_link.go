@@ -459,6 +459,18 @@ var ownedPrefixes sync.Map
 
 // relayToManager is relayTo the manager r is for: its machine's ({mid}), else the one it names, else the default.
 func (h *Hub) relayToManager(w http.ResponseWriter, r *http.Request, admin bool) {
+	if outsideDecisionConsume(r) && namedManager(r) == "" {
+		// The capability is only a random id; it does not name its manager. Locate
+		// it read-only first so a non-default manager's decision is not consumed
+		// (or falsely reported missing) on the default one.
+		id, err := h.outsideDecisionOwner(r.Context(), r)
+		if err != nil {
+			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, err)
+			return
+		}
+		h.relayTo(w, r, admin, id)
+		return
+	}
 	by := h.byRequest
 	if r.PathValue("mid") != "" {
 		by = h.byMachine

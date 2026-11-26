@@ -211,6 +211,24 @@ func outsideDecisionConsume(r *http.Request) bool {
 	return false
 }
 
+func (h *Hub) outsideDecisionOwner(ctx context.Context, r *http.Request) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	lookup := extwire.DecisionOwner{ID: r.PathValue("id"), Action: strings.HasPrefix(r.URL.Path, "/api/v1/connector-decisions/")}
+	for _, manager := range h.listManagers(ctx) {
+		var answer extwire.DecisionOwnerAnswer
+		if err := h.callBus(ctx, manager, extwire.MethodDecisionOwner, lookup, &answer); err != nil {
+			return "", err
+		}
+		if answer.Found {
+			return manager, nil
+		}
+	}
+	// No manager claimed the id. Keep the ordinary not-found response from the
+	// default manager; a lookup error above never turns into this fallback.
+	return h.defaultOwner(ctx), nil
+}
+
 func (h *Hub) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		public := h.sourceOf(r) == sourcePublic

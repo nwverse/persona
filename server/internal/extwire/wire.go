@@ -97,6 +97,9 @@ const (
 	EventErrorReports = "extensions.error_reports"
 	// MethodHubCall: HubCall → the answer: what the hub's own features ask of the manager's (Hub*).
 	MethodHubCall = "extensions.hub_call"
+	// MethodDecisionOwner: DecisionOwner → DecisionOwnerAnswer. A capability-only
+	// consume asks which manager holds its random id before any write is consumed.
+	MethodDecisionOwner = "extensions.decision_owner"
 )
 
 // What the hub's own features ask of the manager (HubCall.Method).
@@ -122,6 +125,19 @@ const (
 	// HubPushBackground: {payload, devices} → {}: a silent push to those devices (an extension's widget).
 	HubPushBackground = "push.background"
 )
+
+// DecisionOwner locates one outside or connector action approval without
+// exposing its owner-facing text or request fingerprint.
+type DecisionOwner struct {
+	ID     string `json:"id"`
+	Action bool   `json:"action,omitempty"`
+}
+
+// DecisionOwnerAnswer says whether the called manager holds the id, including
+// an answered or consumed record whose replay must still be refused there.
+type DecisionOwnerAnswer struct {
+	Found bool `json:"found"`
+}
 
 // Authorize is MethodAuthorize's params: the token's hash, and the route the request is for (its pattern on the
 // hub's mux, its method and its escaped path: the one the hub relays, so the check is made on the route the request

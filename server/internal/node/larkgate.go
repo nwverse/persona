@@ -39,11 +39,12 @@ import (
 
 // larkCall is one gated command's or lark-cli's invocation read off a Bash command.
 type larkCall struct {
-	Gate   int    // the command gate (index in the config's Gates); -1 for lark-cli
-	Method string // HTTP method; "CLI" for a lark-cli command (larkcligate.go)
-	Path   string // without /agent/v1 and the query string; a lark-cli command's words joined by "/"
-	Query  string
-	Body   string // JSON text, a file's content (@file, cut), or "upload file X" (in Chinese)
+	Gate    int    // the command gate (index in the config's Gates); -1 for lark-cli
+	Method  string // HTTP method; "CLI" for a lark-cli command (larkcligate.go)
+	Path    string // without /agent/v1 and the query string; a lark-cli command's words joined by "/"
+	Query   string
+	Body    string // JSON text, a file's content (@file, cut), or "upload file X" (in Chinese)
+	Account string // Agent API's actual routed account; "1" is normalized to the primary "".
 
 	CLI  bool     // lark-cli
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown, larkCLIMissing)
@@ -127,7 +128,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		// Only a rule-allowed call needs no query-bound grant. A confirmation-required GET needs one too, and a non-Auth
 		// script has no proxy backstop. Writes in a space or remote runtime always need confirmation. Refuse every unknown query in those cases
 		// rather than confirm different bytes.
-		needsConfirmation := decision != "allow" || (confirmWrites && !larkRead(c))
+		needsConfirmation := decision != "allow" || (confirmWrites && !larkCallRead(cfg.Gates, c))
 		if c.queryUnknown && needsConfirmation {
 			return "deny", "查询要在执行时才能确定，无法绑定这次确认；请把查询直接写在路径或 --url-query 参数里。", nil
 		}
@@ -149,7 +150,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		// A write through a gate whose credentials are at the proxy goes there only as a call read off the command and
 		// let through here: in a command the gate cannot follow it would be refused after the phone said yes.
 		for _, c := range v.calls {
-			if !c.CLI && c.Gate >= 0 && cfg.Gates[c.Gate].Auth != nil && !larkRead(c) {
+			if !c.CLI && c.Gate >= 0 && cfg.Gates[c.Gate].Auth != nil && !larkCallRead(cfg.Gates, c) {
 				return "deny", "Proxy-authenticated writes must be standalone gated calls, outside loops, scripts and substitutions.", nil
 			}
 		}
@@ -205,7 +206,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			}
 			decision = "confirm" // unconfigured outbound/deletion still requires confirmation
 		}
-		if decision == "allow" && confirmWrites && !larkRead(c) {
+		if decision == "allow" && confirmWrites && !larkCallRead(cfg.Gates, c) {
 			decision = "confirm"
 		}
 		switch decision {

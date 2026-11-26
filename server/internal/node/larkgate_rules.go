@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -38,7 +39,7 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 		return "confirm"
 	}
 	rules := cfg.Gates[c.Gate].Rules
-	read := c.Method == "GET" || c.Method == "HEAD"
+	read := larkGateRead(cfg.Gates[c.Gate], c)
 	bodyScoped := read && slices.ContainsFunc(rules, func(candidate proto.LarkRule) bool {
 		return len(candidate.Body) > 0 &&
 			(candidate.Method == "*" || strings.EqualFold(candidate.Method, c.Method)) &&
@@ -68,6 +69,39 @@ func larkRead(c larkCall) bool {
 		return larkCLIReads(c.Risk)
 	}
 	return c.Method == "GET" || c.Method == "HEAD"
+}
+
+// Agent API's NOT_READ_ONLY_GET_ROUTES: these GET/HEAD routes mint or hand
+// out credentials, export the local database, or sign in as the user. Ordinary
+// GET/HEAD routes remain card-free; only this explicit contract is a write.
+var agentAPIWriteGETRoutes = []string{
+	"/conversations/*/qr-code",
+	"/calendar/event/*/share-link",
+	"/contacts/my-link",
+	"/documents/share/password",
+	"/links/open",
+	"/meetings/participants/*/audio",
+	"/maintenance/export",
+}
+
+func larkGateRead(g proto.CommandGate, c larkCall) bool {
+	if larkRead(c) && (c.Method == http.MethodGet || c.Method == http.MethodHead) {
+		if _, ok := gateAgentToken(g); ok {
+			for _, route := range agentAPIWriteGETRoutes {
+				if pathMatches(route, c.Path) {
+					return false
+				}
+			}
+		}
+	}
+	return larkRead(c)
+}
+
+func larkCallRead(gates []proto.CommandGate, c larkCall) bool {
+	if !c.CLI && c.Gate >= 0 && c.Gate < len(gates) {
+		return larkGateRead(gates[c.Gate], c)
+	}
+	return larkRead(c)
 }
 
 // matchLark is the action of the first rule that matches the call.
@@ -181,7 +215,7 @@ func larkSummaryWithContext(gates []proto.CommandGate, calls []larkCall, context
 			b.WriteString("\n\n")
 		}
 		what := "写操作"
-		if larkRead(c) {
+		if larkCallRead(gates, c) {
 			what = "读操作"
 		}
 		for _, a := range larkActions {
