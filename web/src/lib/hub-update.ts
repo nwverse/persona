@@ -196,18 +196,8 @@ export function hubNotice(s: HubUpdateStatus | null | undefined, dismissed: read
 }
 
 export function hubNoticeText(n: HubNotice): string {
-  switch (n.kind) {
-    case "updating":
-      return t("lib-hub-update.notice_updating", { what: n.what });
-    case "rolled_back":
-      return n.why; // the hub's own words
-    case "auto_on":
-      return t("lib-hub-update.notice_auto_on");
-    case "available":
-      return t("lib-hub-update.notice_available", { version: n.version });
-    case "new_image":
-      return t("lib-hub-update.notice_new_image", { version: n.version });
-  }
+  if (n.kind === "rolled_back") return n.why;
+  return t(`lib-hub-update.notice_${n.kind}`, n);
 }
 
 const DISMISSED_KEY = "persona.hubNotice.dismissed";
