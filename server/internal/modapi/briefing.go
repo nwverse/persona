@@ -3,6 +3,8 @@ package modapi
 import (
 	"context"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // FeedKindBrief is the chat feed item kind for a routine briefing's fixed facts.
@@ -90,11 +92,19 @@ type DeliveryPort interface {
 	MarkListed(f *BriefSnapshot)
 }
 
+// BriefCardPage pairs a physical card with its own plain-text substitute.
+type BriefCardPage struct {
+	Card     *assistantwire.BotCard
+	Fallback string
+}
+
 // PromptPort renders briefing prompts, counts runes, formats plain board rows, strips context tags and translates i18n keys.
 type PromptPort interface {
 	RenderBriefFacts(BriefFacts) string
 	RenderNorthStarFacts(lines []string) string
 	BriefDayRunes(day *BriefDay) int
+	BoardRowMarkdown(lang string, n int, row BriefBoardRow) string
+	OpenStageBar(lang, stage string) string
 	BoardRowPlain(lang string, n int, row BriefBoardRow) string
 	Translate(lang, key string, args map[string]any) string
 	StripContext(text string) string

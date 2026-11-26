@@ -301,6 +301,10 @@ func (fakePrompts) BriefDayRunes(d *modapi.BriefDay) int {
 	}
 	return n
 }
+func (fakePrompts) BoardRowMarkdown(_ string, n int, r modapi.BriefBoardRow) string {
+	return fmt.Sprintf("**%d** %s", n, r.Summary)
+}
+func (fakePrompts) OpenStageBar(_, stage string) string { return stage }
 func (fakePrompts) BoardRowPlain(_ string, n int, r modapi.BriefBoardRow) string {
 	return fmt.Sprintf("%d. %s", n, r.Summary)
 }

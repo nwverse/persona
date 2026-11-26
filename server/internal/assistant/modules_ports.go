@@ -537,6 +537,14 @@ func (briefPromptPort) RenderNorthStarFacts(lines []string) string {
 func (briefPromptPort) BriefDayRunes(day *modapi.BriefDay) int { return prompts.BriefDayRunes(day) }
 func (briefPromptPort) StripContext(text string) string        { return stripContext(text) }
 
+func (briefPromptPort) BoardRowMarkdown(lang string, n int, row modapi.BriefBoardRow) string {
+	return boardRowMarkdown(i18n.Lang(lang), n, fromBriefBoardRow(row))
+}
+
+func (briefPromptPort) OpenStageBar(lang, stage string) string {
+	return stageBar(i18n.Lang(lang), stage, false)
+}
+
 func (briefPromptPort) BoardRowPlain(lang string, n int, row modapi.BriefBoardRow) string {
 	return boardRowPlain(i18n.Lang(lang), n, row)
 }
