@@ -4,7 +4,8 @@
 // History (where its row is, by the hub's features), All Persona chats and New chat. Scheduled tasks and History both
 // drew `clock`, the main chat and Overview both `home`. The glyphs are compared as drawn (the svg's markup), so two
 // icon names with the same paths count as one glyph. The entries this issue changed, Overview and History, also draw no
-// glyph an extension's page can name: an extension may name any icon of the vocabulary for its nav_page.
+// glyph an extension's page can name: an extension may name any icon of the vocabulary for its nav_page. Every
+// History row, the sidebar's (in either place) and the phone's Agents page's, draws HISTORY_ICON.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,7 +33,7 @@ import { Icon, type IconName } from "../ui/icons";
 import { navIcon } from "./extensions/ExtensionSlots";
 import { NEW_ICON_GLYPH } from "./extensions/icon-map";
 import { ROW_ICON } from "./extensions/ViewBody";
-import { type NavPage, Sidebar, SidebarRail, useNavPages } from "./Sidebar";
+import { AgentsList, type NavPage, Sidebar, SidebarRail, useNavPages } from "./Sidebar";
 import { HISTORY_ICON } from "./SidebarParts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -167,6 +168,16 @@ describe("the sidebar's built-in entries (#16282)", () => {
     };
     expect(drawn.overview && drawn.history).toBeTruthy();
     expect({ overview: extension.get(drawn.overview!), history: extension.get(drawn.history!) }).toEqual({ overview: undefined, history: undefined });
+  });
+
+  it.each([
+    { where: "the sidebar, after the Agents list", features: [], text: "work-entry.title", view: () => <Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} /> },
+    { where: "the sidebar, under Pending", features: ["sessions_dimensions", "lark"], text: "work-entry.all", view: () => <Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} /> },
+    { where: "the phone's Agents page", features: [], text: "work-entry.title", view: () => <AgentsList route={{ name: "agent-list" }} onNewAgent={() => {}} /> },
+  ])("History draws HISTORY_ICON in $where", async ({ features, text, view }) => {
+    const history = [...drawnGlyphs([HISTORY_ICON]).keys()][0];
+    await render(features, view());
+    expect(glyph(linkTo(href({ name: "terminal" }), t(text)))).toBe(history);
   });
 
   it("draw pairwise distinct icons on the folded rail", async () => {
