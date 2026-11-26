@@ -14,18 +14,26 @@ import (
 )
 
 func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
-	for _, layout := range []repository.Layout{repository.LayoutRoot, repository.LayoutContainer} {
-		t.Run(string(layout), func(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		layout   repository.Layout
+		branches []string
+	}{
+		{name: "root", layout: repository.LayoutRoot, branches: []string{"trunk"}},
+		{name: "container", layout: repository.LayoutContainer, branches: []string{"trunk", "develop"}},
+		{name: "no repositories", layout: repository.LayoutContainer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			n, f, home, runtimeHost := piHerdrNode(t)
 			// A workspace root may not pass through a symlink (workspaceNoLinks), and macOS keeps t.TempDir() behind
 			// /var: take the home resolved, as workspaceTemp does for the other backend workspace tests.
 			home = resolved(t, home)
 			n.home, n.dir = home, filepath.Join(home, ".persona")
-			urls := []string{workspaceRemote(t, "trunk")}
-			if layout == repository.LayoutContainer {
-				urls = append(urls, workspaceRemote(t, "develop"))
+			var urls []string
+			for _, branch := range tc.branches {
+				urls = append(urls, workspaceRemote(t, branch))
 			}
-			req := taskworkspace.Request{WorkspaceID: "ws_example", OperationID: "op_example", UseID: "launch_example", Plan: workspacePlan(t, home, layout, urls...)}
+			req := taskworkspace.Request{WorkspaceID: "ws_example", OperationID: "op_example", UseID: "launch_example", Plan: workspacePlan(t, home, tc.layout, urls...)}
 			root := req.Plan.RootPath
 			ready := workspaceCall(t, n, "prepare", req)
 			if ready.State != "ready" {
@@ -83,6 +91,9 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 			if r := workspaceCall(t, n, "release", req); r.Error == nil {
 				t.Fatal("released without evidence of stop")
 			}
+			if r := workspaceCall(t, n, "cleanup", req); r.State != "ready" || r.Error == nil || r.Error.Code != "worktree_in_use" {
+				t.Fatal("cleanup did not preserve the active workspace", r.State, r.Error)
+			}
 			if err := n.guardBackendDeletion(root); err == nil {
 				t.Fatal("native cleanup can remove the backend root")
 			}
@@ -103,7 +114,7 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 					t.Fatal(msg)
 				}
 			}
-			if _, err := request(t, n, "git.backend.status", map[string]any{"backend_workspace_id": req.WorkspaceID, "repo_id": "absent", "cwd": ready.Repositories[0].Path}); err == nil {
+			if _, err := request(t, n, "git.backend.status", map[string]any{"backend_workspace_id": req.WorkspaceID, "repo_id": "absent", "cwd": root}); err == nil {
 				t.Fatal("fell back to first repository")
 			}
 			n.state.stopped(startID, proto.StopTaskCompleted)
@@ -112,6 +123,12 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 			}
 			if _, err := request(t, n, "session.start", map[string]any{"resume_session_id": startID, "cwd": root}); err == nil {
 				t.Fatal("retired session reopened a released checkout")
+			}
+			if len(urls) == 0 {
+				if r := workspaceCall(t, n, "cleanup", req); r.State != "removed" || r.Error != nil {
+					t.Fatal("stopped workspace was not removed", r.State, r.Error)
+				}
+				return
 			}
 			req.UseID = "launch_next"
 			if r := workspaceCall(t, n, "acquire", req); r.Error != nil {

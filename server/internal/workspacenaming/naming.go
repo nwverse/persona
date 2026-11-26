@@ -325,7 +325,11 @@ func InPrivateState(path, state string) bool { return within(state, path) }
 // supplies its own path context. Paths are lexical, not ownership attestation.
 func Resolve(s Source, n NodeContext) Preview {
 	p := Preview{Status: "complete", Diagnostics: []Problem{}}
-	if err := Validate(s.Rules); err != nil {
+	rules := s.Rules
+	if len(s.Repositories.Repositories) == 0 {
+		rules.BranchTemplate = ""
+	}
+	if err := Validate(rules); err != nil {
 		e := err.(Problem)
 		p.add(e.Code, e.Field, "", "error")
 		return p
@@ -398,7 +402,7 @@ func Resolve(s Source, n NodeContext) Preview {
 		p.add("path_too_long", "task_directory_template", "", "error")
 		return p
 	}
-	if s.Layout != repositorywire.LayoutRoot && s.Layout != repositorywire.LayoutContainer || s.Layout == repositorywire.LayoutRoot && len(s.Repositories.Repositories) != 1 {
+	if !repositorywire.ValidLayout(s.Layout, len(s.Repositories.Repositories)) {
 		p.add("layout_invalid", "layout", "", "error")
 		return p
 	}
@@ -485,6 +489,9 @@ func Digest(p Plan) string {
 // CheckPlan checks a frozen snapshot's version and integrity. It must not resolve
 // paths again: a manager may run on a different OS than the target Node.
 func CheckPlan(p Plan) error {
+	if len(p.Repositories) != len(p.Source.Repositories.Repositories) || !repositorywire.ValidLayout(p.Source.Layout, len(p.Repositories)) {
+		return problem("layout_invalid", "layout")
+	}
 	if p.Version != Version || p.Digest == "" || p.Digest != Digest(p) {
 		return problem("plan_invalid", "plan")
 	}

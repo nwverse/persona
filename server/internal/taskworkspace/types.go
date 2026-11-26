@@ -16,6 +16,13 @@ import (
 const Capability = nodeproto.TaskWorkspace
 const MethodPrefix = "task.workspace."
 
+// Capabilities is the response to the read-only task.workspace.capabilities probe.
+type Capabilities struct {
+	Capability        string `json:"capability"`
+	Start             bool   `json:"start,omitempty"`
+	EmptyRepositories bool   `json:"empty_repositories,omitempty"`
+}
+
 type Problem struct {
 	Code        string   `json:"code"`
 	Stage       string   `json:"stage"`
@@ -130,8 +137,7 @@ func ValidRequest(r Request) bool {
 		return false
 	}
 	return workspacenaming.CheckPlan(r.Plan) == nil && r.Plan.Source.Manager != "" && r.Plan.Source.MachineID != "" &&
-		len(r.Plan.Repositories) > 0 && len(r.Plan.Repositories) <= repository.MaxTaskRepositories &&
-		len(r.Plan.Repositories) == len(r.Plan.Source.Repositories.Repositories)
+		len(r.Plan.Repositories) <= repository.MaxTaskRepositories
 }
 
 // GitEnv keeps the Node's credential helpers and SSH configuration, but removes

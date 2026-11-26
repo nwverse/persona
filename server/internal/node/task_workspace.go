@@ -347,6 +347,10 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 		if j.Launch != nil && j.Launch.SessionID == "" && j.Launch.ExpectedSessionID != "" {
 			e.observedLaunch(ctx)
 		}
+		if j.State == "ready" && !e.owned(j.Plan.RootPath) {
+			j.Error = taskworkspace.Failure("identity_mismatch", method, j.OperationID, "", j.Plan.RootPath)
+			return j.Record, nil
+		}
 		for i := range j.Repositories {
 			r := &j.Repositories[i]
 			if r.State == "materializing" && e.checkRegistration(ctx, r) == "" {
@@ -385,6 +389,9 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 		}
 		if j.State != "ready" || j.Cleanup != nil || !workspacenaming.ValidOperationID(req.UseID) {
 			return e.fail("not_ready", method, "", j.Plan.RootPath), nil
+		}
+		if !e.owned(j.Plan.RootPath) {
+			return e.fail("identity_mismatch", method, "", j.Plan.RootPath), nil
 		}
 		for i := range j.Repositories {
 			if code := e.inspect(ctx, &j.Repositories[i]); code != "" {
@@ -470,6 +477,9 @@ func (e *workspaceExecutor) prepare(ctx context.Context) taskworkspace.Record {
 	j := &e.journal
 	j.State = "preparing"
 	if !e.owned(j.Plan.RootPath) {
+		if len(j.Plan.Repositories) == 0 && j.Identities[j.Plan.RootPath] != "" {
+			return e.fail("identity_mismatch", "reserve", "", j.Plan.RootPath)
+		}
 		if err := e.claimDir(j.Plan.RootPath); err != nil {
 			return e.fail("path_conflict", "reserve", "", j.Plan.RootPath)
 		}

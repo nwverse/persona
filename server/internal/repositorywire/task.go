@@ -33,6 +33,12 @@ const (
 	LayoutContainer Layout = "container"
 )
 
+// ValidLayout allows only a single repository to occupy the task root.
+// A container can also be an empty task folder.
+func ValidLayout(layout Layout, count int) bool {
+	return layout == LayoutRoot && count == 1 || layout == LayoutContainer && count >= 0
+}
+
 // TaskWorkflow declares a repository's optional default task-collaboration cadence.
 // Unset ("") and TaskWorkflowIsolated preserve existing default behavior; TaskWorkflowSharedBranch
 // cooperates with serial workspace queueing (#13142) and multi-repository container workspaces (#13143).
@@ -201,10 +207,13 @@ func IsWindowsReservedName(name string) bool {
 
 // RepositoryPath maps only explicitly selected layouts; legacy cwd requests never use it.
 func RepositoryPath(layout Layout, alias string, count int) (string, error) {
-	if layout == LayoutRoot && count == 1 {
+	if count == 0 || !ValidLayout(layout, count) {
+		return "", Problem("invalid")
+	}
+	if layout == LayoutRoot {
 		return ".", nil
 	}
-	if layout != LayoutContainer || alias == "" {
+	if alias == "" {
 		return "", Problem("invalid")
 	}
 	if err := ValidateAlias(alias); err != nil {

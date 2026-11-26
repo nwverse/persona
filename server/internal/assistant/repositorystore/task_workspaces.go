@@ -92,7 +92,7 @@ func (d *Store) BeginTaskWorkspace(ctx context.Context, todo, op, manager string
 		if err != nil {
 			return err
 		}
-		if plan.Source.Manager != manager || len(plan.Repositories) == 0 {
+		if plan.Source.Manager != manager {
 			return workspaceProblem("invalid_input", op)
 		}
 		set, err := ReadTodoRepositoriesTx(ctx, tx, todo, nil)

@@ -89,9 +89,7 @@ func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*
 		return nil, taskworkspace.Failure("node_unavailable", "plan", op, "", "")
 	}
 	probeCtx, cancelProbe := context.WithTimeout(ctx, 15*time.Second)
-	var support struct {
-		Capability string `json:"capability"`
-	}
+	var support taskworkspace.Capabilities
 	err = s.call(probeCtx, plan.Source.MachineID, "task.workspace.capabilities", nil, &support)
 	cancelProbe()
 	if err != nil {
@@ -101,7 +99,7 @@ func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*
 		}
 		return nil, taskworkspace.Failure(code, "capability", op, "", "")
 	}
-	if support.Capability != taskworkspace.Capability {
+	if support.Capability != taskworkspace.Capability || len(plan.Repositories) == 0 && !support.EmptyRepositories {
 		return nil, taskworkspace.Failure("unsupported", "capability", op, "", "")
 	}
 	current, err := st.TaskWorkspace(ctx, id, "")

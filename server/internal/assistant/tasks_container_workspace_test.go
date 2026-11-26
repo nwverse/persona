@@ -296,7 +296,7 @@ func (m *containerWorkspaceMemStore) BeginTaskWorkspace(ctx context.Context, tod
 	if !ok || plan.Source.TodoID != todo {
 		return nil, taskworkspace.Failure("not_found", "manager", op, "", "")
 	}
-	if plan.Source.Manager != manager || len(plan.Repositories) == 0 {
+	if plan.Source.Manager != manager {
 		return nil, taskworkspace.Failure("invalid_input", "manager", op, "", "")
 	}
 	ids := make([]string, 0, len(plan.Source.Repositories.Repositories))

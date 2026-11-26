@@ -490,7 +490,9 @@ func (e *workspaceExecutor) cleanup(ctx context.Context, req taskworkspace.Reque
 		return j.Record
 	}
 	if len(j.Uses) > 0 || e.n.agentRunsIn(j.Plan.RootPath) {
-		return e.fail("worktree_in_use", "cleanup", "", j.Plan.RootPath)
+		result := j.Record
+		result.Error = taskworkspace.Failure("worktree_in_use", "cleanup", j.OperationID, "", j.Plan.RootPath)
+		return result
 	}
 	if !e.owned(j.Plan.RootPath) {
 		if _, err := os.Lstat(j.Plan.RootPath); !errors.Is(err, os.ErrNotExist) || j.Cleanup == nil && !e.hasNoResources(j.Plan.RootPath) {
