@@ -1036,11 +1036,15 @@ func (s *Service) todoRoutes() {
 	s.todoRetitleRoute()
 	s.todoReorganizeRoute()
 	s.todoDecisionsBatchRoute()
+	s.todoBlockersRoutes()
+	s.todoMergeTrainRoutes()
+	s.todoTopologyOpsRoutes()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
 	s.todoHandoffRoutes()
 	s.todoAskRoutes()
 	s.todoTimelineRoutes()
+	s.todoCausalTraceRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
@@ -1072,8 +1076,9 @@ func (s *Service) todoRoutes() {
 		var board *todoBoardProjection
 		if !isExtension {
 			sharedBlockers = p.sharedBlockers()
-			if s.settings(r.Context()).todosV2On() {
-				board = buildTodoBoardProjection(list, s.todoBoardDirectionLabels(r.Context()))
+			if cfg := s.settings(r.Context()); cfg.todosV2On() {
+				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
+				board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
 			}
 		}
 		if paged {
@@ -2023,6 +2028,12 @@ func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, titl
 				Agent: agent, StartError: startError, Source: source, Via: via})
 		}
 		target.UpdatedAt = now
+		if target.Supervision != nil && target.Supervision.Progress != nil && target.Supervision.Progress.Kind == upReportDone &&
+			(target.Supervision.Progress.machine != mid || target.Supervision.Progress.session != sid) {
+			v := target.Supervision.clone()
+			v.Progress = nil
+			target.Supervision = v
+		}
 		if target.DoneAt == nil { // as loadTodosLocked has it: only an open todo's agents work for it
 			s.todos.activeBySession[[2]string{mid, sid}] = todoID
 		}
