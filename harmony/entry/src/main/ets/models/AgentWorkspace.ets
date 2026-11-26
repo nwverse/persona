@@ -158,6 +158,15 @@ export class AgentWorkspace {
   historySupported(): boolean { return !!this.client?.directoryOwners().some((owner: ClientModel) => owner.features.includes('agent_session_archives')); }
   rowOnline(row: ResourceRow): boolean { return this.ownerFor(row)?.connected === true; }
   hasRows(): boolean { return this.groups.some((group: AgentWorkspaceGroup) => group.totalRowCount > 0); }
+  /** No list has arrived yet, from the Hub or a launch snapshot: no rows means "not known yet", not "none". */
+  awaitingSource(): boolean {
+    return !this.history && !!this.client && !this.client.sessionsReady && !this.client.directoryReady;
+  }
+  /** Why an unknown list stays unknown: the owner's connection error, '' while it is still connecting. */
+  sourceProblem(): string {
+    if (!this.awaitingSource() || !this.client || this.client.connected || !this.client.error) return '';
+    return this.client.error === 'offline' ? 'hub_unreachable' : this.client.error;
+  }
   /** Each row on screen once, though Needs you repeats a row from its group. */
   visibleRows(): ResourceRow[] {
     const rows: ResourceRow[] = [], seen = new Set<string>();
