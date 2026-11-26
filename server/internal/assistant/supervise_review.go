@@ -954,6 +954,17 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 				go s.taskEndedNotice(context.WithoutCancel(ctx), t, accepted, reason)
 			}
 		}
+			if s.settings(ctx).todosV2On() {
+				if recErr := s.ResetSupervisedTaskRecovery(ctx, id); recErr != nil {
+					s.logf("task %s: reset todos_v2 restart recovery: %v", id, recErr)
+				}
+				if accepted && row.DoneAt != nil {
+					if _, blkErr := s.ReconcileTodoBlockers(ctx, id); blkErr != nil {
+						s.logf("task %s: reconcile todos_v2 blockers: %v", id, blkErr)
+					}
+				}
+			}
+		}
 	}, nil
 }
 
