@@ -598,8 +598,10 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 				attributed = true
 			}
 		}
-		if m.SenderName != "" {
+		nameChanged := false
+		if m.SenderName != "" && p.Name != m.SenderName {
 			p.Name = m.SenderName
+			nameChanged = true
 		}
 		before, seen := len(p.Chats), p.LastSeen
 		p.Chats = addUnique(p.Chats, c.ID)
@@ -608,7 +610,7 @@ func (e *Engine) notePerson(c *Chat, source string, m SourceMessage) {
 		}
 		e.addHandles(pid, m.SenderHandles)
 		// Only write when something a reader cares about changed (not on every message of a busy group).
-		return !p.Persisted || attributed || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
+		return !p.Persisted || attributed || nameChanged || len(p.Chats) != before || p.LastSeen.Sub(seen) > time.Hour
 	})
 	if linked {
 		c.People = addUnique(c.People, pid)

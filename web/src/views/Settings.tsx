@@ -7,13 +7,15 @@ import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, enc, errorText } from "../lib/api";
-import { splitDevices } from "../lib/devices";
+import { groupDevices, type DeviceGroupKey } from "../lib/devices";
 import { ago } from "../lib/format";
 import { agentName, isTraeCli } from "../lib/agent-kind";
 import { install, useInstall, type InstallState } from "../lib/pwa";
 import { useStore } from "../lib/store";
 import { composing } from "../lib/send-history";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast, useMenu } from "../ui/atoms";
+import { NoticeDot } from "../ui/NoticeDot";
+import { useHasUnseenLabs } from "../lib/labs-seen";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
@@ -49,8 +51,9 @@ import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
 import { extensionsRoute, routeSub } from "../lib/extension-market";
-import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager } from "../lib/manager-choice";
+import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
+import { RecoverySettings } from "./settings/RecoverySettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
 import { LauncherQuota } from "./settings/LauncherQuota";
 import { LauncherExtensionSections } from "./settings/ExtensionView";
@@ -181,9 +184,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // assistant only. Their merged lists are filtered by it, its configuration editors name it, and what else they ask of
   // its manager (ASSISTANT_PREFIXES) names it while the page is open.
   const picked = useChosenManager();
-  const integrationsV2 = useStore((s) => s.assistant?.integrations_v2 === true && (!picked || !s.assistant?.manager || sameManager(s.assistant.manager, picked)));
-  const integrationsKnown = useStore((s) => s.loaded !== false || s.assistant != null);
-  const integrationsMode: boolean | "loading" = integrationsKnown ? integrationsV2 : "loading";
+  const targetManager = useShownManager();
+  const integrationsMode = useStore((s) =>
+    s.assistant && sameManager(s.assistant.manager, targetManager) ? s.assistant.integrations_v2 === true : "loading",
+  );
+  const integrationsV2 = integrationsMode === true;
   const integrationsModeRef = useRef<boolean | "loading">(integrationsMode);
   integrationsModeRef.current = integrationsMode;
   // The category (null: none named, the phone's list) and the purpose (model configuration) or extension ("Extensions") it has open.
@@ -226,6 +231,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
   useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
   // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
@@ -314,6 +320,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const search = searchSettings(query, integrationsV2);
   // Inbox Sources' relationship view (#5741) takes the wide page while it is shown; the list keeps its width.
   const [sourcesGraph, setSourcesGraph] = useState(false);
+  // Wide extension plugin_page views (code/diff/split/columns/graph/scene/map) expand to the full extension page width.
+  const [extensionPageWide, setExtensionPageWide] = useState(false);
   const [scrollAnchor, setScrollAnchor] = useState<string | null>(null);
   useEffect(() => {
     if (!scrollAnchor) return;
@@ -327,7 +335,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const show = (el: HTMLElement) => {
       clearTimeout(timer);
       const row = el.hasAttribute("data-settings-row");
-      el.scrollIntoView({ block: row ? "center" : "start" });
+      el.scrollIntoView?.({ block: row ? "center" : "start" });
       card = row ? el : el.querySelector<HTMLElement>(":scope > div") ?? el;
       prev = card.style.boxShadow;
       card.style.boxShadow = "inset 0 0 0 2px var(--accent)";
@@ -364,12 +372,20 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     pick(g.tab, g.sub ?? null, agent);
     setScrollAnchor(g.anchor);
   };
+  const openSettingsUrl = (url: string) => {
+    const target = settingsTarget(url);
+    if (!target || !(isCoreTab(target.tab) || isModuleTab(target.tab))) return;
+    pick(target.tab as Tab, target.sub);
+    if (target.anchor) setScrollAnchor(target.anchor);
+  };
+  const onExtensionPage =
+    (tab === "extensions" && extensionsRoute(sub).kind === "page") ||
+    (tab === "integrations" && parseIntegrationsSub(sub).kind === "page");
   const integrationsSplit =
     !listed &&
     !phone &&
     twoCol &&
     tab === "integrations" &&
-    integrationsKnown &&
     integrationsV2 &&
     isIntegrationDetailRoute(parseIntegrationsSub(sub));
   return (
@@ -413,7 +429,14 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               className={
                 integrationsSplit
                   ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
-                  : cx("mx-auto px-5 py-6 sm:px-8", tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph) ? "max-w-[1120px]" : "max-w-[760px]")
+                  : cx(
+                      "mx-auto px-5 py-6 sm:px-8",
+                      onExtensionPage && extensionPageWide
+                        ? "max-w-[1680px]"
+                        : tab === "integrations" || tab === "channels" || tab === "connectors" || tab === "extensions" || (tab === "sources" && sourcesGraph)
+                          ? "max-w-[1120px]"
+                          : "max-w-[760px]",
+                    )
               }
               style={{ animation: `fade-up 320ms ${EASE} both` }}
             >
@@ -430,7 +453,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "prompts" && <SavedPrompts />}
               {tab === "sources" && (
                 <Suspense fallback={<Loading />}>
-                  <SourcesUI title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
+                  <SourcesUI key={sourcesManager} manager={sourcesManager} title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
                 </Suspense>
               )}
               {tab === "models" && <>
@@ -447,7 +470,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Group title={t("settings.agent_preferences")} anchor="agents-display"><AgentsDisplayRow /></Group>
                 <AgentSections section={at.section} />
               </>}
-              {tab === "integrations" && (integrationsKnown ? (
+              {tab === "integrations" && (integrationsMode !== "loading" ? (
                 <Suspense fallback={integrationsSplit ? <div className="p-6"><Loading /></div> : <Loading />}>
                   <Integrations
                     open={sub}
@@ -455,10 +478,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                     headerBack={phone}
                     initialFilter={normalizeIntegrationFilter(new URLSearchParams(location.search).get("filter"))}
                     onOpen={(id) => pick("integrations", id)}
-                    onSettings={(url) => {
-                      const target = settingsTarget(url);
-                      if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
-                    }}
+                    onPageWide={setExtensionPageWide}
+                    onSettings={openSettingsUrl}
                   />
                 </Suspense>
               ) : (
@@ -467,16 +488,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList openBeside={sub} onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
-                  <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
-                    const target = settingsTarget(url);
-                    if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
-                  }} /></div>
+                  <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={openSettingsUrl} /></div>
                 </div>
               ) : (
-                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} headerBack={phone} onSettings={(url) => {
-                  const target = settingsTarget(url);
-                  if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
-                }} />
+                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} headerBack={phone} onSettings={openSettingsUrl} />
               )) : (
                 <ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} />
               ))}
@@ -494,15 +509,15 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
                 </div>
               ) : (
-                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} />
+                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} onPageWide={setExtensionPageWide} />
               )}</Suspense>}
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
               {tab === "devices" && <Devices />}
-              {tab === "hub" && <>
-                <HubSettings />
+              {tab === "hub" && (sub === "recovery" ? <RecoverySettings onBack={() => pick("hub")} /> : <>
+                <HubSettings onOpenRecovery={() => pick("hub", "recovery")} />
                 <AgentGroup />
-              </>}
+              </>)}
               {tab === "managers" && <ManagersSettings />}
               {!isCoreTab(tab) && <ModuleSettingsPage tab={tab} />}
             </div>
@@ -599,6 +614,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
   contentId: string;
 }) {
   const nav = useRef<HTMLElement>(null);
+  const labsUnseen = useHasUnseenLabs();
   // A deep link or a width change can select a category below the sidebar's fold.
   useEffect(() => {
     nav.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
@@ -638,7 +654,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
       <nav ref={nav} aria-label={t("settings.categories")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
         {query ? (
           <>
-            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
             {groups.length > 0 && <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{t("settings.search_in_page")}</div>}
             {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}/${g.group}`} g={g} onGroup={onGroup} />)}
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
@@ -653,7 +669,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
                   <span className="min-w-0 flex-1"><GroupTitle group={g.key} compact /></span>
                   <GroupAction group={g.key} />
                 </div>
-                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
                 {hasFooter(g.key) && <p className="px-3 pt-1 pb-1.5 text-[11px] leading-snug text-ink-3"><GroupFooter group={g.key} /></p>}
               </div>
             );
@@ -664,7 +680,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
   );
 }
 
-function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean; contentId: string; onPick: (k: Tab) => void }) {
+function NavRow({ k, selected, notice, contentId, onPick }: { k: Tab; selected: boolean; notice: boolean; contentId: string; onPick: (k: Tab) => void }) {
   const info = tabInfo(k);
   return (
     <button
@@ -674,6 +690,7 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
       onFocus={() => preloadTab(k)}
       aria-current={selected ? "page" : undefined}
       aria-controls={contentId}
+      aria-label={notice ? `${info.label}, ${t("sidebar.labs_unseen")}` : undefined}
       className={cx(
         "relative flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] transition-colors",
         selected ? "bg-accent-tint font-medium text-accent-ink" : "text-ink-2 hover:bg-hover hover:text-ink",
@@ -682,6 +699,7 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
       {selected && <span aria-hidden className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />}
       <Icon name={info.icon} size={15} className="shrink-0" />
       <span className="truncate" title={info.label}>{info.label}</span>
+      {notice && <NoticeDot />}
     </button>
   );
 }
@@ -701,6 +719,7 @@ function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup)
 
 /** The phone's first page of Settings: the categories in grouped cards, each opening its page (as on iOS). */
 function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => boolean; integrationsV2: boolean; onPick: (k: Tab) => void }) {
+  const labsUnseen = useHasUnseenLabs();
   return (
     <nav aria-label={t("settings.categories")}>
       {navGroups(integrationsV2).map((g) => {
@@ -709,7 +728,9 @@ function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => bo
         return (
           <Group key={g.key} anchor={`nav-${g.key}`} title={<GroupTitle group={g.key} />} right={<GroupAction group={g.key} />} footer={hasFooter(g.key) ? <GroupFooter group={g.key} /> : undefined}>
             {tabs.map((k) => (
-              <Row key={k} icon={tabInfo(k).icon} label={tabInfo(k).label} hint={tabInfo(k).hint} onClick={() => onPick(k)} />
+              <Row key={k} icon={tabInfo(k).icon} label={tabInfo(k).label} hint={tabInfo(k).hint} onClick={() => onPick(k)}>
+                {k === "labs" && labsUnseen ? <><NoticeDot /><span className="sr-only">{t("sidebar.labs_unseen")}</span></> : undefined}
+              </Row>
             ))}
           </Group>
         );
@@ -1473,15 +1494,16 @@ function DetailBlock({ d, place }: { d: LauncherDetail; place?: string }) {
 // ── Devices ─────────────────────────────────────────────
 
 function Devices() {
-  const [data, setData] = useState<{ tokens: DeviceToken[]; current?: string } | null>(null);
+  const [data, setData] = useState<{ tokens: DeviceToken[]; current?: string; online: Set<string> } | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [revokingOthers, setRevokingOthers] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const load = () => {
     setLoading(true);
-    return api<{ tokens: DeviceToken[]; current?: string }>("/auth/tokens")
-      .then((r) => (setData({ tokens: r.tokens ?? [], current: r.current }), setError("")))
+    return api<{ tokens: DeviceToken[]; current?: string; online?: string[] }>("/auth/tokens")
+      .then((r) => (setData({ tokens: r.tokens ?? [], current: r.current, online: new Set(r.online ?? []) }), setError("")))
       .catch((e) => setError(errorText(e)))
       .finally(() => setLoading(false));
   };
@@ -1497,18 +1519,57 @@ function Devices() {
       toast(errorText(e), "error");
     }
   };
-  const kind: Record<string, string> = { phone: t("settings.kind_phone"), watch: t("settings.kind_watch"), other: t("settings.kind_cli"), web: t("settings.kind_web") };
+  const { groups, revoked } = groupDevices(data?.tokens ?? [], data?.current, data?.online);
+  const otherBrowsers = (groups.find((g) => g.key === "browsers")?.items ?? []).filter((tok) => tok.id !== data?.current);
+  const revokeOtherBrowsers = async () => {
+    if (revokingOthers || otherBrowsers.length === 0) return;
+    setRevokingOthers(true);
+    let ok = 0;
+    let firstError = "";
+    try {
+      for (const tok of otherBrowsers) {
+        try {
+          await api(`/auth/tokens/${enc(tok.id)}`, { method: "DELETE" });
+          ok++;
+        } catch (e) {
+          if (!firstError) firstError = errorText(e);
+        }
+      }
+      setConfirm(null);
+      if (ok > 0) toast(t("settings.revoked_other_browsers_toast", { count: ok }), "ok");
+      if (firstError) toast(firstError, "error");
+      void load();
+    } finally {
+      setRevokingOthers(false);
+    }
+  };
+
+  const kind: Record<string, string> = {
+    phone: t("settings.kind_phone"),
+    watch: t("settings.kind_watch"),
+    other: t("settings.kind_cli"),
+    web: t("settings.kind_web"),
+    link: t("settings.kind_link"),
+  };
   const roles: Record<string, string> = { answer: t("settings.role_answer"), scoped: t("settings.role_scoped") };
-  const { active, revoked } = splitDevices(data?.tokens ?? [], data?.current);
+  const groupTitle = (key: DeviceGroupKey, count: number): string => {
+    if (key === "devices") return t("settings.devices_title", { count });
+    if (key === "browsers") return t("settings.devices_group_browsers", { count });
+    if (key === "links") return t("settings.devices_group_links", { count });
+    return t("settings.devices_group_integrations", { count });
+  };
+  const iconFor = (tok: DeviceToken) =>
+    tok.kind === "phone" ? "phone" : tok.kind === "watch" ? "watch" : tok.kind === "web" ? "web" : tok.kind === "link" ? "link" : "key";
 
   // A revoked credential is shown greyed, with when it was revoked and no "Revoke" (iOS DeviceCredentials.swift).
   const row = (tok: DeviceToken, gone: boolean) => (
     <div key={tok.id} className="flex items-center gap-3 px-4 py-2.5">
-      <Icon name={tok.kind === "phone" ? "phone" : tok.kind === "watch" ? "watch" : "web"} size={15} className="shrink-0 text-ink-3" />
+      <Icon name={iconFor(tok)} size={15} className="shrink-0 text-ink-3" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className={cx("truncate text-[13px]", gone ? "text-ink-3" : "text-ink")}>{tok.name || tok.id}</span>
           {tok.id === data?.current && <Pill tone="green">{t("settings.this_browser")}</Pill>}
+          {!gone && tok.id !== data?.current && data?.online.has(tok.id) && <Pill tone="green">{t("settings.device_online")}</Pill>}
           {tok.role !== "full" && <Pill>{roles[tok.role] ?? tok.role}</Pill>}
         </div>
         <div className="mt-0.5 truncate text-[11.5px] text-ink-3">
@@ -1528,7 +1589,7 @@ function Devices() {
           onCancel={() => setConfirm(null)}
           onConfirm={() => void revoke(tok.id)}
           trigger={
-            <Button tone="quiet" onClick={() => setConfirm(tok.id)} className="text-red enabled:hover:text-red">
+            <Button tone="quiet" onClick={() => setConfirm(tok.id)} className="whitespace-nowrap text-red enabled:hover:text-red">
               {t("settings.revoke")}
             </Button>
           }
@@ -1537,6 +1598,30 @@ function Devices() {
     </div>
   );
 
+  const connectButton = (
+    <Button tone="quiet" icon="plus" onClick={() => setConnecting(true)} className="whitespace-nowrap">
+      {t("settings-connectdevice.add")}
+    </Button>
+  );
+  const revokeOthersControl = otherBrowsers.length > 0 ? (
+    <RowConfirm
+      open={confirm === "__other_browsers__"}
+      confirm={t("settings.confirm_revoke_other_browsers")}
+      onCancel={() => setConfirm(null)}
+      onConfirm={() => void revokeOtherBrowsers()}
+      trigger={
+        <Button
+          tone="quiet"
+          busy={revokingOthers}
+          onClick={() => setConfirm("__other_browsers__")}
+          className="whitespace-nowrap text-red enabled:hover:text-red"
+        >
+          {t("settings.revoke_other_browsers")}
+        </Button>
+      }
+    />
+  ) : null;
+
   return (
     <>
       {!data && !error && <Loading />}
@@ -1544,21 +1629,38 @@ function Devices() {
         <p role="alert" className="min-w-0 flex-1 text-[13px] break-words text-red">{error}</p>
         <Button icon="retry" onClick={() => void load()} busy={loading}>{t("settings.retry")}</Button>
       </div>}
-      {data && (
+      {data && groups.length === 0 && (
         <Group
           anchor="devices"
-          title={t("settings.devices_title", { count: active.length })}
+          title={t("settings.devices_title", { count: 0 })}
           footer={t("settings.devices_footer")}
-          right={
-            <Button tone="quiet" icon="plus" onClick={() => setConnecting(true)} className="whitespace-nowrap">
-              {t("settings-connectdevice.add")}
-            </Button>
-          }
+          right={connectButton}
         >
-          {active.length === 0 && <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.no_devices")}</p>}
-          {active.map((tok) => row(tok, false))}
+          <p className="px-4 py-3 text-[12.5px] text-ink-3">{t("settings.no_devices")}</p>
         </Group>
       )}
+      {data && groups.map((group, idx) => {
+        const isFirst = idx === 0;
+        const isLast = idx === groups.length - 1;
+        const right = isFirst && group.key === "browsers" && revokeOthersControl
+          ? <div className="flex items-center gap-2">{revokeOthersControl}{connectButton}</div>
+          : isFirst
+            ? connectButton
+            : group.key === "browsers"
+              ? revokeOthersControl
+              : undefined;
+        return (
+          <Group
+            key={group.key}
+            anchor={isFirst ? "devices" : undefined}
+            title={groupTitle(group.key, group.items.length)}
+            footer={isLast ? t("settings.devices_footer") : undefined}
+            right={right}
+          >
+            {group.items.map((tok) => row(tok, false))}
+          </Group>
+        );
+      })}
       {data && revoked.length > 0 && <Group title={t("settings.revoked_title", { count: revoked.length })}>{revoked.map((tok) => row(tok, true))}</Group>}
       <ConnectDevice open={connecting} onClose={() => setConnecting(false)} onPaired={() => void load()} />
     </>

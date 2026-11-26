@@ -216,11 +216,11 @@ struct TodoCountsSourceTests {
         let pending = TodoPendingWrites()
         let source = TodoCountsSource(scope: { nil }, pending: { pending.value })
         let rows = [TodoItem(id: "n", title: "N"), TodoItem(id: "a", title: "A"), TodoItem(id: "w", title: "W")]
-        let views = ["n": TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "decision"),
-                     "a": TodoSummary(phase: TodoPhase.todo, section: TodoListSection.todo, reason: "rest"),
-                     "w": TodoSummary(phase: TodoPhase.working, section: TodoListSection.working, reason: "persona_working")]
+        let views = ["n": TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.ownerDecides),
+                     "a": TodoSummary(phase: TodoPhase.todo, section: TodoListSection.todo, reason: TodoReason.rest),
+                     "w": TodoSummary(phase: TodoPhase.working, section: TodoListSection.working, reason: TodoReason.personaWorking)]
         let hubCounts = TodoCounts(open: 3, needsYou: 1, inProgress: 1,
-                                   sections: [TodoListSection.needsYou: 1, TodoListSection.todo: 1, TodoListSection.working: 1])
+                                   sections: TodoCountsSections(needsYou: 1, working: 1, todo: 1))
         for counts in [hubCounts, nil] {
             pending.value = [:]
             source.update(.init(rows: rows, views: views, counts: counts, now: Date()))
@@ -245,8 +245,8 @@ struct TodoCountsSourceTests {
         let source = TodoCountsSource(scope: { nil }, pending: { pending.value })
         let rows = [TodoItem(id: "k1", title: "K1", project: "kyoto"), TodoItem(id: "k2", title: "K2", project: "kyoto"),
                     TodoItem(id: "r1", title: "R1", project: "release")]
-        let needs = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: "decision")
-        let hubCounts = TodoCounts(open: 3, needsYou: 3, sections: [TodoListSection.needsYou: 3])
+        let needs = TodoSummary(phase: TodoPhase.needsYou, section: TodoListSection.needsYou, reason: TodoReason.ownerDecides)
+        let hubCounts = TodoCounts(open: 3, needsYou: 3, sections: TodoCountsSections(needsYou: 3))
         let places = try JSON.decoder.decode(TodoPlaces.self, from: Data(Self.places.utf8))
         source.update(.init(rows: rows, views: ["k1": needs, "k2": needs, "r1": needs], counts: hubCounts, places: places, now: Date()))
         let part = { (slug: String) in source.places.first { $0.id == "project:" + slug }?.needsYou }

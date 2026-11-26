@@ -58,7 +58,7 @@ the file is there from the tree (`git ls-tree <base> -- <path>`, which needs no 
 counting a failed read as "not at the base" would skip a never-raise comparison and pass. The migration freeze, the sleep and
 prompt-language ratchets and the counts table's base read work this way.
 
-The `guards` job (**Manual repository guards**) runs `scripts/ci/guards.sh`: repository/commit privacy and path safety, migration freeze, the sleep, web font and prompt-language ratchets ("Count ratchets" below; the wire types ratchet needs Go and runs in the server build lane) and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
+The `guards` job (**Manual repository guards**) runs `scripts/ci/guards.sh`: repository/commit privacy and path safety, migration freeze, the sleep, web font, prompt-language and wire types ratchets ("Count ratchets" below; the wire types ratchet uses the runner's Go, which fetches the toolchain `server/go.mod` names, so every run counts it whatever lanes were selected) and the no-CallKit source guard (`docs/operations/release.md`, "No CallKit").
 It checks against the base the `changes` job (**Manual path selection**) resolved, so one run has one base. No platform lane needs it:
 a failing guard says nothing about the platforms, so their results still come out, and **CI required**, which needs both
 jobs, fails and names the guards. Before #12725 the guards ran inside `changes` and a guard failure skipped every lane.
@@ -125,7 +125,10 @@ The parts are balanced by measured task time, and each lane runs its parts in on
 share runs once per lane rather than once per part (#3056). Module declarations are dynamically partitioned; unknown module prefixes
 use a fallback part, while unsupported declarations fail rather than skip coverage. Every module's complete test selector retains all
 variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-lane Gradle
-profiles and test/lint reports are uploaded for diagnosis. Local entry points without lane options still run complete verification.
+profiles and test/lint reports are uploaded for diagnosis. An independent exact-source result job then verifies run-bound receipts from
+both lanes and publishes one aggregate artifact even when a lane fails or disappears; missing receipts are recorded as unavailable rather
+than as passes or ordinary test failures, and release signing consumes only a verified aggregate. Local entry points without lane
+options still run complete verification.
 The chat module's single-JVM tests use a 1 GB heap because their Robolectric native-graphics classes accumulate resource/theme
 tables in the shared test process. A two-worker lane can run at most two test JVMs, a 2 GB combined test-heap cap when both use that
 setting; the 4 GB Gradle daemon and non-heap allocations are separate.
@@ -218,8 +221,19 @@ The ordinary `AboutVersionRegularVisualTests` invocation has its own observation
 and `regular-visual-context.json`, recorded immediately before its unchanged `xcodebuild`. Its scoped stream therefore
 does not inherit the preceding readiness invocation's horizon. A 15-second sampler records only PID, parent PID, state
 and process name for the owned Persona host and a debugserver validated under it or its owned launchd_sim. A debugger
-first seen before the host remains associated with this invocation, including when absent from a later sample; matching
-`ps -M` output is bounded. One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
+first seen before the host remains associated with this invocation through its process start time while continuously
+present, including when its launcher exits. Once a successful snapshot observes it absent, or its identity is rejected,
+current owned ancestry is required before accepting it again. This applies even when its new parent is 1 or its
+one-second `lstart` timestamp is unchanged; an equal timestamp alone cannot transfer ownership. The timestamp is
+internal only and never exported. Matching `ps -M` output is bounded and runs only after an immediate PID, start-time
+and ancestry check.
+Each sample retains its own private identity snapshot while revalidation refreshes the shared current map. A process exit
+or a missing/changed identity at either check writes explicit unavailable evidence rather than aborting later sampling or
+final collection. A further check after temporary capture replaces a mismatching successful result with an explicit
+identity-mismatch status and unavailable evidence. Portable `ps` cannot atomically validate a PID and read its threads, so
+a replacement between those kernel operations remains an inherent race; the checks narrow it rather than claim atomic
+capture. Command arguments and private identity values are not exported.
+One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
 ID and its allowlisted `state`, `pid`, `runs` and `last exit code` fields; raw arguments, programs, paths, environment
 and arbitrary values are never exported. The visual command tees its actual stdout/stderr to `ios-about-regular.log`
 without losing its exit status. Once that invocation has started, failure diagnostics require the log, publish an
@@ -308,12 +322,13 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Fixed sleeps | `time.Sleep` calls per Go test file under `server/` and `sdk/go/` | `scripts/ci/sleep_baseline.json` | `scripts/ci/sleep_ratchet.py` (guards, check-fast, merge) | `--update` |
 | Web font sizes | hard-coded px font sizes per `web/src` file | `scripts/ci/web_font_baseline.json` | `scripts/ci/web_font_ratchet.py` (guards, merge) | `--update` |
 | Prompt language | CJK prompt templates without language handling | `scripts/ci/prompt_language_baseline.json` | `scripts/ci/prompt_language_ratchet.py` (guards) | `--update` |
+| Migration enums | columns the migrations leave unchecked, named `table.column` per set: a text column named `*status`, `*kind`, `*state`, `*role`, `*phase` or `*outcome` with no CHECK on it (one a later migration adds, `NOT VALID` included, counts), and a `json` / `jsonb` column with neither a CHECK on it nor an `opaque: <reason>` comment on its line, the lines just before it or `COMMENT ON COLUMN`; replayed from the SQL with no database, generated columns left out, no ignore marker (`docs/plans/plan-typed-core.md`, step P9) | `scripts/ci/migration_enum_baseline.json` | `scripts/ci/migration_enum_check.py` (guards) | `--update` |
 | Hub hard-coded text | CJK string literals per hub and command-line file | `server/internal/i18n/hardcoded-baseline.json`, `server/internal/i18n/hardcoded-terminal-baseline.json` | `TestHardcodedChineseBaseline`, `TestHardcodedTerminalBaseline` (server lane) | `UPDATE_I18N_BASELINE=1` |
 | Web hard-coded text | CJK strings per `web/src` file | `web/src/i18n/hardcoded-baseline.json` | `web/src/i18n/catalog.test.ts` (web lane) | `UPDATE_I18N_BASELINE=1` |
 | Prompt sizes | bytes per instruction section, tool description and supervision event | `server/internal/assistant/testdata/prompt_sizes.json` | `TestPromptSizeRatchet` (server lane) | `PROMPT_SIZE_UPDATE=1` |
 | Inbox book readers | places per file that reach the Inbox's in-memory book | `inboxBookReaders` in `server/internal/archguard/inbox_slice_test.go` | `TestInboxBookStaysInTheInbox` (server lane) | by hand |
 | Domain rules | the domain rules' findings per package in server code that predates them, and the application and library packages' exported-field records, named primitive types (adapters' too), `DoneAt` / `DoneBy` writes and uses of an adapter's `Wire` (`docs/server/architecture.md` "Domain model"; its strict rule `contract-bare-id` takes no count and reads the Wire types row's baseline instead: a bare `*ID` field of a contract package fails unless its name is in `scripts/ci/wire_types_baseline.json`) | `server/internal/archguard/testdata/domain_layers/baseline.txt` | `TestDomainLayers` (server lane; check-fast, with its merge base) and each declared package's `rules_test.go` | `DOMAIN_LAYERS_UPDATE=1`, which also takes an allowance whose type landed into its count; `scripts/test/name_freezes.py pending --write --only domain_layers_baseline`, on a checkout of `main`, drops one whose PRs closed; `scripts/test/name_freezes.py moves` carries a moved package's lines |
-| Wire types | weak types in the contract packages (`server/internal/archguard/testdata/contracts.txt`) and the hub's handlers: bare `string` enum and `*ID` fields, `map[string]any`, `json.RawMessage`, `*time.Time` / `*bool` / `*string` `*Error` fields, inline `map[string]any{"type": ...}` events, `writeJSON(map...)` calls, `.Call(ctx, "literal", ...)`; counted with `go/parser` by `server/internal/archguard/wirecount`, as names with an occurrence count and no package, so a type that moves between packages is neutral; the baseline's `wide` counts (the same field names over every non-test package under `server/internal`, modules included) also make a field lifted into a contract package from a Core package or a module neutral, while a field written anew raises both and fails; a rename is a new name (lower the old, add an exception) | `scripts/ci/wire_types_baseline.json` | `scripts/ci/wire_types_ratchet.py` (server build lane; merge checks only that the baseline does not rise) | `--update`; an exception that must stay goes in the baseline's `exceptions` with a PR reference and a reason |
+| Wire types | weak types in the contract packages (`server/internal/archguard/testdata/contracts.txt`) and the hub's handlers: bare `string` enum and `*ID` fields, `map[string]any`, `json.RawMessage`, `*time.Time` / `*bool` / `*string` `*Error` fields, inline `map[string]any{"type": ...}` events, `writeJSON(map...)` calls, `.Call(ctx, "literal", ...)`; counted with `go/parser` by `server/internal/archguard/wirecount`, as names with an occurrence count and no package, so a type that moves between packages is neutral; the baseline's `wide` counts (the same field names over every non-test package under `server/internal`, modules included) also make a field lifted into a contract package from a Core package or a module neutral, while a field written anew raises both and fails; a rename is a new name (lower the old, add an exception) | `scripts/ci/wire_types_baseline.json` | `scripts/ci/wire_types_ratchet.py` (guards job); `scripts/hooks/merge-pr.sh` counts the merge result with `scripts/ci/merge_wire_types.py` and refuses a weak name the base does not already fail; with a base, both refuse an exception that adds room (an exception may only replace a name the change removed) | `--update`; an exception that must stay goes in the baseline's `exceptions` with a PR reference and a reason |
 | Android text | hard-coded Chinese / Japanese and English UI text per Kotlin file | each module's `i18n-baseline.json` and `i18n-english-baseline.json` | `scripts/app/android_i18n_check.py` (Android lane, check-fast) | `--update` |
 | Android tokens | hard-coded values and Material 3 components per file | `android/core/designsystem/tools/token-baseline.json` | `scripts/app/android_token_baseline.py` (Android lane, check-fast) | `--update-baseline` |
 | Android motion | literal animation specs per file | `android/core/designsystem/tools/motion-baseline.json` | `scripts/app/android_motion_baseline.py` (Android lane, check-fast) | `--update-baseline` |
@@ -709,6 +724,9 @@ real web app.
 ```bash
 DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,recording \
     [--checkout <dir>] [--shots ~/persona-pr-shots/<pr>] [--evidence <file>] [--strict-before-hello]
+
+# The core alone against a client: build with -tags persona_core_only and check every module is off (#16243).
+DOCKER=<docker client> python3 scripts/ci/module-e2e.py --core-only [--no-build-web] [--shots <dir>]
 ```
 
 - **Start-up**: builds `personad`, `persona-hub`, `persona-manager` and `persona-node` (a default build) and the web app
@@ -726,7 +744,8 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   composer and the Agents page in Chrome, no page or console error); per module, the hello flag, the manager's
   `modules: loaded …` line, its server-side parts (extensions, connectors, routes; table `SERVER`) and its web entry
   (table `WEB`: a selector or text on a page, what clicking it opens, an address of its own that answers like a removed
-  page while off) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
+  page while off; an entry that is data the user already has carries an `off` block instead of "absent while off",
+  below) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
   module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
   makes it a failure.
 - **What the user already has stays** (#13430, `docs/architecture/core-and-modules.md` "A module that is off keeps
@@ -737,15 +756,38 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   own routes; while off, the opened recording's detail equals the `on` phase's, the one in flight says
   `paused: "module_off"`, and every file under `recordings/` is byte for byte what it was when the phase began.
   `scripts/ci/core-only-smoke.py` checks the same on a core-only hub and with `--switched-off recording`. The web row
-  still expects the web app to hide a recording's entry while the module is off: that is the web app's behaviour
-  today, and its change is a client follow-up.
+  asserts the same rule in the browser (the `off` block of the `recording` entry in `WEB`, #15530): while the module
+  is off the recording uploaded during the `on` phase and the seeded meeting with minutes are still listed under
+  Knowledge › Meetings, each opens in the default panel's read-only detail and shows its transcript (the seeded one
+  its minutes too), none of the module's controls is on that page (rename, make or regenerate minutes, hand to an Agent, the private
+  mark, the questions asked in the meeting), and none of the module's chunks is requested, the detail opened inside
+  the app included. `on` and `back-on` are as for every entry: present, opens, its chunk loads.
+  Mail has the same kind of row against the mock hub (#15995, the `Inbox mail item` entry): with `module.mail` off the
+  mock answers 404 on `/api/v1/mail/…` as the hub does and keeps the item's stored text on `GET /api/v1/inbox/{id}`
+  (`scripts/mock/mail_mock.py`, with `mail_body_truncated` as the text is: `MOCK_MAIL_STORED_TEXT=clipped` makes every
+  stored mail a long one cut at 3,000 characters, `=unknown` leaves the key out); the mail is still listed in the Inbox, opens with that text and the line saying mail
+  is off, and shows no reply, AI draft reply, attachment or error. On the older hub it opens the whole message.
 - **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default
   `<shots>/evidence.json`: commit, the settings row, the manager line, the hello's module flags, what the browser got and
   requested), and screenshots `<phase>-<scheme>-<name>.png` in `--shots` (this machine's name is masked; never commit
   or push them). The last line is the verdict (`PASS`, `FAIL` or `TIMEOUT` after `--timeout`, default 40 minutes); the
   exit code is non-zero unless it is `PASS`. A run takes about four to six minutes after the builds.
 - **A module the tables lack** is still checked for its hello flag and the manager line, and the run says so: the PR
-  that moves a module adds its rows (what the hub has of it, what the web app shows of it).
+  that moves a module adds its rows (what the hub has of it, what the web app shows of it). A module with nothing of its
+  own on a hub (only its flag and the manager line) gets the honest empty `SERVER` row `{}`, not a missing one; a module
+  the web gates nothing on may have no `WEB` row (only a `NOTE`), or a chunks-only one (its chunks must not be requested
+  while it is off).
+- **Row forms that are not "on or absent"**: `off_stays` is a page the default panel keeps for existing data while the
+  module is off (`health`'s `/health` is the read-only archive, #15704): it stays and shows what it stores, with none of
+  the module's controls. `needs_on` on a kept item is data only the `on` phase makes (the recording the gate uploads),
+  skipped in a run with no `on` phase.
+- **The core-only mode** (`--core-only`, #16243) is the one check that runs a client against a hub built with
+  `-tags persona_core_only` instead of a default build with modules switched off. It builds the four programs with the
+  tag (its own `persona_core_only` build, `--no-build-web` serving the existing `web/dist`), starts a disposable hub the
+  same way, and runs the browser half with **every** module expected off: the hello carries the `modules` marker and no
+  built-in flag, the manager says `modules: loaded none`, the core's pages render with no page or console error, no
+  module's entry, address or chunk is there, and stored recordings stay readable. `--modules` is optional (every module
+  by default). It has no `on`/`off`/`back-on` and no mock phases; the full gate above covers those.
 
 ## End-to-end (verified 2026-10-24)
 
@@ -2390,19 +2432,19 @@ What a large request body costs the hub's slot and the manager it is relayed to,
 
 Hub transcription (`docs/assistant/meeting-minutes.md`, "Phase 5: hub transcription") against a real service, for what
 the tests' scripted contribution cannot tell: how well the words come back, how soon, and what it costs.
-`server/internal/transcribelive` plays the phone against a running test hub whose voice extension is set up with a
+`server/scripts/transcribelive` plays the phone against a running test hub whose voice extension is set up with a
 GPT-Live-compatible upstream (the contribution chosen for transcription, `meeting_transcription_ready` true; it also
 reads the meeting aloud through that extension's speech). Run it on the hub machine, from `server/`:
 
 ```sh
 cd server
-go run ./internal/transcribelive -hub <hub address> -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out <directory>
+go run ./scripts/transcribelive -hub <hub address> -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out <directory>
 ```
 
 - Without `-hub` and `-token-file` it takes `public_url` and `token` from `$PERSONA_HOME/hub.json` (`-kb` defaults to
   `$PERSONA_HOME/data`, where it reads the meeting's files). Never point it at a hub in use: it also sets the hub's
   `meeting_glossary` to the script's terms.
-- The meeting is made up (`server/internal/transcribelive/testdata/mixed_meeting.json`): a third Chinese, a third
+- The meeting is made up (`server/scripts/transcribelive/testdata/mixed_meeting.json`): a third Chinese, a third
   English, a third both in one sentence, and one line said by "Persona". The hub reads each line aloud
   (`POST /api/v1/extensions/voice/speak`, `-voices F=<id>,M=<id>,E=<id>,P=<id>` picks the voices); the audio and the
   script with each line's times go to `<out>/meeting.pcm` and `<out>/script.json`, which a later run reuses

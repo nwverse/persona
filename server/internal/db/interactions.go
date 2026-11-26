@@ -26,6 +26,25 @@ func (d *DB) InsertInteraction(ctx context.Context, ix proto.Interaction) error 
 	return err
 }
 
+// UpdateInteractionDeadline publishes the effective deadline of the same pending card that was inserted at created.
+// The creation-time guard prevents a resolved or replacement card from acquiring a deadline after this write was
+// prepared. No decision, resolution, or execution state is changed.
+func (d *DB) UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error {
+	raw, err := json.Marshal(expires.UTC())
+	if err != nil {
+		return err
+	}
+	tag, err := d.pool.Exec(ctx, `UPDATE interactions SET payload = jsonb_set(payload, '{expires_at}', $3::jsonb, false)
+		WHERE id = $1 AND created_at = $2 AND status = 'pending'`, id, created, raw)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("interaction deadline was not recorded")
+	}
+	return nil
+}
+
 // InsertResolvedInteraction writes an already-resolved decision in one statement, without ever creating a pending
 // card. Unlike InsertInteraction's idempotent card publication, a duplicate id is an error: an audit record must not
 // silently disappear. The decision and its resolved timestamp become queryable together.

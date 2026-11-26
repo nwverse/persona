@@ -180,5 +180,15 @@
   "read_held_gone": "your /read message in the group was recalled or deleted",
   "read_held_unreachable": "Lark couldn't be reached",
   "read_held_expired": "This answer is too old to post now",
-  "read_held_read_off": "/read is turned off in the bot's settings, so nothing was posted"
+  "read_held_read_off": "/read is turned off in the bot's settings, so nothing was posted",
+  "handoff_decision_source": "Lark bot",
+  "handoff_decision_title": "{sender} in {chat}",
+  "handoff_decision_background": "Asked: {question} — Draft: {draft}",
+  "handoff_decision_post": "Post the reply",
+  "handoff_decision_post_leads": "The bot posts this reply in the group, where everyone can read it.",
+  "handoff_decision_drop": "Don't post",
+  "handoff_decision_drop_leads": "Nothing is posted and the question is dropped.",
+  "handoff_decision_cost": "{sender} keeps waiting for an answer.",
+  "handoff_reply_header": "{sender} asked: {question}",
+  "handoff_reply_footer": "Answered by {owner}'s AI assistant, for reference."
 }

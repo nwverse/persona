@@ -74,7 +74,11 @@ nonisolated enum TodoLineText {
     /// (the view's `since`), said on the lines of rows that wait. `closedReason`: the to-do's own words on how it ended.
     static func said(_ line: TodoLine?, since: Date? = nil, closedReason: String? = nil, now: Date, words: TodoWords = TodoWords(),
                      calendar: Calendar = .current) -> Said? {
-        guard let line, keys.contains(line.key) else { return nil }
+        guard let line else { return nil }
+        // The line is shared with the to-do's conversation, whose keys are others (TodoLine.key stays a string): read
+        // as a row's key, one this build does not say is .unknown.
+        let key = TodoLineKey(rawValue: line.key)
+        guard keys.contains(key) else { return nil }
         let args = line.args ?? [:]
         func arg(_ name: String) -> String? { args[name].flatMap { $0.isEmpty ? nil : $0 } }
         func time(_ name: String) -> Date? { arg(name).flatMap(JSON.parseDate) }
@@ -87,7 +91,7 @@ nonisolated enum TodoLineText {
         let check = words("check and tick [To-dos Line]")
         let run = arg("run")
         var said: Said
-        switch line.key {
+        switch key {
         case TodoLineKey.failedStart:
             said = Said(lead: words("Didn't start [To-dos Line]"), rest: arg("error"), tone: .danger)
         case TodoLineKey.agentAsks:
@@ -160,7 +164,7 @@ nonisolated enum TodoLineText {
             said = Said(lead: words("Finished in a related to-do [To-dos Line]"))
         case TodoLineKey.someday:
             said = Said(lead: StateName.todoSomeday, rest: time(TodoLineArg.until).map { words("from \(day($0)) [To-dos Line]") })
-        default:
+        case .unknown:
             return nil
         }
         // A to-do that carries one of its steps says which: "Ryokan · Which of 3?"; not twice when the line names it

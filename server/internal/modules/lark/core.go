@@ -31,6 +31,8 @@ type turns struct {
 	posts threadPoster
 	// book is the chat's state (chat_state.go).
 	book feishuBook
+	// handoff is the proxy replies the module has taken (handoff.go), with its own lock.
+	handoff *handoffBook
 	// detached are the cards closed when their node went away (asks.go).
 	detached detachedCards
 	// held are the /read answers held for the owner (read_held.go).

@@ -180,5 +180,15 @@
   "read_held_gone": "グループの /read メッセージが取り消されたか削除されました",
   "read_held_unreachable": "Lark に接続できませんでした",
   "read_held_expired": "この回答は古いため、もうグループに送れません",
-  "read_held_read_off": "ボットの設定で /read がオフのため、グループには送っていません"
+  "read_held_read_off": "ボットの設定で /read がオフのため、グループには送っていません",
+  "handoff_decision_source": "Lark ボット",
+  "handoff_decision_title": "{chat} の {sender}",
+  "handoff_decision_background": "質問: {question} — 下書き: {draft}",
+  "handoff_decision_post": "返信を投稿",
+  "handoff_decision_post_leads": "ボットがこの返信をグループに投稿します。全員が読めます。",
+  "handoff_decision_drop": "投稿しない",
+  "handoff_decision_drop_leads": "何も投稿せず、質問は取り下げます。",
+  "handoff_decision_cost": "{sender} は返事を待っています。",
+  "handoff_reply_header": "{sender} の質問: {question}",
+  "handoff_reply_footer": "{owner} の AI アシスタントが参考として回答しました。"
 }
