@@ -71,7 +71,6 @@ func TestAgyIdleAutoCompactSweepTaskAgentAndAssistant(t *testing.T) {
 	)
 	clock.set(base.Add(9 * time.Minute))
 	n.sweepAgyIdleCompactions(t.Context(), clock.get())
-	time.Sleep(30 * time.Millisecond)
 	if sends := host.got("session.send"); len(sends) != 0 {
 		t.Fatalf("unexpected compact before idle threshold: %s", sends)
 	}
@@ -138,7 +137,6 @@ func TestAgyIdleAutoCompactSweepTaskAgentAndAssistant(t *testing.T) {
 	})
 	clock.set(clock.get().Add(15 * time.Minute))
 	n.sweepAgyIdleCompactions(t.Context(), clock.get())
-	time.Sleep(30 * time.Millisecond)
 	if sends := host.got("session.send"); len(sends) != 2 {
 		t.Fatalf("latched session compacted again: %s", sends)
 	}
@@ -202,7 +200,6 @@ func TestAgyIdleAutoCompactBeforeInputTaskAgentAndAssistant(t *testing.T) {
 		orderMu.Unlock()
 		if p.Text == "/compact" {
 			go func(sid string) {
-				time.Sleep(15 * time.Millisecond)
 				orderMu.Lock()
 				compactFinished = true
 				orderMu.Unlock()
@@ -299,7 +296,14 @@ func TestAgyIdleAutoCompactWaitsForInFlightSweepBeforeAssistantInput(t *testing.
 		done <- err
 	}()
 
-	time.Sleep(25 * time.Millisecond)
+	waitFor(t, "assistant.send waiting on in-flight silent sweep", func() bool {
+		unlock, ok := n.typing.tryLock(assistantID)
+		if ok {
+			unlock()
+			return false
+		}
+		return true
+	})
 	select {
 	case err := <-done:
 		t.Fatalf("assistant.send returned before silent compaction settled: %v", err)
