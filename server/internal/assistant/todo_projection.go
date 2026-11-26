@@ -46,6 +46,7 @@ func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now t
 	views, waits := projection.ViewsAndWaits(facts, now)
 	if len(facts) > 0 && facts[0].TodosV2 {
 		applyActiveBlockersToViews(list, views, waits)
+		populateTodoChildSummaries(list, views)
 	}
 	return todoProjection{facts: facts, views: views, waits: waits}
 }
