@@ -64,6 +64,12 @@ describe('conversation_summaries.db', () => {
     assert.deepEqual(probeSummaries(agyDir), { surface: 'summaries', state: 'incompatible', detail: 'conversation_summaries is missing not_fully_idle, step_count' })
   })
 
+  it('is absent while SQLite has created the file and agy no table yet', (t) => {
+    const agyDir = scratch(t)
+    writeFileSync(join(agyDir, 'conversation_summaries.db'), '')
+    assert.deepEqual(probeSummaries(agyDir), { surface: 'summaries', state: 'absent', detail: 'conversation_summaries.db has no tables yet' })
+  })
+
   it('leaves an unreadable database unverified rather than incompatible', (t) => {
     const agyDir = scratch(t)
     writeFileSync(join(agyDir, 'conversation_summaries.db'), 'not sqlite')
@@ -188,6 +194,15 @@ describe('native conversation service', () => {
     assert.equal((await probeNative(acp, { waitMs: 0 })).state, 'incompatible')
   })
 
+  it('never takes a server error page for a missing method', async (t) => {
+    for (const [status, body] of [[500, ''], [502, '<html>Bad Gateway</html>']]) {
+      const { port } = await service(t, (req, res) => res.writeHead(status).end(body))
+      const { acp } = client(t, line(port))
+      await assert.rejects(acp.nativeRequest('GetCascadeTrajectory', {}), (error) => error.code === undefined && error.message === `Antigravity conversation service returned ${status}`)
+      assert.equal((await probeNative(acp, { waitMs: 0 })).state, 'unreachable')
+    }
+  })
+
   it('keeps other native errors as they were', async (t) => {
     const { port } = await service(t, (req, res) => res.writeHead(500).end('{"code":"internal","message":"boom"}'))
     const { acp } = client(t, line(port))
@@ -208,17 +223,24 @@ describe('native conversation service', () => {
     assert.equal((await probeNative(acp, { waitMs: 5000, pollMs: 5 })).state, 'ok')
   })
 
-  it('starts agy\'s lazily started language server with session/list, as native requests do', async (t) => {
-    const { port } = await service(t, notFound)
+  it('starts agy\'s lazily started language server with the session/list native requests share', async (t) => {
+    const { port, calls } = await service(t, notFound)
     const { acp, file } = client(t, 'Language server version: 9.0.0\n')
     const asked = []
-    acp.call = async (method) => {
+    let started
+    acp._rawCall = (method) => {
       asked.push(method)
-      writeFileSync(file, `Language server version: 9.0.0\n${line(port)}`)
-      throw Object.assign(new Error('Authentication required'), { code: -32000 })
+      started ??= new Promise((resolve) => setTimeout(resolve, 50)).then(() => {
+        writeFileSync(file, `Language server version: 9.0.0\n${line(port)}`)
+        throw Object.assign(new Error('Authentication required'), { code: -32000 })
+      })
+      return started
     }
-    assert.equal((await probeNative(acp, { waitMs: 0 })).state, 'ok')
+    const [probed, read] = await Promise.allSettled([probeNative(acp, { waitMs: 0 }), acp.nativeRequest('GetCascadeTrajectorySteps', { cascadeId: 'x' })])
+    assert.equal(probed.value.state, 'ok')
+    assert.equal(read.reason.message, 'Authentication required', 'the session read waited on the same call, not a second one')
     assert.deepEqual(asked, ['session/list'])
+    assert.deepEqual(calls.map((c) => c.method), NATIVE_METHODS)
   })
 
   it('leaves an empty log unverified', async (t) => {
@@ -269,29 +291,74 @@ describe('verdict', () => {
 })
 
 describe('once per agy version', () => {
-  it('probes again only for a new version or after an unverified native check', async (t) => {
+  const fake = (text) => ({ agentVersion: '1.5.18', proc: {}, readyPromise: Promise.resolve(), ensureStarted: async () => {}, nativeLog: () => text })
+
+  it('keeps a conclusive verdict for its version and probes a new version again', async (t) => {
     const agyDir = scratch(t)
+    summaries(agyDir)
+    transcript(agyDir, 'a', [STEP])
     const logs = []
     const probe = createCompatProbe({ agyDir, log: (line) => logs.push(line), portWaitMs: 0 })
-    const acp = { agentVersion: '1.5.18', proc: {}, readyPromise: Promise.resolve(), ensureStarted: async () => {}, nativeLog: () => '' }
-    await probe.verdict(acp)
-    await probe.verdict(acp)
-    assert.equal(logs.length, 2, 'an unverified native check is retried')
-    acp.nativeLog = () => 'Language server listening on port 1\n'
-    await probe.verdict(acp)
-    await probe.verdict(acp)
-    assert.equal(logs.length, 3, 'a conclusive verdict is kept for its version')
+    const acp = fake('Language server listening on port 1\n')
+    const first = await probe.verdict(acp)
+    assert.equal(first.ok, false)
+    acp.proc = {}
+    assert.equal(await probe.verdict(acp), first, 'the next process of the version reuses it')
+    assert.equal(logs.length, 1)
     acp.agentVersion = '1.5.19'
     await probe.verdict(acp)
-    assert.equal(logs.length, 4)
+    assert.equal(logs.length, 2)
     probe.stop()
     acp.agentVersion = '1.5.20'
     assert.equal(await probe.verdict(acp), undefined)
-    assert.equal(logs.length, 4)
+    assert.equal(logs.length, 2)
+  })
+
+  it('probes again while a surface is absent or unverified, logging only a changed line', async (t) => {
+    const agyDir = scratch(t)
+    const logs = []
+    const probe = createCompatProbe({ agyDir, log: (line) => logs.push(line), portWaitMs: 0 })
+    const acp = fake('')
+    const first = await probe.verdict(acp)
+    assert.deepEqual(first.results.map((r) => r.state), ['unverified', 'absent', 'absent'])
+    assert.equal((await probe.verdict(acp)).line, first.line)
+    assert.equal(logs.length, 1, 'the same line is not logged twice')
+    // agy creates its database and exports after the probe first ran: they are still checked.
+    summaries(agyDir, SUMMARY_TABLE.replace('`killed` numeric NOT NULL DEFAULT false,', ''))
+    transcript(agyDir, 'a', [{ ...STEP, type: 7 }])
+    const later = await probe.verdict(acp)
+    assert.deepEqual(later.problems.map((p) => p.detail), ['conversation_summaries is missing killed', 'a transcript step lacks type'])
+    assert.equal(logs.length, 2)
+  })
+
+  it('does not keep a transient server error', async (t) => {
+    const agyDir = scratch(t)
+    summaries(agyDir)
+    transcript(agyDir, 'a', [STEP])
+    let failing = true
+    const server = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => failing ? res.writeHead(500).end('{"message":"transient"}') : res.writeHead(404).end('{"code":"not_found","message":"not found"}'))
+    })
+    t.after(() => server.close())
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const dir = scratch(t)
+    const file = join(dir, 'native.log')
+    writeFileSync(file, `Language server listening on random port at ${server.address().port} for HTTP\n`)
+    const acp = new AgyAcpClient()
+    acp.ensureStarted = async () => {}
+    acp.agentVersion = '1.5.18'
+    acp.proc = {}
+    acp.nativeLogs.set(acp.proc, { file })
+    const probe = createCompatProbe({ agyDir, portWaitMs: 0 })
+    const first = await probe.verdict(acp)
+    assert.equal(first.problems[0].state, 'unreachable')
+    failing = false
+    assert.equal((await probe.verdict(acp)).ok, true)
   })
 })
 
-async function runtimeFixture(t, { mode = 'served', version = '1.5.18', table = SUMMARY_TABLE, compatProbe = true } = {}) {
+async function runtimeFixture(t, { mode = 'served', version = '1.5.18', table = SUMMARY_TABLE, compatProbe = true, compatCheckWaitMs } = {}) {
   const home = scratch(t, 'agy-compat-runtime-')
   const agyDir = join(home, 'agy')
   summaries(agyDir, table)
@@ -303,7 +370,7 @@ async function runtimeFixture(t, { mode = 'served', version = '1.5.18', table = 
   chmodSync(binary, 0o700)
   const node = await startFakeNode(t)
   const logs = []
-  const runtime = createAgyRuntime({ home, agyDir, agyBin: binary, personadBin: '/missing', socketPath: node.path, log: (line) => logs.push(line), compatProbe, compatPortWaitMs: 2000, compatPollMs: 10, sharedAcpIdleMs: 50 })
+  const runtime = createAgyRuntime({ home, agyDir, agyBin: binary, personadBin: '/missing', socketPath: node.path, log: (line) => logs.push(line), compatProbe, compatPortWaitMs: 2000, compatPollMs: 10, compatCheckWaitMs, sharedAcpIdleMs: 50 })
   t.after(() => runtime.stop())
   runtime.start()
   await node.ready
@@ -333,6 +400,13 @@ for (const [name, options, reason] of [
     assert.equal(f.logs.filter((line) => line.includes('is not compatible')).length, 1)
   })
 }
+
+test('an availability check waits for an unfinished probe only so long, then goes on', async (t) => {
+  const f = await runtimeFixture(t, { mode: 'silent', compatCheckWaitMs: 100 })
+  const begin = Date.now()
+  assert.equal((await f.check()).ok, true)
+  assert.ok(Date.now() - begin < 1500, `the check waited ${Date.now() - begin}ms for a probe still waiting for the port line`)
+})
 
 test('without the option the runtime never probes', async (t) => {
   const f = await runtimeFixture(t, { mode: 'missing', compatProbe: false })

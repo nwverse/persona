@@ -892,11 +892,15 @@ themselves, so `integrations/antigravity/lib/probe.js` checks these surfaces onc
   `pragma_table_info` query, reads the first and last 256 KiB of the newest transcript export, and makes two
   trajectory reads for a nonexistent conversation, which a served method answers with `not_found`. If the port line is
   missing, it makes the one `session/list` call that starts agy's lazily started language server, as native requests
-  already do. Later processes of the same version reuse the verdict. Session reads never wait for it.
+  already do, and shares it with them. Later processes of the same version reuse a conclusive verdict, one where every
+  surface is ok or incompatible. If any surface is absent, unverified or unreachable, the probe runs again for the
+  next process and logs only a changed line. Session reads never wait for it.
 - **What it reports**: one log line, either `agy <version> compatibility: native ok, summaries ok, transcripts ok` or
   `agy <version> is not compatible with this Persona Antigravity runtime: <surface>: <reason>`. An incompatible
   (missing table, column, field, method or port line) or unreachable surface fails `launchers.check` with code
-  `agy_incompatible` before any prompt, and that check is what the apps show as launcher health. A busy database, an
+  `agy_incompatible` before any prompt, and that check is what the apps show as launcher health. The check waits at
+  most 25 seconds for an unfinished probe. Only a plain 404 or a Connect `unimplemented` answer counts as a missing
+  method; other server errors count as unreachable. A busy database, a database with no tables yet, an
   empty agy log or a process that ended mid-probe counts as unverified, not as a failure. A native request to a
   method agy no longer serves fails with the same readable reason, not a JSON parse error.
 - **Versions**: `VERIFIED_AGY` is the newest agy version `scripts/test/agy-live-smoke.mjs` passed. A newer version is
