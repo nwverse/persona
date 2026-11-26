@@ -73,6 +73,8 @@ export interface XiaoYiStatusSummary {
   headline: string;
   detail: string;
   spokenText: string;
+  profileId?: string;
+  managerId?: string;
 }
 
 export interface XiaoYiPushItem {
@@ -109,6 +111,82 @@ export const XIAOYI_OUTBOX_MAX_ITEMS: number = 200;
 export const XIAOYI_OUTBOX_TTL_MS: number = 7 * 24 * 3600 * 1000;
 export const XIAOYI_OUTBOX_BATCH_SIZE: number = 20;
 export const XIAOYI_PUSH_BODY_MAX: number = 8000;
+
+export const HUB_MODULES_MARKER: string = 'modules';
+export const HUB_MODULE_PREFIX: string = 'module.';
+export const RECORDING_MODULE_FEATURE: string = 'module.recording';
+
+/**
+ * Extract the Hub's published module flags from a `hello` / `health` `features` list, matching iOS `HubModules`.
+ * Returns `null` when the Hub does not announce the `modules` marker (older hub => every module allowed).
+ * Returns a sorted array (possibly empty) of `module.*` flags when the `modules` marker is present.
+ */
+export function extractPublishedModules(features: readonly string[]): string[] | null {
+  if (!features || features.length === 0) return null;
+  if (!features.includes(HUB_MODULES_MARKER)) return null;
+  const set = new Set<string>();
+  for (let i = 0; i < features.length; i++) {
+    const f = features[i];
+    if (f && f.startsWith(HUB_MODULE_PREFIX)) set.add(f);
+  }
+  return Array.from(set).sort();
+}
+
+/** Serialize remembered Hub module flags for LocalStore persistence (`xiaoyi:<scope>:hub-modules`). */
+export function serializeStoredHubModules(published: readonly string[] | null): string {
+  const payload: Record<string, Object> = {};
+  payload['published'] = published === null ? '' : published.slice();
+  payload['hasMarker'] = published !== null;
+  return JSON.stringify(payload);
+}
+
+/** Decode remembered Hub module flags from LocalStore. Returns `null` when never heard or older hub. */
+export function parseStoredHubModules(raw: string): string[] | null {
+  if (!raw || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, Object>;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    if (parsed['hasMarker'] !== true) return null;
+    const list = parsed['published'];
+    if (!Array.isArray(list)) return [];
+    const out: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      if (typeof item === 'string' && item.startsWith(HUB_MODULE_PREFIX)) out.push(item);
+    }
+    return out;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Fail-closed recording module check matching upstream iOS `RecordingModule.allowance` (#15978 / #15985):
+ * off ONLY when the Hub announces `modules` and lacks `module.recording` (live `features` takes precedence over
+ * remembered `storedPublished`; an older Hub without `modules` or a Hub never heard from remains on).
+ */
+export function isRecordingModuleAllowed(
+  features?: readonly string[],
+  storedPublished?: readonly string[] | null
+): boolean {
+  if (features && features.length > 0) {
+    const published = extractPublishedModules(features);
+    if (published === null) return true;
+    return published.includes(RECORDING_MODULE_FEATURE);
+  }
+  if (storedPublished !== undefined && storedPublished !== null) {
+    return storedPublished.includes(RECORDING_MODULE_FEATURE);
+  }
+  return true;
+}
+
+/** Plain-language recording refusal matching iOS `MeetingRecorder.startRefusal` (#15985) across en/zh-Hans/ja. */
+export function recordingModuleRefusalText(locale: string = 'en'): string {
+  const lang = normalizeLocale(locale);
+  if (lang === 'zh-Hans') return '这台 hub 关闭了会议录音。';
+  if (lang === 'ja') return 'このhubでは会議の録音がオフです。';
+  return 'Meeting recording is off on this hub.';
+}
 
 function parseTimestampMs(raw: string): number {
   if (!raw) return Number.POSITIVE_INFINITY;
@@ -242,7 +320,7 @@ export function selectMachine(
   return { ok: false, errorCode: 'xiaoyi_no_online_machine', target: '' };
 }
 
-/** Select an active non-offline agent session on the chosen machine. */
+/** Select an active non-offline sendable agent session on the chosen machine. */
 export function selectLiveSession(
   sessions: readonly XiaoYiSession[],
   machineId: string,
@@ -251,6 +329,7 @@ export function selectLiveSession(
   const live = sessions.filter((s: XiaoYiSession): boolean =>
     s.machineId === machineId &&
     !s.assistant &&
+    s.canSend !== false &&
     s.status.toLowerCase() !== 'offline' &&
     s.state.toLowerCase() !== 'offline'
   );
@@ -598,6 +677,7 @@ export function formatXiaoYiError(code: string, host: string = '', target: strin
     'xiaoyi_needs_screen',
     'xiaoyi_nothing_to_send',
     'xiaoyi_water_not_enabled',
+    'xiaoyi_recording_module_off',
     'xiaoyi_timeout',
     'xiaoyi_rate_limited'
   ];

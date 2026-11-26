@@ -8813,6 +8813,30 @@
       "value": "First add Water tracking in Health inside Persona."
     },
     {
+      "name": "xiaoyi_recording_module_off",
+      "value": "Meeting recording is off on this hub."
+    },
+    {
+      "name": "xiaoyi_diag_recording_module",
+      "value": "Meeting recording module"
+    },
+    {
+      "name": "xiaoyi_diag_on",
+      "value": "On"
+    },
+    {
+      "name": "xiaoyi_diag_off",
+      "value": "Off"
+    },
+    {
+      "name": "xiaoyi_agent_card_ready",
+      "value": "Ready · {count} capabilities"
+    },
+    {
+      "name": "xiaoyi_diag_preview_card",
+      "value": "Preview XiaoYi Card"
+    },
+    {
       "name": "xiaoyi_timeout",
       "value": "The Hub is taking longer than expected. Open Persona to view progress."
     },

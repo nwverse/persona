@@ -1,17 +1,45 @@
 import { common, skillManager } from '@kit.AbilityKit';
+import { AgentCardModel, parseAgentCardPayload } from '../core/AgentCardPayload';
 import { XIAOYI_INTENT_CATALOG } from '../core/XiaoYiIntentCatalog';
 import { Colors } from '../design/Colors';
 import { PhoneStyle } from '../design/PhoneStyle';
 import { tr } from '../design/Strings';
 import { Tokens } from '../design/Tokens';
 import { ClientModel } from '../models/ClientModel';
+import { AgentCardView } from '../pages/AgentCardPage';
 import { HeadlessDiagnosticReport, HeadlessHubService } from '../xiaoyi/HeadlessHubService';
 import { IntentSuggestionsService } from '../xiaoyi/IntentSuggestionsService';
 import { XiaoYiRuntimeContext } from '../xiaoyi/XiaoYiRuntimeContext';
 
+@ComponentV2
+struct XiaoYiInfoRow {
+  @Require @Param label: string;
+  @Require @Param value: string;
+  @Param accent?: ResourceColor = undefined;
+
+  build() {
+    Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center }) {
+      Text(this.label)
+        .fontSize(Tokens.body)
+        .maxFontScale(Tokens.interfaceFontMaxScale)
+        .fontColor(Colors.ink)
+        .margin({ right: Tokens.gap, top: Tokens.fine, bottom: Tokens.fine })
+      Text(this.value)
+        .fontSize(Tokens.meta)
+        .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
+        .fontColor(this.accent || Colors.secondary)
+        .margin({ top: Tokens.fine, bottom: Tokens.fine })
+    }
+    .width('100%')
+    .constraintSize({ minHeight: Tokens.touch })
+    .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+    .accessibilityGroup(true)
+  }
+}
+
 /**
  * Native Settings and live self-diagnostics page for HarmonyOS 7 XiaoYi integration
- * (On-Device A2A Agent, Intents Kit, API 26 Skills, and opt-in XiaoYi Suggestions).
+ * (On-Device A2A Agent, Intents Kit, API 26 Skills, embedded AgentUI card preview, and opt-in XiaoYi Suggestions).
  */
 @ComponentV2
 export struct XiaoYiSettingsPage {
@@ -20,12 +48,36 @@ export struct XiaoYiSettingsPage {
   @Local suggestionsEnabled: boolean = false;
   @Local savingToggle: boolean = false;
   @Local checking: boolean = false;
+  @Local cardPreviewShown: boolean = false;
   @Local skillCount: number = -1;
   @Local skillNames: string = '';
   @Local report: HeadlessDiagnosticReport | undefined = undefined;
   @Local statusNotice: string = '';
   private mounted: boolean = false;
   private checkRevision: number = 0;
+
+  private readonly previewStatusCard: AgentCardModel = parseAgentCardPayload({
+    cardType: 'status',
+    title: 'Persona Status',
+    summary: '2 working, 1 need you. First pending: Run unit tests on feat/harmony-xiaoyi',
+    workingCount: 2,
+    pendingCount: 1,
+    deepLinkUri: 'persona://open?dest=agents',
+    sessions: [
+      { title: 'HarmonyOS XiaoYi integration', state: 'working', machine: 'Studio' },
+      { title: 'Release verification checks', state: 'needs_you', machine: 'Studio' }
+    ]
+  });
+
+  private readonly previewApprovalCard: AgentCardModel = parseAgentCardPayload({
+    cardType: 'approval',
+    title: 'Persona Confirmation',
+    summary: 'Allow tool execution to run portable unit tests and verify HAP build outputs?',
+    decisionId: 'preview-dec-1',
+    decisionKind: 'permission',
+    canApproveInline: true,
+    deepLinkUri: 'persona://open?dest=agents'
+  });
 
   aboutToAppear(): void {
     this.mounted = true;
@@ -42,16 +94,31 @@ export struct XiaoYiSettingsPage {
     return ctx || XiaoYiRuntimeContext.get();
   }
 
-  private async loadInitialState(): Promise<void> {
+  private skillsSummaryText(): string {
+    if (this.skillCount < 0) return '…';
+    if (this.skillCount === 0) return '0';
+    return String(this.skillCount) + (this.skillNames ? ' · ' + this.skillNames : '');
+  }
+
+  private loadInitialState(): void {
+    const rev = ++this.checkRevision;
+    // Query declared API 26 Skills independently so preferences/store never delay skill discovery.
+    this.queryDeclaredSkills().then((skills: string[]) => {
+      if (!this.mounted || rev !== this.checkRevision) return;
+      this.skillCount = skills.length;
+      this.skillNames = skills.join(', ');
+    }).catch(() => {
+      if (!this.mounted || rev !== this.checkRevision) return;
+      this.skillCount = 0;
+      this.skillNames = '';
+    });
+
     const ctx = this.hostContext();
     if (!ctx) return;
-    const rev = ++this.checkRevision;
-    const enabled = await IntentSuggestionsService.isEnabled(ctx);
-    const skills = await this.queryDeclaredSkills();
-    if (!this.mounted || rev !== this.checkRevision) return;
-    this.suggestionsEnabled = enabled;
-    this.skillCount = skills.length;
-    this.skillNames = skills.join(', ');
+    IntentSuggestionsService.isEnabled(ctx).then((enabled: boolean) => {
+      if (!this.mounted || rev !== this.checkRevision) return;
+      this.suggestionsEnabled = enabled;
+    }).catch(() => {});
   }
 
   private async queryDeclaredSkills(): Promise<string[]> {
@@ -113,25 +180,6 @@ export struct XiaoYiSettingsPage {
     }
   }
 
-  @Builder infoRow(label: string, value: string, accent?: ResourceColor) {
-    Row({ space: Tokens.gap }) {
-      Text(label)
-        .fontSize(Tokens.body)
-        .maxFontScale(Tokens.interfaceFontMaxScale)
-        .fontColor(Colors.ink)
-        .layoutWeight(1)
-      Text(value)
-        .fontSize(Tokens.meta)
-        .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
-        .fontColor(accent || Colors.secondary)
-        .textAlign(TextAlign.End)
-    }
-    .width('100%')
-    .constraintSize({ minHeight: Tokens.touch })
-    .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.gap, bottom: Tokens.gap })
-    .accessibilityGroup(true)
-  }
-
   @Builder cardGroup(title: string) {
     Text(title)
       .fontSize(Tokens.caption)
@@ -143,113 +191,95 @@ export struct XiaoYiSettingsPage {
   }
 
   build() {
-    List({ space: Tokens.inset }) {
-      ListItem() {
-        Column() {
-          this.cardGroup(tr('xiaoyi_section_capabilities'))
-          Column() {
-            this.infoRow(tr('xiaoyi_agent_card_label'), 'persona_harmony_agent · 6')
-            this.infoRow(tr('xiaoyi_intents_count_label'), String(XIAOYI_INTENT_CATALOG.length))
-            this.infoRow(
-              tr('xiaoyi_skills_runtime_label'),
-              this.skillCount < 0 ? '…' : this.skillCount > 0 ? String(this.skillCount) + (this.skillNames ? ' · ' + this.skillNames : '') : '0'
-            )
+    if (this.cardPreviewShown) {
+      Column() {
+        Scroll() {
+          Column({ space: Tokens.section }) {
+            AgentCardView({ card: this.previewStatusCard })
+            AgentCardView({ card: this.previewApprovalCard })
+            Button(tr('back'), { type: ButtonType.Capsule })
+              .width('100%')
+              .constraintSize({ minHeight: Tokens.touch })
+              .fontSize(Tokens.body)
+              .maxFontScale(Tokens.interfaceFontMaxScale)
+              .backgroundColor(Colors.control)
+              .fontColor(Colors.ink)
+              .onClick(() => { this.cardPreviewShown = false; })
+              .id('settings.xiaoyi.cardpreview.close')
           }
           .width('100%')
-          .backgroundColor(Colors.card(this.elevated))
-          .borderRadius(PhoneStyle.cardRadius)
-          .clip(true)
-        }.width('100%')
+          .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.section })
+        }
+        .width('100%')
+        .layoutWeight(1)
       }
-
-      ListItem() {
-        Column() {
-          this.cardGroup(tr('xiaoyi_section_preferences'))
+      .width('100%')
+      .height('100%')
+      .backgroundColor(Colors.listGroup(this.elevated))
+      .id('settings.xiaoyi.cardpreview.view')
+    } else {
+      List({ space: Tokens.inset }) {
+        ListItem() {
           Column() {
-            Row({ space: Tokens.gap }) {
-              Column({ space: Tokens.fine }) {
-                Text(tr('xiaoyi_suggestions_toggle'))
-                  .fontSize(Tokens.body)
-                  .maxFontScale(Tokens.interfaceFontMaxScale)
-                  .fontColor(Colors.ink)
-                  .width('100%')
-                Text(tr('xiaoyi_suggestions_hint'))
-                  .fontSize(Tokens.caption)
-                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
-                  .fontColor(Colors.secondary)
-                  .width('100%')
-              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-              Toggle({ type: ToggleType.Switch, isOn: this.suggestionsEnabled })
-                .enabled(!this.savingToggle)
-                .onChange((isOn: boolean) => {
-                  if (isOn !== this.suggestionsEnabled) this.toggleSuggestions(isOn);
-                })
-                .id('settings.xiaoyi.suggestions')
+            this.cardGroup(tr('xiaoyi_section_capabilities'))
+            Column() {
+              XiaoYiInfoRow({
+                label: tr('xiaoyi_agent_card_label'),
+                value: tr('xiaoyi_agent_card_ready').replace('{count}', '6')
+              })
+              XiaoYiInfoRow({
+                label: tr('xiaoyi_intents_count_label'),
+                value: String(XIAOYI_INTENT_CATALOG.length)
+              })
+              XiaoYiInfoRow({
+                label: tr('xiaoyi_skills_runtime_label'),
+                value: this.skillsSummaryText()
+              })
             }
             .width('100%')
-            .constraintSize({ minHeight: Tokens.touch })
-            .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset })
+            .backgroundColor(Colors.card(this.elevated))
+            .borderRadius(PhoneStyle.cardRadius)
+            .clip(true)
+          }.width('100%')
+        }
 
-            Text(tr('xiaoyi_lock_screen_notice'))
-              .fontSize(Tokens.caption)
-              .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
-              .fontColor(Colors.secondary)
+        ListItem() {
+          Column() {
+            this.cardGroup(tr('xiaoyi_section_preferences'))
+            Column() {
+              Row({ space: Tokens.gap }) {
+                Column({ space: Tokens.fine }) {
+                  Text(tr('xiaoyi_suggestions_toggle'))
+                    .fontSize(Tokens.body)
+                    .maxFontScale(Tokens.interfaceFontMaxScale)
+                    .fontColor(Colors.ink)
+                    .width('100%')
+                  Text(tr('xiaoyi_suggestions_hint'))
+                    .fontSize(Tokens.caption)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                    .fontColor(Colors.secondary)
+                    .width('100%')
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                Toggle({ type: ToggleType.Switch, isOn: this.suggestionsEnabled })
+                  .enabled(!this.savingToggle)
+                  .onChange((isOn: boolean) => {
+                    if (isOn !== this.suggestionsEnabled) this.toggleSuggestions(isOn);
+                  })
+                  .id('settings.xiaoyi.suggestions')
+              }
               .width('100%')
-              .padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
+              .constraintSize({ minHeight: Tokens.touch })
+              .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset })
 
-            if (this.statusNotice) {
-              Text(this.statusNotice)
+              Text(tr('xiaoyi_lock_screen_notice'))
                 .fontSize(Tokens.caption)
                 .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
                 .fontColor(Colors.secondary)
                 .width('100%')
                 .padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
-            }
-          }
-          .width('100%')
-          .backgroundColor(Colors.card(this.elevated))
-          .borderRadius(PhoneStyle.cardRadius)
-          .clip(true)
-        }.width('100%')
-      }
 
-      ListItem() {
-        Column() {
-          this.cardGroup(tr('xiaoyi_section_diagnostics'))
-          Column() {
-            Button(this.checking ? tr('xiaoyi_diag_running') : tr('xiaoyi_diag_run'), {
-              type: ButtonType.Normal,
-              buttonStyle: ButtonStyleMode.TEXTUAL
-            })
-              .width('100%')
-              .constraintSize({ minHeight: Tokens.touch })
-              .fontColor(Colors.link)
-              .enabled(!this.checking)
-              .onClick(() => { this.runSelfCheck(); })
-              .id('settings.xiaoyi.selfcheck')
-
-            if (this.report) {
-              this.infoRow(
-                tr('xiaoyi_diag_hub_paired'),
-                this.report.paired ? (this.report.profileName || tr('xiaoyi_diag_pass')) : tr('xiaoyi_diag_attention'),
-                this.report.paired ? Colors.positive : Colors.working
-              )
-              this.infoRow(
-                tr('xiaoyi_diag_credential'),
-                this.report.credentialReadable ? tr('xiaoyi_diag_pass') : tr('xiaoyi_diag_attention'),
-                this.report.credentialReadable ? Colors.positive : Colors.working
-              )
-              this.infoRow(
-                tr('xiaoyi_diag_transport'),
-                this.report.sshTunnelOnly
-                  ? tr('xiaoyi_diag_ssh_warning')
-                  : this.report.hubReachable
-                    ? tr('xiaoyi_diag_reachable').replace('{online}', String(this.report.onlineMachines)).replace('{total}', String(this.report.totalMachines))
-                    : tr('xiaoyi_diag_attention'),
-                this.report.hubReachable && !this.report.sshTunnelOnly ? Colors.positive : Colors.working
-              )
-              if (this.report.errorCode) {
-                Text(tr(this.report.errorCode))
+              if (this.statusNotice) {
+                Text(this.statusNotice)
                   .fontSize(Tokens.caption)
                   .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
                   .fontColor(Colors.secondary)
@@ -257,18 +287,94 @@ export struct XiaoYiSettingsPage {
                   .padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
               }
             }
-          }
-          .width('100%')
-          .backgroundColor(Colors.card(this.elevated))
-          .borderRadius(PhoneStyle.cardRadius)
-          .clip(true)
-        }.width('100%')
+            .width('100%')
+            .backgroundColor(Colors.card(this.elevated))
+            .borderRadius(PhoneStyle.cardRadius)
+            .clip(true)
+          }.width('100%')
+        }
+
+        ListItem() {
+          Column() {
+            this.cardGroup(tr('xiaoyi_section_diagnostics'))
+            Column() {
+              Button(this.checking ? tr('xiaoyi_diag_running') : tr('xiaoyi_diag_run'), {
+                type: ButtonType.Normal,
+                buttonStyle: ButtonStyleMode.TEXTUAL
+              })
+                .width('100%')
+                .constraintSize({ minHeight: Tokens.touch })
+                .fontSize(Tokens.body)
+                .maxFontScale(Tokens.interfaceFontMaxScale)
+                .fontColor(Colors.link)
+                .enabled(!this.checking)
+                .onClick(() => { this.runSelfCheck(); })
+                .id('settings.xiaoyi.selfcheck')
+
+              Divider().color(Colors.divider).margin({ left: Tokens.page, right: Tokens.page })
+
+              Button(tr('xiaoyi_diag_preview_card'), {
+                type: ButtonType.Normal,
+                buttonStyle: ButtonStyleMode.TEXTUAL
+              })
+                .width('100%')
+                .constraintSize({ minHeight: Tokens.touch })
+                .fontSize(Tokens.body)
+                .maxFontScale(Tokens.interfaceFontMaxScale)
+                .fontColor(Colors.link)
+                .onClick(() => { this.cardPreviewShown = true; })
+                .id('settings.xiaoyi.cardpreview')
+
+              if (this.report) {
+                Divider().color(Colors.divider).margin({ left: Tokens.page, right: Tokens.page })
+                XiaoYiInfoRow({
+                  label: tr('xiaoyi_diag_hub_paired'),
+                  value: this.report.paired ? (this.report.profileName || tr('xiaoyi_diag_pass')) : tr('xiaoyi_diag_attention'),
+                  accent: this.report.paired ? Colors.positive : Colors.working
+                })
+                XiaoYiInfoRow({
+                  label: tr('xiaoyi_diag_credential'),
+                  value: this.report.credentialReadable ? tr('xiaoyi_diag_pass') : tr('xiaoyi_diag_attention'),
+                  accent: this.report.credentialReadable ? Colors.positive : Colors.working
+                })
+                XiaoYiInfoRow({
+                  label: tr('xiaoyi_diag_transport'),
+                  value: this.report.sshTunnelOnly
+                    ? tr('xiaoyi_diag_ssh_warning')
+                    : this.report.hubReachable
+                      ? tr('xiaoyi_diag_reachable').replace('{online}', String(this.report.onlineMachines)).replace('{total}', String(this.report.totalMachines))
+                      : tr('xiaoyi_diag_attention'),
+                  accent: this.report.hubReachable && !this.report.sshTunnelOnly ? Colors.positive : Colors.working
+                })
+                if (this.report.paired) {
+                  XiaoYiInfoRow({
+                    label: tr('xiaoyi_diag_recording_module'),
+                    value: this.report.recordingAllowed ? tr('xiaoyi_diag_on') : tr('xiaoyi_diag_off'),
+                    accent: this.report.recordingAllowed ? Colors.positive : Colors.secondary
+                  })
+                }
+                if (this.report.errorCode) {
+                  Text(tr(this.report.errorCode).replace('{host}', this.report.hubHost || ''))
+                    .fontSize(Tokens.caption)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                    .fontColor(Colors.secondary)
+                    .width('100%')
+                    .padding({ left: Tokens.page, right: Tokens.page, bottom: Tokens.inset })
+                }
+              }
+            }
+            .width('100%')
+            .backgroundColor(Colors.card(this.elevated))
+            .borderRadius(PhoneStyle.cardRadius)
+            .clip(true)
+          }.width('100%')
+        }
       }
+      .width('100%')
+      .height('100%')
+      .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.section })
+      .backgroundColor(Colors.listGroup(this.elevated))
+      .id('settings.xiaoyi.page')
     }
-    .width('100%')
-    .height('100%')
-    .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.section })
-    .backgroundColor(Colors.listGroup(this.elevated))
-    .id('settings.xiaoyi.page')
   }
 }

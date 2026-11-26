@@ -17,11 +17,15 @@ import {
   buildPushItem,
   enqueueOutboxItem,
   extractLatestAssistantAnswer,
+  extractPublishedModules,
   formatStatusSummary,
+  isRecordingModuleAllowed,
+  parseStoredHubModules,
   pruneOutboxItems,
   selectLiveSession,
   selectMachine,
   selectPendingApprovals,
+  serializeStoredHubModules,
   takeOutboxBatch
 } from '../core/XiaoYiActions';
 import { XiaoYiRoute, buildXiaoYiRouteUri, createXiaoYiRoute } from '../core/XiaoYiRoutes';
@@ -35,6 +39,7 @@ import { LocalStore } from '../platform/LocalStore';
 const HEALTH_QUERY: string = '?space=health';
 const MAX_A2A_CONTEXTS: number = 64;
 const DEFAULT_ASK_TIMEOUT_MS: number = 24000;
+const HEALTH_PROBE_TIMEOUT_MS: number = 2500;
 const POLL_INTERVAL_MS: number = 900;
 
 export class HeadlessHubFailure extends Error {
@@ -55,6 +60,7 @@ export interface HeadlessAskOptions {
   machineId?: string;
   timeoutMs?: number;
   onProgress?: (text: string, done: boolean) => void;
+  onTarget?: (machineId: string, sessionId: string) => void;
   isCancelled?: () => boolean;
 }
 
@@ -118,6 +124,11 @@ export interface HeadlessContextBinding {
   updatedAt: number;
 }
 
+export interface HeadlessRecordingStartResult {
+  allowed: boolean;
+  deepLinkUri: string;
+}
+
 export interface HeadlessDiagnosticReport {
   paired: boolean;
   profileName: string;
@@ -125,15 +136,19 @@ export interface HeadlessDiagnosticReport {
   credentialReadable: boolean;
   sshTunnelOnly: boolean;
   hubReachable: boolean;
+  recordingAllowed: boolean;
   onlineMachines: number;
   totalMachines: number;
   errorCode: string;
 }
 
+type SshRouteMode = 'none' | 'fallback' | 'required';
+
 interface ActiveHubConnection {
   profile: HubProfile;
   scope: string;
   host: string;
+  sshFallback: boolean;
   transport: HubTransport;
 }
 
@@ -333,22 +348,115 @@ export class HeadlessHubService {
     return selected;
   }
 
-  private async isSshTunnelEnabled(hubId: string): Promise<boolean> {
+  private hubModulesKey(hubId: string): string {
+    return 'xiaoyi:' + scopeKey({ groupId: hubId, managerId: '' }) + ':hub-modules';
+  }
+
+  private async loadStoredHubModules(hubId: string): Promise<string[] | null> {
+    if (!hubId) return null;
+    try {
+      return parseStoredHubModules(await this.local.get(this.hubModulesKey(hubId)));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  private async saveStoredHubModules(hubId: string, published: string[] | null): Promise<void> {
+    if (!hubId) return;
+    try {
+      await this.local.put(this.hubModulesKey(hubId), serializeStoredHubModules(published));
+    } catch (_) {
+      // Non-fatal cache update.
+    }
+  }
+
+  /**
+   * Fail-closed recording module check matching iOS `RecordingModule.allowance` (#15978 / #15985):
+   * prefers live `GET /api/v1/health` `features` when returned by the Hub and falls back to remembered
+   * per-Hub WS `hello` modules (`xiaoyi:<scope>:hub-modules`) when offline or over a public URL.
+   */
+  async isRecordingModuleAllowed(requestedProfileId: string = ''): Promise<boolean> {
+    let profile: HubProfile;
+    try {
+      profile = await this.loadActiveProfile(requestedProfileId);
+    } catch (_) {
+      return true;
+    }
+    const stored = await this.loadStoredHubModules(profile.id);
+    const sshMode = await this.sshRouteMode(profile.id);
+    if (sshMode === 'required') {
+      return isRecordingModuleAllowed(undefined, stored);
+    }
+    let conn: ActiveHubConnection | undefined = undefined;
+    try {
+      conn = await this.openConnection(profile.id, '');
+    } catch (_) {
+      return isRecordingModuleAllowed(undefined, stored);
+    }
+    let timerId: number = -1;
+    try {
+      const timeoutPromise = new Promise<Record<string, Object> | undefined>((resolve) => {
+        timerId = setTimeout(() => resolve(undefined), HEALTH_PROBE_TIMEOUT_MS);
+      });
+      const probePromise = this.requestJson(conn, '/api/v1/health').catch((): Record<string, Object> | undefined => undefined);
+      const health = await Promise.race<Record<string, Object> | undefined>([probePromise, timeoutPromise]);
+      if (health) {
+        const liveFeatures = Wire.strings(health, 'features');
+        if (liveFeatures.length > 0) {
+          await this.saveStoredHubModules(profile.id, extractPublishedModules(liveFeatures));
+          return isRecordingModuleAllowed(liveFeatures);
+        }
+      }
+      return isRecordingModuleAllowed(undefined, stored);
+    } finally {
+      if (timerId !== -1) clearTimeout(timerId);
+      conn.transport.close();
+    }
+  }
+
+  /** Throws `xiaoyi_recording_module_off` when the Hub's recording module is off. */
+  async assertRecordingModuleAllowed(requestedProfileId: string = ''): Promise<void> {
+    const allowed = await this.isRecordingModuleAllowed(requestedProfileId);
+    if (!allowed) {
+      let host = '';
+      try {
+        host = extractHostLabel((await this.loadActiveProfile(requestedProfileId)).baseUrl);
+      } catch (_) {}
+      throw new HeadlessHubFailure('xiaoyi_recording_module_off', host);
+    }
+  }
+
+  /** Verify recording allowance and return the foreground auto-start route when allowed. */
+  async prepareRecordingStart(requestedProfileId: string = ''): Promise<HeadlessRecordingStartResult> {
+    await this.assertRecordingModuleAllowed(requestedProfileId);
+    const route = createXiaoYiRoute('recording');
+    route.autoStart = true;
+    try {
+      const profile = await this.loadActiveProfile(requestedProfileId);
+      route.profile = profile.id;
+    } catch (_) {}
+    return { allowed: true, deepLinkUri: buildXiaoYiRouteUri(route) };
+  }
+
+  private async sshRouteMode(hubId: string): Promise<SshRouteMode> {
     const sshKey = 'view:' + scopeKey({ groupId: hubId, managerId: '' }) + ':ssh-tunnel';
     const raw = await this.local.get(sshKey);
-    if (!raw) return false;
+    if (!raw) return 'none';
     try {
       const parsed = Wire.parse(raw);
-      return Wire.bool(parsed, 'enabled');
+      if (!Wire.bool(parsed, 'enabled')) return 'none';
+      const policy = Wire.text(parsed, 'routePolicy', 'legacy');
+      return policy === 'fallback' ? 'fallback' : 'required';
     } catch (_) {
-      return false;
+      return 'none';
     }
   }
 
   private async openConnection(requestedProfileId: string = '', managerOverride?: string): Promise<ActiveHubConnection> {
     const profile = await this.loadActiveProfile(requestedProfileId);
     const host = extractHostLabel(profile.baseUrl);
-    if (await this.isSshTunnelEnabled(profile.id)) {
+    const sshMode = await this.sshRouteMode(profile.id);
+    if (sshMode === 'required') {
       throw new HeadlessHubFailure('xiaoyi_ssh_open_app', host);
     }
     let access: HubAccess | undefined;
@@ -378,6 +486,7 @@ export class HeadlessHubService {
       profile: profile,
       scope: scopeKey({ groupId: profile.id, managerId: manager }),
       host: host,
+      sshFallback: sshMode === 'fallback',
       transport: new HubTransport(config)
     };
   }
@@ -394,7 +503,11 @@ export class HeadlessHubService {
       const raw = await conn.transport.request(path, method, payload, opId);
       return Wire.parse(raw);
     } catch (error) {
-      throw mapHttpError(error as Error, conn.host);
+      const mapped = mapHttpError(error as Error, conn.host);
+      if (conn.sshFallback && mapped.code === 'xiaoyi_offline') {
+        throw new HeadlessHubFailure('xiaoyi_ssh_open_app', conn.host);
+      }
+      throw mapped;
     }
   }
 
@@ -454,10 +567,38 @@ export class HeadlessHubService {
       } catch (_) {
         // Optional endpoint on older hubs.
       }
-      return formatStatusSummary(sessions, pending, unreadPersonal, this.effectiveLocale());
+      const summary = formatStatusSummary(sessions, pending, unreadPersonal, this.effectiveLocale());
+      summary.profileId = conn.profile.id;
+      summary.managerId = conn.profile.manager;
+      return summary;
     } finally {
       conn.transport.close();
     }
+  }
+
+  private async resolveMainConversation(conn: ActiveHubConnection): Promise<string[]> {
+    const assistantRes = await this.requestJson(conn, '/api/v1/assistant');
+    const mainId = Wire.text(assistantRes, 'main');
+    const mainMachine = Wire.text(assistantRes, 'main_machine_id', Wire.text(assistantRes, 'machine_id'));
+    const conversations = Wire.rows(assistantRes, 'conversations');
+    const mainRow = conversations.find((c: Record<string, Object>): boolean =>
+      Wire.text(c, 'id', Wire.text(c, 'session_id')) === mainId
+    );
+    if (mainId && (mainMachine || (mainRow && Wire.text(mainRow, 'machine_id')))) {
+      return [mainMachine || Wire.text(mainRow!, 'machine_id'), mainId];
+    }
+    const opCreate = util.generateRandomUUID().toLowerCase();
+    const created = await this.requestJson(
+      conn,
+      '/api/v1/assistant/conversations',
+      'POST',
+      Wire.payload(['main', 'prompt'], [true, '']),
+      opCreate
+    );
+    const sessionObj = Wire.object(created, 'session');
+    const sessionId = Wire.text(sessionObj, 'id', Wire.text(sessionObj, 'session_id'));
+    const machineId = Wire.text(sessionObj, 'machine_id', Wire.text(sessionObj, 'machine'));
+    return [machineId, sessionId];
   }
 
   async askPersona(question: string, options?: HeadlessAskOptions): Promise<HeadlessAskResult> {
@@ -467,56 +608,66 @@ export class HeadlessHubService {
     try {
       let machineId = options?.machineId || '';
       let sessionId = options?.conversationId || '';
+      const usedCachedBinding = !!(machineId && sessionId);
 
       if (!machineId || !sessionId) {
-        const assistantRes = await this.requestJson(conn, '/api/v1/assistant');
-        const mainId = Wire.text(assistantRes, 'main');
-        const mainMachine = Wire.text(assistantRes, 'main_machine_id', Wire.text(assistantRes, 'machine_id'));
-        const conversations = Wire.rows(assistantRes, 'conversations');
-        const mainRow = conversations.find((c: Record<string, Object>): boolean =>
-          Wire.text(c, 'id', Wire.text(c, 'session_id')) === mainId
-        );
-        if (mainId && (mainMachine || (mainRow && Wire.text(mainRow, 'machine_id')))) {
-          sessionId = mainId;
-          machineId = mainMachine || Wire.text(mainRow!, 'machine_id');
-        } else {
-          const opCreate = util.generateRandomUUID().toLowerCase();
-          const created = await this.requestJson(
-            conn,
-            '/api/v1/assistant/conversations',
-            'POST',
-            Wire.payload(['main', 'prompt'], [true, '']),
-            opCreate
-          );
-          const sessionObj = Wire.object(created, 'session');
-          sessionId = Wire.text(sessionObj, 'id', Wire.text(sessionObj, 'session_id'));
-          machineId = Wire.text(sessionObj, 'machine_id', Wire.text(sessionObj, 'machine'));
-        }
+        const resolved = await this.resolveMainConversation(conn);
+        machineId = resolved[0];
+        sessionId = resolved[1];
       }
       if (!machineId || !sessionId) {
         throw new HeadlessHubFailure('xiaoyi_no_live_session', conn.host);
       }
 
-      const itemsPathBase = '/api/v1/sessions/' + segment(machineId) + '/' + segment(sessionId) + '/items';
+      let itemsPathBase = '/api/v1/sessions/' + segment(machineId) + '/' + segment(sessionId) + '/items';
       let baselineSeq = 0;
-      try {
-        const initialItems = await this.requestJson(conn, itemsPathBase + '?lines=20&fold_work=1&lazy_images=1');
-        const entries = decodeTranscriptEntries(Wire.rows(initialItems, 'items'));
-        for (let i = 0; i < entries.length; i++) {
-          if (entries[i].seq > baselineSeq) baselineSeq = entries[i].seq;
+      const readBaseline = async (): Promise<number> => {
+        let seq = 0;
+        try {
+          const initialItems = await this.requestJson(conn, itemsPathBase + '?lines=20&fold_work=1&lazy_images=1');
+          const entries = decodeTranscriptEntries(Wire.rows(initialItems, 'items'));
+          for (let i = 0; i < entries.length; i++) {
+            if (entries[i].seq > seq) seq = entries[i].seq;
+          }
+        } catch (_) {
+          // Fresh conversation may have empty items.
         }
-      } catch (_) {
-        // Fresh conversation may have empty items.
-      }
+        return seq;
+      };
+      baselineSeq = await readBaseline();
 
+      if (options?.onTarget) options.onTarget(machineId, sessionId);
       const opSend = util.generateRandomUUID().toLowerCase();
-      await this.requestJson(
-        conn,
-        '/api/v1/sessions/' + segment(machineId) + '/' + segment(sessionId) + '/messages',
-        'POST',
-        Wire.payload(['text', 'client_msg_id'], [text, opSend]),
-        opSend
-      );
+      try {
+        await this.requestJson(
+          conn,
+          '/api/v1/sessions/' + segment(machineId) + '/' + segment(sessionId) + '/messages',
+          'POST',
+          Wire.payload(['text', 'client_msg_id'], [text, opSend]),
+          opSend
+        );
+      } catch (sendError) {
+        // Recover cleanly when a cached A2A contextId references an archived/deleted conversation (404).
+        if (usedCachedBinding && sendError instanceof HeadlessHubFailure && sendError.code === 'xiaoyi_hub_update_required') {
+          const fresh = await this.resolveMainConversation(conn);
+          machineId = fresh[0];
+          sessionId = fresh[1];
+          if (!machineId || !sessionId) throw new HeadlessHubFailure('xiaoyi_no_live_session', conn.host);
+          itemsPathBase = '/api/v1/sessions/' + segment(machineId) + '/' + segment(sessionId) + '/items';
+          baselineSeq = await readBaseline();
+          if (options?.onTarget) options.onTarget(machineId, sessionId);
+          const retryOp = util.generateRandomUUID().toLowerCase();
+          await this.requestJson(
+            conn,
+            '/api/v1/sessions/' + segment(machineId) + '/' + segment(sessionId) + '/messages',
+            'POST',
+            Wire.payload(['text', 'client_msg_id'], [text, retryOp]),
+            retryOp
+          );
+        } else {
+          throw sendError as Error;
+        }
+      }
 
       const timeoutMs = options?.timeoutMs ?? DEFAULT_ASK_TIMEOUT_MS;
       const deadline = Date.now() + timeoutMs;
@@ -580,7 +731,7 @@ export class HeadlessHubService {
         }
       }
 
-      if (latestText && options?.onProgress) {
+      if (latestText && options?.onProgress && !(options?.isCancelled && options.isCancelled())) {
         options.onProgress(latestText, true);
       }
 
@@ -612,9 +763,9 @@ export class HeadlessHubService {
     }
   }
 
-  async interruptSession(machineId: string, sessionId: string): Promise<void> {
+  async interruptSession(machineId: string, sessionId: string, requestedProfileId: string = '', managerOverride?: string): Promise<void> {
     if (!machineId || !sessionId) return;
-    const conn = await this.openConnection();
+    const conn = await this.openConnection(requestedProfileId, managerOverride);
     try {
       await this.interruptSessionWithConn(conn, machineId, sessionId);
     } finally {
@@ -674,13 +825,20 @@ export class HeadlessHubService {
         throw new HeadlessHubFailure(pickedSession.errorCode, conn.host, pickedSession.target || machine.name);
       }
       const session = pickedSession.session;
-      await this.requestJson(
-        conn,
-        '/api/v1/sessions/' + segment(machine.id) + '/' + segment(session.id) + '/messages',
-        'POST',
-        Wire.payload(['text', 'client_msg_id'], [cleanPrompt, opId]),
-        opId
-      );
+      try {
+        await this.requestJson(
+          conn,
+          '/api/v1/sessions/' + segment(machine.id) + '/' + segment(session.id) + '/messages',
+          'POST',
+          Wire.payload(['text', 'client_msg_id'], [cleanPrompt, opId]),
+          opId
+        );
+      } catch (error) {
+        if (error instanceof HeadlessHubFailure && error.code === 'xiaoyi_hub_update_required') {
+          throw new HeadlessHubFailure('xiaoyi_no_live_session', conn.host, session.title || session.id);
+        }
+        throw error as Error;
+      }
       return {
         machineId: machine.id,
         machineName: machine.name || machine.id,
@@ -727,13 +885,20 @@ export class HeadlessHubService {
         };
       }
       const opId = util.generateRandomUUID().toLowerCase();
-      await this.requestJson(
-        conn,
-        '/api/v1/interactions/' + segment(top.id) + '/resolve',
-        'POST',
-        resolution.body,
-        opId
-      );
+      try {
+        await this.requestJson(
+          conn,
+          '/api/v1/interactions/' + segment(top.id) + '/resolve',
+          'POST',
+          resolution.body,
+          opId
+        );
+      } catch (error) {
+        if (error instanceof HeadlessHubFailure && error.code === 'xiaoyi_hub_update_required') {
+          throw new HeadlessHubFailure('xiaoyi_already_handled', conn.host);
+        }
+        throw error as Error;
+      }
       return {
         approved: true,
         needsScreen: false,
@@ -748,14 +913,25 @@ export class HeadlessHubService {
   }
 
   /** Resolve a specific decision ID from an inline AgentCard confirmation, still fail-closed on lock screen. */
-  async resolveDecision(decisionId: string, body: Record<string, Object>, overrideLocked?: boolean): Promise<void> {
+  async resolveDecision(
+    decisionId: string,
+    body: Record<string, Object>,
+    overrideLocked?: boolean,
+    requestedProfileId: string = '',
+    managerOverride?: string
+  ): Promise<void> {
     if (!decisionId) throw new HeadlessHubFailure('xiaoyi_already_handled');
     const locked = overrideLocked !== undefined ? overrideLocked : await this.isDeviceLocked();
     if (locked) throw new HeadlessHubFailure('xiaoyi_unlock_required');
-    const conn = await this.openConnection();
+    const conn = await this.openConnection(requestedProfileId, managerOverride);
     try {
       const opId = util.generateRandomUUID().toLowerCase();
       await this.requestJson(conn, '/api/v1/interactions/' + segment(decisionId) + '/resolve', 'POST', body, opId);
+    } catch (error) {
+      if (error instanceof HeadlessHubFailure && error.code === 'xiaoyi_hub_update_required') {
+        throw new HeadlessHubFailure('xiaoyi_already_handled', conn.host);
+      }
+      throw error as Error;
     } finally {
       conn.transport.close();
     }
@@ -983,6 +1159,7 @@ export class HeadlessHubService {
       credentialReadable: false,
       sshTunnelOnly: false,
       hubReachable: false,
+      recordingAllowed: true,
       onlineMachines: 0,
       totalMachines: 0,
       errorCode: ''
@@ -992,9 +1169,10 @@ export class HeadlessHubService {
       report.paired = true;
       report.profileName = profile.name || profile.hubId || profile.id;
       report.hubHost = extractHostLabel(profile.baseUrl);
-      report.sshTunnelOnly = await this.isSshTunnelEnabled(profile.id);
+      report.sshTunnelOnly = (await this.sshRouteMode(profile.id)) === 'required';
       const token = await this.vault.get(profile.id);
       report.credentialReadable = !!token;
+      report.recordingAllowed = await this.isRecordingModuleAllowed(profile.id);
       if (report.sshTunnelOnly) {
         report.errorCode = 'xiaoyi_ssh_open_app';
         return report;

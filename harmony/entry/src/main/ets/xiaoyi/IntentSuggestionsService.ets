@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { preferences } from '@kit.ArkData';
 import { insightIntent as suggestionsKit } from '@kit.IntentsKit';
 import {
   SuggestionSeed,
@@ -6,8 +7,8 @@ import {
   buildSafeSuggestionSeeds,
   isGracefulSuggestionError
 } from '../core/XiaoYiIntentCatalog';
-import { LocalStore } from '../platform/LocalStore';
 
+const PREF_STORE: string = 'persona.xiaoyi';
 const PREF_KEY: string = 'xiaoyi.suggestions.enabled';
 
 export interface SuggestionShareOutcome {
@@ -29,26 +30,22 @@ function readErrorCode(error: Error): number {
  */
 export class IntentSuggestionsService {
   static async isEnabled(context: common.Context): Promise<boolean> {
-    const store = new LocalStore();
     try {
-      await store.open(context);
-      return (await store.get(PREF_KEY)) === '1';
+      const store = await preferences.getPreferences(context, PREF_STORE);
+      const val = await store.get(PREF_KEY, false);
+      return val === true || val === '1';
     } catch (_) {
       return false;
-    } finally {
-      await store.close().catch(() => {});
     }
   }
 
   static async setEnabled(context: common.Context, enabled: boolean): Promise<boolean> {
-    const store = new LocalStore();
     try {
-      await store.open(context);
-      await store.put(PREF_KEY, enabled ? '1' : '0');
+      const store = await preferences.getPreferences(context, PREF_STORE);
+      await store.put(PREF_KEY, enabled);
+      await store.flush();
     } catch (_) {
       return false;
-    } finally {
-      await store.close().catch(() => {});
     }
     if (!enabled) {
       await IntentSuggestionsService.clearAll(context);

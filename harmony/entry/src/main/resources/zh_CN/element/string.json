@@ -8817,6 +8817,30 @@
       "value": "请先在 Persona 的健康空间中添加饮水记录项。"
     },
     {
+      "name": "xiaoyi_recording_module_off",
+      "value": "这台 hub 关闭了会议录音。"
+    },
+    {
+      "name": "xiaoyi_diag_recording_module",
+      "value": "会议录音模块"
+    },
+    {
+      "name": "xiaoyi_diag_on",
+      "value": "已开启"
+    },
+    {
+      "name": "xiaoyi_diag_off",
+      "value": "已关闭"
+    },
+    {
+      "name": "xiaoyi_agent_card_ready",
+      "value": "已就绪 · {count} 项能力"
+    },
+    {
+      "name": "xiaoyi_diag_preview_card",
+      "value": "预览小艺卡片"
+    },
+    {
       "name": "xiaoyi_timeout",
       "value": "Hub 响应超时，请打开 Persona 查看最新进度。"
     },

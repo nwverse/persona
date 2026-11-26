@@ -15,6 +15,8 @@ export interface AgentCardModel {
   title: string;
   body: string;
   deepLinkUri: string;
+  profileId: string;
+  managerId: string;
   workingCount: number;
   pendingCount: number;
   unreadCount: number;
@@ -99,11 +101,18 @@ export function parseAgentCardPayload(params?: Record<string, Object>): AgentCar
     canApproveFlag &&
     (decisionKind === 'permission' || decisionKind === 'plan');
 
+  const deepLinkUri = safeDeepLink(readStr(map, 'deepLinkUri'), variant);
+  const parsedRoute = parseXiaoYiUri(deepLinkUri);
+  const profileId = clip(readStr(map, 'profileId') || readStr(map, 'profile') || (parsedRoute ? parsedRoute.profile : ''), 128);
+  const managerId = clip(readStr(map, 'managerId') || readStr(map, 'manager') || (parsedRoute ? parsedRoute.manager : ''), 128);
+
   return {
     variant: variant,
     title: clip(readStr(map, 'title') || 'Persona', MAX_TITLE_CHARS),
     body: clip(readStr(map, 'summary') || readStr(map, 'body') || readStr(map, 'text'), MAX_BODY_CHARS),
-    deepLinkUri: safeDeepLink(readStr(map, 'deepLinkUri'), variant),
+    deepLinkUri: deepLinkUri,
+    profileId: profileId,
+    managerId: managerId,
     workingCount: readNum(map, 'workingCount'),
     pendingCount: readNum(map, 'pendingCount'),
     unreadCount: readNum(map, 'unreadCount'),

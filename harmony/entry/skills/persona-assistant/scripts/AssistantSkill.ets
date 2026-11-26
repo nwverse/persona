@@ -1,4 +1,10 @@
-import { HeadlessAskResult, HeadlessKnowledgeHit, HeadlessTodoResult, HeadlessWaterResult } from '../../../src/main/ets/xiaoyi/HeadlessHubService';
+import {
+  HeadlessAskResult,
+  HeadlessKnowledgeHit,
+  HeadlessRecordingStartResult,
+  HeadlessTodoResult,
+  HeadlessWaterResult
+} from '../../../src/main/ets/xiaoyi/HeadlessHubService';
 import { XiaoYiRuntimeContext } from '../../../src/main/ets/xiaoyi/XiaoYiRuntimeContext';
 
 /**
@@ -36,6 +42,16 @@ export class AssistantSkill {
     const hub = XiaoYiRuntimeContext.openHub();
     try {
       return await hub.logWater(amountMl);
+    } finally {
+      await hub.close();
+    }
+  }
+
+  /** Fail-closed meeting recording preflight: throws `xiaoyi_recording_module_off` when the Hub's recording module is off. */
+  static async startRecording(): Promise<HeadlessRecordingStartResult> {
+    const hub = XiaoYiRuntimeContext.openHub();
+    try {
+      return await hub.prepareRecordingStart();
     } finally {
       await hub.close();
     }

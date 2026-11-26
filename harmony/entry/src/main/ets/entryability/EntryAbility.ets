@@ -25,6 +25,8 @@ function clearXiaoYiSuggestionsOnForget(_hubId: string, context: common.Context)
 
 export default class EntryAbility extends UIAbility {
   private lifecycle: number = 0;
+  private shareGeneration: number = 0;
+  private destroyed: boolean = false;
   private visible: boolean = true;
   private pendingNotification: Record<string, Object> | undefined;
   private pendingXiaoYiRoute: string = '';
@@ -53,15 +55,16 @@ export default class EntryAbility extends UIAbility {
     if (uri.length <= 16384 && isPairingLink(uri)) { client.pairingLink = uri; return; }
     if (want.action !== NOTIFICATION_ACTION) {
       if (ShareReceiver.isShareWant(want)) {
-        const epoch = this.lifecycle;
+        const gen = ++this.shareGeneration;
         ShareReceiver.parseWant(want).then((shared) => {
-          if (epoch === this.lifecycle && shared.hasContent && shared.route) {
+          if (gen === this.shareGeneration && !this.destroyed && shared.hasContent && shared.route) {
             this.pendingXiaoYiRoute = JSON.stringify(shared.route);
             this.dispatchXiaoYiRoute();
           }
         }).catch(() => {});
         return;
       }
+      this.shareGeneration++;
       const route = parseXiaoYiWant(uri, params);
       if (route) { this.pendingXiaoYiRoute = JSON.stringify(route); return; }
       if (!uri && params['personaPage'] === 'projects') client.projectsRequested = true;
@@ -108,5 +111,5 @@ export default class EntryAbility extends UIAbility {
     }).catch(() => { if (this.visible && epoch === this.lifecycle) client.error = 'failed'; });
     deviceFeatures.foreground().catch(() => {});
   }
-  onDestroy(): void { phoneTextSize.detach(); nativeEnvironment.foreground = false; NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; this.pendingXiaoYiRoute = ''; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
+  onDestroy(): void { this.destroyed = true; this.shareGeneration++; phoneTextSize.detach(); nativeEnvironment.foreground = false; NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; this.pendingXiaoYiRoute = ''; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
 }

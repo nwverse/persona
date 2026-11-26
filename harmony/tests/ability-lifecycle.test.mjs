@@ -102,6 +102,25 @@ test('a pairing link still routes to pairing and never enters the XiaoYi deep-li
  assert.equal(state.xiaoYiRoutes.length, 0);
 });
 
+test('an incoming system share Want survives cold onCreate -> onForeground transition without being dropped', async () => {
+ reset();
+ state.ready = false;
+ let releaseInit;
+ state.init = new Promise(resolve => releaseInit = resolve);
+ const ability = new EntryAbility();
+ ability.onCreate({ action: 'ohos.want.action.sendData', parameters: { text: 'Cold shared note' } }, {});
+ ability.onForeground();
+ await turn();
+ assert.equal(state.xiaoYiRoutes.length, 0);
+ state.ready = true;
+ releaseInit();
+ await turn();
+ assert.equal(state.xiaoYiRoutes.length, 1);
+ const parsed = JSON.parse(state.xiaoYiRoutes[0]);
+ assert.equal(parsed.dest, 'share');
+ assert.equal(parsed.text, 'Cold shared note');
+});
+
 test('an incoming system share Want stages a share draft route without auto-sending', async () => {
  reset();
  const ability = new EntryAbility();

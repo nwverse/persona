@@ -63,6 +63,8 @@ function makeBridge(overrides = {}) {
         workingCount: 2,
         pendingCount: 1,
         unreadPersonalCount: 0,
+        profileId: 'hub-primary',
+        managerId: 'personal',
         topPending: {
           id: 'dec-1',
           machineId: 'm1',
@@ -82,6 +84,10 @@ function makeBridge(overrides = {}) {
         detail: 'First pending: Run unit tests',
         spokenText: '2 working, 1 need you. First pending: Run unit tests'
       };
+    },
+    async isRecordingAllowed() {
+      calls.push({ op: 'isRecordingAllowed' });
+      return true;
     },
     async addTodo(title, notes) {
       calls.push({ op: 'addTodo', title, notes });
@@ -139,6 +145,9 @@ test('classifyA2AIntent routes bilingual quick commands and general questions cl
   assert.equal(classifyA2AIntent('Send to agent: run tests').kind, 'send_agent');
   assert.equal(classifyA2AIntent('查看状态').kind, 'status');
   assert.equal(classifyA2AIntent('Approve pending').kind, 'inspect_approval');
+  assert.equal(classifyA2AIntent('Start meeting recording').kind, 'start_recording');
+  assert.equal(classifyA2AIntent('开始会议录音').kind, 'start_recording');
+  assert.equal(classifyA2AIntent('会議を録音').kind, 'start_recording');
   assert.equal(classifyA2AIntent('What is the weather in Tokyo?').kind, 'ask_persona');
 });
 
@@ -195,6 +204,94 @@ test('Execute transitions to INPUT_REQUIRED for ask_user and approval inspection
   assert.equal(sink2.artifacts[0].metadata.cardType, 'approval');
   assert.equal(sink2.artifacts[0].metadata.decisionId, 'dec-1');
   assert.equal(sink2.artifacts[0].metadata.canApproveInline, true);
+  assert.equal(sink2.artifacts[0].metadata.profileId, 'hub-primary');
+  assert.equal(sink2.artifacts[0].metadata.managerId, 'personal');
+  assert.ok(sink2.artifacts[0].metadata.deepLinkUri.includes('profile=hub-primary'));
+});
+
+test('Execute refuses start_recording when Hub recording module is off and PerceptionSuggest omits the recording chip', async () => {
+  const offBridge = makeBridge({
+    async isRecordingAllowed() { return false; },
+    async checkStatus() {
+      return { workingCount: 0, pendingCount: 0, unreadPersonalCount: 0, headline: 'All clear.', detail: '', spokenText: 'All clear.' };
+    }
+  });
+  const engine = new XiaoYiA2AEngine(offBridge, 100);
+
+  const sinkRefused = makeSink();
+  await engine.handleMethod('Execute', {
+    taskId: 't-rec-off',
+    contextId: '',
+    userInput: '开始会议录音',
+    parts: [{ text: '开始会议录音' }],
+    locale: 'zh-CN'
+  }, sinkRefused);
+  assert.equal(sinkRefused.statuses.at(-1).state, A2ATaskState.REJECTED);
+  assert.equal(sinkRefused.artifacts[0].parts[0].text, '这台 hub 关闭了会议录音。');
+  assert.equal(sinkRefused.artifacts[0].metadata.deepLinkUri, 'persona://open?dest=recording');
+
+  const sinkSug = makeSink();
+  await engine.handleMethod('PerceptionSuggest', {
+    taskId: 't-sug-rec-off',
+    contextId: '',
+    userInput: '',
+    parts: [],
+    locale: 'en'
+  }, sinkSug);
+  const chipIds = sinkSug.artifacts[0].parts[0].data.suggestions.map((c) => c.id);
+  assert.ok(!chipIds.includes('start_recording'), `expected start_recording omitted when off, got ${chipIds.join(',')}`);
+
+  // When recording module IS on, start_recording succeeds with autoStart=1
+  const onEngine = new XiaoYiA2AEngine(makeBridge({ async isRecordingAllowed() { return true; } }));
+  const sinkOn = makeSink();
+  await onEngine.handleMethod('Execute', {
+    taskId: 't-rec-on',
+    contextId: '',
+    userInput: 'Start meeting recording',
+    parts: [{ text: 'Start meeting recording' }],
+    locale: 'en'
+  }, sinkOn);
+  assert.equal(sinkOn.statuses.at(-1).state, A2ATaskState.COMPLETED);
+  assert.equal(sinkOn.artifacts[0].metadata.deepLinkUri, 'persona://open?dest=recording&autoStart=1');
+});
+
+test('Execute streams >4096-char replies without silent truncation, rejects duplicate active taskId, and supports turn-1 onTarget cancel', async () => {
+  const longText = 'A'.repeat(4096) + 'B'.repeat(1200);
+  const longEngine = new XiaoYiA2AEngine(makeBridge({
+    async askPersona(_q, _c, _m, onProgress) {
+      onProgress(longText, true);
+      return { answer: longText, pending: false, machineId: 'm1', sessionId: 's1', deepLinkUri: 'persona://open?dest=assistant', askUserPrompt: '' };
+    }
+  }));
+  const sinkLong = makeSink();
+  await longEngine.handleMethod('Execute', { taskId: 't-long', contextId: '', userInput: 'Long reply', parts: [], locale: 'en' }, sinkLong);
+  assert.equal(sinkLong.artifacts.length, 2);
+  assert.equal(sinkLong.artifacts[0].parts[0].text.length, 4096);
+  assert.equal(sinkLong.artifacts[0].lastChunk, false);
+  assert.equal(sinkLong.artifacts[1].parts[0].text.length, 1200);
+  assert.equal(sinkLong.artifacts[1].append, true);
+  assert.equal(sinkLong.artifacts[1].lastChunk, true);
+
+  let releaseFirst;
+  const turn1Bridge = makeBridge({
+    async askPersona(_q, _c, _m, _p, isCancelled, onTarget) {
+      onTarget?.('m-first', 's-first');
+      await new Promise((r) => { releaseFirst = r; });
+      return { answer: isCancelled() ? '' : 'late', pending: false, machineId: 'm-first', sessionId: 's-first', deepLinkUri: '', askUserPrompt: '' };
+    }
+  });
+  const engine = new XiaoYiA2AEngine(turn1Bridge);
+  const sink1 = makeSink();
+  const sinkDup = makeSink();
+  const sinkCancel = makeSink();
+  const pending = engine.handleMethod('Execute', { taskId: 't-dup', contextId: '', userInput: 'First turn', parts: [], locale: 'en' }, sink1);
+  await new Promise((r) => setTimeout(r, 10));
+  await engine.handleMethod('Execute', { taskId: 't-dup', contextId: '', userInput: 'Duplicate', parts: [], locale: 'en' }, sinkDup);
+  assert.equal(sinkDup.statuses[0].state, A2ATaskState.REJECTED);
+  await engine.handleMethod('Cancel', { taskId: 't-dup', contextId: '', userInput: '', parts: [], locale: 'en' }, sinkCancel);
+  releaseFirst();
+  await pending;
+  assert.ok(turn1Bridge.calls.some((c) => c.op === 'interruptSession' && c.machineId === 'm-first' && c.sessionId === 's-first'));
 });
 
 test('Execute transitions to AUTH_REQUIRED when unpaired and Cancel interrupts active session', async () => {

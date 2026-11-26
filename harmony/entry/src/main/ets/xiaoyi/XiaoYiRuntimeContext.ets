@@ -63,6 +63,7 @@ function fallbackErrorText(key: string): string {
     case 'xiaoyi_needs_screen': return 'Open Persona to answer this request.';
     case 'xiaoyi_nothing_to_send': return 'Nothing to send.';
     case 'xiaoyi_water_not_enabled': return 'First add Water tracking in Health inside Persona.';
+    case 'xiaoyi_recording_module_off': return 'Meeting recording is off on this hub.';
     case 'xiaoyi_timeout': return 'The Hub is taking longer than expected. Open Persona to view progress.';
     case 'xiaoyi_rate_limited': return 'Too many items pushed recently. Try again later.';
     default: return 'Unable to complete the request. Open Persona to check details.';

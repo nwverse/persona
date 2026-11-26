@@ -59,6 +59,19 @@ test('ApproveFirstPending intent enforces fail-closed lock-screen gating through
   assert.ok(hubSrc.includes("throw new HeadlessHubFailure('xiaoyi_unlock_required')"));
 });
 
+test('StartPersonaRecording, AssistantSkill, and Index deep-link enforce fail-closed recording-module guard (#15985)', () => {
+  const startRecSrc = readFileSync(resolve(MAIN_DIR, 'ets/xiaoyi/intents/StartPersonaRecordingIntent.ets'), 'utf8');
+  assert.ok(startRecSrc.includes('assertRecordingModuleAllowed()'));
+  assert.ok(startRecSrc.includes('xiaoyi_recording_module_off'));
+
+  const indexSrc = readFileSync(resolve(MAIN_DIR, 'ets/pages/Index.ets'), 'utf8');
+  assert.ok(indexSrc.includes('isRecordingModuleAllowed()'));
+  assert.ok(indexSrc.includes("tr('xiaoyi_recording_module_off')"));
+
+  const skillSrc = readFileSync(resolve(MAIN_DIR, '../../skills/persona-assistant/scripts/AssistantSkill.ets'), 'utf8');
+  assert.ok(skillSrc.includes('prepareRecordingStart()'));
+});
+
 test('AppIntentEntity classes declare supportedQueryProperties and onQueryEntity', () => {
   const entitiesSrc = readFileSync(resolve(MAIN_DIR, 'ets/xiaoyi/intents/PersonaIntentEntities.ets'), 'utf8');
   assert.ok(entitiesSrc.includes("entityCategory: 'PersonaMachine'"));

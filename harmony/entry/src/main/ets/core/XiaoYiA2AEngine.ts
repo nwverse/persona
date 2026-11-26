@@ -1,7 +1,7 @@
 /** Pure on-device A2A v1.0 orchestrator for XiaoYi AgentExtensionAbility. Zero platform imports. */
 
 import type { XiaoYiInteraction, XiaoYiStatusSummary } from './XiaoYiActions';
-import { buildApprovalPayload } from './XiaoYiActions';
+import { buildApprovalPayload, recordingModuleRefusalText } from './XiaoYiActions';
 import { buildXiaoYiRouteUri, createXiaoYiRoute } from './XiaoYiRoutes';
 
 /** Numeric task states aligned 1:1 with `@hms.ai.A2A.TaskState`. */
@@ -95,9 +95,11 @@ export interface A2AHubBridge {
     conversationId: string,
     machineId: string,
     onProgress: (text: string, done: boolean) => void,
-    isCancelled: () => boolean
+    isCancelled: () => boolean,
+    onTarget?: (machineId: string, sessionId: string) => void
   ): Promise<A2AAskResult>;
   checkStatus(): Promise<XiaoYiStatusSummary>;
+  isRecordingAllowed?(): Promise<boolean>;
   addTodo(title: string, notes: string): Promise<A2ATodoResult>;
   logWater(amountMl?: number): Promise<A2AWaterResult>;
   searchKnowledge(query: string): Promise<A2AKnowledgeHit[]>;
@@ -111,6 +113,7 @@ export interface A2AHubBridge {
 export type A2AClassifiedKind =
   | 'status'
   | 'inspect_approval'
+  | 'start_recording'
   | 'add_todo'
   | 'log_water'
   | 'search_kb'
@@ -224,6 +227,11 @@ export function classifyA2AIntent(prompt: string): A2AClassifiedIntent {
     return { kind: 'send_agent', arg: agentMatch[1].trim() };
   }
 
+  // Start meeting recording (strictly gated by the Hub's `module.recording` flag)
+  if (/^(?:start\s+(?:a\s+)?(?:meeting\s+)?recording|record\s+(?:a\s+)?meeting|开始(?:会议)?录音|用\s*persona\s*录音|会議を録音|録音を開始)/i.test(clean)) {
+    return { kind: 'start_recording', arg: '' };
+  }
+
   // Inspect pending approvals (always prompts inline confirmation card or Persona App, never silent auto-approve)
   if (/^(?:approve|allow\s+first|review\s+pending|批准|通过待确认|查看待审批|审批|確認待ちを承認)/i.test(clean) ||
     lowered === 'pending approvals') {
@@ -238,7 +246,64 @@ export function classifyA2AIntent(prompt: string): A2AClassifiedIntent {
   return { kind: 'ask_persona', arg: clean };
 }
 
-function buildSuggestionsForStatus(status: XiaoYiStatusSummary | undefined, authError: boolean, locale: string): A2ASuggestionChip[] {
+function localizedTodoReceipt(title: string, locale: string): string {
+  const lang = normalizeLang(locale);
+  if (lang === 'zh-Hans') return `已保存待办：${title}`;
+  if (lang === 'ja') return `ToDoを保存しました: ${title}`;
+  return `To-do saved: ${title}`;
+}
+
+function localizedWaterReceipt(recordedMl: number, todayMl: number, goalMl: number, locale: string): string {
+  const lang = normalizeLang(locale);
+  if (lang === 'zh-Hans') return `已记录 ${recordedMl} 毫升。今日：${todayMl} / ${goalMl} 毫升。`;
+  if (lang === 'ja') return `${recordedMl} ml を記録しました。本日: ${todayMl} / ${goalMl} ml。`;
+  return `Logged ${recordedMl} ml. Today: ${todayMl} / ${goalMl} ml.`;
+}
+
+function localizedKbEmpty(query: string, locale: string): string {
+  const lang = normalizeLang(locale);
+  if (lang === 'zh-Hans') return `知识库中未找到与“${query}”相关的内容。`;
+  if (lang === 'ja') return `「${query}」に一致するナレッジは見つかりませんでした。`;
+  return `No knowledge matches for "${query}".`;
+}
+
+function localizedAgentReceipt(sessionTitle: string, machineName: string, locale: string): string {
+  const lang = normalizeLang(locale);
+  if (lang === 'zh-Hans') return `已发送至 ${sessionTitle}（${machineName}）。`;
+  if (lang === 'ja') return `${sessionTitle}（${machineName}）へ送信しました。`;
+  return `Sent to ${sessionTitle} (${machineName}).`;
+}
+
+function localizedOpeningRecording(locale: string): string {
+  const lang = normalizeLang(locale);
+  if (lang === 'zh-Hans') return '正在打开 Persona 会议录音。';
+  if (lang === 'ja') return 'Persona の会議録音を開きます。';
+  return 'Opening Persona Meeting Recording.';
+}
+
+function localizedStillThinking(locale: string): string {
+  const lang = normalizeLang(locale);
+  if (lang === 'zh-Hans') return '已发送给 Persona，正在处理中——打开 Persona 可查看进度。';
+  if (lang === 'ja') return 'Persona に送信しました。処理中です—進行状況は Persona で確認できます。';
+  return 'Sent to Persona. It is still thinking — open Persona to view progress.';
+}
+
+function splitTextChunks(text: string, maxChars: number): string[] {
+  const chars = Array.from(text);
+  if (chars.length <= maxChars) return [text];
+  const chunks: string[] = [];
+  for (let offset = 0; offset < chars.length; offset += maxChars) {
+    chunks.push(chars.slice(offset, offset + maxChars).join(''));
+  }
+  return chunks;
+}
+
+function buildSuggestionsForStatus(
+  status: XiaoYiStatusSummary | undefined,
+  authError: boolean,
+  locale: string,
+  recordingAllowed: boolean = true
+): A2ASuggestionChip[] {
   const lang = normalizeLang(locale);
   const chips: A2ASuggestionChip[] = [];
 
@@ -290,14 +355,18 @@ function buildSuggestionsForStatus(status: XiaoYiStatusSummary | undefined, auth
       title: lang === 'zh-Hans' ? '记一杯水' : lang === 'ja' ? '水分を記録' : 'Log water',
       query: lang === 'zh-Hans' ? '喝了一杯水' : lang === 'ja' ? '水分を記録' : 'Log water',
       deepLinkUri: buildXiaoYiRouteUri(createXiaoYiRoute('health'))
-    },
-    {
+    }
+  ];
+  if (recordingAllowed) {
+    const recRoute = createXiaoYiRoute('recording');
+    recRoute.autoStart = true;
+    defaults.push({
       id: 'start_recording',
       title: lang === 'zh-Hans' ? '开始会议录音' : lang === 'ja' ? '会議を録音' : 'Start meeting recording',
       query: lang === 'zh-Hans' ? '开始会议录音' : lang === 'ja' ? '会議を録音' : 'Start meeting recording',
-      deepLinkUri: buildXiaoYiRouteUri(createXiaoYiRoute('recording'))
-    }
-  ];
+      deepLinkUri: buildXiaoYiRouteUri(recRoute)
+    });
+  }
 
   for (let i = 0; i < defaults.length && chips.length < 4; i++) {
     chips.push(defaults[i]);
@@ -382,25 +451,35 @@ export class XiaoYiA2AEngine {
   private async handlePerceptionSuggest(req: A2ARequestSnapshot, sink: A2ATaskSink): Promise<void> {
     sink.updateStatus(req.taskId, A2ATaskState.WORKING);
     let status: XiaoYiStatusSummary | undefined = undefined;
+    let recordingAllowed: boolean = true;
     let authError = false;
 
     let timerId: number = -1;
     try {
-      const timeoutPromise = new Promise<XiaoYiStatusSummary | undefined>((resolve) => {
-        timerId = setTimeout(() => resolve(undefined), this.perceptionBudgetMs);
+      const timeoutPromise = new Promise<void>((resolve) => {
+        timerId = setTimeout(() => resolve(), this.perceptionBudgetMs);
       });
-      status = await Promise.race<XiaoYiStatusSummary | undefined>([
-        this.bridge.checkStatus().catch((error: Error): XiaoYiStatusSummary | undefined => {
-          if (isAuthError(error)) authError = true;
-          return undefined;
-        }),
+      const statusWork = this.bridge.checkStatus().then((res: XiaoYiStatusSummary) => {
+        status = res;
+      }).catch((error: Error) => {
+        if (isAuthError(error)) authError = true;
+      });
+      const recWork = this.bridge.isRecordingAllowed
+        ? this.bridge.isRecordingAllowed().then((allowed: boolean) => {
+            recordingAllowed = allowed;
+          }).catch(() => {
+            // Keep default when allowance cannot be read.
+          })
+        : Promise.resolve();
+      await Promise.race<void>([
+        Promise.all([statusWork, recWork]).then((): void => undefined),
         timeoutPromise
       ]);
     } finally {
       if (timerId !== -1) clearTimeout(timerId);
     }
 
-    const chips = buildSuggestionsForStatus(status, authError, req.locale);
+    const chips = buildSuggestionsForStatus(status, authError, req.locale, recordingAllowed);
     const payload: Record<string, Object> = {};
     payload['suggestions'] = chips as Object;
     sink.addArtifact(req.taskId, {
@@ -420,6 +499,10 @@ export class XiaoYiA2AEngine {
       sink.updateStatus(req.taskId, A2ATaskState.REJECTED, 'Empty prompt');
       return;
     }
+    if (this.activeTasks.has(req.taskId)) {
+      sink.updateStatus(req.taskId, A2ATaskState.REJECTED, 'Task already in progress');
+      return;
+    }
     if (this.activeTasks.size >= MAX_CONCURRENT_TASKS) {
       sink.updateStatus(req.taskId, A2ATaskState.REJECTED, 'Too many concurrent tasks');
       return;
@@ -434,6 +517,38 @@ export class XiaoYiA2AEngine {
 
     try {
       const intent = classifyA2AIntent(prompt);
+
+      if (intent.kind === 'start_recording') {
+        const allowed = this.bridge.isRecordingAllowed ? await this.bridge.isRecordingAllowed() : true;
+        if (handle.cancelled) return;
+        if (!allowed) {
+          const refusal = recordingModuleRefusalText(req.locale);
+          const readOnlyUri = buildXiaoYiRouteUri(createXiaoYiRoute('recording'));
+          sink.addArtifact(req.taskId, {
+            artifactId: req.taskId + ':recording_refused',
+            name: 'persona_recording_refused',
+            parts: [{ text: refusal, mediaType: 'text/plain' }],
+            metadata: buildCardMetadata('receipt', readOnlyUri),
+            append: false,
+            lastChunk: true
+          });
+          sink.updateStatus(req.taskId, A2ATaskState.REJECTED, refusal);
+          return;
+        }
+        const route = createXiaoYiRoute('recording');
+        route.autoStart = true;
+        const text = localizedOpeningRecording(req.locale);
+        sink.addArtifact(req.taskId, {
+          artifactId: req.taskId + ':recording',
+          name: 'persona_recording_open',
+          parts: [{ text: text, mediaType: 'text/plain' }],
+          metadata: buildCardMetadata('receipt', buildXiaoYiRouteUri(route)),
+          append: false,
+          lastChunk: true
+        });
+        sink.updateStatus(req.taskId, A2ATaskState.COMPLETED, text);
+        return;
+      }
 
       if (intent.kind === 'status') {
         const summary = await this.bridge.checkStatus();
@@ -472,14 +587,24 @@ export class XiaoYiA2AEngine {
           return;
         }
         const approvalPlan = buildApprovalPayload(top);
-        const deepLink = top.machineId && top.sessionId
-          ? 'persona://open?dest=session&machine=' + encodeURIComponent(top.machineId) + '&session=' + encodeURIComponent(top.sessionId)
-          : buildXiaoYiRouteUri(createXiaoYiRoute('agents'));
+        let deepLink: string;
+        if (top.machineId && top.sessionId) {
+          const route = createXiaoYiRoute('session');
+          route.profile = summary.profileId || '';
+          route.manager = summary.managerId || '';
+          route.machine = top.machineId;
+          route.session = top.sessionId;
+          deepLink = buildXiaoYiRouteUri(route);
+        } else {
+          deepLink = buildXiaoYiRouteUri(createXiaoYiRoute('agents'));
+        }
         const extras: Record<string, Object> = {};
         extras['decisionId'] = top.id;
         extras['decisionKind'] = top.kind;
         extras['summary'] = top.summary || top.toolName || top.kind;
         extras['canApproveInline'] = approvalPlan.kind === 'resolve';
+        if (summary.profileId) extras['profileId'] = summary.profileId;
+        if (summary.managerId) extras['managerId'] = summary.managerId;
         sink.addArtifact(req.taskId, {
           artifactId: req.taskId + ':approval',
           name: 'persona_approval_card',
@@ -495,7 +620,7 @@ export class XiaoYiA2AEngine {
       if (intent.kind === 'add_todo') {
         const saved = await this.bridge.addTodo(intent.arg, '');
         if (handle.cancelled) return;
-        const text = `To-do saved: ${saved.title}`;
+        const text = localizedTodoReceipt(saved.title, req.locale);
         sink.addArtifact(req.taskId, {
           artifactId: req.taskId + ':todo',
           name: 'persona_todo_receipt',
@@ -511,7 +636,7 @@ export class XiaoYiA2AEngine {
       if (intent.kind === 'log_water') {
         const logged = await this.bridge.logWater(intent.amountMl);
         if (handle.cancelled) return;
-        const text = `Logged ${logged.recordedMl} ml. Today: ${logged.todayMl} / ${logged.goalMl} ml.`;
+        const text = localizedWaterReceipt(logged.recordedMl, logged.todayMl, logged.goalMl, req.locale);
         sink.addArtifact(req.taskId, {
           artifactId: req.taskId + ':water',
           name: 'persona_water_receipt',
@@ -528,7 +653,7 @@ export class XiaoYiA2AEngine {
         const hits = await this.bridge.searchKnowledge(intent.arg);
         if (handle.cancelled) return;
         const text = hits.length === 0
-          ? `No knowledge matches for "${intent.arg}".`
+          ? localizedKbEmpty(intent.arg, req.locale)
           : hits.slice(0, 5).map((h: A2AKnowledgeHit): string => h.path + (h.line ? ': ' + h.line : '')).join('\n');
         sink.addArtifact(req.taskId, {
           artifactId: req.taskId + ':kb',
@@ -545,7 +670,7 @@ export class XiaoYiA2AEngine {
       if (intent.kind === 'send_agent') {
         const sent = await this.bridge.sendAgentTask(intent.arg, '', '');
         if (handle.cancelled) return;
-        const text = `Sent to ${sent.sessionTitle} (${sent.machineName}).`;
+        const text = localizedAgentReceipt(sent.sessionTitle, sent.machineName, req.locale);
         sink.addArtifact(req.taskId, {
           artifactId: req.taskId + ':agent',
           name: 'persona_agent_receipt',
@@ -576,17 +701,21 @@ export class XiaoYiA2AEngine {
         existingBinding ? existingBinding.machineId : '',
         (fullText: string, done: boolean) => {
           if (handle.cancelled) return;
-          const delta = fullText.slice(emittedLen);
+          const delta = fullText.length >= emittedLen ? fullText.slice(emittedLen) : '';
           if (delta) {
             emittedLen = fullText.length;
-            sink.addArtifact(req.taskId, {
-              artifactId: artifactId,
-              name: 'persona_answer',
-              parts: [{ text: clipChars(delta, MAX_CHUNK_CHARS), mediaType: 'text/plain' }],
-              append: chunkCount > 0,
-              lastChunk: done
-            });
-            chunkCount++;
+            const slices = splitTextChunks(delta, MAX_CHUNK_CHARS);
+            for (let i = 0; i < slices.length; i++) {
+              const isLast = done && i === slices.length - 1;
+              sink.addArtifact(req.taskId, {
+                artifactId: artifactId,
+                name: 'persona_answer',
+                parts: [{ text: slices[i], mediaType: 'text/plain' }],
+                append: chunkCount > 0,
+                lastChunk: isLast
+              });
+              chunkCount++;
+            }
           } else if (done && chunkCount > 0) {
             sink.addArtifact(req.taskId, {
               artifactId: artifactId,
@@ -597,7 +726,11 @@ export class XiaoYiA2AEngine {
             });
           }
         },
-        (): boolean => handle.cancelled
+        (): boolean => handle.cancelled,
+        (targetMachineId: string, targetSessionId: string) => {
+          handle.machineId = targetMachineId;
+          handle.sessionId = targetSessionId;
+        }
       );
 
       if (handle.cancelled) return;
@@ -623,15 +756,18 @@ export class XiaoYiA2AEngine {
       }
 
       if (chunkCount === 0) {
-        const finalText = askResult.answer || 'Sent to Persona. It is still thinking — open Persona to view progress.';
-        sink.addArtifact(req.taskId, {
-          artifactId: artifactId,
-          name: 'persona_answer',
-          parts: [{ text: clipChars(finalText, MAX_CHUNK_CHARS), mediaType: 'text/plain' }],
-          metadata: buildCardMetadata('answer', askResult.deepLinkUri),
-          append: false,
-          lastChunk: true
-        });
+        const finalText = askResult.answer || localizedStillThinking(req.locale);
+        const slices = splitTextChunks(finalText, MAX_CHUNK_CHARS);
+        for (let i = 0; i < slices.length; i++) {
+          sink.addArtifact(req.taskId, {
+            artifactId: artifactId,
+            name: 'persona_answer',
+            parts: [{ text: slices[i], mediaType: 'text/plain' }],
+            metadata: i === 0 ? buildCardMetadata('answer', askResult.deepLinkUri) : undefined,
+            append: i > 0,
+            lastChunk: i === slices.length - 1
+          });
+        }
       }
       sink.updateStatus(req.taskId, A2ATaskState.COMPLETED);
     } catch (error) {
@@ -660,7 +796,9 @@ export class XiaoYiA2AEngine {
         sink.updateStatus(req.taskId, A2ATaskState.FAILED, message);
       }
     } finally {
-      this.activeTasks.delete(req.taskId);
+      if (this.activeTasks.get(req.taskId) === handle) {
+        this.activeTasks.delete(req.taskId);
+      }
     }
   }
 }

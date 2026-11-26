@@ -1,4 +1,4 @@
-import { common, skillManager } from '@kit.AbilityKit';
+import { ConfigurationConstant, common, skillManager } from '@kit.AbilityKit';
 import { relationalStore } from '@kit.ArkData';
 import { util } from '@kit.ArkTS';
 import { describe, expect, it } from '@ohos/hypium';
@@ -22,14 +22,22 @@ import {
   A2AWaterResult,
   XiaoYiA2AEngine
 } from '../../../main/ets/core/XiaoYiA2AEngine';
-import { XiaoYiStatusSummary } from '../../../main/ets/core/XiaoYiActions';
+import {
+  XiaoYiStatusSummary,
+  extractPublishedModules,
+  isRecordingModuleAllowed,
+  parseStoredHubModules,
+  serializeStoredHubModules
+} from '../../../main/ets/core/XiaoYiActions';
 import { buildXiaoYiRouteUri, createXiaoYiRoute, parseXiaoYiUri } from '../../../main/ets/core/XiaoYiRoutes';
 import { CredentialVault } from '../../../main/ets/platform/CredentialVault';
 import { LocalStore } from '../../../main/ets/platform/LocalStore';
 import { nativeTestContext } from './NativeContext';
+import { fixtureArgument } from './NativeTransport.test';
 
 class StubA2ABridge implements A2AHubBridge {
   interrupted: string = '';
+  recordingAllowed: boolean = true;
 
   async askPersona(
     question: string,
@@ -56,6 +64,8 @@ class StubA2ABridge implements A2AHubBridge {
       workingCount: 1,
       pendingCount: 1,
       unreadPersonalCount: 0,
+      profileId: 'hub-native',
+      managerId: 'personal',
       topPending: {
         id: 'native-dec-1',
         machineId: 'm-native',
@@ -75,6 +85,10 @@ class StubA2ABridge implements A2AHubBridge {
       detail: 'First pending: Run verification check',
       spokenText: '1 working, 1 need you. First pending: Run verification check'
     };
+  }
+
+  async isRecordingAllowed(): Promise<boolean> {
+    return this.recordingAllowed;
   }
 
   async addTodo(title: string, _notes: string): Promise<A2ATodoResult> {
@@ -212,11 +226,56 @@ export default function nativeXiaoYiTests(): void {
         cardType: 'approval',
         decisionId: 'd1',
         decisionKind: 'plan',
-        canApproveInline: true
+        canApproveInline: true,
+        deepLinkUri: 'persona://open?dest=session&profile=hub-1&manager=personal&machine=m1&session=s1'
       });
       expect(card.canApproveInline).assertTrue();
+      expect(card.profileId).assertEqual('hub-1');
+      expect(card.managerId).assertEqual('personal');
       expect(buildInlineCardResolution('plan') !== undefined).assertTrue();
       expect(nextInlineConfirmStep('idle', 'request')).assertEqual('confirming');
+    });
+
+    it('recording_module_guard_fails_closed_on_arkts_for_live_stored_and_a2a', 0, async (): Promise<void> => {
+      expect(isRecordingModuleAllowed(['modules', 'module.voice'])).assertFalse();
+      expect(isRecordingModuleAllowed(['modules', 'module.recording'])).assertTrue();
+      expect(isRecordingModuleAllowed(['file_upload'])).assertTrue();
+
+      const storedOff = serializeStoredHubModules(extractPublishedModules(['modules']));
+      expect(isRecordingModuleAllowed([], parseStoredHubModules(storedOff))).assertFalse();
+
+      const stub = new StubA2ABridge();
+      stub.recordingAllowed = false;
+      const engine = new XiaoYiA2AEngine(stub);
+      const sinkRec = new RecordingSink();
+      await engine.handleMethod('Execute', {
+        taskId: 'native-rec-off',
+        contextId: '',
+        userInput: 'Start meeting recording',
+        parts: [{ text: 'Start meeting recording' }],
+        locale: 'en'
+      }, sinkRec);
+      expect(sinkRec.states[sinkRec.states.length - 1]).assertEqual(A2ATaskState.REJECTED);
+      expect(sinkRec.artifacts[0].parts[0].text).assertEqual('Meeting recording is off on this hub.');
+    });
+  });
+}
+
+export function nativeXiaoYiPreviewHold(): void {
+  describe('NativeXiaoYiPreview', (): void => {
+    it('holds_visual_preview_window_for_inspection', 0, async (): Promise<void> => {
+      const holdSec = Math.max(5, Math.min(45, Number(fixtureArgument('cardHoldSeconds') || '10')));
+      const appCtx = nativeTestContext().getApplicationContext();
+      const dark = fixtureArgument('cardDark') === '1';
+      try {
+        if (fixtureArgument('settingsPreview') === '1') {
+          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+          appCtx.setColorMode(dark ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT);
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, holdSec * 1000));
+      } finally {
+        appCtx.setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
+      }
     });
   });
 }

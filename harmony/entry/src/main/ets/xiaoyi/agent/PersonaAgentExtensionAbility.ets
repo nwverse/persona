@@ -89,12 +89,14 @@ class HeadlessA2ABridge implements A2AHubBridge {
     conversationId: string,
     machineId: string,
     onProgress: (text: string, done: boolean) => void,
-    isCancelled: () => boolean
+    isCancelled: () => boolean,
+    onTarget?: (machineId: string, sessionId: string) => void
   ): Promise<A2AAskResult> {
     const res = await this.hub.askPersona(question, {
       conversationId: conversationId,
       machineId: machineId,
       onProgress: onProgress,
+      onTarget: onTarget,
       isCancelled: isCancelled
     });
     return {
@@ -109,6 +111,10 @@ class HeadlessA2ABridge implements A2AHubBridge {
 
   checkStatus(): Promise<XiaoYiStatusSummary> {
     return this.hub.checkStatus();
+  }
+
+  isRecordingAllowed(): Promise<boolean> {
+    return this.hub.isRecordingModuleAllowed();
   }
 
   async addTodo(title: string, notes: string): Promise<A2ATodoResult> {

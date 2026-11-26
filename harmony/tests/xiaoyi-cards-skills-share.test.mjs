@@ -52,9 +52,20 @@ test('parseAgentCardPayload decodes all 4 variants safely and restricts inline a
   });
   assert.equal(permCard.canApproveInline, true);
   assert.equal(permCard.deepLinkUri, 'persona://open?dest=agents');
+  assert.equal(permCard.profileId, '');
   assert.deepEqual(buildInlineCardResolution('permission'), { allow: true });
   assert.deepEqual(buildInlineCardResolution('plan'), { approve: true, mode: 'acceptEdits' });
   assert.equal(buildInlineCardResolution('question'), undefined);
+
+  const scopedCard = parseAgentCardPayload({
+    cardType: 'approval',
+    decisionId: 'dec-99',
+    decisionKind: 'plan',
+    canApproveInline: true,
+    deepLinkUri: 'persona://open?dest=session&profile=hub-b&manager=work&machine=m2&session=s2'
+  });
+  assert.equal(scopedCard.profileId, 'hub-b');
+  assert.equal(scopedCard.managerId, 'work');
 
   const questionCard = parseAgentCardPayload({
     cardType: 'approval',

@@ -9,12 +9,17 @@ import {
   buildPushItem,
   enqueueOutboxItem,
   extractLatestAssistantAnswer,
+  extractPublishedModules,
   formatStatusSummary,
   formatXiaoYiError,
+  isRecordingModuleAllowed,
+  parseStoredHubModules,
   pruneOutboxItems,
+  recordingModuleRefusalText,
   selectLiveSession,
   selectMachine,
   selectPendingApprovals,
+  serializeStoredHubModules,
   takeOutboxBatch
 } from '../entry/src/main/ets/core/XiaoYiActions.ts';
 
@@ -135,9 +140,10 @@ test('selectMachine obeys explicit fuzzy match without silent switching, then re
   assert.equal(none.errorCode, 'xiaoyi_no_online_machine');
 });
 
-test('selectLiveSession picks fuzzy match or newest live non-assistant session', () => {
+test('selectLiveSession picks fuzzy match or newest sendable live non-assistant session', () => {
   const sessions = [
     session({ id: 'assistant-1', assistant: true, updatedAt: '2026-11-26T09:00:00Z' }),
+    session({ id: 's-readonly', title: 'Read only newest', canSend: false, updatedAt: '2026-11-26T08:30:00Z' }),
     session({ id: 's-offline', status: 'offline', state: 'offline', updatedAt: '2026-11-26T08:00:00Z' }),
     session({ id: 's-old', title: 'Docs cleanup', updatedAt: '2026-11-26T06:00:00Z' }),
     session({ id: 's-new', title: 'XiaoYi integration', updatedAt: '2026-11-26T07:00:00Z' })
@@ -222,7 +228,43 @@ test('extractLatestAssistantAnswer skips non-assistant items and collects ordere
 
 test('formatXiaoYiError maps known and fallback codes cleanly', () => {
   assert.equal(formatXiaoYiError('xiaoyi_unlock_required').key, 'xiaoyi_unlock_required');
+  assert.equal(formatXiaoYiError('xiaoyi_recording_module_off').key, 'xiaoyi_recording_module_off');
   assert.equal(formatXiaoYiError('xiaoyi_ssh_open_app', 'hub.example').host, 'hub.example');
   assert.equal(formatXiaoYiError('offline').key, 'xiaoyi_offline');
   assert.equal(formatXiaoYiError('something_unexpected').key, 'xiaoyi_failed');
+});
+
+test('isRecordingModuleAllowed follows upstream HubModules (#15978 / #15985) across live, stored, and legacy hubs', () => {
+  // Older hub without `modules` marker => allowed
+  assert.equal(extractPublishedModules(['file_upload', 'recording_day']), null);
+  assert.equal(isRecordingModuleAllowed(['file_upload', 'recording_day']), true);
+
+  // Publishing hub with `module.recording` => allowed
+  assert.deepEqual(extractPublishedModules(['modules', 'module.voice', 'module.recording']), ['module.recording', 'module.voice']);
+  assert.equal(isRecordingModuleAllowed(['modules', 'module.recording']), true);
+
+  // Publishing hub WITHOUT `module.recording` => refused (fail closed)
+  assert.deepEqual(extractPublishedModules(['modules', 'module.voice']), ['module.voice']);
+  assert.equal(isRecordingModuleAllowed(['modules', 'module.voice']), false);
+  assert.equal(isRecordingModuleAllowed(['modules']), false);
+
+  // Stored persistence round-trip preserves offline off-state (including empty module list)
+  const storedOff = serializeStoredHubModules(extractPublishedModules(['modules']));
+  assert.deepEqual(parseStoredHubModules(storedOff), []);
+  assert.equal(isRecordingModuleAllowed([], parseStoredHubModules(storedOff)), false);
+
+  const storedOn = serializeStoredHubModules(extractPublishedModules(['modules', 'module.recording']));
+  assert.equal(isRecordingModuleAllowed([], parseStoredHubModules(storedOn)), true);
+
+  const storedLegacy = serializeStoredHubModules(null);
+  assert.equal(parseStoredHubModules(storedLegacy), null);
+  assert.equal(isRecordingModuleAllowed([], parseStoredHubModules(storedLegacy)), true);
+
+  // Live features override stale remembered off-state when hub re-enables recording
+  assert.equal(isRecordingModuleAllowed(['modules', 'module.recording'], []), true);
+
+  // Localized plain-language refusal copy matches iOS #15985
+  assert.equal(recordingModuleRefusalText('en'), 'Meeting recording is off on this hub.');
+  assert.equal(recordingModuleRefusalText('zh-CN'), '这台 hub 关闭了会议录音。');
+  assert.equal(recordingModuleRefusalText('ja-JP'), 'このhubでは会議の録音がオフです。');
 });

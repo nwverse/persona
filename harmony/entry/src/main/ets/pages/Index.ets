@@ -1077,12 +1077,28 @@ struct Index {
     if (dest === 'knowledge') { this.openSpace('knowledge'); return; }
     if (dest === 'health') { this.openSpace('health'); return; }
     if (dest === 'inbox') { this.openSpace('inbox'); return; }
-    if (dest === 'recording') { this.openSpace('recordings'); return; }
+    if (dest === 'recording') {
+      const autoStart = Wire.bool(parsed, 'autoStart');
+      if (!this.model.isRecordingModuleAllowed()) {
+        // Fail closed on recording starts when the Hub's recording module is off (#15985 / #15978);
+        // stored recordings stay readable and an active recording stays stoppable.
+        this.getUIContext().getPromptAction().showToast({ message: tr('xiaoyi_recording_module_off') });
+        this.openSpace('recordings');
+        return;
+      }
+      if (autoStart) {
+        this.openSpace('recordings');
+        return;
+      }
+      this.openSpace('recordings');
+      return;
+    }
     if (dest === 'dictate') { this.openSpace('persona'); this.newConversation(); return; }
     if (dest === 'settings_xiaoyi') {
       if (!this.wide()) {
         this.phoneSettingsQuery = '';
         this.phoneSettingsTrail = pushPhoneSetting([], 'phone_xiaoyi');
+        if (this.model.profile.id) this.spacesShown = true;
         this.phoneSettingsShown = true;
       } else {
         this.openSettings('phone_xiaoyi');
@@ -3395,6 +3411,14 @@ struct Index {
         onAppear: () => { this.spacesLayoutReady = true; this.measureSpaces(); }, onDisappear: () => { this.spacesLayoutReady = false; if (this.wide()) this.spacesShown = false; } })
     }
     }
+    Column().width(0).height(0).bindSheet(!this.model.profile.id && !this.wide() && this.phoneSettingsShown, this.phoneSettings(), {
+      height: this.compactFormHeight(), showClose: false, dragBar: false, backgroundColor: Colors.sheetBackground,
+      onWillDismiss: (dismiss: DismissSheetAction) => {
+        if (dismiss.reason === DismissReason.PRESS_BACK && this.phoneSettingsPage) this.backPhoneSetting();
+        else { this.phoneSettingsShown = false; dismiss.dismiss(); }
+      },
+      onDisappear: () => { this.phoneSettingsShown = false; }
+    })
     Column().width(0).height(0).bindSheet($$this.directionPermissionsVisible,this.directionPermissionsSheet(),{
       title:{title:tr('phone_default_permissions')},height:SheetSize.LARGE,showClose:true,
       onDisappear:()=>{this.directionPermissionsVisible=false;this.directionPermissionsTarget='';}})

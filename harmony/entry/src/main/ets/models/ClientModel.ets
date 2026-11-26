@@ -43,6 +43,7 @@ import { TranscriptModel } from './TranscriptModel';
 import { Pairing, PairingTarget } from '../platform/Pairing';
 import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } from '../core/Domain';
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
+import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
 
 
 
@@ -93,9 +94,16 @@ export class ClientModel {
   @Trace pairingLink: string = '';
   @Trace notificationTarget: string = '';
   @Trace pendingXiaoYiRoute: string = '';
+  @Trace rememberedHubModules: string[] | null = null;
   openXiaoYiRoute(routeJson: string): void {
     if (!routeJson || routeJson.length > 16384) return;
     this.pendingXiaoYiRoute = routeJson;
+  }
+  private hubModulesKey(hubId: string): string {
+    return 'xiaoyi:' + scopeKey({ groupId: hubId, managerId: '' }) + ':hub-modules';
+  }
+  isRecordingModuleAllowed(): boolean {
+    return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
   }
   @Trace forgottenProfile: string = '';
   @Trace forgottenEpoch: number = 0;
@@ -662,12 +670,14 @@ export class ClientModel {
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.managers = []; this.rosterDefaultId = '';
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.managers = []; this.rosterDefaultId = '';
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
     if (!keep && !this.detached) { this.directoryReady = false; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory(); }
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
     await saved; if (!this.owns(generation, scope)) return;
+    try { this.rememberedHubModules = parseStoredHubModules(await this.local.get(this.hubModulesKey(profile.id))); } catch (_) { this.rememberedHubModules = null; }
+    if (!this.owns(generation, scope)) return;
     await this.saveProfiles(); if (!this.owns(generation, scope) || !this.foreground) return;
     let access: HubAccess | undefined;
     const token = await this.vault?.get(profile.id, (value: HubAccess | undefined): void => { access = value; });
@@ -810,7 +820,7 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.error = '';
     }
     this.publishDirectory();
     try { await this.saveCleanup(); } catch (_) { this.error = 'cleanup_incomplete'; throw new Error('cleanup_incomplete'); }
@@ -858,6 +868,11 @@ export class ClientModel {
       for (const listener of this.eventListeners) { try { listener(payload, type); } catch (_) {} }
       if (type === 'hello') {
         this.features = Wire.strings(data, 'features'); this.connected = true; this.error = '';
+        if (this.features.length > 0 && this.profile.id) {
+          const published = extractPublishedModules(this.features);
+          this.rememberedHubModules = published;
+          this.local.put(this.hubModulesKey(this.profile.id), serializeStoredHubModules(published)).catch(() => {});
+        }
         this.repository?.transport.hello(nativeNotifications.features(!this.detached && this.alerts));
         const generation = this.generation, scope = this.scope();
         this.reconcileWrites().then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.refresh(); }).then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.flushNotification(); }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });

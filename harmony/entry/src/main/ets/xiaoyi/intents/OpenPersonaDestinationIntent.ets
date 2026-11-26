@@ -1,6 +1,7 @@
 import { InsightIntentEntry, InsightIntentEntryExecutor, insightIntent } from '@kit.AbilityKit';
 import { XiaoYiDestination, buildXiaoYiRouteUri, createXiaoYiRoute, parseXiaoYiWant } from '../../core/XiaoYiRoutes';
-import { tr } from '../../design/Strings';
+import { Strings, tr } from '../../design/Strings';
+import { XiaoYiRuntimeContext } from '../XiaoYiRuntimeContext';
 import { PersonaActionResultEntity, errorIntentResult, okIntentResult } from './PersonaIntentEntities';
 
 @InsightIntentEntry({
@@ -40,6 +41,10 @@ export default class OpenPersonaDestinationIntent extends InsightIntentEntryExec
   session: string = '';
 
   async onExecute(): Promise<insightIntent.IntentResult<PersonaActionResultEntity>> {
+    const appCtx = XiaoYiRuntimeContext.get();
+    if (appCtx) {
+      try { Strings.bind(appCtx.resourceManager); } catch (_) {}
+    }
     const params: Record<string, Object> = {};
     params['personaDest'] = this.destination || 'assistant';
     if (this.machine) params['machine'] = this.machine;
@@ -47,7 +52,9 @@ export default class OpenPersonaDestinationIntent extends InsightIntentEntryExec
     const parsed = parseXiaoYiWant('', params) || createXiaoYiRoute('assistant' as XiaoYiDestination);
     const uri = buildXiaoYiRouteUri(parsed);
     try {
+      const bundleName = appCtx?.applicationInfo?.name;
       await this.context.startAbility({
+        bundleName: bundleName || undefined,
         abilityName: 'EntryAbility',
         action: 'ohos.want.action.viewData',
         uri: uri,

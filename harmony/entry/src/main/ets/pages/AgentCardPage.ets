@@ -14,33 +14,31 @@ import { Wire } from '../models/Wire';
 import { HeadlessHubService } from '../xiaoyi/HeadlessHubService';
 import { XiaoYiRuntimeContext } from '../xiaoyi/XiaoYiRuntimeContext';
 
+function formatCardSessionState(raw: string): string {
+  const key = (raw || '').trim().toLowerCase();
+  if (key === 'working' || key === 'needs_you' || key === 'idle' || key === 'waiting' || key === 'done' || key === 'running') {
+    const localized = tr(key);
+    if (localized !== key) return localized;
+  }
+  return (raw || '').replace(/_/g, ' ');
+}
+
 /**
- * Embedded ArkUI card displayed directly inside XiaoYi's conversation stream via AgentUIExtensionAbility.
+ * Embedded ArkUI card component displayed directly inside XiaoYi's conversation stream via AgentUIExtensionAbility.
  * Strictly avoids sub-windows and dialogs, using inline two-step confirmation for eligible approvals.
  */
-@Entry
 @ComponentV2
-struct AgentCardPage {
-  @Local card: AgentCardModel = parseAgentCardPayload();
+export struct AgentCardView {
+  @Require @Param card: AgentCardModel;
   @Local confirmStep: InlineConfirmStep = 'idle';
   @Local feedbackMessage: string = '';
-
-  aboutToAppear(): void {
-    const storage = this.getUIContext().getSharedLocalStorage();
-    const raw = storage ? storage.get<string>('agentCardParamsJson') : '';
-    if (raw) {
-      try {
-        this.card = parseAgentCardPayload(Wire.parse(raw));
-      } catch (_) {
-        this.card = parseAgentCardPayload();
-      }
-    }
-  }
 
   private openInPersona(): void {
     const host = this.getUIContext().getHostContext() as common.UIExtensionContext | undefined;
     if (!host) return;
+    const bundleName: string = host.applicationInfo ? host.applicationInfo.name : '';
     host.startAbility({
+      bundleName: bundleName || undefined,
       abilityName: 'EntryAbility',
       action: 'ohos.want.action.viewData',
       uri: this.card.deepLinkUri
@@ -66,7 +64,13 @@ struct AgentCardPage {
     this.feedbackMessage = '';
     const hub = new HeadlessHubService(host);
     try {
-      await hub.resolveDecision(this.card.decisionId, payload);
+      await hub.resolveDecision(
+        this.card.decisionId,
+        payload,
+        undefined,
+        this.card.profileId,
+        this.card.managerId || undefined
+      );
       this.confirmStep = nextInlineConfirmStep(this.confirmStep, 'ok');
       this.feedbackMessage = tr('xiaoyi_card_approved_done');
     } catch (error) {
@@ -80,8 +84,11 @@ struct AgentCardPage {
   @Builder headerBadge(label: string, tint: ResourceColor) {
     Text(label)
       .fontSize(Tokens.caption)
+      .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
       .fontWeight(FontWeight.Medium)
       .fontColor(tint)
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
       .padding({ left: Tokens.gap, right: Tokens.gap, top: Tokens.fine, bottom: Tokens.fine })
       .backgroundColor(Colors.control)
       .borderRadius(Tokens.inset)
@@ -89,14 +96,19 @@ struct AgentCardPage {
 
   @Builder statusBody() {
     Column({ space: Tokens.gap }) {
-      Row({ space: Tokens.gap }) {
-        this.headerBadge(tr('xiaoyi_card_working').replace('{count}', String(this.card.workingCount)), Colors.working)
-        this.headerBadge(tr('xiaoyi_card_needs_you').replace('{count}', String(this.card.pendingCount)), Colors.needs)
+      Flex({ wrap: FlexWrap.Wrap }) {
+        Column() {
+          this.headerBadge(tr('xiaoyi_card_working').replace('{count}', String(this.card.workingCount)), Colors.working)
+        }.margin({ right: Tokens.gap, bottom: Tokens.fine })
+        Column() {
+          this.headerBadge(tr('xiaoyi_card_needs_you').replace('{count}', String(this.card.pendingCount)), Colors.needs)
+        }.margin({ bottom: Tokens.fine })
       }.width('100%')
 
       if (this.card.body) {
         Text(this.card.body)
           .fontSize(Tokens.meta)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
           .fontColor(Colors.secondary)
           .width('100%')
           .maxLines(3)
@@ -107,12 +119,14 @@ struct AgentCardPage {
         Row({ space: Tokens.gap }) {
           Text(row.title)
             .fontSize(Tokens.body)
+            .maxFontScale(Tokens.interfaceFontMaxScale)
             .fontColor(Colors.ink)
             .layoutWeight(1)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(row.state)
+          Text(formatCardSessionState(row.state))
             .fontSize(Tokens.caption)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
             .fontColor(Colors.secondary)
         }
         .width('100%')
@@ -126,6 +140,7 @@ struct AgentCardPage {
       if (this.card.body) {
         Text(this.card.body)
           .fontSize(Tokens.body)
+          .maxFontScale(Tokens.interfaceFontMaxScale)
           .fontColor(Colors.ink)
           .lineHeight(Tokens.lineHeight)
           .width('100%')
@@ -134,6 +149,7 @@ struct AgentCardPage {
       if (this.feedbackMessage) {
         Text(this.feedbackMessage)
           .fontSize(Tokens.meta)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
           .fontColor(this.confirmStep === 'approved' ? Colors.positive : Colors.secondary)
           .width('100%')
       }
@@ -142,12 +158,15 @@ struct AgentCardPage {
         if (this.confirmStep === 'confirming') {
           Text(tr('xiaoyi_card_confirm_prompt'))
             .fontSize(Tokens.meta)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
             .fontColor(Colors.secondary)
             .width('100%')
           Row({ space: Tokens.gap }) {
             Button(tr('cancel'), { type: ButtonType.Capsule })
               .layoutWeight(1)
               .constraintSize({ minHeight: Tokens.touch })
+              .fontSize(Tokens.body)
+              .maxFontScale(Tokens.interfaceFontMaxScale)
               .backgroundColor(Colors.control)
               .fontColor(Colors.ink)
               .onClick(() => {
@@ -157,6 +176,8 @@ struct AgentCardPage {
             Button(tr('confirm'), { type: ButtonType.Capsule })
               .layoutWeight(1)
               .constraintSize({ minHeight: Tokens.touch })
+              .fontSize(Tokens.body)
+              .maxFontScale(Tokens.interfaceFontMaxScale)
               .backgroundColor(Colors.action)
               .fontColor(Colors.onAction)
               .onClick(() => {
@@ -168,6 +189,8 @@ struct AgentCardPage {
           Button(this.confirmStep === 'submitting' ? tr('xiaoyi_card_submitting') : tr('xiaoyi_card_approve'), { type: ButtonType.Capsule })
             .width('100%')
             .constraintSize({ minHeight: Tokens.touch })
+            .fontSize(Tokens.body)
+            .maxFontScale(Tokens.interfaceFontMaxScale)
             .backgroundColor(Colors.action)
             .fontColor(Colors.onAction)
             .enabled(this.confirmStep !== 'submitting')
@@ -185,6 +208,7 @@ struct AgentCardPage {
       if (this.card.body) {
         Text(this.card.body)
           .fontSize(Tokens.body)
+          .maxFontScale(Tokens.interfaceFontMaxScale)
           .fontColor(Colors.ink)
           .lineHeight(Tokens.lineHeight)
           .width('100%')
@@ -195,41 +219,73 @@ struct AgentCardPage {
   }
 
   build() {
-    Column({ space: Tokens.inset }) {
-      Row({ space: Tokens.gap }) {
-        Text(this.card.title || tr('persona'))
-          .fontSize(Tokens.title)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Colors.ink)
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }.width('100%')
+    Scroll() {
+      Column({ space: Tokens.inset }) {
+        Row({ space: Tokens.gap }) {
+          Text(this.card.title || tr('persona'))
+            .fontSize(Tokens.title)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.title))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.ink)
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }.width('100%')
 
-      if (this.card.variant === 'status') {
-        this.statusBody()
-      } else if (this.card.variant === 'approval') {
-        this.approvalBody()
-      } else {
-        this.textBody()
-      }
+        if (this.card.variant === 'status') {
+          this.statusBody()
+        } else if (this.card.variant === 'approval') {
+          this.approvalBody()
+        } else {
+          this.textBody()
+        }
 
-      Button(this.card.variant === 'answer' ? tr('xiaoyi_card_continue') : tr('xiaoyi_card_open_persona'), {
-        type: ButtonType.Capsule
-      })
-        .width('100%')
-        .constraintSize({ minHeight: Tokens.touch })
-        .backgroundColor(Colors.control)
-        .fontColor(Colors.link)
-        .onClick(() => {
-          this.openInPersona();
+        Button(this.card.variant === 'answer' ? tr('xiaoyi_card_continue') : tr('xiaoyi_card_open_persona'), {
+          type: ButtonType.Capsule
         })
-        .id('xiaoyi.card.open')
+          .width('100%')
+          .constraintSize({ minHeight: Tokens.touch })
+          .fontSize(Tokens.body)
+          .maxFontScale(Tokens.interfaceFontMaxScale)
+          .backgroundColor(Colors.control)
+          .fontColor(Colors.link)
+          .onClick(() => {
+            this.openInPersona();
+          })
+          .id('xiaoyi.card.open')
+      }
+      .width('100%')
+      .padding(Tokens.page)
+      .backgroundColor(Colors.surface)
+      .borderRadius(Tokens.card)
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding(Tokens.page)
-    .backgroundColor(Colors.surface)
-    .borderRadius(Tokens.card)
-    .alignItems(HorizontalAlign.Start)
+    .scrollBar(BarState.Off)
+    .id('xiaoyi.card.root')
+  }
+}
+
+@Entry
+@ComponentV2
+struct AgentCardPage {
+  @Local card: AgentCardModel = parseAgentCardPayload();
+
+  aboutToAppear(): void {
+    const storage = this.getUIContext().getSharedLocalStorage();
+    const raw = storage ? storage.get<string>('agentCardParamsJson') : '';
+    if (raw) {
+      try {
+        this.card = parseAgentCardPayload(Wire.parse(raw));
+      } catch (_) {
+        this.card = parseAgentCardPayload();
+      }
+    }
+  }
+
+  build() {
+    Column() {
+      AgentCardView({ card: this.card })
+    }.width('100%')
   }
 }
