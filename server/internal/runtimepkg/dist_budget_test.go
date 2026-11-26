@@ -45,9 +45,11 @@ import (
 // Antigravity Assistant run_command command-gate routing, unclipped command & per-call Cwd forwarding, fail-closed reconnect, tracks Assistant detection, and Assistant allow_always bypass guard (#16202) add 511 B (278,347 B).
 // After preserving Antigravity modes (#16300), the packages measured 278,334 B. Filtering botmux marker
 // lines before shortening runtime previews adds 549 B (#16310).
+// Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
+// sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights add 1,837 B (280,720 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 278_883
+	const budget = 280_720
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
