@@ -1,4 +1,4 @@
-package extmgr
+package larksync
 
 import (
 	"context"
@@ -9,10 +9,8 @@ import (
 	"github.com/nwverse/persona/server/internal/larksyncwire"
 )
 
-// An authorization lasts a year (or less when the platform says so): the owner is reminded 14, 7 and 1 days before it
-// ends, once each, and then the binding needs authorizing again.
 func TestLarkSyncRemindsBeforeTheAuthorizationEnds(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
 	key, _ := w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc", "ref", time.Hour)
 	start := w.now()
@@ -25,10 +23,10 @@ func TestLarkSyncRemindsBeforeTheAuthorizationEnds(t *testing.T) {
 		}
 		return out
 	}
-	at := func(daysLeft int) {
-		w.advance(start.Add(larkSyncAuthLasts - time.Duration(daysLeft)*24*time.Hour).Sub(w.now()))
-		w.h.larkSyncRemind(ctx)
-		w.h.larkSyncRemind(ctx) // asked twice: still once
+	at := func(days int) {
+		w.advance(start.Add(authLasts - time.Duration(days)*24*time.Hour).Sub(w.now()))
+		w.svc.remind(ctx)
+		w.svc.remind(ctx) // asked twice: still once
 	}
 	at(20)
 	if n := len(remindsOf()); n != 0 {
@@ -45,7 +43,7 @@ func TestLarkSyncRemindsBeforeTheAuthorizationEnds(t *testing.T) {
 		payloads, _ := got[len(got)-1]["payloads"].(map[string]any)
 		en, _ := payloads["en"].(map[string]any)
 		meta, _ := en["lark_sync"].(map[string]any)
-		if meta["binding"] != key || meta["reauth_due_days"] != float64(days) {
+		if meta["binding"] != key || meta["reauth_due_days"] != days {
 			t.Fatalf("%d days left: %v", days, en)
 		}
 		_, view := w.do(t, "GET", "/api/v1/bots/feishu/sync", "")
@@ -62,19 +60,17 @@ func TestLarkSyncRemindsBeforeTheAuthorizationEnds(t *testing.T) {
 	}
 }
 
-// The platform's own end of the refresh token, when earlier than a year, is the one reminded of; a jump past two
-// thresholds at once reminds once.
 func TestLarkSyncRemindsOfThePlatformsEnd(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
 	key, _ := w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc", "ref", time.Hour)
-	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
+	if _, err := w.svc.change(ctx, func(st *syncState) error {
 		st.binding(key).RefreshExpiresAt = w.now().Add(5 * 24 * time.Hour)
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	w.h.larkSyncRemind(ctx)
+	w.svc.remind(ctx)
 	if b := w.binding(t, key); !slices.Equal(b.RemindedDays, []int{14, 7}) || len(w.pushes()) != 1 {
 		t.Fatalf("reminded %v, %d pushes", b.RemindedDays, len(w.pushes()))
 	}

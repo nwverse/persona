@@ -44,7 +44,7 @@ import { openAsk, unlinkAgentFromTodo, waitsForOwner } from "../../lib/todos";
 import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
-import { sendDraft } from "../../lib/drafts";
+import { sendDraft, type CommentImagePicker } from "../../lib/drafts";
 import { chatLines, freshWords, isUserInput, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds, relayNeedsAttention } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
@@ -2552,6 +2552,10 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const overviewDetail = panelDrawn && (backgroundPanelOf(panel, mid, sid)?.from === "overview" || subagentPanel?.from === "overview");
   const isAssistant = Boolean(assistant || session?.assistant);
   const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
+  const commentImagesRef = useRef<CommentImagePicker | null>(null);
+  const addCommentImages = useCallback<CommentImagePicker>(async (target, files, signal) => {
+    await commentImagesRef.current?.(target, files, signal);
+  }, []);
   const composerBlocked = gate.blocked ?? noRowBlock;
   const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
   // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
@@ -2854,7 +2858,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               </Suspense>
             ) : <ChatTail {...slotPage} />}
           </div>
-          <CommentMarks scroller={scroller} jump={landRow} />
+          <CommentMarks scroller={scroller} jump={landRow} onAddImages={canCompose && !composerDisabled && !editingLast ? addCommentImages : undefined} />
           </ChatActionsContext.Provider>
         </div>
         {/* NavRail uses the natural left gutter beside the centered transcript. */}
@@ -3000,6 +3004,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         ) : !codexFooterTakeover && (
         <Composer
           draftKey={draftKey}
+          commentImagesRef={commentImagesRef}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           agent={session?.agent}

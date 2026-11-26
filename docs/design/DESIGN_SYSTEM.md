@@ -466,11 +466,13 @@ on-demand model panel, not the everyday Assistant home (#6887).
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
-- Web selection comments (#14518): while writing a comment on selected chat text, paste an image into its field or
-  use the labeled image button beside the keyboard hint. The card reuses the composer's attachment tiles and their
-  remove controls so the picture stays with the text it illustrates. Saving or reopening the note keeps its images.
-  Escape discards a new comment or restores the note and images from before the edit. All pictures in the draft share
-  the message's limits. Selecting text preloads the draft editor, which also loads when a saved comment opens.
+- Web selection comments (#11585, #14518): selecting chat text opens a floating comment bar by the passage, or
+  above the keyboard on a narrow or touch screen. Save leaves a numbered pin beside the passage. One compact
+  chip above the composer lists draft comments and opens the same editor as the pin. Paste a picture into the
+  comment field or use its labeled image button. The editor reuses the composer's removable attachment tiles.
+  Saving and reopening a note keeps its pictures. Escape discards a new comment or restores the note and pictures
+  from before the edit. All pictures in the draft share the message's limits. The editor starts loading when a
+  passage is selected or the comments list is opened.
 - Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
   field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
   about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,

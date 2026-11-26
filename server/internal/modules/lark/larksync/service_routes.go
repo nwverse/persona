@@ -1,39 +1,46 @@
-package extmgr
+package larksync
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/larksyncwire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The sync's routes, under the bots' relayed prefix (/api/v1/bots/feishu/sync…): the view, the schedule, the sync
 // bots' registration, the authorization and the bindings. Reads answer any device; changes need a full-access device,
 // as the bot's other changes do. Tokens, secrets and codes never leave the manager.
 
-// larkSyncView is GET /api/v1/bots/feishu/sync.
-type larkSyncView struct {
-	Available    bool                  `json:"available"`
-	ScheduleHour int                   `json:"schedule_hour"`
-	IMPoll       bool                  `json:"im_poll"`
-	Accounts     []larkSyncAccountView `json:"accounts"`
-	Bots         []larkSyncBotView     `json:"bots"`
-	Bindings     []larkSyncBindingView `json:"bindings"`
+// syncView is GET /api/v1/bots/feishu/sync.
+type syncView struct {
+	Available    bool          `json:"available"`
+	ScheduleHour int           `json:"schedule_hour"`
+	IMPoll       bool          `json:"im_poll"`
+	Accounts     []accountView `json:"accounts"`
+	Bots         []botView     `json:"bots"`
+	Bindings     []bindingView `json:"bindings"`
 }
 
-type larkSyncAccountView struct {
+type accountView struct {
 	ID    string `json:"id"`
 	Label string `json:"label,omitempty"`
 	Brand string `json:"brand,omitempty"`
 	Name  string `json:"name,omitempty"`
 }
 
-type larkSyncBotView struct {
+type botView struct {
 	BotID     string `json:"bot_id"`
 	Label     string `json:"label,omitempty"`
 	AppID     string `json:"app_id,omitempty"`
@@ -47,7 +54,7 @@ type larkSyncBotView struct {
 	Registering bool `json:"registering,omitempty"`
 }
 
-type larkSyncBindingView struct {
+type bindingView struct {
 	Key           string    `json:"key"`
 	BotID         string    `json:"bot_id"`
 	AccountID     string    `json:"account_id"`
@@ -66,26 +73,26 @@ type larkSyncBindingView struct {
 	Running       bool      `json:"running"`
 }
 
-// larkSyncView is the view of the sync's settings.
-func (h *Manager) larkSyncView(ctx context.Context) (larkSyncView, error) {
-	st, err := h.larkSyncLoad(ctx)
+// view is the view of the sync's settings.
+func (s *Service) view(ctx context.Context) (syncView, error) {
+	st, err := s.load(ctx)
 	if err != nil {
-		return larkSyncView{}, err
+		return syncView{}, err
 	}
-	now := h.bots.sync.clock()
-	v := larkSyncView{Available: h.larkSyncAvailable(), ScheduleHour: st.scheduleHour(), IMPoll: st.imPollEnabled(),
-		Accounts: []larkSyncAccountView{}, Bots: []larkSyncBotView{}, Bindings: []larkSyncBindingView{}}
+	now := s.clock()
+	v := syncView{Available: s.available(), ScheduleHour: st.scheduleHour(), IMPoll: st.imPollEnabled(),
+		Accounts: []accountView{}, Bots: []botView{}, Bindings: []bindingView{}}
 	for _, a := range st.accounts {
-		v.Accounts = append(v.Accounts, larkSyncAccountView{ID: a.AccountID, Label: a.Label, Brand: a.Brand, Name: a.Name})
+		v.Accounts = append(v.Accounts, accountView{ID: a.AccountID, Label: a.Label, Brand: a.Brand, Name: a.Name})
 	}
-	appID, secret, domain := h.botAppCredentials(ctx)
+	appID, secret, domain := s.host.PrimaryApp(ctx)
 	if appID != "" {
-		v.Bots = append(v.Bots, larkSyncBotView{BotID: larksyncwire.PrimaryBot, AppID: appID, Domain: domain,
+		v.Bots = append(v.Bots, botView{BotID: larksyncwire.PrimaryBot, AppID: appID, Domain: domain,
 			Role: larksyncwire.RoleChatAndSync, Tier: st.primaryTier(), Approval: st.prefs.PrimaryApproval, Primary: true,
 			HasSecret: secret != "", Registering: st.prefs.PrimaryRegistration != nil})
 	}
 	for _, b := range st.bots {
-		v.Bots = append(v.Bots, larkSyncBotView{BotID: b.BotID, Label: b.Label, AppID: b.AppID, Domain: b.Domain,
+		v.Bots = append(v.Bots, botView{BotID: b.BotID, Label: b.Label, AppID: b.AppID, Domain: b.Domain,
 			Role: larksyncwire.RoleSyncOnly, Tier: st.tierOf(b.BotID), Approval: b.Approval, HasSecret: b.SecretEnc != "",
 			Registering: b.Registration != nil})
 	}
@@ -111,15 +118,15 @@ func (h *Manager) larkSyncView(ctx context.Context) (larkSyncView, error) {
 				health = larksyncwire.HealthAwaiting
 			}
 		}
-		bv := larkSyncBindingView{Key: b.Key, BotID: b.BotID, AccountID: b.AccountID, Label: label, Tier: b.Tier,
+		bv := bindingView{Key: b.Key, BotID: b.BotID, AccountID: b.AccountID, Label: label, Tier: b.Tier,
 			Enabled: b.Enabled, Health: health, Error: b.LastError, GrantedScopes: b.GrantedScopes, AuthorizedAt: b.AuthorizedAt,
 			LastRunAt: b.LastRunAt, NextRunAt: b.NextRunAt, LastMessages: b.LastMessages, LastDocs: b.LastDocs,
-			Running: h.larkSyncRuntime(b.Key).running.Load()}
+			Running: s.runtime(b.Key).running.Load()}
 		if bv.Tier == "" {
 			bv.Tier = st.tierOf(b.BotID)
 		}
 		if b.authorized() {
-			days := max(larkSyncDaysLeft(b, now), 0)
+			days := max(daysLeft(b, now), 0)
 			bv.ReauthDueDays = &days
 		}
 		v.Bindings = append(v.Bindings, bv)
@@ -127,87 +134,94 @@ func (h *Manager) larkSyncView(ctx context.Context) (larkSyncView, error) {
 	return v, nil
 }
 
-// larkSyncWriter says whether the request may change the sync (a full-access device, not an extension); it answers
+// checkWriter says whether the request may change the sync (a full-access device, not an extension); it answers
 // 403 when not.
-func larkSyncWriter(w http.ResponseWriter, r *http.Request) bool {
-	if p := principalOf(r.Context()); p.Role != roleFull || p.Extension != "" {
-		writeErr(w, http.StatusForbidden, errors.New("this device can only read and answer"))
+func (s *Service) checkWriter(w http.ResponseWriter, r *http.Request) bool {
+	if !s.host.CanWrite(r) {
+		apierr.Write(w, http.StatusForbidden, errors.New("this device can only read and answer"))
 		return false
 	}
 	return true
 }
 
-// larkSyncErr answers err with its status.
-func larkSyncErr(w http.ResponseWriter, _ *http.Request, err error) {
+// writeSyncErr answers err with its status.
+func writeSyncErr(w http.ResponseWriter, _ *http.Request, err error) {
 	code, slug := http.StatusBadGateway, "failed"
 	switch {
-	case errors.Is(err, errLarkSyncUnavailable):
+	case errors.Is(err, errUnavailable):
 		code, slug = http.StatusServiceUnavailable, "unavailable"
-	case errors.Is(err, errLarkSyncUnread), errors.Is(err, errBotSettingsSave):
+	case errors.Is(err, errUnread), errors.Is(err, errSettingsSave):
 		code, slug = http.StatusServiceUnavailable, "settings_unavailable"
-	case errors.Is(err, errLarkSyncNoBot), errors.Is(err, errLarkSyncNoBinding):
+	case errors.Is(err, errNoBot), errors.Is(err, errNoBinding):
 		code, slug = http.StatusNotFound, "not_found"
-	case errors.Is(err, errLarkSyncNoApp):
+	case errors.Is(err, errNoApp):
 		code, slug = http.StatusConflict, "no_app"
-	case errors.Is(err, errLarkSyncRedirect):
+	case errors.Is(err, errRedirect):
 		code, slug = http.StatusBadRequest, "bad_redirect"
-	case errors.Is(err, errLarkSyncState), errors.Is(err, errLarkSyncExchange):
+	case errors.Is(err, errState), errors.Is(err, errExchange):
 		code, slug = http.StatusBadRequest, "auth_failed"
-	case errors.Is(err, errLarkSyncRunning):
+	case errors.Is(err, errRunning):
 		code, slug = http.StatusConflict, "running"
 	}
-	writeErrCode(w, code, slug, err)
+	apierr.WriteCode(w, code, slug, err)
 }
 
-// larkSyncDecode reads the request's JSON body into v (an empty body leaves v as it is); false when it answered.
-func larkSyncDecode(w http.ResponseWriter, r *http.Request, v any) bool {
+// decodeBody reads the request's JSON body into v (an empty body leaves v as it is); false when it answered.
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	if r.ContentLength == 0 {
 		return true
 	}
-	if err := decodeJSONBody(w, r, v, larkSyncBodyMost); err != nil {
-		writeBodyErr(w, err, err)
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, requestBodyMost)).Decode(v); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			apierr.WriteCode(w, http.StatusRequestEntityTooLarge, proto.CodeTooLarge,
+				fmt.Errorf("request body is larger than %d bytes", tooLarge.Limit))
+			return false
+		}
+		apierr.Write(w, http.StatusBadRequest, err)
 		return false
 	}
 	return true
 }
 
-// writeLarkSyncView answers the view.
-func (h *Manager) writeLarkSyncView(w http.ResponseWriter, r *http.Request) {
-	v, err := h.larkSyncView(r.Context())
+// writeView answers the view.
+func (s *Service) writeView(w http.ResponseWriter, r *http.Request) {
+	v, err := s.view(r.Context())
 	if err != nil {
-		larkSyncErr(w, r, err)
+		writeSyncErr(w, r, err)
 		return
 	}
-	writeJSON(w, v)
+	apierr.WriteJSON(w, v)
 }
 
-func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
+// Routes registers the Lark user sync HTTP routes on api.
+func (s *Service) Routes(api *http.ServeMux) {
 	const base = "/api/v1/bots/feishu/sync"
-	api.HandleFunc("GET "+base, h.writeLarkSyncView)
+	api.HandleFunc("GET "+base, s.writeView)
 	api.HandleFunc("PUT "+base, func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		var in struct {
 			ScheduleHour *int  `json:"schedule_hour"`
 			IMPoll       *bool `json:"im_poll"`
 		}
-		if !larkSyncDecode(w, r, &in) {
+		if !decodeBody(w, r, &in) {
 			return
 		}
 		if in.ScheduleHour != nil && (*in.ScheduleHour < 0 || *in.ScheduleHour > 23) {
-			writeErrCode(w, http.StatusBadRequest, "bad_hour", errors.New("schedule_hour is 0 to 23"))
+			apierr.WriteCode(w, http.StatusBadRequest, "bad_hour", errors.New("schedule_hour is 0 to 23"))
 			return
 		}
 		if in.ScheduleHour != nil || in.IMPoll != nil {
-			now := h.bots.sync.clock()
-			if _, err := h.larkSyncChange(r.Context(), func(st *larkSyncState) error {
+			now := s.clock()
+			if _, err := s.change(r.Context(), func(st *syncState) error {
 				if in.ScheduleHour != nil {
 					v := *in.ScheduleHour
 					st.prefs.ScheduleHour = &v
 					for i := range st.bindings {
 						if b := &st.bindings[i]; b.authorized() && b.Failures == 0 && b.NextRunAt.After(now) {
-							b.NextRunAt = larkSyncNextSlot(now, v, b.Key)
+							b.NextRunAt = nextSlot(now, v, b.Key)
 						}
 					}
 				}
@@ -217,14 +231,14 @@ func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
 				}
 				return nil
 			}); err != nil {
-				larkSyncErr(w, r, err)
+				writeSyncErr(w, r, err)
 				return
 			}
 		}
-		h.writeLarkSyncView(w, r)
+		s.writeView(w, r)
 	})
 	api.HandleFunc("POST "+base+"/bots", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		var in struct {
@@ -232,103 +246,103 @@ func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
 			Tier   string `json:"tier"`
 			Region string `json:"region"`
 		}
-		if !larkSyncDecode(w, r, &in) {
+		if !decodeBody(w, r, &in) {
 			return
 		}
-		if !h.larkSyncAvailable() || h.registrar() == nil {
-			larkSyncErr(w, r, errLarkSyncUnavailable)
+		if !s.available() || s.host.Registrar() == nil {
+			writeSyncErr(w, r, errUnavailable)
 			return
 		}
 		if !larksyncwire.ValidTier(in.Tier) {
 			in.Tier = larksyncwire.TierDocs
 		}
 		id := "b" + randomHex(5)
-		now := h.bots.sync.clock()
-		if _, err := h.larkSyncChange(r.Context(), func(st *larkSyncState) error {
-			st.bots = append(st.bots, larkSyncBot{BotID: id, Label: cutUTF8(strings.TrimSpace(in.Label), 80),
+		now := s.clock()
+		if _, err := s.change(r.Context(), func(st *syncState) error {
+			st.bots = append(st.bots, syncBot{BotID: id, Label: cutUTF8(strings.TrimSpace(in.Label), 80),
 				Role: larksyncwire.RoleSyncOnly, Tier: in.Tier, CreatedAt: now})
 			return nil
 		}); err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		p, err := h.larkSyncBeginRegistration(r.Context(), id, in.Tier, in.Region, "")
+		p, err := s.beginRegistration(r.Context(), id, in.Tier, in.Region, "")
 		if err != nil {
 			// A bot that never got an app is not kept.
-			_, _ = h.larkSyncChange(context.WithoutCancel(r.Context()), func(st *larkSyncState) error {
-				st.bots = slices.DeleteFunc(st.bots, func(b larkSyncBot) bool { return b.BotID == id })
+			_, _ = s.change(context.WithoutCancel(r.Context()), func(st *syncState) error {
+				st.bots = slices.DeleteFunc(st.bots, func(b syncBot) bool { return b.BotID == id })
 				return nil
 			})
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		writeJSON(w, map[string]any{"bot_id": id, "prompt": p})
+		apierr.WriteJSON(w, map[string]any{"bot_id": id, "prompt": p})
 	})
 	api.HandleFunc("POST "+base+"/bots/{bot}/register", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		var in struct {
 			Step string `json:"step"`
 		}
-		if !larkSyncDecode(w, r, &in) {
+		if !decodeBody(w, r, &in) {
 			return
 		}
-		p, err := h.larkSyncPollRegistration(r.Context(), r.PathValue("bot"))
+		p, err := s.pollRegistration(r.Context(), r.PathValue("bot"))
 		if err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		writeJSON(w, p)
+		apierr.WriteJSON(w, p)
 	})
 	api.HandleFunc("POST "+base+"/bots/{bot}/scopes", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		var in struct {
 			Tier string `json:"tier"`
 		}
-		if !larkSyncDecode(w, r, &in) {
+		if !decodeBody(w, r, &in) {
 			return
 		}
 		if !larksyncwire.ValidTier(in.Tier) {
 			in.Tier = larksyncwire.TierDocs
 		}
 		bot := r.PathValue("bot")
-		st, err := h.larkSyncLoad(r.Context())
+		st, err := s.load(r.Context())
 		if err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		app, err := h.larkSyncApp(r.Context(), &st, bot)
+		app, err := s.app(r.Context(), &st, bot)
 		if err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		region := larkSyncBrand(app.Domain)
-		p, err := h.larkSyncBeginRegistration(r.Context(), bot, in.Tier, region, app.AppID)
+		region := brand(app.Domain)
+		p, err := s.beginRegistration(r.Context(), bot, in.Tier, region, app.AppID)
 		if err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		writeJSON(w, p)
+		apierr.WriteJSON(w, p)
 	})
 	api.HandleFunc("DELETE "+base+"/bots/{bot}", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		bot := r.PathValue("bot")
 		if bot == larksyncwire.PrimaryBot {
-			writeErrCode(w, http.StatusConflict, "primary", errors.New("the chat bot is removed in its own settings"))
+			apierr.WriteCode(w, http.StatusConflict, "primary", errors.New("the chat bot is removed in its own settings"))
 			return
 		}
 		var dropped []string
-		if _, err := h.larkSyncChange(r.Context(), func(st *larkSyncState) error {
+		if _, err := s.change(r.Context(), func(st *syncState) error {
 			if st.bot(bot) == nil {
-				return errLarkSyncNoBot
+				return errNoBot
 			}
-			st.bots = slices.DeleteFunc(st.bots, func(b larkSyncBot) bool { return b.BotID == bot })
-			st.bindings = slices.DeleteFunc(st.bindings, func(b larkSyncBinding) bool {
+			st.bots = slices.DeleteFunc(st.bots, func(b syncBot) bool { return b.BotID == bot })
+			st.bindings = slices.DeleteFunc(st.bindings, func(b syncBinding) bool {
 				if b.BotID == bot && !b.pending() {
 					dropped = append(dropped, b.Key)
 				}
@@ -336,61 +350,61 @@ func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
 			})
 			return nil
 		}); err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		h.larkSyncForget(r.Context(), dropped...)
-		h.auditBot(r.Context(), botRecord{auditLarkSyncRevoke, map[string]any{"bot_id": bot}})
-		h.writeLarkSyncView(w, r)
+		s.forget(r.Context(), dropped...)
+		s.host.Audit(r.Context(), auditRevoke, map[string]any{"bot_id": bot})
+		s.writeView(w, r)
 	})
 	api.HandleFunc("POST "+base+"/bots/{bot}/authorize", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		var in struct {
 			RedirectURI string `json:"redirect_uri"`
 			Tier        string `json:"tier"`
 		}
-		if !larkSyncDecode(w, r, &in) {
+		if !decodeBody(w, r, &in) {
 			return
 		}
-		out, err := h.larkSyncAuthorize(r.Context(), r.PathValue("bot"), in.RedirectURI, in.Tier)
+		out, err := s.authorize(r.Context(), r.PathValue("bot"), in.RedirectURI, in.Tier)
 		if err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		writeJSON(w, out)
+		apierr.WriteJSON(w, out)
 	})
 	api.HandleFunc("POST "+base+"/bots/{bot}/authorize/poll", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
-		p, err := h.larkSyncPollDevice(r.Context(), r.PathValue("bot"))
+		p, err := s.pollDevice(r.Context(), r.PathValue("bot"))
 		if err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		writeJSON(w, p)
+		apierr.WriteJSON(w, p)
 	})
 	api.HandleFunc("POST "+base+"/oauth", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		var in struct {
 			State string `json:"state"`
 			Code  string `json:"code"`
 		}
-		if !larkSyncDecode(w, r, &in) {
+		if !decodeBody(w, r, &in) {
 			return
 		}
-		if err := h.larkSyncCallback(r.Context(), in.State, in.Code); err != nil {
-			larkSyncErr(w, r, err)
+		if err := s.callback(r.Context(), in.State, in.Code); err != nil {
+			writeSyncErr(w, r, err)
 			return
 		}
-		h.writeLarkSyncView(w, r)
+		s.writeView(w, r)
 	})
 	api.HandleFunc("PUT "+base+"/bindings/{key}", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		var in struct {
@@ -398,23 +412,23 @@ func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
 			Label   *string `json:"label"`
 			Tier    *string `json:"tier"`
 		}
-		if !larkSyncDecode(w, r, &in) {
+		if !decodeBody(w, r, &in) {
 			return
 		}
 		if in.Tier != nil && !larksyncwire.ValidTier(*in.Tier) {
-			writeErrCode(w, http.StatusBadRequest, "bad_tier", errors.New("unknown tier"))
+			apierr.WriteCode(w, http.StatusBadRequest, "bad_tier", errors.New("unknown tier"))
 			return
 		}
 		key := r.PathValue("key")
-		now := h.bots.sync.clock()
-		if _, err := h.larkSyncChange(r.Context(), func(st *larkSyncState) error {
+		now := s.clock()
+		if _, err := s.change(r.Context(), func(st *syncState) error {
 			b := st.binding(key)
 			if b == nil || b.pending() {
-				return errLarkSyncNoBinding
+				return errNoBinding
 			}
 			if in.Enabled != nil {
 				if *in.Enabled && !b.Enabled && b.NextRunAt.Before(now) {
-					b.NextRunAt = larkSyncNextSlot(now, st.scheduleHour(), key)
+					b.NextRunAt = nextSlot(now, st.scheduleHour(), key)
 				}
 				b.Enabled = *in.Enabled
 			}
@@ -426,75 +440,92 @@ func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
 			}
 			return nil
 		}); err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		h.writeLarkSyncView(w, r)
+		s.writeView(w, r)
 	})
 	api.HandleFunc("DELETE "+base+"/bindings/{key}", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
 		key := r.PathValue("key")
-		if _, err := h.larkSyncChange(r.Context(), func(st *larkSyncState) error {
+		if _, err := s.change(r.Context(), func(st *syncState) error {
 			if b := st.binding(key); b == nil || b.pending() {
-				return errLarkSyncNoBinding
+				return errNoBinding
 			}
-			st.bindings = slices.DeleteFunc(st.bindings, func(b larkSyncBinding) bool { return b.Key == key })
+			st.bindings = slices.DeleteFunc(st.bindings, func(b syncBinding) bool { return b.Key == key })
 			return nil
 		}); err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
-		h.larkSyncForget(r.Context(), key)
-		h.auditBot(r.Context(), botRecord{auditLarkSyncRevoke, map[string]any{"binding": key}})
-		h.writeLarkSyncView(w, r)
+		s.forget(r.Context(), key)
+		s.host.Audit(r.Context(), auditRevoke, map[string]any{"binding": key})
+		s.writeView(w, r)
 	})
 	api.HandleFunc("POST "+base+"/bindings/{key}/run", func(w http.ResponseWriter, r *http.Request) {
-		if !larkSyncWriter(w, r) {
+		if !s.checkWriter(w, r) {
 			return
 		}
-		if !h.larkSyncAvailable() {
-			larkSyncErr(w, r, errLarkSyncUnavailable)
+		if !s.available() {
+			writeSyncErr(w, r, errUnavailable)
 			return
 		}
 		key := r.PathValue("key")
-		st, err := h.larkSyncLoad(r.Context())
+		st, err := s.load(r.Context())
 		if err != nil {
-			larkSyncErr(w, r, err)
+			writeSyncErr(w, r, err)
 			return
 		}
 		if b := st.binding(key); b == nil || !b.authorized() {
-			larkSyncErr(w, r, errLarkSyncNoBinding)
+			writeSyncErr(w, r, errNoBinding)
 			return
 		}
-		base := h.ctx
+		base := s.host.RunContext()
 		if base == nil {
 			base = context.WithoutCancel(r.Context())
 		}
-		h.larkSyncStartRun(base, key) // a run under way already is the run asked for
-		h.writeLarkSyncView(w, r)
+		s.startRun(base, key) // a run under way already is the run asked for
+		s.writeView(w, r)
 	})
 }
 
-// larkSyncForget drops what the manager kept for removed bindings: their cursors and runtimes. What they read stays
+// forget drops what the sync kept for removed bindings: their cursors and runtimes. What they read stays
 // in the knowledge base.
-func (h *Manager) larkSyncForget(ctx context.Context, keys ...string) {
-	store, _ := h.store.(larkSyncStore)
+func (s *Service) forget(ctx context.Context, keys ...string) {
+	store := s.host.SyncStore()
 	for _, k := range keys {
 		if store != nil {
 			if err := store.DeleteLarkSyncCursors(context.WithoutCancel(ctx), k); err != nil {
-				h.logf("lark sync: %s: drop cursors: %v", k, err)
+				s.host.Logf("lark sync: %s: drop cursors: %v", k, err)
 			}
 		}
-		h.larkSyncDropRuntime(k)
+		s.dropRuntime(k)
 	}
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// cutUTF8 is s cut to at most n bytes without splitting a character.
+func cutUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // Ensure the connector's interfaces stay what the knowledge base asks for.
 var (
-	_ connector.Archive      = larkSyncConnector{}
-	_ connector.ArchiveMedia = larkSyncConnector{}
-	_ connector.Items        = larkSyncConnector{}
-	_ connector.Accounts     = larkSyncConnector{}
+	_ connectorwire.Archive      = syncConnector{}
+	_ connectorwire.ArchiveMedia = syncConnector{}
+	_ connectorwire.Items        = syncConnector{}
+	_ connectorwire.Accounts     = syncConnector{}
 )
