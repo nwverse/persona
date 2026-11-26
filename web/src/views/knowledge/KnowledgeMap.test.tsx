@@ -209,6 +209,43 @@ describe("zooming and panning the map", () => {
     expect(zoom()).toBe(`${Math.round(fit * 100)}%`);
   });
 
+  it("zooms with + / = / - / _ / 0 while a node has focus, leaves ⌘ / Ctrl / Alt to the page zoom, and ignores typing", async () => {
+    const { svg, view, width, height } = await draw();
+    size(view, 800, 600);
+    const node = svg.querySelector<SVGGElement>("g[role=button][tabindex]")!;
+    node.focus();
+    const press = (el: Element, key: string, mods: KeyboardEventInit = {}) => {
+      const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...mods });
+      act(() => el.dispatchEvent(e));
+      return e.defaultPrevented;
+    };
+    expect(zoom()).toBe("65%");
+    // the zoom bar's steps
+    expect(press(node, "=")).toBe(true);
+    expect(zoom()).toBe("81%");
+    press(node, "+", { shiftKey: true });
+    expect(zoom()).toBe("102%");
+    press(node, "-");
+    expect(zoom()).toBe("81%");
+    press(node, "_", { shiftKey: true });
+    expect(zoom()).toBe("65%");
+    // with ⌘, Ctrl or Alt they are the browser's or the desktop app's page zoom: not handled, not prevented
+    for (const mods of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }]) for (const key of ["=", "+", "-", "_", "0"]) expect(press(node, key, mods)).toBe(false);
+    expect(zoom()).toBe("65%");
+    // typing in a field, inside the map's view or elsewhere on the page, zooms nothing
+    for (const parent of [view, document.body]) {
+      const input = parent.appendChild(document.createElement("input"));
+      input.focus();
+      for (const key of ["=", "+", "-", "_", "0"]) expect(press(input, key)).toBe(false);
+      input.remove();
+    }
+    expect(zoom()).toBe("65%");
+    // 0 is Fit to view
+    size(view, 120, 90);
+    expect(press(node, "0")).toBe(true);
+    expect(zoom()).toBe(`${Math.round(Math.max(0.05, Math.min((120 - 24) / width, (90 - 24) / height)) * 100)}%`);
+  });
+
   it("pans on a mouse drag without selecting where it started; a press that hardly moves still selects", async () => {
     const { svg, view } = await draw();
     size(view, 800, 600);
