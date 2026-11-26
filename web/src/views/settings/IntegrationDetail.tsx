@@ -759,6 +759,16 @@ function ExtensionIntegrationDetail({
     if (detail) keepIntegrationDraft(draftKey, dirty ? { base: detail.config ?? {}, draft, typed } : undefined);
   }, [detail, draftKey, dirty, draft, typed]);
 
+  const saveBar = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const field = document.activeElement;
+    const bar = saveBar.current;
+    if (!bar || !(field instanceof HTMLElement) || !bar.parentElement?.contains(field)) return;
+    const bounds = field.getBoundingClientRect();
+    const footer = bar.getBoundingClientRect();
+    if (bounds.bottom > footer.top && bounds.top < footer.bottom) field.scrollIntoView({ block: "center" });
+  }, [dirty]);
+
   const exit = () => {
     keepIntegrationDraft(draftKey);
     (onUninstalled ?? back)?.();
@@ -1313,7 +1323,7 @@ function ExtensionIntegrationDetail({
             </Group>
           </SectionBlock>
           {dirty && (
-            <div className="sticky bottom-0 z-10 flow-root bg-canvas [&>section]:mb-0">
+            <div ref={saveBar} className="sticky bottom-0 z-10 flow-root bg-canvas [&>section]:mb-0">
               <Group anchor="integration-save-bar">
                 {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
                 <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
