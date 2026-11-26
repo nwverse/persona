@@ -1419,3 +1419,238 @@ describe("TodosView server-owned board projection consumption (#15800)", () => {
     expect(workingSection.textContent).not.toContain("Hidden folded subtask");
   });
 });
+
+describe("TodosView detail parent picker, item_type filter & toggle, and undo auto-seen (#16100)", () => {
+  const uxTodos: Todo[] = [
+    {
+      id: "top_goal",
+      title: "Launch v2 architecture",
+      item_type: "task",
+      origin: "conv-main",
+      created_at: iso(6 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "other_goal",
+      title: "Q4 roadmap",
+      item_type: "task",
+      origin: "conv-main",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("todo", "rest", "todo", 1),
+    },
+    {
+      id: "nested_sub",
+      title: "Wire parent picker",
+      item_type: "task",
+      part_of: "top_goal",
+      origin: "conv-main",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "personal_note",
+      title: "Renew passport",
+      item_type: "personal",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("todo", "rest", "todo", 2),
+    },
+    {
+      id: "auto_seen_task",
+      title: "Nightly docs sync",
+      item_type: "task",
+      audience: "autonomous",
+      done_at: iso(2 * HOUR),
+      done_by: "auto",
+      seen_at: iso(2 * HOUR),
+      created_at: iso(8 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("done", "closed", "done", 0),
+    },
+  ];
+
+  it("renders none of the #16100 controls when todos_v2 is false or omitted", async () => {
+    await render({ todos: uxTodos, todosV2: false, selectedId: "auto_seen_task" });
+    expect(host.querySelector("[data-testid=todo-detail-change-parent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-parent-panel]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-item-type]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+    expect(kindFilterEl()).toBeNull();
+  });
+
+  it("re-parents and promotes a single todo via TodoParentPicker without interrupting running Agents", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") {
+        const body = (init as { json?: { ids: string[]; part_of?: string } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          body?.ids.includes(td.id) ? { ...td, part_of: body.part_of || undefined } : td,
+        );
+        return { updated: currentTodos.filter((td) => body?.ids.includes(td.id)) };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: uxTodos, todosV2: true, selectedId: "top_goal" });
+
+    // Open parent picker on top_goal: excludes self (top_goal), descendant (nested_sub), and done (auto_seen_task)
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-parent]")!;
+    expect(trigger).toBeTruthy();
+    await act(async () => trigger.click());
+    await flush();
+
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-parent-select]")!;
+    const optionValues = [...select.options].map((o) => o.value);
+    expect(optionValues).toEqual(["", "other_goal", "personal_note"]);
+
+    // Re-parent top_goal under other_goal
+    await act(async () => {
+      select.value = "other_goal";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-apply]")!.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["top_goal"],
+          part_of: "other_goal",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=todo-detail-parent-panel]")).toBeNull();
+
+    // Now open parent picker again and promote top_goal back to top-level in one click
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-parent]")!.click());
+    await flush();
+    const promoteBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-promote]")!;
+    expect(promoteBtn).toBeTruthy();
+    await act(async () => promoteBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["top_goal"],
+          part_of: "",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+
+    // Turning todos_v2 off removes the parent picker button immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-change-parent]")).toBeNull();
+  });
+
+  it("filters by server item_type under todos_v2 and toggles personal/task in detail via PATCH /todos/{id}", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/personal_note" && (init as { method?: string })?.method === "PATCH") {
+        const body = (init as { json?: { item_type?: "personal" | "task" } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          td.id === "personal_note" ? { ...td, item_type: body?.item_type } : td,
+        );
+        return { todo: currentTodos.find((td) => td.id === "personal_note") };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: uxTodos, todosV2: true, selectedId: "personal_note" });
+
+    // Filter to personal only -> shows only personal_note
+    await clickKind(t("todos.kind_filter_todos"));
+    expect(visibleTodoIds()).toEqual(["personal_note"]);
+
+    // Filter to tasks only -> excludes personal_note
+    await clickKind(t("todos.kind_filter_tasks"));
+    expect(visibleTodoIds()).not.toContain("personal_note");
+    expect(visibleTodoIds()).toContain("top_goal");
+
+    // Back to All
+    await clickKind(t("todos.kind_filter_all"));
+
+    // Detail item_type switcher starts on "personal"
+    const typeGroup = host.querySelector("[data-testid=todo-detail-item-type]")!;
+    expect(typeGroup).toBeTruthy();
+    const personalBtn = typeGroup.querySelector<HTMLButtonElement>('[data-item-type="personal"]')!;
+    const taskBtn = typeGroup.querySelector<HTMLButtonElement>('[data-item-type="task"]')!;
+    expect(personalBtn.getAttribute("aria-checked")).toBe("true");
+    expect(taskBtn.getAttribute("aria-checked")).toBe("false");
+
+    // Toggle to "task" -> calls PATCH /todos/personal_note with { item_type: "task" } and refreshes
+    await act(async () => taskBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/personal_note",
+      expect.objectContaining({
+        method: "PATCH",
+        json: { item_type: "task" },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector('[data-testid=todo-detail-item-type] [data-item-type="task"]')?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("exposes Mark unread button on seen/auto-seen todos under todos_v2 and calls DELETE /todos/{id}/seen", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/auto_seen_task/seen" && (init as { method?: string })?.method === "DELETE") {
+        currentTodos = currentTodos.map((td) =>
+          td.id === "auto_seen_task" ? { ...td, seen_at: null } : td,
+        );
+        return { todo: currentTodos.find((td) => td.id === "auto_seen_task") };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    // Unseen open todo does not show Mark unread button
+    await render({ todos: uxTodos, todosV2: true, selectedId: "personal_note" });
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+
+    // Auto-seen completed autonomous task shows Mark unread button
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: uxTodos, todosV2: true, selectedId: "auto_seen_task" });
+
+    const unseeBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-unsee-btn]")!;
+    expect(unseeBtn).toBeTruthy();
+    expect(unseeBtn.textContent).toContain(t("todos.detail_mark_unread"));
+
+    await act(async () => unseeBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/auto_seen_task/seen",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+
+    // Turning todos_v2 off hides the button immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+  });
+});
