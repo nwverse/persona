@@ -49,6 +49,16 @@ rows at the end of the assistant's group, with the module's own title and icon t
 nothing, and nothing is left greyed out (principle 2). No new component or token: rows and actions reuse `JRow` and
 `JAction`.
 
+## Stored data when its module is off (#13430, #15995)
+
+Audience: everyone on a hub whose owner turned a module off. What the user already has stays readable: the page shows the stored content with the
+module's controls left out, not greyed, and never an error or a Retry that cannot succeed. When part of the content
+is not stored (web, #15995: a mail's full body and attachments are fetched from the mail server each time), the
+stored part is followed by one plain line saying what is missing and why ("Mail is turned off on the hub machine, so
+the full message and its attachments can't be loaded…"), drawn as the page's existing quiet strip (the mail reader's
+translation strip: `bg-inset`, hairline, the `info` icon, `text-label`), neutral rather than caution: nothing went
+wrong and there is nothing for the person to do on this page.
+
 ## Product design principles
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.

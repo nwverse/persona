@@ -2637,6 +2637,23 @@ unavailable (including a 404 from a hub before the list read moved into Core) hi
 flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
 The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
+**Mail with the hub's mail module off** (#15995; mail has no web module of its own, the Inbox reads the hub flag
+`module.mail`). `lib/mail.ts` decides it once (`mailReading`: `full`, or `stored` when the hello names modules and
+leaves mail out) and everything else is handed that: Settings and compose already hide (`loadMailAccounts` asks
+nothing), and an opened mail item is `views/inbox/StoredMailBody.tsx` instead of the live reader. It asks no
+`/api/v1/mail/…` route, which the hub no longer has; it reads the item's own page (`GET /api/v1/inbox/{id}`, Core)
+and shows the mail's words out of the stored `context` (`lib/mail-stored.ts` takes off the heading and header lines
+the hub wrote for the model; at most 3,000 characters of the newest mail, or the list's preview), who it is from and
+when, and after the text one line: mail is off on the hub machine, so the full message and its attachments can't be
+loaded, and a long message may be cut short. The hub does not send whether the text was clipped
+(`mail_body_truncated` is not listed), so the line says it for every mail. A translation is shown only when the item
+lists one the hub kept (`POST /api/v1/translate/mail` answers from it without the mail server); a failure there is
+silent. Left out, because each needs the mail module: Reply and Reply all, marking the mail read, attachments and the
+HTML view, and sending a reply from the Inbox (AI draft reply, Send on a draft or a reply suggestion:
+`views/inbox/item-write-gate.ts`, beside Lark's gate; a draft already written stays readable). Hand to AI (without
+the line about `mail_read`), Done, mute, folders, rules and to-dos are the Inbox's and stay. With the module on, or a
+hub that names no modules, the reader and its requests are as before.
+
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
 extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
