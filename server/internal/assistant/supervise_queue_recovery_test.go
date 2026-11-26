@@ -160,9 +160,12 @@ func TestUnconfirmedSupervisionTriedMismatchRetiresAndUnblocksPending(t *testing
 // Repeated unconfirmed retries of an unchanged supervision relay stop after supervisionConfirmRetryLimit cycles,
 // retire the stuck head with an owner alert, and never loop indefinitely.
 func TestUnconfirmedSupervisionRetryLoopBoundsAndAlerts(t *testing.T) {
-	oldLimit := supervisionConfirmRetryLimit
-	supervisionConfirmRetryLimit = 2
-	t.Cleanup(func() { supervisionConfirmRetryLimit = oldLimit })
+	oldLimit, oldDelays := supervisionConfirmRetryLimit, supervisionConfirmDelays
+	supervisionConfirmRetryLimit, supervisionConfirmDelays = 2, nil
+	t.Cleanup(func() {
+		supervisionConfirmRetryLimit = oldLimit
+		supervisionConfirmDelays = oldDelays
+	})
 
 	store := &memStore{}
 	s, f := newQuietServiceOn(t, store)

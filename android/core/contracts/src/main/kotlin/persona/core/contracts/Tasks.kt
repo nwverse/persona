@@ -44,7 +44,7 @@ data class PlanTask(
     val brief: TaskBrief? = null,
 ) {
     /** The directory's last part: how the user names a project. */
-    val project get() = cwd.trimEnd('/').substringAfterLast('/')
+    val project get() = compactFolderName(cwd)
 }
 
 @KeepGeneratedSerializer
@@ -87,9 +87,9 @@ data class FeedItem(
 
     /**
      * `message`: the reply went out — from this card or from the inbox, on any device (the hub records it on the
-     * card, #1519): when, and what it said (a card sent before the hub recorded it: its draft). Null while not sent.
+     * card, #1519): when, and the recorded text if available. Null while not sent.
      */
-    val sent: SentReply? get() = field("sent_at")?.let { SentReply(it, field("sent")?.takeIf(String::isNotEmpty) ?: field("draft").orEmpty()) }
+    val sent: SentReply? get() = field("sent_at")?.let { SentReply(it, field("sent").orEmpty()) }
 
     /**
      * `message`: the thing the card is about was dealt with elsewhere and nothing went out from this card (#4797):

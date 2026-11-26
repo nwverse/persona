@@ -381,6 +381,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
+				n.agyPaneControls(&s, id)
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					liveBusyAgy[a.PaneID] = true
@@ -439,6 +440,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if m := n.assistantModeOf(s.SessionID); m != "" {
 				s.PermissionMode = m
 			}
+		} else if s.Agent == agyAgent {
+			s.PermissionMode = agyShownMode(s.PermissionMode, n.agyRuntimeMode(s.SessionID))
 		}
 		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes. Under
 		// an id of its own, the ids it went by go too, named on the row for the manager's archive (runtimealiases.go).
