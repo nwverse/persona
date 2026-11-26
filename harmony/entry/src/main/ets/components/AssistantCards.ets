@@ -477,8 +477,8 @@ export struct AssistantCards {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         SymbolGlyph(Symbols.expand).fontSize(Tokens.meta).fontColor([Colors.secondary])
       }.width('100%').alignItems(VerticalAlign.Center)
-    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.surface).borderRadius(Tokens.card)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.environment.dark ? '#28FFFFFF' : Colors.divider, radius: Tokens.card })
+    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')).borderRadius(Tokens.card)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.card })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => { Haptics.tap(); this.openDetail(item); })
       .id('assistant.detail.plan.' + Wire.text(item, 'id')).accessibilityText(tr('assistant_detail_view_plan') + ' ' + this.planSummaryTitle(item) + (this.planTasks(item).length > 1 ? ' ' + this.planSummaryMore(item) : ''))
@@ -754,10 +754,11 @@ export struct AssistantCards {
       }.width('100%').height(this.trayHeight()).align(Alignment.TopStart).scrollBar(BarState.Auto).id('action-tray.rows')
       if (this.pinnedTrayPlan) this.pinnedPlanActions(this.pinnedTrayPlan!,this.trayOwner)
     }.width('100%').alignItems(HorizontalAlign.Start).padding({bottom:4}).margin({bottom:16})
-      .backgroundColor(Colors.surface)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:this.environment.dark ? '#2CFFFFFF' : Colors.divider,radius:20})
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.glassSurface : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:20})
       .borderRadius(20)
-      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
       .transition(Motion.slideFade(this.environment.reduceMotion, 8))
       .id('chat.tasks.tray')
   }
@@ -890,10 +891,10 @@ export struct AssistantCards {
       }
     }.constraintSize({minHeight:32}).padding({left:11,right:11,top:5,bottom:5})
       .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.ink)
-      .backgroundColor(this.shownDecisions.length ? Colors.action : Colors.surface)
+      .backgroundColor(this.shownDecisions.length ? Colors.action : (Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')))
       .border({
         width: PhoneStyle.surfaceEdgeWidth(0.5),
-        color: this.shownDecisions.length ? Colors.prominentRim : $r('app.color.project_card_needs_border'),
+        color: PhoneStyle.cardBorder(this.environment.dark),
         radius: 16
       })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
@@ -943,14 +944,10 @@ export struct AssistantCards {
                       : (this.environment.dark ? '#1CFFFFFF' : '#0E000000'))
               }
             }.constraintSize({minHeight:32}).padding({left:11,right:9,top:5,bottom:5})
-              .backgroundColor(this.trayOpen && this.trayBucket===bucket ? Colors.action : Colors.surface)
+              .backgroundColor(this.trayOpen && this.trayBucket===bucket ? Colors.action : (Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')))
               .border({
                 width: PhoneStyle.surfaceEdgeWidth(0.5),
-                color: this.trayOpen && this.trayBucket===bucket
-                  ? Colors.prominentRim
-                  : this.trayCount(bucket) > 0 && bucket === 'needs'
-                    ? $r('app.color.project_card_needs_border')
-                    : (this.environment.dark ? '#28FFFFFF' : Colors.divider),
+                color: PhoneStyle.cardBorder(this.environment.dark),
                 radius: 16
               })
               .shadow(PhoneStyle.cardElevation(this.environment.dark))
@@ -1010,8 +1007,8 @@ export struct AssistantCards {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         SymbolGlyph(Symbols.expand).fontSize(Tokens.meta).fontColor([Colors.secondary])
       }.width('100%')
-    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.surface).borderRadius(Tokens.card)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.environment.dark ? '#28FFFFFF' : Colors.divider, radius: Tokens.card })
+    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')).borderRadius(Tokens.card)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.card })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => { Haptics.tap(); this.openDetail(item); })
       .id('assistant.detail.receipt.' + Wire.text(item, 'id')).accessibilityText(tr('assistant_detail_view_receipt') + ' ' + projection.title + ' ' + tr('assistant_detail_receipt_' + projection.outcome) + ' ' + projection.summary)

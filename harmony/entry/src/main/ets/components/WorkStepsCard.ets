@@ -154,7 +154,7 @@ export struct WorkStepTimeline {
             .padding(0)
             .backgroundColor(Colors.surface)
             .borderRadius(12)
-            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: step.failed ? Colors.danger : Colors.divider, radius: 12 })
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: step.failed ? Colors.danger : PhoneStyle.cardBorder(this.env.dark), radius: 12 })
             .onClick(() => {
               if (step.inputPreview || step.outputPreview) this.toggleStep(step.id);
               else if (step.filePath) { Haptics.tap(); this.onOpenFile(step.filePath); }
@@ -206,7 +206,7 @@ export struct WorkStepTimeline {
               .padding(10)
               .backgroundColor(Colors.codeCanvas)
               .borderRadius(10)
-              .border({ width: 0.5, color: Colors.divider, radius: 10 })
+              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 10 })
               .transition(Motion.slideFade(this.env.reduceMotion, -4))
             }
           }.width('100%')
@@ -217,7 +217,7 @@ export struct WorkStepTimeline {
     .padding(8)
     .backgroundColor(Colors.control)
     .borderRadius(15)
-    .border({ width: 0.5, color: Colors.divider, radius: 15 })
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 15 })
     .id('chat.work.timeline')
   }
 }
@@ -369,9 +369,9 @@ export struct TurnChangesCard {
       }.width('100%').padding({ top: 4, bottom: 4 })
     }
     .width('100%')
-    .backgroundColor(Colors.surface)
+    .backgroundColor(Colors.styleCard || (this.env.dark ? '#1C1C1E' : '#F4F5F7'))
     .borderRadius(16)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: 16 })
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 16 })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
     .transition(Motion.fadeScale(this.env.reduceMotion, 0.96))
     .id('turn_changes.card')

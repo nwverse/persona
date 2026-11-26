@@ -70,10 +70,11 @@ export struct AgentPendingCards {
             .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
         }
           .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-          .backgroundColor(Colors.surface)
+          .backgroundColor(Colors.styleID === 'glass' ? Colors.glassSurface : Colors.surface)
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
           .borderRadius(12)
-          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.env.dark ? '#28FFFFFF' : Colors.divider, radius: 12 })
-          .shadow(PhoneStyle.cardElevation(this.env.dark))
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: 12 })
+          .shadow(PhoneStyle.floatingElevation(this.env.dark))
           .margin({ left: 2 })
           .id('chat.pending.count')
           .onAreaChange((_old:Area,area:Area) => {

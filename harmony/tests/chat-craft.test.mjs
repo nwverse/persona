@@ -92,7 +92,7 @@ test('chat components remove raw Image(Symbols.more) and apply flagship HarmonyO
     assert.doesNotMatch(src, /Image\(Symbols\.more\)/, `${name} must not render raw Image(Symbols.more)`);
   }
 
-  // MarkdownText flagship code cards, accent-bar blockquotes, alternating tables, and incremental streaming.
+  // MarkdownText clean code cards, accent-bar blockquotes, alternating tables, and incremental streaming without wireframe borders.
   assert.ok(markdown.includes('formatCodeLanguageBadge'));
   assert.ok(markdown.includes('formatCodeLineCount'));
   assert.ok(markdown.includes('Colors.codeHunk'));
@@ -102,36 +102,59 @@ test('chat components remove raw Image(Symbols.more) and apply flagship HarmonyO
   assert.ok(markdown.includes('rowIndex % 2 === 0'));
   assert.ok(markdown.includes('IncrementalMarkdownCache'));
   assert.ok(markdown.includes('StreamTailCaret'));
+  assert.ok(markdown.includes('PhoneStyle.cardBorder'));
+  assert.doesNotMatch(markdown, /#2EFFFFFF/);
 
-  // Conversation MessageSurface elevates assistant replies above flat Colors.control.
+  // Conversation MessageSurface aligns with iOS ChatBox.persona (#F0F0F3 / #2A2A2E) and borderless/shadowless Glass bubbles.
   const surface = conversation.slice(conversation.indexOf('struct MessageSurface'), conversation.indexOf('struct ChatSendStatus'));
   assert.doesNotMatch(surface, /Colors\.control/);
-  assert.ok(surface.includes('#18191D'));
-  assert.ok(surface.includes('#F7F8FB'));
+  assert.ok(surface.includes('#2A2A2E'));
+  assert.ok(surface.includes('#F0F0F3'));
+  assert.ok(surface.includes('PhoneStyle.cardBorder'));
+  assert.ok(surface.includes('PhoneStyle.cardElevation'));
 
-  // AssistantCards tray chips have colored status dots, elevation, hairline rim, press scale, and haptics.
+  // Floating composer and glass controls use PhoneStyle floating elevation/border and COMPONENT_THICK blur; demo leading control uses +.
+  const composerBlock = conversation.slice(conversation.indexOf('private composerSurface('), conversation.indexOf('@Builder taskDock('));
+  assert.ok(composerBlock.includes('PhoneStyle.floatingElevation'));
+  assert.ok(composerBlock.includes('PhoneStyle.floatingBorder'));
+  assert.ok(composerBlock.includes('BlurStyle.COMPONENT_THICK'));
+  assert.match(composerBlock, /this\.showContextMenu && this\.model\.demo[\s\S]{0,200}Symbols\.plus/);
+
+  // AssistantCards tray chips are borderless/shadowless in Glass with colored status dots, press scale, and haptics; trayList floats with Liquid Glass.
   const dock = cards.slice(cards.indexOf('@Builder decisionEntry()'), cards.indexOf('private receiptTodo('));
   assert.ok(dock.includes('trayDotColor'));
+  assert.ok(dock.includes('PhoneStyle.cardBorder'));
   assert.ok(dock.includes('PhoneStyle.cardElevation'));
   assert.ok(dock.includes('MotionTokens.pressScale'));
   assert.ok(dock.includes('Haptics.tap()'));
+  const trayList = cards.slice(cards.indexOf('@Builder trayList()'), cards.indexOf('private metric('));
+  assert.ok(trayList.includes('BlurStyle.COMPONENT_THICK'));
+  assert.ok(trayList.includes('PhoneStyle.floatingElevation'));
+  assert.ok(trayList.includes('PhoneStyle.floatingBorder'));
 
-  // AssistantWelcome has mascot emblem, semantic icon wells, and press scale.
+  // AssistantWelcome has mascot emblem, semantic icon wells, press scale, and borderless/shadowless Glass suggestion cards.
   assert.ok(welcome.includes('welcome_app_icon'));
   assert.ok(welcome.includes('questionWell'));
   assert.ok(welcome.includes('MotionTokens.pressScale'));
+  assert.ok(welcome.includes('PhoneStyle.cardBorder'));
+  assert.ok(welcome.includes('PhoneStyle.cardElevation'));
 
-  // InteractionDecisionForm has layered elevation, semantic header pill, rich Markdown plan rendering, OLED secondary contrast, and haptics.
-  assert.ok(decisions.includes('PhoneStyle.cardElevation'));
-  assert.ok(decisions.includes('headerPillFill'));
-  assert.ok(decisions.includes('#2C2C2E'));
-  assert.ok(decisions.includes('#48484A'));
+  // InteractionDecisionForm uses clean inline header tint (no pill box), Liquid Glass panel radius 22, floating elevation/border, and clean secondary capsules.
+  assert.doesNotMatch(decisions, /headerPillFill|headerPillBorder/);
+  assert.ok(decisions.includes('PhoneStyle.floatingElevation'));
+  assert.ok(decisions.includes('PhoneStyle.floatingBorder'));
+  assert.ok(decisions.includes('BlurStyle.COMPONENT_THICK'));
+  assert.ok(decisions.includes('borderRadius(22)'));
+  assert.doesNotMatch(decisions, /#48484A/);
   assert.match(decisions, /this\.request\.kind === 'plan' && this\.taskPlanSource\(\)[\s\S]{0,200}MarkdownText/);
 
-  // SessionTools elevates files, git status badges, diff summary cards, and terminal keycaps.
+  // SessionTools elevates files, git status badges, diff summary cards, clean terminal keycaps, and narrow-pane / compactHeader adaptation.
   assert.ok(tools.includes('summarizeUnifiedDiff'));
   assert.ok(tools.includes('gitMarkBadgeLabel'));
   assert.ok(tools.includes('Colors.codeAddedFill'));
   assert.ok(tools.includes('Colors.codeRemovedFill'));
   assert.ok(tools.includes('terminalKeyButton'));
+  assert.ok(tools.includes('compactHeader'));
+  assert.ok(tools.includes('paneWidth < 400'));
+  assert.doesNotMatch(tools, /#48484A/);
 });

@@ -109,7 +109,7 @@ export struct AssistantWelcome {
             .height(36)
             .borderRadius(11)
             .backgroundColor(this.questionWell(item.id))
-            .border({ width: 0.5, color: this.environment.dark ? '#22FFFFFF' : '#10000000', radius: 11 })
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 11 })
           Blank().layoutWeight(1)
           SymbolGlyph($r('sys.symbol.arrow_up_right')).fontSize('12vp').fontColor([Colors.tertiary]).accessibilityLevel('no')
         }.width('100%').alignItems(VerticalAlign.Top)
@@ -117,12 +117,11 @@ export struct AssistantWelcome {
           .width('100%').textAlign(TextAlign.Start).maxLines(3).textOverflow({ overflow: TextOverflow.Ellipsis })
       }.width('100%').constraintSize({ minHeight: 106 }).alignItems(HorizontalAlign.Start).justifyContent(FlexAlign.SpaceBetween).padding(14)
     }.width('100%').padding(0)
-      .backgroundColor(Colors.styleID === 'glass' ? (this.environment.dark ? '#CC1C1C1E' : '#F2FFFFFF') : Colors.surface)
-      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F4F5F7'))
       .borderRadius(18)
       .border({
         width: PhoneStyle.surfaceEdgeWidth(0.5),
-        color: this.environment.dark ? '#28FFFFFF' : Colors.divider,
+        color: PhoneStyle.cardBorder(this.environment.dark),
         radius: 18
       })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
@@ -185,7 +184,7 @@ export struct AssistantWelcome {
           .height(56)
           .borderRadius(16)
           .backgroundColor(Colors.surface)
-          .border({ width: 0.75, color: this.environment.dark ? '#30FFFFFF' : Colors.accentWell, radius: 16 })
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.environment.dark), radius: 16 })
           .shadow(PhoneStyle.cardElevation(this.environment.dark))
           .accessibilityLevel('no')
         Column({space:6}) {
@@ -212,8 +211,8 @@ export struct AssistantWelcome {
             }
           }.padding({left:12,right:14,top:8,bottom:8}).constraintSize({minHeight:38})
             .responseRegion({x:0,y:-3,width:'100%',height:44})
-            .backgroundColor(Colors.surface)
-            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.environment.dark ? '#28FFFFFF' : Colors.divider, radius: 19 })
+            .backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F4F5F7'))
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 19 })
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
             .scale({
               x: this.pressedPlace === key ? MotionTokens.pressScale : 1,

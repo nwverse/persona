@@ -54,6 +54,11 @@ export struct SessionTools {
   @Param initialFile: string = '';
   @Param initialTab: number = 0;
   @Param phoneSheetHeight: number | SheetSize = SheetSize.LARGE;
+  @Param compactHeader: boolean = false;
+  @Local private paneWidth: number = 0;
+  @Computed get isCompactPane(): boolean { return this.compactHeader || (this.paneWidth > 0 && this.paneWidth < 400); }
+  private paneHorizontalPadding(): number { return this.isCompactPane ? 12 : PhoneStyle.page; }
+  private paneTopPadding(normal: number): number { return this.isCompactPane ? Math.max(4, normal - 4) : normal; }
   @Local workspace: SessionWorkspace = new SessionWorkspace();
   @Local fileRowBindings: BoundRow<WorkspaceEntry>[] = [];
   @Local gitRowBindings: BoundRow<WorkspaceGitFile>[] = [];
@@ -794,7 +799,7 @@ export struct SessionTools {
     return /\.(swift|ets|ts|tsx|js|jsx|go|rs|py|json|yaml|yml|toml|sh|md|css|html|c|cpp|h|kt|java)$/i.test(name);
   }
   private cardRim(): ResourceColor {
-    return this.env.dark ? '#28FFFFFF' : Colors.divider;
+    return PhoneStyle.cardBorder(this.env.dark);
   }
 
   @Builder fileRow(binding:BoundRow<WorkspaceEntry>) {
@@ -814,7 +819,7 @@ export struct SessionTools {
             : this.isCodeFileName(binding.value.name)
               ? (this.env.dark ? '#24B0A8FF' : '#145B4FD6')
               : (this.env.dark ? '#18FFFFFF' : '#0E000000'))
-        .border({ width: 0.5, color: this.env.dark ? '#20FFFFFF' : '#0E000000', radius: 10 })
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 10 })
         .flexShrink(0)
         .id('session.fileRow.icon.'+binding.value.path)
       Column({space:2}) {
@@ -836,7 +841,7 @@ export struct SessionTools {
           .height(20)
           .borderRadius(6)
           .backgroundColor(this.gitMarkFill(this.workspace.fileGitMark(binding.value)))
-          .border({ width: 0.5, color: this.gitMarkColor(this.workspace.fileGitMark(binding.value)), radius: 6 })
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleID === 'glass' ? Color.Transparent : this.gitMarkColor(this.workspace.fileGitMark(binding.value)), radius: 6 })
           .id('session.files.git_mark.'+binding.value.path)
       }
       if (binding.value.directory) SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.tertiary])
@@ -955,7 +960,7 @@ export struct SessionTools {
           .width(44).height(44).padding(0).backgroundColor(Colors.control).bindMenu(this.fileMenu).accessibilityText(tr('more')).id('session.files.more')
           .bindSheet($$this.transferOpen,this.fileTransferForm(),{title:{title:tr('file_transfer_title')},height:SheetSize.LARGE,showClose:true})
       }.width('100%').id('session.files.find')
-    }.padding({left:PhoneStyle.page,right:PhoneStyle.page,top:5,bottom:8}).width('100%')
+    }.padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding(),top:this.paneTopPadding(5),bottom:this.isCompactPane ? 6 : 8}).width('100%')
   }
   @Builder fileView() {
     Column() {
@@ -1008,7 +1013,7 @@ export struct SessionTools {
         if (!this.shownFileRows.length && !this.workspace.fileBusy && !this.workspace.fileError) ListItem() { Text(tr('empty')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).padding(14) }
         if (this.workspace.hasMoreEntries) ListItem() { Text(tr('session_tools_first_entries')).padding(Tokens.inset) }
         }
-      }.divider({strokeWidth:Tokens.divider,startMargin:35,color:Colors.divider}).width('100%').layoutWeight(1).padding({left:PhoneStyle.page,right:PhoneStyle.page})
+      }.divider({strokeWidth:Tokens.divider,startMargin:35,color:Colors.divider}).width('100%').layoutWeight(1).padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding()})
         .bindSheet($$this.fileOpen,this.fileViewer(),{title:{title:this.workspace.selectedFileName || tr('file')},height:SheetSize.LARGE,showClose:true})
     }.width('100%').height('100%').backgroundColor(this.phoneSheetHeight !== SheetSize.LARGE ? Colors.listBackground : Colors.canvas)
 
@@ -1233,7 +1238,7 @@ export struct SessionTools {
       .aspectRatio(1)
       .borderRadius(7)
       .backgroundColor(this.gitMarkFill(mark))
-      .border({ width: 0.5, color: this.gitMarkColor(mark), radius: 7 })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleID === 'glass' ? Color.Transparent : this.gitMarkColor(mark), radius: 7 })
       .flexShrink(0)
       .id(identity)
   }
@@ -1664,9 +1669,9 @@ export struct SessionTools {
           }
           if (this.workspace.gitHistoryBusy) ListItem() { LoadingProgress().width(25).height(25) }
           if (this.workspace.gitHistoryError) ListItem() { Text(tr('session_git_history_error')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.danger).padding(9) }
-        }.width('100%').layoutWeight(1).padding({left:PhoneStyle.page,right:PhoneStyle.page,top:this.phoneSheetHeight !== SheetSize.LARGE ? 35 : (nativeEnvironment.fontScale>=1.5 ? 10 : 27),bottom:12})
+        }.width('100%').layoutWeight(1).padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding(),top:this.phoneSheetHeight !== SheetSize.LARGE ? 35 : this.paneTopPadding(nativeEnvironment.fontScale>=1.5 ? 10 : 27),bottom:12})
         if (this.workspace.gitFiles.length > 0 && this.workspace.canWriteGit()) Row() { this.stagedCommitBar() }
-          .width('100%').padding({left:PhoneStyle.page,right:PhoneStyle.page,top:2,bottom:this.gitMetric(14,14,8)})
+          .width('100%').padding({left:this.paneHorizontalPadding(),right:this.paneHorizontalPadding(),top:2,bottom:this.gitMetric(14,14,8)})
       } else if (Object.keys(this.workspace.gitStatus).length) {
         Column({space:6}) {
           Text(tr('session_tools_not_repository')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
@@ -1779,7 +1784,7 @@ export struct SessionTools {
           Button(tr(key),{type:ButtonType.Normal}).layoutWeight(1).height(40).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).fontWeight(FontWeight.Medium).padding(0)
             .fontColor(this.workspace.gitDiffStaged===(i===1) ? Colors.ink : Colors.secondary)
             .backgroundColor(this.workspace.gitDiffStaged===(i===1) ? Colors.surface : Color.Transparent).borderRadius(9)
-            .shadow(this.workspace.gitDiffStaged===(i===1) ? { radius: 4, color: this.env.dark ? '#38000000' : '#14000000', offsetY: 1 } : { radius: 0, color: Color.Transparent })
+            .shadow(this.workspace.gitDiffStaged===(i===1) ? PhoneStyle.surfaceShadow({ radius: 4, color: this.env.dark ? '#28000000' : '#10000000', offsetY: 1 }) : { radius: 0, color: Color.Transparent })
             .onClick(() => { if (this.workspace.gitDiffStaged!==(i===1)) { Haptics.selection(); this.workspace.gitDiffStaged=i===1; this.workspace.loadGitDiff(); } })
             .id(i ? 'session.git.diff.staged' : 'session.git.diff.unstaged')
         },(key:string) => key)
@@ -1955,14 +1960,14 @@ export struct SessionTools {
       .fontColor(danger ? Colors.danger : Colors.ink)
       .backgroundColor(danger
         ? (this.env.dark ? '#28FF6369' : '#18C62B33')
-        : (this.env.dark ? '#2C2C2E' : Colors.surface))
+        : (this.env.dark ? '#2C2C2E' : '#FFFFFF'))
       .borderRadius(10)
       .border({
-        width: 0.75,
-        color: danger ? Colors.danger : (this.env.dark ? '#48484A' : Colors.divider),
+        width: PhoneStyle.surfaceEdgeWidth(0.5),
+        color: danger ? (this.env.dark ? '#44FF6369' : '#30C62B33') : PhoneStyle.cardBorder(this.env.dark),
         radius: 10
       })
-      .shadow({ radius: 3, color: this.env.dark ? '#30000000' : '#10000000', offsetY: 1 })
+      .shadow(PhoneStyle.cardElevation(this.env.dark))
       .scale({
         x: this.pressedTerminalKey === keyId ? MotionTokens.pressScale : 1,
         y: this.pressedTerminalKey === keyId ? MotionTokens.pressScale : 1
@@ -2032,7 +2037,7 @@ export struct SessionTools {
             .padding({ left: 10, right: 6, top: 4, bottom: 4 })
             .backgroundColor(Colors.surface)
             .borderRadius(20)
-            .border({ width: 0.75, color: this.cardRim(), radius: 20 })
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: 20 })
           Scroll() {
             Row({ space: 8 }) {
               this.terminalKeyButton('Esc', 'term.esc', false, () => this.workspace.sendTerminalKey('escape'))
@@ -2044,7 +2049,7 @@ export struct SessionTools {
           }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').align(Alignment.Start)
         }.width('100%')
       }
-    }.width('100%').height('100%').padding({ left: PhoneStyle.page, right: PhoneStyle.page, top: 10, bottom: 12 }).backgroundColor(Colors.grouped)
+    }.width('100%').height('100%').padding({ left: this.paneHorizontalPadding(), right: this.paneHorizontalPadding(), top: this.paneTopPadding(10), bottom: 12 }).backgroundColor(Colors.grouped)
   }
 
   @Builder terminalScreenView() {
@@ -2099,7 +2104,7 @@ export struct SessionTools {
             .padding({ left: 10, right: 6, top: 4, bottom: 4 })
             .backgroundColor(Colors.surface)
             .borderRadius(20)
-            .border({ width: 0.75, color: this.cardRim(), radius: 20 })
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: 20 })
           Scroll() {
             Row({ space: 8 }) {
               this.terminalKeyButton('Esc', 'scr.esc', false, () => this.sendTerminalScreenKey('esc'))
@@ -2111,7 +2116,7 @@ export struct SessionTools {
           }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').align(Alignment.Start)
         }.width('100%')
       }
-    }.width('100%').height('100%').padding({ left: PhoneStyle.page, right: PhoneStyle.page, top: 10, bottom: 12 }).backgroundColor(Colors.grouped)
+    }.width('100%').height('100%').padding({ left: this.paneHorizontalPadding(), right: this.paneHorizontalPadding(), top: this.paneTopPadding(10), bottom: 12 }).backgroundColor(Colors.grouped)
   }
 
   @Builder previewServerRow(binding: BoundRow<WorkspacePreviewServer>) {
@@ -2142,7 +2147,7 @@ export struct SessionTools {
           Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.expand).fontSize(Tokens.symbolFont).fontColor([IconActions.color('session_tools_forward', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('session_tools_forward')).bindTips(tr('session_tools_forward')).onClick(() => this.previewAction('forward'))
           Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('refresh')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('refresh', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('refresh')).bindTips(tr('refresh')).onClick(() => this.previewAction('reload'))
         }
-      }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap })
+      }.padding({ left: this.paneHorizontalPadding(), right: this.paneHorizontalPadding(), top: this.paneTopPadding(Tokens.inset), bottom: Tokens.gap })
       if (this.workspace.previewError) Text(trError(this.workspace.previewError)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.transferError) Text(this.transferError).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset)
       if (this.workspace.previewState === 'starting' || this.workspace.previewState === 'opening' || this.workspace.previewState === 'connecting') LoadingProgress()
@@ -2282,5 +2287,11 @@ export struct SessionTools {
       else if (this.workspace.tab === 3) this.terminalScreenView()
       else this.previewView()
     }.width('100%').height('100%')
+      .onAreaChange((_old: Area, area: Area) => {
+        const width = Number(area.width);
+        if (Number.isFinite(width) && width > 0 && Math.abs(width - this.paneWidth) > 1) {
+          this.paneWidth = width;
+        }
+      })
   }
 }

@@ -221,8 +221,8 @@ export struct MarkdownText {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .padding({ left: 7, right: 7, top: 2.5, bottom: 2.5 })
-          .backgroundColor(this.environment.dark ? '#1EFFFFFF' : '#12000000')
-          .border({ width: 0.5, color: this.environment.dark ? '#28FFFFFF' : '#16000000', radius: 6 })
+          .backgroundColor(this.environment.dark ? '#18FFFFFF' : '#0E000000')
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 6 })
           .borderRadius(6)
         if (countCodeLines(block.text) > 0) {
           Text(formatCodeLineCount(countCodeLines(block.text)))
@@ -250,12 +250,12 @@ export struct MarkdownText {
           .padding({ left: 10, right: 10 })
           .backgroundColor(this.copiedCodeKey === blockKey
             ? (this.environment.dark ? '#2830D158' : '#1A237337')
-            : (this.environment.dark ? '#1CFFFFFF' : '#10000000'))
+            : (this.environment.dark ? '#18FFFFFF' : '#0D000000'))
           .border({
-            width: 0.5,
+            width: this.copiedCodeKey === blockKey ? 0.5 : PhoneStyle.surfaceEdgeWidth(0.5),
             color: this.copiedCodeKey === blockKey
               ? Colors.positive
-              : (this.environment.dark ? '#2AFFFFFF' : '#16000000'),
+              : PhoneStyle.cardBorder(this.environment.dark),
             radius: 13
           })
           .responseRegion({ x: -6, y: -9, width: 76, height: 44 })
@@ -279,7 +279,7 @@ export struct MarkdownText {
         .padding({ left: 12, right: 10, top: 8, bottom: 8 })
         .backgroundColor(Colors.codeHunk)
         .alignItems(VerticalAlign.Center)
-      Divider().strokeWidth(0.5).color(this.environment.dark ? '#24FFFFFF' : Colors.divider)
+      Divider().strokeWidth(0.5).color(this.environment.dark ? '#16FFFFFF' : Colors.divider)
       Scroll() {
         Text(trimCodeForCopy(block.text))
           .fontFamily('monospace')
@@ -302,7 +302,7 @@ export struct MarkdownText {
       .clip(true)
       .border({
         width: PhoneStyle.surfaceEdgeWidth(0.5),
-        color: this.environment.dark ? '#2EFFFFFF' : Colors.divider,
+        color: PhoneStyle.cardBorder(this.environment.dark),
         radius: 14
       })
       .shadow(this.chatReply ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
@@ -344,7 +344,7 @@ export struct MarkdownText {
         .alignItems(HorizontalAlign.Start)
         .backgroundColor(Colors.recapTint)
         .borderRadius(12)
-        .border({ width: 0.5, color: Colors.accentWell, radius: 12 })
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 12 })
     } else if (block.kind === 'list') {
       Column({ space: this.dockPlan ? this.readingPoints(Tokens.body)*0.2 : Tokens.gap }) {
         ForEach(block.items, (item: MarkdownBlock, index: number) => this.listItem(item, blockKey + '.l' + String(index), quoted),
@@ -361,8 +361,8 @@ export struct MarkdownText {
           .borderRadius(12)
           .clip(true)
           .border({
-            width: 0.5,
-            color: this.environment.dark ? '#2CFFFFFF' : Colors.divider,
+            width: PhoneStyle.surfaceEdgeWidth(0.5),
+            color: PhoneStyle.cardBorder(this.environment.dark),
             radius: 12
           })
       }
@@ -385,7 +385,7 @@ export struct MarkdownText {
       if (rowIndex > 0) {
         Divider()
           .strokeWidth(rowIndex === 1 ? 0.75 : 0.5)
-          .color(this.environment.dark ? '#26FFFFFF' : Colors.divider)
+          .color(this.environment.dark ? '#16FFFFFF' : Colors.divider)
       }
       Row() {
         ForEach(row.cells, (cell: MarkdownInline[], index: number) => this.tableCell(cell, table, index, row.header),
@@ -407,7 +407,7 @@ export struct MarkdownText {
       .width(Tokens.markdownTableCell)
       .padding({ left: 12, right: 12, top: 9, bottom: 9 })
       .alignItems(HorizontalAlign.Start)
-      .border(index > 0 ? { width: { left: 0.5 }, color: this.environment.dark ? '#22FFFFFF' : Colors.divider } : { width: 0 })
+      .border(index > 0 ? { width: { left: 0.5 }, color: this.environment.dark ? '#14FFFFFF' : Colors.divider } : { width: 0 })
   }
 
   build() {
