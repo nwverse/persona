@@ -756,6 +756,7 @@ private fun TodoTriageRow(
                     todo.hold?.takeIf { state != TodoState.Working && state != TodoState.NeedsYou }?.let {
                         TodoHoldLine(it, Modifier.padding(start = Tokens.Space.xxl))
                     }
+                    todo.wait?.let { TodoWaitLine(it, now) }
                     TodoPlanLine(todo, Modifier.padding(start = Tokens.Space.xxl))
                     // A decision held for the next briefing (#4930): nothing was pushed for it, and the row says so.
                     if (todo.ask?.forBriefing == true) Text(stringResource(R.string.agents_todo_for_briefing),

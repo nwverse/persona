@@ -214,7 +214,7 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 	t.Launcher, t.Model, t.Tier = name, model, ""
 	t.LauncherDefaultModel = model == ""
 	modes := startTakesModes(agent.agent)
-	if !modes {
+	if !startTakesEffort(agent.agent) {
 		t.Effort = ""
 	}
 	if !t.preservePermission {

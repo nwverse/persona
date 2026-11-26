@@ -700,6 +700,8 @@ Two things Claude Code sessions have are missing here. Persona installs no Codex
 In Agents you can see live state, send messages, open the terminal, and close sessions. Existing sessions keep their stored agent identifier.
 The node integration (`server/internal/node/traex.go`) shares rollout parsing with Codex in `transcript/codex.go`.
 
+- **Model selection**: New Agent lists the models with selectable configuration names from the computer's `traex models --json`.
+  An explicit choice is passed as `--model` on a fresh start; Default leaves the CLI's own model preference in effect.
 - **herdr does not recognize it**: TRAE CLI panes are ordinary herdr panes (`agent_status: unknown`, absent from `agent list`); herdr has no custom-Agent configuration either.
   The node finds them itself: `~/.trae/cli/thread-writer-locks/<session id>.owner.json` records the pid writing the session. That pid's environment contains herdr's
   `HERDR_PANE_ID` (Linux reads `/proc/<pid>/environ`, macOS uses `ps -E`), giving an exact pane → pid → session mapping without directory guessing. Pane information comes from
