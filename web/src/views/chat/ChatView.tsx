@@ -24,7 +24,8 @@ import { acknowledgeLaunch } from "../../lib/new-agent";
 import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
-import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
+import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, taskSessionLookup, upsertSession, useStore, viewSession } from "../../lib/store";
+import { useStoreRows } from "../../lib/store-rows";
 import { useCodexThread, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview-link";
@@ -44,7 +45,7 @@ import { openAsk, unlinkAgentFromTodo, waitsForOwner } from "../../lib/todos";
 import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
-import { sendDraft } from "../../lib/drafts";
+import { sendDraft, type CommentImagePicker } from "../../lib/drafts";
 import { chatLines, freshWords, isUserInput, openRecap, parseUserText, segments, type ChatLine, type UserMessage } from "../../lib/turns";
 import { foldsBackgroundRounds, relayNeedsAttention } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
@@ -63,7 +64,7 @@ import { IMAGE_LIMIT_CODE } from "../../lib/api-errors";
 import { COMPACT_FEATURE, compactBody, compactPath } from "../../lib/compaction";
 import { canResendFailedTurn, compactResendSupport, failedTurnToResend, isImageLimitError, resolveFailedTurnPayload, type OutgoingPayload } from "../../lib/compact-resend";
 import { CLEAR_MAIN_FEATURE, clearMainContext, isClearCommand, mainCommands } from "../../lib/main-clear";
-import { PendingCards, TurnCards } from "./Interactions";
+import { PendingCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
 import { COMPOSER_INPUT, lostWith } from "../../lib/dock-focus";
@@ -147,7 +148,8 @@ import { splitBackgroundActivity } from "../../lib/quiet-activity";
 import { CardConversation } from "../../ui/AssistantCard";
 import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
 import { sessionAgentName } from "../../lib/agent-kind";
-import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip, TaskQuestions } from "../assistant/Tasks";
+import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip } from "../assistant/Tasks";
+import { decisionKey, taskDecisionCards, type DecisionCard } from "../../lib/decision-pager";
 import { t } from "../../i18n";
 import { lazyDialog, lazyOverlay } from "../LazyOverlay";
 import { AssistantUpdateSlot } from "./AssistantUpdateSlot";
@@ -158,6 +160,7 @@ import { AssistantUpdateSlot } from "./AssistantUpdateSlot";
 const loadTerminal = () => import("../session/TerminalPanel");
 // Sharing settings load on their first open, outside the first screen (docs/web/web.md "First screen").
 const ChatSearch = lazyDialog(() => import("./ChatSearch").then((m) => m.ChatSearch));
+const DecisionSourceDialog = lazyDialog(() => import("./DecisionSourceDialog").then((m) => m.DecisionSourceDialog));
 const LinkTodoDialog = lazyDialog(() => import("../LinkTodoDialog").then((m) => m.LinkTodoDialog));
 const SharingDialog = lazyOverlay(() => import("../../sharing/SharingDialog").then((m) => m.default));
 const TerminalPanel = lazy(() => loadTerminal().then((m) => ({ default: m.TerminalPanel })));
@@ -323,7 +326,7 @@ export function ChatView(props: Parameters<typeof ActiveChatView>[0]) {
   return <ActiveChatView {...props} />;
 }
 
-function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt, placeholder: askPlaceholder }: {
+function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launching, onToggleSidebar, topCenter, inPage, embedded, panel: chrome, terminalAvailable, banner, offline, mainCache, refreshError, onRefresh, headerActions, landAt: requestedAt, findSource, placeholder: askPlaceholder }: {
   mid: string;
   sid: string;
   assistant?: boolean;
@@ -355,10 +358,16 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   headerActions?: React.ReactNode;
   /** A message to open the chat at (`?at=`, a search hit's, #6283): landed on once it is in, paging back for it. */
   landAt?: string;
+  /** Locates a drill-down's source as more of this transcript is read. */
+  findSource?: (items: readonly Item[]) => string | undefined;
   /** What an idle Persona chat's box asks, in place of the main chat's: a space's own (Health's, docs/assistant/health.md).
    *  The box's other states (offline, queued, unavailable…) say theirs as before. */
   placeholder?: string;
 }) {
+  const [decisionDrill, setDecisionDrill] = useState<Interaction | null>(null);
+  const [sourceTarget, setSourceTarget] = useState<string | null>();
+  const sourcePages = useRef(0);
+  const landAt = requestedAt || sourceTarget || undefined;
   const embeddedSub = splitSubagentLink(sid);
   const { session: runtimeSession, detail, retry: retryDetail, known: runtimeKnown } = useRuntimeSession(mid, sid, !embeddedSub);
   const heldSubRow = useChildRow(mid, sid);
@@ -507,7 +516,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const out = launch?.outgoing;
     if (!launch || !out || (!out.text && !out.images.length)) return [];
     const id = launch.messageId;
-    return [{ id, raw: out.text, images: out.images, before: [], at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
+    const at = launch.handoffAt ?? Date.now();
+    return [{ id, raw: out.text, images: out.images, before: [], at, acceptedAt: at, msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
   });
   const [draftRefusal, setDraftRefusal] = useState<{ id: string; draft: string; clearable?: string } | null>(null);
   // what other pages sent here ("Ask Persona", "Hand to AI"…): shown like this page's own sending bubbles (lib/outbox.ts)
@@ -2207,6 +2217,32 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const key = SEARCH_NOTICE[outcome];
     return key ? t(key) : null;
   }, [loadWithScrollAnchor]);
+  useEffect(() => {
+    if (!findSource || sourceTarget !== undefined || !tr.firstRead || tr.loading || tr.loadingEarlier) return;
+    const found = findSource(tr.items);
+    if (found || !tr.hasMore || tr.items.length >= 400 || sourcePages.current >= 8) {
+      setSourceTarget(found ?? null);
+      return;
+    }
+    sourcePages.current++;
+    void loadWithScrollAnchor(async () => {
+      const page = await tr.loadEarlier();
+      if (!page) setSourceTarget(null);
+      return page;
+    });
+  }, [findSource, sourceTarget, tr.firstRead, tr.loading, tr.loadingEarlier, tr.items, tr.hasMore, tr.loadEarlier, loadWithScrollAnchor]);
+  const openDecisionSource = useCallback((card: DecisionCard, target?: string) => {
+    if (card.taskTitle !== undefined) {
+      setDecisionDrill(card.interaction);
+      return;
+    }
+    if (!target) return;
+    const current = beginNavigation();
+    void import("./land-message").then(({ landMessage }) => landMessage({
+      target, mid, sid, view: messageView, fromLink: false, current,
+      loadEarlier: (stop) => loadForSearch(() => {}, stop),
+    }), () => { if (current()) toast(t("chat-chatview.search_not_found")); });
+  }, [beginNavigation, mid, sid, messageView, loadForSearch]);
   // a message to open the chat at: a search hit's (`?at=`, #6283) or a forward card's original (#3899, lib/forward.ts
   // jumpWhenOpen). Brought into view once the transcript is in and holds it; one further up is paged back for, as "Load
   // earlier and keep searching" does (at most SEARCH_PAGES pages, the reader scrolling away or another landing stops
@@ -2383,14 +2419,18 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return live?.kind === "segment" ? live.seg : undefined;
   }, [lines]);
+  const waitingPending = shownPending.some((p) => p.waits);
+  const postingPending = shownPending.some((p) => p.posting);
+  const acceptedPending = !postingPending && shownPending.length > 0 && state !== "working" && !liveSeg;
   const hasFeedback = Boolean(
-    shownPending.some((p) => p.waits) ||
-    (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)),
+    waitingPending ||
+    (sendFeedback !== undefined ? Boolean(sendFeedback) : postingPending || acceptedPending || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)),
   );
   // Keep empty-transcript "Loading chat" and inline "Processing…" mutually exclusive so at most one loader shows.
   const loadingChat = tr.loading && !tr.items.length && !opening && !hasFeedback;
   const processing = !hasFeedback && !loadingChat && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
     !liveSeg && (tr.loading || (opening && !tr.streaming));
+  const feedbackProcessing = sendFeedback === "processing" || processing || (sendFeedback === undefined && acceptedPending);
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
   const lastStep = useRef<RunStep | undefined>(undefined);
@@ -2475,24 +2515,34 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const sideControl = useMemo(() => (sideCount > 0 ? { count: sideCount, open: sidesOpen, needs: sideNeeds, onToggle: toggleSide } : undefined), [sideCount, sidesOpen, sideNeeds, toggleSide]);
   const subagentPanel = panel?.kind === "subagent" && (panel.parentMid ?? panel.mid) === mid && (panel.parentSid ?? splitSubagentLink(panel.sid)?.parent) === sid ? panel : undefined;
   const subagentShown = panelDrawn && subagentPanel ? { mid: subagentPanel.mid, sid: subagentPanel.sid } : undefined;
-  const elsewhere = (ix: Interaction) =>
+  const subagentMid = subagentShown?.mid;
+  const subagentSid = subagentShown?.sid;
+  const elsewhere = useCallback((ix: Interaction) =>
     (Boolean(teamShown) && ix.session_id === teamShown) ||
     (Boolean(sideShown) && (ix.session_id === sideShown || ix.folded_side === sideShown)) ||
-    Boolean(subagentShown && ix.machine_id === subagentShown.mid && ix.session_id === subagentShown.sid);
+    Boolean(subagentSid && ix.machine_id === subagentMid && ix.session_id === subagentSid), [teamShown, sideShown, subagentMid, subagentSid]);
   // a worker's or subagent's own cards in its conversation (embedded) are its own there, not "From subagent"
   const docked = useMemo(() => {
-    const mine = teamShown || sideShown || subagentShown ? interactions.filter((ix) => !elsewhere(ix)) : interactions;
+    const mine = interactions.filter((ix) => !elsewhere(ix));
     return embedded ? mine.map((ix) => (ix.machine_id === mid && ix.session_id === sid && ix.folded_under ? asOwnCard(ix) : ix)) : mine;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interactions, teamShown, sideShown, subagentShown, embedded, mid, sid]);
-  // a Persona chat's own requests hold its turn: open above the capsules (TurnCards), out of the stack and of Needs you's
-  // count; the rest (a worker's, a side session's) stay in the stack and the tray as before (lib/turn-asks.ts)
+  }, [interactions, elsewhere, embedded, mid, sid]);
+  // A card belongs to the visible child pane, To Decide, or the stack. A task request must not appear in two places.
   const turnSplit = useMemo(() => (assistant ? splitTurnAsks(docked, mid, sid) : { turn: [], rest: docked }), [assistant, docked, mid, sid]);
+  const decisionPlans = useFeed((s) => assistant ? s.plans : undefined);
+  const decisionSlots = useFeed((s) => assistant ? s.taskCards[sid] : undefined);
+  const allTaskDecisions = useStoreRows((s) => assistant && decisionPlans && s.interactions.length ? taskDecisionCards({
+    conversation: sid, conversationMachine: mid, main: s.assistant?.main, manager: skillManager, todos: s.todos, interactions: s.interactions,
+    lookup: taskSessionLookup(s), feed: taskFeed, plans: decisionPlans, cards: decisionSlots,
+  }) : []);
+  const taskDecisions = useMemo(() => allTaskDecisions.filter(({ interaction }) => !elsewhere(interaction)), [allTaskDecisions, elsewhere]);
+  const taskDecisionKeys = useMemo(() => new Set(taskDecisions.map(({ interaction }) => decisionKey(interaction))), [taskDecisions]);
+  const stacked = useMemo(() => turnSplit.rest.filter((ix) => !taskDecisionKeys.has(decisionKey(ix))), [turnSplit.rest, taskDecisionKeys]);
   const trayAsks = useMemo(() => (assistant ? splitTurnAsks(interactions, mid, sid).rest : interactions), [assistant, interactions, mid, sid]);
-  const commandInSlot = turnSplit.rest.some((request) => request.id === commandReveal?.id);
+  const actionBarAsks = useMemo(() => (isMain ? docked : trayAsks).filter((ix) => !taskDecisionKeys.has(decisionKey(ix))), [isMain, docked, trayAsks, taskDecisionKeys]);
+  const commandInSlot = stacked.some((request) => request.id === commandReveal?.id);
   const pendingCards = (
     <PendingCards
-      interactions={focusedFirst(turnSplit.rest, commandInSlot ? commandReveal?.id : focusedCard())}
+      interactions={focusedFirst(stacked, commandInSlot ? commandReveal?.id : focusedCard())}
       answered={teamShown || sideShown || subagentShown ? answered.filter((a) => !elsewhere(a.ix)) : answered}
       delegated={teamShown || sideShown || subagentShown ? delegated.filter((d) => !elsewhere(d.ix)) : delegated}
       offerNext={inPage && !assistant ? { mid, sid } : undefined}
@@ -2547,6 +2597,10 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const overviewDetail = panelDrawn && (backgroundPanelOf(panel, mid, sid)?.from === "overview" || subagentPanel?.from === "overview");
   const isAssistant = Boolean(assistant || session?.assistant);
   const composerDisabled = Boolean(offlineLine) || (!noRow && !hydrating && !sessionCan(session, "send"));
+  const commentImagesRef = useRef<CommentImagePicker | null>(null);
+  const addCommentImages = useCallback<CommentImagePicker>(async (target, files, signal) => {
+    await commentImagesRef.current?.(target, files, signal);
+  }, []);
   const composerBlocked = gate.blocked ?? noRowBlock;
   const agentCompactBlocked = Boolean(composerDisabled || composerBlocked || hasTaskRoute);
   // Assistant compaction calls the hub HTTP endpoint directly, so composer send disables (e.g. offlineLine) do not gate it.
@@ -2826,7 +2880,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
             {!detached && [...shownPending.map((p) => ({ at: p.at, el: (
               <div key={p.id} className="flex flex-col gap-3">
-                <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
+                <UserBubble msg={p.msg} mid={mid} sid={sid} pending={Boolean(p.posting)} sendState={p.posting ? "sending" : "sent"} />
               </div>
             ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
               ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
@@ -2839,8 +2893,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
             {!detached && !loadingChat && (hasFeedback || processing) && (
-              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (processing ? "processing" : "sending")}>
-                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
+              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (feedbackProcessing ? "processing" : "sending")}>
+                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={waitingPending ? t("ultracode.send_waits") : feedbackProcessing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
             )}
             {detached ? hasLater && (
@@ -2849,7 +2903,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               </Suspense>
             ) : <ChatTail {...slotPage} />}
           </div>
-          <CommentMarks scroller={scroller} jump={landRow} />
+          <CommentMarks scroller={scroller} jump={landRow} onAddImages={canCompose && !composerDisabled && !editingLast ? addCommentImages : undefined} />
           </ChatActionsContext.Provider>
         </div>
         {/* NavRail uses the natural left gutter beside the centered transcript. */}
@@ -2891,12 +2945,9 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         )}
         {assistant && (
           <>
-            {takeover && <TaskQuestions conversation={sid} />}
-            {/* the cards this chat's own turn waits on, open above the capsules (also while a voice call is live); the cards
-                of the sessions folded under it are in the chat under the bar (#4883, as iOS): Needs you counts them and
-                lists a row for each that closes the tray onto its card. */}
-            <TurnCards asks={turnSplit.turn} />
-            {!takeover && <AssistantActionBar key={sid} conversation={sid} ownAsks={isMain ? docked : trayAsks} />}
+            <AssistantActionBar key={sid} conversation={sid} ownAsks={actionBarAsks} turnAsks={turnSplit.turn} taskDecisions={taskDecisions}
+              focusDecision={commandReveal?.pending ? commandReveal.id : undefined}
+              inCall={takeover} turnItems={turnSplit.turn.length ? tr.items : undefined} openDecisionSource={openDecisionSource} sourceOpen={decisionDrill !== null} />
             {!takeover && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
             {!takeover && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
@@ -2995,6 +3046,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         ) : !codexFooterTakeover && (
         <Composer
           draftKey={draftKey}
+          commentImagesRef={commentImagesRef}
           placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           agent={session?.agent}
@@ -3052,6 +3104,9 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         </ViewLayer>
       )}
       </div>
+      {decisionDrill && (
+        <DecisionSourceDialog key={decisionKey(decisionDrill)} open card={decisionDrill} onClose={() => setDecisionDrill(null)} />
+      )}
       {session && overview?.open && (
         <PageBoundary page={`overview:${mid}/${sid}`}>
           <Suspense fallback={<div className="p-3"><Loading /></div>}>

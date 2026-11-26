@@ -963,7 +963,11 @@ export interface Interaction {
   seen_at?: string;
   seen_ttl_seconds?: number;
   tool_name?: string;
+  /** The transcript call that raised this card, when its runtime supplies one. */
+  tool_use_id?: string;
   questions?: Question[];
+  /** The hub accepts a bare cancellation for this question. */
+  can_cancel?: boolean;
   plan?: string;
   /** The permission mode a plan-mode session goes on in once this plan is approved (#3784). */
   plan_then?: string;

@@ -118,6 +118,10 @@ type BotFeatures struct {
 	// files as the owner, then does the task and answers under that message (#11803, bots_read.go). Off by default, and
 	// for settings saved before it: they have no such key.
 	ReadGroup bool `json:"read_group"`
+	// ReadGroupDirect: a /read's answer goes straight under the owner's message in the group, as it did before #14437.
+	// Off by default, and for settings saved before it (they have no such key): the answer goes to the owner's private
+	// chat first, and into the group only when the owner presses its button (the lark module's read_held.go).
+	ReadGroupDirect bool `json:"read_group_direct"`
 }
 
 var defaultBotFeatures = BotFeatures{Main: true, Cards: true, Reports: true, TopicCot: true}
@@ -198,8 +202,9 @@ type botHub struct {
 	// bindGate serializes Feishu binding, including registration network calls, independently of mu.
 	// A channel lets a waiting client's context cancel without waiting for the current bind.
 	bindGate chan struct{}
-	// sync is the user sync: the bots' apps reading as the owner every day (larksync.go).
-	sync larkSync
+	// sync is the user sync service provided by the lark module (larksync_host.go).
+	syncMu sync.Mutex
+	sync   botport.SyncService
 }
 
 func (b *botHub) clock() time.Time {

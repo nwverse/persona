@@ -470,6 +470,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 	}
 	dups := s.planDuplicates(ctx, a.Tasks) // before the plan's own todos exist
+	// Same-directory active agents the conversation already supervises: surfaced with exact ids even when the titles
+	// are worded too differently for planDuplicates (#13192). A hint, never a refusal.
+	reuse := reuseHintText("task_plan", s.planReuseHints(ctx, sessionID, a.Tasks))
 	for i := range a.Tasks {
 		plannedScopes[i].Task = a.Tasks[i]
 	}
@@ -549,6 +552,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			fmt.Fprintf(&b, "- %s: waiting for the user to tap Start\n", t.Title)
 		}
 		b.WriteString("After the user taps Start, check the task cards or context snapshot for the outcome.")
+		b.WriteString(reuse)
 		b.WriteString(dups)
 		b.WriteString(s.inboxPlanNotes(ctx, p.Tasks))
 		b.WriteString(conflictHints)
@@ -624,6 +628,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	default:
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
 	}
+	b.WriteString(reuse)
 	b.WriteString(dups)
 	b.WriteString(s.inboxPlanNotes(ctx, started.Tasks))
 	b.WriteString(conflictHints)

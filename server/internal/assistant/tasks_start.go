@@ -882,6 +882,9 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 		if !isStopped || agyCompanionIDRe.MatchString(a.SessionID) {
 			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": a.SessionID}, nil)
+			if isNoTerminalStopError(err) {
+				err = s.call(cctx, a.MachineID, "session.close", map[string]any{"session_id": a.SessionID}, nil)
+			}
 			cancel()
 			// A list row that is live (listed and not stopped) contradicting the stop answer stays hard.
 			// "listed but stopped" only reaches here for the companion-uuid verification call and may be
@@ -904,6 +907,11 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 		stopped = append(stopped, a)
 	}
 	return stopped, nil
+}
+
+func isNoTerminalStopError(err error) bool {
+	var re *rpc.Error
+	return errors.As(err, &re) && re.Code == "no_terminal"
 }
 
 // todoAgentReleaser is the store's letting go of one agent link (released_at only); a store without it keeps that in
