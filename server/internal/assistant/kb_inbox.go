@@ -98,6 +98,10 @@ func (s *Service) kbChatInbox(ctx context.Context, c *kb.Chat, recent string, zo
 				continue
 			}
 		}
+		// Joined on the row itself, not its survivor: the survivor is listed on the chat of each row it stands for and
+		// takes there what that row received, which is what that chat's recent holds (a member keeps its own chain, and
+		// its source keeps collecting into it, followMerged). No visibility filter: that boundary keeps content from the
+		// AI, not from the owner, whose Inbox list has a quarantined item too (inboxListAt), and this asks no model.
 		if shown.MergedInto != "" || !inboxShows(shown, cutoff, cut, true) || !b.fromKBChat(it, c) {
 			continue
 		}

@@ -1119,7 +1119,11 @@ A chat's page leads to the Inbox items that came from it, and an item leads back
   `assistant/inbox_agent.go`: a Feishu chat, a mail correspondent, a subscription's thread). The chat's `connector` is the
   connector that wrote it whatever name it is filed under, its id or one of its manifest's archive sources, so a chat
   filed under an archive source counts too. Nothing else relates an Inbox thread to an archive chat of another id. A row
-  merged into another counts for the one it was merged into, which is the row the Inbox lists.
+  merged into another counts for the one it was merged into, which is the row the Inbox lists: that one is listed on the
+  chat of each row it stands for, and on each it holds the messages the row of that chat received (a merged row keeps its
+  own chain and its source keeps collecting into it). An item the source visibility boundary quarantined
+  (`visibility_excluded`, [inbox.md](inbox.md) ("One item = one row")) is listed too, as the Inbox lists it: that boundary
+  keeps a chat's content from collection and the AI, not from the owner, and this page asks no model.
 - **`GET /api/v1/kb/chats/{id}`** adds `inbox`: the chat's items as the Inbox list has them (with `sources=all`: the open ones
   and the done ones the list still carries), the open ones first, each group newest first, at most 50. Each has `id`,
   `title`, `tier`, `status` (an open item's section), `summary`, `preview`, `updated_at`, `done_at` and `messages`: the rows

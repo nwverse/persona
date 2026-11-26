@@ -312,6 +312,73 @@ func TestKBChatInboxMessageRows(t *testing.T) {
 	}
 }
 
+// A row merged into a survivor of another chat: each chat's page lists the survivor, and its rows link to it by what
+// the row of that chat received (a member keeps its own chain, and its source keeps collecting into it after the
+// merge, followMerged), so the member's chat links the member's rows, before and after the merge, and the survivor's
+// chat its own.
+func TestKBChatInboxMergedRows(t *testing.T) {
+	f := newKBInboxFixture(t)
+	other := &kb.Chat{ID: kb.ChatID("larkx", "c9"), Source: "larkx", SourceID: "c9", Connector: "larkx", Kind: "group", Name: "Other group"}
+	if err := f.e.Store.PutChat(other); err != nil {
+		t.Fatal(err)
+	}
+	t0, t1, t2 := f.at.Add(-20*time.Minute), f.at.Add(-10*time.Minute), f.at
+	f.write(f.chat, kb.Line{At: t0, Sender: "Alice", Text: "Before the merge"}, kb.Line{At: t2, Sender: "Alice", Text: "After the merge"})
+	f.write(other, kb.Line{At: t1, Sender: "Bob", Text: "In the other chat"})
+	member := kbConnectorItem("larkx:c1:m", "larkx", "c1", t0)
+	member.Chain = []InboxChainEntry{kbReceived(t0, "Alice", "Before the merge"), kbReceived(t2, "Alice", "After the merge")}
+	survivor := kbConnectorItem("larkx:c9:s", "larkx", "c9", t1)
+	// merge copies the member's entries into the survivor's chain; followMerged adds a count without messages.
+	survivor.Chain = []InboxChainEntry{kbReceived(t0, "Alice", "Before the merge"), kbReceived(t1, "Bob", "In the other chat"),
+		{Kind: ChainReceived, At: t2, Count: 1, Sender: "Alice"}}
+	survivor.MergedFrom, member.MergedInto = []InboxMergeRef{{ID: member.ID}}, survivor.ID
+	f.add(member, survivor)
+
+	for _, c := range []struct {
+		chat *kb.Chat
+		want []kbChatInboxLine
+	}{
+		{f.chat, []kbChatInboxLine{f.line(t0, "Alice", "Before the merge"), f.line(t2, "Alice", "After the merge")}},
+		{other, []kbChatInboxLine{f.line(t1, "Bob", "In the other chat")}},
+	} {
+		list, _ := f.inbox(c.chat.ID, "")
+		if len(list) != 1 || list[0].ID != survivor.ID || !slices.Equal(list[0].Messages, c.want) {
+			t.Errorf("%s: %+v, want the survivor with rows %q", c.chat.ID, list, c.want)
+		}
+	}
+}
+
+// An item the source visibility boundary quarantined, and a survivor of a quarantined member, are listed with their
+// rows as the Inbox lists them to the owner: that boundary keeps content from the AI, not from the owner
+// (docs/assistant/inbox.md "One item = one row"), and the page asks no model.
+func TestKBChatInboxQuarantined(t *testing.T) {
+	f := newKBInboxFixture(t)
+	t0, t1 := f.at.Add(-time.Minute), f.at
+	f.write(f.chat, kb.Line{At: t0, Sender: "Alice", Text: "Kept from the AI"}, kb.Line{At: t1, Sender: "Bob", Text: "Also kept"})
+	quarantined := kbConnectorItem("larkx:c1:q", "larkx", "c1", t0)
+	quarantined.VisibilityExcluded = true
+	quarantined.Chain = []InboxChainEntry{kbReceived(t0, "Alice", "Kept from the AI")}
+	member := kbConnectorItem("larkx:c1:m", "larkx", "c1", t1)
+	member.VisibilityExcluded = true
+	member.Chain = []InboxChainEntry{kbReceived(t1, "Bob", "Also kept")}
+	survivor := kbConnectorItem("larkx:c2:s", "larkx", "c2", t1.Add(time.Minute))
+	survivor.MergedFrom, member.MergedInto = []InboxMergeRef{{ID: member.ID}}, survivor.ID
+	f.add(quarantined, member, survivor)
+
+	listed := []string{}
+	for _, it := range f.s.inboxList(true) {
+		listed = append(listed, it.ID)
+	}
+	list, _ := f.inbox(f.chat.ID, "")
+	if got := kbInboxIDs(list); !slices.Equal(got, []string{survivor.ID, quarantined.ID}) || !slices.Equal(listed, got) {
+		t.Fatalf("the chat lists %v, the Inbox %v", got, listed)
+	}
+	if !slices.Equal(list[0].Messages, []kbChatInboxLine{f.line(t1, "Bob", "Also kept")}) ||
+		!slices.Equal(list[1].Messages, []kbChatInboxLine{f.line(t0, "Alice", "Kept from the AI")}) {
+		t.Fatalf("rows: %+v", list)
+	}
+}
+
 // The recent text is split into rows as the apps split it: a row's further lines stay with it, a heading that names no
 // day keeps the day before, and "…" (a cut text), a line of its own and a row without a day, a time or a sender are no
 // row of an item's.
