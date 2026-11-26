@@ -222,7 +222,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   useLayoutEffect(() => {
     const host = scroller.current;
     if (!host || tab !== "integrations" || phone) return;
-    const measure = () => setWideIntegrations(host.clientWidth >= 760);
+    // Reserve 440px for the detail beside the 300px list, including its page padding.
+    const measure = () => setWideIntegrations(host.clientWidth >= 740);
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
