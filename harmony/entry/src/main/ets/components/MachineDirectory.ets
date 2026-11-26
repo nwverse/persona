@@ -3,10 +3,14 @@ import { relativeActivityDate } from '../core/PhoneDate';
 import { LengthMetrics } from '@kit.ArkUI';
 import { Colors } from '../design/Colors';
 import { PhoneStyle } from '../design/PhoneStyle';
+import { Motion } from '../design/Motion';
 import { PhoneOutlineIcon } from '../design/PhoneOutlineIcon';
 import { Symbols } from '../design/Symbols';
 import { tr } from '../design/Strings';
 import { Tokens } from '../design/Tokens';
+import { Haptics } from '../platform/Haptics';
+import { NeedsYouPulseDot } from './StatusMotionMarks';
+import { workspaceGridColumns, workspaceGridGutter, workspaceHorizontalPadding } from '../core/WorkspaceGrid';
 import { ClientModel } from '../models/ClientModel';
 import { HubProfile, ResourceRow, Wire } from '../models/Wire';
 import { DashboardPoint, MachineAgent, MachineAlert, MachineReading, machineAgents, machineAlerts, machineBytes,
@@ -138,6 +142,7 @@ struct MachineTimeAxis {
 @ComponentV2
 export struct MachineDirectory {
   @Local liveGridWidth:number=0;
+  @Local private paneWidth: number = 0;
   @Local private agentContentWidth: number = 0;
   @Require @Param model: ClientModel;
   @Param active: boolean = true;
@@ -284,6 +289,12 @@ export struct MachineDirectory {
     return this.cards.filter((c:ComputerCard) => (c.row.group || this.model.profile.id) === group);
   }
 
+  private machineColumns(): number {
+    return workspaceGridColumns(this.paneWidth, nativeEnvironment.fontScale, 2);
+  }
+  private machineSidePadding(): number {
+    return workspaceHorizontalPadding(this.paneWidth);
+  }
   private tint(key:string):string { return FIELD_TINT[key][nativeEnvironment.dark ? 1 : 0]; }
 
   private offlineManager(c:ComputerCard):string {
@@ -355,9 +366,9 @@ export struct MachineDirectory {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         Column({space:2}) {
           Row({space:4}) {
-            if (c.online && !c.pending) Circle().width(6).height(6).fill(Colors.positive)
+            if (c.online && !c.pending) NeedsYouPulseDot({dotSize:6,tint:Colors.positive,surface:Colors.card(this.selected !== undefined),bordered:false})
             Text(this.status(c)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).lineHeight(selected ? undefined : this.overviewTextHeight(14.33,21.67)).fontWeight(FontWeight.Medium).fontColor(c.pending ? Colors.working : c.online ? Colors.positive : Colors.secondary)
-          }
+          }.alignItems(VerticalAlign.Center)
           if (!c.online && this.ageLabel(Date.parse(Wire.text(c.raw,'last_seen')))) Text(this.ageLabel(Date.parse(Wire.text(c.raw,'last_seen'))))
             .fontSize(selected ? 11 : 12).maxFontScale(Tokens.interfaceScaleFor(selected ? 11 : 12))
             .lineHeight(selected ? undefined : this.overviewTextHeight(14.33,21.67)).fontColor(selected ? Colors.secondary : Colors.tertiary)
@@ -381,8 +392,11 @@ export struct MachineDirectory {
         .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.working)
       if (!selected && c.online && c.sample && Object.keys(c.sample.latest).length) this.metrics(c.sample)
     }.width('100%').padding(14).alignItems(HorizontalAlign.Start).backgroundColor(Colors.card(this.selected !== undefined)).borderRadius(PhoneStyle.cardRadius)
-      .border({width:c.alerts.length ? 0.7 : 0,color:c.alerts[0]?.severity === 2 ? Colors.danger : Colors.working,radius:PhoneStyle.cardRadius})
-      .onClick(() => { if (selected) this.onDetails(c.row); else this.onMachine(c.row); })
+      .border({width:c.alerts.length ? 0.8 : PhoneStyle.surfaceEdgeWidth(0.5),
+        color:c.alerts.length ? (c.alerts[0]?.severity === 2 ? Colors.danger : Colors.working) : (Colors.styleEdge || Colors.divider),
+        radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
+      .onClick(() => { Haptics.tap(); if (selected) this.onDetails(c.row); else this.onMachine(c.row); })
       .accessibilityGroup(true).accessibilityText([c.row.title,this.status(c),this.hardware(c),c.online ? [c.needs+' '+tr('needs_you'),c.working+' '+tr('working'),c.idle+' '+tr('machine_agent_idle')].join(' · ') : this.reason(c),
         ...c.alerts.map((a:MachineAlert) => tr(a.key))].filter((v:string) => !!v).join(' · ')).id(selected ? 'machines.selected' : 'machines.row')
   }
@@ -485,7 +499,9 @@ export struct MachineDirectory {
           },(c:ComputerCard,i:number) => c.key+String(c.tokens)+String(i))
         }.width('100%')
       }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.card(this.selected !== undefined)).borderRadius(PhoneStyle.cardRadius).id('machines.tokens')
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.card(this.selected !== undefined)).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).id('machines.tokens')
   }
   @Builder statusBadge(value:string,tint:ResourceColor,alert:boolean = false) {
     Row({space:4}) {
@@ -598,7 +614,7 @@ export struct MachineDirectory {
         })
       }.layoutWeight(1).alignItems(VerticalAlign.Top)
       SymbolGlyph(Symbols.expand).fontSize('12vp').width(8).fontColor([Colors.secondary])
-    }.width('100%').padding({left:16,right:16,top:12,bottom:12}).onClick(() => this.onSession(a.row))
+    }.width('100%').padding({left:16,right:16,top:12,bottom:12}).onClick(() => { Haptics.tap(); this.onSession(a.row); })
       .accessibilityGroup(true).accessibilityText([a.row.title || tr('agent_untitled'),a.note,tr(a.state),a.context,
         a.todoTitle,Number.isFinite(a.updated) ? this.ageLabel(a.updated) : '',a.sourceLabel ? tr(a.sourceLabel) : ''].filter((v:string) => !!v).join('、')).id('machines.agent')
   }
@@ -611,10 +627,12 @@ export struct MachineDirectory {
       if (c.agents.length>5 && !this.expanded) {
         Divider().strokeWidth(0.5).color(Colors.divider).margin({left:14})
         Button(tr('machine_all_agents').replace('{count}',String(c.agents.length)),{buttonStyle:ButtonStyleMode.TEXTUAL})
-          .height(44).width('100%').fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.link).onClick(() => this.expanded = true).id('machines.show_all')
+          .height(44).width('100%').fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.link).onClick(() => { Haptics.tap(); this.expanded = true; }).id('machines.show_all')
       }
       if (!c.agents.length) Text(tr(c.online ? 'machine_no_agents' : 'machine_offline_agents')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).width('100%').padding(14)
-    }.width('100%').backgroundColor(Colors.card(this.selected !== undefined)).borderRadius(PhoneStyle.cardRadius).clip(true)
+    }.width('100%').backgroundColor(Colors.card(this.selected !== undefined)).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).clip(true)
   }
   // ArkUI keeps the view for each metric when a poll or range changes. Its reactive reads
   // belong inside that view, rather than in the ForEach creation callback.
@@ -680,15 +698,19 @@ export struct MachineDirectory {
         .backgroundColor(Colors.control).accessibilityLevel('no')
       else Blank().height(4)
     }.width('100%').alignItems(HorizontalAlign.Start).padding(12).backgroundColor(Colors.card(this.selected !== undefined))
-      .borderRadius(PhoneStyle.cardRadius).accessibilityGroup(true).id('machines.now.'+tile.key)
+      .borderRadius(PhoneStyle.cardRadius)
+      .border({width:alert ? 0.8 : PhoneStyle.surfaceEdgeWidth(0.5),
+        color:alert ? (alert.severity === 2 ? Colors.danger : Colors.working) : (Colors.styleEdge || Colors.divider),
+        radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).accessibilityGroup(true).id('machines.now.'+tile.key)
   }
   @Computed get liveTiles():LiveMetric[] {
     const card = this.cards[0], sample = this.detailSample;
     return card?.online && sample && Object.keys(sample.latest).length ? this.liveMetrics(card,sample) : [];
   }
   @Builder liveGrid() {
-    // The phone keeps two equally flexible tiles. Only fold them when the measured pane cannot fit two 124vp cards and their gutter.
-    GridRow({columns:this.liveGridWidth>0 && this.liveGridWidth<258 ? 1 : 2,gutter:{x:10,y:10}}) {
+    // The phone keeps two equally flexible tiles. Expand to 3/4 tiles on Mate X7 / Mate XT wide panes and fold only a genuinely narrow pane.
+    GridRow({columns:this.liveGridWidth>0 && this.liveGridWidth<258 ? 1 : this.liveGridWidth>=840 ? 4 : this.liveGridWidth>=560 ? 3 : 2,gutter:{x:10,y:10}}) {
       ForEach(this.liveTiles,(tile:LiveMetric) => {
         GridCol({span:1}) { this.liveTile(tile,this.cards[0]?.alerts.find((a:MachineAlert) => a.key === tile.alert)) }
       },(tile:LiveMetric) => JSON.stringify([tile.key,tile.value,tile.detail,tile.percent,this.cards[0]?.alerts,nativeEnvironment.dark]))
@@ -734,6 +756,8 @@ export struct MachineDirectory {
       }.width('100%')
       this.historyPlot(key)
     }.width('100%').padding(14).alignItems(HorizontalAlign.Start).backgroundColor(Colors.card(this.selected !== undefined)).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
   }
   @Builder monitor() {
     Column({space:Tokens.inset}) {
@@ -744,7 +768,10 @@ export struct MachineDirectory {
             Text(tr(key)).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).textAlign(TextAlign.Center)
               .fontWeight(this.range === i ? FontWeight.Bold : FontWeight.Normal).fontColor(this.range === i ? Colors.ink : Colors.secondary)
           }.layoutWeight(1).constraintSize({minHeight:44}).padding({left:3,right:3,top:5,bottom:5}).borderRadius(8)
-            .backgroundColor(this.range === i ? Colors.surface : Color.Transparent).accessibilityText(tr(key)).accessibilitySelected(this.range === i)
+            .backgroundColor(this.range === i ? Colors.surface : Color.Transparent)
+            .animation(Motion.state(nativeEnvironment.reduceMotion))
+            .accessibilityText(tr(key)).accessibilitySelected(this.range === i)
+            .onTouch((event:TouchEvent) => { if (event.type === TouchType.Down && this.range !== i) Haptics.selection(); })
             .onClick(() => this.chooseRange(i)).id('machines.range.'+RANGES[i])
         },(key:string) => key)
       }.width('100%').padding(3).backgroundColor(Colors.control).borderRadius(10)
@@ -754,16 +781,24 @@ export struct MachineDirectory {
           Text(this.inspected ? clockLabel(this.inspected) : tr(RANGE_LABELS[this.shownRange]))
             .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).layoutWeight(1)
           if (this.inspected) Button(tr('machine_now'),{buttonStyle:ButtonStyleMode.TEXTUAL}).constraintSize({minHeight:44})
-            .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.link).onClick(() => this.inspected=0).id('machines.chart.latest')
+            .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.link).onClick(() => { Haptics.tap(); this.inspected=0; }).id('machines.chart.latest')
         }.width('100%').constraintSize({minHeight:44}).padding({left:4,right:4})
         if (this.detailSample.points.some((p:Record<string,Object>) => !Wire.bool(p,'gap'))) {
-          ForEach(HISTORY_FIELDS,(key:string) => { this.chartRow(key) },(key:string) => key)
+          if (this.machineColumns() > 1) {
+            GridRow({columns:this.machineColumns(),gutter:{x:workspaceGridGutter(this.machineColumns()),y:workspaceGridGutter(this.machineColumns())}}) {
+              ForEach(HISTORY_FIELDS,(key:string) => {
+                GridCol({span:1}) { this.chartRow(key) }
+              },(key:string) => key)
+            }.width('100%')
+          } else {
+            ForEach(HISTORY_FIELDS,(key:string) => { this.chartRow(key) },(key:string) => key)
+          }
           Text(tr('machine_history_hint')).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
         } else Text(tr('machine_no_samples')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary).padding(8)
       } else if (this.loading) LoadingProgress().width(26).height(26).margin(12)
       if (this.failed) Row({space:7}) {
         Text(tr('machine_monitor_unavailable')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary).layoutWeight(1)
-        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.link).onClick(() => this.sync(false))
+        Button(tr('retry'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.link).onClick(() => { Haptics.tap(); this.sync(false); })
       }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start).id('machines.monitor')
   }
@@ -783,8 +818,10 @@ export struct MachineDirectory {
       if (this.detailSample && Wire.number(this.detailSample.latest,'disk_total')) this.property('machine_disk',
         machineBytes(Wire.number(this.detailSample.latest,'disk_used',-1))+' / '+machineBytes(Wire.number(this.detailSample.latest,'disk_total')))
       Button(tr('phone_machine_manage'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.link).width('100%')
-        .onClick(() => this.onDetails(c.row)).id('machines.management')
+        .onClick(() => { Haptics.tap(); this.onDetails(c.row); }).id('machines.management')
     }.width('100%').padding({left:14,right:14,top:4,bottom:4}).backgroundColor(Colors.card(this.selected !== undefined)).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
   }
   build() {
     Refresh({refreshing:$$this.refreshing}) {
@@ -810,8 +847,26 @@ export struct MachineDirectory {
           if (!this.settingsScope && this.model.profiles.length > 1 && this.groupIDs.length) {
             ForEach(this.groupIDs,(group:string) => {
               ListItem() { this.groupHeader(group) }
-              ForEach(this.groupCards(group),(c:ComputerCard) => { ListItem() { this.summary(c,false) } },(c:ComputerCard) => c.stamp)
+              if (this.machineColumns() > 1) {
+                ListItem() {
+                  GridRow({columns:this.machineColumns(),gutter:{x:workspaceGridGutter(this.machineColumns()),y:workspaceGridGutter(this.machineColumns())}}) {
+                    ForEach(this.groupCards(group),(c:ComputerCard) => {
+                      GridCol({span:1}) { this.summary(c,false) }
+                    },(c:ComputerCard) => c.stamp)
+                  }.width('100%')
+                }
+              } else {
+                ForEach(this.groupCards(group),(c:ComputerCard) => { ListItem() { this.summary(c,false) } },(c:ComputerCard) => c.stamp)
+              }
             },(group:string) => group)
+          } else if (this.machineColumns() > 1) {
+            ListItem() {
+              GridRow({columns:this.machineColumns(),gutter:{x:workspaceGridGutter(this.machineColumns()),y:workspaceGridGutter(this.machineColumns())}}) {
+                ForEach(this.cards,(c:ComputerCard) => {
+                  GridCol({span:1}) { this.summary(c,false) }
+                },(c:ComputerCard) => c.stamp)
+              }.width('100%')
+            }
           } else {
             ForEach(this.cards,(c:ComputerCard) => { ListItem() { this.summary(c,false) } },(c:ComputerCard) => c.stamp)
           }
@@ -827,12 +882,13 @@ export struct MachineDirectory {
           }
           if (this.loading && !this.cards.length) ListItem() { LoadingProgress().width(28).height(28) }
           ListItem() { Button(tr('phone_machine_manage'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.link)
-            .onClick(() => this.onManage()).id('machines.manage') }
+            .onClick(() => { Haptics.tap(); this.onManage(); }).id('machines.manage') }
         }
-      }.width('100%').height('100%').padding({left:PhoneStyle.page,right:PhoneStyle.page,
+      }.width('100%').height('100%').padding({left:this.machineSidePadding(),right:this.machineSidePadding(),
         top:this.selected ? PhoneStyle.detailListTop : PhoneStyle.formSize(20,16,nativeEnvironment.fontScale),bottom:24}).id('machines.list')
     }.onRefreshing(() => {
       this.sync(true); this.refreshing=this.active && this.model.connected;
     }).width('100%').height('100%').backgroundColor(Colors.listGroup(this.selected !== undefined))
+      .onAreaChange((_:Area,area:Area)=>{ const w=Number(area.width); if (Number.isFinite(w) && w>0 && Math.abs(w-this.paneWidth)>0.5) this.paneWidth=w; })
   }
 }
