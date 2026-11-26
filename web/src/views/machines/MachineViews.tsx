@@ -27,17 +27,21 @@ function isDiagnostic(view: MachineSubview): view is Diagnostic {
 
 export function MachineViewLinks({ mid, view }: { mid: string; view: MachineSubview }) {
   const active = isDiagnostic(view) ? "diagnostics" : view === "config" ? "management" : view;
-  function links(items: readonly (keyof typeof labels)[], current: string) {
-    return <nav aria-label={t(items === primary ? "machines.view_label" : "machines.view_diagnostics")} className="flex flex-wrap gap-1 rounded-card bg-inset p-1">
-      {items.map(v => {
-        const to = { name: "machine" as const, mid, subview: v === "work" ? undefined : v };
-        return <a key={v} href={href(to)} onClick={e => onLinkClick(e, to)} aria-current={current === v ? "page" : undefined}
-          className="flex min-h-11 items-center whitespace-nowrap rounded-control px-3 text-label font-medium text-ink-2 hover:bg-hover aria-[current=page]:bg-surface aria-[current=page]:text-ink aria-[current=page]:shadow-btn">{t(items !== primary && v === "diagnostics" ? "node-health.title" : labels[v])}</a>;
-      })}
-    </nav>;
+  function link(v: keyof typeof labels, current: string, className: string, label: string = labels[v]) {
+    const to = { name: "machine" as const, mid, subview: v === "work" ? undefined : v };
+    return <a key={v} href={href(to)} onClick={e => onLinkClick(e, to)} aria-current={current === v ? "page" : undefined}
+      className={className}>{t(label)}</a>;
   }
-  return <div className="grid gap-2">{links(primary, active)}
-    {active === "diagnostics" && links(["diagnostics", ...Object.keys(tools) as Diagnostic[]], view)}
+  const tab = "flex min-h-11 items-center whitespace-nowrap border-b-2 px-3 text-label hover:text-ink";
+  const pill = "flex min-h-8 items-center whitespace-nowrap rounded-full px-3 text-label hover:bg-hover [@media(pointer:coarse)]:min-h-11";
+  return <div className="grid gap-2">
+    <nav aria-label={t("machines.view_label")} className="flex flex-wrap border-b border-line">
+      {primary.map(v => link(v, active, tab + (v === active ? " border-ink font-semibold text-ink" : " border-transparent text-ink-2")))}
+    </nav>
+    {active === "diagnostics" && <nav aria-label={t("machines.view_diagnostics")} className="flex flex-wrap gap-1">
+      {(["diagnostics", ...Object.keys(tools) as Diagnostic[]] as const).map(v =>
+        link(v, view, pill + (v === view ? " bg-field font-medium text-ink" : " text-ink-2"), v === "diagnostics" ? "node-health.title" : labels[v]))}
+    </nav>}
   </div>;
 }
 
