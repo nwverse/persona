@@ -252,7 +252,8 @@ func (n *Node) larkCheckOutcome(ctx context.Context, session, cwd, command strin
 		}
 		return larkCheckOutcome{decision: "allow", reason: "读操作"}, nil
 	}
-	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, callTitle(cfg.Gates, ask[0]),
+	title := callTitle(cfg.Gates, ask[0])
+	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, cmp.Or(title, "Bash"),
 		larkSummaryWithContext(cfg.Gates, ask, n.larkCardContexts(ctx, cfg, ask), i18n.From(ctx))
 	// The hub remembers these routes for assistant conversations and checks them again on every call.
 	ix.AlwaysKeys = nil
@@ -361,7 +362,10 @@ func callTitle(gates []proto.CommandGate, c larkCall) string {
 	if c.Gate >= 0 && c.Gate < len(gates) && gates[c.Gate].Title != "" {
 		return gates[c.Gate].Title
 	}
-	return "飞书" // lark-cli
+	if r := larkGateRules(); r != nil {
+		return r.DefaultTitle()
+	}
+	return ""
 }
 
 // wholeCommandReads says whether every call the gate identified is an ordinary read. An opaque non-Lark part may

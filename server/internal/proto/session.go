@@ -569,6 +569,10 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeCodexNotLoggedIn: a Codex start met Codex's sign-in screen (node/codex_start.go): Codex has no login on that
+	// computer, so no wait would bring its session up. The launcher's sign-in (launcher health's auth), not a stalled
+	// start; the new tab is closed, and someone runs `codex login` on that computer.
+	CodeCodexNotLoggedIn = "codex_not_logged_in"
 	// CodeShellWaiting: the new tab's shell stopped on a question of its startup files (an update prompt, [Y/n]) before
 	// the start command was typed (#2570). Nothing ran; the tab is kept a while for someone to answer (node/shellsettle.go).
 	CodeShellWaiting = "shell_waiting"

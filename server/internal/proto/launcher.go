@@ -248,8 +248,8 @@ type ManagedLauncher struct {
 	// TimeoutMS: API_TIMEOUT_MS; 0 is 3000000 for a gateway (BaseURL set), Claude Code's own default otherwise.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// CompactWindow: CLAUDE_CODE_AUTO_COMPACT_WINDOW; 0 is the default model's context window (none when unknown).
-	// Assistant conversations follow it like agents do (#3066); the main one is held to assistant.main_compact_window
-	// when that is smaller (#7314).
+	// Assistant conversations follow it like agents do (#3066); the main one and the leader conversations are held to
+	// assistant.main_compact_window when that is smaller (#7314, #15318).
 	CompactWindow int `json:"compact_window,omitempty"`
 	// MaxContext: CLAUDE_CODE_MAX_CONTEXT_TOKENS; 0 is the default model's context window when it is over 200K.
 	MaxContext int `json:"max_context,omitempty"`
