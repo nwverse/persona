@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -31,7 +31,7 @@ func TestCodexAndPiAssistantConversationRoles(t *testing.T) {
 				setSettings(t, s, func(v *Settings) { v.Main = ""; v.MainSupervisesOwnTasks = &yes })
 				var id string
 				wantPolicy := true
-				policyRole := prompts.SupervisionRoleMain
+				policyRole := supervisionrole.RoleMain()
 				switch role {
 				case "main":
 					code, session := startConv(t, s, `{"prompt":"Check the current status.","main":true}`)
@@ -43,7 +43,7 @@ func TestCodexAndPiAssistantConversationRoles(t *testing.T) {
 						t.Fatal("main identity was not retained")
 					}
 				case "background_supervisor":
-					policyRole = prompts.SupervisionRoleBackground
+					policyRole = supervisionrole.RoleBackground()
 					s.noBackground = false
 					if !s.backgroundOn(s.settings(ctx)) {
 						t.Fatal("background supervisor is not enabled")
@@ -57,7 +57,7 @@ func TestCodexAndPiAssistantConversationRoles(t *testing.T) {
 						t.Fatal("background role was not retained")
 					}
 				case "direction_supervisor":
-					policyRole = prompts.SupervisionRoleLeader
+					policyRole = supervisionrole.RoleLeader()
 					code, session := startConv(t, s, `{"prompt":"Follow this direction."}`)
 					if code != http.StatusOK || session.SessionID == "" {
 						t.Fatalf("direction start refused: %d", code)

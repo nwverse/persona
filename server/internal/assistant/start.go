@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -520,7 +521,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		s.putCacheKeepalive(ctx, machine, "", main, params)
 	}
 	if main && p.Space == "" && p.GuestTools == nil {
-		ctx = context.WithValue(ctx, supervisionStartup{}, prompts.SupervisionRoleMain)
+		ctx = context.WithValue(ctx, supervisionStartup{}, supervisionrole.RoleMain())
 	}
 	err = s.call(ctx, machine, DeviceAssistantSend, params, &res)
 	if fromSetting && (nodeOutdated(err) || profileRefused(err)) {
@@ -549,7 +550,7 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 	sess.Effort, _ = params["effort"].(string)
 	sess.Model, _ = params["model"].(string) // what it was started with ("": the launcher's default)
 	if startup := ctx.Value(supervisionStartup{}); startup != nil && sess.SessionID != "" {
-		if role, ok := startup.(prompts.SupervisionRole); ok {
+		if role, ok := startup.(supervisionrole.Role); ok {
 			// The node has accepted both the compact policy and this id. Record that exact baseline before any follow-up
 			// can find the new process working; a pre-id record could not identify the process it belonged to.
 			if err := s.recordAcceptedSupervisionRole(context.WithoutCancel(ctx), machine, sess.SessionID, role); err != nil {

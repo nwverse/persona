@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -56,18 +57,19 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	s.todos.mu.Unlock()
 	for _, tc := range []struct {
 		machine, id string
-		role        prompts.SupervisionRole
+		role        supervisionrole.Role
 	}{
-		{"server", "conv1", prompts.SupervisionRoleMain}, {"server", "lead1", prompts.SupervisionRoleLeader},
-		{"server", "background", prompts.SupervisionRoleBackground}, {"server", "side", prompts.SupervisionRoleSide},
-		{"server", "ordinary", ""}, {"server", "worker", ""},
-		{"server", "health", ""}, {"server", "gone", ""},
-		{"box", "lead1", ""}, {"box", "background", ""},
-		{"box", "side", ""}, {"box", "conv1", ""},
+		{machine: "server", id: "conv1", role: supervisionrole.RoleMain()}, {machine: "server", id: "lead1", role: supervisionrole.RoleLeader()},
+		{machine: "server", id: "background", role: supervisionrole.RoleBackground()}, {machine: "server", id: "side", role: supervisionrole.RoleSide()},
+		{machine: "server", id: "ordinary"}, {machine: "server", id: "worker"},
+		{machine: "server", id: "health"}, {machine: "server", id: "gone"},
+		{machine: "box", id: "lead1"}, {machine: "box", id: "background"},
+		{machine: "box", id: "side"}, {machine: "box", id: "conv1"},
 	} {
 		t.Run(tc.machine+"/"+tc.id, func(t *testing.T) {
 			want := ""
-			if tc.role != "" {
+			var noRole supervisionrole.Role // the rows above with no role get no policy
+			if tc.role != noRole {
 				want = mustSupervisionRole(t, tc.role)
 			}
 			for _, method := range []string{DeviceAssistantSend, DeviceSessionSend} {
@@ -98,7 +100,7 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 			}
 		})
 	}
-	policy := mustSupervisionRole(t, prompts.SupervisionRoleMain)
+	policy := mustSupervisionRole(t, supervisionrole.RoleMain())
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &yes })
 	if mustSupervisionInstructions(t, s, ctx, "server", "conv1") != policy {
 		t.Fatal("self-supervising main lacks policy")
@@ -110,7 +112,7 @@ func TestSupervisionInstructionsDispatchIsolation(t *testing.T) {
 	s.todos.todos[todo.ID].Supervision.Supervisor = "lead1"
 	s.todos.mu.Unlock()
 	setSettings(t, s, func(v *Settings) { v.Leaders = nil })
-	if got := dispatchedPolicy(t, s, "lead1"); got != mustSupervisionRole(t, prompts.SupervisionRoleSide) {
+	if got := dispatchedPolicy(t, s, "lead1"); got != mustSupervisionRole(t, supervisionrole.RoleSide()) {
 		t.Fatal("former leader with remaining tasks did not become a side supervisor")
 	}
 	s.todos.mu.Lock()
@@ -140,7 +142,7 @@ func TestSupervisionRoleKeyIsJSONSafeAndUnambiguous(t *testing.T) {
 func TestSupervisionRoleRefusedIdleSendRestoresLegacyBaseline(t *testing.T) {
 	s, f, _ := newSupervisedService(t)
 	f.setSessions("server", proto.Session{SessionID: "conv1", Assistant: true, Status: proto.StatusIdle})
-	compact := mustSupervisionRole(t, prompts.SupervisionRoleMain)
+	compact := mustSupervisionRole(t, supervisionrole.RoleMain())
 	if got := ownerMessage(t, s, "conv1", "stale-idle"); got != compact {
 		t.Fatal("the idle send did not propose its compact role")
 	}
@@ -161,9 +163,9 @@ func TestSupervisionRoleUpgradeWaitsForAnIdlePolicyChange(t *testing.T) {
 	s.todos.mu.Lock()
 	s.todos.todos[todo.ID].Supervision.Supervisor = "side"
 	s.todos.mu.Unlock()
-	roles := map[string]prompts.SupervisionRole{
-		"conv1": prompts.SupervisionRoleMain, "lead1": prompts.SupervisionRoleLeader,
-		"background": prompts.SupervisionRoleBackground, "side": prompts.SupervisionRoleSide,
+	roles := map[string]supervisionrole.Role{
+		"conv1": supervisionrole.RoleMain(), "lead1": supervisionrole.RoleLeader(),
+		"background": supervisionrole.RoleBackground(), "side": supervisionrole.RoleSide(),
 	}
 	setStatus := func(status string) {
 		sessions := make([]proto.Session, 0, len(roles))
@@ -198,7 +200,7 @@ func TestSupervisionInstructionsFirstStartAndWarm(t *testing.T) {
 	ctx := context.Background()
 	yes := true
 	setSettings(t, s, func(v *Settings) { v.MainSupervisesOwnTasks = &yes })
-	policy := mustSupervisionRole(t, prompts.SupervisionRoleMain)
+	policy := mustSupervisionRole(t, supervisionrole.RoleMain())
 	for _, tc := range []struct {
 		name, purpose string
 		main, want    bool
@@ -275,7 +277,7 @@ func TestSupervisionBackgroundStartUsesBackgroundPolicy(t *testing.T) {
 	if send["session_id"] != "" && send["session_id"] != nil {
 		t.Fatalf("first start unexpectedly resumed %v", send["session_id"])
 	}
-	if got, want := send["supervision_instructions"], mustSupervisionRole(t, prompts.SupervisionRoleBackground); got != want {
+	if got, want := send["supervision_instructions"], mustSupervisionRole(t, supervisionrole.RoleBackground()); got != want {
 		t.Fatalf("background first start received %d bytes, want its %d-byte role policy", len(got.(string)), len(want))
 	}
 }
@@ -288,16 +290,23 @@ func TestSupervisionStartupBaselineCoversFirstWorkingTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.setSessions("server", proto.Session{SessionID: id, Assistant: true, Status: proto.StatusWorking})
-	if got := ownerPolicy(t, s, id); got != mustSupervisionRole(t, prompts.SupervisionRoleBackground) {
+	if got := ownerPolicy(t, s, id); got != mustSupervisionRole(t, supervisionrole.RoleBackground()) {
 		t.Fatal("a follow-up during the first turn lost the compact policy the node accepted at startup")
 	}
 }
 
 func TestSupervisionStartupRejectsUnknownRole(t *testing.T) {
 	s, _ := newQuietService(t)
-	ctx := context.WithValue(context.Background(), supervisionStartup{}, prompts.SupervisionRole("worker"))
-	if err := s.putSupervisionInstructions(ctx, "server", "", map[string]any{}); err == nil {
-		t.Fatal("unknown startup role silently received a policy")
+	// Only a supervisionrole.Role names a startup role. A bare word is refused rather than parsed, a stored one too.
+	for _, word := range []string{"worker", "MAIN", "main"} {
+		ctx := context.WithValue(context.Background(), supervisionStartup{}, word)
+		p := map[string]any{}
+		if err := s.putSupervisionInstructions(ctx, "server", "", p); err == nil {
+			t.Fatalf("startup role %q silently received a policy", word)
+		}
+		if _, ok := p["supervision_instructions"]; ok {
+			t.Fatalf("startup role %q wrote a policy before failing", word)
+		}
 	}
 }
 
@@ -388,11 +397,12 @@ func TestSupervisionEventsContainFactsNotPolicy(t *testing.T) {
 	// #5732 has no background startup prompt: an existing legacy conversation only finishes its old work.
 }
 
-func mustSupervisionRole(t *testing.T, role prompts.SupervisionRole) string {
+// mustSupervisionRole is the compact policy a conversation of role runs on.
+func mustSupervisionRole(t *testing.T, role supervisionrole.Role) string {
 	t.Helper()
-	text, err := prompts.RenderSupervisionInstructionsForRole(role)
-	if err != nil {
-		t.Fatal(err)
+	text := supervisionPolicy(role)
+	if text == "" {
+		t.Fatal("empty supervision policy")
 	}
 	return text
 }
