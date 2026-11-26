@@ -308,12 +308,13 @@ recovery procedure; use the offline procedure only when data recovery is actuall
    The destination must be absent or empty and cannot be a symlink. This command verifies the
    snapshot and applies the same canonical member/link checks before extraction on Python 3.9+.
    A restricted writer creates private directories, exclusively creates regular files, then
-   creates validated symlinks after all file writes. It preserves timestamps and safe file
-   permissions, removes special and group/other write bits, and never applies archive ownership.
-   It rejects absolute, drive/UNC, backslash, noncanonical
-   and duplicate paths, hard links and non-directory parents. A relative symlink must point
-   directly to a file or directory actually inside this archive; dangling links, link chains
-   and links used as parent directories are rejected. Snapshot creation also refuses hard links.
+   recreates validated hard links and symlinks after all file writes. It preserves timestamps and
+   safe file permissions, removes special and group/other write bits, and never applies archive ownership.
+   A hard link must name a regular file in the archive. A stored symlink must point directly to
+   an archived file or directory within its own root, using a canonical relative path. During
+   backup, absolute symlinks within the same collected root are converted to this relative form.
+   The extractor rejects absolute, drive/UNC, backslash, noncanonical and duplicate member paths,
+   dangling links, link chains and links used as parent directories.
    `manifest.json` maps `root-0`, `root-1`, etc. to their original roots.
    Inspect the archived configs privately to identify each database. Restore the dumps with
    `pg_restore` into fresh, empty databases, using a private `PGSERVICE`/`PGPASSFILE`; then select
