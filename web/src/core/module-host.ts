@@ -302,7 +302,7 @@ export interface ModuleDescriptor {
   chatSlots?: readonly ChatSlot[];
   /** The pending-card kinds it renders, none the core has a card for; its code's `cards` draws each. */
   cardRenderers?: readonly string[];
-  /** Its namespaces under src/i18n/locales (`<id>` or `<id>-…`): kept out of the client catalog and loaded with its code. */
+  /** Its namespaces (`<id>` or `<id>-…`), loaded with its code from the shared or module-local locale directory. */
   i18nNamespaces?: readonly string[];
   /** Those namespaces' catalog, one loader per language (`?catalog=module-<id>`, web/i18n-catalogs.ts). */
   locales?: CatalogLoaders;

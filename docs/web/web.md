@@ -2521,9 +2521,9 @@ flows unchanged.
 An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts` `preloadOnIntent`):
 when the pointer, the focus or a finger reaches a link to it (its sidebar entry); not with Data Saver on, and never for
 an off module. Never at idle: that would make every browser fetch every module, outside `IDLE_TIER_BUDGET`. Otherwise it loads on its first render: its strings first (`i18n` `addCatalogs`; its code may call `t()` at module
-scope), then its code. A module's namespaces (`<id>.json`, `<id>-*.json` under `src/i18n/locales/<lang>/`) stay beside the
-others, so every catalog check covers them, but the build leaves them out of `client-startup` and `client-rest` and makes
-them the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and feature description
+scope), then its code. A module's namespace files (`<id>.json`, `<id>-*.json`) live under its own `locales/<lang>/`
+or under `src/i18n/locales/<lang>/`. The catalog checks cover both locations. The build places those strings in
+the module's own catalog (`?catalog=module-<id>`, `web/i18n-catalogs.ts`). A module's sidebar label, page title and feature description
 are read before its strings load, so their keys live in shell namespaces such as `sidebar.json`, `app.json` and
 `settings-features.json`.
 
