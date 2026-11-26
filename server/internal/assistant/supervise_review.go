@@ -882,6 +882,16 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 			s.evaluateTodoAfterDependents(ctx, id)
 			s.evaluateParentCloseoutForChild(ctx, id)
 		}
+		if s.settings(ctx).todosV2On() {
+			if recErr := s.ResetSupervisedTaskRecovery(ctx, id); recErr != nil {
+				s.logf("task %s: reset todos_v2 restart recovery: %v", id, recErr)
+			}
+			if accepted && row.DoneAt != nil {
+				if _, blkErr := s.ReconcileTodoBlockers(ctx, id); blkErr != nil {
+					s.logf("task %s: reconcile todos_v2 blockers: %v", id, blkErr)
+				}
+			}
+		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).
 			go s.taskEndedNotice(context.WithoutCancel(ctx), t, accepted, reason)

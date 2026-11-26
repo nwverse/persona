@@ -841,7 +841,8 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
 
 ## Clients
 
-Each client documents its side in its own platform doc; these are pointers only.
+Each client documents its side in its own platform doc; these are pointers only. Across both Core and feature
+modules, shared domain logic lives in the Go server while clients stay thin (`docs/architecture/server-first-logic.md`).
 
 - **Apple** (#13432): `PersonaHostApp` with `PersonaModuleAPI` and `PersonaModule<Name>` packages. See `docs/apple/` (written with #13432).
   A module the hub may turn off declares `feature` = `module.<id>`; the app follows the rule agreed on #13844 (off only
