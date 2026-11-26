@@ -406,6 +406,8 @@ func TestBudgetStopsAsPartialWithFinishedCursorsOnly(t *testing.T) {
 	if !res.Partial {
 		t.Fatal("not partial")
 	}
+	// The name book (members.go) keeps what the finished part learned.
+	delete(res.Cursors, larksyncwire.SenderNamesCursor)
 	if res.Cursors["im:oc_a"] == "" || res.Cursors["im:oc_b"] != "" || len(res.Cursors) != 1 {
 		t.Errorf("cursors = %v, want only oc_a's", res.Cursors)
 	}
