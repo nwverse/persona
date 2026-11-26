@@ -75,20 +75,51 @@ func restartCardlessClaim(t *testing.T, store Store) (*Service, *fakeHub) {
 	return s, f
 }
 
+// restartCardlessClaimWithManualDigest stops timer scheduling before the
+// initial settings publish loads the to-dos and restores the durable outbox.
+func restartCardlessClaimWithManualDigest(t *testing.T, store *cardlessClaimStore) (*Service, *fakeHub) {
+	t.Helper()
+	f := newFakeHub().withMachine()
+	f.settings = &Settings{Main: "conv1", Timezone: "Asia/Shanghai"}
+	f.known["conv1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: "idle"})
+	s := New(Options{Hub: f, Store: func() Store { return store }, Logf: testLogf(t)})
+	stopSupervisionTimers(s)
+	withSettings(t, f, s)
+	if err := s.ensureTodosLoaded(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s.restoreSupervisePending(t.Context())
+	return s, f
+}
+
+// cardlessRuns holds, for each manager runCardlessManager started, what cancels its run context.
+var cardlessRuns sync.Map
+
+// runCardlessManager gives s a run context that stopCardlessManager cancels, as a manager's Run has. A digest timer
+// reads the run context when it fires (sendDigest(s.runCtx())). Without one of its own, a timer that fired just
+// before the stop read context.Background, waited for digestMu, and digested after the stop. The store's failure
+// was cleared by then, so it spent the claim the next manager had to recover (#13631). Call it before the watch
+// whose failure the restart recovers.
+func runCardlessManager(t *testing.T, s *Service) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.running.Store(&ctx)
+	cardlessRuns.Store(s, cancel)
+	t.Cleanup(func() {
+		cardlessRuns.Delete(s)
+		cancel()
+	})
+}
+
 // A restart ends the old manager before the failed store recovers. Its retry timer must not race the new manager
 // and turn this process-crash fixture into two writers sharing one outbox.
 func stopCardlessManager(s *Service) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	s.running.Store(&ctx)
-	s.supervise.digestMu.Lock()
-	defer s.supervise.digestMu.Unlock()
-	s.supervise.mu.Lock()
-	defer s.supervise.mu.Unlock()
-	if s.supervise.timer != nil {
-		s.supervise.timer.Stop()
+	if stop, ok := cardlessRuns.LoadAndDelete(s); ok {
+		stop.(context.CancelFunc)() // what a timer that already fired read
 	}
-	s.supervise.timer, s.supervise.timerAt = nil, time.Time{}
+	stopSupervisionTimers(s)
 }
 
 func flushCardlessClaim(s *Service) {
@@ -111,6 +142,23 @@ func deliverCardlessDigest(s *Service, list []superviseSignal) bool {
 	defer b.dedupMu.Unlock()
 	ctx := context.Background()
 	return s.deliverDigest(ctx, s.settings(ctx), "conv1", list, "", time.Now(), time.Time{})
+}
+
+// queueAndDeliverCardlessDigest queues g and delivers it at once, both under digestMu. The real timer still runs.
+// It cannot see g before this delivery: g's queueing arms the timer, and an immediate claim pending beside it fires the
+// timer within the short gather (#13631). A signal with g's fingerprint that a digest delivered earlier still
+// deduplicates g here, so a caller that needs g's first delivery keeps the digest quiet until then (#13877).
+func queueAndDeliverCardlessDigest(s *Service, g superviseSignal) bool {
+	b := &s.supervise
+	b.digestMu.Lock()
+	defer b.digestMu.Unlock()
+	s.queueSignal(g)
+	b.routingMu.RLock()
+	defer b.routingMu.RUnlock()
+	b.dedupMu.Lock()
+	defer b.dedupMu.Unlock()
+	ctx := context.Background()
+	return s.deliverDigest(ctx, s.settings(ctx), "conv1", []superviseSignal{g}, "", time.Now(), time.Time{})
 }
 
 func cardlessNotices(f *fakeHub) int {
@@ -145,10 +193,14 @@ func TestCardlessClaimRecoveredPendingDeliversOnce(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			runCardlessManager(t, s)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			store.mu.Lock()
-			store.failMarker = strings.Contains(mode, "marker_failure")
+			// The ambiguous mode's first marker write commits and loses its reply; every later one fails. Both are armed
+			// before the watch: its claim is immediate, so the live digest timer can retry the marker as soon as the
+			// watch releases writeMu, before a failure armed after the watch would apply (#16013).
+			store.failMarker = strings.Contains(mode, "marker_failure") || mode == "legacy_ambiguous_marker_write"
 			store.commitMarkerError = mode == "legacy_ambiguous_marker_write"
 			if mode == "cancelled_after_outbox" {
 				store.afterOutbox = cancel
@@ -156,9 +208,6 @@ func TestCardlessClaimRecoveredPendingDeliversOnce(t *testing.T) {
 			store.mu.Unlock()
 			s.superviseWatch(ctx, time.Now().Add(cardlessSettle+time.Minute))
 			if mode == "legacy_ambiguous_marker_write" {
-				store.mu.Lock()
-				store.failMarker = true
-				store.mu.Unlock()
 				s.superviseWatch(ctx, time.Now().Add(cardlessSettle+2*time.Minute))
 			}
 			if mode != "legacy_claim" && todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
@@ -219,6 +268,7 @@ func TestCardlessClaimRecoveryRechecksRoundUnderWriteLock(t *testing.T) {
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
+	runCardlessManager(t, s)
 	store.mu.Lock()
 	store.failMarker = true
 	store.mu.Unlock()
@@ -228,7 +278,8 @@ func TestCardlessClaimRecoveryRechecksRoundUnderWriteLock(t *testing.T) {
 	store.mu.Lock()
 	store.failMarker = false
 	store.mu.Unlock()
-	again, _ := restartCardlessClaim(t, store)
+	// Start the recovery attempt below after this test holds the write lock.
+	again, _ := restartCardlessClaimWithManualDigest(t, store)
 	again.supervise.writeMu.Lock()
 	done := make(chan [2]bool, 1)
 	go func() {
@@ -263,9 +314,13 @@ func TestCardlessClaimLegacyCompletedMarker(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
 			s, f, todo := newSupervisedServiceOn(t, store)
+			runCardlessManager(t, s)
 			t.Cleanup(func() { stopCardlessManager(s) })
 			holdDigest(s)
 			waitsForReview(t, s, f, todo.ID, "Ready for review.")
+			// Finish the review's writes before installing the legacy row
+			// and handing the outbox to the restarted manager.
+			turnsQuiet(t, s, todo.ID)
 			stopCardlessManager(s)
 			stamp := time.Now().Add(-time.Hour).UTC().Truncate(time.Microsecond)
 			v := todoNow(s, todo.ID).Supervision.clone()
@@ -273,10 +328,13 @@ func TestCardlessClaimLegacyCompletedMarker(t *testing.T) {
 			if err := store.DB.PutTodoSupervision(context.Background(), v.row(todo.ID)); err != nil {
 				t.Fatal(err)
 			}
-			again, nextHub := restartCardlessClaim(t, store)
+			again, nextHub := restartCardlessClaimWithManualDigest(t, store)
 			if pending {
 				g := superviseSignal{Todo: todo.ID, Kind: sigCardlessWait, Key: "cardless@" + stamp.Add(-time.Hour).Format(time.RFC3339Nano), At: stamp}
 				again.signal(g)
+				if got := storedSupervisePending(t, again)[g.id()]; got.Key != g.Key {
+					t.Fatalf("legacy claim did not reach the outbox: %+v", got)
+				}
 			}
 			again.superviseWatch(context.Background(), time.Now().Add(48*time.Hour))
 			flushCardlessClaim(again)
@@ -392,8 +450,15 @@ func TestCardlessClaimRetrySurvivesDigestAcknowledgment(t *testing.T) {
 			store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
 			s, f, todo := newSupervisedServiceOn(t, store)
 			t.Cleanup(func() { stopCardlessManager(s) })
+			if mode == "deduplicated_sibling" {
+				// The sibling's first delivery below must be the first of its fingerprint, which the review that
+				// waitsForReview leaves pending shares (a review's key is not part of it). The claim is immediate, so
+				// the timer could deliver that review first; no digest runs until the sibling went (#13877).
+				quietDigest(s)
+			}
 			holdDigest(s)
 			waitsForReview(t, s, f, todo.ID, "Ready for review.")
+			runCardlessManager(t, s)
 			store.mu.Lock()
 			store.failMarker = true
 			store.mu.Unlock()
@@ -402,13 +467,13 @@ func TestCardlessClaimRetrySurvivesDigestAcknowledgment(t *testing.T) {
 			list := []superviseSignal{g}
 			if mode != "all_retry" {
 				sibling := superviseSignal{Todo: todo.ID, Kind: sigReview, Key: "review-sibling", At: time.Now()}
-				s.queueSignal(sibling)
 				if mode == "deduplicated_sibling" {
-					if !deliverCardlessDigest(s, []superviseSignal{sibling}) {
+					if !queueAndDeliverCardlessDigest(s, sibling) {
 						t.Fatal("the sibling's first real delivery failed")
 					}
-					s.queueSignal(sibling)
+					rearmDigest(s) // the real timer races the delivery under test, as in the other modes
 				}
+				s.queueSignal(sibling)
 				list = append(list, sibling)
 			}
 			deliverCardlessDigest(s, list)
@@ -439,14 +504,14 @@ func (s *cardlessClaimStore) PutTodoSupervision(ctx context.Context, row db.Todo
 		s.commitMarkerError = false
 	}
 	s.mu.Unlock()
-	if fail && row.CardlessToldAt != nil {
-		return errors.New("injected cardless marker failure")
-	}
-	if ambiguous {
+	if ambiguous { // the one lost reply comes before a standing failMarker
 		if err := s.DB.PutTodoSupervision(ctx, row); err != nil {
 			return err
 		}
 		return errors.New("injected lost reply after marker commit")
+	}
+	if fail && row.CardlessToldAt != nil {
+		return errors.New("injected cardless marker failure")
 	}
 	return s.DB.PutTodoSupervision(ctx, row)
 }
@@ -454,22 +519,29 @@ func (s *cardlessClaimStore) PutTodoSupervision(ctx context.Context, row db.Todo
 func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 	store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
 	s, f, todo := newSupervisedServiceOn(t, store)
+	runCardlessManager(t, s)
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
+	// Drive admission and recovery explicitly. An immediate cardless signal
+	// can otherwise be taken from pending before either assertion.
+	turnsQuiet(t, s, todo.ID)
+	stopCardlessManager(s)
 	store.mu.Lock()
 	store.failOutbox = true
 	store.mu.Unlock()
 	now := time.Now().Add(cardlessSettle + time.Minute)
 	s.superviseWatch(context.Background(), now)
-	stopCardlessManager(s)
+	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatal("the watch did not attempt to queue the cardless claim")
+	}
+	if _, ok := storedSupervisePending(t, s)[todo.ID+"|"+sigCardlessWait]; ok || todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
+		t.Fatal("the failed write left a durable claim or acknowledged the review round")
+	}
 	store.mu.Lock()
 	store.failOutbox = false
 	store.mu.Unlock()
-	again, againHub := restartedOn(t, store)
-	t.Cleanup(func() { stopCardlessManager(again) })
-	againHub.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Status: proto.StatusIdle, State: "idle"})
-	holdDigest(again)
+	again, _ := restartCardlessClaimWithManualDigest(t, store)
 	again.superviseWatch(context.Background(), now.Add(time.Minute))
 	if !slices.Contains(pendingKinds(again, todo.ID), sigCardlessWait) {
 		t.Fatalf("the failed outbox write permanently spent the review round across restart: ledger=%+v pending=%+v", todoNow(again, todo.ID).Supervision, storedSupervisePending(t, again))
@@ -479,25 +551,36 @@ func TestCardlessClaimOutboxFailureRetriesAfterRestart(t *testing.T) {
 func TestCardlessClaimMarkerFailureKeepsRecoveryRecord(t *testing.T) {
 	store := &cardlessClaimStore{DB: taskRecoveryDatabase(t)}
 	s, f, todo := newSupervisedServiceOn(t, store)
+	runCardlessManager(t, s)
 	t.Cleanup(func() { stopCardlessManager(s) })
 	holdDigest(s)
 	waitsForReview(t, s, f, todo.ID, "Ready for review.")
+	turnsQuiet(t, s, todo.ID)
+	stopCardlessManager(s)
 	store.mu.Lock()
 	store.failMarker = true
 	store.mu.Unlock()
 	s.superviseWatch(context.Background(), time.Now().Add(cardlessSettle+time.Minute))
-	stopCardlessManager(s)
+	if todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
+		t.Fatal("the failed marker write acknowledged the review round")
+	}
 	store.mu.Lock()
 	store.failMarker = false
 	store.mu.Unlock()
-	again, _ := restartedOn(t, store)
-	t.Cleanup(func() { stopCardlessManager(again) })
-	holdDigest(again)
-	if err := again.ensureTodosLoaded(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	again.restoreSupervisePending(context.Background())
+	again, _ := restartCardlessClaimWithManualDigest(t, store)
 	if !slices.Contains(pendingKinds(again, todo.ID), sigCardlessWait) {
 		t.Fatal("the failed marker write left no durable claim for restart to recover")
+	}
+	if _, ok := storedSupervisePending(t, again)[todo.ID+"|"+sigCardlessWait]; !ok || cardlessNotices(f) != 0 {
+		t.Fatal("recovery requires a durable claim with no earlier hand-back")
+	}
+	// This fresh claim is still inside the production gather window. Let the manual digest deliver it now.
+	setSuperviseTimings(again, shortSuperviseTimings)
+	flushCardlessClaim(again)
+	if got := cardlessNotices(again.hub.(*fakeHub)); got != 1 || todoNow(again, todo.ID).Supervision.CardlessToldAt == nil {
+		t.Fatalf("restored claim produced %d notices, want one notice with a persisted marker", got)
+	}
+	if _, ok := storedSupervisePending(t, again)[todo.ID+"|"+sigCardlessWait]; ok {
+		t.Fatal("the delivered claim remained in the durable outbox")
 	}
 }

@@ -294,6 +294,12 @@ class HubChatRepository(
             return delegate.fork(session, entry?.lock?.withLock { entry.realtime.canonicalId(atItemId) } ?: atItemId)
         }
         override suspend fun rewind(session: Session, target: RewindTarget, restore: RewindRestore) = delegate.rewind(session, target, restore)
+        override suspend fun codexTakeoverInfo(session: Session) = delegate.codexTakeoverInfo(session)
+        override suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean) = delegate.codexTakeover(session, token, confirmStop)
+        override suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo, operationId: String) =
+            delegate.startCodexContinuation(session, info, operationId)
+        override suspend fun codexContinuationOperation(session: Session, operationId: String) =
+            delegate.codexContinuationOperation(session, operationId)
     }
 
     /** The composer shares interruption state with menu actions. Failed requests leave it unchanged. */
@@ -561,7 +567,11 @@ class HubChatRepository(
                 }
                 page.items.forEach { work[it.id] = it }
                 // A changed fold can request another page even when HTTP more=false. Only the applied Ack ends it.
-                actions = awaitActionsAsync(entry, Input.Range(page.items, page.more, fold.id), generation) ?: return emptyList()
+                val next = awaitActionsAsync(entry, Input.Range(page.items, page.more, fold.id), generation) ?: return emptyList()
+                val nextRange = next.singleOrNull() as? Action.FetchRange
+                val restarted = nextRange != null && (!page.more || page.items.lastOrNull()?.seq?.let { nextRange.fromSeq != it + 1 } != false)
+                if (restarted) work.clear()
+                actions = next
             }
             // Like the synchronous path, return what was downloaded even if a push removed the fold meanwhile.
             entry.lock.withLock { publish(entry) }
@@ -741,13 +751,9 @@ class HubChatRepository(
             result.operations.forEach { operation ->
                 synchronized(entry.operations) { entry.operations[operation.id] }?.complete(operation.requests)
             }
-            dispatch(entry, result.requests.filterNot { action ->
-                // expandFoldAsync owns its range HTTP request. It receives this action through the operation's
-                // acknowledged waiter, so generic catch-up dispatch must not ignore it or issue a duplicate.
-                action is Action.FetchRange && result.operations.any { operation ->
-                    operation.requests.contains(action) && synchronized(entry.operations) { entry.operations[operation.id] } != null
-                }
-            })
+            // FetchRange (initial OpenFold, continuation and changed-fold Range) and FetchOlder are owned by
+            // their awaitActionsAsync operations, never by generic catch-up dispatch.
+            dispatch(entry, result.requests.filterNot { it is Action.FetchRange || it is Action.FetchOlder })
             if (continueFill) dispatch(entry, acceptAsync(entry, Input.ContinueFill)?.requests.orEmpty())
             if (result.stateChanged && entry.persistPending.compareAndSet(false, true)) entry.scope.launch { persist(entry) }
         }

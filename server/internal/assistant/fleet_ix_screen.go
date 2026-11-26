@@ -167,13 +167,13 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	s.ixMapLocked()[id] = p
 	s.fleet.mu.Unlock()
 	s.record(ix)
-	if back && !told && terminalQuestion(ix) && s.restoreRoute(ctx, ix) {
+	if back && !told && supervisedScreen(ix) && s.restoreRoute(ctx, ix) {
 		return // Reconnecting a terminal must not lose a question held by its supervisor.
 	}
 	if back || d == nil {
 		s.show(ix) // back: pushed before the node's connection ended (#4252); no dialog: the real card rings later (#4450)
 		if back {
-			go s.feishuCardBack(ix)
+			go s.larkModule().AskBack(ix, resumeGrace)
 		}
 	} else {
 		s.announce(ix)
@@ -272,6 +272,7 @@ func (s *Service) upgradeScreenCard(machine, session, id string, p *pending) {
 				if p.orphaned != nil {
 					p.orphaned.Stop()
 				}
+				p.stopReminderLocked()
 			}
 			s.fleet.mu.Unlock()
 			if same {

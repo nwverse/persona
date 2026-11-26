@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -35,6 +36,9 @@ func TestStopRPCPersistsItsProvenance(t *testing.T) {
 		{"archive and close", "session.retire", map[string]any{"close_terminal": true}, proto.StopUser},
 		{"old retire has no provenance", "session.retire", map[string]any{}, proto.StopUnknown},
 		{"confirmed maintenance stop", "session.stop", map[string]any{"retire": true, "stop_cause": proto.StopRestart}, proto.StopRestart},
+		{"supervision timeout stop", "session.stop", map[string]any{"stop_cause": proto.StopTimeout}, proto.StopTimeout},
+		{"non-retire stop ignores idle cause", "session.stop", map[string]any{"stop_cause": proto.StopIdle}, proto.StopUser},
+		{"close terminal ignores timeout cause", "session.retire", map[string]any{"close_terminal": true, "stop_cause": proto.StopTimeout}, proto.StopUser},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, home := herdrNode(t)
@@ -43,8 +47,12 @@ func TestStopRPCPersistsItsProvenance(t *testing.T) {
 			cwd := mkdir(t, filepath.Join(home, "project"))
 			n.state.put(sidA, sessionState{Launcher: "claude", Cwd: cwd, Pane: "w1:p1", AppMode: "plan",
 				StartedAt: time.Now().Add(-time.Hour)})
+			status := proto.StatusIdle
+			if tc.name == "supervision timeout stop" {
+				status = proto.StatusWorking
+			}
 			n.agents[sidA] = host.Agent{Agent: "claude", PaneID: "w1:p1", TabID: "w1:t1",
-				WorkspaceID: "w1", AgentStatus: proto.StatusIdle}
+				WorkspaceID: "w1", AgentStatus: status}
 			quitsOn(f, "w1:p1", sidA, nil, shellPane("w1:p1", "w1:t1", "w1", cwd, sidA))
 			tc.params["session_id"] = sidA
 			if _, err := request(t, n, tc.method, tc.params); err != nil {
@@ -53,6 +61,11 @@ func TestStopRPCPersistsItsProvenance(t *testing.T) {
 			st, _ := n.state.get(sidA)
 			if st.StopCause != tc.want || st.AppMode != "plan" || st.Launcher != "claude" {
 				t.Fatalf("stop lost its provenance or launch constraints: %+v", st)
+			}
+			if tc.want == proto.StopTimeout {
+				if err := n.supervisorResumeAllowed(sidA, "", ""); err != nil {
+					t.Fatalf("supervisor resume refused after timeout stop: %v", err)
+				}
 			}
 		})
 	}
@@ -243,6 +256,23 @@ func TestRunningObservationCannotEraseAnInFlightUserClose(t *testing.T) {
 	}
 }
 
+func TestAcceptedAssistantInputKeepsNewerStop(t *testing.T) {
+	n, _, _ := herdrNode(t)
+	n.state.put(sidA, sessionState{Launcher: "claude"})
+	n.state.stopped(sidA, proto.StopExit)
+	before, _ := n.state.get(sidA)
+	n.state.stopped(sidA, proto.StopUser)
+	stopped, _ := n.state.get(sidA)
+
+	before.AppMode = "plan"
+	n.state.put(sidA, before)
+	n.state.clearStopAfterAssistantInput(sidA, before.StopCauseAt)
+	after, _ := n.state.get(sidA)
+	if after.StopCause != proto.StopUser || after.StopCauseAt != stopped.StopCauseAt || after.AppMode != "plan" {
+		t.Fatalf("accepting the input lost the newer Stop or its updated mode: %+v", after)
+	}
+}
+
 func TestGuardedResumeRejectsStaleRowsAndPermissionOverrides(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -251,7 +281,7 @@ func TestGuardedResumeRejectsStaleRowsAndPermissionOverrides(t *testing.T) {
 		launcher string
 	}{
 		{"user stopped", proto.StopUser, "", ""},
-		{"unknown", proto.StopUnknown, "", ""},
+		{"exit", proto.StopExit, "", ""},
 		{"future cause", proto.StopCause("future"), "", ""},
 		{"permission override", proto.StopIdle, "bypassPermissions", ""},
 		{"launcher override", proto.StopIdle, "", "another-launcher"},
@@ -356,6 +386,66 @@ func TestOwnerResumeStillUsesItsExplicitPathAfterUserStop(t *testing.T) {
 	}
 	if !strings.Contains(command, "--resume "+sidA) {
 		t.Fatal("owner Resume did not reach the existing terminal path")
+	}
+}
+
+// An Agent stopped for no recorded reason (it quit by itself, a machine restart longer than the restart window cut it
+// off) is not the user's stop: the assistant's resume reaches its terminal as the owner's does (#11528).
+func TestSupervisorResumesAnUnknownStop(t *testing.T) {
+	n, f, _ := keptAgent(t)
+	provenanceHerdr(n)
+	n.state.stopped(sidA, proto.StopUnknown)
+	n.claudeStart, n.claudeReady = 20*time.Millisecond, 20*time.Millisecond
+	// The scripted shell does not launch Claude; reaching its resume command is the boundary under test.
+	_, err := request(t, n, "session.start", map[string]any{
+		"resume_session_id": sidA, "resume_automatic": true, "prompt": "Continue the assigned task",
+	})
+	if re := (*rpc.Error)(nil); errors.As(err, &re) && re.Code == "resume_not_allowed" {
+		t.Fatalf("an unknown stop was refused: %v", err)
+	}
+	var command string
+	for _, call := range f.calls() {
+		if call.Method == "pane.send_input" {
+			command += str(call.Params["text"])
+		}
+	}
+	if !strings.Contains(command, "--resume "+sidA) {
+		t.Fatal("the assistant's resume of an unknown stop did not reach the terminal")
+	}
+}
+
+// An uncertain resume holds off the assistant's next one for resumeSettle, unless the Agent was seen running since or
+// a stop was recorded after it; a resume that ran nothing for sure does not.
+func TestResumeStartsSettle(t *testing.T) {
+	var r resumeStarts
+	at := time.Date(2026, 11, 23, 14, 0, 0, 0, time.UTC)
+	r.begin("uncertain", at)(errors.New("no answer"))
+	if !r.settling("uncertain", at.Add(resumeSettle-time.Second)) || r.settling("uncertain", at.Add(resumeSettle)) {
+		t.Fatal("an uncertain resume did not settle after resumeSettle")
+	}
+	r.begin("ran", at)(nil)
+	if !r.settling("ran", at.Add(time.Second)) {
+		t.Fatal("a resume that returned held nothing off until its Agent was seen")
+	}
+	r.seen("ran")
+	if r.settling("ran", at.Add(time.Second)) {
+		t.Fatal("an Agent seen running still held the next resume off")
+	}
+	r.begin("refused", at)(refusal("start_refused", "refused", map[string]any{"delivered": deliveredNone}))
+	if r.settling("refused", at.Add(time.Second)) {
+		t.Fatal("a start that ran nothing held the next resume off")
+	}
+
+	n, _, _ := keptAgent(t)
+	provenanceHerdr(n)
+	n.uncertainResumes.begin(sidA, time.Now())(errors.New("no answer"))
+	n.state.stopped(sidA, proto.StopUnknown)
+	if err := n.supervisorResumeAllowed(sidA, "", ""); err == nil {
+		t.Fatal("the assistant's resume went while an uncertain one was settling")
+	}
+	n.state.stopped(sidA, proto.StopCompactFailed) // the resumed Agent quit while it was compacted: known since
+	if err := n.supervisorResumeAllowed(sidA, "", ""); err != nil {
+		t.Fatalf("a stop recorded after the resume was held off: %v", err)
 	}
 }
 
