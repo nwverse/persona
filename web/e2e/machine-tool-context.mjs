@@ -55,6 +55,9 @@ async function verify(width, theme, textSize) {
     assert.equal(await choices.last().innerText(), "Assistant resources");
     await page.getByRole("link", { name: /\d+ needs? you/i }).first().waitFor();
     await tokens.waitFor();
+    const titleFits = await page.getByRole("heading", { name: "Computer A", exact: true })
+      .evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
+    assert(titleFits, "The waiting link must leave room for the computer name");
     await capture("cards");
     await views.getByRole("radio", { name: "Services", exact: true }).click();
     await picker.selectOption({ label: "Computer B" });

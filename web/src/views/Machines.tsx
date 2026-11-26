@@ -346,30 +346,32 @@ const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, rout
         <span className={cx("flex size-9 shrink-0 items-center justify-center rounded-[9px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
           <Icon name="machine" size={16} />
         </span>
-        <a href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="group/title min-w-0 flex-1 rounded-[6px]">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate text-[14px] font-semibold text-ink group-hover/title:underline">{m.name}</h2>
-            {hub && (
-              <span title={route ? `${hub} · ${route}` : hub} className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-field px-1.5 text-[11px] font-medium text-ink-2">
-                <Icon name="hub" size={11} />
-                {hub}
+        <div className="flex min-w-0 flex-1 flex-wrap items-start gap-x-2">
+          <a href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="group/title min-w-0 grow basis-48 rounded-control">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-[14px] font-semibold text-ink group-hover/title:underline">{m.name}</h2>
+              {hub && (
+                <span title={route ? `${hub} · ${route}` : hub} className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-field px-1.5 text-[11px] font-medium text-ink-2">
+                  <Icon name="hub" size={11} />
+                  {hub}
+                </span>
+              )}
+              <span className={cx("inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium", m.online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
+                <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} />
+                {m.online ? t("machines.online") : neverConnected(m) ? t("machines.not_connected_yet") : t("machines.offline")}
               </span>
-            )}
-            <span className={cx("inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium", m.online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
-              <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} />
-              {m.online ? t("machines.online") : neverConnected(m) ? t("machines.not_connected_yet") : t("machines.offline")}
-            </span>
-          </div>
-          <p className="truncate text-[11.5px] text-ink-3">{[m.system?.name || m.os, m.system?.model, m.system?.cpu].filter(Boolean).join(" · ") || m.hostname}</p>
-        </a>
-        {needsYou !== undefined && needsYou > 0 && (
-          <a href={href(waiting)} onClick={(e) => onLinkClick(e, waiting)}
-            className="inline-flex min-h-11 shrink-0 items-center rounded-control focus-visible:outline-accent">
-            <span className="whitespace-nowrap rounded-full bg-field px-2 py-1 text-submeta font-medium text-attention">
-              {stateCount("needs_you", needsYou)}
-            </span>
+            </div>
+            <p className="truncate text-[11.5px] text-ink-3">{[m.system?.name || m.os, m.system?.model, m.system?.cpu].filter(Boolean).join(" · ") || m.hostname}</p>
           </a>
-        )}
+          {needsYou !== undefined && needsYou > 0 && (
+            <a href={href(waiting)} onClick={(e) => onLinkClick(e, waiting)}
+              className="inline-flex min-h-11 shrink-0 items-center rounded-control focus-visible:outline-accent">
+              <span className="whitespace-nowrap rounded-full bg-field px-2 py-1 text-submeta font-medium text-attention">
+                {stateCount("needs_you", needsYou)}
+              </span>
+            </a>
+          )}
+        </div>
         {!m.online && !expectedDisconnect && !pending && !managerOffline && (
           <Button tone="secondary" icon="retry" onClick={() => onReconnect(m.id)}>
             {t("machines.reconnect")}
