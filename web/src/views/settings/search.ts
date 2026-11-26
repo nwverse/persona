@@ -73,9 +73,10 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.source_code"), hint: t("settings.about_persona"), anchor: "about-persona" },
   // Advanced › Appearance (#13398): the non-default looks. General keeps the default appearance and text size.
   { tab: "advanced", group: t("settings.appearance"), anchor: "appearance" },
+  { tab: "advanced", group: t("ui-look.surface_style"), hint: words(t("ui-look.surface_default"), t("ui-look.surface_liquid_glass"), t("ui-look.glass_translucency")), anchor: "surface-style" },
   { tab: "advanced", group: t("ui-look.accent"), anchor: "theme-color" },
   { tab: "advanced", group: t("ui-extensionthemepicker.label"), anchor: "extension-theme" },
-  { tab: "advanced", group: t("ui-look.font"), hint: words(t("ui-look.font_sans"), t("ui-look.font_mono")), anchor: "font" },
+  { tab: "advanced", group: t("ui-look.font"), hint: words(t("ui-look.font_sans"), t("ui-look.font_mono"), t("ui-look.font_browser")), anchor: "font" },
   { tab: "advanced", group: t("ui-look.sidebar_icons"), hint: words(t("ui-look.sidebar_icons_monochrome"), t("ui-look.sidebar_icons_colored")), anchor: "sidebar-icons" },
   // the assistant's profile
   { tab: "persona", group: t("settings-assistantsettings.routines"), hint: t("settings-assistantsettings.proactive_title"), anchor: "routines" },
@@ -94,7 +95,7 @@ const SHARED_INDEX: SearchGroup[] = [
     group: t("settings-assistantsettings.agents_title"),
     hint: words(
       t("settings-assistantsettings.auto_naming"), t("settings-assistantsettings.auto_naming_max"), t("settings-assistantsettings.auto_naming_periodic"),
-      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_messages"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
+      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_mode"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
       t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
     ),
     anchor: "agents",

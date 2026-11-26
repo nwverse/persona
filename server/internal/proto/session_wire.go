@@ -34,14 +34,14 @@ func sessionLayout() uint64 {
 // too, each type under its own layout hash: while one's fields differ from the ones written here, its values are left to
 // the reflect encoder (value), the rest of the session still written here.
 const (
-	backgroundWireLayout   = 0x2c6a40db481222e7
+	backgroundWireLayout   = 0x69fdd6d60e3fb445
 	subagentWireLayout     = 0xbf84f2ee699de074
 	workflowToolWireLayout = 0x56c71f2c71223998
 )
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0x53676730036e062b
+const hierarchyWireLayout = 0x8fa73e1a26348c63
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -334,6 +334,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 		if h.View != nil {
 			w.value(`"view":`, h.View)
 		}
+		w.boolean(`"botmux_external_trigger":`, h.BotmuxExternalTrigger, true)
 	}
 	w.boolean(legacyStartedMember, s.StartedByPersona, false) // sessionWire's legacy key (compatibility.go)
 	return append(w.b, '}'), w.ok
@@ -446,6 +447,7 @@ func (w *wireWriter) backgroundTasks(list []BackgroundTask) {
 		if t.ExitCode != nil {
 			w.integer(`"exit_code":`, int64(*t.ExitCode), false)
 		}
+		w.boolean(`"moved_from_foreground":`, t.MovedFromForeground, true)
 		w.close()
 	}
 	w.b = append(w.b, ']')

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/compat"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -566,6 +567,17 @@ func (s *Service) quietTask(ctx context.Context, origin string) bool {
 // made (a topic that turned out to be taken, the lark module's thread_open.go) both go through it.
 func (s *Service) removeTodo(ctx context.Context, id string) error {
 	s.todos.writing.Lock()
+	if current, ok := s.todoNow(id); ok {
+		err := s.receivedFindingsCloseError(current, nil)
+		if err == nil && current.Supervision != nil && current.Supervision.Investigation != nil &&
+			current.Supervision.Investigation.Version != 0 {
+			err = s.investigationTransitionError(ctx, current, current.Supervision, nil)
+		}
+		if err != nil {
+			s.todos.writing.Unlock()
+			return err
+		}
+	}
 	if st := s.todoDB(); st != nil {
 		if err := st.DeleteTodo(ctx, id); err != nil {
 			s.todos.writing.Unlock()
@@ -829,6 +841,9 @@ func formatTodo(t Todo) Todo {
 	})
 	out.Agents = append(out.Agents, curr...)
 	out.Agents = append(out.Agents, past...)
+	if out.Supervision != nil && isCodexRouteProgress(out.Supervision.Progress) {
+		out.Supervision = out.Supervision.clone()
+	}
 	if out.Supervision != nil && out.Supervision.State == reviewNeedsUser && triageReviewState(out) != reviewNeedsUser {
 		out.Supervision = out.Supervision.clone()
 		out.Supervision.State = "" // its old review stays in history; only a fresh review may ask the owner again
@@ -1048,8 +1063,8 @@ func (s *Service) todoRoutes() {
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
-	// (todo_scope.go). With ?limit or ?cursor it answers one page and how to read the next (todo_pagination.go); no
-	// parameter keeps the complete answer, its fields and its revision header unchanged.
+	// (todo_scope.go). Without parameters the answer is complete. ?closed_limit= bounds the closed rows for clients that
+	// opt in (todo_pagination.go). With ?limit or ?cursor it answers one page of the whole list and how to read the next.
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		limit, after, paged, err := todoListPageQuery(r.URL.Query())
 		if err != nil {
@@ -1059,6 +1074,15 @@ func (s *Service) todoRoutes() {
 			}
 			apierr.WriteCode(w, http.StatusBadRequest, code, err)
 			return
+		}
+		closedLimit := 0
+		boundedClosed := false
+		if !paged {
+			closedLimit, boundedClosed, err = todoClosedLimitQuery(r.URL.Query())
+			if err != nil {
+				apierr.WriteCode(w, http.StatusBadRequest, "invalid_todo_closed_limit", err)
+				return
+			}
 		}
 		writes := s.trevision.writes.Load()
 		list, p, err := s.todosViewed(r.Context(), true)
@@ -1078,14 +1102,30 @@ func (s *Service) todoRoutes() {
 			sharedBlockers = p.sharedBlockers()
 			if cfg := s.settings(r.Context()); cfg.todosV2On() {
 				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
-				board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
+				if !paged {
+					// The board is the same complete projection as Counts. The closed_limit option bounds the rows a list
+					// client has to parse; it does not silently create a second, smaller set of board totals.
+					board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
+				}
 			}
+		}
+		var closedNext string
+		var closedHasMore bool
+		if boundedClosed {
+			list, closedNext, closedHasMore = boundedTodoList(list, closedLimit)
 		}
 		if paged {
 			writeTodoPage(w, list, p, sharedBlockers, limit, after)
 			return
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers, Board: board})
+		apierr.WriteJSON(w, todosList{
+			Todos:            list,
+			Counts:           p.counts(),
+			SharedBlockers:   sharedBlockers,
+			Board:            board,
+			ClosedNextCursor: closedNext,
+			ClosedHasMore:    closedHasMore,
+		})
 	})
 	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
@@ -1295,7 +1335,7 @@ func (s *Service) todoRoutes() {
 		if err != nil {
 			if errors.Is(err, db.ErrTodoNotFound) {
 				apierr.Write(w, http.StatusNotFound, err)
-			} else if errors.Is(err, errOutsideDecisionPending) {
+			} else if errors.Is(err, errOutsideDecisionPending) || isInvestigationGuardError(err) {
 				apierr.WriteCode(w, http.StatusConflict, "outside_decision_pending", err)
 			} else if errors.Is(err, db.ErrConcernUnreported) {
 				apierr.Write(w, http.StatusConflict, err) // report its outcome instead: POST …/decisions {source: "reported"}
@@ -1329,7 +1369,7 @@ func (s *Service) todoRoutes() {
 		if err := s.deleteTodo(r.Context(), id); err != nil {
 			if errors.Is(err, db.ErrTodoNotFound) {
 				apierr.Write(w, http.StatusNotFound, err)
-			} else if errors.Is(err, errOutsideDecisionPending) {
+			} else if errors.Is(err, errOutsideDecisionPending) || isInvestigationGuardError(err) {
 				apierr.WriteCode(w, http.StatusConflict, "outside_decision_pending", err)
 			} else {
 				apierr.Write(w, http.StatusInternalServerError, err)
@@ -2044,6 +2084,12 @@ func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, titl
 				Agent: agent, StartError: startError, Source: source, Via: via})
 		}
 		target.UpdatedAt = now
+		if target.Supervision != nil && target.Supervision.Progress != nil && target.Supervision.Progress.Kind == upReportDone &&
+			(target.Supervision.Progress.machine != mid || target.Supervision.Progress.session != sid) {
+			v := target.Supervision.clone()
+			v.Progress = nil
+			target.Supervision = v
+		}
 		if target.DoneAt == nil { // as loadTodosLocked has it: only an open todo's agents work for it
 			s.todos.activeBySession[[2]string{mid, sid}] = todoID
 		}
@@ -2151,7 +2197,14 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	defer unlock()
 	guard := func() error {
 		if t, ok := s.todoNow(id); ok {
-			return s.taskCloseSnapshotError(t, time.Now())
+			if err := s.taskCloseSnapshotError(t, time.Now()); err != nil {
+				return err
+			}
+			if t.DoneAt == nil {
+				if err := s.investigationCloseError(ctx, t); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}
@@ -2292,14 +2345,20 @@ func (s *Service) TodoHandoff(ctx context.Context, h TodoHandoff) (TodoHandoffRe
 	}
 	text := h.Text
 	if strings.TrimSpace(text) != "" {
-		text = s.withTodoDecisions(ctx, h.TodoID, text)
+		var context []string
 		if h.New {
 			lead := ""
 			if t.Supervision != nil {
 				lead = t.Supervision.Supervisor
 			}
-			text = s.withProjectContextForTodo(ctx, h.MachineID, h.Cwd, lead, t, text) // a new agent: its project's background first
+			if background := s.projectBackgroundForTodo(ctx, h.MachineID, h.Cwd, lead, t, text); background != "" {
+				context = append(context, background)
+			}
 		}
+		if decisions := s.todoHandoffDecisionsContext(ctx, h.TodoID); decisions != "" {
+			context = append(context, decisions)
+		}
+		text = agentprompt.WithContext(h.Agent, text, strings.Join(context, "\n\n"))
 	}
 	res := TodoHandoffResult{Found: true, Title: t.Title, DoneAt: t.DoneAt, Text: text}
 	if t.DoneAt == nil && len(t.Images) > 0 {
