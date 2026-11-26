@@ -134,6 +134,12 @@ const (
 // be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
 const CodedStartErrorMax = 600
 
+// TitleMax is the most runes a session's title has in a list of sessions or a session frame (#16343): the node, the
+// manager and the hub cut a longer one (transcript.ListTitle), and the list answers' rows were already cut to it. A
+// title that long is an opening prompt an agent stored as its title (a Codex thread name, a runtime's own title),
+// which no row shows; the transcript keeps the prompt whole.
+const TitleMax = 256
+
 // ToolLoop is a node-detected repetition. It contains no tool input or output.
 // Since identifies the start of this repetition within the current turn.
 type ToolLoop struct {

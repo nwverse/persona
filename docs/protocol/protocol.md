@@ -1099,6 +1099,10 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
 
 // Session: (machine_id, session_id) is unique. session_id is Claude Code's session uuid.
 {"machine_id":"server","session_id":"uuid","title":"AI-generated title or directory name","cwd":"<project directory>",
+ // title: at most 256 characters in every session list, history page and frame (proto.TitleMax, #16343). A longer one (an opening prompt an agent stored
+ // as its title: a Codex thread name, a runtime's own title) is cut on a character boundary, the injected blocks in front of what the user wrote stripped
+ // first; the node cuts it, the manager cuts what an older node sends and the archive's saved rows, the hub cuts older nodes' history rows. The transcript
+ // keeps the prompt whole. A title that fits goes out as it came.
  // cwd: an Agent's latest working directory (Claude Code records the shell's directory after each Bash `cd`), except that an Agent whose `cd` landed in an
  // assistant or health directory itself is listed where it started. For an assistant or health chat it is the directory the chat runs in, where it started,
  // never where its last `cd` left it (#2368): the node lists it there running, at rest and in session info. Only an updated node keeps to this: one from
@@ -1125,7 +1129,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "opened_by":"<extension id>",   // only on assistant chats an extension's token opened, see "Origin of assistant chats" below; absent for any other
  "model_pick":{"launcher":"cx","model":"gpt-5","effort":"high"},   // only on assistant chats switched to a model in the app (PUT …/conversations/{id}/model, feature assistant_model_pick, #5033):
                    // what its next messages run on, model and effort optional; absent = it follows the default (Model configuration › Main chat for the main chat and a scheduled task's, otherwise what it runs). Summary rows carry it too
- "updated_at":"...","last_text":"first 200 characters of the last assistant text",
+ "updated_at":"...","last_text":"first 200 characters of the last assistant text",   // a runtime's row too: the node cuts a longer one, reading asks off it first (#16343)
      "turn_error":"API Error: Connection lost mid-response… (only when stopped and this turn was interrupted by a model API error, otherwise absent; its task counts as \"interrupted\", #1516. Claude Code: the hub recognizes it from the start of the last line; Codex: the node reports it from task_complete.error / a failed turn/completed, #2185. Or, with turn_error_kind no_output / stopped, the hub's sentence in the user's language for a task Agent's turn that had no output at all, or that Persona's Stop interrupted before it had any, #10187)",
      "turn_error_kind":"transient (optional: only when the agent itself states the error kind, Codex's codex_error_info: transient is worth a \"continue\", user needs the user to act, usage_limit is a subscription limit until it resets, unrecoverable marks an invalid conversation that needs a new conversation instead of Continue; otherwise judged from the turn_error text, docs/assistant/agent-work.md \"Triage\"; for Claude Code's \"Not logged in\", a wrong Key or a wrong model the hub fills in user; no_output / stopped are the hub's own word on a task Agent's turn with no output, turn_error then being its sentence, docs/assistant/todos.md \"Automatic completion\", #10187)",
      "model_fallback":{"subtype":"model_refusal_fallback","original_model":"primary-model","fallback_model":"fallback-model","category":"synthetic-policy","scope":"session","explanation":"Upstream refused the request","text":"<the refusal's own words>"}, // optional: active refusal fallback; cleared by a confirmed model change. The public projection only (#2528), as in Item.model_refusal
