@@ -1072,8 +1072,8 @@ func (s *Service) todoRoutes() {
 		var board *todoBoardProjection
 		if !isExtension {
 			sharedBlockers = p.sharedBlockers()
-			if s.settings(r.Context()).todosV2On() {
-				board = buildTodoBoardProjection(list, s.todoBoardDirectionLabels(r.Context()))
+			if cfg := s.settings(r.Context()); cfg.todosV2On() {
+				board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
 			}
 		}
 		if paged {

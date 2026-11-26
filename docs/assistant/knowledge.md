@@ -1345,4 +1345,16 @@ allow an unknown sender (`?`) to match a non-owner gateway line so bot/app and p
 still deduplicate. URL destinations and case, file names and code stay literal. Minute-only, attachment-only,
 changed-content and ambiguous matches are retained. Repair version 3 rechecks archived sync lines even when earlier
 repair versions completed, preserving all receipt IDs and connector ownership. Regression cases live in
-`server/internal/kb/align_gateway_test.go`. No fuzzy or model-based match is used.
+`server/internal/kb/align_gateway_test.go`.
+
+A loose tier (`server/internal/kb/align_loose.go`) then catches four kinds of difference the format tier refuses, inside
+the same frame (same chat, same known sender or the paired-chat unknown-sender rule, exact receipt times in neighbouring
+two-second buckets, exactly one candidate line): a media placeholder on one side only, whatever the attachment counts;
+a leading @mention written otherwise, spaced otherwise or left out (at most 40 characters, followed by the same text of
+at least four characters); a card or rich post one side gives only as its title (the shorter text is the longer one's
+first lines); and long texts at least 98 % alike (both at least 40 characters, at most one differing character per 50,
+the same numbers and links, so template alerts that differ by a host index or build number stay apart). The fuller copy
+stays: when the gateway's line holds less (a card title only), the sync message is written and the gateway line is
+dropped, keeping its receipt ID so a replay never writes it again; a gateway line that cannot be told from an identical
+line of its day is never dropped, and both copies stay. Repair version 4 applies the same tier to archived lines.
+No model-based match is used. Regression cases live in `server/internal/kb/align_loose_test.go`.
