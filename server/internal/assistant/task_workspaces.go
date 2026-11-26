@@ -67,7 +67,7 @@ func (s *Service) backendWorkspaceCall(ctx context.Context, method string, req t
 	return result, nil
 }
 
-func (s *Service) backendWorkspaceCapabilities(ctx context.Context, machine, op string) (taskworkspace.Capabilities, error) {
+func (s *Service) backendWorkspaceCapabilities(ctx context.Context, machine, op, cwd string) (taskworkspace.Capabilities, error) {
 	var support taskworkspace.Capabilities
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -79,7 +79,7 @@ func (s *Service) backendWorkspaceCapabilities(ctx context.Context, machine, op 
 	if strings.Contains(err.Error(), "unknown method "+taskworkspace.MethodPrefix) {
 		code = "unsupported"
 	}
-	return support, taskworkspace.Failure(code, "capability", op, "", "")
+	return support, taskworkspace.Failure(code, "capability", op, "", cwd)
 }
 
 // PrepareBackendWorkspace consumes an already saved naming plan. It never
@@ -103,7 +103,7 @@ func (s *Service) PrepareBackendWorkspace(ctx context.Context, id, op string) (*
 	if _, ok := s.device(ctx, plan.Source.MachineID); !ok {
 		return nil, taskworkspace.Failure("node_unavailable", "plan", op, "", "")
 	}
-	support, err := s.backendWorkspaceCapabilities(ctx, plan.Source.MachineID, op)
+	support, err := s.backendWorkspaceCapabilities(ctx, plan.Source.MachineID, op, "")
 	if err != nil {
 		return nil, err
 	}

@@ -94,6 +94,7 @@ type Launch struct {
 	ExpectedSessionID string `json:"expected_session_id,omitempty"`
 	UseID             string `json:"use_id"`
 	SessionID         string `json:"session_id,omitempty"`
+	TaskDispatch      bool   `json:"task_dispatch,omitempty"`
 }
 type Record struct {
 	Launch              *Launch              `json:"launch,omitempty"`
@@ -119,6 +120,9 @@ type Request struct {
 	Force               bool                 `json:"force,omitempty"`
 	DeleteBranch        bool                 `json:"delete_branch,omitempty"`
 	UseID               string               `json:"use_id,omitempty"`
+	// TaskDispatch preserves ordinary task launcher and terminal placement.
+	// It is sent only on start and is excluded from preparation identity.
+	TaskDispatch bool `json:"task_dispatch,omitempty"`
 	// MirrorRepos names repo IDs in Plan that have an opt-in managed bare mirror enabled on this Node.
 	// Transient per-call hint only; excluded from InputKey and backward-compatible with older Nodes.
 	MirrorRepos      []string `json:"mirror_repos,omitempty"`

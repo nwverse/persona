@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 	repository "github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
+	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
 func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
@@ -18,10 +19,12 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 		name     string
 		layout   repository.Layout
 		branches []string
+		local    bool
 	}{
 		{name: "root", layout: repository.LayoutRoot, branches: []string{"trunk"}},
 		{name: "container", layout: repository.LayoutContainer, branches: []string{"trunk", "develop"}},
 		{name: "no repositories", layout: repository.LayoutContainer},
+		{name: "local dispatch", layout: repository.LayoutRoot, local: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, home, runtimeHost := piHerdrNode(t)
@@ -33,13 +36,23 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 			for _, branch := range tc.branches {
 				urls = append(urls, workspaceRemote(t, branch))
 			}
-			req := taskworkspace.Request{WorkspaceID: "ws_example", OperationID: "op_example", UseID: "launch_example", Plan: workspacePlan(t, home, tc.layout, urls...)}
+			var plan workspacenaming.Plan
+			if tc.local {
+				source := localWorkspaceSource(t, n, workspaceRemote(t, "trunk"), "")
+				plan = localWorkspacePlan(t, n, source, "")
+			} else {
+				plan = workspacePlan(t, home, tc.layout, urls...)
+			}
+			req := taskworkspace.Request{WorkspaceID: "ws_example", OperationID: "op_example", UseID: "launch_example", Plan: plan, TaskDispatch: tc.local}
 			root := req.Plan.RootPath
 			ready := workspaceCall(t, n, "prepare", req)
 			if ready.State != "ready" {
 				t.Fatal(ready.Error, ready.State)
 			}
 			params := map[string]any{"backend_workspace": req, "cwd": root, "session_id": startID}
+			if tc.local {
+				params["task_id"], params["workspace_label"] = "todo_example", "Example task"
+			}
 			start := func() map[string]any {
 				t.Helper()
 				out, err := request(t, n, devicewire.MethodStartBackendSession, params)
@@ -75,6 +88,12 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 			session, ok := got["session"].(map[string]any)
 			if !ok || session["cwd"] != root || session["session_id"] != startID {
 				t.Fatalf("unexpected start: %v", got)
+			}
+			if tc.local {
+				space, ok := got["task_workspace"].(map[string]any)
+				if !ok || space["workspace_id"] != "w-task" || space["task_id"] != "todo_example" {
+					t.Fatal("local dispatch lost leader terminal placement", got)
+				}
 			}
 			creates := f.trace("workspace.create")
 			if len(creates) != 1 || !strings.Contains(creates[0], root) || len(f.trace("worktree.create")) != 0 {
@@ -124,7 +143,7 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 			if _, err := request(t, n, "session.start", map[string]any{"resume_session_id": startID, "cwd": root}); err == nil {
 				t.Fatal("retired session reopened a released checkout")
 			}
-			if len(urls) == 0 {
+			if len(ready.Repositories) == 0 {
 				if r := workspaceCall(t, n, "cleanup", req); r.State != "removed" || r.Error != nil {
 					t.Fatal("stopped workspace was not removed", r.State, r.Error)
 				}
@@ -138,7 +157,7 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 				t.Fatal(err)
 			}
 			hello := paseoEngineHello()
-			hello["caps"].(map[string]any)["backend_workspace_root"] = true
+			hello["caps"].(map[string]any)["backend_workspace_root"] = !tc.local
 			rt := dialRuntimeAt(t, runtimeHost.path, hello)
 			rt.mu.Lock()
 			rt.answer = func(method string, raw json.RawMessage) (any, error) {
@@ -147,7 +166,7 @@ func TestBackendWorkspaceLaunchAndRepositoryRouting(t *testing.T) {
 						Cwd  string `json:"cwd"`
 						Root bool   `json:"backend_workspace_root"`
 					}
-					if err := json.Unmarshal(raw, &input); err != nil || !input.Root || input.Cwd != root {
+					if err := json.Unmarshal(raw, &input); err != nil || input.Root == tc.local || input.Cwd != root {
 						return nil, os.ErrInvalid
 					}
 				}
