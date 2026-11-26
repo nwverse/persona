@@ -2,6 +2,12 @@ package assistantwire
 
 import "encoding/json"
 
+// The Inbox's bus methods are its kernel module's (module_methods.go), in the order its own switch had them.
+func init() {
+	addModuleMethods(MethodInboxCollected, MethodInboxItem, MethodInboxForget, MethodInboxRepoMutes, MethodInboxMutes,
+		MethodInboxPost, MethodInboxTriagePreview, MethodInboxUnmute)
+}
+
 // The params and answers of the Inbox's bus methods (MethodInbox*, inbox.go) that had no type of their own: the
 // manager decodes and encodes them through these, so their JSON is the shape each method's comment gives. InboxRound,
 // InboxRepoMutes, InboxTriagePreview and InboxItemResult are the others.

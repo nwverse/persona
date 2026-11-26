@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/assistant/kernel/seam"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -24,13 +28,21 @@ type answer struct {
 func echo(_ context.Context, p item) (answer, error) { return answer{Text: p.ID, OK: true}, nil }
 
 func TestBusMethodNames(t *testing.T) {
-	for _, name := range []string{"inbox.item", "inbox.repo_mutes", "agents.closeout.brief", "kb.day2"} {
+	for _, name := range []string{assistantwire.MethodInboxItem, assistantwire.MethodInboxRepoMutes} {
 		seam.NewBusMethod(name, echo)
 	}
 	raises(t, "seam.NewBusMethod: a bus method name is not empty", func() { seam.NewBusMethod("", echo) })
 	for _, name := range []string{"inbox", "Inbox.item", "inbox..item", ".inbox", "inbox.", "inbox.repo-mutes",
 		"inbox.2fa", "inbox item", "inbox/item", "inbox.ítem"} {
 		raises(t, "is no bus method name", func() { seam.NewBusMethod(name, echo) })
+	}
+	// Well-formed names no domain lists as a module's: the central dispatch's own (BusHub.request's, the extension
+	// manager's, the devices'), and names nobody answers yet.
+	for _, name := range []string{assistantwire.MethodKBOwner, assistantwire.MethodExtensionEvent, extwire.MethodAccept,
+		devicewire.MethodHoldStart, "agents.closeout.brief", "kb.day2", "inbox.collect"} {
+		raises(t, "seam.NewBusMethod: "+strconv.Quote(name)+" is no module's bus method", func() {
+			seam.NewBusMethod(name, echo)
+		})
 	}
 	raises(t, `seam.NewBusMethod: "inbox.item" has no function`, func() {
 		seam.NewBusMethod[item, answer]("inbox.item", nil)

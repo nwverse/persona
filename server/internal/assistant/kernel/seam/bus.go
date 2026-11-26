@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strconv"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/domainkit/defect"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -21,7 +22,10 @@ type BusMethod struct {
 // NewBusMethod is the bus method name, answered by fn. The call's params are decoded into a P once, as encoding/json
 // decodes (a field P lacks is ignored), and a body that does not decode is answered invalid_params, as BusHub.request
 // answers one; fn's reply is encoded as the bus encodes answers (< > & left as they are). An empty name, a name that
-// is not lower-case words joined by dots ("inbox.repo_mutes"), or a nil fn is a defect.
+// is not lower-case words joined by dots ("inbox.repo_mutes"), a name no domain lists as a module's
+// (assistantwire.IsModuleMethod), or a nil fn is a defect. The list keeps a module off the names the central dispatch
+// answers (BusHub.request's own cases, the extension manager's and the devices'), and archguard's
+// TestModuleBusMethodsAreNoCentralCase keeps those names off the list.
 func NewBusMethod[P, R any](name string, fn func(context.Context, P) (R, error)) BusMethod {
 	const op = "seam.NewBusMethod"
 	if name == "" {
@@ -30,6 +34,12 @@ func NewBusMethod[P, R any](name string, fn func(context.Context, P) (R, error))
 	if !dotted(name) {
 		defect.Raise(op, strconv.Quote(name)+" is no bus method name: lower-case words of [a-z0-9_] joined by dots, "+
 			"as \"inbox.repo_mutes\"")
+	}
+	if !assistantwire.IsModuleMethod(name) {
+		defect.Raise(op, strconv.Quote(name)+" is no module's bus method: a name no domain lists is the central "+
+			"dispatch's (BusHub.request's cases, the extension manager's, the devices'); list a module's own from an "+
+			"init() in its domain's file, assistantwire/<domain>.go, func init() { addModuleMethods(…) }, as "+
+			"inbox_bus.go does")
 	}
 	if fn == nil {
 		defect.Raise(op, strconv.Quote(name)+" has no function")

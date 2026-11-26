@@ -6,13 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"net/http"
-	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -264,64 +259,24 @@ func TestInboxBusAnswersKeepTheirBytes(t *testing.T) {
 	}
 }
 
-// wireMethodNames are the values of assistantwire's Method* constants: every bus method name the wire declares.
-func wireMethodNames(t *testing.T) []string {
-	t.Helper()
-	fset := token.NewFileSet()
-	paths, err := filepath.Glob(filepath.Join("..", "assistantwire", "*.go"))
-	if err != nil || len(paths) == 0 {
-		t.Fatalf("no assistantwire sources: %v", err)
-	}
-	var names []string
-	for _, p := range paths {
-		if strings.HasSuffix(p, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, p, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, d := range f.Decls {
-			g, ok := d.(*ast.GenDecl)
-			if !ok || g.Tok != token.CONST {
-				continue
-			}
-			for _, spec := range g.Specs {
-				v := spec.(*ast.ValueSpec)
-				for i, id := range v.Names {
-					if !strings.HasPrefix(id.Name, "Method") || i >= len(v.Values) {
-						continue
-					}
-					if lit, ok := v.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-						name, err := strconv.Unquote(lit.Value)
-						if err != nil {
-							t.Fatal(err)
-						}
-						names = append(names, name)
-					}
-				}
-			}
-		}
-	}
-	return names
-}
-
-// BusHub.request answers none of the kernel's bus methods itself: with a kernel that has no module, each wire method
-// the full kernel answers is an unknown method, so a case for one in the central switch, which would answer it first,
-// fails here.
+// BusHub.request answers no module's bus method itself, and the full kernel answers each: with a kernel that has no
+// module, every name a domain lists as a module's (assistantwire.ModuleMethods) is an unknown method, so a case for one
+// anywhere in the request's own dispatch, which would answer it before the kernel, fails here. archguard's
+// TestModuleBusMethodsAreNoCentralCase reads the same from the source without running this package, the extension
+// manager's and the devices' cases with it.
 func TestTheCentralSwitchLeavesTheKernelsBusMethods(t *testing.T) {
 	ctx := context.Background()
-	full := New(Options{Hub: newFakeHub(), Logf: testLogf(t)})
-	var kernels []string
-	for _, m := range wireMethodNames(t) {
-		// Params that decode into no method's P: a registered method answers invalid_params and does nothing.
-		if _, ok, _ := full.kernel.Answer(ctx, m, json.RawMessage(`[]`)); ok {
-			kernels = append(kernels, m)
+	listed := assistantwire.ModuleMethods()
+	for _, m := range inboxBusMethods {
+		if !slices.Contains(listed, m) {
+			t.Errorf("%s is not listed as a module's bus method (assistantwire/inbox_bus.go)", m)
 		}
 	}
-	for _, m := range inboxBusMethods {
-		if !slices.Contains(kernels, m) {
-			t.Errorf("the kernel does not answer %s", m)
+	full := New(Options{Hub: newFakeHub(), Logf: testLogf(t)})
+	for _, m := range listed {
+		// Params that decode into no method's P: a registered method answers invalid_params and does nothing.
+		if _, ok, _ := full.kernel.Answer(ctx, m, json.RawMessage(`[]`)); !ok {
+			t.Errorf("no module answers %s, which a domain lists as a module's bus method", m)
 		}
 	}
 	empty := New(Options{Hub: newFakeHub(), Logf: testLogf(t)})
@@ -329,7 +284,7 @@ func TestTheCentralSwitchLeavesTheKernelsBusMethods(t *testing.T) {
 	helloed := make(chan struct{})
 	close(helloed)
 	b := &BusHub{svc: empty, helloed: helloed}
-	for _, m := range kernels {
+	for _, m := range listed {
 		_, err := b.request(ctx, m, json.RawMessage(`[]`))
 		var unknown *rpc.Error
 		if !errors.As(err, &unknown) || unknown.Code != bus.CodeUnknownMethod {

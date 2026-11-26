@@ -1147,8 +1147,9 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
 - **The Kernel.** Only `Registry.Register` makes one, for the module it registers, and any method of a zero `Kernel`
   is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and the slots that replace
   central lines (`Bus`, `TurnSettled`, `Connected` and `Snapshot` below; tools and loops with later steps); never a
-  store, an untyped event or a domain method. A service that publishes contract events to the apps comes with its
-  first user (saved's events, #15222): no module of the kernel builds a `map[string]any` event yet. A module takes its own
+  store, an untyped event or a domain method. `Kernel.Publish(ctx, assistantwire.Event)`, the service that publishes
+  contract events to the apps, comes with its first user, saved's events (#15222, with `assistantwire.Event` and a
+  golden per event kind): no module of the kernel builds a `map[string]any` event yet. A module takes its own
   dependencies through its own constructor, as typed port interfaces `New` hands it: no `any`, no map of them and no
   runtime assertion to get a port back ("Domain model", "Typed seams").
 - **saved's legacy ports.** `saved.NewModule` is the one exception, and not an example to copy: it takes saved's store
@@ -1156,12 +1157,19 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
   saved asserts its ports back out of that store at run time. It stays only because open drafts edit `saved.go` and
   the files that make those assertions; #15222 gives saved typed ports once they land.
 - **Bus methods.** `seam.NewBusMethod[P, R](name, fn)` refuses an empty name, one that is not lower-case words joined
-  by dots (`inbox.repo_mutes`) and a nil `fn`, and `Kernel.Bus` a name another module registered. `BusHub.request`
-  asks `Registry.Answer` after its own cases, where the Inbox's switch was: the params are decoded into `P` once (a
-  field `P` lacks is ignored), a body that does not decode is answered `invalid_params` as the switch answered it, and
-  the reply is encoded as the bus encodes answers. `P` and `R` are contract types (the Inbox's are in
-  `server/internal/assistantwire/inbox_bus.go`). A case for the same name in the central switch would answer first;
-  `TestTheCentralSwitchLeavesTheKernelsBusMethods` (`server/internal/assistant/inbox_module_test.go`) fails on one.
+  by dots (`inbox.repo_mutes`), a name no domain lists as a module's, and a nil `fn`; `Kernel.Bus` refuses a name
+  another module registered. A domain lists its modules' methods from an init() in its own wire file,
+  `func init() { addModuleMethods(…) }` (`server/internal/assistantwire/module_methods.go`; the Inbox's are in
+  `server/internal/assistantwire/inbox_bus.go`), so a module cannot take a name the central dispatch answers.
+  `BusHub.request` asks `Registry.Answer` after its own cases, where the Inbox's switch was, and before the extension
+  manager and the devices: the params are decoded into `P` once (a field `P` lacks is ignored), a body that does not
+  decode is answered `invalid_params` as the switch answered it, and the reply is encoded as the bus encodes answers.
+  `P` and `R` are contract types. archguard's `TestModuleBusMethodsAreNoCentralCase` keeps the list off the central
+  dispatch: it reads the cases of `BusHub.request`, of each function in package assistant it hands the method name
+  to, and of the extension manager's and the devices' `Request`, and fails on a listed name among them or on a case
+  whose name is not a string literal or constant. `TestTheCentralSwitchLeavesTheKernelsBusMethods`
+  (`server/internal/assistant/inbox_module_test.go`) sends each listed name through `BusHub.request` with a kernel
+  that has no module.
 - **Settled turn.** `Kernel.TurnSettled(func(ctx, agentref.Ref))`: `turnEnded` parses the session once with
   `agentrefadapt.FromWire` and, inside its `!meeting` branch, runs the hooks after the settle delay
   (`server/internal/assistant/seam_slots.go`). Ids that name no session run no hook and are logged as they came: that
