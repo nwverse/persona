@@ -102,9 +102,10 @@ import { nativeSheetInset } from '../platform/NativeInsets';
 import { mainConversationData } from '../core/DefaultConversation';
 import { AssistantDetailPage } from '../components/AssistantDetailPage';
 import { tr, trError } from '../design/Strings';
+import { KeyCode } from '@kit.InputKit';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
-import { resolveFoldLayout, widthClassFromBreakpoint } from '../core/FoldPosture';
+import { FOLD_DISPLAY_MODE_GLOBAL_FULL, pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
@@ -160,6 +161,8 @@ struct Index {
   @Local collapsed: boolean = false;
   @Local foldInspectorOpen: boolean = false;
   @Local foldInspectorUserToggled: boolean = false;
+  @Local foldWorkbenchTab: number = 0;
+  @Local foldWorkbenchTabSignal: number = 0;
   private foldInspectorCollapsedRail: boolean = false;
   @Local foldWindowWidthVp: number = 0;
   @Local foldWindowHeightVp: number = 0;
@@ -965,9 +968,134 @@ struct Index {
   private foldPostureLabel(): string {
     const p = this.foldLayout.posture;
     if (p === 'trifold_unfolded') return tr('fold_posture_trifold');
+    if (p === 'trifold_angled') return tr('fold_posture_trifold_angled');
     if (p === 'dual_unfolded') return tr('fold_posture_dual');
     if (p === 'hover_tabletop') return tr('fold_posture_hover');
     return '';
+  }
+  private isTriFoldPosture(): boolean {
+    return this.foldLayout.posture === 'trifold_unfolded' ||
+      this.foldLayout.posture === 'trifold_angled' ||
+      this.environment.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL;
+  }
+  private stepFoldRelay(direction: 1 | -1): void {
+    const rows = (this.model.directoryReady && this.model.directorySessions.length
+      ? this.model.directorySessions
+      : this.model.sessions).filter((row: ResourceRow) => {
+        if (row.kind !== 'session') return false;
+        const data = row.data();
+        return !Wire.bool(data, 'archived') && !Wire.bool(data, 'assistant') && !Wire.bool(data, 'hidden_by_directory');
+      });
+    const states = rows.map((row: ResourceRow) => {
+      const data = row.data();
+      const raw = row.state || Wire.text(data, 'status');
+      if (Wire.bool(data, 'needs_you') || raw === 'needs_you' || raw === 'blocked') return 'needs_you';
+      if (Wire.bool(data, 'working') || raw === 'working' || raw === 'running') return 'working';
+      if (raw === 'done' || raw === 'unread' || Wire.bool(data, 'unread')) return 'unread';
+      return 'idle';
+    });
+    const currentKey = this.detailModel.selected?.key() || this.model.selected?.key() || '';
+    const currentIndex = rows.findIndex((row: ResourceRow) => row.key() === currentKey);
+    const nextIndex = pickRelaySessionIndex(states, currentIndex, direction);
+    if (nextIndex >= 0 && rows[nextIndex]) {
+      Haptics.selection();
+      this.openPickedChat(rows[nextIndex]);
+    }
+  }
+  private expandRail(): void {
+    Haptics.tap();
+    Motion.run(this.getUIContext(), Motion.layout(this.environment.reduceMotion), () => {
+      this.collapsed = false;
+      if (this.foldInspectorCollapsedRail || (this.foldLayout.collapseRailForInspector && this.showFoldInspector())) {
+        this.foldInspectorCollapsedRail = false;
+        this.foldInspectorUserToggled = true;
+        this.foldInspectorOpen = false;
+      }
+    });
+  }
+  private keyNameForShortcut(event: KeyEvent): string {
+    if (event.keyCode === KeyCode.KEYCODE_ESCAPE) return 'escape';
+    if (event.keyCode === KeyCode.KEYCODE_K) return 'k';
+    if (event.keyCode === KeyCode.KEYCODE_N) return 'n';
+    if (event.keyCode === KeyCode.KEYCODE_I) return 'i';
+    if (event.keyCode === KeyCode.KEYCODE_1) return '1';
+    if (event.keyCode === KeyCode.KEYCODE_2) return '2';
+    if (event.keyCode === KeyCode.KEYCODE_3) return '3';
+    if (event.keyCode === KeyCode.KEYCODE_LEFT_BRACKET) return '[';
+    if (event.keyCode === KeyCode.KEYCODE_RIGHT_BRACKET) return ']';
+    return '';
+  }
+  private isCtrlOrMetaPressed(event: KeyEvent): boolean {
+    if (event.metaKey > 0) return true;
+    try {
+      if (event.getModifierKeyState && event.getModifierKeyState(['Ctrl'])) return true;
+    } catch (_) {}
+    return false;
+  }
+  private dismissTopOverlay(): boolean {
+    if (this.directionPermissionsVisible) { this.directionPermissionsVisible = false; return true; }
+    if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true;
+    if (this.chatTitleMenuVisible || this.chatBodyMenuVisible) { this.dismissChatActions(); return true; }
+    if (this.chatSearchShown) { this.chatSearchShown = false; return true; }
+    if (this.readerShown) { this.readerShown = false; return true; }
+    if (this.activityVisible) { this.activityVisible = false; return true; }
+    if (this.showSheet) {
+      if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel();
+      else if (!this.creatingAgent) this.showSheet = false;
+      return true;
+    }
+    if (this.phoneSettingsShown) {
+      if (this.phoneSettingsPage) this.backPhoneSetting();
+      else { this.phoneSettingsQuery = ''; this.phoneSettingsShown = false; }
+      return true;
+    }
+    if (this.spacesShown) { this.spacesShown = false; return true; }
+    if (this.showFoldInspector()) { this.setFoldInspectorOpen(false); return true; }
+    return false;
+  }
+  private switchFoldWorkbenchTab(tab: number): void {
+    Haptics.selection();
+    if (!this.showFoldInspector()) this.setFoldInspectorOpen(true);
+    this.foldWorkbenchTab = tab;
+    this.foldWorkbenchTabSignal++;
+  }
+  private handleFoldKeyEvent(event: KeyEvent): void {
+    if (event.type !== KeyType.Down || !this.model.profile.id) return;
+    const action = resolveFoldShortcut(
+      this.keyNameForShortcut(event),
+      this.isCtrlOrMetaPressed(event),
+      this.wide() && this.foldLayout.supportsInspector
+    );
+    if (action === 'none') return;
+    if (action === 'search') {
+      Haptics.selection();
+      this.showAllChats(this.peer() === 1 || this.projectPlace());
+      event.stopPropagation();
+    } else if (action === 'new_chat') {
+      Haptics.tap();
+      this.startFromPlace();
+      event.stopPropagation();
+    } else if (action === 'toggle_inspector') {
+      this.toggleFoldInspector();
+      event.stopPropagation();
+    } else if (action === 'workbench_pulse') {
+      this.switchFoldWorkbenchTab(0);
+      event.stopPropagation();
+    } else if (action === 'workbench_code') {
+      this.switchFoldWorkbenchTab(1);
+      event.stopPropagation();
+    } else if (action === 'workbench_machines') {
+      this.switchFoldWorkbenchTab(2);
+      event.stopPropagation();
+    } else if (action === 'next_unread') {
+      this.stepFoldRelay(1);
+      event.stopPropagation();
+    } else if (action === 'prev_unread') {
+      this.stepFoldRelay(-1);
+      event.stopPropagation();
+    } else if (action === 'dismiss') {
+      if (this.dismissTopOverlay()) event.stopPropagation();
+    }
   }
   private filtered(): ResourceRow[] {
     return this.model.sessions.filter((row: ResourceRow) =>
@@ -1043,6 +1171,13 @@ struct Index {
     if (!this.foldLayout.supportsInspector) {
       this.foldInspectorUserToggled = false;
       this.foldInspectorOpen = false;
+    }
+    if (this.showFoldInspector() && this.foldLayout.collapseRailForInspector && !this.collapsed && !this.foldInspectorUserToggled) {
+      this.collapsed = true;
+      this.foldInspectorCollapsedRail = true;
+    } else if (!this.foldLayout.collapseRailForInspector && this.foldInspectorCollapsedRail) {
+      this.collapsed = false;
+      this.foldInspectorCollapsedRail = false;
     }
     if (!this.wide() && (this.collapsed || this.foldInspectorCollapsedRail)) {
       this.collapsed = false;
@@ -1483,7 +1618,13 @@ struct Index {
       } else ForEach(this.destinationMenuItems(name, param), (item: NavigationMenuItem, index: number) => {
         Button({ type: ButtonType.Circle }) {
           if (item.symbolIcon) SymbolGlyph().attributeModifier(item.symbolIcon).fontSize(Tokens.symbolFont)
-          else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
+          else if (name === 'session' || name === 'conversation' || name === 'tools') {
+            Row({ space: 3 }) {
+              ForEach([0, 1, 2], (_dot: number) => {
+                Circle().width(3.5).height(3.5).fill(Colors.ink)
+              }, (dot: number) => String(dot))
+            }
+          } else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
         }.attributeModifier(ButtonStyles.chrome)
           .width(Tokens.chrome).height(Tokens.chrome).backgroundColor(Color.Transparent)
           .accessibilityText(item.value as string).enabled(item.isEnabled !== false).onClick(() => item.action?.())
@@ -1491,7 +1632,7 @@ struct Index {
           .bindMenu((name === 'session' || name === 'conversation' || name === 'tools') && this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param),
             this.chatActionsMenu, this.chatMenuOptions(this.chatMenuRevision))
       })
-      if (this.rail() && this.foldLayout.supportsInspector && (name === 'session' || name === 'conversation')) {
+      if (this.rail() && this.foldLayout.supportsInspector && (name === 'session' || name === 'conversation' || name === 'tools')) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.info_circle')).fontSize(Tokens.symbolFont).fontColor([this.showFoldInspector() ? Colors.link : Colors.ink])
         }.attributeModifier(ButtonStyles.chrome)
@@ -2347,8 +2488,147 @@ struct Index {
       compactRoot:true,retainWorkspace:true,active:this.projectPlace(),selectedRow:this.detailModel.selected,
       onOpen:(row:ResourceRow) => this.openLinkedResource(row),onOpenTodo:(row:ResourceRow) => this.openLinkedResource(row)})
   }
+  @Builder railSpaceButton(kind: string) {
+    ListItem() {
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph(this.spaceSymbol(kind))
+          .fontSize('18vp')
+          .fontColor([this.drawerPlaceSelected(kind) ? Colors.link : Colors.ink])
+      }
+      .width(40)
+      .height(40)
+      .padding(0)
+      .backgroundColor(this.drawerPlaceSelected(kind) ? Colors.selection : Colors.surface)
+      .border({
+        width: this.drawerPlaceSelected(kind) ? 1.5 : PhoneStyle.surfaceEdgeWidth(0.5),
+        color: this.drawerPlaceSelected(kind) ? Colors.link : Colors.divider,
+        radius: 20
+      })
+      .accessibilityText(this.spaceTitle(kind))
+      .accessibilitySelected(this.drawerPlaceSelected(kind))
+      .bindTips(this.spaceTitle(kind))
+      .onClick(() => { Haptics.selection(); this.openSpace(kind); })
+      .id('shell.rail.space.' + kind)
+    }.width('100%').padding({ top: 4, bottom: 4 })
+  }
+  @Builder personaRail() {
+    List() {
+      ListItem() {
+        Button({ type: ButtonType.Circle }) {
+          Image(this.look.avatarUri || $r('app.media.foreground'))
+            .width(34).height(34).objectFit(ImageFit.Cover).borderRadius(17)
+        }
+        .width(40)
+        .height(40)
+        .padding(0)
+        .backgroundColor(Colors.surface)
+        .border({
+          width: this.chatSelectionShown('conversation') && this.detailModel.selected.id === this.model.mainId ? 2 : PhoneStyle.surfaceEdgeWidth(0.5),
+          color: this.chatSelectionShown('conversation') && this.detailModel.selected.id === this.model.mainId ? Colors.link : Colors.divider,
+          radius: 20
+        })
+        .shadow(PhoneStyle.cardElevation(this.environment.dark))
+        .accessibilityText(tr('main_chat'))
+        .bindTips(tr('main_chat'))
+        .onClick(() => { Haptics.selection(); this.openMain(); })
+        .id('shell.rail.main')
+      }.width('100%').padding({ top: 4, bottom: 4 })
+      this.railSpaceButton('inbox')
+      this.railSpaceButton('todo')
+      this.railSpaceButton('knowledge')
+      this.railSpaceButton('health')
+      this.railSpaceButton('devices')
+      this.railSpaceButton('settings')
+    }
+    .width('100%')
+    .height('100%')
+    .alignListItem(ListItemAlign.Center)
+    .scrollBar(BarState.Off)
+    .padding({ top: 6, bottom: 12 })
+    .backgroundColor(Colors.grouped)
+    .id('shell.rail.persona_list')
+  }
+  @Builder railShell() {
+    Column() {
+      Column({ space: 2 }) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph(Symbols.persona)
+            .fontSize('17vp')
+            .fontColor([this.peer() === 0 && !this.projectPlace() ? Colors.onAction : Colors.secondary])
+        }
+        .width(36)
+        .height(34)
+        .padding(0)
+        .backgroundColor(this.peer() === 0 && !this.projectPlace() ? Colors.action : Color.Transparent)
+        .accessibilityText(tr('persona'))
+        .accessibilitySelected(this.peer() === 0 && !this.projectPlace())
+        .bindTips(tr('persona'))
+        .onClick(() => { Haptics.selection(); this.selectPeer(0); })
+        .id('shell.rail.persona')
+
+        Stack({ alignContent: Alignment.TopEnd }) {
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph(Symbols.agents)
+              .fontSize('17vp')
+              .fontColor([this.peer() === 1 && !this.projectPlace() ? Colors.onAction : Colors.secondary])
+          }
+          .width(36)
+          .height(34)
+          .padding(0)
+          .backgroundColor(this.peer() === 1 && !this.projectPlace() ? Colors.action : Color.Transparent)
+          .accessibilityText(tr('agents'))
+          .accessibilitySelected(this.peer() === 1 && !this.projectPlace())
+          .bindTips(tr('agents'))
+          .onClick(() => { Haptics.selection(); this.selectPeer(1); })
+          .id('shell.rail.agents')
+          if (this.waitingAgentCount > 0 && this.peer() !== 1) {
+            Circle().width(8).height(8).fill(Colors.needs).stroke(Colors.surface).strokeWidth(1.5)
+              .offset({ x: -3, y: 3 }).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+          }
+        }
+      }
+      .padding(4)
+      .margin({ top: 10, bottom: 8 })
+      .backgroundColor(Colors.surface)
+      .borderRadius(22)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: 22 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .id('shell.rail.peer')
+
+      Divider().strokeWidth(0.5).color(Colors.divider).width(32)
+
+      Column() {
+        if (this.peer() === 1 && !this.projectPlace()) this.agentsList()
+        else this.personaRail()
+      }.width('100%').layoutWeight(1)
+
+      Divider().strokeWidth(0.5).color(Colors.divider).width(32)
+
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph(Symbols.expand).fontSize('16vp').fontColor([Colors.ink])
+      }
+      .width(40)
+      .height(40)
+      .padding(0)
+      .margin({ top: 10, bottom: 14 })
+      .backgroundColor(Colors.surface)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: 20 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .accessibilityText(tr('expand'))
+      .bindTips(tr('expand'))
+      .onClick(() => this.expandRail())
+      .id('shell.rail.expand')
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor(Colors.grouped)
+    .id('shell.rail')
+  }
   @Builder primaryContent() {
-    if (this.projectPlace()) {
+    if (this.rail()) {
+      this.railShell()
+    } else if (this.projectPlace()) {
       ForEach([this.projectRootRevision], (_revision: number) => { this.projectPage('projects', '') }, (revision: number) => String(revision))
     }
     else if (this.peer() === 1) this.agentsList()
@@ -3379,7 +3659,7 @@ struct Index {
         Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
           .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
           .backgroundColor(Colors.canvas)
-          .toolbarConfiguration(this.rail() ? [{ value: tr('expand'), icon: $r('sys.media.ohos_ic_public_arrow_right'), action: () => this.collapsed = false }] : [])
+          .toolbarConfiguration([])
           .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
           .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
           .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
@@ -3396,11 +3676,20 @@ struct Index {
         detailModel: this.detailModel,
         panelWidth: this.foldLayout.inspectorWidth,
         postureLabel: this.foldPostureLabel(),
+        isTriFold: this.isTriFoldPosture(),
+        initialTab: this.foldWorkbenchTab,
+        tabSignal: this.foldWorkbenchTabSignal,
         onClose: () => {
           this.setFoldInspectorOpen(false);
         },
         onOpenTools: () => this.openTools(),
-        onOpenSession: (row: ResourceRow) => this.openPickedChat(row)
+        onOpenToolsTab: (tab: number) => {
+          if (this.shownName === 'tools') this.detailModel.selectWorkspaceTab(tab);
+          else this.openTools('', tab);
+        },
+        onOpenSession: (row: ResourceRow) => this.openPickedChat(row),
+        onStepRelay: (direction: 1 | -1) => this.stepFoldRelay(direction),
+        onOpenLink: (address: string) => this.openReader(address)
       })
     }
     }.width('100%').height('100%')
@@ -3463,6 +3752,7 @@ struct Index {
     }.width('100%').height('100%').alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Start).hitTestBehavior(HitTestMode.Transparent)
     }.width('100%').height('100%').backgroundColor(Colors.canvas)
       .background(this.compactInsetSurface(), { ignoresLayoutSafeAreaEdges: this.compactInsetEdges() })
+      .onKeyEvent((event: KeyEvent) => this.handleFoldKeyEvent(event))
       .bindSheet($$this.readerShown, this.readerContent(), { title: { title: this.readerTitle }, height: Tokens.readerFull, width: Tokens.readerFull, preferType: SheetType.BOTTOM,
         detents: [Tokens.readerFull, Tokens.readerPartial], enableOutsideInteractive: true, showClose: true })
   }

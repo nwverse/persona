@@ -8,6 +8,7 @@ import { AgentWorkspace, AgentWorkspaceGroup, agentGroupingLabels } from '../mod
 import { ProjectAgent, ProjectCatalog, ProjectWorktree } from '../models/ProjectCatalog';
 import { AgentDirectoryRowContent } from './AgentDirectoryRowContent';
 import { AgentNeedsYouMark } from './AgentNeedsYouMark';
+import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
 import { recommendedOptionTitle, interactionToolName } from '../models/InteractionDecision';
 import { agentPaneSource } from '../core/AgentListAdapter';
 import { WorktreeChange } from '../models/WorktreeActions';
@@ -127,6 +128,7 @@ export struct AgentListPage {
     this.workspace.setCompactDisplay(this.displayedAgentStyle==='list');
   }
   @Local groupBindings: BoundAgentGroup[] = [];
+  @Local railBindings: BoundAgentRow[] = [];
   @Local mixedMachines: boolean = false;
   @Local listWidth:number=0;
   private narrowRow():boolean { return this.listWidth>0 && this.listWidth<252*Math.min(this.environment.fontScale,Tokens.interfaceScaleFor(15)); }
@@ -184,7 +186,7 @@ export struct AgentListPage {
       if (['interaction','interactions','interaction_resolved'].includes(type)) this.reloadDecisions();
       if (['todo','assistant_feed'].includes(type) && ['todo','direction'].includes(this.workspace.groupingMode)) this.refreshGroupingSupport();
     });
-    this.reloadDecisions(); this.syncRowBindings(); if (this.active) this.activateWorkspace(); }
+    this.reloadDecisions(); this.syncRowBindings(); if (this.rail) this.syncRailBindings(); if (this.active) this.activateWorkspace(); }
   aboutToDisappear(): void { if (!this.externalSearchControls) this.taskGrouping.clear(); this.stopDecisionEvents?.(); this.retireDecisions(); this.resetSearchReveal(); this.editorOpen = false; this.filterSheetOpen = false; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); }
 
   @Monitor('active') visibleChanged(): void { if (this.active) this.reloadDecisions(); else this.retireDecisions(); if (!this.active) { this.resetSearchReveal(); this.editorOpen = false; this.filterSheetOpen = false; this.editingRow = undefined; this.editingAdmission = undefined; this.workspace.revokeRowActions(); if (!this.retainWorkspace) this.workspace.hide(); } else this.activateWorkspace(); }
@@ -206,7 +208,46 @@ export struct AgentListPage {
     if (this.model.connected) { this.refreshGroupingSupport(); this.workspace.refresh(this.model).catch(() => undefined); }
   }
   @Monitor('workspace.groups', 'workspace.groupingMode') rowsChanged(): void { this.syncRowBindings(); }
+  @Monitor('rail', 'groupBindings', 'workspace.unpinnedRows') railBindingsChanged(): void { this.syncRailBindings(); }
   @Monitor('readingDetail') detailChanged(): void { this.workspace.setReadingDetail(this.readingDetail); }
+
+  private syncRailBindings(): void {
+    if (!this.rail) {
+      if (this.railBindings.length) this.railBindings = [];
+      return;
+    }
+    const result: BoundAgentRow[] = [];
+    const seen = new Set<string>();
+    const groupSet = new Set<BoundAgentRow>();
+    for (const group of this.groupBindings) {
+      for (const rowBinding of group.rows) {
+        groupSet.add(rowBinding);
+        const key = rowBinding.bound.value.key();
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push(rowBinding);
+        }
+      }
+    }
+    const extraRows: ResourceRow[] = [];
+    const unpinned = this.workspace.unpinnedRows || [];
+    for (const row of unpinned) {
+      if (row.kind !== 'session') continue;
+      const key = row.key();
+      if (!seen.has(key)) {
+        seen.add(key);
+        extraRows.push(row);
+      }
+    }
+    if (extraRows.length) {
+      const scope = JSON.stringify([this.model.scope(), this.model.profile.id, this.model.profile.manager]);
+      const prior = this.railBindings.filter((item: BoundAgentRow) => !groupSet.has(item));
+      const bound = reconcileBoundRows(prior.map((item: BoundAgentRow) => item.bound), extraRows,
+        (row: ResourceRow) => row.key(), this.model, this.model, scope, scope);
+      for (const item of this.bindAgentRows(prior, bound, true)) result.push(item);
+    }
+    this.railBindings = result;
+  }
 
   private refreshGroupingSupport(): void {
     if (!this.active) return;
@@ -298,9 +339,11 @@ export struct AgentListPage {
       presentation.lastText = Wire.text(data, 'last_text');
       const agent = (Wire.text(data, 'agent') || Wire.text(data, 'agent_type')).toLowerCase();
       const label = Wire.text(data, 'agent_label') || Wire.text(data, 'launcher');
+      const sourceKind = Wire.text(data, 'source_kind').toLowerCase();
       const known = agent || label.toLowerCase();
-      presentation.brand = known === 'codex' || known === 'openai' ? 'codex' :
-        (known === 'claude' || known === 'claude-code' || known === 'claude code' ? 'claude' : '');
+      presentation.brand = sourceKind === 'codex_app_server' || sourceKind === 'codex_history' ||
+        known.includes('codex') || known.includes('openai') ? 'codex' :
+        (known.includes('claude') ? 'claude' : '');
       presentation.provider = label || (presentation.brand === 'codex' ? 'Codex' : presentation.brand === 'claude' ? 'Claude' : agent);
       presentation.rawStatus = Wire.text(data, 'status');
       presentation.updatedAt = Date.parse(Wire.text(data, 'updated_at'));
@@ -735,7 +778,7 @@ export struct AgentListPage {
             $r('app.color.phone_agent_session_separator') : Colors.divider).margin({left:20,right:20})
         }
       }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26 : 0 })
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26 : 0 })
         .shadow(this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
         .borderRadius({topLeft:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
           topRight:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
@@ -814,33 +857,48 @@ export struct AgentListPage {
   @Builder agentRow(binding: BoundAgentRow, groupId: string, depth:number=0) {
     ListItem() {
       Column() {
-        Row({ space: 10 }) {
+        Row({ space: 12 }) {
           Stack({ alignContent: Alignment.BottomEnd }) {
             Stack() {
-              if (this.rail) Text((binding.bound.value.title || tr('agent_untitled')).slice(0, 2)).fontSize('13vp').fontColor(Colors.ink).maxLines(1)
-              else if (binding.presentation.brand === 'codex') {
-                Image($r('app.media.project_agent_openai')).width(21).height(21).objectFit(ImageFit.Contain).fillColor(Colors.ink)
+              if (binding.presentation.brand === 'codex') {
+                Image($r('app.media.project_agent_openai')).width(18).height(18).objectFit(ImageFit.Contain).fillColor(Colors.ink)
               } else if (binding.presentation.brand === 'claude') {
-                Image($r('app.media.project_agent_claude')).width(22).height(22).objectFit(ImageFit.Contain)
+                Image($r('app.media.project_agent_claude')).width(18).height(18).objectFit(ImageFit.Contain)
               } else if (binding.presentation.provider) {
-                Text(binding.presentation.provider.slice(0, 1).toUpperCase()).fontSize('16vp').fontWeight(FontWeight.Bold).fontColor(Colors.ink)
-              } else SymbolGlyph(Symbols.agent).fontSize('18vp').fontColor([this.rowStatusColor(binding.presentation)])
-            }.width(32).height(32).backgroundColor(Colors.control).borderRadius(9)
-            if (binding.presentation.status === 'needs_you' || binding.presentation.status === 'unread') {
-              Circle().width(8).height(8).fill(this.rowStatusColor(binding.presentation))
-                .stroke(Colors.surface).strokeWidth(1.5)
+                Text(binding.presentation.provider.slice(0, 1).toUpperCase()).fontSize('16vp').fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+              } else SymbolGlyph(Symbols.agent).fontSize('17vp').fontColor([this.rowStatusColor(binding.presentation)])
+            }.width(36).height(36).backgroundColor(Colors.subtle).borderRadius(18)
+            if (binding.presentation.status === 'needs_you') {
+              NeedsYouPulseDot({ dotSize: 10, tint: Colors.needs, surface: Colors.surface, bordered: true }).offset({ x: 3, y: 3 })
+            } else if (binding.presentation.status === 'working') {
+              WorkingArcSpinner({ diameter: 16, tint: Colors.working, surface: Colors.surface, showCoreDot: true }).offset({ x: 4, y: 4 })
+            } else if (binding.presentation.status === 'unread' || binding.presentation.status === 'done') {
+              Circle().width(11).height(11).fill(Colors.unread)
+                .stroke(Colors.surface).strokeWidth(2)
             }
-          }.width(34).height(34)
-          if (!this.rail) Column({ space: 3 }) {
+          }.width(36).height(36)
+          Column({ space: 3 }) {
             Row({ space: 6 }) {
-              Text(binding.bound.value.title || tr('agent_untitled')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(FontWeight.Bold)
+              Text(binding.bound.value.title || tr('agent_untitled')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale)
+                .fontWeight(binding.presentation.status === 'unread' ? FontWeight.Bold : 600)
                 .fontColor(Colors.ink).layoutWeight(1).maxLines(this.narrowRow() ? 4 : 1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
-              if (!this.narrowRow()) Text(this.rowTime(binding.presentation)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+              if (!this.narrowRow() && this.rowTime(binding.presentation)) {
+                Text(this.rowTime(binding.presentation)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+              }
             }.width('100%').alignItems(VerticalAlign.Center)
             if (binding.presentation.recentContent) {
-              Text(binding.presentation.recentContent).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).width('100%')
-                .maxLines(this.narrowRow() ? 4 : this.look.density === 'compact' ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
+              Row({ space: 6 }) {
+                Text(binding.presentation.recentContent).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).layoutWeight(1)
+                  .maxLines(this.narrowRow() ? 4 : this.look.density === 'compact' ? 1 : 2).textOverflow({ overflow: TextOverflow.Ellipsis })
+                if (!this.narrowRow() && binding.presentation.status === 'needs_you') {
+                  Text(tr('needs_you')).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11)).fontWeight(FontWeight.Medium).fontColor(Colors.needs)
+                    .padding({ left: 6, right: 6, top: 2, bottom: 2 }).backgroundColor(Colors.selection).borderRadius(6).maxLines(1)
+                }
+              }.width('100%').alignItems(VerticalAlign.Top)
+            } else if (!this.narrowRow() && binding.presentation.status === 'needs_you') {
+              Text(tr('needs_you')).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11)).fontWeight(FontWeight.Medium).fontColor(Colors.needs)
+                .padding({ left: 6, right: 6, top: 2, bottom: 2 }).backgroundColor(Colors.selection).borderRadius(6).maxLines(1)
             }
             this.rowContext(this.rowPlace(binding.presentation), this.needsStatusLabel(groupId) ? this.rowStatus(binding.presentation) : '',
               this.rowStatusColor(binding.presentation))
@@ -848,18 +906,34 @@ export struct AgentListPage {
               Text(this.rowTime(binding.presentation)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
             }
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-          if (!this.rail) SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
-        }.width('100%').alignItems(VerticalAlign.Center).justifyContent(this.rail ? FlexAlign.Center : FlexAlign.Start)
-          .padding({ left: this.rail ? 5 : 13, right: this.rail ? 5 : 11,
-            top: this.look.density === 'compact' ? 7 : 10, bottom: this.look.density === 'compact' ? 7 : 10 })
-        if (!this.endsSurface(binding,groupId) && !this.rail) Divider().strokeWidth(0.5).color(Colors.divider).margin({ left: 57 })
+          SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.tertiary])
+        }.width('100%').alignItems(VerticalAlign.Center).justifyContent(FlexAlign.Start)
+          .padding({ left: 14, right: 12,
+            top: this.look.density === 'compact' ? 9 : 12, bottom: this.look.density === 'compact' ? 9 : 12 })
+        if (!this.endsSurface(binding,groupId)) Divider().strokeWidth(0.5).color(Colors.divider).margin({ left: 62, right: 12 })
       }.width('100%')
     }.accessibilityGroup(true).accessibilityText([binding.bound.value.title || tr('agent_untitled'),
       binding.presentation.recentContent, ...binding.presentation.metadata.slice(0, 2), this.rowStatus(binding.presentation)].filter((s: string) => !!s).join(' · '))
       .selectable(true).selected(this.isRowSelected(binding)).padding({left:18*Math.min(3,Math.max(0,depth))})
       .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.surface)
-      .borderRadius({ topLeft: this.startsSurface(binding,groupId) && !this.rail ? 13 : 0, topRight: this.startsSurface(binding,groupId) && !this.rail ? 13 : 0,
-        bottomLeft: this.endsSurface(binding,groupId) && !this.rail ? 13 : 0, bottomRight: this.endsSurface(binding,groupId) && !this.rail ? 13 : 0 })
+      .border({
+        width: {
+          top: this.startsSurface(binding, groupId) ? PhoneStyle.surfaceEdgeWidth(0.5) : 0,
+          bottom: this.endsSurface(binding, groupId) ? PhoneStyle.surfaceEdgeWidth(0.5) : 0,
+          left: PhoneStyle.surfaceEdgeWidth(0.5),
+          right: PhoneStyle.surfaceEdgeWidth(0.5)
+        },
+        color: PhoneStyle.cardBorder(this.environment.dark),
+        radius: {
+          topLeft: this.startsSurface(binding, groupId) ? PhoneStyle.cardRadius : 0,
+          topRight: this.startsSurface(binding, groupId) ? PhoneStyle.cardRadius : 0,
+          bottomLeft: this.endsSurface(binding, groupId) ? PhoneStyle.cardRadius : 0,
+          bottomRight: this.endsSurface(binding, groupId) ? PhoneStyle.cardRadius : 0
+        }
+      })
+      .borderRadius({ topLeft: this.startsSurface(binding,groupId) ? PhoneStyle.cardRadius : 0, topRight: this.startsSurface(binding,groupId) ? PhoneStyle.cardRadius : 0,
+        bottomLeft: this.endsSurface(binding,groupId) ? PhoneStyle.cardRadius : 0, bottomRight: this.endsSurface(binding,groupId) ? PhoneStyle.cardRadius : 0 })
+      .shadow(this.endsSurface(binding, groupId) ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
       .onClick(() => this.openRow(binding.bound.value))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.onVisible(binding.bound.value, visible ? ratio : 0))
       .onDisAppear(() => this.onVisible(binding.bound.value, 0))
@@ -1069,7 +1143,7 @@ export struct AgentListPage {
       .width('100%')
       .padding(0)
       .backgroundColor(Colors.surface)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: this.compactRoot && !this.rail ? 22 : 13 })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: this.compactRoot && !this.rail ? 22 : 13 })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .borderRadius(this.compactRoot && !this.rail ? 22 : 13)
       .enabled(!this.workspace.busy)
@@ -1178,10 +1252,84 @@ export struct AgentListPage {
     }.padding(Tokens.page).width('100%')
   }
 
+  @Builder railAvatar(binding: BoundAgentRow) {
+    ListItem() {
+      Button({ type: ButtonType.Circle }) {
+        Stack({ alignContent: Alignment.BottomEnd }) {
+          Stack() {
+            if (binding.presentation.brand === 'claude') {
+              Image($r('app.media.project_agent_claude')).width(20).height(20).objectFit(ImageFit.Contain)
+            } else if (binding.presentation.brand === 'codex') {
+              Image($r('app.media.project_agent_openai')).width(20).height(20).objectFit(ImageFit.Contain).fillColor(Colors.ink)
+            } else if (binding.bound.value.title || binding.presentation.provider) {
+              Text((binding.bound.value.title || binding.presentation.provider).trim().slice(0, 1).toUpperCase())
+                .fontSize('15vp').fontWeight(FontWeight.Bold).fontColor(Colors.ink).maxLines(1)
+            } else {
+              SymbolGlyph(Symbols.agent).fontSize('18vp').fontColor([Colors.secondary])
+            }
+          }
+          .width(40)
+          .height(40)
+          .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.surface)
+          .borderRadius(20)
+          .border({
+            width: this.isRowSelected(binding) ? 2 : PhoneStyle.surfaceEdgeWidth(0.5),
+            color: this.isRowSelected(binding) ? Colors.link : Colors.divider,
+            radius: 20
+          })
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
+          if (binding.presentation.status === 'needs_you') {
+            NeedsYouPulseDot({ dotSize: 9, tint: Colors.needs, surface: Colors.grouped, bordered: true }).offset({ x: 3, y: 3 })
+          } else if (binding.presentation.status === 'working') {
+            WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Colors.grouped, showCoreDot: true }).offset({ x: 3, y: 3 })
+          } else if (binding.presentation.status === 'unread' || binding.presentation.status === 'done') {
+            Circle().width(10).height(10).fill(Colors.unread)
+              .stroke(Colors.grouped).strokeWidth(1.8)
+          }
+        }.width(40).height(40)
+      }
+      .width(48)
+      .height(48)
+      .padding(0)
+      .backgroundColor(Color.Transparent)
+      .accessibilityText([binding.bound.value.title || tr('agent_untitled'), this.rowStatus(binding.presentation)].filter((s: string) => !!s).join(' · '))
+      .accessibilitySelected(this.isRowSelected(binding))
+      .bindTips(binding.bound.value.title || tr('agent_untitled'))
+      .onClick(() => {
+        Haptics.selection();
+        this.openRow(binding.bound.value);
+      })
+      .bindContextMenu(this.rowMenu(binding), ResponseType.LongPress)
+      .id('agent.rail.' + binding.bound.value.id)
+    }
+    .width('100%')
+    .padding({ top: 3, bottom: 3 })
+    .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => this.onVisible(binding.bound.value, visible ? ratio : 0))
+    .onDisAppear(() => this.onVisible(binding.bound.value, 0))
+  }
+
   @Builder resultList() {
+    if (this.rail) {
+      List({ scroller: this.agentScroller }) {
+        if (this.workspace.loading && !this.railBindings.length) {
+          ListItem() {
+            Row() { LoadingProgress().width(24).height(24) }
+              .width('100%').justifyContent(FlexAlign.Center).padding({ top: 12, bottom: 12 })
+          }
+        }
+        ForEach(this.railBindings, (rowBinding: BoundAgentRow) => this.railAvatar(rowBinding), (rowBinding: BoundAgentRow) => rowBinding.key)
+      }
+      .width('100%')
+      .height('100%')
+      .alignListItem(ListItemAlign.Center)
+      .scrollBar(BarState.Off)
+      .padding({ top: 6, bottom: 12 })
+      .backgroundColor(Colors.grouped)
+      .id('agents.rail.list')
+    } else {
       List({scroller:this.agentScroller}) {
         if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
-        if (!this.rail && this.workspace.quickFilter === 'unread' && this.workspace.unreadShownRows.length > 0) this.markAllSeenRow()
+        if (this.workspace.quickFilter === 'unread' && this.workspace.unreadShownRows.length > 0) this.markAllSeenRow()
         ForEach(this.groupBindings, (binding: BoundAgentGroup) => {
             ListItemGroup({ header: () => this.groupHeader(binding) }) {
               ForEach(this.displayRows(binding), (rowBinding: BoundAgentRow) => this.groupRow(rowBinding, binding.value.id,
@@ -1216,19 +1364,22 @@ export struct AgentListPage {
         } else if (!this.workspace.hasRows() && !this.workspace.loading) ListItem() {
           Text(tr(this.workspace.search ? 'no_results' : 'empty')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).padding(Tokens.page).width('100%')
         }.id('agents.empty')
-      }.width('100%').height('100%').onAreaChange((_:Area,area:Area)=>{this.listWidth=Number(area.width);}).padding({ left: this.rail || this.floatingStatusCards ? 0 : 12, right: this.rail || this.floatingStatusCards ? 0 : 12, bottom: Tokens.listTail }).backgroundColor(Colors.grouped)
+      }.width('100%').height('100%').onAreaChange((_:Area,area:Area)=>{this.listWidth=Number(area.width);}).padding({ left: this.floatingStatusCards ? 0 : 12, right: this.floatingStatusCards ? 0 : 12, bottom: Tokens.listTail }).backgroundColor(Colors.grouped)
         .onTouch((event: TouchEvent) => this.trackPull(event)).id('agents.list.'+this.workspace.groupingMode)
+    }
   }
 
   build() {
     Column() {
       if (!this.externalSearchControls) this.filters()
-      if (this.model.directoryUnavailable > 0) Text(tr('directory_partly_unavailable')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset).width('100%')
-      if (this.decisions.error) Text(tr(this.decisions.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.danger).padding(Tokens.inset).width('100%')
-      if (this.workspace.error && !this.editorOpen) Text(tr(this.workspace.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
+      if (!this.rail && this.model.directoryUnavailable > 0) Text(tr('directory_partly_unavailable')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset).width('100%')
+      if (!this.rail && this.decisions.error) Text(tr(this.decisions.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.danger).padding(Tokens.inset).width('100%')
+      if (!this.rail && this.workspace.error && !this.editorOpen) Text(tr(this.workspace.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
         .fontColor($r('app.color.persona_danger')).padding(Tokens.inset).width('100%')
-      if (this.externalSearchControls) {
-        this.resultList()
+      if (this.externalSearchControls || this.rail) {
+        Column() {
+          this.resultList()
+        }.width('100%').layoutWeight(1)
       } else Refresh({ refreshing: $$this.refreshing }) {
         this.resultList()
       }.width('100%').layoutWeight(1).onRefreshing(() => this.refreshAgents())

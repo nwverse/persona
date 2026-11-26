@@ -20,7 +20,7 @@ import { WorktreeSheet } from './WorktreeSheet';
 import { AgentDirectoryRowContent } from './AgentDirectoryRowContent';
 import { deviceLook } from '../models/DeviceLook';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
-import { compactTreeInset } from '../core/FoldPosture';
+import { compactTreeInset, deduplicateAgentPlace } from '../core/FoldPosture';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
 
@@ -628,7 +628,8 @@ export struct ProjectsPage {
     Row() {
       AgentDirectoryRowContent({agent:agent,display:this.agentRepositories?
         (deviceLook.agentDisplay==='list'?'list':this.model.style==='beautiful'?'beautiful':deviceLook.agentDisplay):'avatar',
-        activityList:!!this.agentRepositories,muted:this.agentRepositories?this.isMuted(agent.row):false, age:this.age(agent), place:paneName || agent.tab, showsSource:!!(agent.tab || agent.runtime),
+        activityList:!!this.agentRepositories,muted:this.agentRepositories?this.isMuted(agent.row):false, age:this.age(agent),
+        place:deduplicateAgentPlace(agent.row.title, paneName || agent.tab), showsSource:!!(agent.tab || agent.runtime),
         starter:starter,narrow:this.narrowOutline(),
         leftInset:this.agentRepositories && deviceLook.agentDisplay==='list' ? PhoneStyle.inset+6+18*this.outlineControlScale()*Math.min(level,3) : this.treeInset(level)+6,
         controlScale:this.outlineControlScale(),
@@ -731,16 +732,25 @@ export struct ProjectsPage {
           }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         } else {
           Text(line.tree!.title).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(line.tree!.online && line.tree!.activeCount ? Colors.ink : Colors.secondary)
-            .constraintSize({maxWidth:this.treeDetail(line.tree!) ? '59%' : '76%'}).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+            .constraintSize({maxWidth:this.treeDetail(line.tree!) ? '56%' : '74%'}).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
           if (line.tree!.pinnedAt > 0) SymbolGlyph($r('sys.symbol.pin')).fontSize('12vp').fontColor([Colors.link])
-          if (line.tree!.main) Text(tr('project_checkout_primary')).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11)).fontColor(Colors.secondary)
-            .backgroundColor(Colors.control).borderRadius(5).padding({left:4,right:4,top:2,bottom:2})
-          if (this.treeDetail(line.tree!)) Text(this.treeDetail(line.tree!)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
-            .fontColor(line.tree!.workspaceKind === 'git' && !line.tree!.branch ? Colors.working : Colors.secondary)
-            .layoutWeight(1).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
-          else Blank().layoutWeight(1)
+          if (line.tree!.main) Text(tr('project_checkout_primary')).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11))
+            .fontWeight(FontWeight.Medium).fontColor(Colors.link)
+            .backgroundColor(Colors.selection).borderRadius(8).padding({left:6,right:6,top:2,bottom:2}).maxLines(1)
+          if (this.treeDetail(line.tree!)) {
+            Row() {
+              Text(this.treeDetail(line.tree!)).fontSize(11).maxFontScale(Tokens.interfaceScaleFor(11))
+                .fontFamily(line.tree!.workspaceKind === 'git' ? 'monospace' : 'sans-serif')
+                .fontWeight(FontWeight.Medium)
+                .fontColor(line.tree!.workspaceKind === 'git' && !line.tree!.branch ? Colors.working : Colors.secondary)
+                .padding({left:6,right:6,top:1.5,bottom:1.5})
+                .backgroundColor(Colors.control)
+                .border({width:0.5,color:Colors.divider,radius:7})
+                .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+            }.layoutWeight(1).justifyContent(FlexAlign.Start).clip(true)
+          } else Blank().layoutWeight(1)
           if (line.count) Text(!line.tree!.activeCount ? tr('project_worktree_idle') : this.agentCountText(line.count))
-            .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).maxLines(1)
+            .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary).maxLines(1)
         }
         if (this.treeRowFolds(line)) this.foldChevron(line.open)
       }.layoutWeight(1).constraintSize({minHeight:44*this.outlineControlScale()})
@@ -780,18 +790,53 @@ export struct ProjectsPage {
     else if (line.kind === 'session') this.agentCell(line.agent!,line.tree!.key,line.level,line.paneName,line.starter)
     else this.subsidiaryLine(line)
   }
+  private outlineItemNeedsDivider(entry: RepeatItem<ProjectLine>): boolean {
+    if (entry.item.first || this.floatingAgentCards) return false;
+    if (entry.item.kind === 'host' || entry.item.kind === 'idle-projects' || entry.item.kind === 'project') return false;
+    if (entry.item.kind === 'tree') return true;
+    if (entry.item.kind === 'session') {
+      return entry.index > 0 && this.lines[entry.index - 1]?.kind === 'session';
+    }
+    return true;
+  }
+  private outlineDividerLeftInset(line: ProjectLine): number {
+    if (line.kind === 'tree') return PhoneStyle.inset;
+    if (line.kind === 'session') return this.treeInset(line.level) + 54;
+    return this.treeInset(line.level);
+  }
   @Builder outlineItems() {
     Repeat(this.lines).each((entry:RepeatItem<ProjectLine>) => {
       ListItem() {
         Column() {
+          if (this.outlineItemNeedsDivider(entry)) {
+            Divider().strokeWidth(0.5).color(Colors.divider)
+              .margin({ left: this.outlineDividerLeftInset(entry.item), right: PhoneStyle.inset })
+          }
           this.lineContent(entry.item)
         }.width('100%').padding({left:this.floatingAgentCards && entry.item.kind!=='session'?16:0,
           right:this.floatingAgentCards && entry.item.kind!=='session'?16:0}).alignItems(HorizontalAlign.Start)
           .backgroundColor(entry.item.kind === 'host' || entry.item.kind === 'idle-projects' ? Color.Transparent :
             entry.item.agent && this.adjacentItem === 'session:' + entry.item.agent!.row.key() ||
             entry.item.kind === 'tree' && this.adjacentItem === 'tree:' + entry.item.tree!.key ? Colors.selection : Colors.surface)
+          .border(entry.item.kind === 'host' || entry.item.kind === 'idle-projects' || this.floatingAgentCards ? { width: 0 } : {
+            width: {
+              top: entry.item.first ? PhoneStyle.surfaceEdgeWidth(0.5) : 0,
+              bottom: entry.item.last ? PhoneStyle.surfaceEdgeWidth(0.5) : 0,
+              left: PhoneStyle.surfaceEdgeWidth(0.5),
+              right: PhoneStyle.surfaceEdgeWidth(0.5)
+            },
+            color: PhoneStyle.cardBorder(nativeEnvironment.dark),
+            radius: {
+              topLeft: entry.item.first ? PhoneStyle.cardRadius : 0,
+              topRight: entry.item.first ? PhoneStyle.cardRadius : 0,
+              bottomLeft: entry.item.last ? PhoneStyle.cardRadius : 0,
+              bottomRight: entry.item.last ? PhoneStyle.cardRadius : 0
+            }
+          })
           .borderRadius({topLeft:entry.item.first ? PhoneStyle.cardRadius : 0,topRight:entry.item.first ? PhoneStyle.cardRadius : 0,
             bottomLeft:entry.item.last ? PhoneStyle.cardRadius : 0,bottomRight:entry.item.last ? PhoneStyle.cardRadius : 0})
+          .shadow(entry.item.last && entry.item.kind !== 'host' && entry.item.kind !== 'idle-projects' && !this.floatingAgentCards ?
+            PhoneStyle.cardElevation(nativeEnvironment.dark) : { radius: 0, color: Color.Transparent })
           .margin({bottom:entry.item.last && this.lines[entry.index+1]?.kind !== 'host' ? 12 : 0})
       }
     }).key((line:ProjectLine) => line.key).virtualScroll({totalCount:this.lines.length,reusable:false})
@@ -952,7 +997,8 @@ export struct ProjectsPage {
         if (agent.model) this.spaceModel(agent,true)
       }.width('100%').constraintSize({minHeight:174*this.spaceCardScale()}).padding(12*this.spaceCardScale()).alignItems(HorizontalAlign.Start)
     }.backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:agent.state === 'needs_you' ? 1.5 : 0.5,color:agent.state === 'needs_you' ? $r('app.color.project_card_needs_border') : Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:agent.state === 'needs_you' ? 1.5 : PhoneStyle.surfaceEdgeWidth(0.5),color:agent.state === 'needs_you' ? $r('app.color.project_card_needs_border') : PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
       .overlay(this.spaceFooter(agent),{align:Alignment.BottomStart})
       .accessibilityGroup(true).accessibilityDescription(agent.model).onClick(() => this.openSpaceCard(treeKey,agent.row.key())).id('projects.session')
   }
@@ -984,6 +1030,8 @@ export struct ProjectsPage {
           }, (child: ProjectWorktree) => JSON.stringify([child.key,child.title,child.branch,child.cwd]))
         }.divider({strokeWidth:0.5,color:Colors.divider,startMargin:56})
           .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius).clip(true)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+          .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
       }
     }.width('100%').layoutWeight(1).maintainVisibleContentPosition(true)
       .padding({left:PhoneStyle.page,right:PhoneStyle.page,top:8,bottom:12}).id('projects.sessions')

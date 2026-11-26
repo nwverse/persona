@@ -2,7 +2,7 @@ import { ConfigurationConstant } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import { accessibility } from '@kit.AccessibilityKit';
-import { classifyFoldPosture, widthClassFromBreakpoint } from '../core/FoldPosture';
+import { classifyFoldPosture, FOLD_DISPLAY_MODE_GLOBAL_FULL, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldPostureKind } from '../core/FoldPosture';
 
 /** Native application configuration, shared by workspace and detached views. */
@@ -21,6 +21,10 @@ export class NativeEnvironment {
   @Trace foldStatus: number = 0;
   @Trace foldDisplayMode: number = 0;
   @Trace foldPosture: FoldPostureKind = 'straight';
+  @Trace isTriFold: boolean = false;
+  private lastWidthVp: number = 0;
+  private lastHeightVp: number = 0;
+  private lastWidthBreakpoint: number = -1;
   private windowRef: window.Window | undefined;
   private keyboardChanged: ((height: number) => void) | undefined;
   private sizeChanged: (size: window.Size) => void = (_size: window.Size): void => this.refreshWindow();
@@ -85,8 +89,14 @@ export class NativeEnvironment {
       const bottom = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height;
       this.safeBottomPx = rect.top + rect.height - bottom;
       this.keyboardHeightPx = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_KEYBOARD).bottomRect?.height || 0;
-      this.windowWidthPx = Number.isFinite(rect.width) ? rect.width : 0;
-      this.windowHeightPx = Number.isFinite(rect.height) ? rect.height : 0;
+      const nextWidth = Number.isFinite(rect.width) ? rect.width : 0;
+      const nextHeight = Number.isFinite(rect.height) ? rect.height : 0;
+      if (nextWidth !== this.windowWidthPx || nextHeight !== this.windowHeightPx) {
+        this.lastWidthVp = 0;
+        this.lastHeightVp = 0;
+      }
+      this.windowWidthPx = nextWidth;
+      this.windowHeightPx = nextHeight;
       this.safeTopPx = this.windowRef.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM).topRect?.height || 0;
       this.isFullScreen = this.windowRef.getWindowStatus() === window.WindowStatusType.FULL_SCREEN;
       this.syncPosture();
@@ -118,11 +128,15 @@ export class NativeEnvironment {
     }
     this.syncPosture();
   }
-  syncPosture(widthVp: number = 0, heightVp: number = 0, widthBreakpoint: number = 1): void {
-    const fallbackWidth = widthVp > 0 ? widthVp : (this.windowWidthPx > 0 ? this.windowWidthPx / 3.2 : 0);
-    const fallbackHeight = heightVp > 0 ? heightVp : (this.windowHeightPx > 0 ? this.windowHeightPx / 3.2 : 0);
+  syncPosture(widthVp: number = 0, heightVp: number = 0, widthBreakpoint: number = -1): void {
+    if (widthVp > 0) this.lastWidthVp = widthVp;
+    if (heightVp > 0) this.lastHeightVp = heightVp;
+    if (widthBreakpoint >= 0) this.lastWidthBreakpoint = widthBreakpoint;
+    const fallbackWidth = widthVp > 0 ? widthVp : (this.lastWidthVp > 0 ? this.lastWidthVp : (this.windowWidthPx > 0 ? this.windowWidthPx / 3.2 : 0));
+    const fallbackHeight = heightVp > 0 ? heightVp : (this.lastHeightVp > 0 ? this.lastHeightVp : (this.windowHeightPx > 0 ? this.windowHeightPx / 3.2 : 0));
+    const resolvedBreakpoint = widthBreakpoint >= 0 ? widthBreakpoint : (this.lastWidthBreakpoint >= 0 ? this.lastWidthBreakpoint : 1);
     this.foldPosture = classifyFoldPosture({
-      widthClass: widthClassFromBreakpoint(widthBreakpoint),
+      widthClass: widthClassFromBreakpoint(resolvedBreakpoint),
       windowWidthVp: fallbackWidth,
       windowHeightVp: fallbackHeight,
       isFoldable: this.isFoldable,
@@ -130,6 +144,9 @@ export class NativeEnvironment {
       foldDisplayMode: this.foldDisplayMode,
       nativeHoverAvailable: this.nativeHoverAvailable
     });
+    this.isTriFold = this.foldPosture === 'trifold_unfolded' ||
+      this.foldPosture === 'trifold_angled' ||
+      this.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL;
   }
   update(configuration: Configuration): void {
     if (configuration.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK) this.dark = true;
