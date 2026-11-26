@@ -135,6 +135,14 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 	if err != nil {
 		return nil, err
 	}
+	// A proxy reply's guest lists only its one tool, before any other guest's list (bot_handoff.go).
+	if id, handoff, err := s.handoffOf(ctx, machine, session); guest && err == nil && handoff {
+		_ = id
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}, nil
+		}
+		return guestTools(s.larkModule().HandoffTools(), allowed), nil
+	}
 	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
 		if s.isWorkMachine(machine) {
 			return []proto.Tool{}, nil
@@ -250,6 +258,15 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if s.ext != nil { // the connectors', Cua's, ego's: ctx is the node's call (its caller going away withdraws a card)
 		if s.ext.ConnectorTool(name) { // a connector is told where the call comes from (connector_context.go)
 			ctx = connector.WithCallContext(ctx, s.connectorCallContext(ctx, session))
+			if assistant && machine != "" && session != "" && !s.isWorkMachine(machine) && !s.isRoom(session) {
+				if _, guest, err := s.guestOf(ctx, machine, session); err == nil && !guest {
+					ctx = connector.WithOwnerCaller(ctx)
+				} else {
+					ctx = connector.WithoutOwnerCaller(ctx)
+				}
+			} else {
+				ctx = connector.WithoutOwnerCaller(ctx)
+			}
 		}
 		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
 			return res

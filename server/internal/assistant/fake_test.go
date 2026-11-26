@@ -922,6 +922,10 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
 			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
 		}
+	case assistantwire.AppPhone + " " + assistantwire.PhoneTools:
+		if f.apps[p.AppID+" "+p.Method] == nil {
+			return json.Marshal(map[string]any{"tools": []proto.Tool{}})
+		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})
@@ -1713,7 +1717,7 @@ type told struct {
 
 // launcherAgent is the agent a launcher starts in these tests: the one its name starts with, else claude.
 func launcherAgent(name string) string {
-	for _, other := range []string{"codex", "gemini"} {
+	for _, other := range []string{"codex", "gemini", "traex"} {
 		if strings.HasPrefix(name, other) {
 			return other
 		}

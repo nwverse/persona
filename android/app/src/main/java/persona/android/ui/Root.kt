@@ -222,6 +222,8 @@ private fun PersonaRootContent(
                             persona.core.designsystem.LocalPersonaName provides if (demo) "Persona" else persona.core.designsystem.LocalPersonaName.current,
                             // The demo serves its own Feishu chats, whatever the paired hub has.
                             persona.core.designsystem.LocalLarkFeatures provides if (demo) persona.core.contracts.LarkFeatures.All else persona.core.designsystem.LocalLarkFeatures.current,
+                            // The demo's mail is its own too, whatever modules the paired hub has on.
+                            persona.core.designsystem.LocalMailAccess provides if (demo) persona.core.designsystem.MailAccess.Live else persona.core.designsystem.LocalMailAccess.current,
                             // The demo's mail and chats are made up: nothing to send to a hub for translating.
                             persona.feature.inbox.LocalTranslator provides if (demo) null else persona.feature.inbox.LocalTranslator.current,
                             // A reply's ```persona-view / ```persona-card drawn with the extensions' components (#1851).
@@ -236,7 +238,7 @@ private fun PersonaRootContent(
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = Tokens.Space.m))
+                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
             }
         }
     }

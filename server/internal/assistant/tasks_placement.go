@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -422,7 +423,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !t.preservePermission && t.CallerPermission != nil && t.Permission == "" && modes {
 		t.Permission = s.taskPermission(ctx, t.Machine, nil)
 	}
-	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
+	if !startTakesEffort(fit.agent) {
 		delete(params, "effort")
 		t.Effort = ""
 	}
@@ -450,7 +451,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.admitTaskWorkspace(ctx, t); err != nil {
 		return "", "", err
 	}
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() {
 		defer func() {
 			if err != nil && !startResultUnknown(err) {
 				s.releaseUnusedBackendStart(ctx, t)
@@ -469,10 +470,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	prompt := t.Prompt
 	if t.HandoffID != "" {
 		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
-			prompt = handoffSummary + "\n\n" + prompt
+			prompt = agentprompt.WithContext(fit.agent, prompt, handoffSummary)
 		}
 	}
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() && len(t.WorkspaceResolved.Repositories) > 0 {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
 		if err != nil {
 			return "", "", err
@@ -532,7 +533,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		background = s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
 	}
 	var repoPaths []string
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() {
 		for _, repo := range t.WorkspaceResolved.Repositories {
 			if repo.AbsolutePath == t.Cwd {
 				continue
@@ -690,7 +691,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return err
 		}
 		bindCtx := context.WithValue(ctx, placementBindKey{}, p)
-		if !t.backendWorkspace() {
+		if !t.usesPreparedWorkspace() {
 			return s.call(bindCtx, m.ID, DeviceSessionStart, params, &res)
 		}
 		return s.startBackendTask(bindCtx, t, params, &res)
@@ -743,7 +744,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return "", "", err
 		}
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
-		if !t.backendWorkspace() && startResultUnknown(err) {
+		if !t.usesPreparedWorkspace() && startResultUnknown(err) {
 			if t.startWithoutReplay() {
 				if expectID != "" {
 					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
@@ -789,7 +790,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		return "", "", err
 	}
-	if t.backendWorkspace() && res.Session.Cwd != t.Cwd {
+	if t.usesPreparedWorkspace() && res.Session.Cwd != t.Cwd {
 		return "", "", taskworkspace.Failure("result_mismatch", "start", t.WorkspaceResolved.OperationID, "", t.Cwd)
 	}
 	if res.Session.SessionID == "" || res.Session.MachineID != "" && res.Session.MachineID != m.ID {
@@ -920,8 +921,8 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 	}
 }
 
-// A typed pre-launch refusal is safe to retry once the fallback is on the same
-// task card as its receipts and progress reports. Never replay an uncertain start.
+// A typed pre-launch refusal is safe to retry once the task's conversations have
+// the fallback notice. Never replay an uncertain start.
 func (s *Service) startWithCodexRouteNotice(ctx context.Context, todoID, agent string, params map[string]any, start func() error) error {
 	effort, _ := params["effort"].(string)
 	if todoID == "" || agent != "codex" || effort == "" || params["codex_effort_fallback"] == proto.CodexFallbackAnnounced {
@@ -936,17 +937,45 @@ func (s *Service) startWithCodexRouteNotice(ctx context.Context, todoID, agent s
 	if !ok || task.DoneAt != nil {
 		return err
 	}
-	note := i18n.T(s.lang(ctx), "assistant-tasks.codex_effort_terminal")
-	report := reportBody{Kind: upReportProgress, Text: note}
-	if _, err := s.appendFeed(ctx, task.Origin, feedReport, todoID, report); err != nil {
+	notice := noticeBody{Text: i18n.T(s.lang(ctx), codexRouteNoticeKey)}
+	if _, err := s.appendFeed(ctx, task.Origin, feedNotice, todoID, notice); err != nil {
 		return err
 	}
 	if v := task.Supervision; v != nil && v.Supervisor != "" && v.Supervisor != task.Origin {
-		if _, err := s.appendFeed(ctx, v.Supervisor, feedReport, todoID, report); err != nil {
+		if _, err := s.appendFeed(ctx, v.Supervisor, feedNotice, todoID, notice); err != nil {
 			return err
 		}
 	}
-	s.noteProgress(ctx, todoID, TaskProgress{Kind: upReportProgress, Text: note, At: time.Now().UTC()})
 	params["codex_effort_fallback"] = proto.CodexFallbackAnnounced
 	return start()
+}
+
+const codexRouteNoticeKey = "assistant-tasks.codex_effort_terminal"
+
+// isCodexRouteNoticeText reports whether text matches the hub's Codex terminal
+// fallback notice in any supported language.
+func isCodexRouteNoticeText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return slices.ContainsFunc(i18n.Langs, func(lang i18n.Lang) bool {
+		return trimmed == i18n.T(lang, codexRouteNoticeKey)
+	})
+}
+
+// isCodexRouteProgress reports whether p is a legacy Codex terminal fallback
+// notice previously stored in Supervision.Progress.
+func isCodexRouteProgress(p *TaskProgress) bool {
+	return p != nil && p.Kind == upReportProgress && isCodexRouteNoticeText(p.Text)
+}
+
+// readTaskNotice preserves the stored event ID and time for clients merging old feed pages.
+// Older hubs recorded this notice as an Agent's progress report.
+func readTaskNotice(item FeedItem) FeedItem {
+	if item.Kind != feedReport || item.Ref == "" {
+		return item
+	}
+	var report reportBody
+	if json.Unmarshal(item.Body, &report) == nil && report.Kind == upReportProgress && isCodexRouteNoticeText(report.Text) {
+		item.Kind = feedNotice
+	}
+	return item
 }
