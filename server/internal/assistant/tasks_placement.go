@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -450,7 +451,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.admitTaskWorkspace(ctx, t); err != nil {
 		return "", "", err
 	}
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() {
 		defer func() {
 			if err != nil && !startResultUnknown(err) {
 				s.releaseUnusedBackendStart(ctx, t)
@@ -469,10 +470,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	prompt := t.Prompt
 	if t.HandoffID != "" {
 		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
-			prompt = handoffSummary + "\n\n" + prompt
+			prompt = agentprompt.WithContext(fit.agent, prompt, handoffSummary)
 		}
 	}
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() && len(t.WorkspaceResolved.Repositories) > 0 {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
 		if err != nil {
 			return "", "", err
@@ -529,7 +530,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		background = s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
 	}
 	var repoPaths []string
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() {
 		for _, repo := range t.WorkspaceResolved.Repositories {
 			if repo.AbsolutePath == t.Cwd {
 				continue
@@ -687,7 +688,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return err
 		}
 		bindCtx := context.WithValue(ctx, placementBindKey{}, p)
-		if !t.backendWorkspace() {
+		if !t.usesPreparedWorkspace() {
 			return s.call(bindCtx, m.ID, DeviceSessionStart, params, &res)
 		}
 		return s.startBackendTask(bindCtx, t, params, &res)
@@ -740,7 +741,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return "", "", err
 		}
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
-		if !t.backendWorkspace() && startResultUnknown(err) {
+		if !t.usesPreparedWorkspace() && startResultUnknown(err) {
 			if t.startWithoutReplay() {
 				if expectID != "" {
 					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
@@ -786,7 +787,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		return "", "", err
 	}
-	if t.backendWorkspace() && res.Session.Cwd != t.Cwd {
+	if t.usesPreparedWorkspace() && res.Session.Cwd != t.Cwd {
 		return "", "", taskworkspace.Failure("result_mismatch", "start", t.WorkspaceResolved.OperationID, "", t.Cwd)
 	}
 	if res.Session.SessionID == "" || res.Session.MachineID != "" && res.Session.MachineID != m.ID {

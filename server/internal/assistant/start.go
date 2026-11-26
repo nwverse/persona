@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -652,7 +653,12 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 		}
 		// The conversation's MCP server can discover its tools before assistant.send returns. Register the guest's
 		// restriction first, as roomCreate does, so that first discovery is the declared list rather than an empty one.
-		if err := s.guestSet(ctx, machine, guestID, p.GuestTools); err != nil {
+		if p.GuestHandoff != "" {
+			err = s.guestSetHandoff(ctx, machine, guestID, p.GuestHandoff, p.GuestTools)
+		} else {
+			err = s.guestSet(ctx, machine, guestID, p.GuestTools)
+		}
+		if err != nil {
 			return proto.Session{}, err
 		}
 		defer func() {
@@ -791,7 +797,9 @@ func (s *Service) startMain(ctx context.Context, p StartParams) (proto.Session, 
 	}
 	empty := strings.TrimSpace(p.Text) == "" && len(p.Images) == 0
 	if handoff.From != "" && !empty {
-		p.Text = s.renderHandoff(ctx, handoff, p.Text)
+		cfg := s.effective(ctx, s.settings(ctx))
+		launcher := cmp.Or(p.Launcher, cfg.Launcher)
+		p.Text = s.renderHandoff(ctx, handoff, p.Text, s.launcherAgent(ctx, cfg.MachineID, launcher))
 	}
 	p.MachineID, p.Purpose, p.Main = "", "", false
 	p.Origin, p.OriginRef, p.OpenedBy = OriginUser, "", "" // the main conversation is the user's, whatever channel opened it
@@ -1055,6 +1063,10 @@ func (s *Service) findSession(ctx context.Context, id, preferred string) (string
 // handoffFor is the text of a message to conversation sid: with what the old main conversation left before it when
 // sid is the new main one that was started empty and this is the first message to it.
 func (s *Service) handoffFor(ctx context.Context, sid, text string) string {
+	return s.handoffForAgent(ctx, sid, "", text)
+}
+
+func (s *Service) handoffForAgent(ctx context.Context, sid, agent, text string) string {
 	if sid == "" {
 		return text
 	}
@@ -1068,16 +1080,23 @@ func (s *Service) handoffFor(ctx context.Context, sid, text string) string {
 		s.logf("assistant: clear what the old main conversation left: %v", err)
 		return text
 	}
-	return s.renderHandoff(ctx, handoff, text)
+	return s.renderHandoff(ctx, handoff, text, agent)
 }
 
 // renderHandoff puts what the old main conversation left before text (prompts/assistant/main_handoff).
-func (s *Service) renderHandoff(ctx context.Context, handoff mainHandoff, text string) string {
+func (s *Service) renderHandoff(ctx context.Context, handoff mainHandoff, text, agent string) string {
 	hp := prompts.MainHandoff{FromID: handoff.From, Summary: handoff.Summary, Text: text}
 	local := handoff.Until.In(s.location(ctx))
 	hp.Until = fmt.Sprintf("%d月%d日 %02d:%02d", local.Month(), local.Day(), local.Hour(), local.Minute())
 	for _, t := range handoff.Recent {
 		hp.Recent = append(hp.Recent, prompts.HandoffTurn{Role: t.Role, Text: t.Text})
+	}
+	if agent == agentprompt.Antigravity {
+		if ordered, ok := agentprompt.WorkflowCommand(text); ok {
+			hp.Text = ""
+			context := strings.TrimSpace(prompts.RenderMainHandoff(hp))
+			return agentprompt.WithContext(agent, ordered, context)
+		}
 	}
 	return prompts.RenderMainHandoff(hp)
 }
@@ -1330,6 +1349,7 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	} else {
 		_, said = p.Params["images"] // the node asking what its own message runs on carries neither (NodeAnswer)
 	}
+	hasContent := hasOwnerMessageContent(text, p.Params["images"])
 	sent, _ := p.Params["text"].(string)
 	id, _ := p.Params["client_msg_id"].(string)
 	// How the user's app sent it when not typed in the app itself ("intent", "share"): it never counts as their own
@@ -1368,8 +1388,24 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		}
 		s.endHeldChannelRuns(p.MachineID, p.SessionID)
 		s.ownerInterjects(p.SessionID, params)
+		if clarifyingCardOf(ctx) == "" && hasContent {
+			s.detachPendingApprovalsOnOwnerMessage(p.MachineID, p.SessionID)
+		}
 	}
 	return params, err
+}
+
+func hasOwnerMessageContent(text string, images any) bool {
+	if strings.TrimSpace(text) != "" {
+		return true
+	}
+	switch imgs := images.(type) {
+	case []proto.Image:
+		return len(imgs) > 0
+	case []any:
+		return len(imgs) > 0
+	}
+	return false
 }
 
 // ownerInterjects: params are the owner's own message to conversation id, ready to send. On a round they did not
@@ -1506,7 +1542,14 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	if text, ok := params["text"].(string); ok && !p.VerbatimText {
 		text, own = s.fillWorkspaces(ctx, text) // an @-mentioned workspace: where it is and what worked there (workspace_mention.go)
 		if main {
-			left := s.handoffFor(ctx, p.SessionID, text)
+			agent := ""
+			if currentKnown {
+				agent = current.Agent
+			}
+			if used, _ := params["launcher"].(string); agent == "" && used != "" {
+				agent = s.launcherAgent(withUnhidden(ctx, used), s.logicalExecutionMachine(ctx, p.MachineID, p.SessionID), used)
+			}
+			left := s.handoffForAgent(ctx, p.SessionID, agent, text)
 			own = own && left == text // what the old main conversation left is not the sender's words
 			text = left
 		}
@@ -1541,7 +1584,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
 	}
 	s.putCacheKeepalive(ctx, machine, sid, p["is_main"] == true, p)
-	putMainCompactWindow(cfg, p)
+	putMainCompactWindow(cfg, p, s.isLeader(ctx, sid)) // a direction's lead is held to it too (#15318)
 	if handled, err := s.larkAgentFollowsCurrentModel(ctx, machine, sid, p, lang); handled {
 		return err
 	}
