@@ -1055,7 +1055,8 @@ describe("provider cards and single unified reset timeline (V2)", () => {
     const host = document.createElement("div");
     host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[a]} now={NOW} />);
     const row = host.querySelector('[data-window-row="5h"]')!;
-    expect(row.className).toContain("grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]");
+    expect(row.className).toContain("grid-cols-[1.75rem_minmax(2.5rem,1fr)_2.25rem_3.75rem_0.75rem]");
+    expect(row.className).toContain("@[300px]:grid-cols-[1.75rem_minmax(2.5rem,1fr)_2.25rem_6.75rem_0.75rem]");
     const full = row.querySelector("[data-reset-full]")!;
     const short = row.querySelector("[data-reset-short]")!;
     expect(full.className).toContain("hidden");
@@ -1188,8 +1189,24 @@ describe("provider cards and single unified reset timeline (V2)", () => {
 });
 
 describe("height-first adaptive multi-column layout, hysteresis, scroll fallback, and reduced motion", () => {
-  it("stays single-column without scrollbar when single-column height fits, aligned above trigger", () => {
-    const layout = computeUsagePopoverLayout({
+  it("stays single-column when compact, and expands to 2 columns on wide desktop once multi-provider height passes comfort threshold", () => {
+    const compact = computeUsagePopoverLayout({
+      naturalHeight: 380,
+      viewportWidth: 1440,
+      viewportHeight: 900,
+      anchorRect: { left: 10, top: 800, bottom: 880 },
+      prevCols: null,
+      providerCount: 3,
+    });
+    expect(compact.cols).toBe(1);
+    expect(compact.width).toBe(384); // 360px single-column comfort width + 24px pad
+    expect(compact.left).toBe(10);
+    expect(compact.bottom).toBe(108); // 900 - 800 + 8
+    expect(compact.availH).toBe(776); // min(900 - 32, 800 - 24)
+    expect(compact.availW).toBe(1414); // 1440 - 16 - 10
+
+    // With >=2 provider cards and single-col height > 440px on desktop, expands to 2 balanced columns instead of a skinny tower
+    const desktopMulti = computeUsagePopoverLayout({
       naturalHeight: 520,
       viewportWidth: 1440,
       viewportHeight: 900,
@@ -1197,12 +1214,21 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
       prevCols: null,
       providerCount: 3,
     });
-    expect(layout.cols).toBe(1);
-    expect(layout.width).toBe(344);
-    expect(layout.left).toBe(10);
-    expect(layout.bottom).toBe(108); // 900 - 800 + 8
-    expect(layout.availH).toBe(776); // min(900 - 32, 800 - 24)
-    expect(layout.availW).toBe(1414); // 1440 - 16 - 10
+    expect(desktopMulti.cols).toBe(2);
+    expect(desktopMulti.width).toBe(716); // 2 * 340 + 12 + 24
+    expect(desktopMulti.colWidth).toBe(340);
+
+    // Single provider never creates an empty second column even when tall
+    const singleProvider = computeUsagePopoverLayout({
+      naturalHeight: 560,
+      viewportWidth: 1440,
+      viewportHeight: 900,
+      anchorRect: { left: 10, top: 800 },
+      prevCols: null,
+      providerCount: 1,
+    });
+    expect(singleProvider.cols).toBe(1);
+    expect(singleProvider.width).toBe(384);
   });
 
   it("expands to 2 or 3 columns on wide viewports when height overflows availH, capped at 3 and providerCount", () => {
@@ -1215,8 +1241,8 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
       providerCount: 3,
     });
     expect(twoCols.cols).toBe(2);
-    expect(twoCols.width).toBe(676);
-    expect(twoCols.colWidth).toBe(320);
+    expect(twoCols.width).toBe(716);
+    expect(twoCols.colWidth).toBe(340);
 
     const threeCols = computeUsagePopoverLayout({
       naturalHeight: 1700,
@@ -1227,7 +1253,7 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
       providerCount: 3,
     });
     expect(threeCols.cols).toBe(3);
-    expect(threeCols.width).toBe(1008);
+    expect(threeCols.width).toBe(1068);
 
     // Even if height is huge, capped at 3 columns max
     const cappedAt3 = computeUsagePopoverLayout({
@@ -1254,9 +1280,9 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
 
   it("applies 24px hysteresis in both height and width to avoid column-count flicker", () => {
     expect(POPOVER_HYSTERESIS_PX).toBe(24);
-    // Currently 2 cols; availH = 600, H = 590 (only 10px under availH, < 24px deadband) -> stays at 2 cols
+    // Currently 2 cols; single-col comfort limit = 440, H = 430 (only 10px under 440, < 24px deadband) -> stays at 2 cols
     const stayTwo = computeUsagePopoverLayout({
-      naturalHeight: 590,
+      naturalHeight: 430,
       viewportWidth: 1440,
       viewportHeight: 700,
       anchorRect: { left: 10, top: 624 }, // availH = 600
@@ -1265,9 +1291,9 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     });
     expect(stayTwo.cols).toBe(2);
 
-    // Once H <= availH - 24 (576), collapses cleanly to 1 col
+    // Once H <= 440 - 24 (416), collapses cleanly to 1 col
     const dropToOne = computeUsagePopoverLayout({
-      naturalHeight: 576,
+      naturalHeight: 416,
       viewportWidth: 1440,
       viewportHeight: 700,
       anchorRect: { left: 10, top: 624 },
@@ -1276,10 +1302,10 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     });
     expect(dropToOne.cols).toBe(1);
 
-    // Width hysteresis: at prevCols = 1, availW = 674 (past 664 by only 10px, < 24px) -> stays at 1 col
+    // Width hysteresis: col step = 352, 2*352 = 704; at prevCols = 1, availW = 714 (past 704 by only 10px, < 24px) -> stays at 1 col
     const stayOneNarrow = computeUsagePopoverLayout({
       naturalHeight: 900,
-      viewportWidth: 700, // availW = 700 - 16 - 10 = 674
+      viewportWidth: 740, // availW = 740 - 16 - 10 = 714
       viewportHeight: 700,
       anchorRect: { left: 10, top: 624 },
       prevCols: 1,
@@ -1287,10 +1313,10 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     });
     expect(stayOneNarrow.cols).toBe(1);
 
-    // Once availW >= 2*332 + 24 = 688, expands cleanly to 2 cols
+    // Once availW >= 2*352 + 24 = 728, expands cleanly to 2 cols
     const expandToTwo = computeUsagePopoverLayout({
       naturalHeight: 900,
-      viewportWidth: 714, // availW = 714 - 16 - 10 = 688
+      viewportWidth: 754, // availW = 754 - 16 - 10 = 728
       viewportHeight: 700,
       anchorRect: { left: 10, top: 624 },
       prevCols: 1,
@@ -1298,10 +1324,10 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     });
     expect(expandToTwo.cols).toBe(2);
 
-    // If viewport narrows below 2*332 = 664 while at 2 cols, shrinks immediately so it never clips horizontally
+    // If viewport narrows below 2*352 = 704 while at 2 cols, shrinks immediately so it never clips horizontally
     const immediateShrink = computeUsagePopoverLayout({
       naturalHeight: 900,
-      viewportWidth: 680, // availW = 654 < 664
+      viewportWidth: 710, // availW = 684 < 704
       viewportHeight: 700,
       anchorRect: { left: 10, top: 624 },
       prevCols: 2,
@@ -1321,7 +1347,7 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     });
     expect(narrowLayout.cols).toBe(1);
     expect(narrowLayout.availH).toBe(356);
-    expect(narrowLayout.width).toBe(344);
+    expect(narrowLayout.width).toBe(384);
     expect(narrowLayout.left + narrowLayout.width).toBeLessThanOrEqual(420 - 16);
 
     // Verify scroll-edge fade attributes in the DOM when scrollHeight exceeds availH
@@ -1381,8 +1407,9 @@ describe("height-first adaptive multi-column layout, hysteresis, scroll fallback
     expect(packed.availH).toBe(876);
     expect(packed.cols).toBe(3); // 24 + 400 + 400 = 824 fits without a scrollbar
 
-    // Fits in one column: stays one column
-    expect(computeUsagePopoverLayout({ ...base, cardHeights: [200, 180], spanHeight: 300 }).cols).toBe(1);
+    // Compact cards fitting under comfort height stay one column; taller 2-card stack expands to 2 columns
+    expect(computeUsagePopoverLayout({ ...base, cardHeights: [120, 120], spanHeight: 120 }).cols).toBe(1);
+    expect(computeUsagePopoverLayout({ ...base, cardHeights: [200, 180], spanHeight: 120 }).cols).toBe(2);
     // Nothing fits even in 3 columns: widest the viewport allows, scroll fallback
     expect(computeUsagePopoverLayout({ ...base, cardHeights: [900, 900, 900], spanHeight: 100 }).cols).toBe(3);
     // Hysteresis with packing: at 3 columns, 2 would fit by only 10px (< 24px): stay at 3
@@ -1637,9 +1664,13 @@ describe("grouped windows, extension metadata, compact views, and collapsible ti
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
       expect(host.querySelector("[data-usage-timeline]")).toBeNull();
       const summary = host.querySelector("[data-usage-timeline-summary]")!;
-      expect(summary.textContent).toContain("Main");
-      expect(summary.textContent).toContain("5h");
-      expect(summary.textContent).toContain("1.5 小时");
+      expect(summary.querySelector("[data-usage-timeline-next-name]")?.textContent).toBe("Main");
+      expect(summary.querySelector("[data-usage-timeline-next-name]")?.className).toContain("truncate");
+      const timeSegment = summary.querySelector("[data-usage-timeline-next-time]")!;
+      expect(timeSegment.textContent).toBe("· 5h · 1.5h");
+      expect(timeSegment.className).toContain("shrink-0");
+      expect(timeSegment.className).toContain("whitespace-nowrap");
+      expect(summary.getAttribute("title")).toContain("1.5 小时");
 
       // Expand timeline: grid layout with adaptive name column mounts and persists
       await act(async () => toggle.click());
@@ -1774,6 +1805,185 @@ describe("grouped windows, extension metadata, compact views, and collapsible ti
       expect(tableHtml).toContain(acctHead);
     } finally {
       await initI18n("zh-Hans");
+    }
+  });
+
+  it("never renders 'Fable · Fable' or drops '7d' when an extension sends matching title and model, and aligns all bars across mixed rows", () => {
+    const claudeWithDupTitle: UsageAccount = {
+      id: "cl-fable",
+      provider: "claude",
+      name: "Claude #team",
+      plan: "max",
+      sampled_at: iso(-240_000),
+      sources: ["Pool"],
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 2, resets_at: iso(4.4 * H) },
+        { label: "7d", window_minutes: 10080, used_percent: 0 }, // 100% left, NO resets_at
+        { label: "7d", window_minutes: 10080, used_percent: 18, resets_at: iso(48 * H), model: "Fable", title: "Fable" },
+      ],
+    };
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[claudeWithDupTitle]} now={NOW} />);
+
+    const card = host.querySelector('[data-usage-provider="claude"]')!;
+    expect(card.textContent).not.toContain("Fable · Fable");
+
+    const rows = [...card.querySelectorAll<HTMLButtonElement>("[data-window-row]")];
+    expect(rows).toHaveLength(3);
+    // Every row keeps fixed column 1 span ("5h", "7d", "7d") and identical ruler-aligned grid columns
+    expect(rows.map((r) => r.querySelector("[data-window-span]")?.textContent)).toEqual(["5h", "7d", "7d"]);
+    const expectedGrid = "grid-cols-[1.75rem_minmax(2.5rem,1fr)_2.25rem_3.75rem_0.75rem]";
+    for (const row of rows) {
+      expect(row.className).toContain(expectedGrid);
+      expect(row.querySelector("[data-usage-percent]")?.className).toContain("w-9");
+    }
+    // The 100% row without reset time still reserves fixed reset & chevron placeholders so its bar aligns with siblings
+    expect(rows[1].querySelector("[data-window-reset-placeholder]")).not.toBeNull();
+    expect(rows[1].querySelector("[data-window-chevron-placeholder]")).not.toBeNull();
+
+    // The Fable row places its deduplicated caption in col-start-2 directly above the bar, preserving "7d" in col-start-1
+    const fableRow = rows[2];
+    expect(fableRow.getAttribute("data-window-inline-model")).toBe("true");
+    const modelCaption = fableRow.querySelector("[data-usage-model]")!;
+    expect(modelCaption.textContent).toBe("Fable");
+    expect(modelCaption.className).toContain("col-start-2");
+    expect(fableRow.querySelector('[role="progressbar"]')?.getAttribute("aria-label")).toBe("Claude #team 7d（Fable）：剩余 82%");
+
+    // Unpinned desktop window pins use low-interference overlay mode without eating meter width
+    const winPins = [...card.querySelectorAll("[data-usage-pin-window]")];
+    expect(winPins).toHaveLength(3);
+    for (const pin of winPins) {
+      expect(pin.className).toContain("usage-win-pin");
+      expect(pin.getAttribute("data-pin-pinned")).toBe("false");
+      expect(pin.getAttribute("data-pin-overlay")).toBe("true");
+    }
+  });
+
+  it("merges redundant single-account provider headers and suppresses duplicate per-account sample ages", () => {
+    const agySingle: UsageAccount = {
+      id: "agy-single",
+      provider: "antigravity",
+      name: "Antigravity",
+      plan: "ultra",
+      sampled_at: iso(-240_000),
+      local: true,
+      machines: ["devbox"],
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 15, resets_at: iso(3 * H), model: "Gemini Models" },
+        { label: "7d", window_minutes: 10080, used_percent: 30, resets_at: iso(48 * H), model: "Gemini Models" },
+      ],
+    };
+    const claudeA: UsageAccount = {
+      id: "cl-a",
+      provider: "claude",
+      name: "Claude #one",
+      sampled_at: iso(-240_000), // 4分钟前 (same as card header)
+      sources: ["Gateway"],
+      windows: [{ label: "5h", window_minutes: 300, used_percent: 20, resets_at: iso(2 * H) }],
+    };
+    const claudeB: UsageAccount = {
+      id: "cl-b",
+      provider: "claude",
+      name: "Claude #two",
+      sampled_at: iso(-240_000), // 4分钟前 (same as card header)
+      sources: ["Gateway"],
+      windows: [{ label: "5h", window_minutes: 300, used_percent: 40, resets_at: iso(3 * H) }],
+    };
+    const claudeOld: UsageAccount = {
+      id: "cl-c",
+      provider: "claude",
+      name: "Claude #older",
+      sampled_at: iso(-15 * 60_000), // 15分钟前 (differs from card header -> MUST show)
+      sources: ["Gateway"],
+      windows: [{ label: "5h", window_minutes: 300, used_percent: 10, resets_at: iso(4 * H) }],
+    };
+
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={[agySingle, claudeA, claudeB, claudeOld]} now={NOW} />);
+
+    // Single Antigravity card merges title + plan + pin into card header without repeating <h3>Antigravity</h3> or "1 个账号"
+    const agyCard = host.querySelector('[data-usage-provider="antigravity"]')!;
+    expect(agyCard.querySelectorAll("h3")).toHaveLength(1);
+    expect(agyCard.querySelector("h3")?.textContent).toBe("Antigravity");
+    expect(agyCard.textContent).not.toContain("1 个账号");
+    expect(agyCard.querySelector("[data-usage-merged-header='true']")).not.toBeNull();
+    expect(agyCard.querySelector("header [data-usage-plan]")?.textContent).toBe("Ultra");
+    expect(agyCard.querySelector('header [data-usage-pin="agy-single"]')).not.toBeNull();
+    expect(agyCard.querySelector("[data-usage-source]")?.textContent).toBe("devbox");
+
+    // Claude card shows "4分钟前" once in card header, hides matching ages on #one/#two, and shows distinct "15分钟前" on #older
+    const claudeCard = host.querySelector('[data-usage-provider="claude"]')!;
+    expect(claudeCard.querySelector("[data-usage-card-age]")?.textContent).toBe("4分钟前");
+    expect(claudeCard.textContent?.match(/4分钟前/g)).toHaveLength(1);
+    const acctAges = [...claudeCard.querySelectorAll("[data-usage-account-age]")].map((el) => el.textContent);
+    expect(acctAges).toEqual(["15分钟前"]);
+  });
+
+  it("collapses stale overlapping local accounts by default in Cards and Table views and expands on click", async () => {
+    const staleLocal: UsageAccount = {
+      id: "codex-local-stale",
+      provider: "codex",
+      name: "Codex Promax",
+      plan: "pro",
+      sampled_at: iso(-2 * H),
+      stale: true,
+      local: true,
+      machines: ["devbox"],
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 25, resets_at: iso(2 * H) },
+        { label: "7d", window_minutes: 10080, used_percent: 45, resets_at: iso(48 * H) },
+      ],
+    };
+    const liveExternal: UsageAccount = {
+      id: "codex-ext-live",
+      provider: "codex",
+      name: "Magpie c13f4ab515d6",
+      plan: "pro",
+      sampled_at: iso(-120_000),
+      sources: ["Magpie"],
+      windows: [
+        { label: "5h", window_minutes: 300, used_percent: 18, resets_at: iso(2 * H + 15_000) },
+        { label: "7d", window_minutes: 10080, used_percent: 42, resets_at: iso(48 * H + 10_000) },
+      ],
+    };
+
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<UsagePopover accounts={[staleLocal, liveExternal]} now={NOW} />));
+      const collapsed = host.querySelector('[data-usage-stale-overlap="collapsed"]')!;
+      expect(collapsed).not.toBeNull();
+      // Collapsed by default: stale local windows are not taking card space until expanded
+      expect(collapsed.querySelectorAll("[data-window-row]")).toHaveLength(0);
+      expect(collapsed.textContent).toContain("Codex Promax");
+      expect(collapsed.textContent).toContain("Magpie c13f4ab515d6");
+
+      // Expand stale overlapping account on click -> reveals original stale windows
+      const toggle = collapsed.querySelector<HTMLButtonElement>("[data-usage-stale-overlap-toggle]")!;
+      await act(async () => toggle.click());
+      const expanded = host.querySelector('[data-usage-stale-overlap="expanded"]')!;
+      expect(expanded).not.toBeNull();
+      expect(expanded.querySelectorAll("[data-window-row]")).toHaveLength(2);
+
+      // Collapsed timeline summary keeps window and countdown non-truncating even for long account names
+      const summary = host.querySelector("[data-usage-timeline-summary]")!;
+      expect(summary.querySelector("[data-usage-timeline-next-name]")?.className).toContain("truncate");
+      expect(summary.querySelector("[data-usage-timeline-next-time]")?.textContent).toBe("· 5h · 2h");
+      expect(summary.querySelector("[data-usage-timeline-next-time]")?.className).toContain("shrink-0");
+
+      // Table view also collapses stale overlapping local account by default and expands on click
+      await act(async () => host.querySelector<HTMLButtonElement>('[data-usage-view="table"]')!.click());
+      const tableCollapsed = host.querySelector('tr[data-usage-stale-overlap="collapsed"]')!;
+      expect(tableCollapsed).not.toBeNull();
+      expect(tableCollapsed.querySelectorAll("[data-window-row]")).toHaveLength(0);
+      await act(async () => tableCollapsed.querySelector<HTMLButtonElement>("[data-usage-stale-overlap-toggle]")!.click());
+      const tableExpanded = host.querySelector('tr[data-usage-stale-overlap="expanded"]')!;
+      expect(tableExpanded).not.toBeNull();
+      expect(tableExpanded.querySelectorAll("[data-window-row]")).toHaveLength(2);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
     }
   });
 });

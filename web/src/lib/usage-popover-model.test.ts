@@ -8,6 +8,7 @@ import {
   groupAccountWindows,
   nextTimelineReset,
   shortPoolLabel,
+  shouldMergeSingleAccountHeader,
   tableWindowSubLabel,
   windowRowDisplay,
 } from "./usage-popover-model";
@@ -86,25 +87,67 @@ describe("groupAccountWindows", () => {
 });
 
 describe("windowRowDisplay", () => {
-  it("shows extension title with window span badge only when title does not already repeat the label", () => {
+  it("always keeps window span in column 1 and deduplicates extension title against model, label, and group", () => {
     expect(windowRowDisplay(win("5h", 300, 10, 2 * H, { title: "Burst", note: "Fast bucket" }))).toEqual({
-      primary: "Burst",
-      spanBadge: "5h",
-      modelTag: "",
+      span: "5h",
+      caption: "Burst",
+      isModelCaption: false,
+      hasTitle: true,
       note: "Fast bucket",
     });
-    expect(windowRowDisplay(win("5h", 300, 10, 2 * H, { title: "5h Burst" }))).toEqual({
-      primary: "5h Burst",
-      spanBadge: "",
-      modelTag: "",
+    expect(windowRowDisplay(win("5h", 300, 10, 2 * H, { title: "5h" }))).toEqual({
+      span: "5h",
+      caption: "",
+      isModelCaption: false,
+      hasTitle: false,
       note: "",
     });
-    expect(windowRowDisplay(win("7d", 10080, 80, 48 * H, { model: "Fable" }), "Fable")).toEqual({
-      primary: "7d",
-      spanBadge: "",
-      modelTag: "Fable",
+    // Regression: { label: "7d", model: "Fable", title: "Fable" } or title "7 days · Fable" must NEVER duplicate Fable or lose "7d"
+    expect(windowRowDisplay(win("7d", 10080, 80, 48 * H, { model: "Fable", title: "Fable" }), "Fable")).toEqual({
+      span: "7d",
+      caption: "Fable",
+      isModelCaption: true,
+      hasTitle: false,
       note: "",
     });
+    expect(windowRowDisplay(win("7d", 10080, 80, 48 * H, { model: "Fable", title: "7 days · Fable" }), "Fable")).toEqual({
+      span: "7d",
+      caption: "Fable",
+      isModelCaption: true,
+      hasTitle: false,
+      note: "",
+    });
+    expect(windowRowDisplay(win("7d", 10080, 80, 48 * H, { model: "Fable", title: "fable" }), "Fable")).toEqual({
+      span: "7d",
+      caption: "Fable",
+      isModelCaption: true,
+      hasTitle: false,
+      note: "",
+    });
+    // Distinct extra title alongside model is kept without repeating model
+    expect(windowRowDisplay(win("7d", 10080, 80, 48 * H, { model: "Fable", title: "Extra" }), "Fable")).toEqual({
+      span: "7d",
+      caption: "Fable · Extra",
+      isModelCaption: true,
+      hasTitle: true,
+      note: "",
+    });
+    // Title repeating group context is suppressed
+    expect(windowRowDisplay(win("5h", 300, 20, 2 * H, { title: "5h · Gemini Models" }), undefined, "Gemini Models")).toEqual({
+      span: "5h",
+      caption: "",
+      isModelCaption: false,
+      hasTitle: false,
+      note: "",
+    });
+  });
+
+  it("merges single-account header only when the sole account name matches provider title", () => {
+    const agy = acct("a", "antigravity", "Antigravity", [win("5h", 300, 10, 2 * H)]);
+    const named = acct("b", "antigravity", "Antigravity · Main", [win("5h", 300, 10, 2 * H)]);
+    expect(shouldMergeSingleAccountHeader({ accounts: [agy] }, "Antigravity")).toBe(true);
+    expect(shouldMergeSingleAccountHeader({ accounts: [named] }, "Antigravity")).toBe(false);
+    expect(shouldMergeSingleAccountHeader({ accounts: [agy, named] }, "Antigravity")).toBe(false);
   });
 });
 
@@ -188,6 +231,15 @@ describe("buildUsageTable and nextTimelineReset", () => {
     expect(claudeRow.cells["m:10080"]).toHaveLength(2);
     expect(tableWindowSubLabel(claudeRow.cells["m:10080"][0], "7d", 2, "Plan")).toEqual({ text: "Plan", full: "Plan" });
     expect(tableWindowSubLabel(claudeRow.cells["m:10080"][1], "7d", 2, "Plan")).toEqual({ text: "Fable", full: "Fable" });
+    // Regression: extension title duplicating model or span ("Fable", "7 days · Fable") stays cleanly "Fable" in 7d column
+    expect(tableWindowSubLabel(win("7d", 10080, 82, 30 * H, { model: "Fable", title: "Fable" }), "7d", 2, "Plan")).toEqual({
+      text: "Fable",
+      full: "Fable",
+    });
+    expect(tableWindowSubLabel(win("7d", 10080, 82, 30 * H, { model: "Fable", title: "7 days · Fable" }), "7d", 2, "Plan")).toEqual({
+      text: "Fable",
+      full: "Fable",
+    });
   });
 
   it("sorts by headroom (tightest first ascending, healthiest first descending) with empty cells anchored at the bottom", () => {
@@ -203,7 +255,7 @@ describe("buildUsageTable and nextTimelineReset", () => {
     expect(byName.rows.map((r) => r.account.id)).toEqual(["agy-1", "claude-1", "codex-1", "ds-1"]);
   });
 
-  it("picks the earliest upcoming reset across all timeline rows", () => {
+  it("picks the earliest upcoming reset across live timeline rows, skipping stale/excluded duplicates unless all are stale", () => {
     const groups = groupByProvider(sampleAccounts());
     const rows = unifiedTimeline(groups, NOW);
     const next = nextTimelineReset(rows);
@@ -212,8 +264,18 @@ describe("buildUsageTable and nextTimelineReset", () => {
       accountName: "#alpha",
       provider: "codex",
       label: "5h",
+      resetsAt: at(1.5 * H),
       remainingMs: 1.5 * H,
       paused: false,
     });
+
+    // Stale overlapping local account resetting 10s earlier does not hijack summary ahead of live external account
+    const staleLocal = acct("codex-stale", "codex", "Codex Promax", [win("5h", 300, 20, 1.4 * H)], { stale: true, local: true });
+    const liveExt = acct("codex-live", "codex", "Magpie #1", [win("5h", 300, 10, 1.5 * H)], { sources: ["Magpie"] });
+    const mixedRows = unifiedTimeline(groupByProvider([staleLocal, liveExt]), NOW);
+    expect(nextTimelineReset(mixedRows, new Set(["codex-stale"]))?.accountId).toBe("codex-live");
+    // Falls back to stale row when only stale rows exist
+    const staleOnlyRows = unifiedTimeline(groupByProvider([staleLocal]), NOW);
+    expect(nextTimelineReset(staleOnlyRows)?.accountId).toBe("codex-stale");
   });
 });

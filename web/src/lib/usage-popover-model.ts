@@ -67,27 +67,85 @@ export function groupAccountWindows(a: Pick<UsageAccount, "windows">): UsageWind
 }
 
 export interface WindowRowDisplay {
-  /** Primary row label: extension `title` when provided, otherwise window `label` ("5h", "7d"). */
-  primary: string;
-  /** Secondary window span badge when `title` does not already include the window label (e.g. "Burst" + "5h"). */
-  spanBadge: string;
-  /** Inline single-model allowance name (e.g. "Fable" on a compact `7d · Fable` row). */
-  modelTag: string;
+  /** Always the short window duration label ("5h", "7d") so column 1 stays aligned across every row in a card. */
+  span: string;
+  /** Optional compact caption aligned above the meter track (e.g. single-model name "Fable" or extension `title` "Burst"). */
+  caption: string;
+  /** Whether `caption` represents a per-model allowance (marks `data-usage-model`). */
+  isModelCaption: boolean;
+  /** Whether `caption` carries a distinct extension `title` (marks `data-usage-window-title`). */
+  hasTitle: boolean;
   /** Extension-supplied quiet remark under the row, or "". */
   note: string;
 }
 
-/** Resolve display labels for one window row, avoiding redundant duplication when `title` already mentions `label`. */
-export function windowRowDisplay(w: UsageWindow, inlineModel?: string): WindowRowDisplay {
-  const title = w.title?.trim() ?? "";
-  const label = w.label.trim();
-  const note = w.note?.trim() ?? "";
-  const modelTag = inlineModel?.trim() ?? "";
-  if (title) {
-    const repeatsLabel = !label || title.toLowerCase() === label.toLowerCase() || title.toLowerCase().includes(label.toLowerCase());
-    return { primary: title, spanBadge: repeatsLabel ? "" : label, modelTag, note };
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Remove a redundant window-span prefix or suffix (e.g. "7d · Fable", "7 days · Fable", "Fable (7d)") from a title
+ *  so callers can check whether `title` merely repeats `label` + `model` or `group`. */
+function stripSpanFromTitle(title: string, label: string): string {
+  let out = title.trim();
+  const spanTokens = [label.trim()];
+  const m = /^(\d+(?:\.\d+)?)\s*([mhdw])$/i.exec(label.trim());
+  if (m) {
+    const n = m[1];
+    const unit = { m: "minutes?", h: "hours?", d: "days?", w: "weeks?" }[m[2].toLowerCase() as "m" | "h" | "d" | "w"];
+    spanTokens.push(`${n}\\s*${unit}`);
   }
-  return { primary: label, spanBadge: "", modelTag, note };
+  const sep = "(?:\\s*[·•:\\-–—/|]\\s*|\\s+)";
+  for (const tok of spanTokens) {
+    if (!tok) continue;
+    const pat = tok === label.trim() ? escapeRe(tok) : tok;
+    out = out
+      .replace(new RegExp(`^${pat}${sep}`, "i"), "")
+      .replace(new RegExp(`${sep}${pat}$`, "i"), "")
+      .replace(new RegExp(`^\\(${pat}\\)\\s*`, "i"), "")
+      .replace(new RegExp(`\\s*\\(${pat}\\)$`, "i"), "")
+      .trim();
+  }
+  return out;
+}
+
+/** Resolve display labels for one window row: always keeps `span` ("5h", "7d") in column 1 and deduplicates extension
+ *  `title` against `label`, `inlineModel`, and `groupContext` so e.g. `{ label: "7d", model: "Fable", title: "Fable" }`
+ *  never renders "Fable · Fable" or drops "7d". */
+export function windowRowDisplay(w: UsageWindow, inlineModel?: string, groupContext?: string): WindowRowDisplay {
+  const span = w.label.trim();
+  const rawTitle = w.title?.trim() ?? "";
+  const note = w.note?.trim() ?? "";
+  const model = inlineModel?.trim() ?? "";
+  const group = groupContext?.trim() ?? "";
+
+  const strippedTitle = rawTitle ? stripSpanFromTitle(rawTitle, span) : "";
+  const titleEqualsSpan = Boolean(rawTitle) && rawTitle.toLowerCase() === span.toLowerCase();
+  const titleEqualsGroup = Boolean(group) && (
+    rawTitle.toLowerCase() === group.toLowerCase() ||
+    (Boolean(strippedTitle) && strippedTitle.toLowerCase() === group.toLowerCase())
+  );
+
+  if (model) {
+    const modelLower = model.toLowerCase();
+    const titleDuplicatesModel = !rawTitle || titleEqualsSpan || titleEqualsGroup
+      || rawTitle.toLowerCase() === modelLower
+      || strippedTitle.toLowerCase() === modelLower;
+    if (titleDuplicatesModel) {
+      return { span, caption: model, isModelCaption: true, hasTitle: false, note };
+    }
+    const extra = strippedTitle || rawTitle;
+    return { span, caption: `${model} · ${extra}`, isModelCaption: true, hasTitle: true, note };
+  }
+
+  if (rawTitle && !titleEqualsSpan && !titleEqualsGroup) {
+    return { span, caption: rawTitle, isModelCaption: false, hasTitle: true, note };
+  }
+  return { span, caption: "", isModelCaption: false, hasTitle: false, note };
+}
+
+/** Whether a single-account provider card has an account name identical to its provider title (case-insensitive),
+ *  allowing the card header to merge account badges and pin controls without repeating the title row. */
+export function shouldMergeSingleAccountHeader(group: Pick<ProviderGroup, "accounts">, providerTitleText: string): boolean {
+  if (group.accounts.length !== 1) return false;
+  return group.accounts[0].name.trim().toLowerCase() === providerTitleText.trim().toLowerCase();
 }
 
 const OVERLAP_TOLERANCE_MS = 60_000;
@@ -149,28 +207,39 @@ export interface NextTimelineReset {
   accountName: string;
   provider: string;
   label: string;
+  resetsAt: string;
   remainingMs: number;
   paused: boolean;
 }
 
-/** Earliest upcoming reset across all timeline rows, used for the collapsed reset-timeline summary bar. */
-export function nextTimelineReset(rows: readonly UnifiedTimelineRow[]): NextTimelineReset | null {
-  let best: NextTimelineReset | null = null;
-  for (const row of rows) {
-    for (const lane of row.lanes) {
-      if (!best || lane.remainingMs < best.remainingMs) {
-        best = {
-          accountId: row.account.id,
-          accountName: row.displayName,
-          provider: row.provider,
-          label: lane.label,
-          remainingMs: lane.remainingMs,
-          paused: lane.paused,
-        };
+/** Earliest upcoming reset across timeline rows, used for the collapsed reset-timeline summary bar.
+ *  Prefers live, non-excluded rows so a stale/collapsed duplicate never hides the live account's next reset,
+ *  falling back to all rows only when every row is stale or excluded. */
+export function nextTimelineReset(
+  rows: readonly UnifiedTimelineRow[],
+  excludeIds?: ReadonlySet<string>,
+): NextTimelineReset | null {
+  const pickFrom = (list: readonly UnifiedTimelineRow[]): NextTimelineReset | null => {
+    let best: NextTimelineReset | null = null;
+    for (const row of list) {
+      for (const lane of row.lanes) {
+        if (!best || lane.remainingMs < best.remainingMs) {
+          best = {
+            accountId: row.account.id,
+            accountName: row.displayName,
+            provider: row.provider,
+            label: lane.label,
+            resetsAt: lane.resetsAt,
+            remainingMs: lane.remainingMs,
+            paused: lane.paused,
+          };
+        }
       }
     }
-  }
-  return best;
+    return best;
+  };
+  const preferred = rows.filter((r) => !r.account.stale && !excludeIds?.has(r.account.id));
+  return pickFrom(preferred) ?? pickFrom(rows);
 }
 
 // ── Compact table model (inspired by Magpie's span-aligned quota table) ──────────────────────────────────────
@@ -230,24 +299,38 @@ export function shortPoolLabel(raw: string): string {
   return stripped.length >= 3 ? stripped : trimmed;
 }
 
-/** Sub-label drawn beside a percentage inside a table cell (empty when the column heading already identifies the window). */
+/** Sub-label drawn beside a percentage inside a table cell (empty when the column heading already identifies the window).
+ *  Deduplicates extension `title` against `colHead`, `model`, and `group` so e.g. `{ label: "7d", model: "Fable", title: "7 days · Fable" }`
+ *  inside the `7d` column reads cleanly as `"Fable"`. */
 export function tableWindowSubLabel(
   w: UsageWindow,
   colHead: string,
   cellSize: number,
   planWord: string,
 ): { text: string; full: string } {
-  const title = w.title?.trim() ?? "";
+  const rawTitle = w.title?.trim() ?? "";
   const group = w.group?.trim() ?? "";
   const model = w.model?.trim() ?? "";
   const headLower = colHead.trim().toLowerCase();
+  const cleanTitle = rawTitle ? stripSpanFromTitle(rawTitle, colHead || w.label) : "";
 
-  if (title && title.toLowerCase() !== headLower) {
-    const full = group && group.toLowerCase() !== title.toLowerCase() ? `${group} · ${title}` : title;
-    return { text: shortPoolLabel(title), full };
+  if (model) {
+    const modelLower = model.toLowerCase();
+    const titleDuplicatesModel = !rawTitle
+      || rawTitle.toLowerCase() === headLower
+      || rawTitle.toLowerCase() === modelLower
+      || cleanTitle.toLowerCase() === modelLower;
+    if (titleDuplicatesModel) return { text: shortPoolLabel(model), full: model };
+    const extra = cleanTitle || rawTitle;
+    return { text: shortPoolLabel(extra), full: `${model} · ${extra}` };
+  }
+
+  if (rawTitle && rawTitle.toLowerCase() !== headLower) {
+    const effective = cleanTitle || rawTitle;
+    const full = group && group.toLowerCase() !== effective.toLowerCase() ? `${group} · ${effective}` : effective;
+    return { text: shortPoolLabel(effective), full };
   }
   if (group) return { text: shortPoolLabel(group), full: group };
-  if (model) return { text: shortPoolLabel(model), full: model };
   if (cellSize > 1) return { text: planWord, full: planWord };
   return { text: "", full: colHead };
 }

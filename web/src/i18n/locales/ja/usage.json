@@ -69,8 +69,12 @@
   "table_plan_window": "プラン",
   "table_sort_by": "{column}で並び替え",
   "timeline_next": "次回：{name} · {window}（{remaining}）",
+  "timeline_next_prefix": "次回：",
   "timeline_toggle_show": "リセットのタイムラインを開く",
   "timeline_toggle_hide": "リセットのタイムラインを閉じる",
   "overlap_hint": "{name} と同一アカウントの可能性",
-  "overlap_hint_title": "このローカル計測は {name} とリセット時刻が一致しています。両方の取得元を別々に表示しています"
+  "overlap_hint_title": "このローカル計測は {name} とリセット時刻が一致しています。両方の取得元を別々に表示しています",
+  "overlap_stale_summary": "古いデータ · {name} と重複の可能性",
+  "overlap_stale_show": "古い重複アカウント {name} を表示",
+  "overlap_stale_hide": "古い重複アカウント {name} を非表示"
 }

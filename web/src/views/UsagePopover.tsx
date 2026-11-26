@@ -17,6 +17,7 @@ import {
   nextTimelineReset,
   setUsageTimelineOpen,
   setUsageViewMode,
+  shouldMergeSingleAccountHeader,
   tableWindowSubLabel,
   useUsageTimelineOpen,
   useUsageViewMode,
@@ -90,17 +91,19 @@ export function Meter({
 }
 
 /** Adaptive multi-column popover geometry constants. */
-export const POPOVER_COL_WIDTH = 320;
+export const POPOVER_COL_WIDTH = 340;
+export const POPOVER_SINGLE_COL_WIDTH = 360;
 export const POPOVER_COL_GAP = 12;
-export const POPOVER_COL_STEP = POPOVER_COL_WIDTH + POPOVER_COL_GAP; // 332px
+export const POPOVER_COL_STEP = POPOVER_COL_WIDTH + POPOVER_COL_GAP; // 352px
 export const POPOVER_MAX_COLS = 3;
 export const POPOVER_PAD_X = 24;
 export const POPOVER_PAD_Y = 24;
 export const POPOVER_GAP_PX = 8;
 export const POPOVER_EDGE_PX = 16;
 export const POPOVER_HYSTERESIS_PX = 24;
-export const POPOVER_TABLE_MIN_WIDTH = 600;
-export const POPOVER_TABLE_MAX_WIDTH = 820;
+export const POPOVER_SINGLE_COL_COMFORT_H = 440;
+export const POPOVER_TABLE_MIN_WIDTH = 660;
+export const POPOVER_TABLE_MAX_WIDTH = 880;
 const CLOSE_MS = 160;
 const REDUCED_CLOSE_MS = 120;
 
@@ -126,7 +129,7 @@ export function packedColumnHeight(cards: readonly number[], cols: number, gap =
 }
 
 export interface UsagePopoverLayoutInput {
-  /** Natural height when laid out in a single 320px column (including vertical padding); used when `cardHeights` is absent. */
+  /** Natural height when laid out in a single column (including vertical padding); used when `cardHeights` is absent. */
   naturalHeight?: number;
   /** Measured height of each provider card (unsplittable, flowed in order into the columns). */
   cardHeights?: readonly number[];
@@ -155,10 +158,11 @@ export interface UsagePopoverLayout {
   availW: number;
 }
 
-/** Pure height-first layout calculator: stays single-column (320px) whenever the content fits in availH; otherwise picks
- *  the fewest columns (at most 3 and `floor(availW / 332)`) whose height fits without a scrollbar: the full-width blocks
- *  plus the provider cards packed in order into the columns (`packedColumnHeight`). Without measured cards it falls back
- *  to `ceil(naturalHeight / availH)`. 24px hysteresis on later resizes keeps the column count from flickering.
+/** Pure adaptive multi-column layout calculator: stays single-column (356px inner / 380px outer, clamped to availW)
+ *  when compact or when only one provider card exists; on wide viewports with >=2 provider cards, expands to 2+ columns
+ *  once single-column height exceeds `min(availH, POPOVER_SINGLE_COL_COMFORT_H)` (440px) so multi-provider desktop
+ *  popovers never look like a skinny vertical tower, and expands to 3 columns when 2 columns would overflow `availH`.
+ *  24px hysteresis on later resizes keeps the column count from flickering.
  *  In table mode, uses a single wide column tailored to the number of aligned window columns (clamped to availW). */
 export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): UsagePopoverLayout {
   const vw = Math.max(240, input.viewportWidth);
@@ -180,7 +184,7 @@ export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): Usage
 
   if (input.viewMode === "table") {
     const dataCols = Math.max(1, input.tableColCount ?? 2);
-    const desired = Math.min(POPOVER_TABLE_MAX_WIDTH, Math.max(POPOVER_TABLE_MIN_WIDTH, 240 + dataCols * 180 + POPOVER_PAD_X));
+    const desired = Math.min(POPOVER_TABLE_MAX_WIDTH, Math.max(POPOVER_TABLE_MIN_WIDTH, 270 + dataCols * 190 + POPOVER_PAD_X));
     const width = Math.round(Math.min(availW, desired));
     const colWidth = Math.max(160, width - POPOVER_PAD_X);
     const left = Math.round(Math.max(8, Math.min(rawLeft, vw - POPOVER_EDGE_PX - width)));
@@ -193,9 +197,12 @@ export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): Usage
   const rawMaxByWidth = Math.max(1, Math.min(maxPossibleCols, Math.floor(availW / POPOVER_COL_STEP)));
   const H = Math.max(0, input.naturalHeight ?? 0);
   const spans = Math.max(0, input.spanHeight ?? 0);
-  /** Whether `c` columns hold everything within availH, less `slack`. */
-  const fits = (c: number, slack = 0) =>
-    cards ? POPOVER_PAD_Y + spans + packedColumnHeight(cards, c) <= availH - slack : H <= c * availH - slack;
+  const singleColLimit = Math.min(availH, POPOVER_SINGLE_COL_COMFORT_H);
+  /** Whether `c` columns hold everything within the target height for `c`, less `slack`. */
+  const fits = (c: number, slack = 0) => {
+    const limit = c === 1 && maxPossibleCols > 1 && rawMaxByWidth > 1 ? singleColLimit : availH;
+    return cards ? POPOVER_PAD_Y + spans + packedColumnHeight(cards, c) <= limit - slack : H <= c * limit - slack;
+  };
   let rawNeeded = maxPossibleCols;
   for (let c = 1; c <= maxPossibleCols; c++) {
     if (fits(c)) {
@@ -236,11 +243,13 @@ export function computeUsagePopoverLayout(input: UsagePopoverLayoutInput): Usage
     }
   }
 
-  const idealWidth = cols * POPOVER_COL_WIDTH + (cols - 1) * POPOVER_COL_GAP + POPOVER_PAD_X;
+  const idealWidth = cols === 1
+    ? POPOVER_SINGLE_COL_WIDTH + POPOVER_PAD_X
+    : cols * POPOVER_COL_WIDTH + (cols - 1) * POPOVER_COL_GAP + POPOVER_PAD_X;
   const width = Math.round(Math.min(availW, idealWidth));
   const innerW = Math.max(160, width - POPOVER_PAD_X);
   const colWidth = cols === 1
-    ? Math.min(POPOVER_COL_WIDTH, innerW)
+    ? Math.min(POPOVER_SINGLE_COL_WIDTH, innerW)
     : Math.max(160, Math.min(POPOVER_COL_WIDTH, Math.floor((innerW - (cols - 1) * POPOVER_COL_GAP) / cols)));
   const left = Math.round(Math.max(8, Math.min(rawLeft, vw - POPOVER_EDGE_PX - width)));
 
@@ -704,34 +713,82 @@ export function UsagePopover({
                 now={now}
               />
             ) : (
-              groups.map((g) => (
-                <section
-                  key={g.provider}
-                  data-usage-provider={g.provider}
-                  aria-label={providerTitle(g.provider)}
-                  className="usage-popover-card @container flex flex-col gap-2.5 rounded-control border border-line p-2.5"
-                >
-                  <header className="flex items-center gap-2">
-                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <span aria-hidden data-provider-dot={g.provider} className="size-2 shrink-0 rounded-full" style={{ background: providerHue(g.provider) }} />
-                      <h3 className="truncate text-meta font-semibold text-ink">{providerTitle(g.provider)}</h3>
-                      <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
-                    </span>
-                    {g.sampledAt && <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{sampleAge(g.sampledAt, now)}</span>}
-                  </header>
-                  {g.accounts.map((a, i) => (
-                    <div key={a.id} className={cx("flex flex-col", i > 0 && "border-t border-line pt-2")}>
-                      <AccountSection
-                        a={a}
-                        now={now}
-                        pinnedSet={pinnedSet}
-                        showAge={g.accounts.length > 1 || Boolean(a.stale)}
-                        overlapWith={overlaps.get(a.id)}
-                      />
-                    </div>
-                  ))}
-                </section>
-              ))
+              groups.map((g) => {
+                const title = providerTitle(g.provider);
+                const headerAge = g.sampledAt ? sampleAge(g.sampledAt, now) : "";
+                const mergedSingle = shouldMergeSingleAccountHeader(g, title);
+                const singleAcct = mergedSingle ? g.accounts[0] : undefined;
+                const singlePlan = singleAcct ? planNote(singleAcct) : "";
+                const singlePinned = singleAcct ? pinnedSet.has(singleAcct.id) : false;
+                const singleShowPin = singleAcct ? (isPinnableUsageAccount(singleAcct) || singlePinned) : false;
+                const singleHeaderAge = singleAcct?.stale
+                  ? tr("usage.stale_age", { age: sampleAge(singleAcct.sampled_at, now) })
+                  : headerAge;
+                const cardAlign: CardWindowAlign = {
+                  hasReset: g.accounts.some((acct) =>
+                    acct.windows.some((w) => Boolean(resetLabel(w.resets_at, now) || isWindowPaused(w))),
+                  ),
+                  hasDetail: g.accounts.some((acct) =>
+                    acct.windows.some((w) => Boolean(
+                      resetLabel(w.resets_at, now)
+                        || isWindowPaused(w)
+                        || accountPace({ stale: Boolean(acct.stale) }, w, now)?.state === "over",
+                    )),
+                  ),
+                  hasPinnedWindow: g.accounts.some((acct) =>
+                    acct.windows.some((w) => pinnedSet.has(usageWindowPinId(acct.id, w))),
+                  ),
+                };
+                return (
+                  <section
+                    key={g.provider}
+                    data-usage-provider={g.provider}
+                    aria-label={title}
+                    className="usage-popover-card @container flex flex-col gap-2 rounded-control border border-line p-2.5"
+                  >
+                    <header className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <span aria-hidden data-provider-dot={g.provider} className="size-2 shrink-0 rounded-full" style={{ background: providerHue(g.provider) }} />
+                        <h3 className="truncate text-meta font-semibold text-ink">{title}</h3>
+                        {mergedSingle && singlePlan && (
+                          <span data-usage-plan className="max-w-36 shrink-0 truncate whitespace-nowrap rounded-chip bg-inset px-1.5 py-px text-submeta font-medium text-ink-2" title={singlePlan}>
+                            {singlePlan}
+                          </span>
+                        )}
+                        {g.accounts.length > 1 && (
+                          <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">{tr("usage.provider_accounts", { count: g.accounts.length })}</span>
+                        )}
+                      </span>
+                      {singleHeaderAge && (
+                        <span data-usage-card-age className="shrink-0 whitespace-nowrap text-submeta text-ink-3">
+                          {singleHeaderAge}
+                        </span>
+                      )}
+                      {mergedSingle && singleAcct && singleShowPin && (
+                        <PinToggle
+                          pinned={singlePinned}
+                          pinAttr={singleAcct.id}
+                          label={singlePinned ? tr("usage.unpin_account", { name: singleAcct.name }) : tr("usage.pin_account", { name: singleAcct.name })}
+                          onClick={() => togglePinnedUsageAccount(singleAcct.id)}
+                        />
+                      )}
+                    </header>
+                    {g.accounts.map((a, i) => (
+                      <div key={a.id} className={cx("flex flex-col", i > 0 && "border-t border-line pt-2")}>
+                        <AccountSection
+                          a={a}
+                          now={now}
+                          pinnedSet={pinnedSet}
+                          headerAge={headerAge}
+                          mergedHeader={mergedSingle}
+                          overlapWith={overlaps.get(a.id)}
+                          align={cardAlign}
+                        />
+                      </div>
+                    ))}
+                  </section>
+                );
+              })
             )}
             <UnifiedTimelineSection groups={groups} rows={timelineRows} open={timelineOpen} onToggle={toggleTimeline} now={now} />
             {unconnected.map((p, i) => (
@@ -759,6 +816,12 @@ export function UsagePopover({
   return anchor && typeof document !== "undefined" ? createPortal(dialog, document.body) : dialog;
 }
 
+interface CardWindowAlign {
+  hasReset: boolean;
+  hasDetail: boolean;
+  hasPinnedWindow: boolean;
+}
+
 function windowPinLabel(name: string, w: UsageWindow, pinned: boolean): string {
   const scope = w.model?.trim()
     || (w.title?.trim() && w.title.trim().toLowerCase() !== w.label.trim().toLowerCase() ? w.title.trim() : "")
@@ -778,6 +841,7 @@ function PinToggle({
   onClick,
   pinAttr,
   windowAttr,
+  pinOverlay,
   iconSize = 12,
   className,
 }: {
@@ -786,6 +850,7 @@ function PinToggle({
   onClick: () => void;
   pinAttr?: string;
   windowAttr?: string;
+  pinOverlay?: boolean;
   iconSize?: number;
   className?: string;
 }) {
@@ -794,12 +859,14 @@ function PinToggle({
       type="button"
       data-usage-pin={pinAttr}
       data-usage-pin-window={windowAttr}
+      data-pin-pinned={windowAttr ? (pinned ? "true" : "false") : undefined}
+      data-pin-overlay={pinOverlay ? "true" : undefined}
       aria-pressed={pinned}
       aria-label={label}
       title={pinned ? tr("usage.unpin_title") : tr("usage.pin_title")}
       onClick={onClick}
       className={cx(
-        "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-control transition-colors",
+        "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-control transition-[color,background-color,opacity]",
         pinned ? "bg-hover-2 text-accent-ink" : "text-ink-3 hover:bg-hover hover:text-ink",
         className,
       )}
@@ -813,73 +880,33 @@ function AccountSection({
   a,
   now,
   pinnedSet,
-  showAge = true,
+  headerAge = "",
+  mergedHeader = false,
   overlapWith,
+  align,
 }: {
   a: UsageAccount;
   now: number;
   pinnedSet: ReadonlySet<string>;
-  showAge?: boolean;
+  headerAge?: string;
+  mergedHeader?: boolean;
   overlapWith?: string;
+  align: CardWindowAlign;
 }) {
+  const [staleOverlapOpen, setStaleOverlapOpen] = useState(false);
   const from = sourceNames(a);
   const plan = planNote(a);
   const pinned = pinnedSet.has(a.id);
   const showPin = isPinnableUsageAccount(a) || pinned;
   // A balance's failure is about the provider's balance route, not a usage gateway's stored windows (#11825).
   const problem = isBalanceAccount(a) ? balanceProblemText(a) : problemText(a);
+  const acctAge = sampleAge(a.sampled_at, now);
+  const showAge = !mergedHeader && Boolean(acctAge) && (Boolean(a.stale) || acctAge !== headerAge);
   const sections = groupAccountWindows(a);
-  return (
-    <section aria-label={a.name} data-usage-stale={a.stale ? "true" : undefined} className="flex flex-col gap-1.5">
-      <header className="flex flex-col gap-0.5">
-        <div className="flex items-center gap-1.5">
-          <h3 className={cx("min-w-0 flex-1 truncate text-label font-medium", a.stale ? "text-ink-2" : "text-ink")} title={a.name}>
-            {a.name}
-          </h3>
-          {plan && (
-            <span data-usage-plan className="max-w-36 shrink-0 truncate whitespace-nowrap rounded-chip bg-inset px-1.5 py-px text-submeta font-medium text-ink-2" title={plan}>
-              {plan}
-            </span>
-          )}
-          {showPin && (
-            <PinToggle
-              pinned={pinned}
-              pinAttr={a.id}
-              label={pinned ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
-              onClick={() => togglePinnedUsageAccount(a.id)}
-            />
-          )}
-        </div>
-        {(from.length > 0 || showAge) && (
-          <div className="flex min-w-0 items-baseline justify-between gap-2 text-submeta text-ink-3">
-            {from.length > 0 ? (
-              <span data-usage-source className="min-w-0 truncate" title={tr("usage.sources_title", { sources: from.join(" · ") })}>
-                {from.join(" · ")}
-              </span>
-            ) : (
-              <span aria-hidden />
-            )}
-            {showAge && (
-              <span className="shrink-0 whitespace-nowrap">
-                {a.stale ? tr("usage.stale_age", { age: sampleAge(a.sampled_at, now) }) : sampleAge(a.sampled_at, now)}
-              </span>
-            )}
-          </div>
-        )}
-        {overlapWith && (
-          <div
-            data-usage-overlap-hint
-            className="flex min-w-0 items-center gap-1 text-submeta text-ink-3"
-            title={tr("usage.overlap_hint_title", { name: overlapWith })}
-          >
-            <Icon name="info" size={11} className="shrink-0" />
-            <span className="min-w-0 truncate">{tr("usage.overlap_hint", { name: overlapWith })}</span>
-          </div>
-        )}
-        {problem && <div className="text-submeta leading-snug text-orange">{problem}</div>}
-        {a.headline?.trim() && <div data-usage-headline className="text-submeta leading-snug text-ink-2">{a.headline.trim()}</div>}
-        {a.notice?.trim() && <div data-usage-notice className="text-submeta leading-snug text-ink-3">{a.notice.trim()}</div>}
-      </header>
+  const collapseStaleOverlap = Boolean(a.stale && overlapWith);
+
+  const renderBody = () => (
+    <>
       {a.balance && (
         <div data-usage-balance className="flex items-baseline justify-between gap-2 rounded-control bg-inset px-2.5 py-2">
           <span className="text-xs text-ink-3">{tr("usage.balance_label")}</span>
@@ -893,7 +920,7 @@ function AccountSection({
             <div key={`plain:${idx}`} className="flex flex-col gap-1.5">
               {section.windows.map((w) => {
                 const pinId = usageWindowPinId(a.id, w);
-                return <WindowRow key={windowKey(w)} name={a.name} w={w} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} />;
+                return <WindowRow key={windowKey(w)} name={a.name} w={w} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} align={align} />;
               })}
             </div>
           );
@@ -910,6 +937,7 @@ function AccountSection({
               now={now}
               pinId={pinId}
               pinned={pinnedSet.has(pinId)}
+              align={align}
             />
           );
         }
@@ -926,12 +954,147 @@ function AccountSection({
             <div className="flex flex-col gap-1">
               {section.windows.map((w) => {
                 const pinId = usageWindowPinId(a.id, w);
-                return <WindowRow key={windowKey(w)} name={a.name} w={w} groupContext={section.title} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} />;
+                return <WindowRow key={windowKey(w)} name={a.name} w={w} groupContext={section.title} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} align={align} />;
               })}
             </div>
           </div>
         );
       })}
+    </>
+  );
+
+  if (collapseStaleOverlap && overlapWith) {
+    const staleSummary = tr("usage.overlap_stale_summary", { name: overlapWith });
+    const fullTip = [a.name, acctAge ? tr("usage.stale_age", { age: acctAge }) : "", tr("usage.overlap_hint_title", { name: overlapWith })].filter(Boolean).join(" · ");
+    return (
+      <section aria-label={a.name} data-usage-stale="true" data-usage-stale-overlap={staleOverlapOpen ? "expanded" : "collapsed"} className="flex flex-col gap-1">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            data-usage-stale-overlap-toggle
+            aria-expanded={staleOverlapOpen}
+            aria-label={staleOverlapOpen ? tr("usage.overlap_stale_hide", { name: a.name }) : tr("usage.overlap_stale_show", { name: a.name })}
+            title={fullTip}
+            onClick={() => setStaleOverlapOpen((v) => !v)}
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-control px-1 py-0.5 text-left text-submeta text-ink-3 transition-colors hover:bg-hover/60"
+          >
+            <Icon name="info" size={11} className="shrink-0" />
+            <span className="max-w-[42%] shrink-0 truncate font-medium text-ink-2">{a.name}</span>
+            <span data-usage-overlap-hint className="min-w-0 flex-1 truncate text-ink-3">
+              {staleSummary}
+            </span>
+            <span aria-hidden className={cx("inline-flex shrink-0 items-center transition-transform", staleOverlapOpen ? "rotate-180" : "-rotate-90")}>
+              <Icon name="chevron" size={10} />
+            </span>
+          </button>
+          {pinned && (
+            <PinToggle
+              pinned={pinned}
+              pinAttr={a.id}
+              label={tr("usage.unpin_account", { name: a.name })}
+              onClick={() => togglePinnedUsageAccount(a.id)}
+            />
+          )}
+        </div>
+        <Collapse open={staleOverlapOpen} lazy>
+          <div data-usage-stale-overlap-body className="flex flex-col gap-1.5 pt-1">
+            <div className="flex min-w-0 items-center justify-between gap-2 text-submeta text-ink-3">
+              <span className="flex min-w-0 items-center gap-1.5">
+                {plan && (
+                  <span data-usage-plan className="shrink-0 whitespace-nowrap rounded-chip bg-inset px-1.5 py-px font-medium text-ink-2">
+                    {plan}
+                  </span>
+                )}
+                {from.length > 0 && (
+                  <span data-usage-source className="min-w-0 truncate" title={tr("usage.sources_title", { sources: from.join(" · ") })}>
+                    {from.join(" · ")}
+                  </span>
+                )}
+              </span>
+              <span className="flex shrink-0 items-center gap-1">
+                {acctAge && <span data-usage-account-age className="whitespace-nowrap">{tr("usage.stale_age", { age: acctAge })}</span>}
+                {showPin && !pinned && (
+                  <PinToggle
+                    pinned={false}
+                    pinAttr={a.id}
+                    label={tr("usage.pin_account", { name: a.name })}
+                    onClick={() => togglePinnedUsageAccount(a.id)}
+                  />
+                )}
+              </span>
+            </div>
+            {problem && <div className="text-submeta leading-snug text-orange">{problem}</div>}
+            {a.headline?.trim() && <div data-usage-headline className="text-submeta leading-snug text-ink-2">{a.headline.trim()}</div>}
+            {a.notice?.trim() && <div data-usage-notice className="text-submeta leading-snug text-ink-3">{a.notice.trim()}</div>}
+            {renderBody()}
+          </div>
+        </Collapse>
+      </section>
+    );
+  }
+
+  const hasSubMeta = from.length > 0 || showAge || Boolean(overlapWith || problem || a.headline?.trim() || a.notice?.trim());
+  return (
+    <section
+      aria-label={a.name}
+      data-usage-stale={a.stale ? "true" : undefined}
+      data-usage-merged-header={mergedHeader ? "true" : undefined}
+      className="flex flex-col gap-1.5"
+    >
+      {(!mergedHeader || hasSubMeta) && (
+        <header className="flex flex-col gap-0.5">
+          {!mergedHeader && (
+            <div className="flex items-center gap-1.5">
+              <h3 className={cx("min-w-0 flex-1 truncate text-label font-medium", a.stale ? "text-ink-2" : "text-ink")} title={a.name}>
+                {a.name}
+              </h3>
+              {plan && (
+                <span data-usage-plan className="max-w-36 shrink-0 truncate whitespace-nowrap rounded-chip bg-inset px-1.5 py-px text-submeta font-medium text-ink-2" title={plan}>
+                  {plan}
+                </span>
+              )}
+              {showPin && (
+                <PinToggle
+                  pinned={pinned}
+                  pinAttr={a.id}
+                  label={pinned ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
+                  onClick={() => togglePinnedUsageAccount(a.id)}
+                />
+              )}
+            </div>
+          )}
+          {(from.length > 0 || showAge) && (
+            <div className="flex min-w-0 items-baseline justify-between gap-2 text-submeta text-ink-3">
+              {from.length > 0 ? (
+                <span data-usage-source className="min-w-0 truncate" title={tr("usage.sources_title", { sources: from.join(" · ") })}>
+                  {from.join(" · ")}
+                </span>
+              ) : (
+                <span aria-hidden />
+              )}
+              {showAge && (
+                <span data-usage-account-age className="shrink-0 whitespace-nowrap">
+                  {a.stale ? tr("usage.stale_age", { age: acctAge }) : acctAge}
+                </span>
+              )}
+            </div>
+          )}
+          {overlapWith && (
+            <div
+              data-usage-overlap-hint
+              className="flex min-w-0 items-center gap-1 text-submeta text-ink-3"
+              title={tr("usage.overlap_hint_title", { name: overlapWith })}
+            >
+              <Icon name="info" size={11} className="shrink-0" />
+              <span className="min-w-0 truncate">{tr("usage.overlap_hint", { name: overlapWith })}</span>
+            </div>
+          )}
+          {problem && <div className="text-submeta leading-snug text-orange">{problem}</div>}
+          {a.headline?.trim() && <div data-usage-headline className="text-submeta leading-snug text-ink-2">{a.headline.trim()}</div>}
+          {a.notice?.trim() && <div data-usage-notice className="text-submeta leading-snug text-ink-3">{a.notice.trim()}</div>}
+        </header>
+      )}
+      {renderBody()}
     </section>
   );
 }
@@ -951,6 +1114,14 @@ function UsageTable({
   overlaps: ReadonlyMap<string, string>;
   now: number;
 }) {
+  const [expandedStaleIds, setExpandedStaleIds] = useState<Set<string>>(() => new Set());
+  const toggleStaleRow = (id: string) =>
+    setExpandedStaleIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const dataColSpan = Math.max(1, model.columns.length + (model.hasOther ? 1 : 0));
   const accountColPct = dataColSpan <= 2 ? 38 : 34;
   const dataColPct = (100 - accountColPct) / dataColSpan;
@@ -1020,12 +1191,49 @@ function UsageTable({
             const rowBorder = idx === 0 ? "" : providerBreak ? "border-t border-line-strong" : "border-t border-line";
             const age = a.stale ? tr("usage.stale_age", { age: sampleAge(a.sampled_at, now) }) : sampleAge(a.sampled_at, now);
             const metaLine = [from.join(" · "), age].filter(Boolean).join(" · ");
+            const isStaleOverlapCollapsed = Boolean(a.stale && overlapWith && !expandedStaleIds.has(a.id));
+
+            if (isStaleOverlapCollapsed && overlapWith) {
+              return (
+                <tr
+                  key={a.id}
+                  data-usage-table-row={a.id}
+                  data-usage-provider={provider}
+                  data-usage-stale="true"
+                  data-usage-stale-overlap="collapsed"
+                >
+                  <td colSpan={1 + dataColSpan} className={cx("px-2.5 py-1.5", rowBorder)}>
+                    <button
+                      type="button"
+                      data-usage-stale-overlap-toggle
+                      aria-expanded={false}
+                      aria-label={tr("usage.overlap_stale_show", { name: a.name })}
+                      title={[a.name, age, tr("usage.overlap_hint_title", { name: overlapWith })].filter(Boolean).join(" · ")}
+                      onClick={() => toggleStaleRow(a.id)}
+                      className="flex w-full items-center gap-1.5 rounded-control text-left text-submeta text-ink-3 transition-colors hover:text-ink"
+                    >
+                      <span aria-hidden data-provider-dot={provider} className="size-1.5 shrink-0 rounded-full opacity-60" style={{ background: providerHue(provider) }} />
+                      <Icon name="info" size={11} className="shrink-0" />
+                      <span className="shrink-0 font-medium text-ink-2">{a.name}</span>
+                      <span data-usage-overlap-hint className="min-w-0 flex-1 truncate">
+                        {tr("usage.overlap_stale_summary", { name: overlapWith })}
+                      </span>
+                      <span aria-hidden className="inline-flex shrink-0 -rotate-90 items-center">
+                        <Icon name="chevron" size={10} />
+                      </span>
+                    </button>
+                  </td>
+                </tr>
+              );
+            }
+
             return (
               <tr
                 key={a.id}
                 data-usage-table-row={a.id}
                 data-usage-provider={provider}
                 data-usage-stale={a.stale ? "true" : undefined}
+                data-usage-stale-overlap={a.stale && overlapWith ? "expanded" : undefined}
               >
                 <td className={cx("usage-table-sticky px-2.5 py-2 align-top", rowBorder)}>
                   <div className="flex items-start gap-1.5">
@@ -1051,14 +1259,28 @@ function UsageTable({
                         </div>
                       )}
                       {overlapWith && (
-                        <div
-                          data-usage-overlap-hint
-                          className="flex items-center gap-1 text-submeta text-ink-3"
-                          title={tr("usage.overlap_hint_title", { name: overlapWith })}
-                        >
-                          <Icon name="info" size={10} className="shrink-0" />
-                          <span className="min-w-0 truncate">{tr("usage.overlap_hint", { name: overlapWith })}</span>
-                        </div>
+                        a.stale ? (
+                          <button
+                            type="button"
+                            data-usage-stale-overlap-toggle
+                            aria-expanded={true}
+                            aria-label={tr("usage.overlap_stale_hide", { name: a.name })}
+                            onClick={() => toggleStaleRow(a.id)}
+                            className="flex max-w-full items-center gap-1 text-submeta text-ink-3 hover:text-ink"
+                          >
+                            <Icon name="info" size={10} className="shrink-0" />
+                            <span data-usage-overlap-hint className="min-w-0 truncate">{tr("usage.overlap_hint", { name: overlapWith })}</span>
+                          </button>
+                        ) : (
+                          <div
+                            data-usage-overlap-hint
+                            className="flex items-center gap-1 text-submeta text-ink-3"
+                            title={tr("usage.overlap_hint_title", { name: overlapWith })}
+                          >
+                            <Icon name="info" size={10} className="shrink-0" />
+                            <span className="min-w-0 truncate">{tr("usage.overlap_hint", { name: overlapWith })}</span>
+                          </div>
+                        )
                       )}
                       {problem && <div className="text-submeta leading-snug text-orange">{problem}</div>}
                       {a.headline?.trim() && <div data-usage-headline className="text-submeta leading-snug text-ink-2">{a.headline.trim()}</div>}
@@ -1126,14 +1348,15 @@ function UsageTable({
                         <div className="flex flex-col gap-1.5">
                           {row.other.map((w) => {
                             const pinId = usageWindowPinId(a.id, w);
+                            const sub = tableWindowSubLabel(w, "", 1, tr("usage.table_plan_window"));
                             return (
                               <TableWindowCell
                                 key={windowKey(w)}
                                 name={a.name}
                                 w={w}
                                 subLabel={{
-                                  text: w.title?.trim() || (w.model?.trim() ? `${w.label} · ${w.model.trim()}` : w.label),
-                                  full: [w.group?.trim(), w.model?.trim(), w.title?.trim(), w.label].filter(Boolean).join(" · "),
+                                  text: sub.text ? `${w.label} · ${sub.text}` : w.label,
+                                  full: [w.group?.trim(), w.model?.trim(), sub.full, w.label].filter((v, i, arr) => Boolean(v) && arr.findIndex((x) => x?.toLowerCase() === v?.toLowerCase()) === i).join(" · "),
                                 }}
                                 stale={Boolean(a.stale)}
                                 now={now}
@@ -1197,8 +1420,8 @@ function TableWindowCell({
   const inlineReset = !subLabel.text;
   const pinLabel = windowPinLabel(name, w, pinned);
   return (
-    <div data-window-row={w.label} data-window-paused={paused ? "true" : undefined} className="flex min-w-0 flex-col gap-1" title={tip}>
-      <div className="flex min-w-0 items-center justify-between gap-1">
+    <div data-window-row={w.label} data-window-paused={paused ? "true" : undefined} className="usage-table-cell flex min-w-0 flex-col gap-1" title={tip}>
+      <div className="relative flex min-w-0 items-center justify-between gap-1">
         {subLabel.text ? (
           <>
             <span
@@ -1231,10 +1454,11 @@ function TableWindowCell({
         <PinToggle
           pinned={pinned}
           windowAttr={pinId}
+          pinOverlay={!pinned}
           label={pinLabel}
           onClick={() => togglePinnedUsageAccount(pinId)}
           iconSize={10}
-          className="h-4 w-4"
+          className="usage-win-pin h-4 w-4"
         />
       </div>
       <div className={cx("min-w-0", stale && "opacity-70", reserve !== null && "pt-0.5")}>
@@ -1336,10 +1560,14 @@ function UnifiedTimelineSection({
         {!open && next ? (
           <span
             data-usage-timeline-summary
-            className="min-w-0 flex-1 truncate text-right text-ink-3"
+            className="flex min-w-0 flex-1 items-baseline justify-end gap-1 text-ink-3"
             title={tr("usage.timeline_next", { name: next.accountName, window: next.label, remaining: remainingText(next.remainingMs) })}
           >
-            {tr("usage.timeline_next", { name: next.accountName, window: next.label, remaining: remainingText(next.remainingMs) })}
+            <span className="shrink-0 whitespace-nowrap">{tr("usage.timeline_next_prefix")}</span>
+            <span data-usage-timeline-next-name className="min-w-0 truncate">{next.accountName}</span>
+            <span data-usage-timeline-next-time className="shrink-0 whitespace-nowrap tabular-nums text-ink-2">
+              {`· ${next.label} · ${compactResetText(next.resetsAt, now)}`}
+            </span>
           </span>
         ) : (
           <span className="flex-1" />
@@ -1496,6 +1724,7 @@ function WindowRow({
   now,
   pinId,
   pinned,
+  align,
 }: {
   name: string;
   w: UsageWindow;
@@ -1505,6 +1734,7 @@ function WindowRow({
   now: number;
   pinId: string;
   pinned: boolean;
+  align: CardWindowAlign;
 }) {
   const [expanded, setExpanded] = useState(false);
   const p = accountPace({ stale }, w, now);
@@ -1520,24 +1750,34 @@ function WindowRow({
   const pausedLabel = paused ? tr("usage.paused") : "";
   const fullResetWithPaused = paused ? (fullReset ? `${pausedLabel} · ${fullReset}` : pausedLabel) : fullReset;
   const hasDetail = Boolean(paceVerdict || fullResetWithPaused);
-  const display = windowRowDisplay(w, inlineModel);
-  const customLabel = Boolean(display.spanBadge || display.modelTag || (w.title?.trim() && w.title.trim().toLowerCase() !== w.label.trim().toLowerCase()));
+  const display = windowRowDisplay(w, inlineModel, groupContext);
   const scopeLabel = w.model?.trim() || groupContext || "";
-  const windowLabelForAria = w.title?.trim() && w.title.trim().toLowerCase() !== w.label.trim().toLowerCase() ? `${w.title.trim()} (${w.label})` : w.label;
+  const distinctTitle = w.title?.trim()
+    && w.title.trim().toLowerCase() !== w.label.trim().toLowerCase()
+    && (!scopeLabel || w.title.trim().toLowerCase() !== scopeLabel.toLowerCase())
+    ? w.title.trim()
+    : "";
+  const windowLabelForAria = distinctTitle ? `${distinctTitle} (${w.label})` : w.label;
   const meterBaseLabel = scopeLabel
     ? tr("usage.window_model_remaining_label", { name, window: windowLabelForAria, model: scopeLabel, percent: shown(remaining) })
     : tr("usage.window_remaining_label", { name, window: windowLabelForAria, percent: shown(remaining) });
   const meterLabel = paceVerdict ? `${meterBaseLabel}, ${paceVerdict}` : meterBaseLabel;
-  const rowTitle = [display.primary, display.spanBadge, display.modelTag, shown(remaining), paceVerdict, fullResetWithPaused, display.note].filter(Boolean).join(" · ");
+  const rowTitle = [display.span, display.caption, shown(remaining), paceVerdict, fullResetWithPaused, display.note].filter(Boolean).join(" · ");
   const pinLabel = windowPinLabel(name, w, pinned);
+  const gridCols = align.hasReset
+    ? "grid-cols-[1.75rem_minmax(2.5rem,1fr)_2.25rem_3.75rem_0.75rem] @[300px]:grid-cols-[1.75rem_minmax(2.5rem,1fr)_2.25rem_6.75rem_0.75rem]"
+    : align.hasDetail
+      ? "grid-cols-[1.75rem_minmax(2.5rem,1fr)_2.25rem_0.75rem]"
+      : "grid-cols-[1.75rem_minmax(2.5rem,1fr)_2.25rem]";
+  const pinOverlay = !pinned && !align.hasPinnedWindow;
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-1">
+      <div className={cx("usage-win-row relative flex items-end", align.hasPinnedWindow && "gap-1")}>
         <button
           type="button"
           data-window-row={w.label}
           data-window-paused={paused ? "true" : undefined}
-          data-window-inline-model={display.modelTag ? "true" : undefined}
+          data-window-inline-model={display.isModelCaption ? "true" : undefined}
           aria-expanded={hasDetail ? expanded : undefined}
           aria-label={rowTitle}
           title={rowTitle}
@@ -1545,36 +1785,26 @@ function WindowRow({
           onClick={() => hasDetail && setExpanded((v) => !v)}
           className={cx(
             "grid min-w-0 flex-1 items-center gap-x-1.5 rounded-sm text-left text-submeta [@media(pointer:coarse)]:min-h-11",
-            customLabel
-              ? "grid-cols-[minmax(1.75rem,auto)_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]"
-              : "grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]",
-            hasProtect && "mt-3.5",
+            gridCols,
+            hasProtect && !display.caption && "mt-3.5",
             hasDetail && "hover:bg-hover/60",
           )}
         >
-          {customLabel ? (
-            <span className="flex max-w-32 min-w-7 items-baseline gap-1">
-              {display.modelTag ? (
-                <>
-                  <span className="shrink-0 text-ink-2">{display.primary}</span>
-                  <span aria-hidden className="shrink-0 text-ink-3">·</span>
-                  <span data-usage-model className="min-w-0 truncate text-ink-3" title={display.modelTag}>
-                    {display.modelTag}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span data-usage-window-title className="min-w-0 truncate text-ink-2" title={display.primary}>
-                    {display.primary}
-                  </span>
-                  {display.spanBadge && <span className="shrink-0 text-ink-3">{display.spanBadge}</span>}
-                </>
+          {display.caption && (
+            <span
+              data-usage-model={display.isModelCaption ? (inlineModel ?? w.model) : undefined}
+              data-usage-window-title={display.hasTitle ? display.caption : undefined}
+              className={cx(
+                "col-start-2 col-end-[-1] min-w-0 truncate text-submeta leading-tight text-ink-3",
+                hasProtect ? "pb-4" : "pb-0.5",
               )}
+              title={display.caption}
+            >
+              {display.caption}
             </span>
-          ) : (
-            <span className="w-7 truncate text-ink-2">{display.primary}</span>
           )}
-          <span className={cx("block min-w-0", stale && "opacity-70")}>
+          <span data-window-span className="col-start-1 w-7 truncate text-ink-2">{display.span}</span>
+          <span className={cx("col-start-2 block min-w-0", stale && "opacity-70")}>
             <Meter
               remaining={remaining}
               expectedRemaining={expectedRemaining}
@@ -1585,48 +1815,53 @@ function WindowRow({
               tall
             />
           </span>
-          <span data-usage-percent className={cx("shrink-0 whitespace-nowrap text-right font-medium tabular-nums", stale ? "text-ink-2" : TONE_TEXT[tone])}>
+          <span data-usage-percent className={cx("col-start-3 w-9 whitespace-nowrap text-right font-medium tabular-nums", stale ? "text-ink-2" : TONE_TEXT[tone])}>
             {shown(remaining)}
           </span>
-          {fullResetWithPaused ? (
-            <span data-usage-reset data-usage-paused={paused ? "true" : undefined} className="min-w-0 truncate text-right text-ink-3" title={fullResetWithPaused}>
-              {paused && <span className="font-medium text-red">{pausedLabel}</span>}
-              {paused && fullReset && <span aria-hidden> · </span>}
-              {fullReset && (
-                <>
-                  <span data-reset-full className="hidden @[300px]:inline">{fullReset}</span>
-                  <span data-reset-short className="@[300px]:hidden">{shortReset}</span>
-                </>
-              )}
-            </span>
-          ) : (
-            <span aria-hidden />
+          {align.hasReset && (
+            fullResetWithPaused ? (
+              <span data-usage-reset data-usage-paused={paused ? "true" : undefined} className="col-start-4 min-w-0 truncate text-right text-ink-3" title={fullResetWithPaused}>
+                {paused && <span className="font-medium text-red">{pausedLabel}</span>}
+                {paused && fullReset && <span aria-hidden> · </span>}
+                {fullReset && (
+                  <>
+                    <span data-reset-full className="hidden @[300px]:inline">{fullReset}</span>
+                    <span data-reset-short className="@[300px]:hidden">{shortReset}</span>
+                  </>
+                )}
+              </span>
+            ) : (
+              <span aria-hidden data-window-reset-placeholder className="col-start-4" />
+            )
           )}
-          {hasDetail ? (
-            <span aria-hidden data-window-chevron className={cx("inline-flex shrink-0 items-center text-ink-3 transition-transform", expanded ? "rotate-180" : "-rotate-90")}>
-              <Icon name="chevron" size={10} />
-            </span>
-          ) : (
-            <span aria-hidden />
+          {(align.hasReset || align.hasDetail) && (
+            hasDetail ? (
+              <span aria-hidden data-window-chevron className={cx("inline-flex w-3 shrink-0 items-center justify-end text-ink-3 transition-transform", align.hasReset ? "col-start-5" : "col-start-4", expanded ? "rotate-180" : "-rotate-90")}>
+                <Icon name="chevron" size={10} />
+              </span>
+            ) : (
+              <span aria-hidden data-window-chevron-placeholder className={cx("w-3", align.hasReset ? "col-start-5" : "col-start-4")} />
+            )
           )}
         </button>
         <PinToggle
           pinned={pinned}
           windowAttr={pinId}
+          pinOverlay={pinOverlay}
           label={pinLabel}
           onClick={() => togglePinnedUsageAccount(pinId)}
           iconSize={11}
-          className={hasProtect ? "mt-3.5" : undefined}
+          className="usage-win-pin"
         />
       </div>
       {display.note && (
-        <div data-usage-window-note className="pl-7 pt-0.5 text-submeta leading-snug text-ink-3">
+        <div data-usage-window-note className="pl-[2.125rem] pt-0.5 text-submeta leading-snug text-ink-3">
           {display.note}
         </div>
       )}
       {hasDetail && (
         <Collapse open={expanded} lazy>
-          <div data-usage-pace-detail className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 pl-7 pt-1 text-submeta">
+          <div data-usage-pace-detail className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 pl-[2.125rem] pt-1 text-submeta">
             {paceVerdict && <span className="whitespace-nowrap text-orange">{paceVerdict}</span>}
             {fullResetWithPaused && <span className={cx(paused && !fullReset ? "font-medium text-red" : "text-ink-3")}>{fullResetWithPaused}</span>}
           </div>
