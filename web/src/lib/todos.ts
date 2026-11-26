@@ -326,6 +326,7 @@ export interface TodoAsk {
   questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
+  summary?: string;
   recommend?: string;
   /** Direct evidence/PR/MR URL when present and not merely the to-do's own page (#14659). */
   link?: string;

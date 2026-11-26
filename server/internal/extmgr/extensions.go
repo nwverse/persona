@@ -224,10 +224,11 @@ type extensions struct {
 	dev devTaps
 	// badges are the plugins' badges on their nav_pages' entries ("<plugin>/<ui>" → extension.Badge; extension_ui.go).
 	badges sync.Map
-	// events and todoEvents keep slow extension programs out of the assistant bus read loop: the knowledge base's and the
-	// todos' queues, apart so that a flood of one does not push out the other's.
+	// events, todoEvents and larkEvents keep slow extension programs out of the assistant bus read loop and sync runs:
+	// separate queues so a flood of one does not push out another's.
 	events     extensionEvents
 	todoEvents extensionEvents
+	larkEvents extensionEvents
 	// filtersSent are the agent filters last handed to the nodes, as JSON (agent_filters.go); nil before the first.
 	filtersSent []byte
 	// invalid are the extensions' ui.invalidate waiting to be told to the apps (extension_ui.go), at most one a second.

@@ -330,7 +330,7 @@ function FeishuBotBuiltinDetail({
     void loadLarkcli();
   }, [loadLarkcli]);
 
-  const feishuCtl = useFeishuBotController(true, loadLarkcli);
+  const feishuCtl = useFeishuBotController(true, loadLarkcli, channelCtl.load);
 
   const refreshAll = () => {
     void loadLarkcli();
@@ -395,7 +395,7 @@ function FeishuBotBuiltinDetail({
 
       {/* 2. Chat & Delivery */}
       <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
-        <ChannelDeliveryBlock ctl={channelCtl} onSettings={onSettings} />
+        <ChannelDeliveryBlock ctl={channelCtl} target={target} targetOnly onSettings={onSettings} />
         <FeishuBotDeliveryPanel ctl={feishuCtl} />
       </SectionBlock>
       <ConnectorExternalSourceSettings ids={[channelId]} manager={manager} />
@@ -587,7 +587,7 @@ function BuiltinIntegrationDetail({
       {/* 2. Chat & Delivery */}
       {channelId && (
         <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
-          <ChannelDeliveryBlock ctl={channelCtl} onSettings={onSettings} />
+          <ChannelDeliveryBlock ctl={channelCtl} target={target} onSettings={onSettings} />
         </SectionBlock>
       )}
 
@@ -1080,7 +1080,7 @@ function ExtensionIntegrationDetail({
           {/* 2. Chat & Delivery */}
           {hasChannelSection && (
             <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
-              {channelId && <ChannelDeliveryBlock ctl={channelCtl} onSettings={onSettings} />}
+              {channelId && <ChannelDeliveryBlock ctl={channelCtl} target={target} onSettings={onSettings} />}
               {editable && sections.channel.length > 0 && (
                 <SectionFieldGroups
                   fields={sections.channel}
