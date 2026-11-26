@@ -1480,6 +1480,12 @@ func (s *Service) executeOwnerTodoHandoff(ctx context.Context, todoID string, re
 		}
 	}
 
+	// Preserve an existing supervisor. When automatic Agent supervision is enabled, an untracked to-do
+	// gets the same owner its other Agent work has; a reporting-only origin keeps its quiet report path.
+	if s.agentTasks(ctx) {
+		s.ensureSupervisor(ctx, todo.ID)
+	}
+
 	// Ensure predecessor safely relinquishes the workspace before starting the replacement.
 	stopped, err := s.stopContinuedTaskAgents(ctx, todo)
 	if err != nil {

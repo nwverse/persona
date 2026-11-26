@@ -96,6 +96,11 @@ Use synthetic conversations for screenshots, not the user's real main conversati
 - User images take two paths: ordinary messages contain user image blocks; messages sent while Claude is working are "absorbed mid-turn" as `attachment/queued_command`, with images in the prompt's block array
   (before 2026-10-29, the parser took only text blocks, so bubbles showed no images). In App turns awakened by background tasks, keep the user's images together with their message in the original position, not in the work trace.
 - A long chat's slow first screen is not caused by the hub / node (cold read: 0.12 s), but by the page being too large: one long Codex session's last two turns contained 1412 entries and 1.08 MB, with just 6 reply entries; the rest were tools and thinking already collapsed in the UI.
+- A navigation read can seek to a cold source line using the file's offset table (#15736). Establish the branch
+  topology first so an old question and its reply stay hidden after a rewind in the parsed tail. A detached window
+  has its own covered interval. Attach it to a chat view at that interval so the ordinary continuity fill can
+  still detect actual gaps. Scope preview extraction at the source because filtering positions after excerpt
+  extraction cannot remove a reply already copied from a frozen segment's tail.
 - Codex commentary is assistant text, not `Reasoning` (#5853). Keep an internal-only `Narration` marker so folding can handle completed narration without exposing a new wire kind or counting it as thinking. Only the latest page leaves the newest commentary visible until a final answer follows; a historical page may end before a final answer stored on the next page. Changing only the item kind let 110 commentary rows escape the fold and broke the long-session 40-item / 32 KB budget; cover real running pages, completed folds, expansion merging and golden output together.
 - The App requests `fold_work`. Pages read backward from the end replace each work segment with one `kind: fold` entry (counts and ranges only). Expanding a work row fetches it with `from_seq` / `through_seq`
   (`docs/protocol/protocol.md`, "Folded work"). `after_seq` catch-up and live pushes are not folded. Neither are tool_use entries still running or tool_result entries whose other half is outside the page, or they cannot be paired.

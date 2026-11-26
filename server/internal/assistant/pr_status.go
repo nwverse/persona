@@ -579,14 +579,26 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	status.Title = repository.ObservedLinkTitle(status.Title)
 	externalSource := externalParkPRURL(held)
 	isExternalParkPR := externalSource != "" && externalSource == triageNormalizePRURL(status.URL)
+	terminalState := strings.EqualFold(status.State, "merged") || strings.EqualFold(status.State, "closed")
+	reconcileBlockers := func() {
+		if terminalState && s.settings(ctx).todosV2On() {
+			if _, err := s.reconcileTodoBlockersForPR(ctx, status); err != nil {
+				s.logf("task %s: reconcile blockers for PR %s: %v", t.ID, status.URL, err)
+			}
+		}
+	}
 	current, ok := s.todoNow(t.ID)
 	if !ok || current.DoneAt != nil {
+		reconcileBlockers()
 		return nil
 	}
 	if current.PRURL != status.URL && !slices.Contains(current.PRs, status.URL) {
 		if isExternalParkPR {
-			return s.applyExternalParkOnlyPRStatus(ctx, t, current, held, status)
+			if err := s.applyExternalParkOnlyPRStatus(ctx, t, current, held, status); err != nil {
+				return err
+			}
 		}
+		reconcileBlockers()
 		return nil
 	}
 	t = current
@@ -639,8 +651,11 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		b.mu.Unlock()
 		b.stageWriting.Unlock()
 		if isExternalParkPR {
-			return s.applyExternalParkOnlyPRStatus(ctx, t, current, held, status)
+			if err := s.applyExternalParkOnlyPRStatus(ctx, t, current, held, status); err != nil {
+				return err
+			}
 		}
+		reconcileBlockers()
 		return nil // a new Agent reply replaced the PR while the request was in flight
 	}
 	store := s.store()
@@ -759,6 +774,8 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		s.drainWorkspaceQueuesForPrereq(ctx, t.ID)
 		s.evaluateTodoAfterDependents(ctx, t.ID)
 	}
+	reconcileBlockers()
+	s.onPRStatusMergeTrain(ctx, t, status)
 	return nil
 }
 
