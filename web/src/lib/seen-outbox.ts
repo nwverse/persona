@@ -53,13 +53,17 @@ const expired = (m: SeenMark, now: number) => now - m.markedAt > SEEN_KEEP_MS ||
 
 /** Finished and not seen yet: Unread, or Just finished (seen as far as its state goes, but nobody looked, #9751). */
 export function unseen(s: Session): boolean {
+  if (s.view) {
+    const reason = s.view.reason;
+    return !s.locallySeen && s.view.phase === "done" && (reason?.kind === "unseen" || reason?.kind === "just_finished" || (reason?.kind === "asks" && reason.unseen === true));
+  }
   const st = activityOf(s);
   return st === "unread" || (st === "idle" && Boolean(s.work?.just_finished));
 }
 
 /** `s` as seen: no longer Unread, nor Just finished. */
 export function seenCopy(s: Session): Session {
-  return { ...s, state: "idle", ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}) };
+  return { ...s, state: "idle", ...(s.view ? { locallySeen: true } : {}), ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}) };
 }
 
 /** A mark for `s` as the page has it now; only an unseen one (Unread or Just finished) waits for the hub. */

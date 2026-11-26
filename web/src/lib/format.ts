@@ -130,6 +130,7 @@ export function activityOf(s: Session): AgentState {
   if (!s.view && s.state) return s.state;
   const { phase, reason } = viewOf(s);
   if (phase === "working" || phase === "needs_you") return phase;
+  if (phase === "done" && s.locallySeen) return "idle";
   if (reason?.kind === "unseen" || (reason?.kind === "asks" && reason.unseen)) return "unread";
   if (reason?.kind === "not_running") return "offline";
   if (reason?.kind === "host_unknown") return "unknown";

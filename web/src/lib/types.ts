@@ -290,6 +290,8 @@ export interface Session {
   start_error_args?: Record<string, string>;
   state?: AgentState;
   view?: AgentView;
+  /** Local seen-outbox overlay until the manager acknowledges the read. */
+  locallySeen?: boolean;
   state_since?: string;
   agent?: string;
   agent_name?: string;

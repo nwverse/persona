@@ -165,7 +165,7 @@ export function awaitsReply(s: Session, mutes: AgentMutes = NO_MUTES): boolean {
  *  done before anybody looked, less than three hours ago (`work.just_finished`), or held there from this visit (#12585),
  *  and not muted. Such an agent is not quiet: it never folds into Idle Spaces. */
 export function justFinished(s: Session, mutes: AgentMutes = NO_MUTES, held?: HeldOrderOptions): boolean {
-  return (viewOf(s).reason?.kind === "just_finished" || (stateOf(s) === "idle" && heldPlace(s, held) === "just_finished")) && (Boolean(s.view) || !isMuted(s, mutes));
+  return ((!s.locallySeen && viewOf(s).reason?.kind === "just_finished") || (activityOf(s) === "idle" && heldPlace(s, held) === "just_finished")) && (Boolean(s.view) || !isMuted(s, mutes));
 }
 
 /** A held row that is seen now and still drawn in the place it was held in (Unread, Just finished, or Muted for a muted
