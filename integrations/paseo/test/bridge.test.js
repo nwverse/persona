@@ -567,6 +567,9 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   const { fake, node, a, rows } = await setup(t)
   fake.handlers.clear_agent_attention = (msg) => ({ payload: { agentId: msg.agentId, agents: [] } })
   fake.handlers['workspace.clear_attention.request'] = (msg) => ({ payload: { workspaceId: msg.workspaceId, clearedAgentIds: [a.grok.id], results: [], success: true, error: null } })
+  // A legacy row with a past turn already says done before the bridge receives the attention flag.
+  fake.update(a.claude.id, { requiresAttention: false })
+  await until('seen in Paseo', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   fake.update(a.claude.id, { requiresAttention: true })
   await until('unread', () => rows().find((r) => r.session_id === SID)?.status === 'done')
   await call(node, 'session.seen', { session_id: SID })
@@ -574,7 +577,7 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   // Stored (closed): through its workspace, while it is the only one flagged there; not the agent's own (it would start it).
   fake.update(a.claude.id, { requiresAttention: false })
   fake.update(a.grok.id, { requiresAttention: true, status: 'closed' })
-  await until('the grok flagged', () => fake.agents.get(a.grok.id).agent.requiresAttention === true)
+  await until('the grok flagged', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.status === 'done')
   await until('known flagged', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   await call(node, 'session.seen', { session_id: `paseo-${a.grok.id}` })
   assert.deepEqual(fake.requestsOf('workspace.clear_attention.request').map((r) => r.workspaceId), ['wks_1'])
@@ -2572,6 +2575,66 @@ test('duplicate projects at one physical root resolve deterministically; an expl
   assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_original')
   await call(node, 'session.start', { cwd: f.alias, workspace_id: w.id, launcher: 'my-codex' })
   assert.equal(fake.requestsOf('agent.create.request').at(-1).workspaceId, w.id)
+})
+
+test('symlink-alias duplicate projects at one physical root resolve deterministically to the canonical path', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_canonical', f.repo), f.project('prj_alias', f.alias)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.alias)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_canonical')
+    await call(node, 'session.start', { cwd: f.alias, launcher: 'my-codex' })
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_canonical')
+  }
+})
+
+test('symlink-alias duplicates with no record at the physical path prefer the project with more workspaces, then the lowest ID', async (t) => {
+  const f = projectFixture(t)
+  const alias2 = join(f.dir, 'alias2')
+  symlinkSync(f.repo, alias2)
+  const w = workspaceDescriptor({ workspaceDirectory: alias2, projectId: 'prj_zbusy' })
+  const { fake, node } = await setup(t, { workspaces: [w] })
+  await until('the workspace', () => node.last('runtime.workspaces'))
+  let projects = [f.project('prj_aidle', f.alias), f.project('prj_zbusy', alias2)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.repo)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_zbusy', 'more workspaces beats a lower ID')
+  }
+  projects = [f.project('prj_b', f.alias), f.project('prj_a', alias2)]
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await makeTree(node, f.repo)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.projectId, 'prj_a', 'equal workspaces fall back to the lowest ID')
+  }
+})
+
+test('a linked worktree start picks the canonical record among its main checkout\'s symlink duplicates', async (t) => {
+  const f = projectFixture(t)
+  const tree = join(f.dir, 'linked')
+  f.git(f.repo, 'worktree', 'add', '-b', 'linked', tree)
+  const { fake, node } = await setup(t)
+  let projects = [f.project('prj_legacy', tree), f.project('prj_alias', f.alias), f.project('prj_main', f.repo)]
+  fake.handlers['project.list.request'] = () => ({ payload: { projects } })
+  for (const order of [projects, [...projects].reverse()]) {
+    projects = order
+    await call(node, 'session.start', { cwd: tree, launcher: 'my-codex' })
+    assert.deepEqual(fake.requestsOf('workspace.create.request').at(-1).source, { kind: 'directory', path: tree, projectId: 'prj_main' })
+  }
+})
+
+test('path-only creation with no existing Paseo project canonicalizes symlink cwd before calling Paseo', async (t) => {
+  const f = projectFixture(t)
+  const { fake, node } = await setup(t)
+  fake.handlers['project.list.request'] = () => ({ payload: { projects: [] } })
+  await makeTree(node, f.alias)
+  assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.cwd, f.repo)
+  await call(node, 'session.start', { cwd: f.alias, launcher: 'my-codex' })
+  assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, f.repo)
 })
 
 for (const [name, reply] of [

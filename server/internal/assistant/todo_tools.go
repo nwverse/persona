@@ -41,6 +41,10 @@ func (s *Service) toolTodo(ctx context.Context, machine, self, name string, args
 		return s.toolTodoDone(ctx, machine, self, name, args)
 	case "todo_delete":
 		return s.toolTodoDelete(ctx, machine, self, args)
+	case "todo_split":
+		return s.toolTodoSplit(ctx, args)
+	case "todo_merge":
+		return s.toolTodoMerge(ctx, args)
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
@@ -299,10 +303,31 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		PartOf             json.RawMessage `json:"part_of"`
 		After              json.RawMessage `json:"after"`
 		BlockedByPR        []string        `json:"blocked_by_pr"`
+		UnlockStage        string          `json:"unlock_stage"`
+		UnlockContracts    []string        `json:"unlock_contracts"`
 		RepositoryBindings json.RawMessage `json:"repository_bindings"`
+		TopicMessageID     string          `json:"topic_message_id"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
+	}
+	title := strings.TrimSpace(a.Title)
+	if title == "" {
+		return "", errors.New("title is required")
+	}
+	if a.TopicMessageID != "" {
+		if a.Due != "" || a.Remind != "" || a.Priority != "" || a.Project != "" || a.Kind != "" ||
+			a.Audience != "" || a.DirectionID != "" || a.PartOf != nil || a.After != nil || a.RepositoryBindings != nil {
+			return "", errors.New("creating a Lark topic to-do takes only title, notes and topic_message_id")
+		}
+		run, ok := s.decidingTopicRun(ctx, machine, self, a.TopicMessageID)
+		if !ok {
+			return "", errors.New("topic_message_id must identify a pending Lark topic message for this main conversation")
+		}
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "todo_create", "", title, args); err != nil || !ok {
+			return todoNotAllowed(outcome, err)
+		}
+		return s.larkModule().DecideTopicTodo(ctx, run, title, strings.TrimSpace(a.Notes))
 	}
 	bindings, err := parseCreateBindings(a.RepositoryBindings)
 	if err != nil {
@@ -310,10 +335,6 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	}
 	if err := s.resolveCreateBindings(ctx, bindings); err != nil { // before the store, outside todos.writing
 		return "", s.taskRepositoryToolError(ctx, err)
-	}
-	title := strings.TrimSpace(a.Title)
-	if title == "" {
-		return "", errors.New("title is required")
 	}
 	kind, err := todoKind(a.Kind)
 	if err != nil {
@@ -344,11 +365,20 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		plan.DirectionID = &dir
 	}
 	var blockedByPR []string
-	if s.settings(ctx).todosV2On() && len(a.BlockedByPR) > 0 {
-		var prErr error
-		blockedByPR, prErr = parseBlockedByPRURLs(a.BlockedByPR)
-		if prErr != nil {
-			return "", prErr
+	var unlockStage string
+	var unlockContracts []string
+	if s.settings(ctx).todosV2On() {
+		if len(a.BlockedByPR) > 0 {
+			var prErr error
+			blockedByPR, prErr = parseBlockedByPRURLs(a.BlockedByPR)
+			if prErr != nil {
+				return "", prErr
+			}
+		}
+		var unlockErr error
+		unlockStage, unlockContracts, unlockErr = parseUnlockStageRule(a.UnlockStage, a.UnlockContracts)
+		if unlockErr != nil {
+			return "", unlockErr
 		}
 	}
 	if s.settings(ctx).todosV2On() && strings.TrimSpace(a.ItemType) != "" {
@@ -397,8 +427,12 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		if err := s.persistExternalPRBlockers(ctx, t.ID, blockedByPR); err != nil {
 			s.logf("todo %s: persist external_pr blockers: %v", t.ID, err)
 		}
+		if len(t.After) > 0 {
+			s.syncAfterBlockers(ctx, t.ID, t.After, unlockStage, unlockContracts)
+		}
 		return "Created under your direction (you supervise it; to have an Agent do it, use task_plan with todo_id " + t.ID +
-			"): " + todoLine(t, now, loc), nil
+			"): " + todoLine(t, now, loc) +
+			reuseHintText("todo_create", s.activeReuseHints(ctx, self, 3)), nil
 	}
 	if plan.PartOf != nil && *plan.PartOf != "" && self != "" && s.workerRefusal(ctx, machine, self) == nil {
 		// a piece the conversation will hand out itself: its own, so that task_plan's todo_id can run an Agent on it
@@ -408,6 +442,9 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		}
 		if err := s.persistExternalPRBlockers(ctx, t.ID, blockedByPR); err != nil {
 			s.logf("todo %s: persist external_pr blockers: %v", t.ID, err)
+		}
+		if len(t.After) > 0 {
+			s.syncAfterBlockers(ctx, t.ID, t.After, unlockStage, unlockContracts)
 		}
 		return "Created as a piece of " + t.PartOf + " (to have an Agent do it when its turn comes, use task_plan with todo_id " + t.ID +
 			"): " + todoLine(t, now, loc), nil
@@ -419,7 +456,11 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 	if err := s.persistExternalPRBlockers(ctx, t.ID, blockedByPR); err != nil {
 		s.logf("todo %s: persist external_pr blockers: %v", t.ID, err)
 	}
-	return "Created: " + todoLine(t, now, loc), nil
+	if len(t.After) > 0 {
+		s.syncAfterBlockers(ctx, t.ID, t.After, unlockStage, unlockContracts)
+	}
+	return "Created: " + todoLine(t, now, loc) +
+		reuseHintText("todo_create", s.activeReuseHints(ctx, self, 3)), nil
 }
 
 func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
@@ -525,6 +566,9 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 	out, err := s.editTodo(ctx, t.ID, e)
 	if err != nil {
 		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
+	}
+	if e.After != nil {
+		s.syncAfterBlockers(ctx, out.ID, out.After, "", nil)
 	}
 	return "Updated: " + todoLine(out, now, loc), nil
 }

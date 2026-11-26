@@ -140,7 +140,7 @@ export function FilesTree({
   }
 
   return (
-    <div role="tree" aria-label={t("files-tree.tree")} className="py-1" style={{ animation: "fade-in 160ms ease-out both" }}>
+    <div role="tree" aria-label={t("files-tree.tree")} className="px-1.5 py-1" style={{ animation: "fade-in 160ms ease-out both" }}>
       {rows.map((r) => (
         <Row key={r.key} r={r} mid={mid} cwd={cwd} thumbs={thumbs} git={git} active={r.kind === "entry" && !r.entry.dir && sameTreePath(activePath, r.path)} onToggle={toggle} onOpenFile={onOpenFile} onRetry={fetchDir} ops={rowOps} />
       ))}
@@ -181,7 +181,7 @@ function Row({
   }, [active]);
   if (r.kind === "loading") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="flex h-8 items-center gap-2 text-[12px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="flex h-7 items-center gap-2 text-[12px] text-ink-3">
         <Spinner />
         {t("files-tree.loading")}
       </div>
@@ -189,21 +189,21 @@ function Row({
   }
   if (r.kind === "empty") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="flex h-8 items-center text-[12px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="flex h-7 items-center text-[12px] text-ink-3">
         {t("files-tree.emptyFolder")}
       </div>
     );
   }
   if (r.kind === "more") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="py-1.5 text-[11.5px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="py-1.5 text-[11.5px] text-ink-3">
         {t("files-tree.tooMany")}
       </div>
     );
   }
   if (r.kind === "error") {
     return (
-      <div role="none" style={indent(r.depth, 7)} className="flex min-h-8 items-center gap-2 pr-3 text-[12px] text-ink-3">
+      <div role="none" style={indent(r.depth, 28)} className="flex min-h-7 items-center gap-2 pr-3 text-[12px] text-ink-3">
         <span className="min-w-0 flex-1 truncate" title={r.error}>
           {t("files-tree.openFailedInline", { error: r.error })}
         </span>
@@ -228,8 +228,8 @@ function Row({
       aria-selected={ops?.selecting ? ops.isSelected(r.path) : active || undefined}
       data-active={active ? "true" : undefined}
       className={cx(
-        "group/row relative mx-1 flex items-center rounded-md transition-colors",
-        active ? "bg-hover-2 text-ink font-medium" : picked ? "bg-hover" : "hover:bg-hover",
+        "group/row relative mx-1 flex h-7 items-center rounded-md transition-colors [@media(pointer:coarse)]:min-h-11",
+        active ? "bg-hover-2 font-medium text-ink" : picked ? "bg-hover-2 font-medium text-ink" : "hover:bg-hover",
       )}
       // dragged into a terminal or the chat box it becomes `@path ` (lib/entry-drag.ts)
       draggable
@@ -243,14 +243,14 @@ function Row({
         type="button"
         onClick={rowClick(ops, x, open)}
         style={indent(r.depth)}
-        className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-left"
+        className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-2 text-left text-tree-row"
         title={e.ignored ? t("files-tree.gitIgnored", { path: r.path }) : r.path}
       >
         {e.dir ? <Icon name={r.expanded ? "chevron" : "chevronRight"} size={12} stroke={2.2} className="shrink-0 text-ink-3" /> : <span aria-hidden className="size-3 shrink-0" />}
         <span className={cx("flex shrink-0", e.ignored && "opacity-50")}>
-          {thumbs && !e.dir && thumbable(e.name, e.size) ? <ThumbGlyph mid={mid} cwd={cwd} path={r.path} entry={e} /> : <FileGlyph name={e.name} dir={e.dir} />}
+          {thumbs && !e.dir && thumbable(e.name, e.size) ? <ThumbGlyph mid={mid} cwd={cwd} path={r.path} entry={e} /> : <FileGlyph name={e.name} dir={e.dir} size={14} />}
         </span>
-        <span className={cx("truncate text-[13px]", active ? "font-medium text-ink" : e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")}>{e.name}</span>
+        <span className={cx("truncate", (active || picked) ? "font-medium text-ink" : e.ignored ? "text-ink-3" : hidden ? "text-ink-2" : "text-ink")}>{e.name}</span>
         {e.symlink && <Icon name="link" size={11} className="shrink-0 text-ink-3" />}
         <span className="flex-1" />
         {mark && (e.dir ? <GitDot letter={mark} /> : <GitBadge letter={mark} />)}

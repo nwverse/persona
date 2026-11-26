@@ -645,7 +645,13 @@ func (s *Service) takeTurnAs(ctx context.Context, t Todo, last proto.Session, it
 			b.doc.Turns[t.ID] = cur
 			s.saveTurnsLocked(ctx)
 		}
+		if named {
+			s.projectReviewTurn(ctx, t, last, end, cur.State)
+		}
 		return cur, true
+	}
+	if named {
+		s.projectReviewTurn(ctx, t, last, end, state)
 	}
 	b.doc.Turns[t.ID] = fresh
 	delete(b.tries, t.ID)
@@ -1044,7 +1050,7 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		retry, retrying := b.retry[key]
 		// A closed row can still need its settlement read retried.
 		if b.closed[ref] == lookOf(c) && (!retrying || retry.look != lookOf(c)) ||
-			!taskAgentSettled(probe[i]) || limitTakenUp(c, now) {
+			!taskAgentSettledIn(t, probe, probe[i]) || limitTakenUp(c, now) {
 			continue
 		}
 		for _, e := range b.doc.InboxEvents {
