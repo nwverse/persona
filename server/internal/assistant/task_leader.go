@@ -792,10 +792,17 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	verdict, note := a.Verdict, clip(a.Note, 2000)
 	over, overSafetyCap, overCount := false, false, 0
 	var criteriaErr, findingErr error
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if verdict == reviewCancelled {
+		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
+	}
 	var guard func(Todo) bool
 	if verdict == reviewAccepted || verdict == reviewCancelled {
 		guard = func(cur Todo) bool {
-			findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, nil)
+			if !(verdict == reviewCancelled && cancelStaleAllowed && staleInvestigationCancelAllowed(cur, cancelCheckedAgents)) {
+				findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, nil)
+			}
 			if findingErr == nil {
 				var acceptedChecks []ReviewCheck
 				if verdict == reviewAccepted {

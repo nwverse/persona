@@ -3,17 +3,25 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func findingTask(t *testing.T, st Store) (*Service, Todo) {
 	t.Helper()
-	s, _ := newQuietServiceOn(t, st)
+	s, _, todo := findingTaskWithHub(t, st)
+	return s, todo
+}
+
+func findingTaskWithHub(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
+	t.Helper()
+	s, f := newQuietServiceOn(t, st)
 	holdDigest(s)
 	raw := json.RawMessage(`{"tasks":[{"title":"Investigate request problems","prompt":"Find and classify each error.","goal":"A list of findings","machine":"box","cwd":"/code/app","readonly":true,"multi_issue_report":true}]}`)
 	if _, err := s.toolTaskPlan(context.Background(), "conv1", raw); err != nil {
@@ -24,7 +32,7 @@ func findingTask(t *testing.T, st Store) (*Service, Todo) {
 	if todo.Supervision == nil || todo.Supervision.Investigation == nil || todo.Supervision.Investigation.Version != 0 {
 		t.Fatalf("explicit plan did not opt in: %+v", todo.Supervision)
 	}
-	return s, todo
+	return s, f, todo
 }
 
 func reportFindings(t *testing.T, s *Service, todo Todo, findings []investigationFinding) *investigationFindings {
@@ -283,4 +291,112 @@ func TestInvestigationFindingsExplicitEmptyAndLegacy(t *testing.T) {
 	if _, err := reviewErr(legacy, old.ID, waitingPark()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestInvestigationFindingsStaleDeadWorkerRecoveryAndLiveSafety(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("orphaned_stale_findings_allow_review_and_brief_accept_422_then_200", func(t *testing.T) {
+		s, _, todo := acceptedForUserCheck(t)
+		r := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
+		s.supervisedWorking(ctx, todoNow(s, todo.ID))
+		if got := todoNow(s, todo.ID).Supervision.Investigation; !got.Stale {
+			t.Fatal("expected findings to be marked stale")
+		}
+		ask := askOf(s, todo.ID)
+		if ask == nil {
+			t.Fatal("missing user_check acceptance ask")
+		}
+		// Before orphan watch, worker is not known gone, so HTTP Pass must still fail with 422 (never 502).
+		reqBody := `{"asked_at":"` + ask.AskedAt.UTC().Format(timeKeyLayout) + `"}`
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/todos/"+todo.ID+"/accept", strings.NewReader(reqBody)))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("HTTP /accept with pending findings = %d %s, want 422", rec.Code, rec.Body.String())
+		}
+		var errBody map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &errBody); err != nil {
+			t.Fatalf("decode 422 body: %v", err)
+		}
+		if errBody["code"] != "investigation_findings_pending" || errBody["delivered"] != "none" {
+			t.Fatalf("unexpected 422 body: %+v", errBody)
+		}
+
+		// Once orphanWatch marks the unlisted agent as orphanClosed, the supervisor can review and dispose of stale findings.
+		s.orphanWatch(ctx, time.Now().Add(orphanReconnectWait+time.Minute))
+		if o, ok := s.orphanOf(todo.ID); !ok || o.Reason != orphanClosed {
+			t.Fatalf("expected orphanClosed, got %+v ok=%v", o, ok)
+		}
+		completeTestFinding(t, s, todo.ID, r.Version, investigateLogs, "Verified follow-up coverage.")
+		got := todoNow(s, todo.ID).Supervision.Investigation
+		if got.Stale || got.Confirmed != r.Version {
+			t.Fatalf("stale review did not restore current confirmed findings: %+v", got)
+		}
+
+		rec2 := httptest.NewRecorder()
+		s.ServeHTTP(rec2, httptest.NewRequest(http.MethodPost, "/api/v1/todos/"+todo.ID+"/accept", strings.NewReader(reqBody)))
+		if rec2.Code != http.StatusOK {
+			t.Fatalf("HTTP /accept after stale findings disposition = %d %s, want 200", rec2.Code, rec2.Body.String())
+		}
+		if todoNow(s, todo.ID).DoneAt == nil {
+			t.Fatal("to-do did not close after owner Pass")
+		}
+	})
+
+	t.Run("stopped_worker_allows_stale_cancel_while_handoff_receiver_stays_protected", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, todoTestDB(t))
+		r := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
+		follow, err := s.newTodo(ctx, "Follow up logs", "", "conv1", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.superviseTodo(ctx, follow.ID, "conv1", []string{investigateLogs.Next}, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := confirmTestFindings(s, todo.ID, r.Version, findingDisposition{ID: "logs", FollowUp: follow.ID}); err != nil {
+			t.Fatal(err)
+		}
+		s.supervisedWorking(ctx, todoNow(s, todo.ID))
+		// Mark the worker archived so todoAgentStopped confirms no live worker remains.
+		worker := todoNow(s, todo.ID).Agents[0]
+		f.mu.Lock()
+		f.sessions[worker.MachineID] = []proto.Session{{SessionID: worker.SessionID, Archived: true}}
+		f.mu.Unlock()
+
+		if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewCancelled, "note": "Findings already tracked in follow-up"}); err != nil {
+			t.Fatalf("cancelling stale investigation with dead worker failed: %v", err)
+		}
+		closed := todoNow(s, todo.ID)
+		if closed.DoneAt == nil || closed.DoneBy != db.DoneByCancelled {
+			t.Fatalf("expected cancelled closed todo, got done_at=%v done_by=%q", closed.DoneAt, closed.DoneBy)
+		}
+		// Handoff receiver still cannot be cancelled without completion evidence.
+		if _, err := reviewErr(s, follow.ID, map[string]any{"verdict": reviewCancelled, "note": "Drop receiver"}); err == nil {
+			t.Fatal("cancelling unresolved handoff receiver unexpectedly succeeded")
+		}
+	})
+
+	t.Run("live_worker_keeps_stale_findings_and_cancel_blocked", func(t *testing.T) {
+		s, f, todo := findingTaskWithHub(t, todoTestDB(t))
+		r := reportFindings(t, s, todo, []investigationFinding{investigateLogs})
+		s.supervisedWorking(ctx, todoNow(s, todo.ID))
+		worker := todoNow(s, todo.ID).Agents[0]
+		f.mu.Lock()
+		f.sessions[worker.MachineID] = []proto.Session{{SessionID: worker.SessionID, Status: proto.StatusWorking}}
+		f.mu.Unlock()
+
+		if _, err := confirmTestFindings(s, todo.ID, r.Version); err == nil {
+			t.Fatal("live worker must block confirming stale findings")
+		}
+		if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewCancelled, "note": "Cancel while live"}); err == nil {
+			t.Fatal("live worker must block cancelling stale investigation")
+		}
+		if _, err := reviewErr(s, todo.ID, map[string]any{"verdict": reviewAccepted, "note": "Accept while live"}); err == nil {
+			t.Fatal("live worker must block accepting stale investigation")
+		}
+		yes := true
+		if _, err := s.editTodo(ctx, todo.ID, db.TodoEdit{Done: &yes}); err == nil {
+			t.Fatal("live worker must block manual completion on stale investigation")
+		}
+	})
 }

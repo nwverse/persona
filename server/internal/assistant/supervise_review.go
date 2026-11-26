@@ -329,6 +329,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	var findingErr error
 	var reviewedAt time.Time
 	withdrawGone := false // withdraw_needs_user, but the task stopped waiting for the user meanwhile: nothing is written
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if ledger && verdict == reviewCancelled {
+		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
+	}
 	if ledger {
 		var guard func(Todo) bool
 		if verdict == reviewParked || verdict == reviewAccepted && !a.UserCheck || verdict == reviewCancelled {
@@ -340,7 +345,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				if cur.DoneAt != nil {
 					return true
 				}
-				findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, park.Evidence)
+				if !(verdict == reviewCancelled && cancelStaleAllowed && staleInvestigationCancelAllowed(cur, cancelCheckedAgents)) {
+					findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, park.Evidence)
+				}
 				if findingErr == nil && verdict != reviewParked {
 					var acceptedChecks []ReviewCheck
 					if verdict == reviewAccepted && a.Outcome != outcomeCannot {
@@ -867,9 +874,22 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil // only its report closes a concern (concerns.go)
 	}
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if !accepted {
+		if cur, ok := s.todoNow(id); ok {
+			cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, cur)
+		}
+	}
 	s.todos.writing.Lock() // memory takes the rows in the order the store committed them (todoBook.writing)
 	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-		if err := s.investigationCloseError(ctx, current); err != nil {
+		var err error
+		if !accepted && cancelStaleAllowed && staleInvestigationCancelAllowed(current, cancelCheckedAgents) {
+			err = s.receivedFindingsCloseError(current, nil)
+		} else {
+			err = s.investigationCloseError(ctx, current)
+		}
+		if err != nil {
 			s.todos.writing.Unlock()
 			return false, err
 		}
