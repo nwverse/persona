@@ -5,6 +5,7 @@ import { decisionDismissed, linkedParkInteraction, reviewState, withoutParkInter
 import { finishedAt, hubNeedsYou, JUST_DONE_MS, openByView, supersededFailedStarts, triage } from "./todo-triage";
 import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, taskReviewDecisionAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
+import { requestHome } from "./child-sessions";
 import { homeKey } from "./folded-rows";
 import { sameManager } from "./manager-choice";
 import type { Interaction, Session } from "./types";

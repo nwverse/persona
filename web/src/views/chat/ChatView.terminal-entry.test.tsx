@@ -36,8 +36,8 @@ const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(async () => {
-  await initI18n("en");
   media.phone = false;
+  await initI18n("en");
   localStorage.clear();
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } }))));
   host = document.createElement("div");
@@ -76,7 +76,7 @@ it.each(["en", "zh-Hans", "ja"])("on the agent's page: localized terminal entrie
   expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(false);
 
   media.phone = true;
-  await open(<ChatView key="phone" mid="mac" sid="s1" inPage />);
+  await open(<ChatView key={`phone-${lang}`} mid="mac" sid="s1" inPage />);
   expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(true);
 });
 
@@ -97,14 +97,12 @@ it("in the side panel: the terminal button opens the agent's page in its termina
 });
 
 it("the side panel's localized terminal menu item opens the terminal page and closes the panel", async () => {
+  media.phone = true;
   const router = await import("../../lib/router");
   const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});
   const onClose = vi.fn();
   try {
-  const phoneBefore = media.phone;
-  try {
-    media.phone = true;
-    await open(<ChatView key="phone" mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
+    await open(<ChatView mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
     await settle();
     const item = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
@@ -114,7 +112,6 @@ it("the side panel's localized terminal menu item opens the terminal page and cl
     expect(navigate).toHaveBeenCalledWith({ name: "session", mid: "mac", sid: "s1", view: "term" });
     expect(onClose).toHaveBeenCalledOnce();
   } finally {
-    media.phone = phoneBefore;
     navigate.mockRestore();
   }
 });

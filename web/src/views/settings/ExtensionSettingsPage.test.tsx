@@ -179,7 +179,7 @@ describe("host-owned extension settings", () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(host.textContent).toContain("1.1.0");
     // never "upgrades automatically later": a new ID waits for the owner's confirmation
-    expect(host.textContent).toContain(`将 ${BASE.id} 更名为 example-successor 并升级`);
+    expect(host.textContent).toContain(`将 ${BASE.id} 重命名为 example-successor 并升级`);
     expect(host.textContent).not.toContain("稍后自动升级");
     act(() => button("去确认").click()); expect(callbacks.onUpgrade).toHaveBeenCalledWith("official", "example-successor");
   });

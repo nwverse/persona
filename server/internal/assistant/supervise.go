@@ -556,15 +556,21 @@ type taskReviewClose struct {
 // updateSupervisionWithClose validates on a private ledger, then commits it with a terminal review's closure before
 // the caller records any review effects. A late activity refusal therefore leaves no review on the open task.
 func (s *Service) updateSupervisionWithClose(ctx context.Context, id string, change func(*Supervision) bool, closing *taskReviewClose) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedWithClose(ctx, id, nil, change, closing)
+}
+
+// updateSupervisionGuardedWithClose validates a current-todo guard and a private ledger in one write boundary,
+// committing a terminal review's closure before any post-commit effects run.
+func (s *Service) updateSupervisionGuardedWithClose(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool, closing *taskReviewClose) (Supervision, bool, error) {
 	if closing == nil {
-		return s.updateSupervision(ctx, id, change)
+		return s.updateSupervisionGuarded(ctx, id, guard, change)
 	}
 	s.loadSeen(ctx)
 	_ = s.loadTaskActivity(ctx)
 	// Match guarded supervision writes: the to-do writer must be acquired before the ledger writer.
 	s.todos.writing.Lock()
 	s.supervise.writeMu.Lock()
-	v, changed, err := s.updateSupervisionGuardedLockedAt(ctx, id, time.Now().UTC(), nil, change, closing)
+	v, changed, err := s.updateSupervisionGuardedLockedAt(ctx, id, time.Now().UTC(), guard, change, closing)
 	s.supervise.writeMu.Unlock()
 	s.todos.writing.Unlock()
 	if closing.after != nil {

@@ -838,7 +838,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			return findingErr == nil
 		}
 	}
-	v, _, err := s.updateSupervisionWithCloseGuarded(ctx, t.ID, guard, func(v *Supervision) bool {
+	v, _, err := s.updateSupervisionGuardedWithClose(ctx, t.ID, guard, func(v *Supervision) bool {
 		if verdict == reviewAccepted {
 			if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
 				return false

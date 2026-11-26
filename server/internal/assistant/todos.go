@@ -2197,17 +2197,19 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	defer unlock()
 	guard := func() error {
 		if t, ok := s.todoNow(id); ok {
-			return s.taskCloseSnapshotError(t, time.Now())
+			if err := s.taskCloseSnapshotError(t, time.Now()); err != nil {
+				return err
+			}
+			if t.DoneAt == nil {
+				if err := s.investigationCloseError(ctx, t); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	}
 	if err := guard(); err != nil {
 		return false, err
-	}
-	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-		if err := s.investigationCloseError(ctx, current); err != nil {
-			return false, err
-		}
 	}
 	now := time.Now().UTC()
 	var row db.TodoRow

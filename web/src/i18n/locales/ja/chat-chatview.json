@@ -75,8 +75,6 @@
   "call_not_loaded": "このステップは読み込まれた履歴にありません。上にスクロールしてもう一度お試しください",
   "refresh_failed": "更新できませんでした",
   "preview": "プレビュー",
-  "archived_notice": "このセッションはアーカイブ済みです。復元するか、新しいメッセージを送るとAgentsに戻ります。",
-  "restore": "復元",
   "connecting": "接続中…",
   "connecting_placeholder": "接続中…先に入力できます",
   "session_gone": "利用不可",

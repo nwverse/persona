@@ -38,7 +38,7 @@
   "copy_session_id": "复制会话 ID",
   "copy_workspace_id": "复制空间 ID",
   "copy_tab_id": "复制标签页 ID",
-  "copy_pane_id": "拷贝终端 ID",
+  "copy_pane_id": "复制终端 ID",
   "copy_machine_id": "复制机器 ID",
   "close_tab": "关闭标签页",
   "close_pane": "关闭终端分屏",

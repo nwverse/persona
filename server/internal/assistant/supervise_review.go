@@ -388,14 +388,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				return findingErr == nil
 			}
 		}
-		if closing != nil {
-			s.loadSeen(ctx)
-			_ = s.loadTaskActivity(ctx)
-			// Match guarded supervision writes: the to-do writer must be acquired before the ledger writer.
-			s.todos.writing.Lock()
-			s.supervise.writeMu.Lock()
-		}
-		v, _, err = s.updateSupervisionGuardedLockedAt(ctx, t.ID, time.Now().UTC(), guard, func(v *Supervision) bool {
+		v, _, err = s.updateSupervisionGuardedWithClose(ctx, t.ID, guard, func(v *Supervision) bool {
 			if !s.canReviewLedger(ctx, self, t, v) {
 				unauthorized = true
 				return false
@@ -486,13 +479,6 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 			return true
 		}, closing)
-		if closing != nil {
-			s.supervise.writeMu.Unlock()
-			s.todos.writing.Unlock()
-			if closing.after != nil {
-				closing.after()
-			}
-		}
 	} else if closing != nil {
 		closing.closed, err = s.reviewDoneTodo(ctx, t.ID, closing.reason, closing.accepted)
 	}
@@ -939,6 +925,25 @@ func (s *Service) reviewDoneTodoWithSupervision(ctx context.Context, id, reason 
 		_ = s.loadTaskActivity(ctx)
 	}
 	s.todos.writing.Lock()
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if ledger == nil && !accepted {
+		if cur, ok := s.todoNow(id); ok {
+			cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, cur)
+		}
+	}
+	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+		var err error
+		if !accepted && cancelStaleAllowed && staleInvestigationCancelAllowed(current, cancelCheckedAgents) {
+			err = s.receivedFindingsCloseError(current, nil)
+		} else {
+			err = s.investigationCloseError(ctx, current)
+		}
+		if err != nil {
+			s.todos.writing.Unlock()
+			return false, err
+		}
+	}
 	ok, after, err := s.reviewDoneTodoLocked(ctx, id, reason, accepted, ledger, ownerPass)
 	s.todos.writing.Unlock()
 	if after != nil {
@@ -965,24 +970,6 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 	}
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil, nil // only its report closes a concern (concerns.go)
-	}
-	var cancelCheckedAgents []TodoAgent
-	cancelStaleAllowed := false
-	if !accepted {
-		if cur, ok := s.todoNow(id); ok {
-			cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, cur)
-		}
-	}
-	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-		var err error
-		if !accepted && cancelStaleAllowed && staleInvestigationCancelAllowed(current, cancelCheckedAgents) {
-			err = s.receivedFindingsCloseError(current, nil)
-		} else {
-			err = s.investigationCloseError(ctx, current)
-		}
-		if err != nil {
-			return false, nil, err
-		}
 	}
 	now := time.Now().UTC()
 	var row db.TodoRow
