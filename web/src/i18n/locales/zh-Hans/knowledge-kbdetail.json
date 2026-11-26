@@ -35,5 +35,6 @@
   "recording_day_recap": "日回顾",
   "recording_transcript": "转写",
   "recording_photos": "照片",
-  "recording_photo_label": "照片 {n}"
+  "recording_photo_label": "照片 {n}",
+  "recording_paused_module_off": "hub 所在的机器上已关闭会议录音，纪要和转写已暂停。已保存的内容仍可查看。"
 }
