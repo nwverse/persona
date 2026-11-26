@@ -1909,11 +1909,11 @@ Two-column pages (Inbox, Knowledge) switch to one column according to their own 
   Merged cells, cell-specific number / date formats (SheetJS formatted text); click, drag, Shift-extend, select whole column / row by its letter / number, ⌘A; partial selection of a merged block expands to the whole block.
   ⌘C copies TSV (pasteable into spreadsheet software); selection shows count, sum and average when numeric values exist. Sheet tabs at the bottom. CSV / TSV can switch to Source file.
   - **No CSV type guessing**: own RFC 4180 parser (quotes, `""`, embedded newlines, CRLF, BOM), values shown unchanged, `001` never becomes `1`; delimiter by extension, otherwise the most common in the first lines (`,` `;` tab).
-  - **Parsing in a Worker**: after reading large files (CSV at most 64 MB, workbooks at most 200 MB), pass to `sheets.worker.ts`; small CSV runs on the main thread. Keep at most 20 million cells per workbook and 500,000 rows per sheet; show a truncation notice beyond that.
+  - **Parsing in a Worker**: after reading large files (CSV at most 64 MB, workbooks at most 200 MB), use `lib/sheets.worker.ts` for delimited text and `modules/office/workbook.worker.ts` for binary workbooks; small CSV runs on the main thread. Keep at most 20 million cells per workbook and 500,000 rows per sheet; show a truncation notice beyond that.
   - **Official SheetJS package**: npm `xlsx` stopped at 0.18.5 (public prototype pollution and ReDoS vulnerabilities); new official releases are only tarballs from cdn.sheetjs.com (Apache-2.0).
     The privacy scanner accepts only the official npm registry or repository-relative paths, so it is stored at `web/vendor/xlsx-0.20.3.tgz`, with `file:vendor/…` in `package.json`. Docker copies `web/vendor/` before `npm ci`. Upgrade: download the new tarball, replace the old, `npm i ./vendor/<new file>`.
   - The Worker's SheetJS chunk is about 500 KB, loaded only when opening a spreadsheet.
-- **Office** (#1345, `session/files/OfficeView.tsx`, `lib/pptx.ts`; iOS / Mac use QuickLook, #1293): docx / docm / dotx use docx-preview (Apache-2.0) for paginated layout (headers, footers, tables, images, footnotes).
+- **Office** (#1345, `modules/office/OfficeView.tsx`, `lib/pptx.ts`; iOS / Mac use QuickLook, #1293): docx / docm / dotx use docx-preview (Apache-2.0) for paginated layout (headers, footers, tables, images, footnotes).
   pptx / pptm / ppsx / potx use our `lib/pptx.ts`: slide size, theme colors (with luminance adjustments), placeholder positions and font sizes inherited from layouts and masters, master shapes, backgrounds, text (size, bold / italic, underline, color, alignment, bullets and levels),
   shapes (fill, outline, rectangle / rounded rectangle / ellipse / triangle / line), images, tables (merges, background), groups, hidden slides, notes.
   Charts read series from the chart part's cache and render column / bar (including stacked) / line / area / pie / doughnut as SVG (title, axes, legend, text scales with chart size). Unsupported scatter, radar, combo charts, and so on show a message in their box directing you to Convert to PDF at the top right; SmartArt does the same. Page count at the top, Convert to PDF always available.
@@ -2486,6 +2486,10 @@ page or lies under a core address other than `/tracks/<slug>` (a space the modul
 alias that another module's base or alias starts, or that starts one of theirs. The rest of the contract (`hub_routes`,
 `mcp_tools`, `prompt_sections`, `background_jobs`, …) belongs to the server.
 
+**File previews.** A module claims file kinds in `filePreviews` and supplies a lazy `FilePreview` component.
+The Office module previews documents and binary workbooks when opened. Turning it off in General or at the hub
+leaves each file in its folder and opens the usual download card. CSV and TSV keep their text table viewer.
+
 **The module list** (`web/src/modules/index.ts`) imports each module's descriptor (`modules/<id>/module.ts`) and
 registers it. A descriptor the host refuses throws in development and tests, so it cannot land; in a production build
 it is logged and that module is left out (absent), so one bad module does not stop the app from starting. It is the only place module ids appear outside their own directories. `App.tsx` imports it first, so the
@@ -2674,7 +2678,7 @@ read-only, including in a core-only build.
    `i18nNamespaces` with `locales: byLanguage(import.meta.glob("../../i18n/locales/*/_meta.json", { query: "?catalog=module-<id>" }))`,
    and `load: () => import("./Page").then((m) => ({ Page: m.Page }))`.
 2. Move the feature's files into the directory and fix their imports; the shared helpers they use stay in core.
-3. Rename or move its namespace files to `<id>.json` / `<id>-*.json` in every language, and take them out of
+3. Rename or move its namespace files to `<id>.json` / `<id>-*.json` in every language (either under `src/i18n/locales/<lang>/` or the module’s own `locales/<lang>/`), and take them out of
    `src/i18n/startup-namespaces.json`.
 4. Add the descriptor to `MODULES` in `web/src/modules/index.ts`, and remove the feature's hand-wired entries (its
    `Route` variant, its `lazyPage` line, its sidebar entry, its color in `lib/sidebar-icons.ts`).
