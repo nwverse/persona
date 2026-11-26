@@ -1418,6 +1418,10 @@ test('launcher choices preserve the selected machine, actual launcher ID and age
     assert.equal(sent.path,'/api/v1/sessions');assert.ok(sent.timeout>=100_000);
     assert.deepEqual(JSON.parse(sent.body),{machine_id:'a/b',cwd:'/tmp',prompt:'First message',launcher:choice.name,agent_type:choice.agent,model:'chosen-model'});
   }
+  await repo.createAgent('First message',machine,'/tmp','claude','op','',undefined,'claude','opus','high');
+  assert.equal(JSON.parse(calls.at(-1).body).effort,'high');
+  await repo.createAgent('First message',machine,'','','op','',undefined,'','','high');
+  assert.equal('effort' in JSON.parse(calls.at(-1).body),false,'without a launcher the machine default runs with Agents\' own effort');
 });
 
 test('question resolution rechecks journal-delayed scope, request, capability and active-sheet admission',async()=>{

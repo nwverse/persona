@@ -6335,6 +6335,14 @@
     {
       "name": "chat_history_failed",
       "value": "読み込めませんでした。タップして再試行"
+    },
+    {
+      "name": "agent_default_effort",
+      "value": "Agent の既定"
+    },
+    {
+      "name": "minimal",
+      "value": "最小"
     }
   ]
 }

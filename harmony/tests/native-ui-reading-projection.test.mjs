@@ -314,27 +314,33 @@ test('next-step buttons send once and retain the accepted choice on the original
 
 test('the new-session picker refreshes Codex on its owner and keeps named 6.2 choices in order',async()=>{
   const page=readFileSync(new URL('../entry/src/main/ets/pages/Index.ets',import.meta.url),'utf8');
-  const methods=['canTypeStartModel','startModelOptions','modelLabel','pickStartModel','readStartModels'].map(name=>method(name,page)).join('\n');
-  const View=new Function('Wire','tr','return '+stripTypeScriptTypes('class View {'+methods+'}'))({text:(r,k)=>r[k]||''},k=>k);
+  const methods=['canTypeStartModel','startModelOptions','modelLabel','pickStartModel','readStartModels','offeredEfforts','chosenEffort','keepStartEffort'].map(name=>method(name,page)).join('\n');
+  const {launcherModelLabel,startEfforts}=await import('../entry/src/main/ets/core/ModelLabel.ts');
+  const View=new Function('Wire','tr','launcherModelLabel','startEfforts','return '+stripTypeScriptTypes('class View {'+methods+'}'))({text:(r,k)=>r[k]||''},k=>k,launcherModelLabel,startEfforts);
   const calls=[];let release;
   const owner={connectionGeneration:()=>1,scope:()=> 'hub',owns:()=>true,repo:()=>({sessionModels(machine,launcher,refresh){
     calls.push([machine,launcher,refresh]);return new Promise(resolve=>{release=resolve;});
   }})};
   const view=Object.assign(new View(),{agentModel:owner,agentMachineId:'office',launcher:'codex',sheetKind:'newagent',showSheet:true,
-    modelRequest:0,startModel:'',startModels:[],saveAgentDraft(){},agentMachine(){return {id:this.agentMachineId};},
+    modelRequest:0,startModel:'',startEffort:'',startModels:[],saveAgentDraft(){},agentMachine(){return {id:this.agentMachineId};},
     chosenLauncher(){return {name:this.launcher,agent:'codex'};}});
   const first=view.readStartModels(), prior=release;
   view.agentMachineId='mini'; const second=view.readStartModels();
-  release({models:[{id:'gpt-6.2-sol',name:'GPT-6.2-Sol',default:true},{id:'gpt-6.2-astra',name:'GPT-6.2-Astra'}],locked:false});await second;
+  release({models:[{id:'gpt-6.2-sol',name:'GPT-6.2-Sol',default:true,efforts:['low','high','xhigh']},{id:'gpt-6.2-astra',name:'GPT-6.2-Astra',efforts:['low','high']}],locked:false});await second;
   prior({models:[{id:'old'}],locked:false});await first;
   assert.deepEqual(calls,[['office','codex',true],['mini','codex',true]]);
   assert.deepEqual(view.startModelOptions().map(o=>o.value),['agent_default_model','GPT-6.2-Sol','GPT-6.2-Astra','agent_custom_model']);
+  assert.deepEqual(view.offeredEfforts(),['low','high','xhigh'],'with no pick, the default model\'s efforts');
   view.pickStartModel(1);assert.equal(view.startModel,'gpt-6.2-sol');
+  view.startEffort='xhigh';assert.equal(view.chosenEffort(),'xhigh');
   view.pickStartModel(2);assert.equal(view.modelLabel(),'GPT-6.2-Astra');
+  assert.equal(view.startEffort,'','a model without the picked effort drops it');
+  view.startEffort='high';view.pickStartModel(1);assert.equal(view.chosenEffort(),'high');
   view.pickStartModel(0);assert.equal(view.startModel,'');
   view.pickStartModel(3);view.startModel='my-new-model';
   const reload=view.readStartModels(true);release({models:[],locked:false});await reload;
   assert.equal(view.typingStartModel,true);assert.equal(view.startModel,'my-new-model');
+  assert.deepEqual(view.offeredEfforts(),[]);assert.equal(view.chosenEffort(),'','a typed model sends no effort nobody listed for it');
   view.launcher='codex-app';const locked=view.readStartModels();release({models:[],locked:true});await locked;
   assert.equal(view.canTypeStartModel(),false);assert.equal(view.startModel,'');
 });
