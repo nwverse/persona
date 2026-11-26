@@ -1435,8 +1435,6 @@ struct InboxRow: View {
                     if let summary = item.lineSummary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + summary))
-                                // The hierarchical styles, not `Color.primary`: a Mac list's selected row turns that
-                                // white, where the row sets the words' color for these (MacHoverRow).
                                 .font(Theme.Font.secondary)
                                 .foregroundStyle(item.isDone ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary.opacity(0.9))).lineLimit(2)
                             if !item.repeatsSummary { Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1) }
@@ -1750,6 +1748,8 @@ struct InboxDetailView: View {
                 slot.detailIdentityChanged(from: oldKey, to: newKey)
             }
             #endif
+            // Which knowledge base chat it came from, for Knowledge Page in More (#15356): asked once per item.
+            .task(id: Self.identity(for: item)) { await InboxKBChats.shared.load(current) }
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1787,6 +1787,8 @@ struct InboxDetailView: View {
                         }
                         Button { sameMatter = true } label: { Label("Same matter as…", systemImage: Theme.Icon.link) }
                             .accessibilityIdentifier("inbox.detail.sameMatter")
+                        // Its chat's knowledge page, when its read names one (#15356).
+                        InboxKBChatButton(item: current)
                     } label: { ThemedIcon(Theme.Icon.moreMenu) }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("inbox.detail.more")

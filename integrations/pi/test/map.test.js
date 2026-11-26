@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { branchItems, branchKey, entryItems, imageOf, lastText, toolInput, toolName } from '../lib/map.js'
+import { branchItems, branchKey, callName, entryItems, imageOf, lastText, toolInput, toolName } from '../lib/map.js'
 
 const msg = (id, parentId, message) => ({ type: 'message', id, parentId, timestamp: '2026-11-01T10:00:00.000Z', message })
 
@@ -43,6 +43,14 @@ test('interrupted and failed turns, compactions and the user\'s own commands lea
   assert.deepEqual(entryItems({ type: 'model_change', id: 'm', parentId: null }, 5), [])
   assert.equal(toolName('bash'), 'Bash')
   assert.deepEqual(toolInput('write', { path: 'x', content: 'y' }), { file_path: 'x', content: 'y' })
+  assert.equal(callName('edit', { path: 'a.go', oldText: 'before', newText: 'after' }), 'Edit')
+  assert.deepEqual(toolInput('edit', { path: 'a.go', oldText: 'before', newText: 'after' }), {
+    file_path: 'a.go',
+    old_string: 'before',
+    new_string: 'after',
+  })
+  assert.equal(callName('edit', { path: 'a.go', edits: [{ oldText: 'a', newText: 'b' }, { oldText: 'c', newText: 'd' }] }), 'MultiEdit')
+  assert.deepEqual(toolInput('edit', { path: 'a.go', edits: [null] }), { file_path: 'a.go' })
 })
 
 test('a branch shows only its entries, at their file positions; its key changes only when it leaves the file order', () => {
@@ -69,4 +77,12 @@ test('a branch shows only its entries, at their file positions; its key changes 
   assert.equal(branchKey(more, main), 'root')
   assert.equal(branchKey(more, main.slice(0, 3)), 'root@a1', 'a leaf with entries after it is a branch of its own')
   assert.equal(branchKey(e, main.slice(0, 3)), 'root@a1')
+})
+
+test('assistant preview filters standalone botmux lines before flattening the branch', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const message = (text) => ({ message: { role: 'assistant', content: [{ type: 'text', text }] } })
+  const words = 'The manual calls it ' + marker
+  const branch = [message(words + '\n  ' + marker + '\r\nDetails.'), message(marker)]
+  assert.equal(lastText(branch), words + ' Details.')
 })

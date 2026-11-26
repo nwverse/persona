@@ -60,10 +60,12 @@ type startNamed struct{ launcher, noModel, effort bool }
 // (callerPick), not what this try resolved for it from a tier, Model configuration › Agents or a start-defaults
 // policy. Those are for that one start (the Agent's session shows what it runs with, a failed start's error args its
 // launcher): kept with the task, a retry (task_retry, the card's Retry), a remedy or a queued start, which read the
-// task back from the store, would take them for the task's own choice and stay on them after the default or the
-// tier's model changed (#12618). What this try put in place of the resolved launch (startNamed) is kept, as the card
+// task back from the store, would take them for the task's own choice and stay on them after the default changed
+// (#12618). The candidate a tier gave the start is recorded apart, as the hub's Dispatch: the next Agent of the task
+// keeps it while the tier still lists it (candidate_keep.go, #14701), without it ever becoming the task's own launch,
+// so a changed tier or profile still decides once the candidate is gone. What this try put in place of the resolved launch (startNamed) is kept, as the card
 // shows it, unless a policy's preset (or, for the effort, the policy's effort) decided it. The permission mode is the
-// one this try settled, except one a policy's preset brought.
+// one this try settled, except one a policy's preset brought. CallerPermission separately drives the next start.
 func (t PlanTask) storedLaunch() startPick {
 	kept := t.launchPick()
 	if t.callerPick == nil {
@@ -72,6 +74,12 @@ func (t PlanTask) storedLaunch() startPick {
 	own := *t.callerPick
 	ran := kept
 	kept.launcher, kept.model, kept.effort, kept.speed, kept.tier = own.launcher, own.model, own.effort, own.speed, own.tier
+	if t.startFilled.preset {
+		kept.permission = own.permission
+		if t.CallerPermission != nil && *t.CallerPermission == "" {
+			kept.permission = ran.permission
+		}
+	}
 	if named := t.startNamed; !t.startFilled.preset {
 		if named.launcher {
 			kept.launcher, kept.tier = ran.launcher, ""
@@ -82,9 +90,6 @@ func (t PlanTask) storedLaunch() startPick {
 		if named.effort && !t.startFilled.effort {
 			kept.effort = ran.effort
 		}
-	}
-	if t.startFilled.preset {
-		kept.permission = own.permission
 	}
 	if t.startFilled.ultracode {
 		kept.ultracode = copyBool(own.ultracode)
@@ -216,7 +221,7 @@ func launcherKindSnapshot(discovered, overrides []ConfiguredLauncher, name strin
 	}
 	if kind == "" {
 		switch name {
-		case "claude", "codex", "traex":
+		case "claude", "codex", "traex", "agy":
 			kind = name
 		}
 	}
@@ -257,10 +262,12 @@ func (a startAgent) allowAllOver(mode string) bool {
 // fitLauncher holds params' launcher (resolveStart's) to what computer m can start. One the caller named, or an
 // explicit tier resolved to, that m does not have is refused, naming the ones it has: both are caller choices the
 // start must not quietly replace (#12032). One a default gave (only the agent.new binding or a profile) gives way to
-// one m has (launcherInstead), with that launcher's own default model and the caller's effort; note says so in the
+// one m has (launcherInstead), with that launcher's own default model unless the caller named a model, and with the
+// caller's effort; note says so in the
 // user's language, for the task's why and the tool's answer. A list that can't be read (m offline, a timeout) counts
-// as having it, as mainChatFit does: nothing is refused or replaced on a guess. What the launcher runs comes from the
-// same list, so a caller changing permissions by it does not have to ask for it again.
+// as having it, as mainChatFit does: nothing is refused or replaced on a guess. A default of Claude's desktop app gives
+// way the same on every start but a person's New Agent, list or not (models_desktop.go). What the launcher runs comes
+// from the same list, so a caller changing permissions by it does not have to ask for it again.
 func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, params map[string]any) (note string, agent startAgent, err error) {
 	name, _ := params["launcher"].(string)
 	if proto.IsExternalLauncher(name) {
@@ -284,8 +291,11 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		}
 		return "", startAgent{}, nil
 	}
+	// The desktop app's launcher as a default opens only a person's New Agent start in the app: any other start gives
+	// way as on a computer without it, whatever its list says (models_desktop.go).
+	appDefault := !own.explicitLauncher() && !personStart(ctx) && s.desktopAppProvider(ctx, launcherProvider(name))
 	list, known := s.launchersHere(withUnhidden(ctx, name), m.ID) // a hidden default still runs (#4659)
-	if !known {
+	if !known && !appDefault {
 		return "", s.lastSeenAgent(ctx, m.ID, name), nil
 	}
 	discovered := make([]ConfiguredLauncher, 0, len(list))
@@ -294,8 +304,12 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	}
 	overrides := s.hello(ctx).Models.Launchers[m.ID]
 	agentOf := configuredStartAgentLookup(discovered, overrides)
-	if slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name }) {
+	here := slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == name })
+	if here && !appDefault {
 		return "", agentOf(name), nil
+	}
+	if known && !here {
+		placementOf(ctx).hit(m.ID, "launcher_missing", i18n.Args{"launcher": name})
 	}
 	if own.explicitLauncher() {
 		return "", startAgent{}, i18n.Err("assistant-tasks.launcher_not_on_machine", i18n.Args{
@@ -307,6 +321,9 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 		delete(params, k)
 	}
 	params["launcher"] = to
+	if own.model != "" {
+		params["model"] = own.model
+	}
 	if own.effort != "" {
 		params["effort"] = own.effort
 	}
@@ -319,10 +336,25 @@ func (s *Service) fitLauncher(ctx context.Context, m Device, own startPick, para
 	if err := s.applyModel(ctx, "agent.new", params); err != nil {
 		return "", startAgent{}, err
 	}
-	s.logf("start on %s: launcher %s is not there, using %s", m.ID, name, to)
-	note = i18n.T(s.lang(ctx), "assistant-tasks.launcher_swapped", i18n.Args{
-		"launcher": name, "machine": firstNonEmpty(m.Name, m.ID), "to": to,
-	})
+	args := i18n.Args{"launcher": name, "machine": firstNonEmpty(m.Name, m.ID), "to": to}
+	if own.model != "" {
+		args["model"] = own.model
+	}
+	key := "assistant-tasks.launcher_swapped"
+	switch {
+	case appDefault && own.model != "":
+		key = "assistant-tasks.launcher_desktop_default_model"
+	case appDefault:
+		key = "assistant-tasks.launcher_desktop_default"
+	case own.model != "":
+		key = "assistant-tasks.launcher_swapped_model"
+	}
+	if appDefault {
+		s.logf("start on %s: launcher %s opens only a person's New Agent start, using %s", m.ID, name, to)
+	} else {
+		s.logf("start on %s: launcher %s is not there, using %s", m.ID, name, to)
+	}
+	note = i18n.T(s.lang(ctx), key, args)
 	current, _ := params["launcher"].(string)
 	return note, agentOf(current), nil
 }
@@ -349,7 +381,7 @@ func (s *Service) lastSeenAgent(ctx context.Context, machine, name string) start
 			}
 		}
 		if len(configured) == 0 {
-			return startAgent{}
+			break
 		}
 		for _, l := range sessionLaunchers(configured, overrides) {
 			if l.Name == name {
@@ -358,6 +390,9 @@ func (s *Service) lastSeenAgent(ctx context.Context, machine, name string) start
 				return a
 			}
 		}
+	}
+	if name == "agy" {
+		return startAgent{agent: "agy", snapshot: "agy"}
 	}
 	return startAgent{}
 }

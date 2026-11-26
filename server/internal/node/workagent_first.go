@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -93,16 +94,35 @@ func (n *Node) confirmWorkFirst(ctx context.Context, pane, kind, prompt string) 
 		if try == firstPromptTries {
 			return fmt.Sprintf(lostTries, firstPromptTries)
 		}
+		if kind == agyAgent {
+			if err := n.agyClearOverlay(ctx, pane, s); err != nil {
+				log.Printf("start in pane %s: clear agy overlay before retry: %v", pane, err)
+				return lostTimeout
+			}
+		}
 		log.Printf("start in pane %s: %s did not take its first message (try %d), typing it again", pane, kind, try)
 		err = n.hostPrompt(ctx, pane, prompt)
-		if errors.Is(err, host.ErrAgentBlocked) {
-			return lostDialog
+		if errors.Is(err, host.ErrAgentBlocked) || errors.Is(err, host.ErrDialogOpen) {
+			// A blocked status is also a first-message acceptance signal (docs/lessons/agents.md): if the agent
+			// already reported a conversation (which only happens after a submission), treat it as taken. Otherwise
+			// stop retrying (a visible prompt could still be an unsubmitted draft) and ask the user to resolve the
+			// dialog and check whether the first message started before resending.
+			if a, aerr := n.paneAgent(ctx, pane); aerr == nil && a.Agent == kind && n.agyReported(*a) != "" {
+				return ""
+			}
+			return lostWorkDialog()
 		}
 		if err != nil {
 			log.Printf("start in pane %s: type the first message again: %v", pane, err)
 			return lostTimeout
 		}
 	}
+}
+
+// lostWorkDialog is set when a background first-message retry is blocked by an open dialog on a work agent: the
+// earlier attempt may have triggered that dialog, so the user must resolve it and check before resending.
+func lostWorkDialog() string {
+	return i18n.T(i18n.Default, "hub-transcript_text.work_agent_first_dialog")
 }
 
 // workFirstSeen looks at the agent in pane every workFirstPoll for workFirstWait, until it is seen taking the message.
@@ -124,7 +144,7 @@ func (n *Node) workFirstSeen(ctx context.Context, pane, kind string) workFirst {
 		case a.Agent != kind:
 			return workFirstGone
 		case a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked ||
-			a.AgentStatus == proto.StatusDone || reportedAgyConversation(*a) != "":
+			a.AgentStatus == proto.StatusDone || n.agyReported(*a) != "":
 			return workFirstTaken
 		default:
 			idle = a.AgentStatus == proto.StatusIdle

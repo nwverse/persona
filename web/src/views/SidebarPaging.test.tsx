@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seedAgentsDisplay } from "../lib/agents-display";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -36,7 +37,10 @@ const managerHealthDir = { ...health, session_id: "manager-health-dir", title: "
 const emptyPins: AgentPins = { sessions: [], spaces: [] };
 const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } }));
 let host: HTMLDivElement, root: Root;
-const flush = async () => { for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); }); };
+const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
+  for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); });
+};
 const grouping = () => host.querySelector('[role="radiogroup"][aria-label="Agent 分组"]');
 const chosen = () => grouping()?.querySelector('[aria-checked="true"]')?.textContent;
 const pagedList = () => host.querySelector("[data-paged-sessions]");
@@ -96,6 +100,8 @@ async function render(paged: boolean, pins = emptyPins, saved?: string, agentsOn
 beforeEach(() => {
   localStorage.clear();
   reset();
+  // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
+  seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
   history.replaceState(null, "", "/");
@@ -123,8 +129,8 @@ for (const paged of [false, true]) {
       const { fetch } = await render(paged, emptyPins, saved);
       expect(chosen()).toBe({ todo: "待办", machine: "机器", repo: "仓库", space: "项目", state: "状态" }[saved]);
       expect(localStorage.getItem("persona.agentGrouping")).toBe(saved);
-      // every grouping but By repository is paged where the hub pages (#6662)
-      const complete = !paged || saved === "repo";
+      // The hub pages its machine, space and to-do groups. Status needs each AgentView.
+      const complete = !paged || saved === "repo" || saved === "state";
       expect(Boolean(pagedList())).toBe(!complete);
       expect(completeReads(fetch).length > 0).toBe(complete);
       if (complete) expect(host.textContent).toContain(tail.title);

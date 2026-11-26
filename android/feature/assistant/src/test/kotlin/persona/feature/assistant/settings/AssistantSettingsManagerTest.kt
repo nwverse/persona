@@ -28,7 +28,9 @@ class AssistantSettingsManagerTest {
         val renamed: MutableList<Pair<String, String>> = mutableListOf(),
         private val onRename: (HubManager) -> Unit = {},
     ) : AssistantManagement, HubManagers {
-        override fun forManager(manager: String?) = Hub(values, requireNotNull(manager), managers, renamed, onRename)
+        // Null names the default assistant (AssistantManagement.forManager), as the domain spaces ask for (#13500).
+        override fun forManager(manager: String?) =
+            Hub(values, manager ?: managers.firstOrNull { it.isDefault }?.id ?: "assistant", managers, renamed, onRename)
         override suspend fun roster() = ManagerRoster(managers.toList(), managers.firstOrNull { it.isDefault }?.id.orEmpty())
         override suspend fun create(name: String): ManagerCode = error("not used")
         override suspend fun newCode(id: String): ManagerCode = error("not used")
@@ -46,7 +48,8 @@ class AssistantSettingsManagerTest {
         override suspend fun updateConfig(update: AssistantConfigUpdate): AssistantConfig {
             val previous = values.getValue(owner)
             return previous.copy(defaultPermissionMode = update.defaultPermissionMode ?: previous.defaultPermissionMode,
-                timezone = update.timezone ?: previous.timezone, recentTaskChats = update.recentTaskChats ?: previous.recentTaskChats).also { values[owner] = it }
+                timezone = update.timezone ?: previous.timezone, recentTaskChats = update.recentTaskChats ?: previous.recentTaskChats,
+                dashboards = update.dashboards ?: previous.dashboards).also { values[owner] = it }
         }
         override suspend fun memory() = emptyList<MemoryFile>()
         override suspend fun warm() {}

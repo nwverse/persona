@@ -6,7 +6,7 @@
 // workers above the chosen one's conversation. This module says who is a worker, which one the panel shows, and when the
 // panel opens or closes by itself (cindy's timing, `teamReveal`).
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { stateOf } from "./format";
+import { activityOf, stateOf } from "./format";
 import { paneOrder } from "./herdr-tree";
 import { getPanel, openPanel, usePanel, type Panel } from "./panel";
 import { NARROW, useMedia } from "./viewport";
@@ -27,7 +27,7 @@ export function teamPanelOf(p: Panel | null, mid: string, sid: string): TeamPane
 /** The workers among the rows folded under a lead, in pane order. A worker that stops is not folded any more (the
  *  manager folds only running ones): it leaves the strip and is a row of its own again. */
 export function teamWorkers(rows: readonly Session[]): Session[] {
-  return rows.filter((s) => isWorker(s) && stateOf(s) !== "offline").sort(paneOrder);
+  return rows.filter((s) => isWorker(s) && activityOf(s) !== "offline").sort(paneOrder);
 }
 
 // the worker picked last on each lead's strip (this browser tab), so the panel opens on it again
@@ -50,7 +50,7 @@ export function shownMember(members: readonly Session[], last: string | undefine
 /** Shows `worker` in its lead's Team panel (a pill picked on the strip), opening the panel if it is not. */
 export function showWorker(mid: string, lead: string, worker: string) {
   picked.set(leadKey(mid, lead), worker);
-  openPanel({ kind: "team", mid, sid: lead, worker });
+  openPanel({ kind: "team", mid, sid: lead, worker }, teamPanelOf(getPanel(), mid, lead) ? { replace: true } : { push: false });
 }
 
 // ── what was decided for a lead's panel in this browser: cindy's per-task record of the right sidebar's collapsed state ──
@@ -185,7 +185,7 @@ export function useTeamReveal(mid: string, sid: string, session: Session | undef
       if (arriving && shown && !open) return;
       recordTeam(mid, sid, "open");
       if (!open || asked && (open.worker !== asked.worker || open.at !== asked.at)) {
-        openPanel({ kind: "team", mid, sid, worker: asked?.worker, at: asked?.at });
+        openPanel({ kind: "team", mid, sid, worker: asked?.worker, at: asked?.at }, { push: false });
       }
     });
     // the panel's own state is decided once per arrival and count: a later resize or panel change does not reopen it

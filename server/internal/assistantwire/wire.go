@@ -64,6 +64,20 @@ type Hello struct {
 	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
 	// sends it: off. A change of the switch sends manager.updated.
 	QuietPush bool `json:"quiet_push,omitempty"`
+	// PushGradingCards is the effective cards section of the hub's push grading configuration for this manager when
+	// QuietPush is on. Nil from an older hub or while push grading is off for the manager.
+	PushGradingCards *PushGradingCards `json:"push_grading_cards,omitempty"`
+}
+
+// PushGradingCards is the effective cards section of the hub's push grading configuration, delivered per manager
+// in Hello and manager.updated.
+type PushGradingCards struct {
+	SupervisorHold  bool     `json:"supervisor_hold"`
+	EscalateReasons []string `json:"escalate_reasons"`
+	HoldConclusions bool     `json:"hold_conclusions"`
+	HoldAcceptance  bool     `json:"hold_acceptance"`
+	DecisionLevel   string   `json:"decision_level"`
+	ReportLevel     string   `json:"report_level"`
 }
 
 // NotifyTimings are hub.json's notify section, and manager.json's hook_timeout_minutes, in milliseconds (0: the
@@ -91,6 +105,9 @@ type Placement struct {
 	MemoryDreaming bool `json:"memory_dreaming,omitempty"`
 	// CompleteAgentlessTodos lets a supervising conversation complete its own agentless memo without another card.
 	CompleteAgentlessTodos bool `json:"complete_agentless_todos,omitempty"`
+	// AutoApproveReversibleSettings skips confirmation cards only for the exact, restorable Assistant settings allowlist.
+	// It is set only by manager.json, never by persona_settings.
+	AutoApproveReversibleSettings bool `json:"auto_approve_reversible_settings,omitempty"`
 	// SupervisionBatchMinutes is manager.json's administrator-pinned routine supervision interval. Nil leaves the
 	// assistant's saved setting in effect; an explicit zero pins immediate delivery through the legacy cadence.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
@@ -302,6 +319,8 @@ type Notification struct {
 	LongMS int64 `json:"long_ms,omitempty"`
 	// Todo is a NotifyDecide push's to-do and the round of its decision.
 	Todo *NotifyTodo `json:"todo,omitempty"`
+	// Health is a NotifyHealthWater reminder's button context.
+	Health *NotifyHealth `json:"health,omitempty"`
 	// LinkCovered: a NotifyInput push's card is what the manager's Persona Link summary shows for its agent and rings
 	// for (the card that stands for it, notifying, among the listed items), so a Persona Link desktop of the manager's
 	// may stand in for the phone's push ("Phone Muted", docs/operations/link.md "Presence"). Older managers leave it
@@ -321,6 +340,10 @@ type Notification struct {
 	// immersive mode lets through when it is the track in focus. Older hubs drop both.
 	Depth string `json:"depth,omitempty"`
 	Track string `json:"track,omitempty"`
+	// CardID is the card a NotifyPush push stands for (a plan's id) when that card is answered elsewhere: the push
+	// carries it as `interaction_id`, and once the manager says the card is over (EventFleetResolved with it) the hub
+	// takes the push back from the devices it went to, as an interaction's (#4349). Older hubs drop it.
+	CardID string `json:"card_id,omitempty"`
 }
 
 // Push levels a Notification may carry (hub low-distraction mode, docs/server/server.md "Push policy").

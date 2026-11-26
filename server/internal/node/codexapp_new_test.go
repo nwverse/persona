@@ -143,7 +143,7 @@ func TestNewAgentWithTheCodexAppLauncherStartsTheChatInTheApp(t *testing.T) {
 		t.Fatal("the App ran no turn")
 	}
 	req := p["turnStart"].(map[string]any)["request"].(map[string]any)
-	if in := req["input"].([]any)[0].(map[string]any); req["threadId"] != thread || in["text"] != taskFallback("Fix the CSV export\nand test it", agentPlatformInstructions(runtime.GOOS, "")) {
+	if in := req["input"].([]any)[0].(map[string]any); req["threadId"] != thread || in["text"] != "Fix the CSV export\nand test it" {
 		t.Fatalf("turn %v", req)
 	}
 	if !codexDesktopChat(codexSource{home: n.codexHome(), thread: thread, path: rolloutPath(n.codexHome(), thread)}) {
@@ -366,7 +366,7 @@ func TestACodexAppStartRefusesWhatTheAppCannotRun(t *testing.T) {
 func TestTheCodexAppLauncherIsOfferedWhereTheAppRuns(t *testing.T) {
 	n, _, _, _ := codexAppNode(t)
 	list, added := n.withCodexAppLauncher([]proto.Launcher{{Name: "codex"}})
-	if !added || list[1] != (proto.Launcher{Name: "codex-app", Source: "codex_app", Agent: "codex"}) {
+	if !added || list[1] != (proto.Launcher{Name: "codex-app", Source: "codex_app", Agent: "codex", DisplayName: "Codex App"}) {
 		t.Fatalf("list %+v", list)
 	}
 	if models, err := n.launcherModels(context.Background(), "codex-app", "", false); err != nil || models.Agent != "codex" || len(models.Models) != 0 || models.Locked != "" {

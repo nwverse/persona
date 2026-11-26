@@ -1,4 +1,3 @@
-#if os(iOS)
 import Foundation
 import SwiftUI
 import Testing
@@ -80,8 +79,8 @@ struct TodoRowAgentMetadataTests {
         let lead = try session("codex", agent: "codex", state: .working, model: "gpt-5.5")
         let words = try await rowWords(self.todo(agents: [agent("codex")]), sessions: [lead])
 
-        #expect(words.contains("MacBook · 5.5"), "actual TodoRow: \(words)")
-        #expect(!words.contains("MacBook · 5.5 ·"), "an absent effort adds no separator: \(words)")
+        #expect(words.contains("MacBook · GPT-5.5"), "actual TodoRow: \(words)")
+        #expect(!words.contains("MacBook · GPT-5.5 ·"), "an absent effort adds no separator: \(words)")
     }
 
     @Test func anUnknownModelIDUsesItsFriendlyShortForm() async throws {
@@ -207,4 +206,3 @@ struct TodoRowAgentMetadataTests {
         unsafeBitCast(set, to: Enable.self)(on ? 1 : 0)
     }
 }
-#endif

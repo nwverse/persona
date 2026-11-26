@@ -1,9 +1,7 @@
 import Foundation
 import Observation
 import PersonaWire
-#if canImport(UIKit)
 import UIKit
-#endif
 
 /// Where the owner is in To-dos (#10465; docs/design/proposals/todos-redesign.md 3.3, "Places have identity"): the
 /// place, and where each place's list was scrolled to. One for the app (`TodoWorkspace.shared`), outside the pages'
@@ -100,10 +98,6 @@ final class TodoWorkspace {
     }
 
     static func sceneActive() -> Bool {
-        #if canImport(UIKit)
         UIApplication.shared.applicationState == .active
-        #else
-        true
-        #endif
     }
 }
