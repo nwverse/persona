@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
@@ -31,25 +33,41 @@ func (n *Node) resolveHomeAlias(path string) string {
 	return workspacenaming.PhysicalHomePath(path, n.home, n.workspacePhysicalHome())
 }
 
-// workspaceStateDir resolves symlinks on the node's own state directory
-// (such as a symlinked home ancestor or directory-symlinked PERSONA_HOME)
-// before checking that subdirectories created inside it contain no symlinks.
-func (n *Node) workspaceStateDir() (string, error) {
-	if n.dir == "" {
-		return "", errors.New("workspace state path unavailable")
-	}
-	clean := filepath.Clean(n.dir)
-	if !filepath.IsAbs(clean) {
-		return "", errors.New("workspace state path unavailable")
-	}
-	dir, err := n.realPath(clean)
+// workspaceControlDir follows the configured state prefix only. A link in
+// place of the control directory is inspected solely to classify the refusal.
+func (n *Node) workspaceControlDir(name string) (string, error) {
+	state, err := n.realPath(filepath.Clean(n.dir))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return "", err
-	}
-	if workspaceNoLinks(dir) != nil {
 		return "", errors.New("workspace state path unavailable")
 	}
-	return dir, nil
+	path := filepath.Join(state, name)
+	err = workspaceNoLinks(path)
+	if errors.Is(err, errWorkspaceSymlink) {
+		code := "path_symlink"
+		if target, err := os.Readlink(path); err == nil {
+			if !filepath.IsAbs(target) {
+				target = state + string(filepath.Separator) + target
+			}
+			if !n.workspacePathInScope(target, state) {
+				code = "base_scope_denied"
+			}
+		}
+		return "", taskworkspace.Failure(code, "validation", "", "", "")
+	}
+	return path, err
+}
+
+func (n *Node) workspacePathInScope(path, state string) bool {
+	real, err := n.realPath(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) || n.offLimitsResolved(real) != nil || workspacenaming.InPrivateState(real, state) {
+		return false
+	}
+	standard := filepath.Join(n.home, ".persona")
+	if n.dir == "" || n.dir == standard {
+		return true
+	}
+	standard, err = n.realPath(standard)
+	return (err == nil || errors.Is(err, fs.ErrNotExist)) && !workspacenaming.InPrivateState(real, standard)
 }
 
 func (n *Node) resolveWorkspaceNaming(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -101,11 +119,10 @@ func (n *Node) workspacePlanPathProblem(plan *workspacenaming.Plan) *workspacena
 		return scopeDenied("")
 	}
 	check := func(path, field, repoID string) *workspacenaming.Problem {
-		real, err := n.realPath(path)
-		if err != nil && !errors.Is(err, fs.ErrNotExist) || n.offLimitsResolved(real) != nil || workspacenaming.InPrivateState(real, state) {
+		if !n.workspacePathInScope(path, state) {
 			return scopeDenied(repoID)
 		}
-		switch err = workspaceNoLinks(path); {
+		switch err := workspaceNoLinks(path); {
 		case errors.Is(err, errWorkspaceSymlink):
 			return &workspacenaming.Problem{Code: "path_symlink", Field: field, RepoID: repoID, Severity: "error"}
 		case err != nil:

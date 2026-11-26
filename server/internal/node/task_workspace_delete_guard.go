@@ -16,7 +16,10 @@ func (n *Node) guardBackendDeletion(path string) error {
 	if n.dir == "" {
 		return nil
 	}
-	control := filepath.Join(n.dir, "task-workspaces")
+	control, err := n.workspaceControlDir("task-workspaces")
+	if err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(control)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

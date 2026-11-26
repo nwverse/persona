@@ -157,6 +157,10 @@ func (e *workspaceExecutor) sourceFromMirror(ctx context.Context, r *taskworkspa
 		TTLSeconds: e.mirrorTTLSeconds,
 	}
 	info, err := e.n.ensureRepoMirror(ctx, ensureReq)
+	var problem *taskworkspace.Problem
+	if errors.As(err, &problem) {
+		return true, problem.Code
+	}
 	if err != nil || !info.Exists || info.Path == "" {
 		return false, ""
 	}
@@ -165,6 +169,9 @@ func (e *workspaceExecutor) sourceFromMirror(ctx context.Context, r *taskworkspa
 		// Mirror skipped fetch due to TTL; force-refresh once in case the requested ref was pushed recently.
 		ensureReq.Force = true
 		info, err = e.n.ensureRepoMirror(ctx, ensureReq)
+		if errors.As(err, &problem) {
+			return true, problem.Code
+		}
 		if err != nil || !info.Exists || info.Path == "" {
 			return false, ""
 		}

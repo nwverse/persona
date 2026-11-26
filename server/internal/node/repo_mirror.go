@@ -84,18 +84,7 @@ func (m *repoMirrorManager) timeout() time.Duration {
 }
 
 func (n *Node) repoMirrorRoot() (string, error) {
-	if n.dir == "" {
-		return "", errors.New("mirror runtime directory unavailable")
-	}
-	stateDir, err := n.workspaceStateDir()
-	if err != nil {
-		return "", errors.New("mirror root path unavailable")
-	}
-	root := filepath.Join(stateDir, "repos")
-	if err := workspaceNoLinks(root); err != nil {
-		return "", errors.New("mirror root path unavailable")
-	}
-	return root, nil
+	return n.workspaceControlDir("repos")
 }
 
 func (n *Node) repoMirrorPaths(repoID string) (root, mirrorDir, metaPath, lockPath, hooksDir string, err error) {

@@ -253,13 +253,13 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 			return taskworkspace.Record{Error: taskworkspace.Failure("source_invalid", "validation", req.OperationID, source.RepoID, "")}, nil
 		}
 	}
-	stateDir, err := n.workspaceStateDir()
+	control, err := n.workspaceControlDir("task-workspaces")
 	if err != nil {
-		return nil, errors.New("workspace control path unavailable")
-	}
-	control := filepath.Join(stateDir, "task-workspaces")
-	if workspaceNoLinks(control) != nil {
-		return nil, errors.New("workspace control path unavailable")
+		var problem *taskworkspace.Problem
+		if errors.As(err, &problem) {
+			return taskworkspace.Record{Error: taskworkspace.Failure(problem.Code, "validation", req.OperationID, "", req.Plan.RootPath)}, nil
+		}
+		return nil, err
 	}
 	if err := os.MkdirAll(control, 0700); err != nil {
 		return nil, err
