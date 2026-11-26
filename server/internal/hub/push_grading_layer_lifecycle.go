@@ -227,6 +227,8 @@ func (h *Hub) handlePutPushGradingLayer(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	h.push.invalidatePushGradingCache()
+	h.assistantUpdated()
 	ownerEnabled, attentionMode := h.pushGradingOwnerStatus()
 	writeJSON(w, pushGradingLayerResponse{
 		Layer:         pushGradingLayerViewOf(&saved),
@@ -265,6 +267,10 @@ func (h *Hub) handleDeletePushGradingLayer(w http.ResponseWriter, r *http.Reques
 			writeErr(w, http.StatusServiceUnavailable, err)
 			return
 		}
+		if removed {
+			h.push.invalidatePushGradingCache()
+			h.assistantUpdated()
+		}
 		ownerEnabled, attentionMode := h.pushGradingOwnerStatus()
 		writeJSON(w, pushGradingLayerDeleteResponse{
 			OK:            true,
@@ -288,6 +294,10 @@ func (h *Hub) handleDeletePushGradingLayer(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
+	}
+	if removed {
+		h.push.invalidatePushGradingCache()
+		h.assistantUpdated()
 	}
 	ownerEnabled, attentionMode := h.pushGradingOwnerStatus()
 	writeJSON(w, pushGradingLayerDeleteResponse{
@@ -405,15 +415,22 @@ func (h *Hub) runPushGradingLayerReconcile() {
 		}
 		rec.mu.Unlock()
 
+		var pruned bool
 		var err error
 		if mgr != "" {
 			if store := h.pushGradingLayerStore(); store != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), h.pushGradingStoreTimeout())
-				_, err = prunePushGradingLayer(ctx, store, mgr, active)
+				pruned, err = prunePushGradingLayer(ctx, store, mgr, active)
 				cancel()
 			}
 		}
+		if err == nil && pruned {
+			h.push.invalidatePushGradingCache()
+		}
 		rec.writeMu.Unlock()
+		if err == nil && pruned {
+			h.assistantUpdated()
+		}
 
 		// Record any transient failure before releasing the quiesce slot so a
 		// concurrent pause/resume cannot observe an empty deferred map and skip retry.
