@@ -380,6 +380,42 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 	}, nil
 }
 
+// activeTodoBlockerRefs returns the target_refs of all active persistent blockers for todoID
+// when todos_v2 is enabled, or nil when todos_v2 is off or no active blockers remain.
+func (s *Service) activeTodoBlockerRefs(ctx context.Context, todoID string) []string {
+	if s == nil || !s.settings(ctx).todosV2On() {
+		return nil
+	}
+	todoID = strings.TrimSpace(todoID)
+	if todoID == "" {
+		return nil
+	}
+	st := s.todoBlockerDB()
+	if st == nil {
+		return nil
+	}
+	rows, err := st.ListTodoBlockersByTodo(ctx, todoID)
+	if err != nil {
+		s.logf("todo_blockers: list active for %s: %v", todoID, err)
+		return nil
+	}
+	var refs []string
+	for _, r := range rows {
+		if r.State != db.TodoBlockerStateActive {
+			continue
+		}
+		if ref := strings.TrimSpace(r.TargetRef); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+// hasActiveTodoBlockers reports whether todoID currently has at least one active persistent blocker under todos_v2.
+func (s *Service) hasActiveTodoBlockers(ctx context.Context, todoID string) bool {
+	return len(s.activeTodoBlockerRefs(ctx, todoID)) > 0
+}
+
 func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
 	key := "blockers_unblocked:" + todoID
 	to := ""
@@ -395,6 +431,9 @@ func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string,
 	})
 	if hook != nil {
 		hook(ctx, todoID)
+	}
+	if s.settings(ctx).todosV2On() {
+		s.sweepAdmissionQueue(ctx)
 	}
 }
 
