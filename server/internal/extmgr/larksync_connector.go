@@ -140,6 +140,9 @@ func (c larkSyncConnector) Status(context.Context) connector.Status {
 		if b.LastRunAt.After(last.LastSync) {
 			last.LastSync = b.LastRunAt
 		}
+		if b.LastIMRunAt.After(last.LastSync) {
+			last.LastSync = b.LastIMRunAt
+		}
 	}
 	switch {
 	case n == 0:

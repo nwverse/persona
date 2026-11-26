@@ -267,6 +267,8 @@ var (
 		"todo.decision":             true,
 		"leader.changed":            true,
 		"leader.report":             true,
+		"placement.pending":         true,
+		"lark.messages":             true,
 	}
 
 	// EventScopes are the hub scopes an event needs besides the subscription: only an extension granted the scope
@@ -279,6 +281,8 @@ var (
 		"todo.decision":             ScopeTodosRead,
 		"leader.changed":            ScopeLeadersRead,
 		"leader.report":             ScopeLeadersRead,
+		"placement.pending":         ScopeTasksSchedule,
+		"lark.messages":             ScopeLarkMessagesRead,
 	}
 )
 

@@ -1,4 +1,6 @@
 {
+  "err_cannot_cancel": "当前无法取消更新。",
+  "err_cancel_history": "更新已取消，但未能保存历史记录。",
   "err_development_step": "开发版更新在「{step}」步骤中断。请在 Hub 机器上检查 update/development/{phase}.log。",
   "development_step_fetch": "获取提交",
   "development_step_npm_install": "安装 Web 依赖",
@@ -55,6 +57,7 @@
   "err_development_quiesce": "hub 无法为备份暂停写入：{error}",
   "err_computer_packages": "hub 已更新，但电脑程序包准备失败。暂存文件仍保留在 hub 机器上，请检查更新日志后再部署电脑。",
   "err_development_recovery": "上次开发版更新中断，需要先恢复。请在 hub 机器上检查 update/development/adopting.json 和保留的快照，再更新或切换来源。",
+  "err_resolve_latest": "无法检查最新提交，请重试。",
   "err_development_phase": "开发版更新准备失败。请在 hub 机器上检查 update/development/{phase}.log，原版本及有效快照仍保留。",
   "err_development_backup": "此程序备份已不可用，请刷新历史备份版本。",
   "err_development_backup_path": "不能使用这个备份文件夹：{error}",

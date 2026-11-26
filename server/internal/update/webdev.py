@@ -117,7 +117,7 @@ def defer_cancellation():
     previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
         for s in previous:
-            signal.signal(s, lambda *_: pending.append(True))
+            signal.signal(s, lambda signum, _: pending.append(signum))
         yield pending
     finally:
         for s, handler in previous.items():
@@ -133,9 +133,17 @@ def interrupt(*_):
 
 def run(argv, cwd=None, env=None, output=False, timeout=1800, on_tick=None):
     # Do not echo argv: Git credentials, database URLs and hooks can be private.
-    with subprocess.Popen(argv, cwd=cwd, env=env, start_new_session=True,
-                          stdout=subprocess.PIPE if output else None, text=output) as process:
+    process = None
+    with contextlib.ExitStack() as stack:
         try:
+            # A cancellation during Popen must reach the cleanup below once the
+            # child group exists and its leader is available to signal and reap.
+            with defer_cancellation() as pending:
+                process = stack.enter_context(subprocess.Popen(
+                    argv, cwd=cwd, env=env, start_new_session=True,
+                    stdout=subprocess.PIPE if output else None, text=output))
+            if pending:
+                signal.raise_signal(pending[0])
             deadline = time.monotonic() + timeout
             while True:
                 remaining = max(0, deadline - time.monotonic())
@@ -147,6 +155,8 @@ def run(argv, cwd=None, env=None, output=False, timeout=1800, on_tick=None):
                         raise
                     on_tick()
         except BaseException:
+            if process is None:
+                raise
             with defer_cancellation():
                 # Signal the whole child group, first allowing hook cleanup.
                 # Timeout and cancellation share the same bounded escalation.
@@ -397,14 +407,32 @@ def read_manifest(path):
     return m
 
 
-def archive_path(name):
+def archive_path(name, member=None):
     if (not isinstance(name, str) or not name or "\\" in name or "\x00" in name or
             name.startswith("/") or ntpath.splitdrive(name)[0]):
-        raise ValueError("unsafe history archive path")
+        raise ValueError(f"{member or name!r}: unsafe history archive path")
     parts = name.split("/")
     if any(p in ("", ".", "..") or ":" in p for p in parts):
-        raise ValueError("noncanonical history archive path")
+        raise ValueError(f"{member or name!r}: noncanonical history archive path")
     return PurePosixPath(name)
+
+
+def symlink_target(member):
+    # A sibling subtree needs leading ".." components. Only accept the canonical
+    # relative spelling, so no component traversed and then cancelled can be a link.
+    parent = posixpath.dirname(member.name)
+    target = posixpath.normpath(posixpath.join(parent, member.linkname))
+    path = archive_path(target, member.name)
+    if (len(path.parts) < 2 or path.parts[0] != member.name.split("/")[0] or
+            posixpath.relpath(target, parent) != member.linkname):
+        raise ValueError(f"{member.name!r}: symlink target must stay within its history root")
+    return target
+
+
+def validate_hardlink(member, by_name):
+    target = by_name.get(str(archive_path(member.linkname, member.name)))
+    if target is None or not target.isfile():
+        raise ValueError(f"{member.name!r}: hard link target is not an archived regular file")
 
 
 def history_members(archive, roots):
@@ -414,20 +442,23 @@ def history_members(archive, roots):
     for member in members:
         path = archive_path(member.name)
         if (path.parts[0] not in root_names or
-                not (member.isfile() or member.isdir() or member.issym()) or member.name in by_name):
-            raise ValueError("invalid or duplicate history archive member")
+                not (member.isfile() or member.isdir() or member.issym() or member.islnk()) or member.name in by_name):
+            raise ValueError(f"{member.name!r}: invalid or duplicate history archive member")
         by_name[member.name] = member
     for name, member in by_name.items():
         path = PurePosixPath(name)
         for parent in path.parents:
             if str(parent) != "." and (str(parent) not in by_name or not by_name[str(parent)].isdir()):
-                raise ValueError("history archive parent is not a directory")
+                raise ValueError(f"{name!r}: history archive parent is not a directory")
+        if member.islnk():
+            validate_hardlink(member, by_name)
         if member.issym():
-            target = str(path.parent / archive_path(member.linkname))
-            if target not in by_name or not (by_name[target].isfile() or by_name[target].isdir()):
-                raise ValueError("history symlink target is not an archived file or directory")
-    if any(f"root-{i}" not in by_name or not by_name[f"root-{i}"].isdir() for i in range(len(roots))):
-        raise ValueError("history archive is missing an inventory root")
+            target = by_name.get(symlink_target(member))
+            if target is None or not (target.isfile() or target.isdir() or target.islnk()):
+                raise ValueError(f"{name!r}: symlink target is not an archived file or directory")
+    for name in root_names:
+        if name not in by_name or not by_name[name].isdir():
+            raise ValueError(f"{name!r}: history archive is missing an inventory root")
     return members
 
 
@@ -491,7 +522,9 @@ def extract_history(path, destination):
         # No more file writes through archive paths once links exist. Validation
         # requires each target to be a direct, archived regular file/directory.
         for member in members:
-            if member.issym():
+            if member.islnk():
+                os.link(destination / member.linkname, destination / member.name)
+            elif member.issym():
                 (destination / member.name).symlink_to(member.linkname)
         for member in reversed(directories):
             os.utime(destination / member.name, (member.mtime, member.mtime))
@@ -729,31 +762,67 @@ class HistoryReader:
         return chunk
 
 
+def write_history_symlinks(archive, links, by_name):
+    # Resolve source aliases using only the collected names. An excluded directory
+    # or an alias leading outside the root is never consulted on the host.
+    targets = {name: symlink_target(info) for name, info in links.items()}
+    for name, info in links.items():
+        target = targets[name]
+        # Match the usual filesystem limit, including cycles with a growing suffix.
+        for _ in range(40):
+            path = PurePosixPath(target)
+            alias = next((str(p) for p in (path, *path.parents) if str(p) in targets), None)
+            if alias is None:
+                break
+            target = str(PurePosixPath(targets[alias]) / path.relative_to(alias))
+        entry = by_name.get(target)
+        if entry is None or not (entry.isfile() or entry.isdir() or entry.islnk()):
+            raise ValueError(f"{name!r}: symlink target is not an archived file or directory")
+        info.linkname = posixpath.relpath(target, posixpath.dirname(name))
+        archive.addfile(info)
+
+
 def archive_history(roots, excluded, target, progress):
     # The metadata-only pass skips the same subtrees as the archive pass.
     # Counters track regular files and uncompressed bytes entering the archive.
     size = count = 0
+    linked_inodes = set()
     for _, _, info in history_entries(roots, excluded):
         if stat.S_ISREG(info.st_mode):
+            if info.st_nlink > 1:
+                inode = (info.st_dev, info.st_ino)
+                if inode in linked_inodes:
+                    continue
+                linked_inodes.add(inode)
             size += info.st_size
             count += 1
     progress.update(force=True, bytes_done=0, bytes_total=size, item_done=0, item_total=count)
     written = 0
+    by_name = {}
+    links = {}
+    root_paths = {f"root-{i}": str(root).rstrip("/") + "/" for i, root in enumerate(roots)}
     with tarfile.open(target, "w:gz", dereference=False, copybufsize=1024 * 1024) as archive:
         for path, name, _ in history_entries(roots, excluded):
             info = archive.gettarinfo(str(path), name)
             if info is None:
                 continue
             archive_path(info.name)
-            if info.islnk():
-                raise ValueError("history hard links require an explicit snapshot boundary")
-            if info.issym():
-                # Absolute and escaping links need their own inventoried root.
-                archive_path(info.linkname)
-            if not (info.isfile() or info.isdir() or info.issym()):
-                continue
             info.uid = info.gid = 0
             info.uname = info.gname = ""
+            if info.issym():
+                if info.linkname.startswith("/"):
+                    root = name.split("/")[0]
+                    prefix = root_paths[root]
+                    if not info.linkname.startswith(prefix):
+                        raise ValueError(f"{name!r}: absolute symlink target is outside its history root")
+                    relative = archive_path(info.linkname[len(prefix):], name)
+                    info.linkname = posixpath.relpath(f"{root}/{relative}", posixpath.dirname(name))
+                links[name] = info
+                continue
+            if info.islnk():
+                validate_hardlink(info, by_name)
+            elif not (info.isfile() or info.isdir()):
+                continue
             if info.isfile():
                 with path.open("rb") as source:
                     archive.addfile(info, HistoryReader(source, progress))
@@ -761,6 +830,8 @@ def archive_history(roots, excluded, target, progress):
                 progress.update(item_done=written)
             else:
                 archive.addfile(info)
+            by_name[name] = info
+        write_history_symlinks(archive, links, by_name)
     if written == 0:
         raise ValueError("no history or configuration files found")
     progress.emit(force=True)

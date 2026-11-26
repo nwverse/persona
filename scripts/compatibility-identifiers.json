@@ -1387,6 +1387,14 @@
       "path_tokens": [],
       "external_refs": []
     },
+    "web/e2e/composer-inline-references.mjs": {
+      "reason": "Browser assertions for the exact legacy context/file markers accepted by the registered compatibility adapter.",
+      "tokens": [
+        "jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
     "web/src/lib/assistant-chat.test.ts": {
       "reason": "Baseline regression fixture or exact compatibility assertion for a persisted contract.",
       "tokens": [
@@ -1439,6 +1447,15 @@
         "my-jarvis-art",
         "plugin_jarvis",
         "started_by_jarvis"
+      ],
+      "path_tokens": [],
+      "external_refs": []
+    },
+    "web/src/lib/disconnect.test.ts": {
+      "reason": "Exact regression fixture for legacy credential keys that sign-out must still remove.",
+      "tokens": [
+        "jarvis.token",
+        "jarvis.tokenId"
       ],
       "path_tokens": [],
       "external_refs": []

@@ -106,6 +106,20 @@ func (a *acc) child(name, path string, dir bool, j *job) *acc {
 	return k
 }
 
+// mountChild records another filesystem's root under a with its mount state initialized before publication into
+// a.kids, so concurrent view readers never race on k.mount or see it as a tracked folder.
+func (a *acc) mountChild(name, path string, mtime int64, vol *volume) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.kids) >= mostTracked {
+		return // another filesystem's bytes do not belong to a's overflow sum
+	}
+	k := &acc{name: name, path: path, parent: a, depth: a.depth + 1, dir: true, mount: vol}
+	k.usedAt.Store(mtime)
+	k.listed.Store(true)
+	a.kids = append(a.kids, k)
+}
+
 // job is one scan: a set of roots walked by one pool of walkers within one deadline and one entry budget. Callers for
 // the same key join it; it keeps going when they stop waiting.
 type job struct {
@@ -268,14 +282,11 @@ func (j *job) list(ctx context.Context, w work) []work {
 		if st.dir && st.dev != w.dev {
 			// Another filesystem (a disk or share mounted here): named with its own numbers, never walked.
 			if tracking {
-				k := w.at.child(e.Name(), path, true, j)
+				vol := &volume{}
 				if v, err := volumeAt(path); err == nil {
-					k.mount = &v
-				} else {
-					k.mount = &volume{}
+					vol = &v
 				}
-				k.usedAt.Store(st.mtime)
-				k.listed.Store(true)
+				w.at.mountChild(e.Name(), path, st.mtime, vol)
 			}
 			continue
 		}

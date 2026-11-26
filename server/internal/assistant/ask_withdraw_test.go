@@ -454,21 +454,21 @@ func TestRestartInvalidationDeliversSafeContextForAskUserAndApproval(t *testing.
 				t.Errorf("shouldNotifyRestartInvalidated(%s) = true, want false", ix.ID)
 			}
 		}
-	if !slices.Contains(toolNames, "ask_user_withdraw") {
-		t.Fatal("ask_user_withdraw missing from toolNames")
-	}
+		if !slices.Contains(toolNames, "ask_user_withdraw") {
+			t.Fatal("ask_user_withdraw missing from toolNames")
+		}
 
-	// Verify the public MCP Tool() entry point routes ask_user_withdraw and preserves errors.
-	ft := newFleetTest(t)
-	res := ft.s.Tool(context.Background(), ToolCall{
-		Name:      "ask_user_withdraw",
-		Arguments: json.RawMessage(`{"interaction_id":"ix_missing"}`),
-		MachineID: "mac",
-		SessionID: "s1",
-	})
-	if !res.IsError || len(res.Content) == 0 || !strings.Contains(res.Content[0].Text, "no pending ask_user question ix_missing") {
-		t.Fatalf("Tool(ask_user_withdraw missing) = %+v", res)
-	}
+		// Verify the public MCP Tool() entry point routes ask_user_withdraw and preserves errors.
+		ft := newFleetTest(t)
+		res := ft.s.Tool(context.Background(), ToolCall{
+			Name:      "ask_user_withdraw",
+			Arguments: json.RawMessage(`{"interaction_id":"ix_missing"}`),
+			MachineID: "mac",
+			SessionID: "s1",
+		})
+		if !res.IsError || len(res.Content) == 0 || !strings.Contains(res.Content[0].Text, "no pending ask_user question ix_missing") {
+			t.Fatalf("Tool(ask_user_withdraw missing) = %+v", res)
+		}
 	})
 
 	t.Run("restoreInteractions before recoverApprovalJournals does not overwrite applying or duplicate clarified", func(t *testing.T) {

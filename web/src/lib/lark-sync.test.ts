@@ -6,7 +6,7 @@ import { t } from "../i18n";
 import { ApiError } from "./api";
 import {
   asSyncView, bindingTitle, forgetReturn, healthOf, isAbsent, LARK_SETTINGS_PATH, oauthRedirectURI, oauthReturn,
-  orderedBots, readReturn, reauthSoon, rememberReturn, tierText, TIER_DOCS, TIER_FULL, type LarkSyncBinding, type LarkSyncView,
+  needsAuthorize, orderedBots, readReturn, reauthSoon, rememberReturn, tierText, TIER_DOCS, TIER_FULL, type LarkSyncBinding, type LarkSyncView,
 } from "./lark-sync";
 import { parse, routePath } from "./router";
 
@@ -36,6 +36,10 @@ describe("sync view", () => {
     // a missing or odd hour falls back to the hub's default
     expect(asSyncView({ ...view(), schedule_hour: 99 })?.schedule_hour).toBe(3);
     expect(asSyncView({ available: true, bots: [], bindings: [] })?.accounts).toEqual([]);
+    // im_poll is preserved when boolean and omitted when absent (older hub)
+    expect(asSyncView({ ...view(), im_poll: true })?.im_poll).toBe(true);
+    expect(asSyncView({ ...view(), im_poll: false })?.im_poll).toBe(false);
+    expect(asSyncView(view())?.im_poll).toBeUndefined();
   });
 
   it("treats a missing route as absent and every other failure as one", () => {
@@ -59,6 +63,8 @@ describe("sync view", () => {
     expect(healthOf(binding({ health: "needs_reauth" })).tone).toBe("red");
     expect(healthOf(binding({ health: "rate_limited" })).tone).toBe("orange");
     expect(healthOf(binding({ health: "scope_missing" })).text).toBe(t("settings-larksync.health_scope_missing"));
+    expect(needsAuthorize(binding({ health: "scope_missing" }))).toBe(true);
+    expect(reauthSoon(binding({ health: "scope_missing", reauth_due_days: 30 }))).toBeNull();
     expect(healthOf(binding({ health: "failing", running: true }))).toEqual({ text: t("settings-larksync.health_running"), tone: "accent" });
     expect(healthOf(binding({ health: "something_new" })).text).toBe(t("settings-larksync.health_unknown"));
     expect(tierText(TIER_FULL)).toBe(t("settings-larksync.tier_full"));

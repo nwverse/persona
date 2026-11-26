@@ -150,6 +150,7 @@ if args == ['tool', 'dist', 'list']:
         root = self.root / "history"
         root.mkdir()
         (root / "keep").write_bytes(b"a" * (2 * 1024 * 1024))
+        os.link(root / "keep", root / "same")
         (root / "empty").touch()
         (root / "link").symlink_to("keep")
         (root / "skip").mkdir()
@@ -168,7 +169,7 @@ if args == ['tool', 'dist', 'list']:
         self.assertEqual((events[-1]["item_done"], events[-1]["percent"]), (2, 100))
         self.assertNotIn(str(root), json.dumps(events))
         with tarfile.open(archive) as stream:
-            self.assertEqual(stream.getnames(), ["root-0", "root-0/empty", "root-0/keep", "root-0/link"])
+            self.assertEqual(stream.getnames(), ["root-0", "root-0/empty", "root-0/keep", "root-0/same", "root-0/link"])
 
     def test_progress_throttles_counters_and_resets_metrics_on_step_change(self):
         elapsed = 0

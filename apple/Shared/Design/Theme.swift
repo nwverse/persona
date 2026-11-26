@@ -311,7 +311,7 @@ nonisolated enum Theme {
         static let dash: [CGFloat] = [Theme.Space.xs, Theme.Space.xs]
     }
 
-    /// The avatar sheet's Theme Color and Pictures for Each State (#15449, `AvatarStatesPages`).
+    /// The avatar sheet's Theme Color, Pictures for Each State and image drop highlight (#15449, #15612, `AvatarStatesPages`).
     enum AvatarSheet {
         /// A theme color's swatch, round, beside its name.
         static let swatch = Size.iconS
@@ -319,6 +319,10 @@ nonisolated enum Theme {
         static let swatchEdge = Color.primary.opacity(0.15)
         /// A state's picture in its row, as it will move: the size of the top bar's dot.
         static let preview = Size.avatarL
+        /// The accent border and tint drawn over a picture slot or avatar card while an image is dragged over it (#15612).
+        static var dropStroke: Color { Theme.accent }
+        static let dropStrokeWidth = Size.rule
+        static var dropTint: Color { Theme.accentTint }
     }
     #endif
 
@@ -535,6 +539,10 @@ nonisolated enum Theme {
         static let workflowShare: CGFloat = 0.38
         /// The smallest thing a finger should hit.
         static let tapTarget: CGFloat = 44
+        /// The widest a To-dos row's "OK: ‹option›" is drawn (#10465; DESIGN_SYSTEM 2.5): past it, at the text size in use,
+        /// it says "OK" alone, since line 2 already names the recommendation and a button's words are never cut. Not
+        /// scaled: the label's length and the text size decide (`TodoRowAnswers.okTitle`).
+        static let todoAnswerMax: CGFloat = 260
         /// A search field's band under a navigation bar, as the system's drawer draws it (`AgentsHeader`).
         static let searchBand: CGFloat = 54
         /// The field in it, at its top.

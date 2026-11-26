@@ -162,14 +162,13 @@ func (e ruleEnv) refusal(p, purpose string, f facts) string {
 	case len(parts) == 1 && slices.Contains(standardFolders, strings.ToLower(parts[0])):
 		return proto.RefusalStandardFolder
 	}
-	if c := e.cacheAt(n); c != "" && trash {
-		return ""
-	}
-	if e.appManaged(n, parts, trash) {
-		return proto.RefusalAppManaged
-	}
-	if strings.HasPrefix(parts[0], ".") && !(trash && len(parts) == 2 && parts[0] == ".cache") {
-		return proto.RefusalDotFolder
+	if e.cacheAt(n) == "" || !trash {
+		if e.appManaged(n, parts, trash) {
+			return proto.RefusalAppManaged
+		}
+		if strings.HasPrefix(parts[0], ".") && !(trash && len(parts) == 2 && parts[0] == ".cache") {
+			return proto.RefusalDotFolder
+		}
 	}
 	// Last, a folder that would be allowed but holds something precious takes it with it.
 	return e.precious(n, inHome, func(p, root string) bool { return within(root, p) })

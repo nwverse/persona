@@ -55,8 +55,8 @@ func TestAudioStateIsOnePerStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := newTestEngine(&kb.Engine{Store: e.Store, TranscriptionReady: e.TranscriptionReady, Logf: func(string, ...any) {}})
-	if second.Writers == e.Writers || second.Writers.audio != e.Writers.audio {
-		t.Fatalf("the second engine's writers: same %v, same audio state %v", second.Writers == e.Writers, second.Writers.audio == e.Writers.audio)
+	if second.Writers == e.Writers || second.Writers.state != e.Writers.state {
+		t.Fatalf("the second engine's writers: same %v, same audio state %v", second.Writers == e.Writers, second.Writers.state == e.Writers.state)
 	}
 	if held, err := second.AudioHeld(recID); err != nil || len(held) != 1 {
 		t.Fatalf("held through the second engine: %v %v", held, err)
@@ -70,7 +70,7 @@ func TestAudioStateIsOnePerStore(t *testing.T) {
 	_ = w.Close()
 	// A store nobody hooked has no state to share: its writers start their own.
 	fresh := goldenEngine(t, nil)
-	if fresh.Writers.audio == e.Writers.audio || fresh.Writers.audio == nil {
+	if fresh.Writers.state == e.Writers.state || fresh.Writers.state == nil {
 		t.Fatal("writers of another store share the audio state")
 	}
 }
@@ -101,4 +101,74 @@ func TestAudioAppendAllocatesNothingForThePort(t *testing.T) {
 	if allocs > 1 {
 		t.Fatalf("an append allocates %v times", allocs)
 	}
+}
+
+// A live append through the port costs what it did as a method of the knowledge base's engine, plus the writers'
+// view of it made for the call (Writers.engine: the engine and the store as the writers see them, and the closures
+// over the port): a handful of allocations beside the few hundred of reading the log, and no lock or goroutine more.
+func TestLiveAppendAllocatesLittleMoreThroughThePort(t *testing.T) {
+	e := liveBenchEngine(t, 20)
+	seg := []LiveSegment{{Start: 0, End: 0.9, Text: "sentence 0 of the meeting"}} // held already: read, compared, not written
+	made := e.eng()
+	direct := testing.AllocsPerRun(100, func() {
+		if _, _, err := made.LiveAppend(recID, 0, seg); err != nil {
+			t.Fatal(err)
+		}
+	})
+	through := testing.AllocsPerRun(100, func() {
+		if _, _, err := e.LiveAppend(recID, 0, seg); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if through-direct > 4 {
+		t.Fatalf("an append through the port allocates %v times, %v with the engine made already", through, direct)
+	}
+}
+
+// The order of the locks between the store's meeting lock and the module's live lock is kept by neither side taking
+// the other's: a live log's writers finish while the meeting lock is held (they never take it), and meeting.json's
+// update finishes while the live lock is held (it never takes that), so no path can hold one and wait for the other.
+func TestLiveAndMeetingLocksNeverNest(t *testing.T) {
+	now := time.Date(2026, 11, 10, 14, 0, 0, 0, goldenZone)
+	e := goldenEngine(t, nil)
+	putRecording(t, e, recID, attendedUpload(1, now, AttendanceParticipant), now)
+	done := func(what string, fn func() error) {
+		t.Helper()
+		errs := make(chan error, 1)
+		go func() { errs <- fn() }()
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s waits for a lock it must not take", what)
+		}
+	}
+	meeting := e.Writers.core.Locks().Meeting
+	meeting.Lock()
+	done("a live append under the meeting lock", func() error {
+		_, _, err := e.LiveAppend(recID, 0, []LiveSegment{{Start: 1, End: 2, Text: "a line"}})
+		return err
+	})
+	done("a live update under the meeting lock", func() error {
+		_, err := e.LiveUpdate(recID, func(l *Live, _ Recording) error { l.Problem = "x"; return nil })
+		return err
+	})
+	done("a live append of the hub's under the meeting lock", func() error {
+		_, err := e.LiveAppendHub(recID, nil)
+		if errors.Is(err, ErrNotHub) {
+			return nil
+		}
+		return err
+	})
+	meeting.Unlock()
+	live := &e.Writers.state.liveMu
+	live.Lock()
+	done("a meeting update under the live lock", func() error {
+		private := true
+		_, err := e.MeetingUpdate(recID, func(m *Meeting, _ Recording) error { m.Private = &private; return nil })
+		return err
+	})
+	live.Unlock()
 }

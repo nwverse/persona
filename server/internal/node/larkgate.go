@@ -49,6 +49,7 @@ type larkCall struct {
 	Risk string   // lark-cli's own risk level for a "CLI" call: read | write | high-risk-write ("" unknown, larkCLIMissing)
 	Args []string // lark-cli's arguments, for the phone card
 
+	fileBody     bool // an @file body input whose content can change between check time and send time (#8413)
 	relFile      bool // a relative @file body or query input, read from the conversation's directory (classifyLark, #8404)
 	queryUnknown bool // execution-time stdin, expansion, or -G data cannot be bound to a query-confirmed grant
 	dataInQuery  bool // -G moved the parsed data argument to the query, leaving the actual request body empty
@@ -91,6 +92,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	// directory. Keep the actual execution directory separately for the
 	// manager's exact-call continuation fingerprint.
 	ix.ExecutionCwd = cwd
+	ix.OutwardWrite = false
 	cfg := n.assistantLark(ctx)
 	if slices.ContainsFunc(cfg.Gates, func(g proto.CommandGate) bool { return g.Auth != nil }) {
 		n.gates() // the proxy goes by this Node's config from now on (a resident node's next connection)
@@ -116,9 +118,11 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		if decision == "deny" {
 			return "deny", "这个操作按配置不允许（" + c.Method + " " + c.Path + "）。", nil
 		}
-		if decision == "allow" && c.dataInQuery && c.Gate >= 0 && c.Gate < len(cfg.Gates) {
+		if decision == "allow" && c.dataInQuery && c.Gate >= 0 && c.Gate < len(cfg.Gates) && !(c.fileBody && cfg.Gates[c.Gate].Auth == nil) {
 			// firstLark matched the data as a request body, but curl -G sends it in the query with an empty body. A
 			// body-scoped allow therefore does not authorize the actual call, especially a direct non-Auth command.
+			// For Auth-less @file calls, decideLarkFileBody already skips body-scoped allows and only allows
+			// body-independent rules with no earlier body restriction.
 			if rule, ok := firstLark(cfg.Gates[c.Gate].Rules, c); ok && len(rule.Body) > 0 {
 				return "deny", "-G/--get 会把 data 移到查询并留下空请求体，实际请求不再满足按请求体放行的规则。", nil
 			}
@@ -182,6 +186,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 				// which could be anything, the CLI included. Still asked, as the ordinary Bash card it is (#4890).
 				ix.ToolName, ix.Summary = cmp.Or(ix.ToolName, "Bash"), prettyBody(command)
 			}
+			ix.OutwardWrite = wholeCommandOutwardWrite(v, write, title)
 			decision, reason, _, err := n.confirmLark(ctx, session, ix, nil, confirmWrites, title)
 			return decision, reason, err
 		}
@@ -242,6 +247,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	if confirmWrites || bypass {
 		remember = nil // hard boundaries are confirmed each time
 	}
+	ix.OutwardWrite = slices.ContainsFunc(ask, larkCallOutwardWrite)
 	decision, reason, card, err := n.confirmLark(ctx, session, ix, remember, confirmWrites, ix.ToolName)
 	if decision == "allow" {
 		n.grantGateCalls(cfg, session, ask, card)

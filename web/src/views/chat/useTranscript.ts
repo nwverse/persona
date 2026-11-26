@@ -5,7 +5,7 @@ import { api, ApiError, errorText, isAbort, READ_TIMEOUT_MS, sessionHistoryNotFo
 import { sessionLoadError } from "../../lib/session-link";
 import { getState, listenSession, markConversationDeleted, send, type ItemsEvent } from "../../lib/store";
 import { afterPull, afterPush, FRESH_TALLY, newestItemAt, notLive as tallyNotLive, RevWatch, shouldPull, type StaleTally } from "../../lib/stale-page";
-import { insideFold, mergeItems, withoutFolded } from "../../lib/turns";
+import { insideFold, isUserInput, mergeItems, withoutFolded } from "../../lib/turns";
 import { chosenManager } from "../../lib/manager-choice";
 import { discardFeedCache, discardMemoryPage, feedCacheScope, readFeedCache, readMemoryPage, writeFeedCache, writeMemoryPage, type FeedCache } from "../../lib/feed-cache";
 import type { Item, ItemsPage } from "../../lib/types";
@@ -26,6 +26,39 @@ const EARLIER_RETRY_MS = 3000;
 const EARLIER_RETRY_MAX_MS = 30_000;
 /** Coalesce live push cache writes so WS bursts do not serialize the main-chat cache on every frame. */
 export const FEED_CACHE_SAVE_MS = 1000;
+
+// Independent newest-page reads still share one commit order across views of a session. Otherwise an older response
+// can land after a newer one and roll its own view and the shared page cache back to a stale snapshot.
+interface PageReadHub {
+  committed: number;
+  listeners: Set<(page: ItemsPage) => void>;
+}
+const pageReadHubs = new Map<string, PageReadHub>();
+let nextPageReadTicket = 0;
+
+function listenPageReads(key: string, listener: (page: ItemsPage) => void): () => void {
+  let hub = pageReadHubs.get(key);
+  if (!hub) {
+    hub = { committed: 0, listeners: new Set() };
+    pageReadHubs.set(key, hub);
+  }
+  hub.listeners.add(listener);
+  return () => {
+    hub.listeners.delete(listener);
+    if (!hub.listeners.size && pageReadHubs.get(key) === hub) pageReadHubs.delete(key);
+  };
+}
+
+function publishPageRead(key: string, ticket: number, page: ItemsPage): void {
+  const hub = pageReadHubs.get(key);
+  if (!hub || hub.committed > ticket) return;
+  hub.committed = ticket;
+  for (const listener of [...hub.listeners]) listener(page);
+}
+
+function pageReadSuperseded(key: string, ticket: number): boolean {
+  return (pageReadHubs.get(key)?.committed ?? 0) > ticket;
+}
 
 interface EarlierRead {
   controller: AbortController;
@@ -78,6 +111,8 @@ export interface Transcript {
   streaming: string;
   /** The stream ended while its final transcript item is still on the way. */
   streamEnded?: boolean;
+  /** Transcript cursor when the reply preview arrived. A newer user echo belongs to a different turn. */
+  streamEndedThrough?: number;
   /** The stream keeps losing items (the page got them by asking): say so, with a reload. */
   notLive: boolean;
   reload: () => void;
@@ -124,7 +159,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
   const [earlierPage, setEarlierPage] = useState<symbol>();
   const [replaceEpoch, setReplaceEpoch] = useState(0);
   const [streaming, setStreaming] = useState("");
-  const [streamEnded, setStreamEnded] = useState(false);
+  const [streamEndedThrough, setStreamEndedThrough] = useState<number>();
   const reread = useRef<() => void>(() => {});
   const replacing = useRef(false);
   const [notLive, setNotLive] = useState(false);
@@ -243,7 +278,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     setError("");
     historyMissing.current = false;
     updateHasMore(cached?.hasMore ?? false);
-    setStreamEnded(false);
+    setStreamEndedThrough(undefined);
     deltas.current.flush("");
     liveRaw.current = liveShown.current = "";
     covered.current = 0;
@@ -356,10 +391,19 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       handoffTimer = undefined;
       liveRaw.current = liveShown.current = "";
       deltas.current.flush("");
-      setStreamEnded(false);
+      setStreamEndedThrough(undefined);
     };
     const showLive = (batch?: Item[]) => {
-      if (liveRaw.current && liveThrough && batch?.some((i) => i.role === "user" && i.kind === "text" && !i.queued && i.seq > liveThrough)) return endLive();
+      // A preview without an input can claim a late echo. Once bound, the next input supersedes it,
+      // even when the previous turn's end marker has not arrived yet.
+      const input = liveRaw.current && batch?.findLast((i) => i.seq > liveThrough && !i.queued && isUserInput(i));
+      if (input) {
+        const message = input.id.split("#")[0];
+        if (message !== liveInput && (liveInput !== undefined || handoffTimer !== undefined)) return endLive();
+        liveInput = message;
+        liveThrough = input.seq;
+        if (handoffTimer !== undefined) setStreamEndedThrough(liveThrough);
+      }
       if (assistant) {
         if (batch?.some((i) => i.role === "assistant" && i.kind === "text" && i.seq >= liveThrough)) endLive();
         return;
@@ -373,6 +417,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       else deltas.current.push(want);
     };
     let liveThrough = 0;
+    let liveInput: string | undefined;
     const onDelta = (text: string) => {
       if (dead) return;
       if (replacing.current) {
@@ -383,15 +428,20 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       if (!text) {
         if (!liveRaw.current || handoffTimer !== undefined) return;
         // The end marker and saved words travel separately. If a run ended without an item, release its preview.
-        setStreamEnded(true);
+        setStreamEndedThrough(liveThrough);
         deltas.current.flush(liveShown.current);
         handoffTimer = window.setTimeout(endLive, READ_TIMEOUT_MS);
         return;
       }
+      if (!liveRaw.current || handoffTimer !== undefined) {
+        liveThrough = Math.max(covered.current, latest.at(-1)?.seq ?? 0);
+        const boundary = latest.findLast((item) => !item.queued &&
+          (isUserInput(item) || (item.role === "assistant" && item.kind === "text")));
+        liveInput = boundary && isUserInput(boundary) ? boundary.id.split("#")[0] : undefined;
+      }
       clearTimeout(handoffTimer);
       handoffTimer = undefined;
-      setStreamEnded(false);
-      liveThrough = covered.current;
+      setStreamEndedThrough(undefined);
       liveRaw.current = text;
       if (assistant) {
         liveShown.current = text;
@@ -411,7 +461,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       const sent = revs.sending();
       let fresh = 0;
       for (let n = 0; n < 8 && !dead; n++) {
-        const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?after_seq=${covered.current}&lazy_images=1`, { signal: ctl.signal });
+        const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?after_seq=${covered.current}&lazy_images=1`, { signal: ctl.signal, dedupe: false });
         if (dead || version !== pageRequest) return fresh;
         if (p.history && history.current && p.history !== history.current) {
           rewritten(p.history);
@@ -608,35 +658,44 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       pendingEnd = false;
     }
 
+    const pageReadKey = sessionPath(mid, sid);
+    const offPageReads = listenPageReads(pageReadKey, (p) => {
+      if (dead) return;
+      if (pendingHistory && p.history && pendingHistory !== p.history) {
+        rewritten(); // Take a fresh snapshot after both conflicting observations.
+        return;
+      }
+      commitPage(p);
+    });
+
     async function readPage(openWatch = true) {
       const before = history.current;
       const version = ++pageRequest;
+      const ticket = ++nextPageReadTicket;
       ready = false;
       historyMissing.current = true;
       if (!itemsRef.current.length && !liveRaw.current) setLoading(true);
       clearTimeout(refused);
       refused = undefined;
       try {
-        const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}`, { signal: ctl.signal });
+        const p = await api<ItemsPage>(`${sessionPath(mid, sid)}/items?${PAGE}`, { signal: ctl.signal, dedupe: false });
         if (dead || version !== pageRequest) return;
-        if (pendingHistory && p.history && pendingHistory !== p.history) {
-          rewritten(); // Take a fresh snapshot after both conflicting observations.
-          return;
-        }
-        commitPage(p);
+        publishPageRead(pageReadKey, ticket, p);
       } catch (e) {
         if (dead || version !== pageRequest) return;
-        if (e instanceof ApiError && e.code === "conversation_deleted") { markConversationDeleted(mid, sid); return; }
-        if (opts.starting) recovered();
-        // A subscribe may already have supplied the page while the HTTP read was pending.
-        if (replacing.current && replacementReplay) {
-          commitPage(replacementReplay);
-          endRefused();
-        } else if (!opts.starting) {
-          const text = sessionLoadError(errorText(e));
-          historyMissing.current = sessionHistoryNotFound(e);
-          if (isNotLoaded(e)) refused = window.setTimeout(() => endRefused(text), READ_TIMEOUT_MS);
-          else setError(text);
+        if (!pageReadSuperseded(pageReadKey, ticket)) {
+          if (e instanceof ApiError && e.code === "conversation_deleted") { markConversationDeleted(mid, sid); return; }
+          if (opts.starting) recovered();
+          // A subscribe may already have supplied the page while the HTTP read was pending.
+          if (replacing.current && replacementReplay) {
+            commitPage(replacementReplay);
+            endRefused();
+          } else if (!opts.starting) {
+            const text = sessionLoadError(errorText(e));
+            historyMissing.current = sessionHistoryNotFound(e);
+            if (isNotLoaded(e)) refused = window.setTimeout(() => endRefused(text), READ_TIMEOUT_MS);
+            else setError(text);
+          }
         }
       } finally {
         if (!dead && version === pageRequest) {
@@ -657,6 +716,7 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
       ctl.abort();
       offDeleted();
       off();
+      offPageReads();
       clearTimeout(refused);
       clearTimeout(handoffTimer);
       itemCoalescer.cancel();
@@ -762,5 +822,6 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
     [mid, sid, apply],
   );
 
-  return { items, history: history.current, replaceEpoch, loading, firstRead, error, hasMore, loadingEarlier, earlierPage, loadEarlier, expandFold, streaming, streamEnded, notLive, reload: () => reread.current() };
+  return { items, history: history.current, replaceEpoch, loading, firstRead, error, hasMore, loadingEarlier, earlierPage,
+    loadEarlier, expandFold, streaming, streamEnded: streamEndedThrough !== undefined, streamEndedThrough, notLive, reload: () => reread.current() };
 }

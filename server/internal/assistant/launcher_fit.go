@@ -213,7 +213,7 @@ func launcherKindSnapshot(discovered, overrides []ConfiguredLauncher, name strin
 	}
 	if kind == "" {
 		switch name {
-		case "claude", "codex", "traex":
+		case "claude", "codex", "traex", "agy":
 			kind = name
 		}
 	}
@@ -373,7 +373,7 @@ func (s *Service) lastSeenAgent(ctx context.Context, machine, name string) start
 			}
 		}
 		if len(configured) == 0 {
-			return startAgent{}
+			break
 		}
 		for _, l := range sessionLaunchers(configured, overrides) {
 			if l.Name == name {
@@ -382,6 +382,9 @@ func (s *Service) lastSeenAgent(ctx context.Context, machine, name string) start
 				return a
 			}
 		}
+	}
+	if name == "agy" {
+		return startAgent{agent: "agy", snapshot: "agy"}
 	}
 	return startAgent{}
 }
