@@ -64,6 +64,11 @@ func TestRouteVariableConstantOverTheCommand(t *testing.T) {
 		{"arithmetic elsewhere", `F=7; i=0; for x in $(seq 1 2); do i=$((i+1)); ex GET "/conversations/$F/messages"; done`, ""},
 		{"zsh test -v", `F=x; test -v 'path[${F::=}1]'; for i in 1; do ex GET "/links$F/open"; done`, ""},
 		{"[[ -v ]]", `F=x; [[ -v 'path[${F::=}1]' ]]; for i in 1; do ex GET "/links$F/open"; done`, ""},
+		{"zsh [[ -t ]]", `F=x; [[ -t 'pipestatus[${F::=}1]' ]]; for i in 1; do ex GET "/links$F/open"; done`, ""},
+		{"zsh test -t", `F=x; test -t 'pipestatus[${F::=}1]'; for i in 1; do ex GET "/links$F/open"; done`, ""},
+		{"zsh $name[expr]", `F=1; echo $path[F=7123456789] >/dev/null; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"zsh \"$name[expr]\"", `cd /tmp && F=1; echo "$path[F=7]"; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"zsh $name[indirect]", `F=x; e='pipestatus[${F::=}1]'; echo $pipestatus[e] >/dev/null; for i in 1; do ex GET "/links$F/open"; done`, ""},
 		{"IFS", `IFS=z; F=userz-o; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
 		{"{name}> redirect", `cd /tmp && F=x; exec {F}>/dev/null; for i in 1; do ex GET "/$F/open"; done`, ""},
 		// cd counts as always succeeding only into an absolute directory anyone may enter.

@@ -1031,13 +1031,25 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 			// Arithmetic can assign (`$((N=1))`), also through a variable whose value is an expression.
 			opaque = true
 		case *syntax.UnaryTest:
-			if n.Op == syntax.TsVarSet || n.Op == syntax.TsRefVar {
-				opaque = true // zsh evaluates a subscript in -v's quoted operand, ${NAME::=…} included
+			// Only string and file tests: zsh evaluates other operands (-t, -v, …) as arithmetic or a subscript.
+			switch n.Op {
+			case syntax.TsExists, syntax.TsRegFile, syntax.TsDirect, syntax.TsRead, syntax.TsWrite, syntax.TsExec,
+				syntax.TsNoEmpty, syntax.TsEmpStr, syntax.TsNempStr, syntax.TsNot:
+			default:
+				opaque = true
 			}
 		case *syntax.BinaryTest:
 			switch n.Op {
-			case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
-				opaque = true // [[ a -eq b ]] evaluates both sides as arithmetic
+			case syntax.TsMatchShort, syntax.TsMatch, syntax.TsNoMatch, syntax.AndTest, syntax.OrTest:
+			default:
+				opaque = true // -eq and the like evaluate arithmetic; =~ fills match variables
+			}
+		case *syntax.ExtGlob:
+			opaque = true // zsh glob qualifiers can run code
+		case *syntax.Lit:
+			// An unquoted or double-quoted [ is a glob or, after $name in zsh, a subscript evaluated as arithmetic.
+			if strings.Contains(n.Value, "[") && n.Value != "[" {
+				opaque = true
 			}
 		case *syntax.FuncDecl, *syntax.DeclClause, *syntax.LetClause, *syntax.CoprocClause:
 			opaque = true
@@ -1058,10 +1070,10 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 				opaque = true
 			}
 			if name == "test" || name == "[" {
-				// zsh evaluates a numeric comparison's operands as arithmetic, and -v's subscript.
+				// As in [[ ]], only string and file tests: zsh evaluates the others' operands.
 				opaque = opaque || slices.ContainsFunc(n.Args[1:], func(w *syntax.Word) bool {
 					s, _ := executionWord(w)
-					return slices.Contains([]string{"-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-v", "-R"}, s)
+					return strings.HasPrefix(s, "-") && !slices.Contains([]string{"-n", "-z", "-e", "-f", "-d", "-s", "-r", "-w", "-x", "-a", "-o"}, s)
 				})
 			}
 		}
