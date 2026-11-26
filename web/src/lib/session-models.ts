@@ -11,7 +11,7 @@ import { t } from "../i18n";
 import { ApiError, credentialOwner, errorText, onCredentialChange } from "./api";
 import { agentId, sessionAgent } from "./agent-kind";
 import { modelShort } from "./context-usage";
-import { sessionCan, stateOf } from "./format";
+import { sessionCan, activityOf, stateOf } from "./format";
 import { runsAssistant, type AssistantLauncher } from "./assistant-chat";
 import { SUPERVISE_PURPOSE } from "./background-supervisor";
 import {
@@ -358,13 +358,13 @@ export const ENGINE_SWITCH_FEATURE = "engine_switch";
 export function engineSwitchable(s: Session): boolean {
   const engine = sessionEngine(s);
   if (engine === "claude") return !s.source_kind && canSwitchModel(s);
-  return engine === "codex" && !s.assistant && !s.source_kind && Boolean(s.pane_id) && sessionCan(s, "send") && stateOf(s) !== "offline";
+  return (engine === "codex" || engine === "agy") && !s.assistant && !s.source_kind && Boolean(s.pane_id) && sessionCan(s, "send") && activityOf(s) !== "offline";
 }
 
 /** What the pill and the panel can change on the session now: its model (Claude Code in a terminal, a runtime that says
  *  so), its effort (the composer's chips used to; a Codex thread on its app-server too). Neither: the pill is a label. */
 export function sessionSwitches(s: Session): { model: boolean; effort: boolean } {
-  const live = stateOf(s) !== "offline";
+  const live = activityOf(s) !== "offline";
   return { model: canSwitchModel(s), effort: live && (hasModes(s) || hasEffortOnly(s)) };
 }
 
