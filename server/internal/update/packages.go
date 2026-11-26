@@ -11,11 +11,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-var managedPackageName = regexp.MustCompile("^((?:personad|persona-node|persona-manager|persona-link)|" +
+var managedPackageName = lazyre.New("^((?:personad|persona-node|persona-manager|persona-link)|" +
 	legacyDaemon + ")-([a-z0-9]+)-([a-z0-9]+)(\\.exe)?$")
 
 // PackageName is the installed name for a program and platform.

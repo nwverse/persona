@@ -18,6 +18,7 @@ func TestPublishPackagesMigratesOnlyOwnedAliases(t *testing.T) {
 	legacy := legacyDaemon + "-linux-amd64"
 	put(dir, canonical, "old build")
 	put(dir, legacy, "old build")
+	put(dir, legacy+".version", "v1\n")
 	put(stage, canonical, "new build")
 	// An older Hub may already have prepared a regular legacy copy in its staging directory.
 	put(stage, legacy, "stale staged copy")
@@ -34,6 +35,7 @@ func TestPublishPackagesMigratesOnlyOwnedAliases(t *testing.T) {
 	}
 	put(stage, "personad-darwin-arm64", "new darwin build")
 
+	var previous os.FileInfo
 	for range 2 {
 		if err := PublishPackages(stage, dir, Build{Version: "v2"}); err != nil {
 			t.Fatal(err)
@@ -52,6 +54,14 @@ func TestPublishPackagesMigratesOnlyOwnedAliases(t *testing.T) {
 		if b, _ := os.ReadFile(filepath.Join(dir, legacy)); string(b) != "new build" {
 			t.Fatalf("legacy reads %q", b)
 		}
+		if b, _ := os.ReadFile(filepath.Join(dir, legacy+".version")); string(b) != "v2\n" {
+			t.Fatalf("legacy package version reads %q", b)
+		}
+		current, err := os.Lstat(filepath.Join(dir, legacy))
+		if err != nil || previous != nil && !os.SameFile(previous, current) {
+			t.Fatalf("republishing changed the existing alias: %v", err)
+		}
+		previous = current
 		if b, _ := os.ReadFile(filepath.Join(dir, legacyDaemon+"-linux-arm64")); string(b) != "user file" {
 			t.Fatalf("user file reads %q", b)
 		}
