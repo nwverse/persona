@@ -17,15 +17,16 @@ vi.hoisted(() => {
 const machines: Machine[] = [{ id: "a", name: "Computer A", online: true }, { id: "b", name: "Computer B", online: true }];
 const sessions: Session[] = [{ machine_id: "b", session_id: "session", title: "Review changes", cwd: "/projects/active", space_id: "active",
   space_name: "Active", space_kind: "herdr", state: "needs_you", status: "idle", todo: { id: "todo-a", title: "Review to-do" } }];
+const read = { failedMachines: [] as string[] | null | undefined, paneError: false, folder: false };
 const spaces = ["active", "quiet"].map(id => ({ id, source: "herdr", source_id: id, title: id === "active" ? "Active" : "Quiet", machine_id: "b", cwd: "/projects/" + id }));
 vi.mock("../../lib/store", async (original) => {
   const real = await original<typeof import("../../lib/store")>();
-  return { ...real, useStore: <T,>(select: (s: ReturnType<typeof real.getState>) => T) => select({ ...real.getState(), loaded: true, machines, features: ["terminal_panes", "pane_new_space"] }) };
+  return { ...real, useStore: <T,>(select: (s: ReturnType<typeof real.getState>) => T) => select({ ...real.getState(), loaded: true, machines, features: ["terminal_panes", "pane_new_space", ...(read.folder ? ["pane_cwd"] : [])] }) };
 });
 vi.mock("../../lib/sessions", async (original) => ({ ...await original<typeof import("../../lib/sessions")>(), useFullAgentSessions: () => ({ sessions, loaded: true }) }));
 vi.mock("../../lib/current-assistant", async (original) => ({ ...await original<typeof import("../../lib/current-assistant")>(), useScopedMachines: () => machines }));
 vi.mock("../../lib/workspace-catalog", async (original) => ({ ...await original<typeof import("../../lib/workspace-catalog")>(), useWorkspaceCatalog: () => ({
-  workspaces: [...spaces, { ...spaces[1], machine_id: "a", title: "Elsewhere" }], manager: "", owner: "", failedMachines: [],
+  workspaces: [...spaces, { ...spaces[1], machine_id: "a", title: "Elsewhere" }], manager: "", owner: "", failedMachines: read.failedMachines,
 }) }));
 
 let host: HTMLDivElement, root: Root;
@@ -45,10 +46,12 @@ beforeEach(async () => {
   await initI18n("en");
   history.replaceState(null, "", "/machines/b");
   posts.length = 0;
+  Object.assign(read, { failedMachines: [], paneError: false, folder: false });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, opts?: RequestInit) => {
     const path = new URL(String(input), location.origin).pathname;
     if (path.endsWith("/metrics")) return json({ metrics: { machine_id: "b", online: true, latest: { t: 1, disk_used: 95, disk_total: 100 }, points: [] } });
     if (path.endsWith("/panes")) {
+      if (read.paneError) return new Response("Pane inventory unavailable", { status: 503 });
       if (opts?.method === "POST") { posts.push([path, JSON.parse(String(opts.body))]); return json({ terminal: "pane:new" }); }
       return json({ hosts: [{ kind: "herdr", stream: true, new_tab: true, control: true,
         workspaces: [{ id: "active", cwd: "/projects/active" }], tabs: [],
@@ -111,4 +114,27 @@ it("takes a disk warning straight to reclaim on the selected computer", async ()
   await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes(t("machines-usagemap.reclaim_open")))!);
   expect(location.pathname).toBe("/machines");
   expect(takeUsageFocus()).toEqual({ mid: "b", mode: "reclaim" });
+});
+
+it("distinguishes pending and failed workspace discovery while keeping known rows", async () => {
+  read.failedMachines = undefined;
+  await detail();
+  expect(host.textContent).toContain(t("machines-machinedetail.workspaces_loading"));
+  read.failedMachines = ["b"];
+  await detail();
+  expect(host.textContent).toContain(t("machines-machinedetail.workspaces_failed"));
+  expect(quiet()).toBeTruthy();
+});
+
+it("retries a failed pane read before offering creation, and uses the folder-capable hub", async () => {
+  read.paneError = true;
+  read.folder = true;
+  await detail();
+  await click(find(quiet().parentElement!, t("sidebar.nav_terminal"))); await terminal();
+  expect(host.querySelector('[role="alert"]')).toBeTruthy();
+  expect(find(host, t("terminal-terminalpage.new_terminal"))).toBeUndefined();
+  read.paneError = false;
+  await click(find(host, t("terminal-terminalpage.retry")));
+  await click(find(host, t("terminal-terminalpage.new_terminal")));
+  expect(posts).toEqual([["/api/v1/machines/b/panes", { kind: "herdr", cwd: "/projects/quiet" }]]);
 });

@@ -48,6 +48,7 @@ export function TerminalPage({ route, onToggleSidebar, onNewAgent, detail, onWor
   const panesOn = useStore((s) => s.features.includes("terminal_panes"));
   // New terminal on a computer with no workspace yet (#6362): a hub that checks the node can (else 409 node_outdated)
   const newSpaceOn = useStore((s) => s.features.includes("pane_new_space"));
+  const canOpenFolder = useStore(s => s.features.includes("pane_cwd"));
   const target: MachineTerminalTarget | undefined = route?.view === "terminals" && !route.id ? history.state?.machineTerminal : undefined;
   const addressed = target?.mid ?? route?.mid ?? detail?.selected?.mid;
   // A bookmarked terminal or session may name another assistant's computer. Only the current one's are listed.
@@ -131,7 +132,7 @@ export function TerminalPage({ route, onToggleSidebar, onNewAgent, detail, onWor
 
   if (target && panesOn) return <MachineTerminalEntry key={JSON.stringify(target)} target={target}
     machine={targets.find(m => m.id === target.mid)} listing={listing[target.mid]}
-    canCreateSpace={newSpaceOn} retry={() => void reload([target.mid])} />;
+    canCreateSpace={newSpaceOn} canOpenFolder={canOpenFolder} retry={() => void reload([target.mid])} />;
 
   return (
     <div className="flex h-full min-w-0 flex-col">

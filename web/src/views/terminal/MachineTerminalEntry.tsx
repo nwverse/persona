@@ -9,8 +9,8 @@ import type { Machine } from "../../lib/types";
 import { sameDirectory } from "../../lib/workspace-directory";
 import { Button, Loading } from "../../ui/atoms";
 
-export function MachineTerminalEntry({ target, machine, listing, canCreateSpace, retry }: {
-  target: MachineTerminalTarget; machine?: Machine; listing?: Listing; canCreateSpace: boolean; retry: () => void;
+export function MachineTerminalEntry({ target, machine, listing, canCreateSpace, canOpenFolder, retry }: {
+  target: MachineTerminalTarget; machine?: Machine; listing?: Listing; canCreateSpace: boolean; canOpenFolder: boolean; retry: () => void;
 }) {
   const { mid, cwd, workspaceId, host } = target;
   const [pending, setPending] = useState(false);
@@ -18,21 +18,23 @@ export function MachineTerminalEntry({ target, machine, listing, canCreateSpace,
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const hosts = listing?.data?.hosts ?? [];
-  const scoped = hosts.filter(h => !host || h.kind === host);
-  const workspace = scoped.flatMap(h => (h.workspaces ?? []).map(w => ({ h, w })))
-    .find(({ w }) => workspaceId ? w.id === workspaceId : cwd ? sameDirectory(w.cwd || "", cwd) : true);
+  const boundHost = hosts.find(h => h.kind === host);
+  // Runtime workspaces can live outside the terminal host. Their folder is the terminal destination.
+  const scoped = boundHost ? [boundHost] : hosts;
+  const matches = (id: string, path?: string) => boundHost && workspaceId ? id === workspaceId : !cwd || sameDirectory(path || "", cwd);
+  const workspaces = scoped.flatMap(h => (h.workspaces ?? []).filter(w => matches(w.id, w.cwd)).map(w => ({ h, w })));
+  const workspace = workspaces.find(({ h }) => h.new_tab);
   const existing = scoped.filter(h => h.stream).flatMap(h => (h.panes ?? []).filter(p =>
-    workspaceId ? p.workspace_id === workspaceId : !cwd || sameDirectory(p.cwd || "", cwd)
-      || (h === workspace?.h && p.workspace_id === workspace.w.id))).at(0);
+    matches(p.workspace_id, p.cwd) || workspaces.some(({ h: owner, w }) => owner === h && w.id === p.workspace_id))).at(0);
   const id = existing && terminalId(existing);
   const ready = machine?.online && !listing?.error;
-  const go = (id: string) => navigate({ name: "terminal", mid, id, view: "terminals" }, true, {});
   useEffect(() => {
     if (ready && id && !pending) navigate({ name: "terminal", mid, id, view: "terminals" }, true, {});
   }, [ready, id, mid, pending]);
 
-  const kind = scoped.find(h => h.new_tab)?.kind;
-  const at = workspace?.h.new_tab ? { kind: workspace.h.kind, workspace_id: workspace.w.id }
+  const kind = (scoped.find(h => h.new_tab) ?? hosts.find(h => h.new_tab))?.kind;
+  const at = workspace ? { kind: workspace.h.kind, workspace_id: workspace.w.id }
+    : canOpenFolder && cwd && kind ? { kind, cwd }
     : canCreateSpace && kind ? { kind, cwd: cwd || "~", new_space: true } : undefined;
   const start = async () => {
     if (!at || pending || !ready) return;
@@ -40,7 +42,7 @@ export function MachineTerminalEntry({ target, machine, listing, canCreateSpace,
     setError("");
     try {
       const result = await api<{ terminal: string }>(`/machines/${enc(mid)}/panes`, { method: "POST", json: at });
-      if (mounted.current) go(result.terminal);
+      if (mounted.current) navigate({ name: "terminal", mid, id: result.terminal, view: "terminals" }, true, {});
     } catch (e) {
       setError(t("terminal-terminalpage.new_failed", { error: errorText(e) }));
     } finally {

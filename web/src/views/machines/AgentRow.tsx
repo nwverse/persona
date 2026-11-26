@@ -40,6 +40,7 @@ export function AgentRow({ s }: { s: Session }) {
       {todo?.id && (
         <a href={href({ name: "todos", id: todo.id })} onClick={(e) => onLinkClick(e, { name: "todos", id: todo.id })}
           className="mx-4 inline-flex min-h-11 min-w-0 items-center gap-1 self-start rounded-control px-2 text-xs text-accent-ink hover:bg-hover sm:mx-2 sm:max-w-[35%] sm:self-center"
+          aria-label={t("machines-alerts.handoff_todo", { title: todo.title })}
           title={t("machines-alerts.handoff_todo", { title: todo.title })}>
           <Icon name="todo" size={14} className="shrink-0" />
           <span className="truncate">{todo.title || t("space-page.todos")}</span>
