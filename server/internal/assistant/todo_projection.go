@@ -35,21 +35,23 @@ type todoProjection struct {
 func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now time.Time) todoProjection {
 	facts := s.todoFactsOf(ctx, list)
 	if len(facts) > 0 && facts[0].TodosV2 {
-		s.populateTodoRepoGates(ctx, list)
+		reposByTodo := s.populateTodoRepoGates(ctx, list)
+		populateTodoItemTypes(list, reposByTodo)
 	}
 	return todoProjection{facts: facts, views: projection.Views(facts, now)}
 }
 
 // populateTodoRepoGates computes and attaches the weakest-link Target Repo delivery gate summary
-// to each listed to-do that has bound repositories. Callers must invoke this only when todos_v2 is enabled.
-func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) {
+// to each listed to-do that has bound repositories, and returns the loaded repository bindings by to-do ID.
+// Callers must invoke this only when todos_v2 is enabled.
+func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) map[string][]repository.TaskRepository {
 	ids := make([]string, len(list))
 	for i := range list {
 		ids[i] = list[i].ID
 	}
 	reposByTodo := s.loadOpenTodoRepositories(ctx, ids)
 	if len(reposByTodo) == 0 {
-		return
+		return reposByTodo
 	}
 	for i := range list {
 		bound := reposByTodo[list[i].ID]
@@ -58,6 +60,7 @@ func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) 
 		}
 		list[i].RepoGate = aggregateRepoGate(buildRepoGateInputs(list[i].Todo, bound))
 	}
+	return reposByTodo
 }
 
 func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRepo {
@@ -173,6 +176,25 @@ func normalizeRepoGateURL(raw string) string {
 	return strings.ToLower(strings.TrimRight(raw, "/"))
 }
 
+// applyTodosV2FactsConfig copies resolved todos_v2 projection SLA preferences onto f.
+// When todos_v2 is off, f is untouched so legacy projection remains byte-for-byte identical.
+func applyTodosV2FactsConfig(f *projection.Facts, cfg Settings) {
+	if !cfg.todosV2On() {
+		return
+	}
+	f.TodosV2 = true
+	if h := cfg.todosV2PendingReviewSLAHours(); h == 0 {
+		f.PendingReviewSLADisabled = true
+	} else {
+		f.PendingReviewSLAHours = h
+	}
+	if h := cfg.todosV2CanWaitSLAHours(); h == 0 {
+		f.CanWaitSLADisabled = true
+	} else {
+		f.CanWaitSLAHours = h
+	}
+}
+
 // hasParkInteractionLink says whether this park's projection must retain its workers' pending cards, even after release.
 func hasParkInteractionLink(v *Supervision) bool {
 	return v != nil && v.State == reviewParked && v.Parked != nil && v.Parked.Evidence != nil && v.Parked.Evidence.Kind == parkExternalEvent && v.Parked.Evidence.InteractionID != ""
@@ -213,13 +235,13 @@ func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projecti
 	}
 	cards := s.todoRunCards(want)
 	loc := s.location(ctx)
-	todosV2 := s.settings(ctx).todosV2On()
+	cfg := s.settings(ctx)
 	facts := make([]projection.Facts, len(list))
 	for i := range list {
 		t := &list[i]
 		linked := hasParkInteractionLink(t.Supervision)
 		facts[i] = projectionFacts(*t, sessions, loc)
-		facts[i].TodosV2 = todosV2
+		applyTodosV2FactsConfig(&facts[i], cfg)
 		if t.DoneAt != nil && t.StartError == "" {
 			continue
 		}
