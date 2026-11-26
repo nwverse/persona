@@ -48,7 +48,7 @@ export type Route =
   | { name: "inbox"; id?: string; manager?: string }
   | { name: "starred" }
   | { name: "routines" }
-  | { name: "kb"; kind?: string; id?: string }
+  | { name: "kb"; kind?: string; id?: string; section?: { extension: string; ui: string } }
   | { name: "machines" }
   | ({ name: "machine"; mid: string } & MachineLocation)
   // one space of a machine by its name (lib/space-page.ts): its agents, the todos it hangs on, what can be done to it
@@ -137,7 +137,13 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "routines") return { name: "routines" };
   // An entry of a kind only a feature module draws is unknown while that module is off. Existing recordings are the
   // exception: their data and Core read-only detail stay available.
-  if (p[0] === "kb") return p[1] && p[1] !== "recordings" && p[2] && moduleKBKindAt(p[1]) === "absent" ? notFound(path, search) : { name: "kb", kind: p[1], id: p[2] };
+  if (p[0] === "kb") {
+    if (p[1] && p[1] !== "recordings" && p[2] && moduleKBKindAt(p[1]) === "absent") return notFound(path, search);
+    const params = new URLSearchParams(search);
+    const extension = params.get("extension"), ui = params.get("ui");
+    const section = p[1] === "projects" && p[2] && extension && ui ? { extension, ui } : undefined;
+    return { name: "kb", kind: p[1], id: p[2], ...(section && { section }) };
+  }
   if (p[0] === "space" && p[1] && p[2]) {
     const workspace = new URLSearchParams(search).get("workspace");
     return { name: "space", mid: p[1], space: p[2], ...(workspace && { workspace }) };
@@ -244,8 +250,10 @@ export function routePath(r: Route): string {
       return "/starred";
     case "routines":
       return "/routines";
-    case "kb":
-      return ["/kb", r.kind, r.kind && r.id].filter(Boolean).map((x, i) => (i ? encodeURIComponent(x as string) : x)).join("/");
+    case "kb": {
+      const path = ["/kb", r.kind, r.kind && r.id].filter(Boolean).map((x, i) => (i ? encodeURIComponent(x as string) : x)).join("/");
+      return r.kind === "projects" && r.id && r.section ? path + "?" + new URLSearchParams(r.section) : path;
+    }
     case "machines":
       return "/machines";
     case "machine":

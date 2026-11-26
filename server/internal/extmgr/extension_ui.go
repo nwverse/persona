@@ -19,6 +19,7 @@ import (
 	"github.com/nwverse/persona/server/internal/connector/proc"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -187,11 +188,12 @@ type uiRequest struct {
 		Launcher string `json:"launcher,omitempty"`
 		Machine  string `json:"machine,omitempty"`
 		// Item is the inbox item an inbox_item is drawn for.
-		Item     string `json:"item,omitempty"`
-		TZ       string `json:"tz,omitempty"`
-		Locale   string `json:"locale,omitempty"`
-		Platform string `json:"platform,omitempty"`
-		Size     string `json:"size,omitempty"`
+		Item      string `json:"item,omitempty"`
+		ProjectID string `json:"project_id,omitempty"`
+		TZ        string `json:"tz,omitempty"`
+		Locale    string `json:"locale,omitempty"`
+		Platform  string `json:"platform,omitempty"`
+		Size      string `json:"size,omitempty"`
 		// UIVersion is the UI version the app draws: 1 (the first eight items) when it says nothing.
 		UIVersion int `json:"ui_version,omitempty"`
 		// Unsupported lists component types this client cannot render even within UIVersion (e.g. ["scene"]).
@@ -307,6 +309,13 @@ func (h *Manager) withUI(ctx context.Context, id, uiID string, in uiRequest, cal
 		quotaQueries.Store(qid, &quotaQuery{extension: id, send: gw.send})
 		defer quotaQueries.Delete(qid)
 		params.Launcher = &extension.UILauncher{Name: in.Context.Launcher, BaseURL: root.String(), QueryID: qid}
+	case "project_section":
+		id := in.Context.ProjectID
+		if (in.Context.Platform != "web" && in.Context.Platform != "desktop") || id == "" || len(id) > 120 || kb.SafeID(id) != id {
+			return res, errProjectContext
+		}
+		// Persona Link uses the Web panel. Keep the established platform vocabulary for extensions.
+		params.Platform, params.ProjectID = "web", id
 	case "machine_section":
 		m := h.machineByID(in.Context.Machine)
 		if m == nil && in.Context.Machine != "" {
@@ -493,6 +502,7 @@ var (
 	// errUnsupportedGateway: a launcher section without hosts whose plugin says the launcher's gateway is not its own;
 	// the apps leave the section out.
 	errUnsupportedGateway = i18n.ErrEnglish("extension-status.unsupported_gateway")
+	errProjectContext     = i18n.Err("hub-extension_ui.project_context")
 	// errNoMachine: a machine section for a machine the hub does not have.
 	errNoMachine = i18n.Err("hub-extension_ui.no_machine")
 	// errNoItem: an inbox item's page without the item, or for one the inbox does not have.
@@ -545,7 +555,7 @@ func (h *Manager) extensionUIRoutes(api *http.ServeMux) {
 			writeExtensionResponseError(w, r, http.StatusNotFound, "unsupported", err)
 		case errors.Is(err, errNotItsItem):
 			writeExtensionResponseError(w, r, http.StatusForbidden, "forbidden", err)
-		case errors.Is(err, errUseWidget):
+		case errors.Is(err, errUseWidget), errors.Is(err, errProjectContext):
 			writeExtensionResponseError(w, r, http.StatusBadRequest, "bad_request", err)
 		case errors.Is(err, errOffline):
 			writeExtensionResponseError(w, r, http.StatusServiceUnavailable, "offline", err)

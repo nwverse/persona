@@ -1,4 +1,6 @@
 {
+  "project_extensions": "プロジェクトの拡張機能",
+  "close_section": "セクションを閉じる",
   "empty_title": "項目を選択してください",
   "empty_body": "プロフィール、タイムライン、関連を確認できます。「Personaに聞く」でメインチャットに渡します。",
   "send_failed": "送信できませんでした：{error}",

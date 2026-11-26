@@ -17,7 +17,8 @@
   "activation_events": ["on_startup"],
   "contributes": {
     "ui": [
-      {"id": "quicknotes", "title": "Quick notes", "placement": "nav_page", "icon": "doc"}
+      {"id": "quicknotes", "title": "Quick notes", "placement": "nav_page", "icon": "doc"},
+      {"id": "project-notes", "title": "Quick notes", "placement": "project_section"}
     ],
     "api": [
       {"id": "quicknotes", "prefix": "quicknotes", "features": ["quicknotes"]}

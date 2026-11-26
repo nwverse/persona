@@ -8,7 +8,7 @@ import { parse as parseRoute, type Route } from "./router";
 // refresh_after and the render context; an item type the web does not know is skipped, never a white page. An
 // inbox_item (docs/extensions/extensions.md "Inbox items") draws the body of an inbox item from the extension's own connector.
 import { api, ApiError, enc } from "./api";
-import { itemHeaders } from "./manager-choice";
+import { itemHeaders, stampedHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
 import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
@@ -476,6 +476,7 @@ export interface UIContext {
   launcher?: string;
   machine?: string;
   item?: string;
+  project_id?: string;
   size?: "compact" | "full";
   /** The assistant's name as the composer shows it ("Ask {name}…"), sent only to the manager's own subscription pages,
    *  which name their Set Up with … after it (docs/extensions/subscriptions.md "Pages"). */
@@ -508,6 +509,7 @@ export function uiContext(context?: UIContext): UIContextSent {
   if (context?.launcher) out.launcher = context.launcher;
   if (context?.machine) out.machine = context.machine;
   if (context?.item) out.item = context.item;
+  if (context?.project_id) out.project_id = context.project_id;
   if (context?.size) out.size = context.size;
   if (context?.assistant) out.assistant = context.assistant;
   return out;
@@ -524,7 +526,7 @@ export function uiPlaces(placement: string, launcher?: string, machine?: string,
   if (!placement || placement === "overview_card") q.set("pages_overview", "1");
   if (launcher) q.set("launcher", launcher);
   if (machine) q.set("machine", machine);
-  return api<{ ui?: UIPlace[] }>(`${extRoot()}/-/ui${q.size ? `?${q}` : ""}`, { headers: itemHeaders(manager) }).then((r) => (Array.isArray(r.ui) ? r.ui.map(placeOf) : []));
+  return api<{ ui?: UIPlace[] }>(`${extRoot()}/-/ui${q.size ? `?${q}` : ""}`, { headers: placement === "project_section" ? stampedHeaders(manager) : itemHeaders(manager) }).then((r) => (Array.isArray(r.ui) ? r.ui.map(placeOf) : []));
 }
 
 /** A place as either kind of hub lists it: the extension's id and name under the new keys (an older hub says plugin,
@@ -560,14 +562,14 @@ export const uiPath = (extension: string, ui: string) =>
 /** Draws the view (no action). A view that does not read at all is an error; unknown items are left out. `manager`:
  *  whose extension it is (another manager's inbox item, or computer); none: the default's. */
 export const renderUI = (extension: string, ui: string, context?: UIContext, state?: string, manager?: string) =>
-  api<{ view: unknown }>(uiPath(extension, ui), { method: "POST", json: { context: uiContext(context), ...(state ? { state } : {}) }, headers: itemHeaders(manager) }).then((r) => readView(r.view));
+  api<{ view: unknown }>(uiPath(extension, ui), { method: "POST", json: { context: uiContext(context), ...(state ? { state } : {}) }, headers: context?.project_id ? stampedHeaders(manager) : itemHeaders(manager) }).then((r) => readView(r.view));
 
 /** A press of a button (or a row): the action's id, the view's state, and the fields' values when it submits. */
 export const actUI = (extension: string, ui: string, action: string, opts: { context?: UIContext; state?: string; values?: Record<string, string>; manager?: string } = {}) =>
   api<UIActionResult>(uiPath(extension, ui), {
     method: "POST",
     json: { context: uiContext(opts.context), ...(opts.state ? { state: opts.state } : {}), action, ...(opts.values ? { values: opts.values } : {}) },
-    headers: itemHeaders(opts.manager),
+    headers: opts.context?.project_id ? stampedHeaders(opts.manager) : itemHeaders(opts.manager),
   }).then((r) => ({
     ...r,
     view: r.view ? readView(r.view) : undefined,

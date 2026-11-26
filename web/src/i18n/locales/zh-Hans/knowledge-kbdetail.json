@@ -1,4 +1,6 @@
 {
+  "project_extensions": "项目扩展",
+  "close_section": "收起此区域",
   "empty_title": "选一个条目",
   "empty_body": "看它的档案、时间线和关联；「问 Persona」把它交给主对话。",
   "send_failed": "没发出去：{error}",

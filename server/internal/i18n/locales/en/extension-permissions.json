@@ -101,6 +101,7 @@
   "slot_nav_page": "Entry in the main navigation",
   "slot_overview_card": "Card on the overview",
   "slot_capsule_card": "Card in Android’s cross-app floating capsule (outside the app)",
+  "slot_project_section": "Section on Knowledge project details (receives the selected project ID)",
   "slot_machine_section": "Section on computer details (receives the computer identity)",
   "slot_inbox_item": "Details of items from its connector in the inbox (receives the item title, summary, and tier)",
   "slot_widget": "Home screen widgets and watch complications (outside the app)",

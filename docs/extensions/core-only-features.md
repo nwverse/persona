@@ -43,10 +43,11 @@ What it cannot add is under "What you cannot do yet" below.
 
 ## The sample: Quick notes
 
-`sdk/examples/quicknotes` is a complete extension in about 400 lines of Go:
+`sdk/examples/quicknotes` is a complete Go extension:
 
 | Part | Where | What it shows |
 | --- | --- | --- |
+| Notes belonging to one Knowledge project | `project_section` in the manifest and the existing page handler | The program keeps a separate book for the project named by `project_id`. |
 | A server capability | `api.go`: `GET` and `POST /api/v1/quicknotes/notes` | The request body is decoded once, strictly, into a struct; an unknown field or a mark outside the set is a 400 |
 | A hub flag | `persona-extension.json`: `"features": ["quicknotes"]` | Announced only while the extension is on |
 | A visible entry | `persona-extension.json`: a `nav_page`; `page.go` draws it | The web sidebar shows **Quick notes**; the page's words come in en, zh-Hans and ja (`text.go`, `l10n/`) |

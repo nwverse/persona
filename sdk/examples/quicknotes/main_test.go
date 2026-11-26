@@ -45,7 +45,8 @@ func TestManifestDeclaresTheSample(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := m.Contributes
-	if len(c.UI) != 1 || c.UI[0].ID != "quicknotes" || c.UI[0].Placement != "nav_page" {
+	if len(c.UI) != 2 || c.UI[0].ID != "quicknotes" || c.UI[0].Placement != "nav_page" ||
+		c.UI[1].ID != projectNotes || c.UI[1].Placement != "project_section" {
 		t.Fatalf("ui: %+v", c.UI)
 	}
 	if len(c.API) != 1 || c.API[0].Prefix != "quicknotes" || len(c.API[0].Features) != 1 || c.API[0].Features[0] != "quicknotes" {
@@ -218,5 +219,42 @@ func TestClosedSetsRefuseWhatIsOutside(t *testing.T) {
 	}
 	if _, err := a.book.Add(strings.Repeat("é", maxNoteText+1), MarkPlain, day); err == nil {
 		t.Error("a note over the limit was stored")
+	}
+}
+
+func TestProjectNotesStayWithTheirProject(t *testing.T) {
+	a, filename := newApp(t)
+	request := func(id, action, text string) *ext.UIRequest {
+		return &ext.UIRequest{UIParams: wire.UIParams{Contribution: projectNotes, ProjectID: id, Placement: "project_section",
+			Action: action, Values: map[string]string{"text": text}, Locale: "en"}}
+	}
+	ctx := context.Background()
+	if _, err := a.home(ctx, request("", "", "")); err == nil {
+		t.Fatal("rendered project notes without a project")
+	}
+	if _, err := a.act(ctx, request("", actionAdd, "missing project")); err == nil {
+		t.Fatal("accepted a note without a project")
+	}
+	for _, id := range []string{"Garden", "garden"} {
+		if _, err := a.act(ctx, request(id, actionAdd, id+" notebook")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := a.act(ctx, request("garden", actionToggle+"n1", "")); err != nil {
+		t.Fatal(err)
+	}
+	restored := &app{book: OpenBook(filepath.Dir(filename))}
+	for _, id := range []string{"garden", "Garden"} {
+		v, err := restored.home(ctx, request(id, "", ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows := v.Sections[1].Items
+		if len(rows) != 1 || rows[0].Title != id+" notebook" || (rows[0].Badge != nil) != (id == "garden") {
+			t.Fatalf("unexpected project page for %q: %+v", id, rows)
+		}
+	}
+	if notes, err := restored.book.List(); err != nil || len(notes) != 0 {
+		t.Fatalf("project note reached the standalone page: %+v, %v", notes, err)
 	}
 }

@@ -43,6 +43,10 @@ func serveUIExtensionForTest() {
 		var c extension.UIParams
 		_ = json.Unmarshal(params, &c)
 		switch {
+		case p.Contribution == "project-notes" && method == "render":
+			return extension.View{Sections: []extension.Section{{Items: []extension.UIElem{{Type: "text", Text: c.ProjectID}}}}}, nil
+		case method == "action" && p.Action == "project-context":
+			return map[string]any{"toast": fmt.Sprintf("project=%s platform=%s machine=%t item=%t", c.ProjectID, c.Platform, c.Machine != nil, c.Item != nil)}, nil
 		case method == "action" && p.Action == "save":
 			return map[string]any{"toast": "存好了：" + p.Values["note"]}, nil
 		case method == "action" && p.Action == "invalidate":
@@ -537,5 +541,76 @@ func TestCheckView(t *testing.T) {
 		if err := extension.CheckView(&extension.View{Sections: []extension.Section{{Items: []extension.UIElem{e}}}}); err == nil {
 			t.Errorf("%s: drawn", name)
 		}
+	}
+}
+
+// The project detail hands over just its selected ID when the owner opens the contribution.
+func TestProjectSectionRenderAndConsent(t *testing.T) {
+	h, _ := extensionTestHub(t)
+	mux, token := h.routes(), h.cfg.Token
+	dir := uiPackage(t)
+	file := filepath.Join(dir, extension.ManifestFile)
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(raw), `"ui": [`, `"ui": [{"id":"project-notes","title":"Project notes","placement":"project_section"},`, 1)
+	if err := os.WriteFile(file, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	const base = "/api/v1/extensions/example-ui/-/"
+	_, preview := call(t, mux, "POST", "/api/v1/extensions/-/preview", token, `{"source":"dir:`+dir+`"}`)
+	if !strings.Contains(fmt.Sprint(preview["permissions"]), "知识库项目详情页") {
+		t.Fatalf("missing install consent: %v", preview)
+	}
+	call(t, mux, "POST", "/api/v1/extensions/-/install", token, fmt.Sprintf(`{"preview_id":%q,"permissions_digest":%q}`, preview["preview_id"], preview["permissions_digest"]))
+	waitLong(t, "project notes provider ready", func() bool {
+		hp := h.extensions.get("example-ui")
+		return hp != nil && hp.proc != nil && hp.proc.Ready()
+	})
+	const listRoute = "/api/v1/extensions/-/ui?placement=project_section"
+	_, listing := call(t, mux, "GET", listRoute, token, "")
+	if !strings.Contains(fmt.Sprint(listing["ui"]), "id:project-notes") {
+		t.Fatalf("provider wasn't listed: %v", listing)
+	}
+	const renderBody = `{"context":{"project_id":"产品-release.2","platform":"web"}}`
+	code, out := call(t, mux, "POST", base+"ui/project-notes", token, renderBody)
+	if code != 200 || !strings.Contains(fmt.Sprint(out["view"]), "产品-release.2") {
+		t.Fatalf("project view: %d %v", code, out)
+	}
+	for _, platform := range []string{"web", "desktop"} {
+		body := fmt.Sprintf(`{"context":{"project_id":"产品-release.2","platform":%q,"machine":"box1","item":"mail:1"},"action":"project-context"}`, platform)
+		for _, tt := range []struct{ ui, want string }{{"project-notes", "project=产品-release.2 platform=web machine=false item=false"}, {"nav", "project= platform="}} {
+			code, out = call(t, mux, "POST", base+"ui/"+tt.ui, token, body)
+			if code != 200 || !strings.HasPrefix(fmt.Sprint(out["toast"]), tt.want) {
+				t.Fatalf("context on %s: %d %v", tt.ui, code, out)
+			}
+		}
+	}
+	for _, body := range []string{
+		`{"context":{"platform":"web"}}`, `{"context":{"platform":"ios","project_id":"project"}}`,
+		`{"context":{"platform":"web","project_id":"a/b"}}`, `{"context":{"platform":"web","project_id":".."}}`,
+		`{"context":{"platform":"web","project_id":"` + strings.Repeat("产", 41) + `"}}`,
+	} {
+		if code, _ := call(t, mux, "POST", base+"ui/project-notes", token, body); code != 400 {
+			t.Fatalf("invalid context %s: %d", body, code)
+		}
+	}
+	if code, _ := call(t, mux, "PUT", base+"enabled", token, `{"enabled":false}`); code != 200 {
+		t.Fatalf("disable: %d", code)
+	}
+	_, listing = call(t, mux, "GET", listRoute, token, "")
+	if strings.Contains(fmt.Sprint(listing["ui"]), "project-notes") {
+		t.Fatalf("disabled provider still listed: %v", listing)
+	}
+	if code, _ := call(t, mux, "POST", base+"ui/project-notes", token, renderBody); code != 404 {
+		t.Fatalf("disabled provider answered: %d", code)
+	}
+	if code, _ := call(t, mux, "DELETE", base, token, ""); code != 200 {
+		t.Fatalf("uninstall: %d", code)
+	}
+	if code, _ := call(t, mux, "POST", base+"ui/project-notes", token, renderBody); code != 404 {
+		t.Fatalf("uninstalled provider answered: %d", code)
 	}
 }

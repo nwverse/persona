@@ -26,7 +26,7 @@ type UIItem struct {
 	// name, the extension is told the one it wrote), launcher_section (a section
 	// on the page of a launcher whose gateway is one of Hosts, or of any launcher when there are none: the plugin then
 	// answers unsupported for gateways not its own; it may send requests there with the key, as quota does), nav_page,
-	// overview_card, capsule_card, machine_section, inbox_item.
+	// overview_card, capsule_card, machine_section, inbox_item, project_section.
 	Placement string   `json:"placement"`
 	Hosts     []string `json:"hosts,omitempty"`
 	// Icon is a nav_page's icon, from UIIcons (each app draws its own); the default when empty.
@@ -67,7 +67,7 @@ type UISlot struct {
 	Name string
 	// Size is what the plugin is asked to draw there: compact (a card) or full (a page, a section).
 	Size string
-	// Context is what the apps say about where it is drawn: launcher, machine, item.
+	// Context is what the apps say about where it is drawn: launcher, machine, item or project_id.
 	Context string
 	// Badge: the plugin may put a badge (ui.badge) on its entry.
 	Badge bool
@@ -88,6 +88,7 @@ var UISlots = []UISlot{
 	{Name: "nav_page", Size: SizeFull, Badge: true, Shown: true, Since: 2},
 	{Name: "overview_card", Size: SizeCompact, Shown: true, Since: 2},
 	{Name: "capsule_card", Size: SizeCompact, Shown: true, Since: 3},
+	{Name: "project_section", Size: SizeFull, Context: "project_id", Shown: true, Since: 2},
 	{Name: "machine_section", Size: SizeFull, Context: "machine", Shown: true, Since: 2},
 	// inbox_item draws the body of an inbox item from the plugin's connector (its own header stays the app's): the
 	// same items a plugin's connector brought in, with the hub's triage on them. Drawn with UI version 2's items.
@@ -203,6 +204,7 @@ type UIParams struct {
 	Machine   *UIMachine   `json:"machine,omitempty"`
 	Launcher  *UILauncher  `json:"launcher,omitempty"`
 	Item      *UIInboxItem `json:"item,omitempty"`
+	ProjectID string       `json:"project_id,omitempty"`
 }
 
 // BadgeEvent is ui.badge, sent by a plugin: the badge on its nav_page's entry (no text clears it).

@@ -16,7 +16,7 @@ const (
 	actionToggle = "toggle:"
 )
 
-// app is the extension: one book, served to the page and to the route.
+// app keeps the standalone book and opens project books in the same installation.
 type app struct {
 	book *Book
 	now  func() time.Time
@@ -34,10 +34,26 @@ func (a *app) init(ctx context.Context, in *ext.Init, hub *ext.Hub) (map[string]
 	return nil, nil
 }
 
+const projectNotes = "project-notes"
+
+func (a *app) bookForPage(r *ext.UIRequest) (*Book, error) {
+	if r.Contribution != projectNotes {
+		return a.book, nil
+	}
+	if r.ProjectID == "" {
+		return nil, &ext.Error{Code: "invalid", Message: "missing project"}
+	}
+	return a.book.forProject(r.ProjectID), nil
+}
+
 // home draws the page: a field to write a note, then the notes, newest first.
 func (a *app) home(ctx context.Context, r *ext.UIRequest) (*wire.View, error) {
 	l := langOf(r.Locale)
-	notes, err := a.book.List()
+	book, err := a.bookForPage(r)
+	if err != nil {
+		return nil, err
+	}
+	notes, err := book.List()
 	if err != nil {
 		return nil, err
 	}
@@ -66,9 +82,13 @@ func (a *app) home(ctx context.Context, r *ext.UIRequest) (*wire.View, error) {
 // act answers a tap; an empty result draws the page again.
 func (a *app) act(ctx context.Context, r *ext.UIRequest) (*wire.ActionResult, error) {
 	lang := langOf(r.Locale)
+	book, err := a.bookForPage(r)
+	if err != nil {
+		return nil, err
+	}
 	switch {
 	case r.Action == actionAdd:
-		if _, err := a.book.Add(r.Values["text"], MarkPlain, a.now()); err != nil {
+		if _, err := book.Add(r.Values["text"], MarkPlain, a.now()); err != nil {
 			return nil, userError(err, lang)
 		}
 	case strings.HasPrefix(r.Action, actionToggle):
@@ -76,7 +96,7 @@ func (a *app) act(ctx context.Context, r *ext.UIRequest) (*wire.ActionResult, er
 		if err != nil {
 			return nil, userError(err, lang)
 		}
-		if _, err := a.book.Toggle(id); err != nil {
+		if _, err := book.Toggle(id); err != nil {
 			return nil, userError(err, lang)
 		}
 	default:

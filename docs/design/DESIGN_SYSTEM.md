@@ -3325,6 +3325,8 @@ See [External sources in the web app](../web/web.md#external-sources-15518).
 
 ## Extension entry lists
 
+Knowledge projects list installed providers under their project details. Opening an entry draws its declarative view in place, with the current project as its context. The project URL identifies the selected entry so Back returns to the project and a bookmark reopens it. When the provider leaves the live list, the host shows the underlying project.
+
 A declared list of extension accounts, gateways or similar entries (#9504) belongs in the existing **Settings** group; it does not create a page, tabs or an extension-owned layout. The audience is an everyday owner managing a small list, so rows use the entry's name and plain state words, never its host-owned ID, array index, secret name or engine terminology. Reuse settings `Group`, `Row`, `Button`, `IconButton` and `Dialog`, the existing radius, surface, hairline, spacing and type roles; do not introduce a second card style or new tokens for one extension.
 
 - Each entry is one surface with a title and secret state, then its declared flat text fields. Prefer its `name`, then its first nonempty field, then a localized numbered title. **Secret** opens the shared write-only secret dialog and names both entry and secret. Before the entry is saved, the button is disabled and the reason says to save first. Entry secrets never also appear in the fixed Secrets group.

@@ -40,7 +40,8 @@ func TestUIConforms(t *testing.T) {
 		"engines": {"plugin_protocol": 1}, "runtime": {"command": "bin/usage"},
 		"contributes": {"ui": [{"id": "usage", "title": "用量", "placement": "nav_page", "icon": "chart"},
 			{"id": "today", "title": "今天", "placement": "overview_card", "opens": "usage"},
-			{"id": "gpu", "title": "显卡", "placement": "machine_section"}]}}`))
+			{"id": "gpu", "title": "显卡", "placement": "machine_section"},
+			{"id":"notes", "title":"Project notes", "placement":"project_section"}]}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestUIConforms(t *testing.T) {
 			if method != "render" {
 				return nil, serve.UnknownMethod(method)
 			}
-			if !slices.Contains([]string{"usage", "today", "gpu"}, p.Contribution) {
+			if !slices.Contains([]string{"usage", "today", "gpu", "notes"}, p.Contribution) {
 				return nil, serve.NoContribution(p.Contribution)
 			}
 			if _, ok := drawn[p.Contribution]; !ok {
@@ -65,6 +66,9 @@ func TestUIConforms(t *testing.T) {
 				{Type: "stat_grid", Stats: []extension.Stat{{Label: "今天", Value: "1.2M"}}}, chart}}}}, nil
 		}}}
 	Check(t, m, Serve(t, prog), extension.InitializeParams{})
+	if drawn["notes"].ProjectID != "example-project" || drawn["gpu"].ProjectID != "" || drawn["notes"].Platform != "web" {
+		t.Fatalf("project section context: %+v", drawn)
+	}
 	if drawn["today"].Size != extension.SizeCompact || drawn["usage"].Size != extension.SizeFull || drawn["gpu"].Machine == nil ||
 		drawn["usage"].TZ == "" || drawn["usage"].UIVersion != extension.UIVersion {
 		t.Fatalf("%+v", drawn)
