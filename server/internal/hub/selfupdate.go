@@ -159,7 +159,7 @@ type updater struct {
 
 	// androidNote is what syncAndroid last logged: the same failure is not logged again every hour.
 	androidNote string
-	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any, func(update.DevelopmentProgress)) error
+	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any, func(), func(update.DevelopmentProgress)) error
 	// behindNote is the update source and release noteBehind last logged as behind: once per pair, not every hour.
 	behindNote string
 	// testAfterBackupRecoveryCheck runs in tests right after UnrecoveredSnapshot

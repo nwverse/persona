@@ -42,6 +42,12 @@ function activeProgress(s: HubUpdateStatus): HubDevelopmentProgress | undefined 
   return p && p.phase === s.state && Object.hasOwn(phaseSteps, p.phase) ? p : undefined;
 }
 
+// The standalone check precedes the build. Preflight within a snapshot
+// has the full backup step count and shares its deferred cancellation.
+function isEarlyPreflight(p?: HubDevelopmentProgress): boolean {
+  return p?.phase === "backing_up" && p.step === "preflight" && p.step_total === 1;
+}
+
 function phaseElapsedMs(p?: HubDevelopmentProgress): number | undefined {
   const seconds = p?.elapsed_seconds;
   return seconds !== undefined && Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
@@ -56,7 +62,7 @@ export function observeHubUpdate(previous: PipelineRun | undefined, s: HubUpdate
   const runningTarget = s.source === "web-dev" ? s.development?.current_commit?.slice(0, 12) || s.version : s.version;
   const target = s.latest?.commit?.slice(0, 12) || s.latest?.version || previous?.target || (s.state === "confirming" ? runningTarget : undefined);
   const phaseElapsed = phaseElapsedMs(activeProgress(s));
-  const firstPhase = s.state === "building" || s.state === "applying_backup";
+  const firstPhase = isEarlyPreflight(activeProgress(s)) || s.state === "building" || s.state === "applying_backup";
   // Only the first phase supplies a starting point for measuring the whole run.
   const startedAt = previous?.startedAt ?? (firstPhase && phaseElapsed !== undefined ? now - phaseElapsed : undefined);
   return { restoringBackup, backupId, target, startedAt, elapsedMs: startedAt === undefined ? undefined : now - startedAt };
@@ -73,6 +79,8 @@ function macroStages(s: HubUpdateStatus, restoringBackup: boolean) {
     case "restarting":
     case "confirming": active = "restarting"; break;
     case "backing_up":
+      active = isEarlyPreflight(activeProgress(s)) ? undefined : s.state;
+      break;
     case "waiting_idle": active = s.state; break;
   }
   const done = active ? stages.slice(0, stages.indexOf(active)) : [];
@@ -126,11 +134,23 @@ function stepLabel(step: string): string {
   return localized === key ? step.replaceAll("_", " ").trim() || t("settings-hubsettings.pipeline_unknown_step") : localized;
 }
 
+function backupSteps(p: HubDevelopmentProgress, builtinQuiesce?: boolean): string[] {
+  if (isEarlyPreflight(p)) return ["preflight"];
+  const base = phaseSteps.backing_up;
+  // Six steps can be an older hub with external hooks or a newer hub
+  // with the built-in pause. Match the reported step as well as the total.
+  const layouts = [true, false].flatMap(preflight => [builtinQuiesce !== false, builtinQuiesce === false].map(builtin => [
+    ...(preflight ? ["preflight"] : []), ...base.slice(0, -1),
+    ...(builtin ? [] : ["resume_writers"]), "verify_snapshot",
+  ]));
+  const match = layouts.find(steps => steps.length === p.step_total && steps[p.step_index - 1] === p.step);
+  if (match && (builtinQuiesce !== false || match.includes("resume_writers"))) return match;
+  // Incomplete telemetry from older hubs still shows the configured resume hook.
+  return [...base.slice(0, -1), ...(builtinQuiesce === false || p.step === "resume_writers" ? ["resume_writers"] : []), "verify_snapshot"];
+}
+
 function PhaseSteps({ p, builtinQuiesce }: { p: HubDevelopmentProgress; builtinQuiesce?: boolean }) {
-  const steps = [...phaseSteps[p.phase]];
-  if (p.phase === "backing_up" && (p.step_total >= 6 || p.step === "resume_writers" || builtinQuiesce === false)) {
-    steps.splice(steps.indexOf("verify_snapshot"), 0, "resume_writers");
-  }
+  const steps = p.steps?.length ? [...p.steps] : p.phase === "backing_up" ? backupSteps(p, builtinQuiesce) : [...phaseSteps[p.phase]];
   let active = steps.indexOf(p.step);
   if (active < 0) {
     // Keep all known steps and give a new step its own node so its telemetry remains visible.
@@ -215,7 +235,7 @@ export function HubUpdatePipeline({ s, run, onNow, onCancel }: {
   s: HubUpdateStatus; run: PipelineRun; onNow: () => void; onCancel: () => Promise<void>;
 }) {
   const progress = activeProgress(s);
-  const title = s.cancelling ? t(s.state === "backing_up" ? "settings-hubsettings.stop_after_backup" : "settings-hubsettings.cancelling")
+  const title = s.cancelling ? t(s.state === "backing_up" && !isEarlyPreflight(progress) ? "settings-hubsettings.stop_after_backup" : "settings-hubsettings.cancelling")
     : s.state === "resolving" ? t("settings-hubsettings.resolving_latest") : updateStateTitle(s);
   const phaseElapsed = phaseElapsedMs(progress);
   const elapsed = run.elapsedMs !== undefined ? t("settings-hubsettings.progress_elapsed", { time: duration(run.elapsedMs) }) :

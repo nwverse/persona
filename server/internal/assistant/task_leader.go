@@ -764,6 +764,12 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new worker for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
 	}
+	if a.Verdict == reviewAccepted && t.DoneAt == nil {
+		if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
+			return "", errors.New("accepted refused: " + why + ". Send the instruction back with rework, or ask the " +
+				"conversation above to collect the owner's explicit confirmation")
+		}
+	}
 	var up string // the conversation a needs_user goes to: whoever handed the leader its task
 	if lt, ok := s.leaderTaskOf(ctx, lead); ok && lt.Supervision != nil {
 		up = lt.Supervision.Supervisor

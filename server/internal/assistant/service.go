@@ -853,6 +853,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		unlock := s.lockTaskSpace(taskRoot)
 		defer unlock()
 	}
+	assignmentAt := time.Now().UTC()
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return beforeNodeWrite(method, err)
@@ -874,6 +875,15 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
+	}
+	if err == nil && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+		if sent, ok := params.(map[string]any); ok {
+			if id, _ := sent["session_id"].(string); id != "" {
+				actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				s.notePersonaAssignment(actx, device, id, assignmentAt)
+				cancel()
+			}
+		}
 	}
 	laterTaken(err == nil)
 	if sent, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
@@ -1005,6 +1015,7 @@ func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult,
 	}
 	// A track's push_cap holds the level (track_attention.go).
 	s.capTrackPush(ctx, &n)
+	s.applyTodosV2PushAttention(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}

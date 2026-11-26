@@ -79,7 +79,7 @@ type FeishuBotSettings struct {
 	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`
 	SourceReportFullReply    bool `json:"source_report_full_reply,omitempty"`
 	// Handoff is the proxy-reply policy (bots_handoff.go). The owner's: it goes when the owner does.
-	Handoff *BotHandoffPolicy `json:"handoff,omitempty"`
+	Handoff *botHandoffPolicy `json:"handoff,omitempty"`
 }
 
 // BotFeatures are the parts that can be switched on one by one: kept here with the credentials, acted on by the
