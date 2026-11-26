@@ -56,6 +56,9 @@ func (s *Service) Tools(ctx context.Context) []proto.Tool {
 	if s.storeFn.Load() != nil && ownerReplyApprovalOn(s.settings(ctx)) {
 		tools = append(tools, toolsNamed([]string{ownerActionPrepareTool})...)
 	}
+	if s.storeFn.Load() != nil && s.settings(ctx).todosV2On() {
+		tools = append(tools, toolsNamed([]string{"todo_split", "todo_merge"})...)
+	}
 	if s.urgentOn(ctx) {
 		tools = append(tools, toolsNamed([]string{"urgent_call"})...)
 	}
@@ -230,7 +233,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTodoRepositoryLinksAdd(ctx, machine, self, name, args)
 	case "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set":
 		return s.toolTodoRepositories(ctx, machine, self, name, args)
-	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete":
+	case "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "todo_split", "todo_merge":
 		return s.toolTodo(ctx, machine, self, name, args) // todo_tools.go
 	case "direction_name":
 		return s.toolDirectionName(ctx, self, args) // direction_progress.go
@@ -813,19 +816,20 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			tier = "" // the tier's launcher is not what runs
 			tierChoice = nil
 		}
-		// traex, omp…: no effort or permission mode (launcher_modes.go). One this call names is refused before the user is asked, rather
-		// than by the computer after they said yes; one a tier filled in is dropped. pi, cursor: dropped either way.
+		// Check the caller's choices before approval. Drop unsupported settings inherited from the tier or purpose.
 		if !startTakesModes(fit.agent) {
 			launcher, _ := run["launcher"].(string)
 			if err := startModesRefused(launcher, fit.agent, own.permission, own.effort); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
-			a.Effort = ""
 			a.PermissionMode = ""
-			delete(run, "effort")
 			delete(run, "permission_mode")
 		} else if mode, _ := run["permission_mode"].(string); mode != "" && own.permission == "" && !fit.supportsPermissionMode(mode) {
 			delete(run, "permission_mode")
+		}
+		if !startTakesEffort(fit.agent) {
+			a.Effort = ""
+			delete(run, "effort")
 		}
 		// The admission gate refuses a too-busy computer before the user is asked to approve anything.
 		gated, _ := run["launcher"].(string)
@@ -881,9 +885,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			params["host"] = a.Host
 		}
 		prompt := a.Prompt
-		if !a.SkipProjectMemory {
-			prompt = s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
-		}
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -913,6 +914,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if err := s.applyOmpStartDefaults(sctx, am, own, fit, params); err != nil {
 			return "", err
 		}
+		if !a.SkipProjectMemory {
+			prompt = s.withProjectContextForAgent(sctx, am.ID, a.Cwd, self, fit.agent, prompt)
+		}
 		params["prompt"] = s.withCloseoutBrief(sctx, am.ID, prompt, false)
 		if err := checkStartSpeed(params, fit, ""); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
@@ -922,7 +926,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			if err := startModesRefused(picked, fit.agent, own.permission, own.effort); err != nil {
 				return "", fmt.Errorf("%w; no agent was started", err)
 			}
-			delete(params, "effort")          // Model configuration's, not this call's
 			delete(params, "permission_mode") // Model configuration's or tier's, not this call's
 		} else {
 			mode, _ := params["permission_mode"].(string)
@@ -936,6 +939,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			} else if mode == "" {
 				delete(params, "permission_mode")
 			}
+		}
+		if !startTakesEffort(fit.agent) {
+			delete(params, "effort")
 		}
 		if !s.isWorkMachine(am.ID) {
 			params["prompt"] = params["prompt"].(string) + "\n\n" + s.taskHandoff(sctx, am.ID, fit)

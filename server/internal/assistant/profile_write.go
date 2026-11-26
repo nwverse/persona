@@ -135,9 +135,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if d := in.RecordingDays; d != nil && (*d < minRecordingDays || *d > maxRecordingDays) {
-		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
+	if d := in.RecordingDays; d != nil && !recordingDaysValid(d, true) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–3650"))
 		return
+	}
+	for _, d := range []*int{in.RecordingAudioDays, in.RecordingTextDays} {
+		if d != nil && !recordingDaysValid(d, false) {
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_recording_days"))
+			return
+		}
 	}
 	var conversationTagFilters []string
 	tagFiltersWritten := len(in.ConversationTagFilters) > 0
@@ -191,6 +197,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if g := in.DeliveryGate; g != nil && !slices.Contains(deliveryGates, *g) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("delivery_gate must be off, merged or live"))
+		return
+	}
+	if in.AutoSupervisionMode != "" && !slices.Contains(supervisionModes, in.AutoSupervisionMode) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("auto_supervision_mode must be all, outcomes or off"))
 		return
 	}
 	if in.TodosV2AutoSeen != "" && !slices.Contains(todosV2AutoSeenModes, in.TodosV2AutoSeen) {
@@ -374,8 +384,14 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.Readonly != nil {
 			v.ReadonlyMode = in.ReadonlyMode
 		}
-		if in.RecordingDays != nil {
-			v.RecordingDays = in.RecordingDays
+		if in.RecordingDays != nil { // the old name: a client from before #16412 sets the audio's days
+			v.RecordingAudioDays = in.RecordingDays
+		}
+		if in.RecordingAudioDays != nil {
+			v.RecordingAudioDays = in.RecordingAudioDays
+		}
+		if in.RecordingTextDays != nil {
+			v.RecordingTextDays = in.RecordingTextDays
 		}
 		if in.MinutesDays != nil {
 			v.MinutesDays = in.MinutesDays
@@ -515,8 +531,16 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.SupervisionBatchMinutes != nil {
 			v.SupervisionBatchMinutes = in.SupervisionBatchMinutes
 		}
-		if in.AutoSupervisionMessages != nil {
+		if in.AutoSupervisionMode != "" {
+			// The mode wins over the older switch in the same body, and keeps it in step for older readers.
+			on := in.AutoSupervisionMode != supervisionModeOff
+			v.AutoSupervisionMode, v.AutoSupervisionMessages = in.AutoSupervisionMode, &on
+		} else if in.AutoSupervisionMessages != nil {
 			v.AutoSupervisionMessages = in.AutoSupervisionMessages
+			v.AutoSupervisionMode = supervisionModeOff
+			if *in.AutoSupervisionMessages {
+				v.AutoSupervisionMode = supervisionModeAll
+			}
 		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode

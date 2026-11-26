@@ -1143,6 +1143,8 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
     var sessionID: String
     var title: String
     var cwd: String
+    /// The node-verified physical directory used for workspace association.
+    var workspaceCWD: String? = nil
     var status: SessionStatus
     var paneID: String?
     var tabID: String?
@@ -1661,6 +1663,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         case listWaiting = "waiting", listBackgroundCount = "background_count", listRunningSubagents = "running_subagents", listRunningWorkflows = "running_workflows"
         case listBackgroundTasksCount = "background_tasks_count", listWorkflowProgress = "workflow_progress"
         case title, cwd, status, launcher, model, agent, effort, efforts, capabilities, attached
+        case workspaceCWD = "workspace_cwd"
         case pendingEffort = "pending_effort", effortChangeFailed = "effort_change_failed"
         case hiddenByDirectory = "hidden_by_directory"
         case serviceTier = "service_tier", serviceTiers = "service_tiers"
@@ -1702,6 +1705,7 @@ nonisolated struct Session: Codable, Identifiable, Hashable, Sendable {
         manager = try c.decodeIfPresent(String.self, forKey: .manager)
         title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         cwd = try c.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+        workspaceCWD = try c.decodeIfPresent(String.self, forKey: .workspaceCWD)
         let rawStatus = try c.decodeIfPresent(String.self, forKey: .status)
         status = rawStatus.flatMap(SessionStatus.init(rawValue:)) ?? .unknown
         wasInterrupted = rawStatus == "interrupted"
@@ -3098,6 +3102,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var ownerProposal: Bool?
     var noExpiry: Bool?
     var ownerApprovalPhrases: [String]?
+    /// True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps hand-back.
+    var noHandBack: Bool?
     var ownerApprovalPhrase: String? {
         guard kind == .permission, ownerProposal == true, let approvalBatchID, !approvalBatchID.isEmpty,
               !machineID.isEmpty, !sessionID.isEmpty,
@@ -3148,7 +3154,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under",
              foldedUnderMachineIDText = "folded_under_machine_id", foldedAsText = "folded_as",
              foldedSideText = "folded_side", approvalBatchID = "approval_batch_id", approvalItemID = "approval_item_id",
-             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases"
+             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases",
+             noHandBack = "no_hand_back"
     }
 }
 

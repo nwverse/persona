@@ -116,6 +116,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE {base}/bindings/{key}
 -                    DELETE {base}/bots/{bot}
 -                    DELETE {base}/markets/{mid}
+-                    DELETE {base}/markets/{mid}/keys/{kid}
 -                    GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json
 -                    GET /api/v1/admin/devices
 -                    GET /api/v1/admin/devices/{credential_id}/owner
@@ -429,11 +430,14 @@ todos.read           GET /api/v1/todos/{id}/decisions
 -                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
+-                    GET /api/v1/todos/{id}/trace
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
 todos.read           GET /api/v1/todos/{id}/workspace-rules
 -                    GET /api/v1/usage
 -                    GET /api/v1/usage/days
 -                    GET /api/v1/usage/hours
+-                    GET /api/v1/usage/projects
+-                    GET /api/v1/usage/projects/detail
 -                    GET /api/v1/usage/windows
 agents.read          GET /api/v1/workspace-board
 agents.read          GET /api/v1/workspace-board/activity
@@ -447,6 +451,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {base}/catalog
 -                    GET {base}/market-settings
 -                    GET {base}/markets
+-                    GET {base}/markets/{mid}/keys
 -                    GET {bus.Path}
 -                    GET {devicewire.DevelopmentPackagesPath}/{commit}/{version}/{file}
 -                    GET {devicewire.RelayPath}
@@ -783,7 +788,9 @@ todos.write          POST /api/v1/todos
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/handoff
+-                    POST /api/v1/todos/{id}/merge
 -                    POST /api/v1/todos/{id}/retry
+-                    POST /api/v1/todos/{id}/split
 -                    POST /api/v1/todos/{id}/start/answer
 todos.write          POST /api/v1/todos/{id}/workspace-naming/plans
 todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
@@ -800,6 +807,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST {base}/bots/{bot}/scopes
 -                    POST {base}/catalog/preview
 -                    POST {base}/markets
+-                    POST {base}/markets/{mid}/keys
 -                    POST {base}/markets/{mid}/refresh
 -                    POST {base}/oauth
 -                    POST {bus.JoinPath}

@@ -750,6 +750,131 @@ def usage_history_hours(n):
             "stored": True}
 
 
+# Token usage by project (#16530): the calendar's days (usage_history_day) split into made-up projects, each range's
+# total the calendar's for the same days; the 7 days have some usage from before folders were kept (not split).
+# MOCK_TOKENS=none: an older hub (404).
+MOCK_PROJECTS = [  # key, kind, group, name, host, share of a day, computers
+    ("git:github.com/acme/storefront", "repo", "development", "acme/storefront", "github.com", 0.36, ["macbook", "server", "studio"]),
+    ("git:github.com/acme/payments-api", "repo", "development", "acme/payments-api", "github.com", 0.20, ["macbook", "server"]),
+    ("git:gitlab.example.com/nimbus/infra", "repo", "development", "nimbus/infra", "gitlab.example.com", 0.12, ["server"]),
+    ("git:github.com/lumen/docs-site", "repo", "development", "lumen/docs-site", "github.com", 0.07, ["macbook"]),
+    ("git:github.com/acme/mobile-app", "repo", "development", "acme/mobile-app", "github.com", 0.05, ["macbook", "studio"]),
+    ("local:" + "1f" * 20, "local", "development", "scratch-ml", "", 0.025, ["studio"]),
+    ("assistant", "assistant", "other", "", "", 0.09, ["server", "macbook"]),
+    ("folder:trip planning", "folder", "other", "Trip planning", "", 0.03, ["macbook"]),
+    ("folder:taxes 2026", "folder", "other", "Taxes 2026", "", 0.015, ["macbook"]),
+    ("home", "home", "other", "", "", 0.01, ["macbook", "server"]),
+    ("temp", "temp", "other", "", "", 0.005, ["server"]),
+]
+
+
+def mock_project_days():
+    """The last 7 days (oldest first) of the calendar: (date, tokens), today so far."""
+    import datetime
+    now = time.localtime()
+    today = datetime.date(now.tm_year, now.tm_mon, now.tm_mday)
+    part = (now.tm_hour * 3600 + now.tm_min * 60) / 86400
+    return [(today - datetime.timedelta(days=i), usage_history_day(today - datetime.timedelta(days=i), part if i == 0 else 1.0))
+            for i in range(6, -1, -1)]
+
+
+def mock_scaled(tokens, f):
+    return {k: int(v * f) for k, v in tokens.items()}
+
+
+def mock_add(a, b):
+    return {k: a.get(k, 0) + b.get(k, 0) for k in ("in", "cache_write", "cache_read", "out", "req")}
+
+
+def mock_tokens_total(t):
+    return t["in"] + t["cache_write"] + t["cache_read"] + t["out"]
+
+
+def usage_projects():
+    """GET /api/v1/usage/projects (#16530): today, the last 3 and 7 days by project; days 4 to 7 ago partly not split."""
+    days = mock_project_days()
+    ranges = []
+    for n in (1, 3, 7):
+        total = {"in": 0, "cache_write": 0, "cache_read": 0, "out": 0, "req": 0}
+        not_split = dict(total)
+        per = {p[0]: dict(total) for p in MOCK_PROJECTS}
+        for i, (_, day) in enumerate(days[7 - n:]):
+            ago = n - 1 - i
+            total = mock_add(total, day)
+            split = 0.0 if ago >= 5 else 1.0  # before the update: not split
+            not_split = mock_add(not_split, mock_scaled(day, 1 - split))
+            for key, _, _, _, _, share, _ in MOCK_PROJECTS:
+                per[key] = mock_add(per[key], mock_scaled(day, share * split / sum(x[5] for x in MOCK_PROJECTS)))
+        all_ = max(1, mock_tokens_total(total))
+        projects = [{"key": key, "kind": kind, "group": group, "name": name, "host": host or None,
+                     "machines": len(machines) if n > 1 else min(2, len(machines)), "share": mock_tokens_total(per[key]) / all_,
+                     "tokens": per[key]}
+                    for key, kind, group, name, host, _, machines in MOCK_PROJECTS if mock_tokens_total(per[key]) > 0]
+        projects.sort(key=lambda x: -mock_tokens_total(x["tokens"]))
+        ranges.append({"days": n, "total": total, "projects": projects, "not_split": not_split})
+    return {"zone": time.strftime("%Z") or "UTC", "ranges": ranges, "stored": True}
+
+
+def usage_project_detail(key):
+    """GET /api/v1/usage/projects/detail (#16530): one made-up project's breakdown; None for an unknown key."""
+    found = next((p for p in MOCK_PROJECTS if p[0] == key), None)
+    if found is None:
+        return None
+    key, kind, group, name, host, _, machines = found
+    listing = usage_projects()
+    names = {m["id"]: m["name"] for m in MACHINES}
+    days = mock_project_days()
+    days_out, ranges = [], []
+    for r in listing["ranges"]:
+        proj = next((p for p in r["projects"] if p["key"] == key), None)
+        tokens = proj["tokens"] if proj else {"in": 0, "cache_write": 0, "cache_read": 0, "out": 0, "req": 0}
+        parts = lambda items: [{"key": k, **({"name": names.get(k, "")} if machines_part else {}),
+                               "tokens": mock_scaled(tokens, f)} for k, f in items]
+        machines_part = True
+        weights = [0.52, 0.34, 0.14][:len(machines)]
+        m = parts([(mid, w / sum(weights)) for mid, w in zip(machines, weights)])
+        machines_part = False
+        agents = parts([("claude", 0.77), ("codex", 0.2), ("pi", 0.03)]) if group == "development" else parts([("claude", 1.0)])
+        models = parts([("claude-opus-5-5", 0.68), ("gpt-5.5-codex", 0.2), ("claude-sonnet-5-5", 0.09), ("claude-haiku-5-5", 0.03)])
+        launchers = parts([("claude", 0.77), ("codex", 0.2), ("", 0.03)])
+        places = []
+        if kind in ("repo", "local", "folder", "home"):
+            leaf = name.split("/")[-1] if name else "~"
+            for mid, w in zip(machines, weights):
+                base = {"macbook": f"~/code/{leaf}", "server": f"~/src/{leaf}", "studio": f"~/work/{leaf}"}.get(mid, f"~/{leaf}")
+                if kind == "folder":
+                    base = f"~/Documents/{name}"
+                if kind == "home":
+                    base = "~"
+                if mid == machines[0] and kind == "repo":
+                    places.append({"machine": mid, "machine_name": names.get(mid, ""), "place": f"{base}-wt/checkout-v2",
+                                   "worktree": True, "tokens": mock_scaled(tokens, w / sum(weights) * 0.35)})
+                    w *= 0.65
+                places.append({"machine": mid, "machine_name": names.get(mid, ""), "place": base,
+                               "tokens": mock_scaled(tokens, w / sum(weights))})
+            places.sort(key=lambda x: -mock_tokens_total(x["tokens"]))
+        all_input = tokens["in"] + tokens["cache_write"] + tokens["cache_read"]
+        ranges.append({"days": r["days"], "total": tokens, "share": proj["share"] if proj else 0,
+                       "cache_hit": tokens["cache_read"] / all_input if all_input else 0, "machines": m, "agents": agents,
+                       "models": models, "launchers": launchers, "places": places})
+    share = next(p for p in MOCK_PROJECTS if p[0] == key)[5] / sum(x[5] for x in MOCK_PROJECTS)
+    for i, (d, day) in enumerate(days):
+        days_out.append({"date": d.isoformat(), "tokens": mock_scaled(day, share if 6 - i < 5 else 0)})
+    now = time.time()
+    lt = time.localtime(now)
+    midnight = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+    hours, t = [], int(midnight)
+    import math
+    today_tokens = days_out[-1]["tokens"]
+    while t <= now:
+        hr = time.localtime(t).tm_hour
+        shape = max(0.0, math.sin(math.pi * (hr - 8) / 16)) if 8 <= hr <= 24 else 0.03
+        hours.append({"t": t, "hour": hr, "tokens": mock_scaled(today_tokens, shape / 10)})
+        t += 3600
+    project = next(p for p in listing["ranges"][2]["projects"] if p["key"] == key)
+    return {"zone": listing["zone"], "project": project, "ranges": ranges, "days": days_out, "hours": hours, "stored": True}
+
+
 def sess(mid, sid, title, cwd, status, state, space, sidx, slot, slidx, minutes, last, agent="claude", pending=0, **kw):
     s = {"machine_id": mid, "session_id": sid, "title": title, "cwd": cwd, "status": status, "state": state,
          "agent": agent, "launcher": "claude", "model": "opus" if agent == "claude" else "gpt-5.5", "started_by_persona": True,
@@ -2650,6 +2775,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
                     # Close an Agent's terminal when its session ends (#10355), off by default.
                     "close_ended_terminals": False,
+                    # Which automatic supervision messages are sent (#16417): all (default), outcomes or off.
+                    "auto_supervision_mode": "all",
                     # Learn from finished tasks (#12295), off by default; a project's lessons: project_lessons_mock.py.
                     "task_lessons": False,
                     # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
@@ -2673,17 +2800,21 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
                     "meeting_glossary": [], "meeting_transcription_extension": "",
-                    # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
-                    # went (#3780, MOCK_MINUTES_DAYS): 0 means forever; finite windows are never fewer than the recordings'.
-                    "recording_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
+                    # How long recording audio stays (#16412, formerly recording_days; MOCK_RECORDING_DAYS), a recording's
+                    # text (forever until a PUT changes it) and a meeting's minutes after its transcript went (#3780,
+                    # MOCK_MINUTES_DAYS): 0 means forever; finite minutes windows are never fewer than the text's.
+                    "recording_audio_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
+                    "recording_text_days": 0,
                     "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0")),
                     # Knowledge points by topic (#3783), on by default; MOCK_KB_TOPICS_OFF=1 starts it off (#7251's empty map).
                     "kb_topics": os.environ.get("MOCK_KB_TOPICS_OFF") != "1",
                     # The sidebar's Recent lists the scheduled tasks' chats too (#8324), off by default;
                     # MOCK_RECENT_TASK_CHATS=1 starts on; =absent is a hub from before it. Left out with MOCK_LEGACY_HUB.
                     "recent_task_chats": os.environ.get("MOCK_RECENT_TASK_CHATS") == "1"}
-# What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
-RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
+# What PUT /api/v1/assistant takes for the retentions, as the hub's profile_write.go; recording_days is the old name of
+# recording_audio_days.
+RETENTION_BOUNDS = {"recording_days": (1, 3650), "recording_audio_days": (0, 3650), "recording_text_days": (0, 3650),
+                    "minutes_days": (0, 3650)}
 
 
 def assistant_state(space="", archived=False):
@@ -2695,7 +2826,9 @@ def assistant_state(space="", archived=False):
     out = {"manager": MANAGERS["default"], "machine_id": cfg["machine_id"], "launcher": cfg["launcher"],
            "cwd": home + "/.persona/" + (space or "assistant") if home else "",
            "timezone": cfg["timezone"], "notes_effective": notes.strip(), "main_tasks_quiet": cfg["main_tasks_quiet"],
-           "recording_days": cfg["recording_days"], "minutes_days": 0 if cfg["minutes_days"] == 0 else max(cfg["minutes_days"], cfg["recording_days"]),
+           "recording_days": cfg["recording_audio_days"], "recording_audio_days": cfg["recording_audio_days"],
+           "recording_text_days": cfg["recording_text_days"],
+           "minutes_days": 0 if cfg["minutes_days"] == 0 or cfg["recording_text_days"] == 0 else max(cfg["minutes_days"], cfg["recording_text_days"]),
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
@@ -2703,6 +2836,7 @@ def assistant_state(space="", archived=False):
         out.update(work_guide=MANAGER_WORK_GUIDES.get(MANAGERS["default"], False), agent_tasks=cfg["agent_tasks"], task_lessons=cfg["task_lessons"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   auto_supervision_mode=cfg["auto_supervision_mode"], auto_supervision_messages=cfg["auto_supervision_mode"] != "off",
                    claude_interactive=cfg["claude_interactive"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
                    default_permission_mode=cfg["default_permission_mode"],
@@ -4022,7 +4156,7 @@ def day_fields(body):
 
 
 def day_expired(rid, body):
-    days = ASSISTANT_CONFIG["recording_days"]
+    days = ASSISTANT_CONFIG["recording_text_days"]
     return rid in RECORDINGS_TRIMMED or bool(days and day_time(body["started_at"]) < datetime.now(timezone.utc) - timedelta(days=days))
 
 
@@ -4736,7 +4870,8 @@ def assistant_for_manager(h):
     st = assistant_state("", False)
     notes = MANAGER_NOTES.get(mid, "")
     # Another manager is one from before meeting attendance and the retention settings: none of their fields.
-    st = {k: v for k, v in st.items() if k not in ("main", "notes", "meeting_attendance_default", "recording_days", "minutes_days",
+    st = {k: v for k, v in st.items() if k not in ("main", "notes", "meeting_attendance_default", "recording_days", "recording_audio_days",
+                                                           "recording_text_days", "minutes_days",
                                                            "meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension", "meeting_transcription_ready")}
     if "work_guide" in st:
         st["work_guide"] = MANAGER_WORK_GUIDES.get(mid, False)
@@ -7660,7 +7795,9 @@ def recordings_route_locked(h, method, p):
     if os.environ.get("MOCK_RECORDINGS_DOWN") == "1":
         return h.send_json({"error": "知识库暂时不可用", "code": "kb_unavailable"}, 503) or True
     if p == "/api/v1/recordings" and method == "GET":
-        return h.send_json({"days": ASSISTANT_CONFIG["recording_days"], "deleted": sorted(RECORDINGS_DELETED),
+        audio = ASSISTANT_CONFIG["recording_audio_days"]  # phones take 1–365 as days (#16412)
+        return h.send_json({"days": audio if 0 < audio <= 365 else 365, "audio_days": audio,
+                            "text_days": ASSISTANT_CONFIG["recording_text_days"], "deleted": sorted(RECORDINGS_DELETED),
                             "recordings": [{"id": k, "revision": v["revision"], "complete": v.get("complete", False),
                                             "started_at": v["started_at"],
                                             **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
@@ -27180,8 +27317,13 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(computer_now(machine))
         if p == "/api/v1/usage/windows":  # subscription rate-limit windows (#2432); MOCK_USAGE=none answers no accounts
             return self.send_json(mock_usage_windows())
-        if p in ("/api/v1/usage/days", "/api/v1/usage/hours") and MOCK_TOKENS == "none":  # an older hub
+        if p in ("/api/v1/usage/days", "/api/v1/usage/hours", "/api/v1/usage/projects", "/api/v1/usage/projects/detail") and MOCK_TOKENS == "none":  # an older hub
             return self.send_json({"error": "not found"}, 404)
+        if p == "/api/v1/usage/projects":  # token usage by project (#16530)
+            return self.send_json({"usage": usage_projects()})
+        if p == "/api/v1/usage/projects/detail":
+            detail = usage_project_detail(q.get("key", [""])[0])
+            return self.send_json({"usage": detail} if detail else {"error": "no such project"}, 200 if detail else 404)
         if p == "/api/v1/usage/days":  # the token calendar's days (#9480, #9506); MOCK_TOKENS=empty has no usage
             return self.send_json({"usage": usage_history_days(int(q.get("days", ["140"])[0]))})
         if p == "/api/v1/usage/hours":
@@ -29575,6 +29717,10 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["task_lessons"] = body["task_lessons"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
+            if body.get("auto_supervision_mode") in ("all", "outcomes", "off"):
+                ASSISTANT_CONFIG["auto_supervision_mode"] = body["auto_supervision_mode"]
+            elif isinstance(body.get("auto_supervision_messages"), bool):
+                ASSISTANT_CONFIG["auto_supervision_mode"] = "all" if body["auto_supervision_messages"] else "off"
             if isinstance(body.get("main_supervises_own_tasks"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
                 ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
@@ -29605,7 +29751,7 @@ class H(BaseHTTPRequestHandler):
             if MEETING_ATTENDANCE and "meeting_attendance_default" in body:
                 ASSISTANT_CONFIG["meeting_attendance_default"] = body["meeting_attendance_default"]
             for key in RETENTION_BOUNDS:
-                if key in body: ASSISTANT_CONFIG[key] = body[key]
+                if key in body: ASSISTANT_CONFIG["recording_audio_days" if key == "recording_days" else key] = body[key]
             ASSISTANT_CONFIG.update(transcription_config)
             return self.send_json(assistant_state())
         if "/health/reports/" in p and p.startswith("/api/v1/machines/") and self.command == "DELETE":

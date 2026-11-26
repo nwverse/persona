@@ -26,7 +26,7 @@ import { navigate } from "../../lib/router";
 import type { LauncherQuotaAnswer } from "../../lib/quota";
 import { hasFinePointer, keyboardFrame } from "../../lib/viewport";
 import { settingsHref } from "../../views/settings/nav";
-import { cx, Spinner } from "../atoms";
+import { Button, cx, Spinner } from "../atoms";
 import { Icon } from "../icons";
 import { NARROW_QUERY, returnFocus, SHEET_QUERY, useMedia } from "../overlay";
 import { LauncherColumn, LevelColumn, SAVED_SIDE, SpeedSwitch } from "./Columns";
@@ -45,9 +45,9 @@ export interface ModelPanelProps {
   /** Applies a whole setup (a row, a favorite, a recent entry); true when it was applied: the panel then records it in
    *  Recent and closes. false: the caller has said why; the panel stays open with the old setup. */
   onPick: (config: PanelConfig) => Promise<boolean>;
-  /** A flyout edit (effort, Fast) on the model that runs now: applied at once, the flyout stays open. */
-  onApplyCurrent?: (patch: { effort?: string; fast?: boolean }) => Promise<boolean>;
-  /** Reads a provider's list again (its group's Retry). */
+  /** A live effort or speed edit on the current model keeps the panel open. */
+  onApplyCurrent?: (patch: PanelOverride) => Promise<boolean>;
+  /** Refreshes a provider's catalog (also used for Retry). */
   onReload?: (provider: string) => void;
   /** Forgets a typed model ID (#1644). */
   onForget?: (provider: string, model: string) => void;
@@ -473,7 +473,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
       if (d && row.setup.effort && row.setup.effort !== d) patch.effort = d;
       // no default known: back to none, the model's own (an Agent not started yet; a running one sends nothing for it)
       else if (!d && row.setup.effort) patch.effort = "";
-      if (row.setup.fast) patch.fast = false;
+      if (row.setup.speed && row.setup.speed !== "standard" && row.model.speeds?.some((choice) => choice.id === "standard")) patch.speed = "standard";
       if (Object.keys(patch).length && !(await applyLive(row, patch))) return;
     }
     store.resetOverride(row.provider.id, row.model.id);
@@ -611,6 +611,36 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
             </div>
           )}
         </div>
+      </div>
+    );
+  };
+
+  const catalogActions = (s: PanelSection) => {
+    const p = s.provider!;
+    const loading = s.loading || p.loading;
+    const refresh = onReload && p.models !== null && !p.error && !p.unavailable && !p.locked;
+    if (!loading && !refresh) return null;
+    return (
+      <div className="flex items-center justify-end px-2">
+        {loading && (
+          <div role="status" className="mr-auto flex items-center gap-2 px-1 py-2 text-label text-ink-3">
+            <Spinner size={12} />
+            {t("ui-modelpanel.loading")}
+          </div>
+        )}
+        {refresh && (
+          <Button
+            tone="quiet"
+            size="sm"
+            icon="retry"
+            className="touch-hit"
+            aria-label={t("ui-modelpanel.refresh_provider_models", { provider: p.name })}
+            disabled={picking || loading}
+            onClick={() => onReload(p.id)}
+          >
+            {t("ui-modelpanel.refresh_models")}
+          </Button>
+        )}
       </div>
     );
   };
@@ -784,12 +814,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                   ) : sideSection ? (
                     <div role="group" aria-label={sideSection.provider!.name} data-panel-section="provider">
                       {sideNote(sideSection.provider!)}
-                      {sideSection.loading && (
-                        <div role="status" className="flex items-center gap-2 px-3 py-2 text-label text-ink-3">
-                          <Spinner size={12} />
-                          {t("ui-modelpanel.loading")}
-                        </div>
-                      )}
+                      {catalogActions(sideSection)}
                       {renderBlocks(sideSection)}
                     </div>
                   ) : null
@@ -844,12 +869,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
                           />
                           {expanded.has(s.provider!.id) && (
                             <div className="ml-2 border-l border-line pl-1">
-                              {s.loading && (
-                                <div role="status" className="flex items-center gap-2 px-3 py-2 text-[12px] text-ink-3">
-                                  <Spinner size={12} />
-                                  {t("ui-modelpanel.loading")}
-                                </div>
-                              )}
+                              {catalogActions(s)}
                               {renderBlocks(s)}
                             </div>
                           )}
@@ -863,8 +883,8 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
             {columns && <LevelColumn row={levelRow} disabled={levelOff(levelRow)} onLevel={(effort) => levelRow && void chooseLevel(levelRow, effort)} />}
           </div>
           <div className="flex shrink-0 items-center gap-2 border-t border-line px-3.5 py-[9px]">
-            {columns && levelRow?.model.fast && levelRow.kind !== "preset" && (
-              <SpeedSwitch fast={Boolean(levelRow.setup.fast)} disabled={picking || Boolean(applying) || !rowCustomizable(levelRow, state, live)} onFast={(on) => void edit(levelRow, { fast: on })} />
+            {columns && levelRow?.model.speeds && levelRow.kind !== "preset" && (
+              <SpeedSwitch options={levelRow.model.speeds} speed={levelRow.setup.speed} disabled={picking || Boolean(applying) || !rowCustomizable(levelRow, state, live)} onSpeed={(speed) => void edit(levelRow, { speed })} />
             )}
             {columns && levelRow?.kind === "model" && levelRow.current && currentExtra && <div data-panel-extra className="min-w-0">{currentExtra}</div>}
             <button
@@ -886,7 +906,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
           rowEl={fly.el}
           panelEl={panel.current}
           row={flyRow}
-          setup={applying?.key === flyRow.key ? { ...flyRow.setup, ...applying.patch } : flyRow.setup}
+          setup={applying?.key === flyRow.key && applying.patch.effort !== undefined ? { ...flyRow.setup, effort: applying.patch.effort } : flyRow.setup}
           mode={flyMode(flyRow)}
           starred={flyRow.kind === "favorite" || flash === flyRow.key}
           disabled={picking || Boolean(applying)}
@@ -900,7 +920,7 @@ export function ModelPanel({ anchor, onClose, providers, state, scope, onPick, o
             void apply(() => onPick(setup), setup);
           }}
           onEffort={(effort) => void edit(flyRow, { effort })}
-          onFast={(on) => void edit(flyRow, { fast: on })}
+          onSpeed={(speed) => void edit(flyRow, { speed })}
           onReset={() => void reset(flyRow)}
           onStar={() => star(flyRow)}
           onClose={closeFly}
