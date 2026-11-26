@@ -179,6 +179,8 @@ private fun SettingsContent(
     var mailAccounts by remember(assistant.id) { mutableStateOf<List<MailAccount>?>(null) }
     var larkStatus by remember(assistant.id) { mutableStateOf<LarkStatus?>(null) }
     val larkChats = LocalLarkFeatures.current.chats
+    // The hub's mail module (#15995), decided by the shell: off, Settings offers no mail row or page and asks no mail route.
+    val mailAccess = LocalMailAccess.current
     val translationPrefs = services.translation?.prefs?.collectAsState()?.value
     val translationValue = when {
         services.demo || translationPrefs == null -> null
@@ -232,10 +234,10 @@ private fun SettingsContent(
         catch (error: CancellationException) { throw error } catch (_: Exception) { hubUpdateStatus }
     }
     LaunchedEffect(hubUpdates) { hubUpdates?.events?.collect { hubUpdateStatus = it } }
-    LaunchedEffect(connectorsService, page, connection, larkChats, assistant.id) {
+    LaunchedEffect(connectorsService, page, connection, larkChats, mailAccess, assistant.id) {
         if (connectorsService == null || page != "connectors" || connection != ConnectionState.Online) return@LaunchedEffect
         try {
-            mailAccounts = runCatching { connectorsService.mailAccounts() }.getOrNull()
+            mailAccounts = if (mailAccess == MailAccess.Live) runCatching { connectorsService.mailAccounts() }.getOrNull() else null
             // Lark's status is the Lark extension's (`/api/v1/lark/status`): only asked while the hub has it.
             larkStatus = if (larkChats) runCatching { connectorsService.larkStatus() }.getOrNull() else null
             // The current assistant's alone: a merged list (a hub that answers every manager's) is filtered by each one's stamp.
@@ -267,7 +269,7 @@ private fun SettingsContent(
         }
     }
     val connectorItems: LazyListScope.() -> Unit = {
-        val connectorRows = connectorRows(hubConnectors, lark = larkChats)
+        val connectorRows = connectorRows(hubConnectors, lark = larkChats, mail = mailAccess)
         fun connectorPosition(row: ConnectorRow) = GroupPosition.of(connectorRows.indexOf(row), connectorRows.size)
         item {
             JGroupItem(connectorPosition(ConnectorRow.Phone)) {
@@ -281,7 +283,7 @@ private fun SettingsContent(
                 )
             }
         }
-        item {
+        if (ConnectorRow.Mail in connectorRows) item {
             JGroupItem(connectorPosition(ConnectorRow.Mail)) {
                 JRow(
                     selected = detailKey == SettingsPageRoute(SettingsPage.Mail),
@@ -339,7 +341,7 @@ private fun SettingsContent(
         }
     }
     SettingsPageContent(
-        services = services, mine = mine, assistant = assistant, owner = owner, larkBot = larkBot, channelService = channelService,
+        services = services, mine = mine, assistant = assistant, owner = owner, larkBot = larkBot, mailAccess = mailAccess, channelService = channelService,
         pageState = pageState, searchQueryState = searchQueryState,
         purposeManagerState = purposeManagerState, purposeState = purposeState,
         extensionState = extensionState, extensionManagerState = extensionManagerState,
@@ -401,6 +403,7 @@ private fun SettingsPageContent(
     assistant: CurrentAssistant,
     owner: String?,
     larkBot: LarkBotEntry,
+    mailAccess: MailAccess,
     channelService: ChannelManagement?,
     pageState: MutableState<String>,
     searchQueryState: MutableState<String>,
@@ -655,9 +658,12 @@ private fun SettingsPageContent(
         "triage" -> TriageSettingsPage(mine.triage.takeUnless { services.demo }, mine.models.takeUnless { services.demo }, onBack = back,
             onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage", owner)) ?: run {
                 purposeManager = owner; purpose = "agent.triage"; page = "models" } })
-        "mail" -> MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
+        // The hub's mail module is off (#15995): a link or a saved page lands on one line, and no mail route is asked.
+        "mail", "mail-add" -> if (mailAccess == MailAccess.StoredOnly) ModuleOffPage(stringResource(R.string.settings_src_mail_title),
+            stringResource(R.string.settings_mail_module_off), back)
+            else if (page == "mail") MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
+            else AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
         "feishu-bot" -> FeishuBotPage(mine.feishuBot.takeUnless { services.demo }, back, larkBot)
-        "mail-add" -> AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
         "feishu" -> FeishuConnectorPage(connectorsService, onBack = back, onAgentModel = {
             // The model of the current assistant's agent there, as the page's connector is that one's.
             onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("lark.agent", owner)) ?: run { purposeManager = owner; purpose = "lark.agent"; page = "models" }

@@ -687,8 +687,10 @@ func (tb *treeBuild) directionOf(t Todo) string {
 }
 
 // state is listed task t's state in the tree (first match wins). Needs you follows the authoritative to-do projection
-// so supervisor-held cards, supervised failed starts, deferred can_wait decisions, user_check, and dismissed decisions
-// stay out of counts.needs_you and agree with GET /api/v1/todos counts.needs_you.
+// so supervisor-held cards, supervised failed starts, deferred can_wait decisions and dismissed decisions stay out of
+// counts.needs_you and agree with GET /api/v1/todos counts.needs_you. An open personal verification (user_check) is
+// in the projection's Needs you (reason verify), so here too; a quiet or carried one, kept out of Needs you below, is
+// review.
 func (tb *treeBuild) state(t listedTodo) string {
 	tr := tb.placed[t.ID]
 	v, hasView := tb.views[t.ID]

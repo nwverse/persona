@@ -139,6 +139,9 @@ in `docs/protocol/counts.md`; step 6 of the plan, #15512): `{"version": 1, "case
   `fleetcount` decides for that case on the Agents list: the counted rows in `keys`, the muted and held ones in `held`,
   each reason as the adapter spells it, and a quiet task's agent in neither. `TestViewSamplesAreFleetcountsRows`
   (`server/internal/assistant/fleetcount/fleetcountadapt`) checks it, and that `totals` repeats `n`.
+- A case whose `input.todo_counts` also names a case of `spec/fixtures/todo-counts` holds, as `counts.todos_needs_you`,
+  that list's `needs_you` with no row listed (all of `n` is `more`), and the same test checks it; a case that names none
+  is a view from a manager that has not counted its to-dos yet, without `todos_needs_you`.
 - A case without `input` shows a shape no fixture case gives: rows past the listed `keys` (`more`), and a manager
   build that does not work a count out (absent, never 0).
 
