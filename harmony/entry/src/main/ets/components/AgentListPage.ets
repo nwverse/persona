@@ -633,6 +633,10 @@ export struct AgentListPage {
           .selected(this.quickIndex()).value(this.quickLabel(this.quickFilters()[this.quickIndex()])).attributeModifier(SelectStyles.inline).width('100%').constraintSize({ minHeight: Tokens.touch })
           .onSelect((index: number) => this.chooseQuick(index)).id('agents.quick')
       } else {
+        // The filters list only states that have sessions, so the set can change while the chosen filter keeps its key
+        // at a new position. CapsuleSegmentButtonV2 then reads a backplate position it has not laid out yet and throws
+        // (getBackplatePosition): build a new one whenever the set of segments changes rather than updating it in place.
+        ForEach([this.quickFilters().join('|')], (_set: string) => {
         CapsuleSegmentButtonV2({ items: new SegmentButtonV2Items(this.quickFilters().map((key: string) => ({ text: this.quickLabel(key) } as SegmentButtonV2ItemOptions))),
           selectedIndex: this.quickIndex(), $selectedIndex: (index: number) => this.chooseQuick(index),
           itemSelectedBackgroundColor: ColorMetrics.resourceColor(Colors.action), itemSelectedFontColor: ColorMetrics.resourceColor(Colors.onAction),
@@ -640,6 +644,7 @@ export struct AgentListPage {
           itemFontSize: LengthMetrics.fp(Tokens.meta), itemSelectedFontSize: LengthMetrics.fp(Tokens.meta),
           itemMinHeight: LengthMetrics.vp(Tokens.touch), buttonMinHeight: LengthMetrics.vp(Tokens.touch), itemPadding: { start: LengthMetrics.vp(Tokens.inset), end: LengthMetrics.vp(Tokens.inset) },
           buttonPadding: LengthMetrics.vp(Tokens.fine) }).width('100%')
+        }, (set: string) => set)
       }
     }.padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.gap }).width('100%')
       .onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.filterWidth = width; })

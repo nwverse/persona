@@ -361,3 +361,9 @@ test('group headers count what folds hide, in the Needs color, and Needs you nev
   assert.match(header, /if \(binding\.value\.id !== NEEDS_GROUP\) Button/);
   assert.match(header, /Span\(this\.groupNeeds\(binding\.value\)\)\.fontColor\(Colors\.needs\)/);
 });
+
+test('the quick filter segments are rebuilt when their set changes, never updated in place', () => {
+  // CapsuleSegmentButtonV2 throws in getBackplatePosition when its items change under a selection it has not laid out.
+  assert.match(source, /ForEach\(\[this\.quickFilters\(\)\.join\('\|'\)\], \(_set: string\) => \{\s*(?:\/\/[^\n]*\n\s*)*CapsuleSegmentButtonV2\(\{ items: new SegmentButtonV2Items\(this\.quickFilters\(\)/);
+  assert.match(source, /buttonPadding: LengthMetrics\.vp\(Tokens\.fine\) \}\)\.width\('100%'\)\s*\}, \(set: string\) => set\)/);
+});
