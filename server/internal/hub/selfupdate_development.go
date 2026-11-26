@@ -242,7 +242,7 @@ func (u *updater) unreplacedCandidate(r *update.Published) error {
 	return unreplaced(r.Manifest, target, self, u.services)
 }
 
-func (u *updater) runDevelopment(ctx context.Context, operation string, input map[string]any, result any) error {
+func (u *updater) runDevelopment(ctx context.Context, operation string, input map[string]any, result any, resume func()) error {
 	cfg := u.developmentRequestConfig()
 	u.mu.Lock()
 	gen := u.opGen
@@ -254,13 +254,13 @@ func (u *updater) runDevelopment(ctx context.Context, operation string, input ma
 			u.developmentProgress = &p
 		}
 	}
-	if err := u.devRun(ctx, cfg, filepath.Join(u.dir, "development"), operation, input, result, report); err != nil {
+	if err := u.devRun(ctx, cfg, filepath.Join(u.dir, "development"), operation, input, result, resume, report); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
 		u.mu.Lock()
 		step := ""
-		if p := u.developmentProgress; p != nil && u.opGen == gen && update.DevelopmentStep(operation, p.Step, cfg.Backup.Builtin).Phase == p.Phase {
+		if p := u.developmentProgress; p != nil && u.opGen == gen && update.DevelopmentStep(operation, p.Step).Phase == p.Phase {
 			step = p.Step
 		}
 		u.mu.Unlock()
@@ -388,13 +388,13 @@ func (u *updater) resolveDevelopment(ctx context.Context) (*update.Published, er
 		return nil, err
 	}
 	var candidate update.DevelopmentCandidate
-	err := u.runDevelopment(ctx, "resolve", nil, &candidate)
+	err := u.runDevelopment(ctx, "resolve", nil, &candidate, nil)
 	if err != nil || !devicewire.ValidDevelopmentCommit(candidate.Commit) {
 		return nil, i18n.Err("hub-selfupdate.err_resolve_latest")
 	}
 	number := update.DevelopmentNumber(u.h.build.Number)
 	m := &update.Manifest{Version: fmt.Sprintf("web-dev-%s-%d", candidate.Commit[:12], number), Build: number,
-		Commit: candidate.Commit, Released: time.Now()}
+		Commit: candidate.Commit, Released: time.Now(), Edition: u.h.build.Edition.Marker()}
 	r := &update.Published{Manifest: m, Development: &candidate}
 	u.mu.Lock()
 	// A repeated check of the same object retains the attempt identity (including
@@ -402,6 +402,7 @@ func (u *updater) resolveDevelopment(ctx context.Context) (*update.Published, er
 	if u.release != nil && u.release.Development != nil && u.release.Development.BackupID == "" && u.release.Development.Commit == candidate.Commit {
 		copy := *u.release
 		manifest := *copy.Manifest
+		manifest.Edition = m.Edition
 		copy.Manifest = &manifest
 		copy.Development = &candidate
 		r = &copy
@@ -451,7 +452,7 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 	if r.Development.BackupID != "" {
 		operation, firstStep, lastStep = "prepare_backup", "verify_snapshot", "prepare_artifacts"
 	}
-	u.startDevelopmentPhase(update.DevelopmentStep(operation, firstStep, false), "web/hub/node")
+	u.startDevelopmentPhase(update.DevelopmentStep(operation, firstStep), "web/hub/node")
 	var built struct {
 		Artifacts string   `json:"artifacts"`
 		Ancestors []string `json:"ancestors"`
@@ -466,7 +467,7 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 	err := u.runDevelopment(ctx, operation, map[string]any{
 		"candidate": r.Development, "version": r.Manifest.Version, "build": r.Manifest.Build,
 		"backup_id": r.Development.BackupID, "runtime": u.h.cfg.dir,
-		"platform": runtime.GOOS + "-" + runtime.GOARCH, "platforms": platforms, "release_url": u.h.updateURL()}, &built)
+		"platform": runtime.GOOS + "-" + runtime.GOARCH, "platforms": platforms, "release_url": u.h.updateURL()}, &built, nil)
 	if err != nil {
 		return err
 	}
@@ -481,7 +482,11 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 			return developmentPhaseError(operation, lastStep)
 		}
 	}
-	m, err := update.BuildManifest(built.Artifacts, *r.Manifest)
+	// Development artifacts and their hosted packages use File.Name locally, not the publisher's core- aliases.
+	// Build that shape first, then restore the hub's edition below for CheckBinary.
+	local := *r.Manifest
+	local.Edition = ""
+	m, err := update.BuildManifest(built.Artifacts, local)
 	if err != nil {
 		return developmentPhaseError(operation, lastStep)
 	}
@@ -496,13 +501,14 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 		}
 	}
 	m.Ancestors = ancestors
+	m.Edition = r.Manifest.Edition
 	r.Manifest = m
 	return nil
 }
 
 func (u *updater) preflightDevelopment(ctx context.Context) error {
 	cfg := u.developmentRequestConfig()
-	u.startDevelopmentPhase(update.DevelopmentStep("preflight", "preflight", cfg.Backup.Builtin), "")
+	u.startDevelopmentPhase(update.DevelopmentStep("preflight", "preflight"), "")
 	return u.checkBackupBeforePause(ctx, cfg.Backup)
 }
 
@@ -520,7 +526,7 @@ func (u *updater) checkBackupBeforePause(ctx context.Context, cfg update.Develop
 	}
 	return u.runDevelopment(ctx, "preflight", map[string]any{
 		"runtime": u.h.cfg.dir, "hub_database": u.h.cfg.DatabaseURL,
-	}, &struct{}{})
+	}, &struct{}{}, nil)
 }
 
 func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, target string) (*update.DevelopmentBackup, error) {
@@ -531,7 +537,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		u.mu.Unlock()
 		return nil, context.Canceled
 	}
-	u.startDevelopmentPhaseLocked(update.DevelopmentStep("backup", "preflight", cfg.Builtin), "")
+	u.startDevelopmentPhaseLocked(update.DevelopmentStep("backup", "preflight"), "")
 	u.mu.Unlock()
 	u.broadcastStatus()
 	programs := map[string]string{"personad": target}
@@ -551,7 +557,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		if err := u.checkBackupBeforePause(ctx, cfg); err != nil {
 			return nil, err
 		}
-		u.startDevelopmentPhase(update.DevelopmentStep("backup", "quiesce", true), "")
+		u.startDevelopmentPhase(update.DevelopmentStep("backup", "quiesce"), "")
 	}
 	resume, err := u.quiesceDevelopmentWriters(ctx, cfg)
 	if err != nil {
@@ -562,7 +568,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		"runtime": u.h.cfg.dir, "candidate": r.Development, "hub_database": u.h.cfg.DatabaseURL,
 		"from_version": u.h.version, "from_commit": u.h.build.Commit, "from_build": u.h.build.Number,
 		"from_updated_at": updatedAt, "platform": runtime.GOOS + "-" + runtime.GOARCH,
-		"executables": programs, "node_directory": identity.NodeBinaryDir()}, &saved)
+		"executables": programs, "node_directory": identity.NodeBinaryDir()}, &saved, resume)
 	if err != nil {
 		return nil, err
 	}

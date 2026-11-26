@@ -104,6 +104,9 @@ type ExtensionView struct {
 	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
 	// is connected.
 	Attached *ExtensionAttached `json:"attached,omitempty"`
+	// MarketSignature: how an extension installed from a market was verified (extension_market_keys.go).
+	// State: official | signed | key_removed | unsigned | market_invalid.
+	MarketSignature *MarketSignatureView `json:"market_signature,omitempty"`
 }
 
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
@@ -419,6 +422,7 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	if ps.h != nil {
 		ps.h.extensionUpgrades().decorate(ctx, &v, p)
 		ps.h.decorateMarketMetadata(ctx, &v, p)
+		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
 		ps.h.decorateInstalledLogo(&v, p)
 	}
 	if m.NodeProgram() != nil {
@@ -1364,7 +1368,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			extensionConnectors.Store(c.ID, p.Record.Source)
 		}
 		cfg := proc.Config{ID: c.ID, Name: c.Name, Manifest: ps.knownOnly(id, connectorManifest(c)), Secrets: secrets, KB: kbase,
-			Logf: ps.logf, Link: link}
+			Logf: ps.logf, Link: link, Identity: &connector.ExtensionIdentity{
+				Extension: p.Record.ID,
+				Version:   p.Record.Version,
+				Source:    p.Record.Source,
+				MarketKey: p.Record.MarketKey,
+				Remote:    p.Record.Remote != nil,
+			}}
 		cfg.RecallNotBefore = hp.recallNotBefore // the program is not asked about a send before this install, whoever asks
 		if p.Record.Granted.GhLogin && ps.h != nil {
 			cfg.GhToken = ps.h.ghTokenFor
