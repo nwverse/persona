@@ -786,6 +786,10 @@ pitfalls from the Agent-send side at the same time, and the two changes now shar
 to-do routes read a little more as in doubt than `sendUnknown` does (a connection that ended mid-answer, any other
 network error). A refusal said "nothing typed" wrongly is the unsafe side: when in doubt, say `unknown`.
 
+After a conversation switch claims segment preparation, a failed receipt lookup can only tell us about that lookup
+(#16066). Keep checking the same operation until its preparation deadline. Starting a replacement before confirming
+the original could leave two prepared segments.
+
 ## Name the thing an event is about, and keep what was done for it (#5718)
 
 Completion handling started only on a session list going from `working` to `done` / `idle`, and remembered "this stretch
