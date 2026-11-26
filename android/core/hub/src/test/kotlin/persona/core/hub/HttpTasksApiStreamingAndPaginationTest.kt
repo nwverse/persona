@@ -194,15 +194,16 @@ class HttpTasksApiStreamingAndPaginationTest {
         val output = process.inputStream.bufferedReader().readText()
         assertTrue("Low-heap child JVM timed out:\n$output", process.waitFor(60, TimeUnit.SECONDS))
         assertEquals("64 MiB low-heap streaming runner failed:\n$output", 0, process.exitValue())
-        assertTrue("Expected >= 25 MiB wire payload and 1250 decoded todos:\n$output",
-            output.contains("COUNT=1250") && output.contains("WIRE_OK=true"))
+        assertTrue("Expected >= 25 MiB rich todos + single oversized unknown-field todo:\n$output",
+            output.contains("COUNT=1250") && output.contains("WIRE_OK=true") && output.contains("SINGLE_OVERSIZED_OK=true"))
         println(output.trim())
     }
 }
 
 /**
- * Child-JVM entry point run under `-Xmx64m` to prove [HttpTasksApi.todos] streams a 25+ MiB
- * `/api/v1/todos` payload without materializing a whole-body `ByteArray`, `String`, or `JsonObject` DOM.
+ * Child-JVM entry point run under `-Xmx64m` to prove [HttpTasksApi.todos] and [persona.core.contracts.WireSerializer]
+ * stream a 25+ MiB `/api/v1/todos` payload with rich nested [persona.core.contracts.Todo] fields AND skip a 25+ MiB
+ * unknown subtree inside a single [persona.core.contracts.Todo] without materializing a whole-body DOM or blowing `HashMap`.
  */
 object TodosLowHeapStreamRunner {
     private const val TARGET_COUNT = 1250
@@ -210,15 +211,14 @@ object TodosLowHeapStreamRunner {
 
     @JvmStatic
     fun main(args: Array<String>) {
-        // Build realistic ~21 KiB JSON rows on the fly (CJK UTF-8 text + structured server-only brief.log/view
-        // entries + real Todo fields) so the generator never buffers 25 MiB in heap while a non-streaming
-        // String + JsonObject DOM decoder immediately blows past -Xmx64m.
+        // Phase 1: 1,250 rich nested Todos (every major nested model populated + CJK text + server-only brief.log/view)
+        // totaling > 25 MiB wire bytes, verifying real nested fields survive decoding (not empty-shell Todos).
         val logEntry = """{"at":"2026-11-26T00:00:00Z","actor":"supervisor","kind":"progress","summary":"检查进展与日志上下文记录验证结果"}"""
-        val briefLog = (0 until 170).joinToString(",") { logEntry }
+        val briefLog = (0 until 160).joinToString(",") { logEntry }
         val viewBlock = """{"phase":"working","section":"active","reason":"running","steps":{"done":3,"total":5},"detail":"等待验证结果确认"}"""
         var wireBytes = 0L
 
-        val streamingBody = object : ResponseBody() {
+        val richBody = object : ResponseBody() {
             override fun contentType() = "application/json".toMediaType()
             override fun contentLength() = -1L
             override fun source(): BufferedSource {
@@ -238,7 +238,7 @@ object TodosLowHeapStreamRunner {
                                 index < TARGET_COUNT -> {
                                     val i = index++
                                     val sep = if (i == 0) "" else ","
-                                    """$sep{"id":"todo-$i","title":"Task $i","notes":"Note $i","created_at":"2026-11-26T00:00:00Z","agents":[{"machine_id":"m1","session_id":"s-$i"}],"brief":{"log":[$briefLog]},"view":$viewBlock}"""
+                                    """$sep{"id":"todo-$i","title":"任务 $i","notes":"详细说明与验收要点 $i","created_at":"2026-11-26T00:00:00Z","updated_at":"2026-11-26T01:00:00Z","origin":"main","plan_id":"plan-$i","stage":"review","stage_kind":"code","priority":"high","manager":"assistant","agents":[{"machine_id":"m1","session_id":"s-$i","title":"Worker $i","cwd":"/work/repo","agent":"codex"},{"machine_id":"m1","session_id":"s-$i-old","released_at":"2026-11-26T00:30:00Z"}],"spaces":[{"machine_id":"m1","space":"repo"}],"supervision":{"supervisor":"main","done_when":["tests green","privacy clean"],"expect_minutes":30,"state":"pending_review","round":2,"reviews":[{"at":"2026-11-26T00:50:00Z","verdict":"accepted","round":2,"checks":[{"criterion":"tests green","met":true,"evidence":"all pass"}]}]},"delivery":{"state":"pr","gate":"review","unblock":"user","at":"2026-11-26T00:55:00Z"},"check":{"verdict":"done","reason":"verified","at":"2026-11-26T00:56:00Z"},"ask":{"verdict":"needs_user","asked_at":"2026-11-26T00:57:00Z","question":"Merge now?","options":[{"label":"Yes","leads_to":"merge"},{"label":"Wait","leads_to":"hold"}]},"decision_review":{"review_at":"2026-11-26T00:50:00Z"},"pr_status":{"url":"https://example.com/pr/$i","state":"open","checks":"pass","checked_at":"2026-11-26T00:58:00Z"},"lineage":[{"todo_id":"prev-$i","title":"Prev $i","current":false},{"todo_id":"todo-$i","title":"任务 $i","current":true}],"brief":{"log":[$briefLog]},"view":$viewBlock}"""
                                 }
                                 index == TARGET_COUNT -> {
                                     index++
@@ -266,17 +266,91 @@ object TodosLowHeapStreamRunner {
                 .protocol(okhttp3.Protocol.HTTP_1_1)
                 .code(200)
                 .message("OK")
-                .body(streamingBody)
+                .body(richBody)
                 .build()
         })
 
         val todos = runBlocking { api.todos() }
+        check(todos.size == TARGET_COUNT) { "Expected $TARGET_COUNT todos, got ${todos.size}" }
+        val sample = todos.last()
+        check(todos.first().id == "todo-0" && sample.id == "todo-${TARGET_COUNT - 1}")
+        check(sample.agents.size == 2 && sample.spaces?.size == 1) { "Nested agents/spaces missing" }
+        check(sample.supervision?.reviews?.singleOrNull()?.checks?.singleOrNull()?.met == true) { "Nested supervision missing" }
+        check(sample.delivery?.state == "pr" && sample.check?.verdict == "done") { "Nested delivery/check missing" }
+        check(sample.ask?.options?.size == 2 && sample.prStatus?.checks == "pass") { "Nested ask/pr_status missing" }
+        check(sample.lineage?.size == 2) { "Nested lineage missing" }
+        check(wireBytes >= MIN_WIRE_BYTES) { "Wire bytes $wireBytes below $MIN_WIRE_BYTES" }
+
+        // Phase 2: One single Todo carrying a 25+ MiB unknown `brief.log` (~190,000 nested objects).
+        // Proves WireSerializer.deserialize skips unknown fields in the lexer rather than building a HashMap DOM.
+        var singleWireBytes = 0L
+        val singleEntries = 210_000
+        val singleBody = object : ResponseBody() {
+            override fun contentType() = "application/json".toMediaType()
+            override fun contentLength() = -1L
+            override fun source(): BufferedSource {
+                var emitted = -1
+                var pending = ByteArray(0)
+                var offset = 0
+                return object : Source {
+                    override fun timeout() = Timeout.NONE
+                    override fun close() = Unit
+                    override fun read(sink: Buffer, byteCount: Long): Long {
+                        if (offset >= pending.size) {
+                            val chunk = when {
+                                emitted == -1 -> {
+                                    emitted = 0
+                                    """{"todos":[{"id":"giant-unknown","title":"Single oversized brief","brief":{"log":["""
+                                }
+                                emitted < singleEntries -> {
+                                    val batchEnd = minOf(singleEntries, emitted + 64)
+                                    val sb = StringBuilder(9_000)
+                                    for (j in emitted until batchEnd) {
+                                        if (j > 0) sb.append(',')
+                                        sb.append(logEntry)
+                                    }
+                                    emitted = batchEnd
+                                    sb.toString()
+                                }
+                                emitted == singleEntries -> {
+                                    emitted++
+                                    """]},"notes":"preserved after giant brief"}],"has_more":false}"""
+                                }
+                                else -> return -1L
+                            }
+                            pending = chunk.toByteArray()
+                            offset = 0
+                        }
+                        val n = minOf(byteCount, (pending.size - offset).toLong()).toInt()
+                        sink.write(pending, offset, n)
+                        offset += n
+                        singleWireBytes += n
+                        return n.toLong()
+                    }
+                }.buffer()
+            }
+        }
+        val singleApi = HttpTasksApi({ path, method, _, options ->
+            check(!options.buffered) { "Expected buffered=false" }
+            Response.Builder()
+                .request(Request.Builder().url("https://example.com$path").method(method, null).build())
+                .protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body(singleBody)
+                .build()
+        })
+        val singleList = runBlocking { singleApi.todos() }
+        check(singleList.size == 1 && singleList.single().id == "giant-unknown" && singleList.single().notes == "preserved after giant brief")
+        check(singleWireBytes >= MIN_WIRE_BYTES) { "Single oversized wire bytes $singleWireBytes below $MIN_WIRE_BYTES" }
+
         val rt = Runtime.getRuntime()
         val usedMiB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
         val maxMiB = rt.maxMemory() / (1024 * 1024)
-        check(todos.size == TARGET_COUNT) { "Expected $TARGET_COUNT todos, got ${todos.size}" }
-        check(todos.first().id == "todo-0" && todos.last().id == "todo-${TARGET_COUNT - 1}")
-        check(wireBytes >= MIN_WIRE_BYTES) { "Wire bytes $wireBytes below $MIN_WIRE_BYTES" }
-        println("COUNT=${todos.size} WIRE_BYTES=$wireBytes WIRE_OK=${wireBytes >= MIN_WIRE_BYTES} USED_MIB=$usedMiB MAX_MIB=$maxMiB")
+        println(
+            "COUNT=${todos.size} WIRE_BYTES=$wireBytes WIRE_OK=${wireBytes >= MIN_WIRE_BYTES} " +
+                "SINGLE_WIRE_BYTES=$singleWireBytes SINGLE_OVERSIZED_OK=${singleWireBytes >= MIN_WIRE_BYTES} " +
+                "USED_MIB=$usedMiB MAX_MIB=$maxMiB",
+        )
     }
 }
