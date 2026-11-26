@@ -206,4 +206,3 @@ export function presetPrompt(preset: string | undefined, draft: string): string 
   if (draft.startsWith(p)) return draft;
   return `${p}\n\n${draft.trim()}`;
 }
-

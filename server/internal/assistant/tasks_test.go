@@ -619,26 +619,33 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 		early bool   // that send went before the acceptance
 		// reopens: the turn opens it again
 		reopens bool
+		owner   string // "view": the owner has the agent's page open; "message": they messaged it just now (#6819)
 	}{
-		{"judged done", []Todo{task(db.DoneByAuto, s1)}, "", false, true},
-		{"accepted, its plan started the agent", []Todo{planned}, "", false, false},
-		{"accepted, its plan started the agent, its conversation sent more", []Todo{planned}, "conv1", false, true},
-		{"accepted, its plan started the agent, sent before the acceptance", []Todo{planned}, "conv1", true, false},
-		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, "", false, false},
-		{"accepted, other work", []Todo{accepted}, "", false, false},
-		{"accepted, its conversation sent more", []Todo{accepted}, "conv1", false, true},
-		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, "conv1", false, true},
-		{"accepted, its supervisor sent more", []Todo{handedOn}, "conv2", false, true},
-		{"accepted, another conversation sent", []Todo{accepted}, "conv9", false, false},
-		{"accepted, sent before the acceptance", []Todo{accepted}, "conv1", true, false},
-		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, "", false, false},
-		{"legacy cancelled", []Todo{legacyCancelled}, "", false, false},
-		{"closed by the user", []Todo{task("", s1)}, "", false, false},
-		{"start failed", []Todo{failed}, "", false, false},
-		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, "", false, false},
-		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, "", false, false},
-		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, "", false, false},
-		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, "", false, false},
+		{"judged done", []Todo{task(db.DoneByAuto, s1)}, "", false, true, ""},
+		{"accepted, its plan started the agent", []Todo{planned}, "", false, false, ""},
+		{"accepted, its plan started the agent, its conversation sent more", []Todo{planned}, "conv1", false, true, ""},
+		{"accepted, its plan started the agent, sent before the acceptance", []Todo{planned}, "conv1", true, false, ""},
+		{"accepted, its plan started the agent, the owner chats on its page", []Todo{planned}, "", false, false, "view"},
+		{"accepted, its plan started the agent, the owner just messaged it", []Todo{planned}, "", false, false, "message"},
+		{"accepted, its plan started the agent, its conversation sent more while the owner looks", []Todo{planned}, "conv1", false, true, "view"},
+		{"accepted, its plan started the agent, its conversation sent more while the owner messages it", []Todo{planned}, "conv1", false, true, "message"},
+		{"accepted, the owner chats on its page", []Todo{accepted}, "", false, false, "view"},
+		{"judged done, the owner chats on its page", []Todo{task(db.DoneByAuto, s1)}, "", false, true, "view"},
+		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, "", false, false, ""},
+		{"accepted, other work", []Todo{accepted}, "", false, false, ""},
+		{"accepted, its conversation sent more", []Todo{accepted}, "conv1", false, true, ""},
+		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, "conv1", false, true, ""},
+		{"accepted, its supervisor sent more", []Todo{handedOn}, "conv2", false, true, ""},
+		{"accepted, another conversation sent", []Todo{accepted}, "conv9", false, false, ""},
+		{"accepted, sent before the acceptance", []Todo{accepted}, "conv1", true, false, ""},
+		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, "", false, false, ""},
+		{"legacy cancelled", []Todo{legacyCancelled}, "", false, false, ""},
+		{"closed by the user", []Todo{task("", s1)}, "", false, false, ""},
+		{"start failed", []Todo{failed}, "", false, false, ""},
+		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, "", false, false, ""},
+		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, "", false, false, ""},
+		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, "", false, false, ""},
+		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, "", false, false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -658,6 +665,12 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 			}
 			if c.from != "" && !c.early {
 				noted()
+			}
+			switch c.owner {
+			case "view":
+				setTaskViewer(t, s, "box", "s1", true)
+			case "message":
+				s.UserSpoke(ctx, SessionRef{MachineID: "box", SessionID: "s1"})
 			}
 			agentTurn(s, f, proto.StatusWorking, "", 0) // its turn starts before the send returns
 			if note != nil {
@@ -1155,6 +1168,25 @@ type startTogetherHub struct {
 	n, came  int
 	all      chan struct{} // closed when n came
 	lastPlan *TaskPlan
+	planSeen chan struct{} // closed again by each task_plan notification
+}
+
+func (h *startTogetherHub) lastTold() *TaskPlan {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lastPlan
+}
+
+func (h *startTogetherHub) planComplete(p *TaskPlan) bool {
+	if p == nil {
+		return false
+	}
+	for _, task := range p.Tasks {
+		if task.Error == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *startTogetherHub) Broadcast(ctx context.Context, b Broadcast) {
@@ -1165,7 +1197,12 @@ func (h *startTogetherHub) Broadcast(ctx context.Context, b Broadcast) {
 	if json.Unmarshal(b.Message, &ev) == nil && ev.Type == "task_plan" {
 		h.mu.Lock()
 		h.lastPlan = ev.Plan
+		seen := h.planSeen
+		h.planSeen = make(chan struct{})
 		h.mu.Unlock()
+		if seen != nil {
+			close(seen)
+		}
 	}
 	h.fakeHub.Broadcast(ctx, b)
 }
@@ -1229,14 +1266,25 @@ func TestPlanTasksFailingTogetherAllKeepTheirError(t *testing.T) {
 	}
 	waitFor(t, "every start's failure to be written", func() bool {
 		done, _ := st.done()
-		return done && s.tasks.planEdits.len() == 0
+		// A launch can have passed the read barrier and still be about to record its start error.
+		return done && s.tasks.planEdits.len() == 0 && s.taskStarting.Load() == 0
 	})
 	if _, timedOut := st.done(); timedOut {
 		t.Fatal("the plan's writers did not all come")
 	}
-	h.mu.Lock()
-	told := h.lastPlan
-	h.mu.Unlock()
+	// The last writer releases the plan lock only after its broadcast returns: wait for that final notification too.
+	var told *TaskPlan
+	for !h.planComplete(h.lastTold()) {
+		h.mu.Lock()
+		seen := h.planSeen
+		h.mu.Unlock()
+		select {
+		case <-seen:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the apps did not receive the complete failed plan: %+v", h.lastTold())
+		}
+	}
+	told = h.lastTold()
 	for what, p := range map[string]*TaskPlan{"stored": storedPlan(t, st), "told to the apps last": told} {
 		if p == nil || len(p.Tasks) != n {
 			t.Fatalf("%s plan: %+v", what, p)
