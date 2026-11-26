@@ -71,8 +71,8 @@ it("shows waiting work once, links its to-do, and prefills machine and workspace
     const todo = waiting.querySelector<HTMLAnchorElement>('a[href="/todos?id=todo-a"]')!;
     expect(waiting.textContent).toContain("Review changes");
     const management = host.querySelector('a[href="/machines/b/management"]')!;
-    expect(waiting.compareDocumentPosition(management) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(quiet().compareDocumentPosition(management) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(management.compareDocumentPosition(waiting) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(management.compareDocumentPosition(quiet()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(host.querySelectorAll('a[href="/s/b/session"]')).toHaveLength(1);
     await click(find(host, t("space-page.new_agent")));
     expect(preset).toHaveBeenLastCalledWith({ machineId: "b" });
