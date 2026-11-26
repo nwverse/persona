@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -515,6 +516,9 @@ func isSelfAuthoredInboxItem(it *InboxItem, owner string, ownEmails []string) bo
 	if matchesOwn(it.Sender) {
 		return true
 	}
+	if it.Lark != nil && matchesOwn(it.Lark.SenderID) {
+		return true
+	}
 	if it.Mail != nil {
 		if matchesOwn(it.Mail.From.Email) || matchesOwn(it.Mail.From.Name) {
 			return true
@@ -805,7 +809,7 @@ func (s *Service) forwardInboxToTodos(ctx context.Context) {
 		}
 	}
 	for _, it := range b.items {
-		if !it.open() || !inboxTaskLinkEligible(it) {
+		if it.VisibilityExcluded || !it.open() || it.externallyRouted() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if isSelfAuthoredInboxItem(it, owner, ownEmails) {
@@ -859,6 +863,17 @@ type todoForwardDelivery struct {
 }
 
 func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, snap InboxItem, m todoForwardMatch) {
+	b := &s.inbox
+	b.mu.Lock()
+	stillLegacy := b.items[snap.ID] == it && it.Last == snap.Last && !it.externallyRouted()
+	b.mu.Unlock()
+	if !stillLegacy {
+		return
+	}
+	allowed, visErr := s.inboxVisibilityModelAllowed(ctx, &snap)
+	if visErr != nil || !allowed {
+		return
+	}
 	claimed, pending, err := s.claimTodoForward(ctx, snap.ID, m.todo.ID, snap.Last)
 	if err != nil {
 		s.logf("inbox: todo forward ledger check for %s -> %s: %v", snap.ID, m.todo.ID, err)
@@ -871,6 +886,14 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	// Re-check that the to-do is still open right before delivery.
 	curTodo, ok := s.todoNow(m.todo.ID)
 	if !ok || !taskOpen(curTodo) {
+		_ = s.finishTodoForward(ctx, inboxTodoForwardRecord{InboxItemID: snap.ID, TodoID: m.todo.ID}, false)
+		return
+	}
+	won, err := s.claimLegacyExternalInbox(ctx, snap, curTodo.ID)
+	if !won || err != nil {
+		if err != nil {
+			s.logf("inbox: check external receipt before legacy forwarding: %v", err)
+		}
 		_ = s.finishTodoForward(ctx, inboxTodoForwardRecord{InboxItemID: snap.ID, TodoID: m.todo.ID}, false)
 		return
 	}
@@ -910,7 +933,6 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	}
 
 	// Persist forwarding metadata on the Inbox item without dropping it.
-	b := &s.inbox
 	var w *inboxWrite
 	recordAudit := res.commitLedger
 	b.mu.Lock()
@@ -957,6 +979,19 @@ func (s *Service) forwardOneInboxItemToTodo(ctx context.Context, it *InboxItem, 
 	// Append audit entry on the to-do for traceability.
 	if recordAudit {
 		s.recordTodoForwardAudit(ctx, &snap, curTodo, m.canonicalURL, res.status, res.machineID, res.sessionID, res.reason)
+	}
+	// If the task is in reviewNeedsUser and auto-forward delivered to the bound Agent (not already to the supervisor),
+	// also emit a non-destructive external-info wake so supervision can evaluate superseding the pending ask (#13112).
+	if res.commitLedger && res.status != TodoForwardFallback && needsUserWakeEligible(curTodo) {
+		source, summary := formatInboxExternalInfo(prompts.SuperviseInbox{
+			Item:    snap.ID,
+			Title:   clip(oneLine(snap.Title), 80),
+			Sender:  clip(oneLine(snap.Sender), 40),
+			Preview: clip(oneLine(snap.Preview), 140),
+			Count:   max(snap.Count, 1),
+			URL:     m.canonicalURL,
+		})
+		s.emitNeedsUserExternalInfo(ctx, curTodo, source, summary, "inbox_forward:"+snap.ID+"@"+snap.Last)
 	}
 }
 
@@ -1077,7 +1112,11 @@ func (s *Service) deliverInboxForwardToTodo(ctx context.Context, it *InboxItem, 
 			supervisorSelf = t.Origin
 		}
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
-		if err := s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil); err != nil {
+		err := eventMayResume(c)
+		if err == nil {
+			err = s.resumeAllowed(ctx, supervisorSelf, am, c, resumeWhy, nil)
+		}
+		if err != nil {
 			return s.fallbackInboxForwardToSupervisor(ctx, it, t, canonicalURL, envelope, clip(oneLine(err.Error()), 240))
 		}
 		params := map[string]any{
@@ -1188,6 +1227,9 @@ func (s *Service) retryUncertainInboxForward(ctx context.Context, t Todo, canoni
 			supervisorSelf = t.Origin
 		}
 		resumeWhy := fmt.Sprintf("auto-forwarded Inbox event for %s", canonicalURL)
+		if err := eventMayResume(*matched); err != nil {
+			return stayUncertain(err.Error())
+		}
 		if err := s.resumeAllowed(ctx, supervisorSelf, am, *matched, resumeWhy, nil); err != nil {
 			return stayUncertain(err.Error())
 		}

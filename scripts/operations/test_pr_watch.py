@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import importlib.util
+import io
 from datetime import datetime, timezone
 import json
 import os
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, redirect_stderr
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -477,6 +478,27 @@ class WatcherTests(unittest.TestCase):
                 patch.object(self.watcher, "enqueue") as enqueue:
             self.watcher.discover()
         enqueue.assert_called_once_with("example/one", 7, SHA_B, "poll")
+
+    def test_discovery_polls_open_prs_older_than_the_newest_two_hundred(self):
+        # gh lists the newest PRs first and stops at --limit (#14864).
+        listing = [{"number": 300 - index, "headRefOid": SHA_A, "isDraft": False,
+                    "baseRefName": "main", "mergeable": "MERGEABLE"} for index in range(250)]
+        def gh(argv, **kwargs):
+            return listing[:int(argv[argv.index("--limit") + 1])]
+        logs = []
+        with patch.object(pr_watch, "gh_json", side_effect=gh), \
+                patch.object(self.watcher, "enqueue") as enqueue, \
+                patch.object(self.watcher, "log", side_effect=logs.append):
+            self.watcher.discover()
+        self.assertEqual(sorted(call.args[1] for call in enqueue.call_args_list), list(range(51, 301)))
+        self.assertEqual(logs, [])
+        with patch.object(pr_watch, "DISCOVERY_LIMIT", 250), \
+                patch.object(pr_watch, "gh_json", side_effect=gh), \
+                patch.object(self.watcher, "enqueue"), \
+                patch.object(self.watcher, "log", side_effect=logs.append):
+            self.watcher.discover()
+        self.assertEqual(len(logs), 1)
+        self.assertIn("example/one: discovery reached its bound of 250 open PRs", logs[0])
 
     def test_same_head_backoff_and_terminal_records_skip_stale_activity(self):
         evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
@@ -1935,6 +1957,62 @@ class WatcherTests(unittest.TestCase):
             commands = pr_watch_verify.persona_checks(".", pr(title="test: update an argument-driven check"), 1, {})
         self.assertEqual(commands[0], ("CI scripts", ["bash", "scripts/ci/scripts.sh"]))
 
+    def test_invalid_base_sha_runs_no_git_or_privacy_command(self):
+        import pr_watch_test_guards
+        invalid = (
+            "c" * 39,
+            "c" * 41,
+            "C" * 40,
+            "g" * 40,
+            "--help",
+            "-" + "c" * 39,
+            "c" * 40 + "\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for base in invalid:
+                for repository_guards in (False, True):
+                    with self.subTest(base=base, repository_guards=repository_guards), \
+                            patch.object(pr_watch_test_guards, "checked") as checked, \
+                            patch.object(pr_watch_test_guards, "privacy_environment") as privacy, \
+                            patch.object(pr_watch_test_guards, "documentation_guard") as documentation:
+                        argv = ["--base=" + base, "--head", SHA_A, "--worktree", directory]
+                        if repository_guards:
+                            argv.append("--repository-guards")
+                        with self.assertRaisesRegex(pr_watch_common.WatchError, "base.*40 lowercase hexadecimal"):
+                            pr_watch_test_guards.main(argv)
+                        checked.assert_not_called()
+                        privacy.assert_not_called()
+                        documentation.assert_not_called()
+
+    def test_noncommit_or_missing_base_runs_only_the_object_validator(self):
+        import pr_watch_test_guards
+        for object_type in ("tree", "blob", "tag", "missing"):
+            with self.subTest(object_type=object_type), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(pr_watch_test_guards, "privacy_environment") as privacy, \
+                    patch.object(pr_watch_test_guards, "documentation_guard") as documentation:
+                def fake_checked(argv, **kwargs):
+                    self.assertEqual(["git", "cat-file", "-t", SHA_BASE], argv)
+                    if object_type == "missing":
+                        raise pr_watch_common.WatchError("missing object")
+                    return object_type + "\n"
+                with patch.object(pr_watch_test_guards, "checked", side_effect=fake_checked) as checked:
+                    with self.assertRaisesRegex(pr_watch_common.WatchError, "base.*commit"):
+                        pr_watch_test_guards.main([
+                            "--base", SHA_BASE, "--head", SHA_A, "--worktree", directory, "--repository-guards",
+                        ])
+                checked.assert_called_once()
+                privacy.assert_not_called()
+                documentation.assert_not_called()
+
+    def test_valid_base_commit_is_the_changed_guard_control(self):
+        import pr_watch_test_guards
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(pr_watch_test_guards, "checked", return_value="commit\n") as checked:
+            self.assertEqual(0, pr_watch_test_guards.main([
+                "--base", SHA_BASE, "--head", SHA_A, "--worktree", directory,
+            ]))
+        checked.assert_called_once_with(["git", "cat-file", "-t", SHA_BASE], cwd=Path(directory).resolve())
+
     def test_documentation_guards_use_base_not_stale_watcher_or_pr_source(self):
         import pr_watch_test_guards
         base_source = (
@@ -1979,6 +2057,9 @@ class WatcherTests(unittest.TestCase):
             shown = []
 
             def fake_checked(argv, **kwargs):
+                if argv[:3] == ["git", "cat-file", "-t"]:
+                    self.assertEqual(SHA_BASE, argv[3])
+                    return "commit\n"
                 if argv[:2] == ["git", "show"]:
                     if not argv[2].startswith(SHA_BASE + ":scripts/test/"):
                         raise AssertionError("guard source did not come from the exact base: " + argv[2])
@@ -2002,6 +2083,86 @@ class WatcherTests(unittest.TestCase):
             expected = {SHA_BASE + ":scripts/test/" + name
                         for name in relatives + ("doc_sections_known.txt",)}
             self.assertEqual(expected, set(shown))
+
+    def test_extension_repository_guards_use_its_own_base_doc_checks(self):
+        import pr_watch_test_guards
+        check_source = (
+            "import pathlib\n"
+            "import sys\n"
+            "ROOT = pathlib.Path(__file__).resolve().parent.parent\n"
+            "def check(root):\n"
+            "    return [] if (pathlib.Path(root) / 'docs-ok').is_file() else ['missing target']\n"
+            "def main():\n"
+            "    errors = check(ROOT)\n"
+            "    print('docs: %s' % ('failed' if errors else 'ok'))\n"
+            "    return bool(errors)\n"
+        )
+        test_source = (
+            "import importlib.util\n"
+            "import pathlib\n"
+            "import tempfile\n"
+            "import unittest\n"
+            "spec = importlib.util.spec_from_file_location('check_docs', pathlib.Path(__file__).with_name('check-docs.py'))\n"
+            "docs = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(docs)\n"
+            "class LinkTests(unittest.TestCase):\n"
+            "    def test_checker(self):\n"
+            "        with tempfile.TemporaryDirectory() as tmp:\n"
+            "            self.assertEqual(['missing target'], docs.check(tmp))\n"
+        )
+        stale_source = "raise SystemExit('PR or watcher documentation source ran')\n"
+        for docs_ok in (True, False):
+            with self.subTest(docs_ok=docs_ok), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                watcher, checkout = root / "watcher", root / "pr"
+                for base in (watcher, checkout):
+                    (base / "scripts").mkdir(parents=True)
+                    for name in ("check-docs.py", "test-docs.py"):
+                        (base / "scripts" / name).write_text(stale_source)
+                if docs_ok:
+                    (checkout / "docs-ok").write_text("")
+                shown = []
+
+                def fake_checked(argv, **kwargs):
+                    if argv[:3] == ["git", "cat-file", "-t"]:
+                        return "commit\n"
+                    if argv[:2] == ["git", "show"]:
+                        shown.append(argv[2])
+                        if argv[2] == SHA_BASE + ":scripts/check-docs.py":
+                            return check_source
+                        if argv[2] == SHA_BASE + ":scripts/test-docs.py":
+                            return test_source
+                        raise pr_watch_common.WatchError("fatal: path does not exist: " + argv[2])
+                    return ""
+
+                original_path = sys.path.copy()
+                argv = ["--base", SHA_BASE, "--head", SHA_A, "--worktree", str(checkout), "--repository-guards",
+                        "--repository", "nwverse/persona-extensions"]
+                with patch.dict(sys.modules), \
+                        patch.object(pr_watch_test_guards, "ROOT", watcher), \
+                        patch.object(pr_watch_test_guards, "privacy_environment", return_value={}), \
+                        patch.object(pr_watch_test_guards, "documentation_guard") as persona_guard, \
+                        patch.object(pr_watch_test_guards, "checked", side_effect=fake_checked):
+                    if docs_ok:
+                        self.assertEqual(0, pr_watch_test_guards.main(argv))
+                    else:
+                        with self.assertRaisesRegex(pr_watch_common.WatchError, "scripts/check-docs.py"):
+                            pr_watch_test_guards.main(argv)
+                persona_guard.assert_not_called()
+                self.assertEqual(original_path, sys.path)
+                self.assertEqual([SHA_BASE + ":scripts/check-docs.py", SHA_BASE + ":scripts/test-docs.py"], shown)
+
+    def test_extension_doc_unit_test_failure_blocks(self):
+        import pr_watch_test_guards
+        failing = "import unittest\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.fail('x')\n"
+        sources = {":scripts/check-docs.py": "def main():\n    return False\n", ":scripts/test-docs.py": failing}
+        # Keep the planted failure's report out of the suite log; only the raised guard error matters.
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules), \
+                redirect_stderr(io.StringIO()), \
+                patch.object(pr_watch_test_guards, "checked",
+                             side_effect=lambda argv, **kwargs: sources[argv[2][len(SHA_BASE):]]):
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "scripts/test-docs.py"):
+                pr_watch_test_guards.extension_documentation_guards(Path(directory), SHA_BASE)
 
     def test_documentation_guard_reads_pr_not_watcher_root(self):
         import pr_watch_test_guards
@@ -2841,8 +3002,10 @@ class WatcherTests(unittest.TestCase):
                                   "verify": {}, "merge": True, "privacy": None, "notify_command": None}]
         watcher = pr_watch.Watcher(config, verbose=False)
         with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+                patch.object(pr_watch, "require_local_gate") as local_gate, \
                 patch.object(pr_watch, "pr_snapshot", return_value=pr(state="MERGED")):
             watcher.merge(config["repositories"][0], pr())
+        local_gate.assert_called_once_with(repo, SHA_A, SHA_BASE)
         argv = run.call_args.args[0]
         self.assertEqual(argv[2:6], ["--expect-head", SHA_A, "--expect-base", SHA_BASE])
         self.assertEqual(argv[6], "7")

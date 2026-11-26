@@ -19,6 +19,11 @@ import (
 // everything that is no such hand-over (an unquoted message, an answer, a hand-over still queued and never tried, a
 // conversation that is no lead, the main conversation). Read-only tasks and kinds the owner trusts start as before.
 //
+// Decision rights (2026-11-23) took the Start card off a lead's own plans: words handed to the wrong lead start work in
+// the wrong place, which is reversible and the supervisor's to set right, none of the six kinds only the owner decides.
+// A lead's plan starts at once whatever the mark says (task_plan's orchestrates), and a scheduled round drops
+// user_requested before the hold is read: the mark is still kept, but no longer holds a plan back.
+//
 // What the hold keeps from #12953 on, so a lead starts and closes its own work without the owner or the main conversation
 // starting it (heldOutsideOwnKinds):
 //
@@ -134,13 +139,24 @@ func (s *Service) handoverKept(id string) bool {
 
 // heldOutsideOwnKinds takes user_requested off the tasks of a plan from held lead lead (handedOver) that neither carry
 // the owner's verified words of a hand-over delivered into it (handedWords) nor are of a kind a started plan of that lead
-// ran (trustKey, or trustFolderKey from before the repository was known): those wait for the owner's Start.
-func (s *Service) heldOutsideOwnKinds(ctx context.Context, lead string, tasks []PlanTask) {
+// ran (trustKey, or trustFolderKey from before the repository was known): those wait for the owner's Start. A continuation
+// keeps its inherited brief, but may instead carry the verified hand-over in the current conversation, as todo_id does.
+func (s *Service) heldOutsideOwnKinds(ctx context.Context, machine, lead string, tasks []PlanTask) {
 	var own map[string]bool
+	var current *briefRecord
 	for i := range tasks {
 		t := tasks[i]
 		if !t.UserRequested || t.Brief != nil && s.handedWords(lead, t.Brief.Request) {
 			continue
+		}
+		if t.Continues != "" {
+			if current == nil {
+				origin := s.briefOrigin(ctx, machine, lead)
+				current = &origin
+			}
+			if s.handedWords(lead, current.Request) {
+				continue
+			}
 		}
 		if own == nil {
 			own = map[string]bool{}

@@ -47,6 +47,8 @@ import persona.android.MainActivity
 import persona.android.data.Hub
 import persona.android.navigation.*
 import persona.core.contracts.*
+import persona.core.contracts.api.AssistantConversations
+import persona.core.contracts.api.AssistantManagerChoice
 import persona.core.contracts.api.ConnectionState
 import persona.core.contracts.api.MainConversationSender
 import persona.core.contracts.api.MessageSender
@@ -77,14 +79,14 @@ import persona.feature.assistant.proactive.AssistantProactiveScreen
 import persona.feature.chat.*
 import persona.feature.inbox.InboxItemPages
 import persona.feature.inbox.InboxItemExtensionScreen
-import persona.feature.inbox.InboxItemKey
+import persona.core.inbox.InboxItemKey
 import persona.feature.inbox.InboxRepository
 import persona.feature.inbox.LocalInboxItemPages
 import persona.feature.inbox.InboxLanding
 import persona.feature.inbox.LocalInboxLanding
 import persona.feature.inbox.LocalInboxListActive
 import persona.feature.inbox.ManagerLinks
-import persona.feature.inbox.InboxTriage
+import persona.core.inbox.InboxTriage
 import persona.feature.inbox.InboxTriageSetup
 import persona.feature.inbox.LocalInboxTriageSetup
 import persona.feature.inbox.inboxEntries
@@ -93,19 +95,19 @@ import persona.feature.inbox.needsYouCount
 import persona.feature.inbox.inboxUnreadCount
 import persona.feature.inbox.agentWorking
 import persona.feature.inbox.inboxSourcePage
-import persona.feature.knowledge.*
 import persona.feature.machines.LocalSidebarUsage
 import persona.feature.machines.SidebarUsageStrip
 import persona.feature.machines.machinesEntries
 import persona.feature.machines.rememberSidebarUsage
 import persona.feature.settings.*
 import persona.feature.terminal.terminalEntries
-import persona.feature.voice.voiceEntries
 import persona.platform.notify.Notify
 import persona.platform.phonetools.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -122,8 +124,17 @@ fun PersonaRoot(
     val features = persona.core.designsystem.LocalHubFeatures.current
     val api = services.extensions?.takeIf { active != null && active?.demo == null &&
         ("extension_manager" in features || "plugin_manager" in features) }
+    val spaceConversations = remember(services.extensionSlots) {
+        services.extensionSlots?.state?.map { slots -> slots.places.any { it.extension == "space-conversations" && it.id == "home" } }?.distinctUntilChanged()?.stateIn(
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate),
+            started = kotlinx.coroutines.flow.SharingStarted.Eagerly,
+            initialValue = services.extensionSlots?.state?.value?.places?.any { it.extension == "space-conversations" && it.id == "home" } == true,
+        )
+    }
+    CompositionLocalProvider(persona.feature.assistant.LocalSpaceConversationsEnabled provides spaceConversations) {
     persona.feature.settings.ExtensionDeclarationsHost(api, active?.identity.orEmpty()) {
         PersonaRootContent(hub, openNavigation, services, shell, onPaired)
+    }
     }
 }
 
@@ -170,14 +181,21 @@ private fun PersonaRootContent(
                         onDiagnostics = { diagnostics = true }, diagnostics = services.diagnostics,
                         onCredentialsSaved = { MainActivity.pendingPairLink.value = null }, machines = services.machines,
                         attempts = services.pairingAttempts, mainReadiness = services.readiness,
-                        footer = {
-                            if (hub == null) JTextButton(stringResource(R.string.app_try_demo), onClick = { scope.launch {
-                                try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
-                                catch (error: Exception) {
-                                    android.util.Log.w("PersonaShell", "Unable to start demo", error)
-                                    shell.feedback.failure(error)
+                        footer = { welcome ->
+                            if (hub == null) {
+                                val startDemo: () -> Unit = {
+                                    scope.launch {
+                                        try { shell.enterDemo(); MainActivity.pendingPairLink.value = null }
+                                        catch (error: Exception) {
+                                            android.util.Log.w("PersonaShell", "Unable to start demo", error)
+                                            shell.feedback.failure(error)
+                                        }
+                                    }
                                 }
-                            } })
+                                val title = stringResource(R.string.app_try_demo)
+                                if (welcome) PairingShortcut(title, PersonaIcons.playMedia, startDemo)
+                                else JTextButton(title, onClick = startDemo)
+                            }
                         })
                     if (diagnostics) {
                         val close = { diagnostics = false }
@@ -206,19 +224,23 @@ private fun PersonaRootContent(
                             persona.core.designsystem.LocalPersonaName provides if (demo) "Persona" else persona.core.designsystem.LocalPersonaName.current,
                             // The demo serves its own Feishu chats, whatever the paired hub has.
                             persona.core.designsystem.LocalLarkFeatures provides if (demo) persona.core.contracts.LarkFeatures.All else persona.core.designsystem.LocalLarkFeatures.current,
+                            // The demo's mail is its own too, whatever modules the paired hub has on.
+                            persona.core.designsystem.LocalMailAccess provides if (demo) persona.core.designsystem.MailAccess.Live else persona.core.designsystem.LocalMailAccess.current,
                             // The demo's mail and chats are made up: nothing to send to a hub for translating.
                             persona.feature.inbox.LocalTranslator provides if (demo) null else persona.feature.inbox.LocalTranslator.current,
                             // A reply's ```persona-view / ```persona-card drawn with the extensions' components (#1851).
                             persona.core.designsystem.LocalViewBlocks provides persona.feature.settings.PersonaViewBlocks.blocks,
                         ) {
                             SavedPromptsHost(displayed.savedPromptsConnection) {
-                                PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), remember(shell) { AppShellHost(shell) })
+                                StarredMessagesHost(displayed.savedPromptsConnection) {
+                                    PersonaShell(displayed, openNavigation, services.copy(connection = displayed.connection, sessions = displayed.sessions, demo = displayed.demo != null), remember(shell) { AppShellHost(shell) })
+                                }
                             }
                         }
                     }
                     active.phone?.let { PhoneConfirmationHost(it.confirmations) }
                 }
-                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = Tokens.Space.m))
+                persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
             }
         }
     }
@@ -267,9 +289,10 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     }
     var selected by rememberSaveable { mutableStateOf(initialRoute?.tab ?: if (session.demo != null) AppTab.Persona else saved.tab) }
     var machine by rememberSaveable { mutableStateOf(saved.machine) }
-    val assistantStack = rememberNavBackStack(AssistantRoute,
-        *listOfNotNull(saved.chats[AppTab.Persona]?.takeIf { !embeddedAssistant }).toTypedArray())
-    val agentsStack = rememberNavBackStack(AgentsRoute, *listOfNotNull(saved.chats[AppTab.Agents]).toTypedArray())
+    // Restorable: a saved route whose class this build lacks (a module left out) is dropped, not a crash (#13433).
+    val assistantStack = rememberRestorableNavBackStack(AssistantRoute,
+        *listOfNotNull(saved.chats[AppTab.Persona]?.takeIf { !embeddedAssistant }).toTypedArray(), onDropped = ::droppedRoute)
+    val agentsStack = rememberRestorableNavBackStack(AgentsRoute, *listOfNotNull(saved.chats[AppTab.Agents]).toTypedArray(), onDropped = ::droppedRoute)
     // Each regular-width root keeps its own stack. Persona points at whichever one is in front.
     val hosts = remember { SidebarRootHosts(assistantStack) }
     val stacks = remember {
@@ -301,7 +324,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         sidebar.opened.value = false
         sidebarOverlayShown.value = false
     }
-    val settingsSheetStack = rememberNavBackStack(SettingsRoute)
+    val settingsSheetStack = rememberRestorableNavBackStack(SettingsRoute, onDropped = ::droppedRoute)
     persona.android.navigation.TrackDevScreen(selected, stacks.getValue(selected).lastOrNull(), settingsOpened, settingsSheetStack.lastOrNull())
     // Where each stack's Inbox list goes when an item is opened from outside it (#9053): one per stack, so a list kept
     // composed in a hidden tab never takes another stack's landing.
@@ -316,6 +339,13 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         inboxLandings.getValue(AppTab.Persona).clear()
         selected = AppTab.Persona
     }
+    /** Opens the new-chat page of [manager], keeping that manager's starter draft. */
+    fun showAssistantComposer(manager: String) {
+        val choice = AssistantManagerChoice.current.value
+        if (choice.shown != manager) AssistantManagerChoice.choose(choice.hubId, manager, choice.defaultId)
+        showAssistantHome()
+        persona.feature.assistant.AssistantComposerFocus.request()
+    }
     /** Point Persona's navigator at the host now in front. */
     fun showHost(root: NavKey, next: List<NavKey>) {
         hosts.activate(root, next)
@@ -324,6 +354,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     fun sidebarDestination(key: NavKey) {
         dismissSidebar()
         window.clearPending()
+        val wasOnPersona = selected == AppTab.Persona
         selected = AppTab.Persona
         // Regular: SidebarPageRoots.select, then the Inbox enters or lands (inboxPicked,
         // AssistantView.swift:633–640). Compact: the drawer keeps a host, and an Inbox item on it
@@ -333,6 +364,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
             { stacks[AppTab.Persona] = it },
             inboxLandings.getValue(AppTab.Persona),
             session.inbox.snapshot.value.records,
+            alreadyInFront = wasOnPersona,
         )
     }
     /**
@@ -375,6 +407,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // With several hub groups paired the Persona menu's heading ends with the selected group's name, as on iOS.
     val hubGroups by session.groups.groups.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
+    LaunchedEffect(session.preferences) {
+        session.preferences.watchDisplaySettings(kotlinx.coroutines.flow.flowOf(0))
+    }
     val todos by (session.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
     val todosSupported by (session.tasks?.todosSupported ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.
@@ -417,7 +452,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         currentKind(SessionKey(route.machineId, route.sessionId))?.let { if (it == ConversationKind.Assistant) AppTab.Persona else AppTab.Agents }
     }, openAssistant = { chat, select -> openAssistant(chat, select) }, inboxReturns = saved.inboxReturns,
         openPlace = { openPlace(it) }, leavePlaceRoot = { leavePlaceRoot() },
-        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() }) }
+        onInboxEntered = { tab -> inboxLandings.getValue(tab).enter() },
+        keepPersonaAgents = { currentMerged.value }) }
     fun openResolved(route: ResolvedRoute): AppTab {
         // The restored ledger can hold the source even when the visible key does not. Check it before this direct open
         // updates the ledger: a sourced assistant stays a secondary page instead of replacing the embedded home.
@@ -699,10 +735,35 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val shellNeedsYou = remember(agentRows, sessions, needsMessages) {
         persona.feature.assistant.needsYouBySession(agentRows, sessions, needsMessages)
     }
-    // Voice chat is offered while the hub runs a voice extension: asked each time the Persona tab shows while connected.
-    val voiceExtension = persona.feature.voice.rememberVoiceExtension(session.voice,
-        active = selected == AppTab.Persona && connection == ConnectionState.Online)
+    // The modules on for this hub (Modules.kt): carried by the build, and offered by the hub when they need a feature.
+    val hubFeatures by session.features.collectAsStateWithLifecycle()
+    val modules = remember(hubFeatures) { persona.android.Modules.carried.active(hubFeatures) }
+    // The modules' items in the assistant's title menu, asked each time the Persona tab shows while connected.
+    val moduleUi = { id: String -> persona.core.moduleapi.ModuleUiContext(navigator, session.modules[id],
+        active = selected == AppTab.Persona && connection == ConnectionState.Online) }
+    val assistantModuleActions = modules.flatMap { module ->
+        key(module.id) { module.menuActions(persona.core.moduleapi.MenuSlot.AssistantTitle, moduleUi(module.id)) }
+    }
     // Links over the whole shell, persona:// links from conversations, "Hand to Persona" from pages (ShellLinks.kt).
+    // The modules' actions in the composer's, a conversation's and a message's menus, and their Settings pages (#13847).
+    val moduleActions = remember(modules, navigator, session.modules, connection) {
+        object : persona.core.moduleapi.ModuleActions {
+            @Composable
+            override fun actions(slot: persona.core.moduleapi.MenuSlot, target: persona.core.moduleapi.ModuleActionTarget) =
+                modules.flatMap { module ->
+                    key(module.id) {
+                        module.menuActions(slot, persona.core.moduleapi.ModuleUiContext(navigator, session.modules[module.id],
+                            active = connection == ConnectionState.Online, target = target))
+                    }
+                }
+        }
+    }
+    val appContext = LocalContext.current.applicationContext
+    val moduleSettingsPages = remember(hubFeatures) { persona.android.Modules.carried.settingsPages(hubFeatures) }
+    val modulePlaces = remember(modules) { modules.flatMap { it.places }.toSet() }
+    CompositionLocalProvider(persona.core.moduleapi.LocalModuleActions provides moduleActions,
+        persona.core.moduleapi.LocalModuleSettingsPages provides moduleSettingsPages,
+        persona.core.moduleapi.LocalModulePlaces provides modulePlaces) {
     ShellLinkHost(session, navigator, shell.feedback) {
         val uriHandler = LocalUriHandler.current
         // Each page shows the connection state in its own title, so the shell adds no banner above it.
@@ -718,6 +779,17 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         val demoBadge = if (session.demo != null) stringResource(R.string.app_demo_badge) else null
         val items = navigationItems(badges)
         val extensionPages = slotsState?.navPages.orEmpty()
+        val starredState = persona.feature.chat.LocalStarredMessagesStore.current?.state?.collectAsStateWithLifecycle()?.value
+        val starredPages = starredState?.count?.let { count ->
+            listOf(
+                NavItem(
+                    "starred",
+                    stringResource(persona.feature.assistant.R.string.assistant_starred_title),
+                    PersonaIcons.pluginStar,
+                    badge = count,
+                ),
+            )
+        }.orEmpty()
         val messagePages = if (showLarkMessages) listOf(
             NavItem(
                 "messages",
@@ -725,7 +797,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 PersonaIcons.messagesApp,
             ),
         ) else emptyList()
-        val sidebarPages = messagePages + listOfNotNull(
+        val sidebarPages = starredPages + messagePages + listOfNotNull(
             NavItem("machines", stringResource(R.string.app_machines), PhIcons.Desktop).takeIf { !merged || session.metrics != null },
         ) +
             extensionPages.map { page ->
@@ -884,18 +956,58 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                     AssistantSidebarContent(assistant, session.assistant, sidebar.active, sidebarOperations, session.demo != null,
                         onOpen = { key ->
                             dismissSidebar()
-                            selected = openResolved(ResolvedRoute(AppTab.Persona, ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)))
+                            val route = ChatRoute(key.machineId, key.sessionId, ConversationKind.Assistant)
+                            if (!embeddedAssistant) {
+                                selected = openResolved(ResolvedRoute(AppTab.Persona, route))
+                            } else {
+                                val wasOnPersona = selected == AppTab.Persona
+                                val sameConversation = sidebar.active == key && !sidebar.healthInFront && sidebar.spaceInFront == null
+                                navigator.noteDirectOpen(route)
+                                window.clearPending()
+                                val kept = selectSidebarConversation(
+                                    useRootHost = window.regular || currentMerged.value,
+                                    alreadyOnPersona = wasOnPersona,
+                                    sameConversation = sameConversation,
+                                    pageRoots = pageRoots,
+                                    hosts = hosts,
+                                    assistantStack = assistantStack,
+                                    showHost = ::showHost,
+                                    assignPersona = { stacks[AppTab.Persona] = it },
+                                )
+                                selected = AppTab.Persona
+                                if (!kept) assistantPending = key
+                            }
                         },
                         onAction = { action ->
                             dismissSidebar()
+                            val wasOnPersona = selected == AppTab.Persona
                             if (window.regular || merged) {
-                                // Assistant actions use its embedded conversation host. A Merged Scheduled Tasks pick
-                                // uses the same screen on a place host.
-                                val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
-                                showHost(step.root, step.stack)
-                                selected = AppTab.Persona
-                            } else showAssistantHome()
-                            sidebar.action = action
+                                if (action == persona.feature.assistant.AssistantSidebarAction.MainConversation) {
+                                    val sameConversation = sidebar.active == null && !sidebar.healthInFront && sidebar.spaceInFront == null
+                                    val kept = selectSidebarConversation(
+                                        useRootHost = true,
+                                        alreadyOnPersona = wasOnPersona,
+                                        sameConversation = sameConversation,
+                                        pageRoots = pageRoots,
+                                        hosts = hosts,
+                                        assistantStack = assistantStack,
+                                        showHost = ::showHost,
+                                        assignPersona = { stacks[AppTab.Persona] = it },
+                                    )
+                                    selected = AppTab.Persona
+                                    if (!kept) sidebar.action = action
+                                } else {
+                                    // Assistant actions use its embedded conversation host. A Merged Scheduled Tasks pick
+                                    // uses the same screen on a place host.
+                                    val step = pageRoots.select(AssistantRoute, hosts.current.drop(1), contentChanged = true)
+                                    showHost(step.root, step.stack)
+                                    selected = AppTab.Persona
+                                    sidebar.action = action
+                                }
+                            } else {
+                                showAssistantHome()
+                                sidebar.action = action
+                            }
                         },
                         onSettings = {
                             dismissSidebar()
@@ -910,6 +1022,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         pages = sidebarPages,
                         onPage = { key ->
                             when {
+                                key == "starred" -> sidebarDestination(persona.core.navigation.StarredMessagesRoute)
                                 key == "messages" && showLarkMessages -> sidebarDestination(LarkMessagesRoute)
                                 key == "machines" -> sidebarDestination(MachinesRoute)
                                 else -> extensionPages.firstOrNull { extensionRailKey(it.extension, it.id) == key }?.let { page ->
@@ -936,13 +1049,16 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                     settingsSheetStack.add(SettingsRoute)
                                     settingsSheetStack.add(SettingsPageRoute(SettingsPage.Managers))
                                     settingsOpened = true
-                                }, headModifier = head, trailing = trailing, fallback = fallback)
+                                }, headModifier = head, hubs = session.groups.takeUnless { services.demo },
+                                trailing = trailing, fallback = fallback)
                         },
                         // Regular window: Search opens over the whole window as the open iPhone Duo (#9171).
                         fullWindowSearch = regular || merged,
                         shadedPlace = if (merged) {
                             val root = if (agentDrill) personaRoot else visibleRoot
-                            if (root == AssistantRoute && sidebar.healthInFront) AssistantSidebarShade.Health else sidebarShadeKey(root)
+                            if (root == AssistantRoute && sidebar.healthInFront) AssistantSidebarShade.Health
+                            else if (root == AssistantRoute && sidebar.spaceInFront != null) sidebar.spaceInFront!!.let(AssistantSidebarShade::space)
+                            else sidebarShadeKey(root)
                         } else visibleSidebarShade(
                             regular = regular,
                             selected = selected,
@@ -1082,7 +1198,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
         // A chat's terminal cover reads its machine's own hub group, as the terminal page does (`routed`).
         fun chatTerminal(route: ChatRoute) = session.terminal?.let { shell.groupTerminal(SessionKey(route.machineId, route.sessionId)) ?: it }
         val askSubscriptions = rememberSubscriptionAsk(session.sender, shell.feedback)
-        val provider = entryProvider<NavKey> {
+        val composeExtensions = rememberExtensionCompose(session.assistant, shell.feedback, ::showAssistantComposer)
+        val provider = entryProvider<NavKey>(fallback = { key -> shellFallbackEntry(key, navigator) }) {
             assistantEntries(navigator) {
                 // Persona's conversation offers the next card an Agent waits on you with, as an Agent's chat does (#4339 C18).
                 val waiting = rememberWaitingRequests(session, sessions)
@@ -1096,7 +1213,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                         requestedSession = assistantRequest, onKnowledge = { sidebarDestination(KnowledgeRoute) },
                         needsYou = needsYou, shellNeedsYou = shellNeedsYou, onOpenNeed = { line -> openWithCard(needsYouRoute(line), fromPage = true) },
                         onOpenInbox = { sidebarDestination(InboxRoute) },
-                        onVoice = voiceExtension?.let { extension -> { navigator.navigate(VoiceRoute(extension.id, extension.name)) } },
+                        moduleActions = assistantModuleActions,
                         onTodos = { sidebarDestination(TodosRoute) },
                         todoCount = uncompletedTodosCount,
                         showTodos = todosSupported, mentionSessions = session.sessions.sessions,
@@ -1161,15 +1278,26 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                 entry<persona.core.navigation.AddComputerRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
                 entry<MachineDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_machines), navigator) }
             }
-            session.knowledge?.let { knowledgeEntries(navigator, it, session.assistant, session.sender, session.sessions,
-                session.knowledgeNamespace, uriHandler::openUri,
-                onNewAgent = { start -> navigator.navigate(NewAgentRoute(start.machineId, start.cwd, start.prompt)) }) } ?: run {
-                entry<KnowledgeRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
-                entry<KnowledgeKindRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
-                entry<KnowledgeDetailRoute> { UnavailablePage(stringResource(R.string.app_demo_no_knowledge), navigator) }
+            settingsDetailEntries(navigator, services, askSubscriptions, composeExtensions)
+            // Each module's pages (Modules.kt); in demo mode a module has no services and says why its pages cannot work.
+            // What a module's pages use of the core (the knowledge base, the assistant, sending, sessions); none in demo mode.
+            val moduleShell = session.knowledge?.let { knowledge ->
+                object : persona.core.moduleapi.ModuleShell {
+                    override val knowledge = knowledge
+                    override val knowledgeNamespace = session.knowledgeNamespace
+                    override val assistant = session.assistant
+                    override val sender = session.sender
+                    override val sessions = session.sessions
+                    override fun openLink(url: String) = uriHandler.openUri(url)
+                    override fun mainConversationSender() = dagger.hilt.android.EntryPointAccessors.fromApplication(
+                        appContext, persona.feature.assistant.AssistantEntryPoint::class.java).mainConversationSender()
+                }
             }
-            settingsDetailEntries(navigator, services, askSubscriptions)
-            session.voice?.let { voiceEntries(navigator, it, session.identity, onModelConfiguration = { purpose -> navigator.navigate(ModelPurposeRoute(purpose)) }) } ?: run { entry<VoiceRoute> { UnavailablePage(stringResource(R.string.app_demo_no_voice), navigator) } }
+            moduleEntries(modules) { module ->
+                persona.core.moduleapi.ModuleNavContext(navigator, session.modules[module.id],
+                    unavailable = { message -> UnavailablePage(message, navigator) }, audioFocus = shell.audioFocus.forModule(module),
+                    shell = moduleShell)
+            }
             tools?.run { register(navigator) }
         }
         val panes: (NavKey, Boolean) -> NavEntry<NavKey> = { key, singleRightStack ->
@@ -1344,7 +1472,8 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                                 merged = merged,
                                             ) { _, hostStack, hostShown ->
                                                 val hostPolicy = assistantPanePolicy(tab, hostStack, currentRegular.value, widePhone)
-                                                val hostDirective = if (hostPolicy.singleRightStack) directive.onePane() else directive
+                                                val singleRightStack = hostPolicy.singleRightStack || (currentRegular.value && merged)
+                                                val hostDirective = if (singleRightStack) directive.onePane() else directive
                                                 val hostDetail = detailOf(hostStack)
                                                 val hostList = rememberShellListDetail(
                                                     tab, hostDirective, paneMaxWidth, paneHinges, detailOpen = hostDetail != null,
@@ -1389,7 +1518,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                                                             else hostTransitions.pop
                                                         },
                                                         predictivePopTransitionSpec = { hostTransitions.predictivePop },
-                                                        entryProvider = { key -> panes(key, hostPolicy.singleRightStack) },
+                                                        entryProvider = { key -> panes(key, singleRightStack) },
                                                     )
                                                 }
                                             }
@@ -1436,7 +1565,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
                       entry<PhoneToolsRoute> { session.phone?.let { PhoneToolsScreen(it, settingsNavigator) }
                           ?: UnavailablePage(stringResource(R.string.app_unavailable_phone_tools), settingsNavigator) }
                       assistantEntries(settingsNavigator)
-                      settingsDetailEntries(settingsNavigator, services, askSubscriptions)
+                      settingsDetailEntries(settingsNavigator, services, askSubscriptions, composeExtensions)
                   }
                   // In a regular window the list of settings stays beside the page it opens, as on an open iPhone Duo
                   // (its divider is not kept: the sheet starts from the usual split each time). Elsewhere one page.
@@ -1447,6 +1576,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
               }
           }
         }
+    }
     }
 }
 
@@ -1646,6 +1776,43 @@ private fun rememberSubscriptionAsk(sender: MessageSender, feedback: AppFeedback
     }
 }
 
+/**
+ * An extension page's compose link: its quick prompt goes to its owner's main conversation draft, or to that owner's
+ * new-chat draft when it has no main conversation. Never creates a conversation and never sends.
+ */
+@Composable
+private fun rememberExtensionCompose(
+    conversations: AssistantConversations,
+    feedback: AppFeedback,
+    showNewConversation: (String) -> Unit,
+): (Navigator, String, String?) -> Unit {
+    val scope = rememberCoroutineScope()
+    val failed = stringResource(persona.feature.chat.R.string.chat_handoff_failed)
+    return remember(conversations, scope, feedback, failed, showNewConversation) {
+        { nav, text, manager ->
+            scope.launch {
+                try {
+                    val handoff = prepareExtensionCompose(conversations, text, manager,
+                        AssistantManagerChoice.current.value.defaultId.ifBlank {
+                            persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER
+                        })
+                    val main = handoff.main
+                    if (main == null) {
+                        nav.selectTab(AppTab.Persona)
+                        showNewConversation(handoff.manager)
+                    } else {
+                        nav.navigate(ChatRoute(main.machineId, main.sessionId, ConversationKind.Assistant))
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (feedback.failure(error) != true) feedback.notice(failed)
+                }
+            }
+        }
+    }
+}
+
 /** Debug builds add one row under the settings page; release builds and automated captures show nothing. */
 @Composable
 private fun SettingsWithTools(tools: DeveloperTools?, navigator: Navigator, content: @Composable () -> Unit) {
@@ -1655,6 +1822,27 @@ private fun SettingsWithTools(tools: DeveloperTools?, navigator: Navigator, cont
         HorizontalDivider()
         TextButton(onClick = { navigator.navigate(tools.home) }, Modifier.fillMaxWidth()) { Text(tools.homeTitle, maxLines = 1) }
     }
+}
+
+/** The pages of the active [modules] (Modules.kt), each with its [context]. */
+internal fun androidx.navigation3.runtime.EntryProviderScope<NavKey>.moduleEntries(
+    modules: List<persona.core.moduleapi.PersonaModule>,
+    context: (persona.core.moduleapi.PersonaModule) -> persona.core.moduleapi.ModuleNavContext,
+) = modules.forEach { it.navEntries(this, context(it)) }
+
+/** A saved route this build could not restore (rememberRestorableNavBackStack): said in the log, then left out. */
+internal fun droppedRoute(className: String) {
+    android.util.Log.w("PersonaShell", "Dropped a saved route this build lacks: $className")
+}
+
+/**
+ * The page for a route no entry is registered for: a module that the hub stopped offering while its page was open (its
+ * feature left the hello), or one this build does not carry. Says so and offers a way back instead of crashing, and logs
+ * loudly, since a core route reaching it is a bug (#13433).
+ */
+internal fun shellFallbackEntry(key: NavKey, navigator: Navigator, log: (String) -> Unit = { android.util.Log.e("PersonaShell", it) }): NavEntry<NavKey> {
+    log("No page registered for ${key::class.java.name}; showing the unavailable page")
+    return NavEntry(key) { UnavailablePage(stringResource(R.string.app_page_unavailable), navigator) }
 }
 
 @Composable

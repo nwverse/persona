@@ -7,7 +7,7 @@ Each computer's OS, current load and curves for the past 24 hours. The node coll
 | Collection (parsing /proc, vm_stat, iostat, sw_vers, Win32 responses, etc.) | `server/internal/sysmon/` (`sysmon.go`, `winparse.go` pure parsing; `linux.go` / `darwin.go` / `windows.go` read the OS) |
 | Node sending | `server/internal/node/metrics.go` |
 | Manager storage, downsampling, cleanup, API (hub forwards `devicewire.MetricsRoutes`) | `server/internal/devices/metrics.go`, `server/internal/db/metrics.go`, migration `0051_machine_metrics.sql` |
-| Token usage: node metering, manager storage, API (see "Token usage" below) | `server/internal/tokenuse/`, `server/internal/node/usage.go`, `server/internal/node/usage_adapters.go`, `server/internal/devices/usage.go`, `server/internal/db/usage.go`, migration `manager/0421_machine_usage.sql` |
+| Token usage: node metering, manager storage, API (see "Token usage" below) | `server/internal/tokenuse/`, `server/internal/node/usage.go`, `server/internal/node/usage_adapters.go`, `server/internal/devices/usage.go`, `server/internal/devices/usage_projects.go`, `server/internal/db/usage.go`, migration `manager/0421_machine_usage.sql` |
 | App | `apple/Persona/Views/Machines/` (`MachinesView`, `MachineDetailView`, `MetricCharts`, `OSBadge`), model `apple/Packages/PersonaWire/Sources/PersonaWire/MachineMetrics.swift` |
 | Inspect local samples / overhead | `personad sysmon [n]`: prints system info and n+1 samples (one every 10 seconds, n ≤ 8640, one day); final line gives actual sample count, collection duration and personad CPU (Ctrl-C stops immediately) |
 
@@ -121,7 +121,7 @@ Computers belong to the manager, and so does everything they send: the hub's exi
 | Interactions: waiting for `interaction.create`, resumable cards (retain for 3 minutes after node disconnect for hook reclaim; recover from `interactions` after manager restart, without another push on reclaim), expiry, always allow for session, screen cards (read, keypress, recheck), Codex cards, plans answered in terminal, history table, assistant questions/cards, questions from hub-owned features (`fleet.ask`: sending mail, Cua apps, persona_settings) | `fleet_ix.go`, `fleet_ix_screen.go`, `fleet_ix_codex.go`, `fleet_ix_terminal.go`, `fleet_ix_own.go` |
 | Session lists: unified state, background tasks, model errors, seen (`session_seen`), state start time, to-do / quiet / work state / channel markers / assistant-chat titles | `fleet.go`, `fleet_sessions.go`, `fleet_seen.go`, `fleet_work.go`, `fleet_text.go` |
 | Push decisions: waiting and filtering for done notifications (seen, muted, answered through a channel, Inbox twin, notify_user already pushed, no duplicate push for one Stop), card notifications | `fleet_push.go` |
-| Live Activity content (FleetState) and Dynamic Island counts | `fleet_live.go` |
+| Live Activity content (FleetState) and Dynamic Island counts | `fleet_live.go`; which agents and cards need the owner: `server/internal/assistant/fleetcount`, their rows: `server/internal/assistant/fleetcount/fleetcountadapt/render.go` |
 | Node MCP tools (`mcp.tools` / `mcp.call` dispatch) and `assistant.lark` | `fleet_tools.go` |
 | `lark.sent`: a write the node's gate proxy forwarded, kept in the sent-as-user ledger | `fleet_events.go` (`NodeRequest`), `extmgr/sent_ledger.go` |
 | Channel-followed chats (`session.follow`: node sends items and generating text to manager, delivered to channels with turn starts/ends in node order) | `fleet_follow.go`, `devices.Follow` |
@@ -181,6 +181,26 @@ Each process prints one line every 10 seconds, much cheaper than starting `vm_st
 
 Windows starts no processes: also `CGO_ENABLED=0`, but these Win32 calls work in pure Go (`golang.org/x/sys/windows`; `GetSystemTimes` and `GlobalMemoryStatusEx` directly through kernel32).
 
+### What load counts
+
+Load is the kernel's 1-minute load average: the number of threads running or waiting for a CPU, averaged over a minute. Linux also counts
+threads in uninterruptible sleep (usually waiting for the disk); macOS counts only runnable threads. It is not a percentage and is not divided
+by the cores, so it is read **per core** (load ÷ core count): at 1 per core every core has a thread, above 1 some threads wait.
+
+- **One figure everywhere** (#12519): the apps and the web show load per core with one decimal and the same words in each language,
+  "1.4 per core" (`MetricFormat.loadPerCore` and `MetricFormat.perCore`; web `perCoreText`, `perCoreLabel`). The card's line
+  under CPU says "Load 1.4 per core" (the raw value only while the core count is unknown); the machine page's Load tile keeps the raw value
+  ("25.4") with the per-core figure under it, and its chart keeps the raw value with a dashed line at the core count. The alert, the Live
+  Activity and the widgets go by the same per-core figure ("Alerts" below; `docs/apple/live-activity.md`, "Usage (tokens / TPM / load)").
+- **Said on the screen**: one sentence under the Machines cards, under a machine's charts (iOS and web) and in the web's load alert sheet
+  (`MachineCard.loadDefinition`, web `lib-machine-alerts.load_definition`): "Load is the number of threads running or waiting for a CPU,
+  averaged over a minute (Linux also counts threads waiting for the disk). It isn't a percentage: above 1 per core, some threads are waiting.
+  On a Mac, work at background priority may run on only some of the cores, so threads can wait while CPU stays low."
+- **Why load can be high while CPU is not**: CPU is the whole machine's busy share over the last 10 seconds, load counts waiting threads. On
+  a Mac a process tree started under a launchd job with `ProcessType=Background` runs at background priority and can be kept to one cluster
+  of cores, so its threads queue there while the other cores idle and the CPU average stays moderate (the node's own check for its plist is
+  `launchd-process-type`, "Doctor: what this computer can do").
+
 ### Which network interfaces count
 
 Count only traffic actually leaving the machine. Virtual interfaces are either local (lo, containers) or counted again on underlying physical interfaces (tunnels, proxies, bridges):
@@ -219,7 +239,7 @@ The nodes sample on the same wall-clock tick, so one writer stores a tick's samp
 It writes once every machine that sent in the last 30 seconds has sent this tick's, at most 2 seconds after the first (a single machine's sample is written at once); one machine's bad sample does not cost the others theirs.
 Samples wait in a queue of 1024; when Postgres is that far behind, a sample is dropped with a log line. A stopping manager still writes what it has, for at most 2 seconds.
 
-The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. The tool returns facts without ranking machines.
+The main assistant's read-only `machines_list` tool combines the trusted machine list with the manager's last system information and sample, working agent count, recent failing launchers and node version status. It reports the list's completeness and excluded count; machines that belong to another manager or are not trusted are not exposed. Connection, session and launcher records have separate availability: an empty failure list means no recent failure is recorded, not that every launcher was checked. Values whose source is missing, ambiguous, offline, stale or has a future timestamp are null with a reason. Samples over 30 seconds old retain their age but are not current; a sample from before the current connection is not current either. System information is the last reported information and may persist while offline; memory and disk availability follow the collection definitions above, and disk is an aggregate rather than necessarily the work directory's filesystem. Node builds that differ cannot be ordered by their identifiers, so a different build alone is not called outdated. A machine whose link is up but whose node has sent no sample for 3 minutes (counted from the later of the last sample and the current connection) is `unresponsive`, not `online`, with a `state_reason` giving `no_recent_report` and the age of the last report; `agents_list` names such machines in an "unresponsive machines" line. The tool returns facts without ranking machines.
 
 The assistant-only `machine_redeploy` tool accepts a machine ID or an exact, unambiguous display name. Name selection requires a complete machine inventory; an ID remains valid when the list is incomplete. It invokes the same explicit `Machine.startDeploy` operation as `POST /api/v1/machines/{mid}/deploy`, waits for that job's outcome and returns success or the failure reason. The app's route remains asynchronous. Canceling the tool's wait does not cancel the deployment or change its card phases, persisted outcome or notifications; an unconfirmed wait is not reported as a failed deployment. A call cannot target the machine running its own conversation, because the update waits for that conversation to become idle; use a conversation on another machine instead.
 Every minute `metricsLoop`:
@@ -272,6 +292,7 @@ How many tokens each machine runs, for the Machines page's cards and charts (the
   (`step = 600`), the 10-minute rows older than 7 days and an hour into one row per hour (`step = 3600`, `db.RollupUsageHours`), and rows older than 53 weeks and a day are deleted.
   About 1 to 3 rows a machine and minute (one per model, launcher and agent in use), 10,000 to 30,000 rows a machine for the week, then 24 to 72 a machine and day for the year (about 9,000 to 27,000).
   Rows keep their agent through the rollups (`machine_usage.agent`, migration `manager/0551_usage_by_agent.sql`); rows stored before agents were kept apart, and an older node's, have `''`.
+  They keep their directory the same way (`machine_usage.dir`, "Token usage by project" below).
 - **Ranges**: 1 hour by minute (60 points), 24 hours by 10 minutes (144), 7 days by hour (168). A point is the step's sums; for "per minute" the apps divide by the step's minutes, the step under way by the part of it that had passed when the report came (at least a minute, `web/src/lib/usage-rate.ts` `stepMinutes`, PersonaWire `MachineUsageSeries.minutes(at:)`; #9205).
   A step with no monitoring sample and nothing counted is a break (`gap`), as in the monitoring charts; a machine that never sent monitoring samples has no breaks.
 - **Card** (`GET /api/v1/metrics`'s `usage` per machine, from memory): today's sums, all tokens per minute now (over the last two to three minutes) and the last 60 minutes by minute.
@@ -289,6 +310,74 @@ so a day's number is the same sum as today's tokens on the Machines page.
   through the `machine_usage_ts` index. A row counts in the span its start is in: the minute and 10-minute rows of the last week fall exactly, while the hour rows split a day at the hour
   in a zone whose clock is not a whole hour from UTC.
 - Without Postgres (`stored: false`) both come from the buckets in memory, the last 26 hours.
+
+### Token usage by project
+
+The token usage page's **By Project** (#16530): today's, the last 3 days' and the last 7 days' tokens by project, across
+machines, and one project's breakdown (`devices/usage_projects.go`, `devicewire/usage_projects.go`).
+
+- **What a row says**: each bucket also names where its session started (`proto.UsageBucket.Dir`, `machine_usage.dir`,
+  migration `manager/20261126153844_usage_by_dir.sql`): the start directory written from the home folder (`~/code/app`, `~`;
+  outside home as it is), or a token, `:assistant` (a Persona assistant conversation), `:temp` (a temporary folder),
+  `:unknown` (a record that names no directory). The directory is part of the row's key through the minute, ten-minute
+  and hour rows, the backfill and a runtime's deltas. `''` is "not split": usage stored before, or from an older node.
+- **Where a session started** (`node/usage_dirs.go`): the directory Persona started it in (its state), else the first
+  directory its records name: a Claude Code transcript's head (a subagent's or workflow agent's file takes its session's
+  own transcript), a Codex or TRAE CLI rollout's `session_meta`, a pi or omp session's header, opencode's
+  `session.directory` (read apart from the usage query, so a database without it is still metered), a runtime's row.
+  Never the latest one: Claude Code's `cwd` follows the model's `cd` (`docs/lessons/transcript.md`). Read once per file
+  (the head, at most 256 KB). The assistant's own directories are `:assistant`; the system's temp directory, `/tmp`,
+  `/var/tmp` and macOS's `/var/folders` are `:temp`.
+- **Resolving it** (`resolveUsageDir`, in the background, once per directory and connection; the meter never waits for
+  it): the nearest `.git` above it, read as git does without running git (`node/gitplace.go`: a linked worktree's
+  shared git dir, a submodule's own). Its remote is `origin`, else `upstream`, else the first one in the repository's
+  `config` (read up to 256 KB): the SSH, scp-like, HTTPS and git:// spellings of one repository give one key, the user,
+  password or token and the port are dropped, the host is lower case (`ssh.github.com`, `www.github.com` and the
+  forges' other names folded in), a trailing `.git` and empty segments go, and GitHub's, GitLab's, Bitbucket's,
+  Codeberg's, Gitee's and Azure DevOps's paths are keyed in lower case (others keep theirs; the name keeps the remote's
+  own case). A remote written as it was cloned is used as written, so a global `insteadOf` rewrite to a mirror does not
+  change the key; only a shorthand with no dotted host (`gh:owner/repo`) is asked of git (`git remote get-url`, 10
+  seconds at most). A local path, a URL with a query and anything else is no remote: then the key is the root commit
+  (`git rev-list --max-parents=0 HEAD`, 10 seconds at most), so a copy on another machine is the same project, and two
+  repositories made from one template are merged (known and accepted); with no commit yet, the folder's name
+  (`local:dir:`). Forks and mirrors with another owner stay apart. A repository at home or above it (dotfiles in git)
+  is the home folder's only, a folder in it its own; a repository whose config cannot be read, and a broken `.git`,
+  are folders; a directory that cannot be read is not looked into (a folder); one that is gone is not resolved, and the
+  manager keeps its last resolution.
+- **What a directory is**: the node sends, with the report that first names a directory on a connection, what it resolved
+  it to (`dirs`, `proto.UsageDir`): the project key the manager sums by across machines, its name, the remote's host,
+  the place (the working tree's top, or the folder) and whether that is a linked worktree. Keys: `git:<host>/<path>`,
+  `local:<root commit>`, `local:dir:<folder>`, `folder:<folder name>`, `home`. The manager keeps the latest resolution of
+  each machine's directory in `usage_dirs` (and in memory), so the usage of a directory removed since (a finished task's
+  worktree) keeps its project, and a folder that later gets a remote moves its history to the repository.
+  It keeps only the shapes a node makes (`usableDirs`): a `git:` key has a lower-case host with no user or port and
+  path segments of a forge's characters, its name is the key's path and its host the key's, so no remote's
+  credentials, URL or query can be stored even from a broken node. A refused resolution is logged by count only.
+- **Sums** (`db.UsageDirSpans`): every machine's rows summed into the calendar's day bounds (and today's hours for a
+  breakdown) by machine and directory, and for a breakdown by agent, model and launcher too; Go maps each machine's
+  directory to its project. A directory no node resolved is `unknown`. So a range's projects and its not-split part add
+  up to exactly the calendar's total for the same days. Without Postgres both come from memory (the last 26 hours).
+- **Groups**: `repo` and `local` are development, `folder`, `home`, `temp` and `assistant` non-development, `unknown` apart.
+  Home, temp, assistant and unknown carry no name (the apps name them), so a folder's name never shows the account's.
+- **A project's name**: the name and host of its resolutions with the most tokens in the range (two machines may write
+  one remote in different case).
+- **Breakdown**: by computer, Agent, model, launcher and place (each working tree or folder on each computer, worktrees
+  marked), the last 7 days by day and today by the hour, its share of every project's tokens, and its cache hit rate.
+- **The week before** (`node/usage_resplit.go`, `devices/usage_resplit.go`, `db.ResplitUsage`, table `usage_resplit`, migration
+  `manager/20261126162313_usage_resplit.sql`): once, a few minutes after connecting to a manager that keeps directories,
+  a node asks `usage.resplit.status`; unless done, it re-reads its transcripts from a week ago to where its live window
+  starts (the ten-minute rows the projects' week is summed from) by the ten minutes, with the live meter's rules and
+  each session's start directory, rate-limited like the backfill, and sends them with what their directories resolve to.
+  The manager splits each stored ten minutes, model, launcher and file-metered agent that has no directory in the
+  re-read shares, kind by kind (largest remainder), so every key's sums, and the calendar, stay exactly as they were.
+  Usage the transcripts no longer hold, a runtime's and an older node's stays not split; re-read usage with nothing
+  stored is left out. The manager records the last ten minutes sent and when it finished, so a cut re-split goes on
+  and one sent again changes nothing; a machine with nothing to split is done at once.
+- **Rolling upgrades**: the node splits by directory only after the manager answers `usage.features` with `dirs: true`;
+  an older manager answers `unknown method`, and the node sends its buckets summed as before (there, several buckets of
+  one minute, model, launcher and agent would replace each other). An older node sends no directories: its usage is
+  not split. The routes are not open to extension tokens or read-only sessions: project names and places are more than
+  counts.
 
 ### Backfill
 
@@ -339,23 +428,23 @@ removing the **Machine Monitoring** name and entry point.
 
 - **Entry points** (all open `MachinesView`): **Machines** in the new shell drawer; **Settings › Machines**; **Machines** at the bottom of the Agents list's top-left menu (`MachineListRoute`, opens in the right column on iPad);
   Mac sidebar **Machines** (⌘5). Top-right ⓘ on Projects / machine projects opens machine detail (`MachineDetailRoute`).
-- **Machines page** (`MachinesView`): top line "N/M online · K under heavy load · J Agents need you". Under it **Today's Tokens** (`TodayTokensCard`, #4973): the total, every token per minute now,
+- **Machines page** (`MachinesView`): top line "N/M online · K with high readings · J Agents need you" (K counts machines with any alert, CPU, memory, disk or load, so it never says "load"; #12519). Under it **Today's Tokens** (`TodayTokensCard`, #4973): the total, every token per minute now,
   the cache hit rate, and each computer's share as a bar in shades of the text ink (not the kinds' colors). One card per machine (`MachineCard`): OS icon, name, OS · cores · memory (one line),
   online / offline (last online time and SSH error when offline); alert tags ("Alerts" below); Agent counts **Needs you / Working / Idle** (Idle = Unread + Seen + Unknown,
-  live sessions only, excluding assistant chats, matching Agents list); current CPU / memory / network values and past-hour sparklines, and **Tokens** (per minute now, today's total, the past hour) when its node reports usage; **Redeploy** when personad and hub aren't from the same deployment.
-  iPad / Mac cards form multiple columns according to width. Tap to open machine detail.
+  live sessions only, excluding assistant chats, matching Agents list); current CPU / memory / network values and past-hour sparklines, with load per core under CPU ("Load 1.4 per core", "What load counts" above), and **Tokens** (per minute now, today's total, the past hour) when its node reports usage; **Redeploy** when personad and hub aren't from the same deployment.
+  iPad / Mac cards form multiple columns according to width. Tap to open machine detail. Under the cards, the footnote says how often the numbers update and what load counts.
   Web deployment entry depends on `can_deploy`: old Link nodes prompt a one-time local upgrade; supported nodes show waiting for idle / transfer / restart / version confirmation; details in [node-update.md](../operations/node-update.md).
 - **Ordering** (`MachineConcern`): attention-needed first: offline → severe alerts → caution alerts → Agents needing you → version mismatch; within each category and for remaining machines, hub config order.
   Reorder only when something shown on the card changes, with animation.
 - **Machine detail** (`MachineDetailView`): everything on one page, common actions first. Same card at top (without metrics or the name, the title has it); when offline, next comes **Hub connects through SSH …** and **Reconnect**.
-  Then **Agents**: Needs you first, Working next, first 5 shown, **Show all N** for the rest; tap to open chat. Next **Engine** (which engine's sessions this machine shows; tap to choose, `EngineSelectionView`). Then **Token Usage** (`MachineUsageSection`, see "Token usage charts" below). Then **Monitoring**: current CPU / memory / network / load / disk / swap,
-  1 hour / 6 hours / 24 hours selector, four charts for CPU, memory, network (download + upload), load (dashed core-count line); Linux also has per-core bars.
+  Then **Agents**: Needs you first, Working next, first 5 shown, **Show all N** for the rest; tap to open chat. Next **Engine** (which engine's sessions this machine shows; tap to choose, `EngineSelectionView`). Then **Token Usage** (`MachineUsageSection`, see "Token usage charts" below). Then **Monitoring**: current CPU / memory / network / load (the raw value, load per core under it) / disk / swap,
+  1 hour / 6 hours / 24 hours selector, four charts for CPU, memory, network (download + upload), load (dashed core-count line) with what load counts under them; Linux also has per-core bars.
   Hold and drag any chart to inspect a time; all four share the selected timestamp, showing its value and time in the header. Then **What This Computer Can Do** (two rows when everything works:
   the summary and **Show All Checks**; the features show when something needs attention or after **Show All Checks**), the computer and browser sections, **System** (OS, kernel, architecture, model, processor,
   cores, memory, hostname, boot time and uptime, herdr / Claude Code / node versions), **Launchers**, and, when online, connection method and **Reconnect** last.
 - **Updates**: machine online state and Agents update live through hub pushes; numbers poll only while page is visible and App foreground: Machines every 10 seconds, detail's 1-hour range every 10 seconds, other ranges every minute;
   stops in background (`task(id: scenePhase)`). Pull to refresh (Mac ⌘R, `macRefreshes`) also reloads the machine list.
-- **Alerts** (`MetricAlert`): CPU ≥ 75% caution, ≥ 90% severe; memory ≥ 80% / 90%; disk ≥ 80% / 90%; load ≥ 1 / 2 times core count. Cards get a status-colored border,
+- **Alerts** (`MetricAlert`): CPU ≥ 75% caution, ≥ 90% severe; memory ≥ 80% / 90%; disk ≥ 80% / 90%; load per core ≥ 1 / 2 (the load average over the core count, "What load counts" above). Cards get a status-colored border,
   and tags use icon (status color) + text (body color), not color alone.
 - With old hubs lacking these endpoints (404), machine cards omit metrics (Agent counts remain), and detail monitoring says **Deploy newer hub and node versions to see this**; old nodes sending no samples show **—**.
 
@@ -473,6 +562,18 @@ a bad section or id 400 `bad_request`, offline 503 `machine_offline`, a node wit
 Tests: `node/machdiag` (stat and ps fixtures, grouping and the top-N union, the walker's links, hard links, other filesystems and deadline, the catalog per OS and its variables,
 in-use matching, the cleanup's guard rails on temporary home directories, the tool probe with fake commands), `node/diagnose_rpc_test.go` (dispatch),
 `devices/diagnosis_test.go` (pass-through, capability, offline, bad input, roles, node errors), `hub/diagnosis_routes_test.go` (answer-only devices and extension tokens).
+
+## Disk usage map (#14576)
+
+The diagnosis answers a fixed question; the **disk usage map** lets the user walk a computer's disk and act on it. The
+manager routes `GET /api/v1/machines/{mid}/storage/usage` and `POST …/storage/trash`, `…/trash/undo`, `…/trash/purge`
+(`devices/usagemap.go`, `full` devices only) call the node's `machine.storage.usage`, `.trash`, `.untrash` and `.purge`
+(`node/machine_storage_usage.go` over `node/diskmap/`, capability `machine_storage_usage`). The node sizes folders in
+the background, keeps them for 15 minutes, and holds every path a request names to its own protection rules (credentials,
+Agents' and Persona's data, app-managed folders and the like are never trashed); `machine.storage.check` answers those
+rules alone, for the extension manager to ask before an offload. An extension can offer to move items elsewhere through
+the generic `disk_offload` extension point. The whole contract (the tree, the rules, the routes, the extension point
+and what the apps draw) is [machine-usage-map.md](machine-usage-map.md).
 
 ## Renaming a computer
 

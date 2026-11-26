@@ -182,6 +182,38 @@ class AboutBuildGenerationRollbackTest(unittest.TestCase):
             self.assertIn("original reviewed Kotlin restored", stderr)
             self.assertNotIn("PASSED", stdout)
 
+    def test_failed_generate_removes_new_output_without_entry_bytes(self):
+        with tempfile.TemporaryDirectory(prefix="persona-refract-build-rollback-") as temporary:
+            generated = Path(temporary) / "AboutBuildRow.kt"
+
+            def generate(cli, mode, android_out, harmony_out):
+                generated.write_bytes(b"partial unreviewed output\n")
+                raise subprocess.CalledProcessError(1, [str(cli), mode], stderr="primary generator failure\n")
+
+            result, stdout, stderr = self.run_generate(generated, generate)
+            self.assertEqual(result, 1)
+            self.assertFalse(generated.exists())
+            self.assertIn("primary generator failure", stderr)
+            self.assertIn("new unreviewed Kotlin removed after generation failure", stderr)
+            self.assertNotIn("PASSED", stdout)
+
+    def test_new_output_removal_failure_preserves_the_primary_cli_diagnostic(self):
+        with tempfile.TemporaryDirectory(prefix="persona-refract-build-rollback-") as temporary:
+            generated = Path(temporary) / "AboutBuildRow.kt"
+
+            def generate(cli, mode, android_out, harmony_out):
+                generated.write_bytes(b"partial unreviewed output\n")
+                raise subprocess.CalledProcessError(1, [str(cli), mode], stderr="primary generator failure\n")
+
+            with mock.patch.object(build, "remove_new_output", side_effect=OSError("fixture removal failure")):
+                result, stdout, stderr = self.run_generate(generated, generate)
+            self.assertEqual(result, 1)
+            self.assertLess(stderr.index("primary generator failure"), stderr.index("Refract About Build: FAILED"))
+            self.assertLess(stderr.index("Refract About Build: FAILED"), stderr.index("secondary restoration failure"))
+            self.assertIn("fixture removal failure", stderr)
+            self.assertNotIn("new unreviewed Kotlin removed", stderr)
+            self.assertNotIn("PASSED", stdout)
+
     def test_restoration_failure_preserves_the_primary_cli_diagnostic(self):
         with tempfile.TemporaryDirectory(prefix="persona-refract-build-rollback-") as temporary:
             generated = Path(temporary) / "AboutBuildRow.kt"

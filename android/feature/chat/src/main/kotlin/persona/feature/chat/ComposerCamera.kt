@@ -14,8 +14,10 @@ import androidx.core.content.ContextCompat
  * then goes in like a picked one. Those originals belong to one draft and are deleted when they leave it.
  */
 
-/** A photo this app took for a draft (cache/chat-captures behind the chat FileProvider), not a picked one. */
-internal fun isCaptureUri(uri: String, packageName: String): Boolean = uri.startsWith("content://$packageName.chat.files/chat-captures/")
+/** A photo this app captured for a draft (`cache/chat-captures` or `cache/assist` behind the chat FileProvider), not a picked one. */
+internal fun isCaptureUri(uri: String, packageName: String): Boolean =
+    uri.startsWith("content://$packageName.chat.files/chat-captures/") ||
+        uri.startsWith("content://$packageName.chat.files/assist/")
 
 /**
  * The captures that were in [before] and are no longer in [now] (removed, or sent and cleared), by attachment id. An
@@ -29,7 +31,7 @@ internal fun leftCaptures(before: List<ComposerAttachment>, now: List<ComposerAt
 /** Deletes a capture's file through the provider; anything that is not one of ours is left alone. Call off the main thread. */
 fun deleteCapture(context: Context, uri: String) {
     if (!isCaptureUri(uri, context.packageName)) return
-    runCatching { context.contentResolver.delete(Uri.parse(uri), null, null) }
+    val _ = runCatching { context.contentResolver.delete(Uri.parse(uri), null, null) }
 }
 
 /**
@@ -54,6 +56,6 @@ fun appLabel(context: Context): String =
 /** This app's page in the system settings, where its permissions are. */
 fun openAppSettings(context: Context) {
     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
-    runCatching { context.startActivity(intent) }
+    val _ = runCatching { context.startActivity(intent) }
         .recoverCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }

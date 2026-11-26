@@ -27,8 +27,8 @@ export function ContextChipList({ refs, onRemove }: { refs: ContextRef[]; onRemo
             style={{ animation: `pop-in 180ms ${EASE} both` }}
           >
             {file ? <Icon name="file" size={12} /> : r.kind === "edit" || skill ? <Icon name="spark" size={11} /> : workspace ? <Icon name="folder" size={12} /> : repository ? <Icon name="git" size={12} /> : <QuoteIcon size={12} />}
-            <span className="shrink-0 text-[11px] font-semibold">{kindLabel}</span>
-            <span className="min-w-0 truncate text-[12px]">{whole || workspace || repository || skill || file ? label : t("link-contextchips.quoted", { text: label })}</span>
+            <span className="shrink-0 text-submeta font-semibold">{kindLabel}</span>
+            <span className="min-w-0 truncate text-label">{whole || workspace || repository || skill || file ? label : t("link-contextchips.quoted", { text: label })}</span>
             <button
               type="button"
               aria-label={t("link-contextchips.remove_label")}

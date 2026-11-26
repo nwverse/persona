@@ -14,6 +14,7 @@
   "fill_in_suffix": " (open Persona to fill in)",
   "done_body": "Done",
   "health_title": "Health",
+  "health_tell_unconfirmed": "Couldn't confirm a message reached Health. Open Persona to check.",
   "health_body": "New in your health space. Open Persona to see it.",
   "delegate_recommend_suffix": "\nThe assistant suggests: {answer}",
   "question_more_options": " and {count} more",
@@ -21,5 +22,6 @@
   "question_more_other": "{count} more questions",
   "usage_limit": "Usage limit reached; continue it once the limit resets: {error}",
   "private_card": "Persona needs your answer. Open Persona to see it.",
-  "registration_required": "This device is no longer registered for notifications. Open Settings › Notifications in Persona to see why."
+  "registration_required": "This device is no longer registered for notifications. Open Settings › Notifications in Persona to see why.",
+  "sealed_fallback": "New message"
 }

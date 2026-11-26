@@ -98,7 +98,7 @@ internal fun rememberChatPageTaskHost(
                 { id -> machineDisplayNames[id] ?: id },
                 onOpen = { k -> currentOnOpenSession?.invoke(GroupKeys.key(k, namespace)) },
                 onError = { currentOnNotice(operationFeedback(it).text.resolve(res)) },
-                say = { text -> scope.launch { runCatching { sendTodayCardMessage(sender, key, text, UUID.randomUUID().toString()) } } },
+                say = { text -> scope.launch { val _ = runCatching { sendTodayCardMessage(sender, key, text, UUID.randomUUID().toString()) } } },
                 sheet = taskSheet, machines = hostMachines,
                 pending = hostPending,
                 manager = manager,

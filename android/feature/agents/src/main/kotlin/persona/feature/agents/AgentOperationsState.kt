@@ -101,8 +101,8 @@ internal class AgentOperationsState(private val api: AgentOperations, private va
         } finally { mutable.value = mutable.value.copy(busy = false) }
     }
 
-    suspend fun session(session: Session, requested: AgentSessionEdit) = mutex.withLock {
-        val rename = SessionRename.changes(session, requested.title, requested.tab)
+    suspend fun session(session: Session, requested: AgentSessionEdit, unified: Boolean = false) = mutex.withLock {
+        val rename = SessionRename.changes(session, requested.title, requested.tab, unified = unified)
         if (!requested.removes && !rename.changed) return@withLock
         val edit = if (requested.removes) requested else AgentSessionEdit(rename.title, rename.tabName)
         val key = session.key
@@ -124,6 +124,16 @@ internal class AgentOperationsState(private val api: AgentOperations, private va
             if (uncertain) expectedSessions[operation] = key to edit
             throw e
         } finally { mutable.value = mutable.value.copy(busy = false) }
+    }
+
+    suspend fun fork(session: Session): String = mutex.withLock {
+        val before = mutable.value
+        mutable.value = before.copy(busy = true)
+        try {
+            api.forkSession(session.key)
+        } finally {
+            mutable.value = mutable.value.copy(busy = false)
+        }
     }
 
     suspend fun renameSpace(session: Session, requestedName: String) = mutex.withLock {

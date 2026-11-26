@@ -24,15 +24,17 @@ import (
 var coreTools = []string{
 	"agent_archive", "agent_interrupt", "agent_read", "agent_send", "agent_start", "agent_supervise", "agents_list",
 	"ask_user", "cancel_followup", "conversation_read", "conversation_send", "conversations_list", "interaction_answer",
-	"kb_get", "kb_list", "kb_search", "kb_update", "lark_chats", "lark_messages", "lark_search", "larkcli_chats",
+	"kb_get", "kb_list", "kb_search", "kb_update", "lark_chats", "lark_image", "lark_messages", "lark_search", "larkcli_chats",
 	"larkcli_messages", "larkcli_search", "list_followups", "machines_list", "model_profiles_list", "notify_user",
 	"persona_settings", "schedule_followup", "schedule_routine", "supervision_finish", "task_plan", "task_review",
 	"task_scope", "todo_get", "todo_list", "todo_update",
 }
 
 // leaderCoreTools supplement the shared list for current direction supervisors. Loading
-// these definitions does not change each tool's caller authorization.
-var leaderCoreTools = []string{"leader_progress", "todo_create", "ask_escalate", "direction_name"}
+// these definitions does not change each tool's caller authorization. agent_transfer joins
+// them because a lead hands off its own open tasks with it (#13192): behind lazy loading,
+// leads only discover that path after an extra ToolSearch round.
+var leaderCoreTools = []string{"agent_transfer", "leader_progress", "todo_create", "ask_escalate", "direction_name"}
 
 // The operations taught by persona-work. Match built-in names exactly: an
 // extension sharing a prefix must keep its own loading policy.
@@ -42,7 +44,7 @@ var workGuideTools = []string{
 	"agent_supervise", "agent_transfer", "task_plan", "task_plan_withdraw", "task_scope", "task_retry",
 	"task_start_screen", "task_start_keys", "task_review", "task_decided", "leader_progress", "direction_name",
 	"todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"conversations_list", "conversation_read", "conversation_rename", "conversation_tags_set", "conversation_new",
+	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_tags_set", "conversation_new",
 	"conversation_send", "conversation_archive", "conversation_unarchive", "repositories_list", "repository_get",
 	"repository_add", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_add", "todo_repository_links_set",
 }
@@ -57,6 +59,7 @@ func (s *Service) withToolLoading(ctx context.Context, self string, tools []prot
 	cleanRound := guide && s.cleanRoundSession(self)
 	deferring = deferring && !(settings.LoadAllTools != nil && *settings.LoadAllTools)
 	leader := deferring && s.isLeader(ctx, self)
+	pageRoutine := deferring && s.isPageRoutineSession(ctx, self)
 	out := slices.Clone(tools)
 	for i := range out {
 		// Keep planning and its allowed preflight reads directly available in a granted round.
@@ -64,7 +67,8 @@ func (s *Service) withToolLoading(ctx context.Context, self string, tools []prot
 		out[i].WorkGuideTool = guide && slices.Contains(workGuideTools, out[i].Name) &&
 			!(cleanRound && (out[i].Name == "task_plan" || grantSafeTools[out[i].Name]))
 		out[i].DeferLoading = deferring && !slices.Contains(coreTools, out[i].Name) &&
-			!(leader && slices.Contains(leaderCoreTools, out[i].Name))
+			!(leader && slices.Contains(leaderCoreTools, out[i].Name)) &&
+			!(pageRoutine && out[i].Name == pageToolName)
 	}
 	return out
 }

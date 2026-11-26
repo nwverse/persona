@@ -6,7 +6,7 @@
 // it as "Close…" (#7125, closeOffer), which closes a busy agent too after saying what that interrupts.
 import { useSyncExternalStore } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
-import { sessionDeletable, sessionMenuActions, sessionTitle, stateOf } from "./format";
+import { sessionDeletable, sessionMenuActions, sessionTitle, activityOf, stateOf } from "./format";
 import { dropSession, getState, refresh, upsertSession, useStore } from "./store";
 import { toast } from "../ui/atoms";
 import { t } from "../i18n";
@@ -19,7 +19,7 @@ export const AGENT_ARCHIVE_CLOSE_FEATURE = "agent_session_archive_close";
 /** Busy as the manager counts it for an archive (agent_archives.go agentArchiveBusy): working, starting, waiting for an
  *  answer, background work, running subagents or workflows. Awaiting the user's reply is not busy. */
 export function archiveBusy(s: Session): boolean {
-  const st = stateOf(s);
+  const st = activityOf(s);
   return Boolean(
     s.starting || s.status === "working" || s.status === "blocked" || st === "working" || st === "needs_you" ||
       s.background_working || s.background_waiting || (s.pending_interactions ?? 0) > 0 ||
@@ -51,14 +51,18 @@ export type ArchiveOffer = "ok" | "busy" | "no";
  *  Archive: any agent but the assistant's conversations (those archive in All chats), on a hub that has archives.
  *  Archive and close: an agent running in a terminal tab that the node can bring back after closing it, as session.retire
  *  decides (node retire.go): Claude Code, and Codex or a compatible CLI that Persona started (its launcher is known);
- *  not a runtime's or a desktop app's session (their tool keeps them), and not one already closed. */
+ *  not a runtime's or a desktop app's session (their tool keeps them), and not one already closed. An Antigravity CLI
+ *  conversation is closed so too (#14520), from its pane's row (session.retire) or from its own row, the companion's
+ *  (its close), and a message continues it in the companion after either; Antigravity keeps no archive of its own, so
+ *  Persona's is what takes it out of the list, as Close does for a Claude Code agent. */
 export function archiveOffers(s: Session, features: readonly string[]): { archive: ArchiveOffer; close: ArchiveOffer } {
   if (s.assistant || s.archived || !features.includes(AGENT_ARCHIVES_FEATURE)) return { archive: "no", close: "no" };
   const archive: ArchiveOffer = archiveBusy(s) ? "busy" : "ok";
   const agent = s.agent ?? "";
   const resumable = agent === "" || agent === "claude" || ((agent === "codex" || agent === "traex") && Boolean(s.started_by_persona));
-  const open = stateOf(s) !== "offline" && s.status !== "offline" && !s.start_error;
-  const closable = features.includes(AGENT_ARCHIVE_CLOSE_FEATURE) && !s.source_kind && resumable && open;
+  const agy = agent === "agy" && (!s.source_kind || (s.source_kind === "runtime" && s.capabilities?.close === true));
+  const open = activityOf(s) !== "offline" && s.status !== "offline" && !s.start_error;
+  const closable = features.includes(AGENT_ARCHIVE_CLOSE_FEATURE) && (agy || (!s.source_kind && resumable)) && open;
   return { archive, close: !closable ? "no" : closeBusy(s) ? "busy" : "ok" };
 }
 
@@ -146,6 +150,13 @@ export function noteArchived(s: Session, archived: boolean) {
   if (archived) known.set(keyOf(s.machine_id, s.session_id), { ...s, archived: true });
   else known.delete(keyOf(s.machine_id, s.session_id));
   knownChanged();
+}
+
+/** Whether mid/sid is archived as this page last saw it, outside React: the automatic reads of an open chat stop for
+ *  an archived session, which gets no new lines (#13677). Back in the lists, it is not archived any more. */
+export function archivedNow(mid: string, sid: string): boolean {
+  if (!known.has(keyOf(mid, sid))) return false;
+  return !getState().sessions[mid]?.some((x) => x.session_id === sid);
 }
 
 /** The archived session mid/sid as this page last saw it; undefined when it is not known to be archived. */

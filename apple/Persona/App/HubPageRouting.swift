@@ -6,6 +6,9 @@ struct MessageJump: Equatable {
     var key: SessionKey
     var item: String
     var id = UUID() // the same message linked twice still moves there again
+    /// A task's card in the assistant's pager whose View in Chat opened this chat (#12625): `item` is found from it once the
+    /// chat's items are in (`CardSource.source`), the message that asked or, without a tool use id, the newest question.
+    var card: Interaction? = nil
     #if os(iOS)
     var starred: StarredSource? = nil
     #endif
@@ -97,9 +100,6 @@ extension AppModel {
         if session(key)?.assistant == true || key == assistantMain {
             openAssistantConversation(key)
         } else {
-            #if os(macOS)
-            MacShellState.shared.willOpen()
-            #endif
             open(key)
         }
     }
@@ -140,6 +140,9 @@ extension AppModel {
     /// hub-level group: a link never switches the hub the app shows.
     func openHubPage(_ page: HubPage, group: String) -> HubLinkOpen? {
         let hubLevel = group == hub?.group
+        #if os(iOS)
+        if hubLevel, returnToStartIfHidden(page.navigationPage) { return .opened }
+        #endif
         switch page {
         case .agent(let machine, let session, let item):
             openLinked(linkedSession(group, machine: machine, session: session), item: item)

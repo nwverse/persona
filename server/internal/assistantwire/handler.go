@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // ---- what the hub sends the assistant (Handler) ----
@@ -113,20 +114,40 @@ type SessionRef struct {
 	SessionID string `json:"session_id"`
 }
 
-// UserSpokeParams carries text only when the hub authenticated a person's own app.
+// UserSpokeParams carries text only when the hub authenticated a person's own app, for both
+// Agent conversations and the assistant's own supervisor / direction conversations. The event
+// reaches the manager before the message is persisted, so a direction's decision cards rely on
+// this text rather than a transcript read.
 // Keep it out of SessionRef: session references are also used as map keys.
 type UserSpokeParams struct {
 	SessionRef
 	Text string `json:"text,omitempty"`
+	// Source is set only with Text from authenticated owner input to an Agent: "app" for the app's message route,
+	// "terminal" for the terminal Agent-message route. It is never a runtime transcript role.
+	Source string `json:"source,omitempty"`
+	// ClientMsgID is the send's client_msg_id, sent with Text when the message has one: the same id its
+	// session.assistant_sent (ConversationSent) names, so the manager can wait for the send's outcome before an
+	// irreversible step (#13041). An older hub sends none; an older manager ignores it.
+	ClientMsgID wireids.ClientMsgID `json:"client_msg_id,omitempty"`
+	At          time.Time           `json:"at,omitempty"`
 }
+
+// Verified owner-input provenance carried by UserSpokeParams.
+const (
+	OwnerInputApp      = "app"
+	OwnerInputTerminal = "terminal"
+)
 
 // ContextParams is assistant.context's params. MachineID is the asking node's machine: the hub sets it from the
 // node's connection, never from the node's params. With Ack the call only confirms that a message carrying those
 // view errors (ContextResult.ViewErrors) was delivered, and answers nothing.
 type ContextParams struct {
-	SessionID string             `json:"session_id"`
-	MachineID string             `json:"machine_id,omitempty"`
-	Ack       []ViewErrorReceipt `json:"ack,omitempty"`
+	RecoveryID      string             `json:"recovery_id,omitempty"`
+	RecoveryOnly    bool               `json:"recovery_only,omitempty"`
+	PrepareRecovery bool               `json:"prepare_recovery,omitempty"`
+	SessionID       string             `json:"session_id"`
+	MachineID       string             `json:"machine_id,omitempty"`
+	Ack             []ViewErrorReceipt `json:"ack,omitempty"`
 }
 
 // ContextResult is assistant.context's answer: the <persona-context> text, and the <persona-view-errors> block of the
@@ -135,9 +156,12 @@ type ContextParams struct {
 // Receipts also carry what else the hub wants confirmed as delivered with the message (the background supervisor's
 // announcement, item_id "background_supervisor"): the node sends them all back as they are.
 type ContextResult struct {
-	Text       string             `json:"text"`
-	ViewErrors string             `json:"view_errors,omitempty"`
-	Receipts   []ViewErrorReceipt `json:"view_error_receipts,omitempty"`
+	RecoveryID          string             `json:"recovery_id,omitempty"`
+	Recovery            string             `json:"recovery,omitempty"`
+	CompactInstructions string             `json:"compact_instructions,omitempty"`
+	Text                string             `json:"text"`
+	ViewErrors          string             `json:"view_errors,omitempty"`
+	Receipts            []ViewErrorReceipt `json:"view_error_receipts,omitempty"`
 }
 
 // ViewErrorReceipt names the reported errors of one reply as they were read: an ack whose digest no longer matches
@@ -194,7 +218,7 @@ type MessageCard struct {
 	ProgressVersion string `json:"progress_version,omitempty"`
 	// SentAt: the reply to the item went out (from this card or from the inbox, on any device) and Sent is what it
 	// said; set when the inbox sent the reply (the inbox is the assistant's too), never cleared, so the card stays sent
-	// when the item opens again. A card sent before that was recorded has no Sent (the draft is what went out).
+	// when the item opens again. Older send records can lack Sent, in which case the sent text is unknown.
 	SentAt *time.Time `json:"sent_at,omitempty"`
 	Sent   string     `json:"sent,omitempty"`
 	// Dismissal is per draft card, not inbox filing or task completion. Undo
@@ -210,7 +234,7 @@ type MessageCard struct {
 // it has no credentials (a model of its own, "<synthetic>"): the turn did not run, the user must sign in
 // (docs/assistant/onboarding.md 4.4). Its separator is in the marker, so a reply that talks about being logged out is a reply.
 var APIErrorMarkers = []string{"API Error:", "There's an issue with the selected model", "Failed to authenticate",
-	"OAuth token has expired", "Invalid API key", "Not logged in ·"}
+	"OAuth token has expired", "Invalid API key", "Not logged in ·", "Request too large"}
 
 // refusalMarkers start the other lines Claude Code writes itself instead of an answer when the request was refused
 // before the model ran: a sign-in that is gone ("Please run /login · API Error: 403", "Login expired · Please run

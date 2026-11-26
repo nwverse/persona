@@ -224,6 +224,8 @@ fun DecisionDock(
     /** One line over the headline saying what the request waits for ("Waiting for your approval", #4883), as the web's
      *  and iOS's cards do; null draws the dock as before. Folded, the card is its header's line alone. */
     kicker: String? = null,
+    /** Optional top-edge grabber for resizing a lone unfolded pending card (#12306). */
+    grabber: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = PersonaTheme.palette
@@ -264,7 +266,9 @@ fun DecisionDock(
             }
         }
     }
+    val showGrabber = !collapsed && grabber != null
     val body: @Composable ColumnScope.() -> Unit = {
+        if (showGrabber) grabber?.invoke()
         header()
         if (!collapsed) { Spacer(Modifier.height(10.dp.dense)); content() }
     }
@@ -274,18 +278,20 @@ fun DecisionDock(
         AppStyle.Glass -> Column(
             modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m)
                 .floatingSurface(shape)
-                .padding(start = 18.dp.dense, end = 10.dp.dense, top = 10.dp.dense, bottom = 14.dp.dense).animateContentSize(PersonaTheme.motion.size()),
+                .padding(start = 18.dp.dense, end = 10.dp.dense, top = if (showGrabber) Tokens.Space.xs else 10.dp.dense, bottom = 14.dp.dense)
+                .animateContentSize(PersonaTheme.motion.size()),
         ) { Column(Modifier.padding(end = 8.dp.dense)) { body() } }
         AppStyle.Brief -> Column(
             modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m)
                 .shadow(HomeTokens.composerShadow, shape, ambientColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha), spotColor = Color.Black.copy(alpha = HomeTokens.composerShadowAlpha))
                 .clip(shape).background(palette.surface)
-                .padding(start = 20.dp.dense, end = 12.dp.dense, top = 16.dp.dense, bottom = 12.dp.dense).animateContentSize(PersonaTheme.motion.size()),
+                .padding(start = 20.dp.dense, end = 12.dp.dense, top = if (showGrabber) Tokens.Space.xs else 16.dp.dense, bottom = 12.dp.dense)
+                .animateContentSize(PersonaTheme.motion.size()),
         ) { Column(Modifier.padding(end = 8.dp.dense)) { body() } }
         AppStyle.Board -> Column(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m).clip(shape).background(palette.surface)
             .border(Tokens.Size.line, palette.line, shape).animateContentSize(PersonaTheme.motion.size())) {
             Box(Modifier.fillMaxWidth().height(Tokens.Size.bar).background(palette.needsYou.dot))
-            Column(Modifier.padding(start = 16.dp.dense, end = 8.dp.dense, top = 10.dp.dense, bottom = 10.dp.dense)) { Column(Modifier.padding(end = 8.dp.dense)) { body() } }
+            Column(Modifier.padding(start = 16.dp.dense, end = 8.dp.dense, top = if (showGrabber) Tokens.Space.xs else 10.dp.dense, bottom = 10.dp.dense)) { Column(Modifier.padding(end = 8.dp.dense)) { body() } }
         }
     }
 }

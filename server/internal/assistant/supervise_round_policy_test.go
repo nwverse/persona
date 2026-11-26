@@ -27,9 +27,9 @@ var mainOnlySignals = []string{sigFailed, sigStarted, sigEscalated, sigLeaderStu
 
 // backgroundSignals are the signals an existing background conversation can receive for explicitly addressed legacy
 // notices. Without that explicit legacy target, all of them stay with main for new assistant-dispatched work (#5732).
-var backgroundSignals = []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
-	sigPRConflict, sigDraftPR, sigReport, sigOrphaned, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable,
-	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigOverdue, sigCheck}
+var backgroundSignals = []string{sigReview, sigReviewNudge, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigAllStopped, sigInterrupted,
+	sigPRConflict, sigDraftPR, sigPRMerged, sigReport, sigOrphaned, sigRecovered, sigAsk, sigDecide, sigDecisionReply, sigRecheck, sigUndecidable, sigDeliveryHold, sigCardlessWait,
+	sigOwnerCannot, sigParkedDue, sigParkedSummary, sigParkDecided, sigInbox, sigNeedsUserExternalInfo, sigOwnerPresent, sigOverdue, sigCheck}
 
 // roundConnectorTools are the round's tools that come with the Lark extension (lark_search) or the lark-cli connector
 // (larkcli_search) rather than the assistant's own list.
@@ -139,6 +139,8 @@ func roundMessage(lang string) string {
 			e.Detail = "the model service answered 529"
 		case sigDraftPR:
 			e.Detail = prompts.RenderDraftPR(prompts.DraftPR{Language: lang, URL: "https://github.com/example/repo/pull/1", Head: "abc123"})
+		case sigPRMerged:
+			e.Detail = prompts.RenderPRMergedWake(prompts.PRMergedWake{Language: lang, PRURL: "https://github.com/example/repo/pull/1"})
 		case sigReport:
 			e.Report, e.Said, e.Evidence, e.Step, e.Steps = "question", "Should it keep the old API?", []string{"https://example.com/log"}, 2, 3
 		case sigOrphaned:
@@ -162,6 +164,9 @@ func roundMessage(lang string) string {
 		case sigInbox:
 			e.Inbox = &prompts.SuperviseInbox{Item: "in1", Title: "Release thread", Sender: "A colleague", Preview: "Is it out?",
 				Count: 2, URL: "https://github.com/example/repo/issues/2", ToAgent: "sent"}
+		case sigNeedsUserExternalInfo:
+			e.ExternalInfo = &prompts.NeedsUserExternalInfo{Language: lang, Source: "PR status", Summary: "PR #12 merged",
+				PendingQuestion: "Merge PR #12 now?", PendingRecommend: "Merge after review"}
 		}
 		entries = append(entries, e)
 	}
@@ -174,15 +179,21 @@ func roundMessage(lang string) string {
 var roundScanTools = append(slices.Clone(toolNames), "lark_search", "larkcli_search", "urgent_call", "lark_chats", "lark_messages")
 
 // namedTools are the tools of roundScanTools text names, quoted or bare, each once in the order it first names them.
+// The page tool (pages_tool.go) is named only quoted or with one of its actions: "page" alone is an English word.
 func namedTools(text string) []string {
 	var named []string
 	for _, w := range regexp.MustCompile(`[a-z][a-z0-9_]*`).FindAllString(text, -1) {
-		if slices.Contains(roundScanTools, w) && !slices.Contains(named, w) {
+		if w != pageToolName && slices.Contains(roundScanTools, w) && !slices.Contains(named, w) {
 			named = append(named, w)
 		}
 	}
+	if pageToolMention.MatchString(text) {
+		named = append(named, pageToolName)
+	}
 	return named
 }
+
+var pageToolMention = regexp.MustCompile("`page`|\\bpage (create|update|get|list|remove)\\b")
 
 // roundPassingMentions are the tools a round does not list that what it reads besides its own message still names, by
 // where: the description (and schema) of a tool it lists, or "context", the background supervisor's <persona-context>.
@@ -201,7 +212,7 @@ var roundPassingMentions = map[string][]string{
 	"kb_search":          {"kb_list"},
 	"schedule_followup":  {"inbox_post"},
 	"supervision_finish": {"ask_user"},
-	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry"},
+	"task_plan":          {"kb_list", "repositories_list", "repository_get", "task_retry", "agent_transfer"},
 	"task_review":        {"agent_start"},
 	"task_scope":         {"agent_supervise", "ask_user"},
 	"todo_get":           {"todo_repository_links_add"},
@@ -433,6 +444,9 @@ func TestBackgroundRoundAsksTheOwnerWithNeedsUser(t *testing.T) {
 			name = "the bot on"
 		}
 		t.Run(name, func(t *testing.T) {
+			if bot {
+				needsLarkLayer(t)
+			}
 			var s *Service
 			var f *fakeHub
 			var todo Todo

@@ -4,13 +4,10 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
-	"time"
-
-	"github.com/nwverse/persona/server/internal/i18n"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -510,60 +507,6 @@ func (s *Service) releaseBackground(ctx context.Context, machine, id string) {
 	rl.mu.Unlock()
 	if c, ok := s.session(ctx, machine, id); ok {
 		s.drainRelays(machine, []proto.Session{c})
-	}
-}
-
-// replaceBackground starts a background supervisor in place of old, which outgrew its first turn (why), and puts old
-// away. The new one's id, or old's when it could not start (old goes on as it is: its rounds keep the context, and the
-// next try is after backgroundRetry). background.mu is held, and old is reserved (backgroundOutgrown): the caller
-// moves what waits for it (backgroundLost), which ends the reservation.
-func (s *Service) replaceBackground(ctx context.Context, cfg Settings, old, why string) string {
-	r := &s.background.rounds
-	r.mu.Lock()
-	r.replacedAt = time.Now()
-	r.mu.Unlock()
-	s.logf("supervise: replacing the background supervisor %s (%s)", short(old), why)
-	id, err := s.startBackground(ctx)
-	if err != nil {
-		s.logf("supervise: the background supervisor's replacement did not start: %v; %s goes on as it is", err, short(old))
-		s.releaseBackground(ctx, cfg.MachineID, old)
-		return old
-	}
-	r.mu.Lock()
-	delete(r.outgrown, old)
-	if why == "no_anchor" {
-		if r.replacement == nil {
-			r.replacement = map[string]bool{}
-		}
-		r.replacement[id] = true
-	}
-	r.forks = nil
-	r.forksLoaded = true
-	r.breaker = superviseBreaker{}
-	r.mu.Unlock()
-	s.saveBackgroundForks(ctx, nil)
-	// The owner's model pick for the background supervisor goes on with the conversation that does its work: a pick is
-	// never dropped behind the owner's back (model_pick.go). The old one keeps its own in the archive.
-	if pick, ok := s.modelPickOf(ctx, cfg.BackgroundSupervisorMachineID, old); ok {
-		pick.At = time.Now().UTC()
-		if err := s.setModelPick(ctx, id, &pick); err != nil {
-			s.logf("supervise: carry the background supervisor's model pick to %s: %v", short(id), err)
-		}
-	}
-	s.putAwayBackground(ctx, cfg.BackgroundSupervisorMachineID, old, time.Now())
-	return id
-}
-
-// putAwayBackground puts away background supervisor old, replaced (the settings name another already): renamed
-// "Background supervisor · until M/D" in the owner's language by the user's hand (autonaming leaves it) and archived,
-// as a former main chat is (putAwayMain). Its rounds stay readable there; sending to it brings it back as an ordinary
-// conversation.
-func (s *Service) putAwayBackground(ctx context.Context, machine, old string, now time.Time) {
-	local := now.In(s.location(ctx))
-	s.titleSet(machine, old, i18n.T(s.lang(ctx), "assistant-conversations.background_supervisor_former",
-		i18n.Args{"month": fmt.Sprint(int(local.Month())), "day": fmt.Sprint(local.Day())}), titleByUser)
-	if _, err := s.setArchived(ctx, machine, old, true, titleByUser); err != nil {
-		s.logf("supervise: archive the former background supervisor %s: %v", short(old), err)
 	}
 }
 

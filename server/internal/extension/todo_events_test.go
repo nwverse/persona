@@ -96,15 +96,18 @@ func TestTodoEventTopicsAreDeclaredAndRequireConsent(t *testing.T) {
 // subscriber unchecked.
 func TestEveryEventTopicHasItsScopeSettled(t *testing.T) {
 	want := map[string]string{
-		"kb.changed":      ScopeKBRead,
-		"kb.forgotten":    ScopeKBRead,
-		"todo.changed":    ScopeTodosRead,
-		"todo.decision":   ScopeTodosRead,
-		"leader.changed":  ScopeLeadersRead,
-		"leader.report":   ScopeLeadersRead,
-		"inbox.changed":   "",
-		"agent.needs_you": "",
-		"agent.finished":  "",
+		"assistant.entries.changed": ScopeAssistantEntriesRead,
+		"kb.changed":                ScopeKBRead,
+		"kb.forgotten":              ScopeKBRead,
+		"todo.changed":              ScopeTodosRead,
+		"todo.decision":             ScopeTodosRead,
+		"leader.changed":            ScopeLeadersRead,
+		"leader.report":             ScopeLeadersRead,
+		"placement.pending":         ScopeTasksSchedule,
+		"lark.messages":             ScopeLarkMessagesRead,
+		"inbox.changed":             "",
+		"agent.needs_you":           "",
+		"agent.finished":            "",
 	}
 	for topic := range EventTopics {
 		scope, ok := want[topic]

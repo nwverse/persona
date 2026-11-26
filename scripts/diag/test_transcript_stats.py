@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import subprocess
 import sys
@@ -57,7 +58,17 @@ class TranscriptStatsTests(unittest.TestCase):
                 '{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"NewRecord"}}}\n'
             )
             result = subprocess.check_output(compare, text=True, timeout=10)
+            current = root / "after.json"
+            after = subprocess.check_output(command + ["--json", str(projects)], text=True, timeout=10)
+            current.write_text(after)
+            # A live scan must not reach these default paths in offline mode.
+            (root / ".claude" / "projects" / "unreadable.jsonl").mkdir(parents=True)
+            env = dict(os.environ, HOME=str(root), CLAUDE_CONFIG_DIR=str(root / "other-profile"))
+            offline = subprocess.check_output(command + ["--compare", str(baseline), "--against", str(current)],
+                                              text=True, timeout=10, env=env)
+            self.assertEqual(offline, result)
             self.assertEqual(baseline.read_text(), snapshot)
+            self.assertEqual(current.read_text(), after)
             self.assertNotIn(projects.name, result)
             self.assertIn("Files: 1 -> 1; lines: 3 -> 3.", result)
             self.assertIn("~ claude assistant: 2 -> 1", result)
@@ -66,6 +77,37 @@ class TranscriptStatsTests(unittest.TestCase):
             self.assertIn("- claude 1.0: 3", result)
             self.assertIn("+ claude 2.0: 1", result)
             self.assertIn("+ codex 0.50: 1", result)
+
+    def test_against_requires_baseline_and_excludes_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot = Path(directory) / "snapshot.json"
+            command = [sys.executable, "-B", str(SCRIPT)]
+            compare = ["--compare", str(snapshot)]
+            against = ["--against", str(snapshot)]
+            for args in (against, ["--json", *against], [*compare, *against, directory]):
+                with self.subTest(args=args):
+                    result = subprocess.run(command + args, text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("--against requires --compare and no transcript directories", result.stderr)
+
+    def test_invalid_comparison_snapshot_is_an_argument_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Path(directory) / "baseline.json"
+            current = Path(directory) / "current.json"
+            valid = {"schema_version": 1, "files": 1, "lines": 1, "kinds": {}, "versions": {}}
+            baseline.write_text(json.dumps(valid))
+            command = [sys.executable, "-B", str(SCRIPT), "--compare", str(baseline), "--against", str(current)]
+            for content in (None, "{", json.dumps(dict(valid, schema_version=2)),
+                            json.dumps(dict(valid, versions={"claude 1.0": -1}))):
+                with self.subTest(content=content):
+                    if content is not None:
+                        current.write_text(content)
+                    result = subprocess.run(command, text=True, capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("cannot read comparison snapshot", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
 
     def test_invalid_baselines_are_reported_as_argument_errors(self):
         with tempfile.TemporaryDirectory() as directory:

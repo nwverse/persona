@@ -18,6 +18,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.HubScope
 import persona.core.contracts.JsonCodec
+import persona.core.contracts.ProtocolCompatibility
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import persona.core.domain.AttachedFile
@@ -91,7 +92,6 @@ class ChatComposerStateTest {
         val finish = CompletableDeferred<Unit>()
         fun upload(attachment: ComposerAttachment) = async(Dispatchers.Default + SupervisorJob()) {
             // Each upload used to read and later replace this whole list. Per-id updates must keep the other result.
-            state.attachments.map { if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it }
             state.updateAttachment(attachment.id) { it.copy(uploadState = DraftUploadState.Uploading) }
             firstRead.complete(Unit)
             finish.await()
@@ -163,12 +163,17 @@ class ChatComposerStateTest {
     @Test fun forwardedContextKeepsItsOwnFileTagsOutOfTheNewAttachments() {
         val nested = AttachedFile("file", "/up/quoted.txt", "quoted.txt", 10).toXml()
         val own = AttachedFile("file", "/up/own.txt", "own.txt", 20).toXml()
-        val raw = "Review\n\n<persona-context kind=\"quote\">\n$nested\n</persona-context>\n\n$own"
-        val edited = ChatComposerState().apply { editMessage(raw) }
-        assertEquals(listOf("/up/own.txt"), edited.attachments.map { it.path })
-        assertTrue(edited.value.text.contains(nested))
-        assertFalse(edited.value.text.contains(own))
-        assertEquals(raw, edited.message())
+        val canonical = "Review\n\n<persona-context kind=\"quote\">\n$nested\n<attached_images>\n/up/quoted.jpg\n</attached_images>\n</persona-context>\n\n$own"
+        val legacy = ProtocolCompatibility.messageForHub(canonical)
+        assertNotEquals(canonical, legacy)
+        for (raw in listOf(canonical, legacy)) {
+            val edited = ChatComposerState().apply { editMessage(raw) }
+            assertEquals(listOf("/up/own.txt"), edited.attachments.map { it.path })
+            assertTrue(edited.value.text.contains("/up/quoted.txt"))
+            assertTrue(edited.value.text.contains("/up/quoted.jpg"))
+            assertFalse(edited.value.text.contains("/up/own.txt"))
+            if (raw == canonical) assertEquals(raw, edited.message())
+        }
     }
 
     @Test fun tenFilesFitButTheEleventhHasNoPlace() {

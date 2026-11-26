@@ -331,11 +331,7 @@ func (ps *extensions) setSandbox(ctx context.Context, p *extension.Extension, on
 	st := ps.sandboxOf(ctx, p)
 	ps.reg.Audit(ctx, p.Record.ID, "sandbox", who, map[string]any{"enabled": st.Enabled, "chosen": st.Chosen})
 	ps.logf("extension %s: sandbox %v (by %s)", p.Record.ID, st.Enabled, who)
-	run := ps.ctx // its program lives as long as the extensions do, not as long as this request
-	if run == nil {
-		run = context.Background()
-	}
-	ps.apply(run, p.Record.ID)
+	ps.apply(ps.runtimeContext(ctx), p.Record.ID)
 	return nil
 }
 
@@ -394,6 +390,9 @@ func (ps *extensions) confine(ctx context.Context, p *extension.Extension, hp *h
 	}
 	hubURL := "http://" + egress.HubHost
 	s.Env = identity.Environment(s.Env, "PERSONA_HUB_URL="+hubURL)
+	// A permitted loopback address in its settings is LocalHost in the sandbox (`127.0.0.1` there is the sandbox
+	// itself, #13540).
+	s.Env = setEnv(s.Env, "PERSONA_PLUGIN_CONFIG", string(extension.SandboxConfig(p.Manifest, ps.reg.Config(p), ruleNow())))
 	if start := s.StartEnv; start != nil {
 		s.StartEnv = func() []string { return identity.Environment(start(), "PERSONA_HUB_URL="+hubURL) }
 	}
@@ -403,6 +402,7 @@ func (ps *extensions) confine(ctx context.Context, p *extension.Extension, hp *h
 			if params.Hub.URL != "" {
 				params.Hub.URL = hubURL
 			}
+			params.Config = extension.SandboxConfig(p.Manifest, params.Config, ruleNow())
 			return params, err
 		}
 	}
