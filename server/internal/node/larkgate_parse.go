@@ -317,6 +317,10 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	}
 	vars := map[string]string{}
 	varsStable := larkVariableScopeStable(cmd, gates)
+	if !varsStable {
+		// Outside straight-line code only a variable constant over the whole command expands (#16491).
+		vars = larkLiteralConstants(cmd)
+	}
 	executableEnv := false
 	// Text naming lark-cli is a call only where a program executes it (larkgate_text.go): flow notes each
 	// segment for larkTextRuns.
@@ -871,6 +875,187 @@ func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 		return true
 	})
 	return stable
+}
+
+var (
+	larkConstantValue = lazyre.New(`^[A-Za-z0-9_-]+$`)
+	larkConstantName  = lazyre.New(`^(?:[a-z][A-Za-z0-9_]*|[A-Z])$`)
+	// zsh's lowercase special parameters and hook arrays: the shell sets or reads them itself (=~ fills match, cd runs
+	// chpwd_functions). bash's are all uppercase or start with "_", which larkConstantName already rules out.
+	larkShellLowercase = map[string]bool{"argv": true, "status": true, "pipestatus": true, "path": true, "cdpath": true,
+		"fpath": true, "fignore": true, "mailpath": true, "manpath": true, "module_path": true, "psvar": true, "watch": true,
+		"match": true, "mbegin": true, "mend": true, "reply": true, "signals": true, "histchars": true, "prompt": true,
+		"funcstack": true, "funcfiletrace": true, "funcsourcetrace": true, "functrace": true, "options": true,
+		"parameters": true, "commands": true, "aliases": true, "galiases": true, "saliases": true, "functions": true,
+		"builtins": true, "reswords": true, "history": true, "historywords": true, "jobdirs": true, "jobstates": true,
+		"jobtexts": true, "dirstack": true, "modules": true, "nameddirs": true, "userdirs": true, "usergroups": true,
+		"errnos": true, "sysparams": true, "termcap": true, "terminfo": true, "mapfile": true, "epochtime": true,
+		"langinfo": true, "keymaps": true, "widgets": true, "patchars": true, "words": true, "compstate": true}
+)
+
+// larkShellUppercase: bash's and zsh's uppercase parameters that the shell itself rewrites while a command runs (cd,
+// =~, read, getopts, every command or second). A literal binding of one says nothing about its later value.
+var larkShellUppercase = map[string]bool{"PWD": true, "OLDPWD": true, "FUNCNAME": true, "REPLY": true, "OPTARG": true,
+	"OPTIND": true, "LINENO": true, "RANDOM": true, "SRANDOM": true, "SECONDS": true, "EPOCHSECONDS": true,
+	"EPOCHREALTIME": true, "HISTCMD": true, "PIPESTATUS": true, "MATCH": true, "MBEGIN": true, "MEND": true,
+	"COPROC": true, "MAPFILE": true, "DIRSTACK": true, "GROUPS": true, "PPID": true, "UID": true, "EUID": true,
+	"SHLVL": true, "COLUMNS": true, "LINES": true, "TTYIDLE": true, "ERRNO": true}
+
+// larkShellManaged: a name bash or zsh sets or acts on by itself.
+func larkShellManaged(name string) bool {
+	return name == "_" || name == "IFS" || strings.HasPrefix(name, "BASH") || larkShellUppercase[name] ||
+		larkShellLowercase[name] || strings.HasSuffix(name, "_functions") || strings.HasPrefix(name, "zsh_") ||
+		strings.HasPrefix(name, "zle_") || strings.HasPrefix(name, "comp")
+}
+
+// larkConstantNameOK: a lowercase name or one capital letter that the shell never sets itself.
+func larkConstantNameOK(name string) bool {
+	return larkConstantName.MatchString(name) && !larkShellManaged(name)
+}
+
+// larkLiteralConstants returns the variables provably constant over the whole command, for routes in loops and lists
+// that larkVariableScopeStable rejects (#16491). A constant is assigned exactly once, as `NAME=value` on its own, by a
+// top-level statement that always runs: a `;` / newline statement, or an `&&` operand after only `true`, `:` or `cd` to
+// an absolute directory that exists now and anyone may enter. Its value is a literal of [A-Za-z0-9_-], so it cannot
+// change which route a call reaches; its name is one the shell never sets itself (larkConstantNameOK); it is not used
+// before that statement, and nothing else in the command can assign it. Anything that can
+// assign a variable indirectly (eval, source, read, export, unset, functions, …) leaves no constants at all.
+func larkLiteralConstants(cmd string) map[string]string {
+	out := map[string]string{}
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil {
+		return out
+	}
+	type constant struct {
+		value string
+		at    syntax.Pos
+	}
+	candidates := map[string]constant{}
+	assigned := map[string]int{} // every assignment of each name, anywhere
+	used := map[string][]syntax.Pos{}
+	opaque := false
+	alwaysRuns := func(st *syntax.Stmt) bool {
+		call, ok := st.Cmd.(*syntax.CallExpr)
+		if !ok || st.Negated || st.Background || st.Coprocess || len(st.Redirs) > 0 || len(call.Assigns) > 0 {
+			return false
+		}
+		words := make([]string, len(call.Args))
+		for i, arg := range call.Args {
+			var dynamic bool
+			if words[i], dynamic = executionWord(arg); dynamic {
+				return false
+			}
+		}
+		switch {
+		case len(words) == 1 && (words[0] == "true" || words[0] == ":"):
+			return true
+		case len(words) == 2 && words[0] == "cd":
+			// An absolute literal directory anyone may enter: it does not depend on an earlier cd, CDPATH or who runs it.
+			dir := words[1]
+			if !filepath.IsAbs(dir) || strings.ContainsAny(dir, "~*?[]{}") || slices.Contains(strings.Split(dir, "/"), "..") {
+				return false
+			}
+			info, err := os.Stat(dir)
+			return err == nil && info.IsDir() && info.Mode().Perm()&0o001 != 0
+		}
+		return false
+	}
+	candidate := func(st *syntax.Stmt) {
+		call, ok := st.Cmd.(*syntax.CallExpr)
+		if !ok || len(call.Args) != 0 || len(call.Assigns) != 1 || len(st.Redirs) > 0 || st.Background || st.Coprocess || st.Negated {
+			return
+		}
+		a := call.Assigns[0]
+		if a.Append || a.Index != nil || a.Array != nil || a.Naked || a.Value == nil || a.Name == nil {
+			return
+		}
+		value, dynamic := executionWord(a.Value)
+		if dynamic || !larkConstantValue.MatchString(value) || !larkConstantNameOK(a.Name.Value) {
+			return
+		}
+		candidates[a.Name.Value] = constant{value: value, at: st.Pos()}
+	}
+	for _, st := range tree.Stmts {
+		// A top-level `a && b && NAME=v` is a left-nested chain; walk it in order.
+		var chain []*syntax.Stmt
+		for cur := st; ; {
+			b, ok := cur.Cmd.(*syntax.BinaryCmd)
+			if !ok || b.Op != syntax.AndStmt || cur.Negated || cur.Background || cur.Coprocess || len(cur.Redirs) > 0 {
+				chain = append([]*syntax.Stmt{cur}, chain...)
+				break
+			}
+			chain = append([]*syntax.Stmt{b.Y}, chain...)
+			cur = b.X
+		}
+		for i, part := range chain {
+			if !slices.ContainsFunc(chain[:i], func(prev *syntax.Stmt) bool { return !alwaysRuns(prev) }) {
+				candidate(part)
+			}
+		}
+	}
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.Assign:
+			if n.Name != nil {
+				assigned[n.Name.Value]++
+			}
+		case *syntax.WordIter:
+			if n.Name != nil {
+				assigned[n.Name.Value] += 2 // a loop variable is never a constant
+			}
+		case *syntax.ParamExp:
+			if n.Param != nil {
+				if n.Exp != nil || n.Excl || n.Names != 0 {
+					assigned[n.Param.Value] += 2 // ${NAME:=x}, ${!NAME}: assigns or reads indirectly
+				}
+				used[n.Param.Value] = append(used[n.Param.Value], n.Pos())
+			}
+		case *syntax.ArithmCmd, *syntax.ArithmExp:
+			// Arithmetic can assign (`$((N=1))`, `((N++))`): no name in it is a constant.
+			syntax.Walk(n, func(inner syntax.Node) bool {
+				switch w := inner.(type) {
+				case *syntax.Lit:
+					assigned[w.Value] += 2
+				case *syntax.ParamExp:
+					if w.Param != nil {
+						assigned[w.Param.Value] += 2
+					}
+				}
+				return true
+			})
+		case *syntax.FuncDecl, *syntax.DeclClause, *syntax.LetClause:
+			opaque = true
+		case *syntax.CallExpr:
+			if len(n.Args) == 0 {
+				return true
+			}
+			name, dynamic := executionWord(n.Args[0])
+			if dynamic {
+				opaque = true // a command named by an expansion could be anything, eval included
+				return true
+			}
+			switch filepath.Base(name) {
+			case "eval", "source", ".", "read", "readarray", "mapfile", "getopts", "unset", "export", "declare", "typeset",
+				"local", "readonly", "let", "builtin", "command", "exec", "printf", "alias", "trap":
+				// printf -v, command/builtin wrapping one of the others: any could assign or replace a variable.
+				opaque = opaque || name != "printf" || slices.ContainsFunc(n.Args[1:], func(w *syntax.Word) bool {
+					s, dyn := executionWord(w)
+					return dyn || strings.HasPrefix(s, "-v")
+				})
+			}
+		}
+		return true
+	})
+	if opaque {
+		return map[string]string{}
+	}
+	for name, c := range candidates {
+		if assigned[name] != 1 || slices.ContainsFunc(used[name], func(p syntax.Pos) bool { return p.Offset() < c.at.Offset() }) {
+			continue
+		}
+		out[name] = c.value
+	}
+	return out
 }
 
 // scalarParameter is a plain quoted scalar expansion, not "$@", an array
