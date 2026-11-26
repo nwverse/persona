@@ -1,4 +1,4 @@
-package extmgr
+package larksync
 
 import (
 	"context"
@@ -15,22 +15,17 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/botport"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/larksyncwire"
+	"github.com/nwverse/persona/server/internal/modules/lark/larkauth"
 )
 
-// Mock suite C, the manager's part: the sync bots' registration with the user scopes, the authorization's three modes
-// (browser, the device flow when the redirect URL cannot be set, the owner pasting it), approval awaiting, and the
-// token's refresh (single-flight per binding, persisted before it is handed out, an invalid grant ends in
-// needs_reauth without retrying).
-
-const larkRedirect = "https://hub.example/lark-oauth"
+const testRedirect = "https://hub.example/lark-oauth"
 
 // A new sync-only bot is registered by QR with the user scopes of its tier; the device code and the app's secret are
 // sealed in top-level fields; adding the scopes to an existing app (the chat bot's) names that app.
 func TestLarkSyncBotRegistersWithUserScopes(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	w.reg.polls = []botcard.RegisterTicket{{Status: botcard.RegisterPending},
 		{Status: botcard.RegisterDone, AppID: "cli_new", AppSecret: "new-app-secret", Brand: "lark"}}
 	code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots", `{"label":"Work","tier":"full_with_im"}`)
@@ -39,15 +34,15 @@ func TestLarkSyncBotRegistersWithUserScopes(t *testing.T) {
 	}
 	id, _ := out["bot_id"].(string)
 	p, _ := out["prompt"].(map[string]any)
-	if id == "" || p["step"] != stepLarkSyncRegister || p["kind"] != "qr" || p["qr"] == nil {
+	if id == "" || p["step"] != stepRegister || p["kind"] != "qr" || p["qr"] == nil {
 		t.Fatalf("add bot: %v", out)
 	}
 	opts := w.reg.lastBegin(t)
 	if !slices.Equal(opts.UserScopes, larksyncwire.ScopesFor(larksyncwire.TierFull)) || opts.AppID != "" {
 		t.Fatalf("registration options: %+v", opts)
 	}
-	raw := w.store.raw(larkSyncBotsKey)
-	noSecretIn(t, "the answer", larkJSON(t, out), "dc_sync_secret")
+	raw := w.store.raw(botsKey)
+	noSecretIn(t, "the answer", marshalJSON(t, out), "dc_sync_secret")
 	noSecretIn(t, "bots.feishu.sync.bots", raw, "dc_sync_secret")
 	if !strings.Contains(raw, `"registration_device_enc":"`) {
 		t.Fatalf("the device code is not sealed at the top level: %s", raw)
@@ -58,7 +53,7 @@ func TestLarkSyncBotRegistersWithUserScopes(t *testing.T) {
 	if code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/"+id+"/register", `{"step":"register"}`); code != 200 || p["done"] != true {
 		t.Fatalf("done: %d %v", code, p)
 	}
-	raw = w.store.raw(larkSyncBotsKey)
+	raw = w.store.raw(botsKey)
 	noSecretIn(t, "bots.feishu.sync.bots", raw, "new-app-secret", "dc_sync_secret")
 	if strings.Contains(raw, "registration_device_enc") {
 		t.Fatalf("the finished registration kept its device code: %s", raw)
@@ -72,10 +67,10 @@ func TestLarkSyncBotRegistersWithUserScopes(t *testing.T) {
 		b["role"] != larksyncwire.RoleSyncOnly || b["tier"] != larksyncwire.TierFull || b["label"] != "Work" || b["approval"] != larksyncwire.ApprovalReady {
 		t.Fatalf("sync bot: %v", b)
 	}
-	noSecretIn(t, "the view", larkJSON(t, view), "new-app-secret")
+	noSecretIn(t, "the view", marshalJSON(t, view), "new-app-secret")
 
 	// The chat bot's app gets the user scopes added: the registration names it.
-	if code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/scopes", `{"tier":"full_with_im"}`); code != 200 || p["step"] != stepLarkSyncRegister {
+	if code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/scopes", `{"tier":"full_with_im"}`); code != 200 || p["step"] != stepRegister {
 		t.Fatalf("scopes: %d %v", code, p)
 	}
 	if opts := w.reg.lastBegin(t); opts.AppID != "cli_primary" || !slices.Equal(opts.UserScopes, larksyncwire.ScopesFor(larksyncwire.TierFull)) {
@@ -89,8 +84,7 @@ func TestLarkSyncBotRegistersWithUserScopes(t *testing.T) {
 	if b := view["bots"].([]any)[0].(map[string]any); b["primary"] != true || b["tier"] != larksyncwire.TierFull || b["app_id"] != "cli_primary" {
 		t.Fatalf("primary: %v", b)
 	}
-	// The chat bot's own credentials were not touched.
-	if raw := w.store.raw(botSettingsKey); raw != "" {
+	if raw := w.store.raw("bots.feishu"); raw != "" {
 		t.Fatalf("bots.feishu written: %s", raw)
 	}
 
@@ -102,50 +96,38 @@ func TestLarkSyncBotRegistersWithUserScopes(t *testing.T) {
 	if code, view := w.do(t, "DELETE", "/api/v1/bots/feishu/sync/bots/"+id, ""); code != 200 || len(view["bots"].([]any)) != 1 || len(view["bindings"].([]any)) != 0 {
 		t.Fatalf("remove: %d %v", code, view)
 	}
-	if st, _ := w.h.larkSyncLoad(context.Background()); st.binding(key) != nil {
+	if st, _ := w.svc.load(context.Background()); st.binding(key) != nil {
 		t.Fatal("the bot's binding stayed")
-	}
-}
-
-// The chat bot's first registration (binding it by QR) also asks the user scopes of the sync's tier: TierDocs when
-// the owner never chose one.
-func TestLarkSyncPrimaryRegistrationAsksUserScopes(t *testing.T) {
-	w := newLarkWorld(t)
-	if _, ok := w.h.beginFeishuRegistration(context.Background(), ""); !ok {
-		t.Fatal("the registration did not begin")
-	}
-	if opts := w.reg.lastBegin(t); !slices.Equal(opts.UserScopes, larksyncwire.ScopesDocs) || opts.AppID != "" {
-		t.Fatalf("first registration: %+v", opts)
 	}
 }
 
 // The browser authorization: the redirect URL and the scopes are configured on the app once (under review: approval
 // awaiting), the PKCE verifier is sealed, and the return with state and code binds the account.
 func TestLarkSyncBrowserAuthorization(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	w.ua.configure = larksyncwire.RedirectReport{Configured: true, Published: true, Awaiting: true}
 	if code, _ := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"https://hub.example/elsewhere"}`); code != 400 {
 		t.Fatalf("a redirect that is not /lark-oauth: %d", code)
 	}
-	code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`)
-	if code != 200 || out["mode"] != larkSyncModeBrowser || !strings.Contains(out["url"].(string), "state=") {
+	code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+testRedirect+`"}`)
+	if code != 200 || out["mode"] != modeBrowser || !strings.Contains(out["url"].(string), "state=") {
 		t.Fatalf("authorize: %d %v", code, out)
 	}
-	if len(w.ua.configured) != 1 || w.ua.configured[0] != "cli_primary "+larkRedirect {
+	if len(w.ua.configured) != 1 || w.ua.configured[0] != "cli_primary "+testRedirect {
 		t.Fatalf("configured: %v", w.ua.configured)
 	}
 	req := w.ua.authorized[0]
-	if len(req.State) != 64 || len(req.Verifier) < 43 || req.RedirectURI != larkRedirect || !slices.Equal(req.Scopes, larksyncwire.ScopesDocs) {
+	if len(req.State) != 64 || len(req.Verifier) < 43 || req.RedirectURI != testRedirect || !slices.Equal(req.Scopes, larksyncwire.ScopesDocs) {
 		t.Fatalf("auth request: %+v", req)
 	}
-	raw := w.store.raw(larkSyncBindingsKey)
+	raw := w.store.raw(bindingsKey)
 	noSecretIn(t, "bots.feishu.sync.bindings", raw, req.Verifier)
-	noSecretIn(t, "the answer", larkJSON(t, out), req.Verifier)
+	noSecretIn(t, "the answer", marshalJSON(t, out), req.Verifier)
 	if !strings.Contains(raw, `"auth_verifier_enc":"`) {
 		t.Fatalf("the verifier is not sealed: %s", raw)
 	}
 	// Configured once: authorizing again goes straight to the browser.
-	if code, _ := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`); code != 200 || len(w.ua.configured) != 1 {
+	if code, _ := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+testRedirect+`"}`); code != 200 || len(w.ua.configured) != 1 {
 		t.Fatalf("again: %d, configured %v", code, w.ua.configured)
 	}
 	req = w.ua.authorized[1]
@@ -159,7 +141,7 @@ func TestLarkSyncBrowserAuthorization(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("oauth: %d %v", code, view)
 	}
-	if got := w.ua.exchanged[0]; got != "c1 "+larkRedirect+" "+req.Verifier {
+	if got := w.ua.exchanged[0]; got != "c1 "+testRedirect+" "+req.Verifier {
 		t.Fatalf("exchanged %q", got)
 	}
 	bindings := view["bindings"].([]any)
@@ -175,9 +157,9 @@ func TestLarkSyncBrowserAuthorization(t *testing.T) {
 	if a := accounts[0].(map[string]any); a["label"] != "Me" || a["brand"] != "feishu" {
 		t.Fatalf("account: %v", a)
 	}
-	raw = w.store.raw(larkSyncBindingsKey)
+	raw = w.store.raw(bindingsKey)
 	noSecretIn(t, "bots.feishu.sync.bindings", raw, "user-access-1", "user-refresh-1", req.Verifier)
-	noSecretIn(t, "the view", larkJSON(t, view), "user-access-1", "user-refresh-1", "_enc")
+	noSecretIn(t, "the view", marshalJSON(t, view), "user-access-1", "user-refresh-1", "_enc")
 	if strings.Contains(raw, "~pending") {
 		t.Fatalf("the authorization under way stayed: %s", raw)
 	}
@@ -186,15 +168,15 @@ func TestLarkSyncBrowserAuthorization(t *testing.T) {
 		t.Fatalf("the state was used again: %d", code)
 	}
 	// A state that ran out is refused.
-	w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`)
-	w.advance(larkSyncAuthFor + time.Second)
+	w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+testRedirect+`"}`)
+	w.advance(authFor + time.Second)
 	if code, _ := w.do(t, "POST", "/api/v1/bots/feishu/sync/oauth", `{"state":"`+w.ua.authorized[2].State+`","code":"c1"}`); code != 400 {
 		t.Fatalf("an expired state: %d", code)
 	}
 	// The tick drops it once it ran out.
 	w.advance(2 * time.Minute)
-	w.h.larkSyncRemind(context.Background())
-	if raw := w.store.raw(larkSyncBindingsKey); strings.Contains(raw, "~pending") {
+	w.svc.remind(context.Background())
+	if raw := w.store.raw(bindingsKey); strings.Contains(raw, "~pending") {
 		t.Fatalf("an expired authorization stayed: %s", raw)
 	}
 }
@@ -202,17 +184,17 @@ func TestLarkSyncBrowserAuthorization(t *testing.T) {
 // An app without the patch permission cannot get the redirect URL: the device flow (a QR code) authorizes instead;
 // when that is not offered either, the owner is shown the redirect URL to paste and the app's settings page.
 func TestLarkSyncAuthorizationFallsBack(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierDocs)
 	w.ua.configure = larksyncwire.RedirectReport{MissingPatch: true, ConsoleURL: "https://open.example.com/app/cli_sync/safe"}
-	code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/bsync/authorize", `{"redirect_uri":"`+larkRedirect+`","tier":"full_with_im"}`)
+	code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/bsync/authorize", `{"redirect_uri":"`+testRedirect+`","tier":"full_with_im"}`)
 	p, _ := out["prompt"].(map[string]any)
-	if code != 200 || out["mode"] != larkSyncModeDevice || p["kind"] != "qr" || p["qr"] == nil || p["user_code"] != "UC-1" {
+	if code != 200 || out["mode"] != modeDevice || p["kind"] != "qr" || p["qr"] == nil || p["user_code"] != "UC-1" {
 		t.Fatalf("device: %d %v", code, out)
 	}
-	noSecretIn(t, "the answer", larkJSON(t, out), "device_secret")
-	noSecretIn(t, "bots.feishu.sync.bindings", w.store.raw(larkSyncBindingsKey), "device_secret")
-	if !strings.Contains(w.store.raw(larkSyncBindingsKey), `"auth_device_enc":"`) {
+	noSecretIn(t, "the answer", marshalJSON(t, out), "device_secret")
+	noSecretIn(t, "bots.feishu.sync.bindings", w.store.raw(bindingsKey), "device_secret")
+	if !strings.Contains(w.store.raw(bindingsKey), `"auth_device_enc":"`) {
 		t.Fatal("the device code is not sealed")
 	}
 	w.ua.devicePoll = []larksyncwire.DevicePoll{{Status: larksyncwire.DeviceSlowDown}, {Status: larksyncwire.DevicePending},
@@ -224,7 +206,7 @@ func TestLarkSyncAuthorizationFallsBack(t *testing.T) {
 	if code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/bsync/authorize/poll", ""); code != 200 || p["done"] != nil {
 		t.Fatalf("pending: %d %v", code, p)
 	}
-	if code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/bsync/authorize/poll", ""); code != 200 || p["done"] != true || p["account"] != i18n.T(w.h.userLang(), "hub-larksync.account_n", i18n.Args{"n": 1}) {
+	if code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/bsync/authorize/poll", ""); code != 200 || p["done"] != true || p["account"] != i18n.T(w.host.UserLang(), "hub-larksync.account_n", i18n.Args{"n": 1}) {
 		t.Fatalf("done: %d %v", code, p)
 	}
 	_, view := w.do(t, "GET", "/api/v1/bots/feishu/sync", "")
@@ -235,12 +217,12 @@ func TestLarkSyncAuthorizationFallsBack(t *testing.T) {
 	if bot := view["bots"].([]any)[1].(map[string]any); bot["approval"] != larksyncwire.ApprovalDegraded {
 		t.Fatalf("the bot's app: %v", bot)
 	}
-	noSecretIn(t, "bots.feishu.sync.bindings", w.store.raw(larkSyncBindingsKey), "dev-access", "dev-refresh", "device_secret")
+	noSecretIn(t, "bots.feishu.sync.bindings", w.store.raw(bindingsKey), "dev-access", "dev-refresh", "device_secret")
 
 	// No device flow either: the owner pastes the redirect URL; the browser URL works once they did.
 	w.ua.deviceErr = errors.New("device flow not offered")
-	code, out = w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`)
-	if code != 200 || out["mode"] != larkSyncModeManual || out["redirect_uri"] != larkRedirect || out["console_url"] == "" ||
+	code, out = w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+testRedirect+`"}`)
+	if code != 200 || out["mode"] != modeManual || out["redirect_uri"] != testRedirect || out["console_url"] == "" ||
 		!strings.Contains(out["url"].(string), "client_id=cli_primary") {
 		t.Fatalf("manual: %d %v", code, out)
 	}
@@ -251,7 +233,6 @@ func TestLarkSyncAuthorizationFallsBack(t *testing.T) {
 // device flow first instead of jumping straight to manual redirect pasting, and falls back to manual only when
 // the device endpoint itself is unavailable.
 func TestLarkSyncAuthorizeMissingPatchScopeFallsBackToDeviceFlow(t *testing.T) {
-	needsLarkModule(t)
 	for _, errCode := range []int{99991672, 99991676} {
 		t.Run(strconv.Itoa(errCode), func(t *testing.T) {
 			var deviceOK atomic.Bool
@@ -296,13 +277,13 @@ func TestLarkSyncAuthorizeMissingPatchScopeFallsBackToDeviceFlow(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			w := newLarkWorld(t)
-			w.h.bots.sync.userAuth = botport.NewUserAuth(srv.URL, srv.URL, srv.Client())
+			w := newServiceWorld(t)
+			w.svc.userAuth = larkauth.NewUserAuth(srv.URL, srv.URL, srv.Client())
 
-			code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`)
+			code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+testRedirect+`"}`)
 			p, _ := out["prompt"].(map[string]any)
-			if code != 200 || out["mode"] != larkSyncModeDevice || p["user_code"] != "UC-PATCH" {
-				t.Fatalf("code %d: got %d %v, want mode=%s with device prompt", errCode, code, out, larkSyncModeDevice)
+			if code != 200 || out["mode"] != modeDevice || p["user_code"] != "UC-PATCH" {
+				t.Fatalf("code %d: got %d %v, want mode=%s with device prompt", errCode, code, out, modeDevice)
 			}
 			if deviceHits.Load() != 1 || publishHits.Load() != 0 {
 				t.Fatalf("code %d: deviceHits=%d publishHits=%d, want 1 and 0", errCode, deviceHits.Load(), publishHits.Load())
@@ -310,8 +291,8 @@ func TestLarkSyncAuthorizeMissingPatchScopeFallsBackToDeviceFlow(t *testing.T) {
 
 			// When device authorization is not offered, it degrades to manual redirect setup.
 			deviceOK.Store(false)
-			code, out = w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`"}`)
-			if code != 200 || out["mode"] != larkSyncModeManual || out["redirect_uri"] != larkRedirect ||
+			code, out = w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+testRedirect+`"}`)
+			if code != 200 || out["mode"] != modeManual || out["redirect_uri"] != testRedirect ||
 				out["console_url"] != botcard.DomainFeishu+"/app/cli_primary/safe" {
 				t.Fatalf("code %d manual fallback: got %d %v", errCode, code, out)
 			}
@@ -322,10 +303,7 @@ func TestLarkSyncAuthorizeMissingPatchScopeFallsBackToDeviceFlow(t *testing.T) {
 	}
 }
 
-// Upgrading an existing docs_standard binding (on either the primary chat bot or a sync-only bot) to full_with_im:
-// POST /bots/{bot}/scopes starts QR scope registration for the existing app, finishing it updates the bot's tier and
-// clears its cached redirect while keeping the already-authorized binding on docs_standard until the owner authorizes
-// again with full_with_im scopes, after which the binding moves to full_with_im.
+// Upgrading an existing docs_standard binding to full_with_im.
 func TestLarkSyncUpgradeExistingBindingToFullWithIM(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -337,17 +315,15 @@ func TestLarkSyncUpgradeExistingBindingToFullWithIM(t *testing.T) {
 		{name: "sync_only", botID: "bsync", appID: "cli_sync", sync: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w := newLarkWorld(t)
+			w := newServiceWorld(t)
 			if tc.sync {
 				w.addSyncBot(t, tc.botID, tc.appID, larksyncwire.TierDocs)
 			}
-			// Simulate a bot that already configured redirect once and has an existing docs_standard binding
-			// (including a legacy binding whose own Tier was left empty and inherited from the bot).
-			if _, err := w.h.larkSyncChange(context.Background(), func(st *larkSyncState) error {
+			if _, err := w.svc.change(context.Background(), func(st *syncState) error {
 				if tc.botID == larksyncwire.PrimaryBot {
-					st.prefs.PrimaryRedirect = larkRedirect
+					st.prefs.PrimaryRedirect = testRedirect
 				} else {
-					st.bot(tc.botID).Redirect = larkRedirect
+					st.bot(tc.botID).Redirect = testRedirect
 				}
 				return nil
 			}); err != nil {
@@ -361,7 +337,7 @@ func TestLarkSyncUpgradeExistingBindingToFullWithIM(t *testing.T) {
 
 			// Step 1: add full_with_im scopes to the existing app via QR registration.
 			code, p := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/"+tc.botID+"/scopes", `{"tier":"full_with_im"}`)
-			if code != 200 || p["step"] != stepLarkSyncRegister || p["kind"] != "qr" {
+			if code != 200 || p["step"] != stepRegister || p["kind"] != "qr" {
 				t.Fatalf("scopes begin: %d %v", code, p)
 			}
 			opts := w.reg.lastBegin(t)
@@ -381,12 +357,12 @@ func TestLarkSyncUpgradeExistingBindingToFullWithIM(t *testing.T) {
 
 			// Step 2: authorize again with full_with_im -> re-configures redirect/scopes and upgrades the binding.
 			w.ua.configure = larksyncwire.RedirectReport{Configured: true, Published: true}
-			code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/"+tc.botID+"/authorize", `{"redirect_uri":"`+larkRedirect+`","tier":"full_with_im"}`)
-			if code != 200 || out["mode"] != larkSyncModeBrowser {
+			code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/"+tc.botID+"/authorize", `{"redirect_uri":"`+testRedirect+`","tier":"full_with_im"}`)
+			if code != 200 || out["mode"] != modeBrowser {
 				t.Fatalf("authorize: %d %v", code, out)
 			}
-			if len(w.ua.configured) != 1 || w.ua.configured[0] != tc.appID+" "+larkRedirect {
-				t.Fatalf("configured after scopes upgrade = %v, want [%s %s]", w.ua.configured, tc.appID, larkRedirect)
+			if len(w.ua.configured) != 1 || w.ua.configured[0] != tc.appID+" "+testRedirect {
+				t.Fatalf("configured after scopes upgrade = %v, want [%s %s]", w.ua.configured, tc.appID, testRedirect)
 			}
 			req := w.ua.authorized[len(w.ua.authorized)-1]
 			if !slices.Equal(req.Scopes, larksyncwire.ScopesFor(larksyncwire.TierFull)) {
@@ -413,10 +389,9 @@ func TestLarkSyncUpgradeExistingBindingToFullWithIM(t *testing.T) {
 }
 
 // Twenty callers asking a binding's token while it ends soon: one refresh, every caller gets the new token, and it was
-// saved (sealed) before any of them got it. The reader's token func asks before every request: a token that is still
-// good is never refreshed, however often it is asked.
+// saved (sealed) before any of them got it.
 func TestLarkSyncRefreshIsSingleFlight(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
 	key, _ := w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc-1", "ref-1", 5*time.Minute)
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -426,13 +401,13 @@ func TestLarkSyncRefreshIsSingleFlight(t *testing.T) {
 		<-release
 		return larksyncwire.Token{AccessToken: "acc-2", RefreshToken: "ref-2", ExpiresAt: w.now().Add(2 * time.Hour)}, nil
 	}
-	shared, _ := w.h.larkSyncTokenFunc(key)
+	shared, _ := w.svc.tokenFunc(key)
 	var wg sync.WaitGroup
 	errs := make(chan string, 20)
 	for i := range 20 {
 		token := shared
 		if i%2 == 1 {
-			token, _ = w.h.larkSyncTokenFunc(key)
+			token, _ = w.svc.tokenFunc(key)
 		}
 		wg.Add(1)
 		go func() {
@@ -442,9 +417,8 @@ func TestLarkSyncRefreshIsSingleFlight(t *testing.T) {
 				errs <- "token: " + tok
 				return
 			}
-			// Saved before it was handed out.
 			b := w.binding(t, key)
-			if got, _ := w.h.larkSyncOpen(b.AccessTokenEnc); got != "acc-2" {
+			if got, _ := w.svc.open(b.AccessTokenEnc); got != "acc-2" {
 				errs <- "not saved yet: " + got
 			}
 		}()
@@ -460,12 +434,12 @@ func TestLarkSyncRefreshIsSingleFlight(t *testing.T) {
 		t.Fatalf("refreshes: %d", n)
 	}
 	b := w.binding(t, key)
-	access, _ := w.h.larkSyncOpen(b.AccessTokenEnc)
-	refresh, _ := w.h.larkSyncOpen(b.RefreshTokenEnc)
+	access, _ := w.svc.open(b.AccessTokenEnc)
+	refresh, _ := w.svc.open(b.RefreshTokenEnc)
 	if access != "acc-2" || refresh != "ref-2" || !b.TokenExpiresAt.Equal(w.now().Add(2*time.Hour)) {
 		t.Fatalf("saved: %s %s %v", access, refresh, b.TokenExpiresAt)
 	}
-	noSecretIn(t, "bots.feishu.sync.bindings", w.store.raw(larkSyncBindingsKey), "acc-2", "ref-2")
+	noSecretIn(t, "bots.feishu.sync.bindings", w.store.raw(bindingsKey), "acc-2", "ref-2")
 
 	for range 50 {
 		if tok, err := shared(ctx); err != nil || tok != "acc-2" {
@@ -480,15 +454,15 @@ func TestLarkSyncRefreshIsSingleFlight(t *testing.T) {
 // A refused refresh token leaves the binding needs_reauth: it is not refreshed again, not run, and the view says so,
 // until the owner authorizes again.
 func TestLarkSyncInvalidGrantNeedsReauth(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
 	key, _ := w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc-1", "ref-1", time.Minute)
 	w.ua.refresh = func(larksyncwire.App, string) (larksyncwire.Token, error) {
 		return larksyncwire.Token{}, &larksyncwire.Error{Kind: larksyncwire.ErrKindInvalidGrant, Op: "refresh", Code: 20037, Msg: "expired"}
 	}
-	token, _ := w.h.larkSyncTokenFunc(key)
+	token, _ := w.svc.tokenFunc(key)
 	for range 3 {
-		if _, err := token(ctx); larkSyncKindOf(err) != larksyncwire.ErrKindInvalidGrant {
+		if _, err := token(ctx); errorKindOf(err) != larksyncwire.ErrKindInvalidGrant {
 			t.Fatalf("token: %v", err)
 		}
 	}
@@ -496,7 +470,7 @@ func TestLarkSyncInvalidGrantNeedsReauth(t *testing.T) {
 		t.Fatalf("refreshes: %d, want 1 (no retry storm)", n)
 	}
 	b := w.binding(t, key)
-	if b.Health != larksyncwire.HealthNeedsReauth || larkSyncDue(b, w.now().Add(72*time.Hour)) {
+	if b.Health != larksyncwire.HealthNeedsReauth || isDue(b, w.now().Add(72*time.Hour)) {
 		t.Fatalf("binding: %+v", b)
 	}
 	_, view := w.do(t, "GET", "/api/v1/bots/feishu/sync", "")
@@ -505,7 +479,7 @@ func TestLarkSyncInvalidGrantNeedsReauth(t *testing.T) {
 	}
 	// Authorizing again heals it.
 	w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc-3", "ref-3", 2*time.Hour)
-	if b := w.binding(t, key); b.Health != larksyncwire.HealthOK || !larkSyncDue(b, w.now()) {
+	if b := w.binding(t, key); b.Health != larksyncwire.HealthOK || !isDue(b, w.now()) {
 		t.Fatalf("authorized again: %+v", b)
 	}
 }
@@ -513,7 +487,7 @@ func TestLarkSyncInvalidGrantNeedsReauth(t *testing.T) {
 // A token refused part way through a run (revoked before it ran out): the run refreshes once and reads again; refused
 // again, the binding needs authorizing again.
 func TestLarkSyncRunRefreshesOnARefusedToken(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
 	key, acc := w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc-1", "ref-1", 2*time.Hour)
 	var seen []string
@@ -529,7 +503,7 @@ func TestLarkSyncRunRefreshesOnARefusedToken(t *testing.T) {
 		}
 		return larksyncwire.Result{Cursors: map[string]string{"drive": "2"}}, nil
 	})
-	if err := w.h.larkSyncRun(ctx, key); err != nil {
+	if err := w.svc.runSync(ctx, key); err != nil {
 		t.Fatal(err)
 	}
 	if len(seen) != 2 || seen[1] != "acc-ref-1+" || w.ua.refreshes.Load() != 1 {
@@ -545,7 +519,7 @@ func TestLarkSyncRunRefreshesOnARefusedToken(t *testing.T) {
 		}
 		return larksyncwire.Result{}, &larksyncwire.Error{Kind: larksyncwire.ErrKindAuth, Op: "im", Code: 99991663}
 	})
-	if err := w.h.larkSyncRun(ctx, key); larkSyncKindOf(err) != larksyncwire.ErrKindAuth {
+	if err := w.svc.runSync(ctx, key); errorKindOf(err) != larksyncwire.ErrKindAuth {
 		t.Fatalf("run: %v", err)
 	}
 	if b := w.binding(t, key); b.Health != larksyncwire.HealthNeedsReauth || w.ua.refreshes.Load() != 2 || w.store.cursorsOf(key)["drive"] != "2" {
@@ -568,30 +542,30 @@ func TestLarkSyncRedirectRule(t *testing.T) {
 		"ftp://hub.example/lark-oauth":           false,
 		"/lark-oauth":                            false,
 	} {
-		if got := larkSyncValidRedirect(raw); got != want {
+		if got := validRedirect(raw); got != want {
 			t.Errorf("%s: %v, want %v", raw, got, want)
 		}
 	}
 }
 
 func TestLarkSyncReauthorizationReconfiguresMissingScopesWithSameRedirect(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
 	key, _ := w.adopt(t, larksyncwire.PrimaryBot, "ou_owner", "example-access", "example-refresh", 24*time.Hour)
 	w.ua.configure = larksyncwire.RedirectReport{Configured: true, Published: true}
-	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
-		st.prefs.PrimaryRedirect = larkRedirect
+	if _, err := w.svc.change(ctx, func(st *syncState) error {
+		st.prefs.PrimaryRedirect = testRedirect
 		b := st.binding(key)
 		b.Health, b.Tier = larksyncwire.HealthScopeMissing, larksyncwire.TierFull
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+larkRedirect+`","tier":"full_with_im"}`)
-	if code != 200 || out["mode"] != larkSyncModeBrowser {
+	code, out := w.do(t, "POST", "/api/v1/bots/feishu/sync/bots/primary/authorize", `{"redirect_uri":"`+testRedirect+`","tier":"full_with_im"}`)
+	if code != 200 || out["mode"] != modeBrowser {
 		t.Fatalf("authorize: status=%d mode=%v", code, out["mode"])
 	}
-	if !slices.Equal(w.ua.configured, []string{"cli_primary " + larkRedirect}) {
+	if !slices.Equal(w.ua.configured, []string{"cli_primary " + testRedirect}) {
 		t.Fatal("missing scopes did not reconfigure an already known redirect")
 	}
 	if !slices.Equal(w.ua.authorized[0].Scopes, larksyncwire.ScopesFor(larksyncwire.TierFull)) {

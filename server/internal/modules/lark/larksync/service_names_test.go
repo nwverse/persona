@@ -1,4 +1,4 @@
-package extmgr
+package larksync
 
 import (
 	"context"
@@ -7,20 +7,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/larksyncwire"
 )
 
-// namesWorld is a full binding at backfill v2 with two unnamed external senders already in the outbox.
-func namesWorld(t *testing.T) (w *larkWorld, key string) {
+func namesWorld(t *testing.T) (w *serviceWorld, key string) {
 	t.Helper()
-	w = newLarkWorld(t)
+	w = newServiceWorld(t)
 	ctx := context.Background()
 	w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierFull)
 	key, acc := w.adopt(t, "bsync", "ou_owner", "acc-1", "ref-1", 24*time.Hour)
-	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
+	if _, err := w.svc.change(ctx, func(st *syncState) error {
 		b := st.binding(key)
 		b.Tier = larksyncwire.TierFull
 		b.BackfillVersion = 2
@@ -29,7 +27,7 @@ func namesWorld(t *testing.T) (w *larkWorld, key string) {
 		t.Fatal(err)
 	}
 	at := w.now().Add(-time.Hour)
-	raw, err := json.Marshal(connector.ChatBatch{
+	raw, err := json.Marshal(connectorwire.ChatBatch{
 		Chat: kbwire.SourceChat{ID: "oc_big", Name: "Big Group", Kind: "group"},
 		Messages: []kbwire.SourceMessage{
 			{ID: "om_a", SenderID: "ou_a", Text: "one", At: at},
@@ -42,7 +40,7 @@ func namesWorld(t *testing.T) (w *larkWorld, key string) {
 	if err := w.store.CommitLarkSyncRun(ctx, key, nil, []larksyncwire.IndexRecord{
 		{Key: larksyncwire.KeyMessage + "om_a", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: key, Entry: larksyncwire.EntryChat}}},
 		{Key: larksyncwire.KeyMessage + "om_b", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: key, Entry: larksyncwire.EntryChat}}},
-	}, []db.LarkSyncOutbox{{Kind: db.LarkSyncChat, CanonicalKey: "chat:oc_big", Payload: raw}}); err != nil {
+	}, []larksyncwire.OutboxRow{{Kind: larksyncwire.OutboxChat, CanonicalKey: "chat:oc_big", Payload: raw}}); err != nil {
 		t.Fatal(err)
 	}
 	w.script("bsync", acc, func(context.Context, larksyncwire.Binding, func(context.Context) (string, error), map[string]string, larksyncwire.Index) (larksyncwire.Result, error) {
@@ -51,7 +49,7 @@ func namesWorld(t *testing.T) (w *larkWorld, key string) {
 	return w, key
 }
 
-func (w *larkWorld) onResolve(fn func(larksyncwire.Binding, larksyncwire.NameResolveRequest) (larksyncwire.NameResolveResult, error)) {
+func (w *serviceWorld) onResolve(fn func(larksyncwire.Binding, larksyncwire.NameResolveRequest) (larksyncwire.NameResolveResult, error)) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.resolveNamesWithFallback = func(_ context.Context, b larksyncwire.Binding, _ func(context.Context) (string, error), req larksyncwire.NameResolveRequest) (larksyncwire.NameResolveResult, error) {
@@ -59,9 +57,6 @@ func (w *larkWorld) onResolve(fn func(larksyncwire.Binding, larksyncwire.NameRes
 	}
 }
 
-// The deploy that was rolled back: a sender-name lookup that timed out turned the binding's health to failing.
-// A timeout, a rate limit or a passing failure of the names step now only degrades naming: health stays ok, the
-// run does not count as failed, the warning and the round are recorded, and the backfill stays due.
 func TestLarkSyncSenderNamesTimeoutDegradesHealthOnly(t *testing.T) {
 	for name, resolveErr := range map[string]error{
 		"deadline":     context.DeadlineExceeded,
@@ -74,7 +69,7 @@ func TestLarkSyncSenderNamesTimeoutDegradesHealthOnly(t *testing.T) {
 			w.onResolve(func(larksyncwire.Binding, larksyncwire.NameResolveRequest) (larksyncwire.NameResolveResult, error) {
 				return larksyncwire.NameResolveResult{UserNames: map[string]string{"ou_a": "Alpha"}, Progress: `{"scans":{}}`}, resolveErr
 			})
-			if err := w.h.larkSyncRunMode(context.Background(), key, larksyncwire.ModeIM); err != nil {
+			if err := w.svc.runMode(context.Background(), key, larksyncwire.ModeIM); err != nil {
 				t.Fatalf("the run failed on a names error: %v", err)
 			}
 			b := w.binding(t, key)
@@ -84,7 +79,7 @@ func TestLarkSyncSenderNamesTimeoutDegradesHealthOnly(t *testing.T) {
 			if b.NamesWarning == "" || b.NamesRounds != 1 || b.BackfillVersion != 2 {
 				t.Fatalf("warning = %q, rounds = %d, backfill = %d; want a warning, 1, still v2", b.NamesWarning, b.NamesRounds, b.BackfillVersion)
 			}
-			if !b.NextIMRunAt.Equal(w.now().Add(larkSyncIMEvery)) {
+			if !b.NextIMRunAt.Equal(w.now().Add(imEvery)) {
 				t.Errorf("next IM run = %v, want the regular cadence", b.NextIMRunAt.Sub(w.now()))
 			}
 			cur, _ := w.store.LarkSyncCursors(context.Background(), key)
@@ -95,13 +90,12 @@ func TestLarkSyncSenderNamesTimeoutDegradesHealthOnly(t *testing.T) {
 	}
 }
 
-// What the owner must fix still shows: a missing contact scope is scope_missing, as before.
 func TestLarkSyncSenderNamesScopeStillShows(t *testing.T) {
 	w, key := namesWorld(t)
 	w.onResolve(func(larksyncwire.Binding, larksyncwire.NameResolveRequest) (larksyncwire.NameResolveResult, error) {
 		return larksyncwire.NameResolveResult{}, &larksyncwire.Error{Kind: larksyncwire.ErrKindScope, Op: "user name", Msg: "no permission"}
 	})
-	if err := w.h.larkSyncRunMode(context.Background(), key, larksyncwire.ModeIM); err != nil {
+	if err := w.svc.runMode(context.Background(), key, larksyncwire.ModeIM); err != nil {
 		t.Fatal(err)
 	}
 	if b := w.binding(t, key); b.Health != larksyncwire.HealthScopeMissing || b.NamesWarning != "" {
@@ -109,8 +103,6 @@ func TestLarkSyncSenderNamesScopeStillShows(t *testing.T) {
 	}
 }
 
-// Backfill v3 in rounds: a round cut short by its own budget saves its progress and the names it learned; the next
-// run's round is handed that progress, only what is still unnamed, and completes v3.
 func TestLarkSyncSenderNamesResumeAcrossRuns(t *testing.T) {
 	w, key := namesWorld(t)
 	ctx := context.Background()
@@ -130,7 +122,7 @@ func TestLarkSyncSenderNamesResumeAcrossRuns(t *testing.T) {
 		return larksyncwire.NameResolveResult{UserNames: map[string]string{"ou_b": "Beta"}}, nil
 	})
 
-	if err := w.h.larkSyncRunMode(ctx, key, larksyncwire.ModeIM); err != nil {
+	if err := w.svc.runMode(ctx, key, larksyncwire.ModeIM); err != nil {
 		t.Fatal(err)
 	}
 	b := w.binding(t, key)
@@ -142,7 +134,7 @@ func TestLarkSyncSenderNamesResumeAcrossRuns(t *testing.T) {
 		t.Fatalf("cursors after round 1 = %v", cur)
 	}
 
-	if err := w.h.larkSyncRunMode(ctx, key, larksyncwire.ModeIM); err != nil {
+	if err := w.svc.runMode(ctx, key, larksyncwire.ModeIM); err != nil {
 		t.Fatal(err)
 	}
 	if len(reqs) != 2 {
@@ -155,17 +147,16 @@ func TestLarkSyncSenderNamesResumeAcrossRuns(t *testing.T) {
 		t.Fatalf("round 2 asked for %v, want only the sender still unnamed", reqs[1].ChatSenders)
 	}
 	for i, d := range budgets {
-		if d != larkSyncNamesBudget {
-			t.Errorf("round %d budget = %v, want its own %v", i+1, d, larkSyncNamesBudget)
+		if d != namesBudget {
+			t.Errorf("round %d budget = %v, want its own %v", i+1, d, namesBudget)
 		}
 	}
 	b = w.binding(t, key)
-	if b.BackfillVersion != larkSyncBackfillVersion || b.NamesRounds != 0 || b.Health != larksyncwire.HealthOK {
+	if b.BackfillVersion != backfillVersion || b.NamesRounds != 0 || b.Health != larksyncwire.HealthOK {
 		t.Fatalf("after round 2: backfill %d, rounds %d, health %q", b.BackfillVersion, b.NamesRounds, b.Health)
 	}
 
-	// Done: a later run asks for nothing more.
-	if err := w.h.larkSyncRunMode(ctx, key, larksyncwire.ModeIM); err != nil {
+	if err := w.svc.runMode(ctx, key, larksyncwire.ModeIM); err != nil {
 		t.Fatal(err)
 	}
 	if len(reqs) != 2 {
