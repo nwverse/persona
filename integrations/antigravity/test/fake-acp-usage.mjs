@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 
@@ -18,6 +18,18 @@ const server = createServer(async (req, res) => {
   if (method === 'RetrieveUserQuotaSummary') {
     res.end(JSON.stringify({ response: JSON.parse(readFileSync(`${directory}/quota.json`, 'utf8')) }))
     return
+  }
+  if (method === 'GetUserStatus') {
+    const statusPath = `${directory}/user-status.json`
+    if (existsSync(statusPath)) {
+      const payload = JSON.parse(readFileSync(statusPath, 'utf8'))
+      if (payload?.httpStatus) {
+        res.writeHead(payload.httpStatus).end(JSON.stringify({ message: payload.message || 'status error' }))
+        return
+      }
+      res.end(JSON.stringify(payload))
+      return
+    }
   }
   res.writeHead(404).end('{"message":"Unknown native method"}')
 })
