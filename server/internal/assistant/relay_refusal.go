@@ -278,6 +278,17 @@ func (s *Service) reportRelayRefused(ctx context.Context, machine, to, tool, cod
 		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"), Body: i18n.T(lang, relayRefusedBody(tool, code), args)})
 }
 
+// reportSupervisionUnconfirmed pushes the owner when an unconfirmed supervision relay exhausts its confirmation
+// retries and is retired so newer supervision digests can deliver without manual intervention.
+func (s *Service) reportSupervisionUnconfirmed(ctx context.Context, machine, to string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	lang := s.lang(ctx)
+	s.push(withCard(ctx, cardRelayRefusal), Notification{DeviceID: machine, SessionID: to,
+		Title: i18n.T(lang, "assistant-conversations.relay_delivery_failed"),
+		Body:  i18n.T(lang, "assistant-conversations.supervision_delivery_unconfirmed")})
+}
+
 // relayRefusedBody is the key of the push's text when a message of kind tool is refused for good with code.
 func relayRefusedBody(tool, code string) string {
 	runtime := supervisionRefusalCode(code)

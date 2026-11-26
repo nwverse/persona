@@ -24,6 +24,10 @@ const (
 	relayLookLimit = 3
 )
 
+// supervisionConfirmRetryLimit bounds how many transcript-confirmation failure cycles an unconfirmed supervision
+// relay undergoes before retiring the stuck queue head and alerting the owner so newer supervision can deliver.
+var supervisionConfirmRetryLimit = 3
+
 // relayMsgID is the once_id every try of message msg to conversation to goes under: made from the message, so
 // the same after the manager restarts and for messages queued before ids existed, and different for any other one.
 func relayMsgID(to string, msg relayMsg) string {
@@ -111,6 +115,10 @@ func (s *Service) relayArrived(machine, to string, msg relayMsg) (bool, error) {
 // destination transcript. It is not a refusal; the caller persists the relay with its attempt state for reconciliation.
 var errSupervisionRelayUnconfirmed = errors.New("supervision send not confirmed in transcript")
 
+// errSupervisionConfirmExhausted marks a queued supervision relay that exhausted supervisionConfirmRetryLimit
+// transcript-confirmation cycles without matching in the destination transcript.
+var errSupervisionConfirmExhausted = errors.New("supervision send unconfirmed after retry limit")
+
 // lookForRelay notes a match as delivered. Otherwise it advances the relay's look schedule.
 func (s *Service) lookForRelay(machine, to string, msg *relayMsg) bool {
 	landed, err := s.relayArrived(machine, to, *msg)
@@ -194,7 +202,7 @@ func (s *Service) recordQueuedDoubt(to string, msg *relayMsg) {
 			if q[i].DoubtedAt.IsZero() {
 				q[i].DoubtedAt = triedAt
 			}
-			q[i].Looks, q[i].LookAfter = msg.Looks, msg.LookAfter
+			q[i].Looks, q[i].LookAfter, q[i].ConfirmFails = msg.Looks, msg.LookAfter, msg.ConfirmFails
 			b.st.Queue[to] = q
 			_ = s.saveRelayLocked()
 			break
@@ -286,6 +294,13 @@ func (s *Service) tryQueuedRelay(ctx context.Context, machine, to string, head *
 	}
 	if s.confirmSupervisionRelay(ctx, machine, to, &msg, res, round, err != nil) {
 		return msg, 0, nil
+	}
+	if !previous.TriedAt.IsZero() || !previous.DoubtedAt.IsZero() {
+		msg.ConfirmFails++
+	}
+	if msg.ConfirmFails >= supervisionConfirmRetryLimit {
+		s.releasePushes(context.Background(), to)
+		return msg, 0, errSupervisionConfirmExhausted
 	}
 	s.recordQueuedDoubt(to, &msg)
 	s.releasePushes(context.Background(), to)
