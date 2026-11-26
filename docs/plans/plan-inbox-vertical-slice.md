@@ -437,8 +437,9 @@ repository and the facade; and the client steps wait for the client domain guard
   structs, and the extension manager builds the apps' `{"type":"inbox"}`), so the kernel's publishing service waits for
   its first user (saved's events, #15222); and `TestDomainLayers` with a base refuses a count line the merge base lacks,
   so no `app-bridge-call` count starts: the Inbox's hook matches an open item's Agent link with `agentref.Ref.IsSame`
-  and goes on with that link's ids. None of the 53 lines in 25 test files that build `&Service{}` without `New`
-  reaches a table that moved, so nothing stays package-level. The guard is archguard's
+  and goes on with that link's ids. None of the 57 lines in 26 test files that build `&Service{}` without `New`
+  reaches a path that reads the kernel (`Service.snapshot`, `BusHub.request`, `BusHub.onHello`, `turnEnded`), so
+  nothing stays package-level. The guard is archguard's
   `TestCentralFilesNameNoInboxCode`: `service.go` keeps, besides the two fields, the register line and `s.inbox.lang`,
   the Inbox names of `Service.call` and the conversation views, in its shrink-only list.
 
