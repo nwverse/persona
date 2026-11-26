@@ -749,20 +749,23 @@ select:not([multiple], [size], .appearance-none) {
     border: 0;
     border-radius: 0;
   }
-  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header:first-of-type,
-  [data-app-shell][data-mac-chrome="windowed"] > aside header:first-of-type {
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14,
+  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 {
     height: 45px;
     -webkit-app-region: drag;
   }
-  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header:first-of-type :is(button, a, input, select, [role="button"]),
-  [data-app-shell][data-mac-chrome="windowed"] > aside header:first-of-type :is(button, a, input, select, [role="button"]) {
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14 :is(button, a, input, select, [role="button"]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 :is(button, a, input, select, [role="button"]) {
     -webkit-app-region: no-drag;
   }
-  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header:first-of-type {
+  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header.h-14 {
     padding-left: 124px;
   }
-  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header:first-of-type {
+  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header.h-14 {
     padding-left: 174px;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main > .min-h-0 > * > :not(:first-child) header.h-14 {
+    padding-left: 1rem;
   }
 }
 

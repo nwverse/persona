@@ -31,7 +31,7 @@ function subscribe(listener: () => void): () => void {
   syncBridge();
   listeners.add(listener);
   if (!detachBridge && typeof window !== "undefined") {
-    detachBridge = window.personaDesktop?.onWindowChromeChange?.((next) => {
+    detachBridge = window.personaDesktop?.onWindowChromeChange?.((next: DesktopWindowChrome) => {
       if (sameChrome(currentChrome, next)) return;
       currentChrome = next;
       listeners.forEach((f) => f());

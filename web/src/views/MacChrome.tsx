@@ -29,6 +29,11 @@ export function MacBayTools({ onSearch }: { onSearch: () => void }) {
   );
 }
 
+function applyMainClip(el: HTMLElement, value: string): void {
+  el.style.clipPath = value;
+  el.style.setProperty("-webkit-clip-path", value);
+}
+
 /** Clips `<main>` with the 44 px Apple G2 continuous-curvature path and strokes its crisp 1 px border + top specular rim. */
 export function MacMainContour({ mainRef, bay }: { mainRef: RefObject<HTMLElement | null>; bay: "rail" | "hidden" | null }) {
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
@@ -37,8 +42,7 @@ export function MacMainContour({ mainRef, bay }: { mainRef: RefObject<HTMLElemen
     const el = mainRef.current;
     if (!el) return;
     if (!bay) {
-      el.style.clipPath = "";
-      el.style.webkitClipPath = "";
+      applyMainClip(el, "");
       return;
     }
     const measure = () => {
@@ -46,22 +50,17 @@ export function MacMainContour({ mainRef, bay }: { mainRef: RefObject<HTMLElemen
       const h = Math.round(el.clientHeight);
       if (w >= 100 && h >= 100) {
         const { clip } = appleG2Contour(w, h, bay);
-        el.style.clipPath = `path("${clip}")`;
-        el.style.webkitClipPath = `path("${clip}")`;
+        applyMainClip(el, `path("${clip}")`);
         setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
       }
     };
     measure();
-    if (typeof ResizeObserver === "undefined") return () => {
-      el.style.clipPath = "";
-      el.style.webkitClipPath = "";
-    };
+    if (typeof ResizeObserver === "undefined") return () => applyMainClip(el, "");
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => {
       ro.disconnect();
-      el.style.clipPath = "";
-      el.style.webkitClipPath = "";
+      applyMainClip(el, "");
     };
   }, [mainRef, bay]);
 
