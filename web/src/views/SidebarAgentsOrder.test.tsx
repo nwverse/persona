@@ -218,7 +218,13 @@ describe("the paged list's Filter", () => {
     expect(filterButton()).toBeNull();
   });
 
-  const names = () => { const text = agentsText(); return text.indexOf("第一台") < text.indexOf("第二台") ? "first computer first" : "second computer first"; };
+  const computerNames = async () => {
+    await vi.waitFor(() => {
+      expect(agentsText()).toContain("第一台");
+      expect(agentsText()).toContain("第二台");
+    });
+    return agentsText().match(/第一台|第二台/g);
+  };
 
   it("keeps the hub's computer order on the paged list, though the newest session is on the second computer", async () => {
     localStorage.setItem("persona.agentGrouping", "machine");
@@ -226,7 +232,7 @@ describe("the paged list's Filter", () => {
     display({ sort_by_activity: false });
     await flush();
     expect(host.querySelector("[data-paged-sessions]")).not.toBeNull();
-    expect(names()).toBe("first computer first");
+    expect((await computerNames())?.[0]).toBe("第一台");
   });
 
   it("orders the paged list's computers by their newest session when the sort is on", async () => {
@@ -234,7 +240,7 @@ describe("the paged list's Filter", () => {
     await setup(true);
     display({ sort_by_activity: true });
     await flush();
-    expect(names()).toBe("second computer first");
+    expect((await computerNames())?.[0]).toBe("第二台");
   });
 });
 
