@@ -13,23 +13,22 @@ import (
 
 // IM reading bounds.
 const (
-	chatsPagesMost       = 20              // 2000 chats
-	chatMembersPagesMost = 20              // 2000 members per chat for fallback sender resolution
-	chatPagesMost        = 40              // 2000 messages of one chat per full run; the rest next run (ascending order)
-	imChatPagesMost      = 5               // 250 messages of one chat per ModeIM run so one busy chat never starves others
-	threadPagesMost      = 10              // 500 replies of one thread per full run
-	imThreadPagesMost    = 3               // 150 replies of one thread per ModeIM run
-	imChatThreadsMost    = 20              // threads read per chat per ModeIM run
-	searchPagesMost      = 10              // 500 general search hits per run
-	p2pSearchPagesMost   = 40              // 2000 p2p search hits per run for single-chat discovery
-	p2pChatsMost         = 2000            // remembered single chats per binding
-	messageOverlap       = 5 * time.Minute // re-read before a chat's cursor: messages that landed late
-	searchResource       = larksyncwire.ResSearch
-	p2pSearchResource    = larksyncwire.ResSearch + ":p2p"
-	chatResourceStem     = larksyncwire.ResIM + ":"
-	threadCursorStem     = "im_thread:"
-	p2pChatsResource     = chatResourceStem + "p2p_chats"
-	imRoundRobinCursor   = chatResourceStem + "rr"
+	chatsPagesMost     = 20              // 2000 chats
+	chatPagesMost      = 40              // 2000 messages of one chat per full run; the rest next run (ascending order)
+	imChatPagesMost    = 5               // 250 messages of one chat per ModeIM run so one busy chat never starves others
+	threadPagesMost    = 10              // 500 replies of one thread per full run
+	imThreadPagesMost  = 3               // 150 replies of one thread per ModeIM run
+	imChatThreadsMost  = 20              // threads read per chat per ModeIM run
+	searchPagesMost    = 10              // 500 general search hits per run
+	p2pSearchPagesMost = 40              // 2000 p2p search hits per run for single-chat discovery
+	p2pChatsMost       = 2000            // remembered single chats per binding
+	messageOverlap     = 5 * time.Minute // re-read before a chat's cursor: messages that landed late
+	searchResource     = larksyncwire.ResSearch
+	p2pSearchResource  = larksyncwire.ResSearch + ":p2p"
+	chatResourceStem   = larksyncwire.ResIM + ":"
+	threadCursorStem   = "im_thread:"
+	p2pChatsResource   = chatResourceStem + "p2p_chats"
+	imRoundRobinCursor = chatResourceStem + "rr"
 	// searchChatTypeP2P is the chat_type filter for POST /open-apis/search/v2/message to match single (p2p) chats only.
 	// Feishu Open Platform docs: https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/search-v2/message/create
 	// (oapi-sdk-go/v3/service/search/v2 CreateMessageReqBody.ChatType: "group_chat" | "p2p_chat").
@@ -862,6 +861,11 @@ func (r *run) fetchP2PChatName(ctx context.Context, chatID string) string {
 			targetID = data.P2PTargetID
 		} else if data.OwnerID != "" && data.OwnerID != r.owner && isContactUser(data.OwnerID, "") {
 			targetID = data.OwnerID
+		} else if data.P2PTargetID != "" {
+			// Another app's bot: no API a user token may call names it (members.go); an @mention may have.
+			if name := cmpString(r.msgNames[data.P2PTargetID], r.nameBook().name(data.P2PTargetID)); name != "" {
+				return name
+			}
 		}
 		if targetID != "" {
 			if name := r.senderName(ctx, targetID); name != "" {
@@ -883,7 +887,7 @@ func (r *run) fetchP2PChatName(ctx context.Context, chatID string) string {
 		}
 	}
 	if targetID != "" {
-		if name := r.msgNames[targetID]; name != "" {
+		if name := cmpString(r.msgNames[targetID], r.nameBook().name(targetID)); name != "" {
 			return name
 		}
 	}
@@ -1081,10 +1085,21 @@ func (r *run) nameSenders(ctx context.Context, msgs []larksyncwire.Message) {
 				m.SenderName = name
 			} else if name := r.memberNames[m.SenderID]; name != "" {
 				m.SenderName = name
-			} else if m.ChatID != "" && r.chatMembers[m.ChatID] != nil && r.chatMembers[m.ChatID][m.SenderID] != "" {
-				m.SenderName = r.chatMembers[m.ChatID][m.SenderID]
+			} else if m.ChatID != "" && r.chatMembers[m.ChatID] != nil {
+				// This chat already missed contact/v3 (an external group): its member list, read on, names the rest.
+				if m.SenderName = r.chatMemberName(ctx, m.ChatID, m.SenderID); m.SenderName == "" {
+					m.SenderName = r.senderName(ctx, m.SenderID)
+				}
 			} else {
 				m.SenderName = r.senderName(ctx, m.SenderID)
+			}
+			// Free before paging a large group's member list: a name a message carried, or the book's (a member who
+			// left the group is in no list).
+			if m.SenderName == "" {
+				m.SenderName = r.msgNames[m.SenderID]
+			}
+			if m.SenderName == "" {
+				m.SenderName = r.nameBook().name(m.SenderID)
 			}
 			if m.SenderName == "" && m.ChatID != "" {
 				m.SenderName = r.chatMemberName(ctx, m.ChatID, m.SenderID)
@@ -1092,6 +1107,12 @@ func (r *run) nameSenders(ctx context.Context, msgs []larksyncwire.Message) {
 		}
 		if m.SenderName == "" && m.SenderID != "" {
 			m.SenderName = r.msgNames[m.SenderID]
+		}
+		if m.SenderName == "" && m.SenderID != "" {
+			m.SenderName = r.nameBook().name(m.SenderID) // a bot named by an earlier @mention
+		}
+		if m.SenderName != "" {
+			r.nameBook().learn(m.SenderID, m.SenderName, r.s.now())
 		}
 	}
 	peers := map[string]string{}
@@ -1114,101 +1135,65 @@ func (r *run) nameSenders(ctx context.Context, msgs []larksyncwire.Message) {
 	}
 }
 
-// chatMemberName looks up openID in chatID's cached member list (fetching GET /open-apis/im/v1/chats/:chat_id/members
-// at most once per chat per run through the binding's rate limiter).
+// chatMemberName looks up openID among chatID's members, reading the list on demand (chatMemberList.find) through
+// the binding's rate limiter; each page is read at most once per chat and run.
 func (r *run) chatMemberName(ctx context.Context, chatID, openID string) string {
 	if chatID == "" || openID == "" {
 		return ""
 	}
-	members := r.ensureChatMembers(ctx, chatID)
-	return members[openID]
+	return r.readChatMembers(ctx, chatID, openID)[openID]
 }
 
-// ensureChatMembers fetches and caches chatID's members (member_id -> display name) for this run.
+// ensureChatMembers reads chatID's whole member list (member_id -> display name) for this run.
 func (r *run) ensureChatMembers(ctx context.Context, chatID string) map[string]string {
 	if chatID == "" {
 		return nil
 	}
-	if members, ok := r.chatMembers[chatID]; ok {
-		return members
+	return r.readChatMembers(ctx, chatID, "")
+}
+
+// readChatMembers reads chatID's members until want ("" for all) is among them and returns what was read.
+func (r *run) readChatMembers(ctx context.Context, chatID, want string) map[string]string {
+	l := r.chatMembers[chatID]
+	if l == nil {
+		if r.chatMembersOff {
+			return nil
+		}
+		l = &chatMemberList{}
+		r.chatMembers[chatID] = l
 	}
-	if r.chatMembersOff || ctx.Err() != nil || r.overBudget() {
-		return nil
+	if !l.done && !r.chatMembersOff && ctx.Err() == nil {
+		_, _ = l.find(ctx, r.sess, chatID, want, r.overBudget)
+		if l.denied {
+			r.chatMembersOff = true
+		}
 	}
-	members, scopeDenied, err := loadChatMembers(ctx, r.sess, chatID, r.overBudget)
-	if scopeDenied {
-		r.chatMembersOff = true
-	}
-	if err != nil {
-		return members
-	}
-	if members == nil {
-		members = map[string]string{}
-	}
-	r.chatMembers[chatID] = members
-	for id, name := range members {
+	for id, name := range l.names {
 		if name != "" && r.memberNames[id] == "" {
 			r.memberNames[id] = name
 		}
 	}
-	return members
+	return l.names
 }
 
-// loadChatMembers pages GET /open-apis/im/v1/chats/:chat_id/members using the binding's user token and famIM rate
-// limiter, returning open_id -> display name. A missing permission sets scopeDenied without returning an error so
-// callers can silently disable the fallback without breaking readable messages; fatal/context errors propagate.
-func loadChatMembers(ctx context.Context, sess *session, chatID string, overBudget func() bool) (members map[string]string, scopeDenied bool, err error) {
-	if chatID == "" {
-		return nil, false, nil
+// nameBook is the binding's name book (members.go), read from its cursor on first use.
+func (r *run) nameBook() *nameBook {
+	if r.book == nil {
+		r.book = parseNameBook(r.cursors[larksyncwire.SenderNamesCursor])
 	}
-	out := map[string]string{}
-	tok := ""
-	for range chatMembersPagesMost {
-		if overBudget != nil && overBudget() {
-			break
-		}
-		var data struct {
-			page
-			Items []struct {
-				MemberID string `json:"member_id"`
-				Name     string `json:"name"`
-			} `json:"items"`
-		}
-		q := map[string]string{"member_id_type": "open_id", "page_size": "100"}
-		if tok != "" {
-			q["page_token"] = tok
-		}
-		rerr := sess.getJSON(ctx, request{
-			family: famIM,
-			op:     "chat members",
-			path:   "/open-apis/im/v1/chats/" + pathEsc(chatID) + "/members",
-			query:  q,
-		}, &data)
-		if rerr != nil {
-			if ctx.Err() != nil {
-				return out, false, ctx.Err()
-			}
-			if fatal(rerr) {
-				return out, false, rerr
-			}
-			if e := asSyncError(rerr); e != nil && e.Kind == larksyncwire.ErrKindScope {
-				return out, true, nil
-			}
-			return out, false, nil
-		}
-		for _, item := range data.Items {
-			id := strings.TrimSpace(item.MemberID)
-			name := strings.TrimSpace(item.Name)
-			if id != "" && name != "" {
-				out[id] = name
-			}
-		}
-		if !data.HasMore || data.PageToken == "" {
-			break
-		}
-		tok = data.PageToken
+	return r.book
+}
+
+// saveNameBook keeps what the run learned in the name book: the senders it named and the users messages mentioned.
+func (r *run) saveNameBook() {
+	if r.b.Tier != larksyncwire.TierFull {
+		return
 	}
-	return out, false, nil
+	b := r.nameBook()
+	b.learnAll(r.msgNames, r.s.now())
+	if raw := b.encode(); raw != "" && raw != r.cursors[larksyncwire.SenderNamesCursor] {
+		r.moveCursor(larksyncwire.SenderNamesCursor, raw)
+	}
 }
 
 // uniqueP2PPeerName returns the display name of the single non-owner member in a p2p chat's member map, or "" when

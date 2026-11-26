@@ -176,6 +176,25 @@ func normalizeRepoGateURL(raw string) string {
 	return strings.ToLower(strings.TrimRight(raw, "/"))
 }
 
+// applyTodosV2FactsConfig copies resolved todos_v2 projection SLA preferences onto f.
+// When todos_v2 is off, f is untouched so legacy projection remains byte-for-byte identical.
+func applyTodosV2FactsConfig(f *projection.Facts, cfg Settings) {
+	if !cfg.todosV2On() {
+		return
+	}
+	f.TodosV2 = true
+	if h := cfg.todosV2PendingReviewSLAHours(); h == 0 {
+		f.PendingReviewSLADisabled = true
+	} else {
+		f.PendingReviewSLAHours = h
+	}
+	if h := cfg.todosV2CanWaitSLAHours(); h == 0 {
+		f.CanWaitSLADisabled = true
+	} else {
+		f.CanWaitSLAHours = h
+	}
+}
+
 // hasParkInteractionLink says whether this park's projection must retain its workers' pending cards, even after release.
 func hasParkInteractionLink(v *Supervision) bool {
 	return v != nil && v.State == reviewParked && v.Parked != nil && v.Parked.Evidence != nil && v.Parked.Evidence.Kind == parkExternalEvent && v.Parked.Evidence.InteractionID != ""
@@ -216,13 +235,13 @@ func (s *Service) todoFactsOf(ctx context.Context, list []listedTodo) []projecti
 	}
 	cards := s.todoRunCards(want)
 	loc := s.location(ctx)
-	todosV2 := s.settings(ctx).todosV2On()
+	cfg := s.settings(ctx)
 	facts := make([]projection.Facts, len(list))
 	for i := range list {
 		t := &list[i]
 		linked := hasParkInteractionLink(t.Supervision)
 		facts[i] = projectionFacts(*t, sessions, loc)
-		facts[i].TodosV2 = todosV2
+		applyTodosV2FactsConfig(&facts[i], cfg)
 		if t.DoneAt != nil && t.StartError == "" {
 			continue
 		}

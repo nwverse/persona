@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -87,14 +88,14 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	} else if guest {
 		return "", nil
 	}
-	role := prompts.SupervisionRoleSide
+	role := supervisionrole.RoleSide()
 	switch {
 	case main:
-		role = prompts.SupervisionRoleMain
+		role = supervisionrole.RoleMain()
 	case background:
-		role = prompts.SupervisionRoleBackground
+		role = supervisionrole.RoleBackground()
 	case leader:
-		role = prompts.SupervisionRoleLeader
+		role = supervisionrole.RoleLeader()
 	}
 	idle := leadIdle(c, known)
 	if idle {
@@ -116,10 +117,7 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 			return s.leaderPolicy(ctx, id, policy, false, role)
 		}
 	}
-	policy, err := prompts.RenderSupervisionInstructionsForRole(policyRole)
-	if err != nil {
-		return "", err
-	}
+	policy := supervisionPolicy(policyRole)
 	// A leader's own direction notes and leader/side role changes follow its role policy (direction_notes.go): both wait
 	// for an idle send and roll back together if that send is refused. Former leaders keep remaining tasks as side supervisors.
 	return s.leaderPolicy(ctx, id, policy, idle, role)
@@ -134,14 +132,11 @@ func (s *Service) putSupervisionInstructions(ctx context.Context, machine, id st
 	}
 	if id == "" && p["guest"] == nil {
 		if startup := ctx.Value(supervisionStartup{}); startup != nil {
-			role, ok := startup.(prompts.SupervisionRole)
+			role, ok := startup.(supervisionrole.Role)
 			if !ok {
 				return fmt.Errorf("invalid supervision startup role %T", startup)
 			}
-			text, err = prompts.RenderSupervisionInstructionsForRole(role)
-			if err != nil {
-				return err
-			}
+			text = supervisionPolicy(role)
 		}
 	}
 	p["supervision_instructions"] = text

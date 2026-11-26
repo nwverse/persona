@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole/supervisionroleadapt"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -43,13 +45,22 @@ func supervisionRoleKey(machine, id string) string {
 	return strconv.Itoa(len(machine)) + ":" + machine + id
 }
 
-func validSupervisionRole(role string) (prompts.SupervisionRole, bool) {
-	r := prompts.SupervisionRole(role)
-	switch r {
-	case prompts.SupervisionRoleMain, prompts.SupervisionRoleLeader, prompts.SupervisionRoleBackground, prompts.SupervisionRoleSide:
-		return r, true
-	}
-	return "", false
+// validSupervisionRole is the role a stored word names; an empty or unknown word names none, which its readers fail
+// closed on.
+func validSupervisionRole(word string) (role supervisionrole.Role, ok bool) {
+	supervisionroleadapt.Restore(supervisionroleadapt.Record{Role: word}).Match(
+		func(r supervisionrole.Role) { role, ok = r, true }, func() {})
+	return role, ok
+}
+
+// supervisionRoleWord is role as a direction's RoleInEffect and the supplement store it.
+func supervisionRoleWord(role supervisionrole.Role) string {
+	return supervisionroleadapt.Store(role).Role
+}
+
+// supervisionPolicy is the supervision policy for role: the common policy with only that role's own paragraphs.
+func supervisionPolicy(role supervisionrole.Role) string {
+	return prompts.RenderSupervisionInstructionsFor(prompts.SupervisionParts{Leader: role.IsLeader(), Background: role.IsBackground()})
 }
 
 // supRolesLocked loads the supplement once; b.mu is held. Unknown roles are ignored by its readers and fail closed to
@@ -86,15 +97,15 @@ func (s *Service) saveSupervisionRolesLocked(ctx context.Context) error {
 
 // workingSupervisionRole returns the role already in effect. A direction record is authoritative once one exists;
 // conversations without one use the supplement. A read failure or absent legacy baseline retains the complete policy.
-func (s *Service) workingSupervisionRole(ctx context.Context, machine, id string) (prompts.SupervisionRole, bool) {
+func (s *Service) workingSupervisionRole(ctx context.Context, machine, id string) (role supervisionrole.Role, ok bool) {
 	s.directions.mu.Lock()
 	loaded := s.directionsLocked(ctx)
 	if !loaded {
 		s.directions.mu.Unlock()
-		return "", false
+		return role, false
 	}
 	if d := s.directions.m[id]; d != nil {
-		role, ok := validSupervisionRole(d.RoleInEffect)
+		role, ok = validSupervisionRole(d.RoleInEffect)
 		s.directions.mu.Unlock()
 		return role, ok
 	}
@@ -103,7 +114,7 @@ func (s *Service) workingSupervisionRole(ctx context.Context, machine, id string
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.supRolesLocked(ctx) {
-		return "", false
+		return role, false
 	}
 	return validSupervisionRole(b.m[supervisionRoleKey(machine, id)])
 }
@@ -111,18 +122,18 @@ func (s *Service) workingSupervisionRole(ctx context.Context, machine, id string
 // recordSupervisionRole proposes an idle role on a send whose outcome its caller reports. Direction records use their
 // own notes/role move instead. A policy-only lookup has no carry and therefore cannot create a baseline that a later
 // send might present without the node ever accepting it.
-func (s *Service) recordSupervisionRole(ctx context.Context, machine, id string, role prompts.SupervisionRole) error {
+func (s *Service) recordSupervisionRole(ctx context.Context, machine, id string, role supervisionrole.Role) error {
 	return s.recordSupervisionRoleAccepted(ctx, machine, id, role, false)
 }
 
 // recordAcceptedSupervisionRole records a compact startup policy after the node returned its new conversation id.
 // If the durable write fails, the accepted in-memory role still prevents this manager from changing a working process
 // back to the full fingerprint; the error is logged by the caller and the write is retried by a later idle selection.
-func (s *Service) recordAcceptedSupervisionRole(ctx context.Context, machine, id string, role prompts.SupervisionRole) error {
+func (s *Service) recordAcceptedSupervisionRole(ctx context.Context, machine, id string, role supervisionrole.Role) error {
 	return s.recordSupervisionRoleAccepted(ctx, machine, id, role, true)
 }
 
-func (s *Service) recordSupervisionRoleAccepted(ctx context.Context, machine, id string, role prompts.SupervisionRole, accepted bool) error {
+func (s *Service) recordSupervisionRoleAccepted(ctx context.Context, machine, id string, role supervisionrole.Role, accepted bool) error {
 	s.directions.mu.Lock()
 	loaded := s.directionsLocked(ctx)
 	if loaded && s.directions.m[id] != nil {
@@ -143,8 +154,8 @@ func (s *Service) recordSupervisionRoleAccepted(ctx context.Context, machine, id
 	if !s.supRolesLocked(ctx) {
 		return &supervisionRoleStoreError{}
 	}
-	key := supervisionRoleKey(machine, id)
-	if b.m[key] == string(role) {
+	key, word := supervisionRoleKey(machine, id), supervisionRoleWord(role)
+	if b.m[key] == word {
 		if b.dirty {
 			if err := s.saveSupervisionRolesLocked(ctx); err != nil {
 				return err
@@ -154,7 +165,7 @@ func (s *Service) recordSupervisionRoleAccepted(ctx context.Context, machine, id
 		if carry != nil {
 			if f := b.inflight[key]; f != nil {
 				for i := len(f.moved) - 1; i >= 0; i-- {
-					if m := f.moved[i]; m.role == string(role) {
+					if m := f.moved[i]; m.role == word {
 						m.carriers++
 						carry.id, carry.role = id, m
 						break
@@ -168,8 +179,8 @@ func (s *Service) recordSupervisionRoleAccepted(ctx context.Context, machine, id
 		return &supervisionRoleStoreError{}
 	}
 	previous, existed := b.m[key]
-	m := &supervisionRoleMove{key: key, prev: previous, hadPrev: existed, role: string(role), carriers: 1}
-	b.m[key] = string(role)
+	m := &supervisionRoleMove{key: key, prev: previous, hadPrev: existed, role: word, carriers: 1}
+	b.m[key] = word
 	if err := s.saveSupervisionRolesLocked(ctx); err != nil {
 		if accepted {
 			b.dirty = true

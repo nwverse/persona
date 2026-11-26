@@ -104,6 +104,11 @@ const (
 	// PendingLinksCursor is the per-binding cursor key in lark_sync_cursors holding the persistent queue of unfetched
 	// or retryable linked cloud documents discovered in synced messages.
 	PendingLinksCursor = "links_queue"
+
+	// SenderNamesCursor is the per-binding cursor key holding the name book: display names the sync learned for
+	// senders and mentioned users (open_id or app_id -> name), so a member who left a group or a bot another message
+	// mentioned is still named.
+	SenderNamesCursor = "sender_names"
 )
 
 // Canonical-key prefixes: one piece of content has one key whichever bot, account or entry point read it.
@@ -425,6 +430,13 @@ type NameResolveRequest struct {
 	// SampleMessages maps sender_id -> a sample message_id from that sender for message-carried fallback when
 	// both contact/v3 and chat members miss.
 	SampleMessages map[string]string
+	// SampleTimes maps sender_id -> the time of its sample message, around which the chat is read for an @mention of
+	// a sender no member list names (one who left the group).
+	SampleTimes map[string]time.Time
+	// SampleChats maps sender_id -> the chat of its sample message.
+	SampleChats map[string]string
+	// NameBook is the binding's stored SenderNamesCursor value: names learned before, for senders nothing else names.
+	NameBook string
 }
 
 // NameResolveResult holds display names resolved for senders and unnamed p2p chats.
