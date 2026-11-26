@@ -20,6 +20,11 @@ data class OutboxMessage(
     val createdAt: Long? = null,
     /** The active attempt's wire id after the manager explicitly refused an earlier attempt. */
     val opId: String? = null,
+    /**
+     * The hub's own sentence for the refusal [error] codes, in the app's language (the `error` of its refusal); null when
+     * it gave none, for every other state, and for an outbox restored from before it was stored.
+     */
+    val reason: String? = null,
 )
 
 private val NoWrittenAt = MutableStateFlow(emptyMap<String, Long>())
@@ -63,6 +68,11 @@ interface MessageSender : MessageSendReceiptSource {
      * the network) is tried at once.
      */
     suspend fun retry(clientMessageId: String): Boolean = false
+    /**
+     * After a confirmed start answer, requeue only this session's known-undelivered refusals with exactly [code].
+     * Uncertain deliveries are never included. Returns how many durable entries changed, in their existing queue order.
+     */
+    suspend fun retryRefused(session: SessionKey, code: String): Int = 0
     /** Drops a message whose delivery is unknown: off the list and the queue, never retried or reconciled. */
     suspend fun discard(clientMessageId: String): Boolean = false
     suspend fun confirm(clientMessageId: String, delivered: Boolean): Boolean = false

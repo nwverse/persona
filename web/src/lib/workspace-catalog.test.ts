@@ -50,9 +50,11 @@ describe("independent workspace catalog", () => {
     const catalog = new WorkspaceCatalog(scope, transport(() => read()), () => scope);
     await catalog.refresh(); const first = catalog.snapshot();
     read = async () => { throw new Error("offline"); };
-    await catalog.refresh(); expect(catalog.snapshot()).toBe(first);
+    await catalog.refresh(); expect(catalog.snapshot().workspaces).toBe(first.workspaces);
+    expect(catalog.snapshot().failedMachines).toBeNull();
     read = async () => ({ workspaces: [], errors: [{ machine_id: "machine-a", error: "offline" }] });
-    await catalog.refresh(); expect(catalog.snapshot()).toBe(first);
+    await catalog.refresh(); expect(catalog.snapshot().workspaces).toEqual(first.workspaces);
+    expect(catalog.snapshot().failedMachines).toEqual(["machine-a"]);
     read = async () => ({ workspaces: [] });
     await catalog.refresh(); expect(catalog.snapshot().workspaces).toEqual([]);
   });
@@ -85,7 +87,7 @@ describe("independent workspace catalog", () => {
     const request = transport(async () => ({ workspaces: [row()] }));
     const catalog = new WorkspaceCatalog(scope, request, () => scope);
     const stop = catalog.watch(); const stopOther = catalog.watch();
-    await Promise.resolve(); expect(request).toHaveBeenCalledTimes(1);
+    await vi.dynamicImportSettled(); expect(request).toHaveBeenCalledTimes(1);
     stopOther();
     await vi.advanceTimersByTimeAsync(CATALOG_POLL_MS); expect(request).toHaveBeenCalledTimes(2);
     visibility = "hidden"; document.dispatchEvent(new Event("visibilitychange"));
@@ -100,10 +102,11 @@ describe("independent workspace catalog", () => {
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => "visible");
     const request = transport(async () => ({ workspaces: [row()] }));
     const stop = new WorkspaceCatalog(scope, request, () => scope).watch();
-    await Promise.resolve(); expect(request).toHaveBeenCalledTimes(1);
+    await vi.dynamicImportSettled(); expect(request).toHaveBeenCalledTimes(1);
     // every 10 s this was 5 more reads by now; each one asks every online computer live (workspaces.list)
     await vi.advanceTimersByTimeAsync(59_000); expect(request).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000); expect(request).toHaveBeenCalledTimes(2);
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(60_000); expect(request).toHaveBeenCalledTimes(3);
     stop();
   });
@@ -128,5 +131,32 @@ describe("independent workspace catalog", () => {
     const key = workspaceKey(w, scope.owner, scope.manager);
     for (const candidate of [workspaceKey(w, "other", scope.manager), workspaceKey(w, scope.owner, "other"), workspaceKey({ ...w, machine_id: "other" }, scope.owner, scope.manager), workspaceKey({ ...w, source: "herdr" }, scope.owner, scope.manager)]) expect(candidate).not.toBe(key);
     expect(workspaceTarget(w, scope.owner, scope.manager)).toEqual({ ...scope, machineId: w.machine_id, host: "orca", workspaceId: w.source_id, cwd: w.cwd, label: "Main" });
+  });
+
+  it.each([["codex_app", "codex-project:home"], ["claude_desktop", "claude-environment:account"]])("keys each %s root by its canonical directory while keeping distinct projects separate", (source, prefix) => {
+    const w = { ...row(), source, source_id: `${prefix}:project-a`, cwd: "C:\\Projects\\App" };
+    const key = (patch: Partial<HostWorkspace> = {}) => workspaceKey({ ...w, ...patch }, scope.owner, scope.manager);
+    expect(key({ cwd: "c:/projects/app/src/../" })).toBe(key());
+    expect(key({ cwd: "C:\\Projects\\Other" })).not.toBe(key());
+    expect(key({ source_id: `${prefix}:project-b` })).not.toBe(key());
+    expect(key({ cwd: "/projects/App" })).not.toBe(key({ cwd: "/projects/app" }));
+    expect(workspaceTarget(w, scope.owner, scope.manager).cwd).toBe("C:\\Projects\\App");
+  });
+
+  it.each([["codex_app", "codex-project:home"], ["claude_desktop", "claude-environment:account"]])("retains every %s project root across catalog refreshes", async (source, prefix) => {
+    const a = { ...row("App"), id: "root-a", source, source_id: `${prefix}:project`, cwd: "C:\\Projects\\App" };
+    const b = { ...a, id: "root-b", title: "Docs", cwd: "C:\\Projects\\Docs" };
+    const other = { ...a, id: "other-project", source_id: `${prefix}:other` };
+    let rows = [a, b, other];
+    const catalog = new WorkspaceCatalog(scope, transport(async () => ({ workspaces: rows })), () => scope);
+    await catalog.refresh();
+    const first = catalog.snapshot();
+    expect(first.workspaces.map((w) => w.id).sort()).toEqual(["other-project", "root-a", "root-b"]);
+    rows = rows.map((w) => ({ ...w })).reverse();
+    await catalog.refresh();
+    expect(catalog.snapshot()).toBe(first);
+    rows = [a, other];
+    await catalog.refresh();
+    expect(catalog.snapshot().workspaces.map((w) => w.id).sort()).toEqual(["other-project", "root-a"]);
   });
 });

@@ -49,24 +49,41 @@ struct AssistantActionBarTests {
                 "questions": [["question": "Which one?", "options": [["label": "A"], ["label": "B"]]]]])
     }
 
+    private func card(_ id: String, _ kind: String, session: String = "w", owner: Bool = false,
+                      delegating: Bool = false) -> Interaction {
+        decode(["id": id, "machine_id": "mac", "session_id": session, "kind": kind, "created_at": iso(2),
+                "owner_proposal": owner, "delegating": delegating])
+    }
+
     private func split(_ todos: [TodoItem], _ sessions: [Session] = [], asks: [Interaction] = [], plans: [TaskPlan] = [],
-                       feed: [FeedItem] = [], conversation: String = "main", waits: ((FeedItem) -> Bool)? = nil) -> AssistantEntries.Result {
+                       feed: [FeedItem] = [], conversation: String = "main", waits: ((FeedItem) -> Bool)? = nil,
+                       direct: Bool = false, hidden: ((TodoItem) -> Bool)? = nil) -> AssistantEntries.Result {
         AssistantEntries.split(conversation: conversation, main: "main", todos: todos, sessions: sessions, interactions: asks,
                                plans: Dictionary(uniqueKeysWithValues: plans.map { ($0.id, $0) }), feed: feed, now: now,
-                               messageWaits: waits ?? AssistantEntries.messageWaits)
+                               messageWaits: waits ?? AssistantEntries.messageWaits,
+                               decisionHidden: hidden ?? { _ in false }, directUserOnly: direct)
     }
 
     private func ids(_ rows: [AssistantEntries.Row]) -> [String] { rows.map(\.id) }
 
-    /// Needs You and In Progress always; Finished only while it lists something, or while its tray is open (#10922).
-    @Test func finishedIsTheThirdEntryOnlyWhileItListsSomething() {
+    /// Needs You is always visible on the bar; Finished is not persistent on the collapsed bar (#16165) and appears on
+    /// the bar only while its tray is open, reachable from any open tray's header when 24-hour finished rows exist.
+    @Test func finishedIsNotPersistentOnCollapsedBar() {
         #expect(ActionTray.allCases == [.needsYou, .running, .finished])
         let empty = ActionTrayContent(split([]))
         #expect(empty.entries(open: nil) == [.needsYou, .running])
         #expect(empty.entries(open: .running) == [.needsYou, .running])
         #expect(empty.entries(open: .finished) == [.needsYou, .running, .finished])
+        #expect(!empty.offersFinishedLink(for: .needsYou))
+        #expect(!empty.offersFinishedLink(for: .running))
         let finished = ActionTrayContent(split([todo("done", done: true)]))
-        #expect(finished.entries(open: nil) == [.needsYou, .running, .finished])
+        #expect(finished.entries(open: nil) == [.needsYou, .running])
+        #expect(finished.entries(open: .needsYou) == [.needsYou, .running])
+        #expect(finished.entries(open: .running) == [.needsYou, .running])
+        #expect(finished.entries(open: .finished) == [.needsYou, .running, .finished])
+        #expect(finished.offersFinishedLink(for: .needsYou))
+        #expect(finished.offersFinishedLink(for: .running))
+        #expect(!finished.offersFinishedLink(for: .finished))
     }
 
     /// A task waiting for a decision or review is only in Needs You; once answered it is back in In Progress.
@@ -369,6 +386,80 @@ struct AssistantActionBarTests {
         #expect(content.needsYou.map(\.id) == ["ask:own", "task:t"])
         #expect(content.count(.needsYou) == 2)
         #expect(content.count(.running) == 0)
+    }
+
+    @Test func directWaitingKeepsOnlyCurrentDirectQuestionsAndOwnerAuthorizations() {
+        let direct = [ask("question", session: "w"), card("form", "elicitation"), card("owner", "permission", owner: true)]
+        for included in direct {
+            #expect(Supervision.directUserRequest(included))
+            let result = split([], [session("w", "needs_you")], asks: [included], direct: true)
+            #expect(ids(result.needsYou) == ["agent:mac/w"])
+            #expect(ActionTrayContent(result).count(.needsYou) == result.needsYou.count)
+        }
+        let excluded = [card("permission", "permission"), card("plan", "plan"), card("screen", "screen"),
+                        card("delegating", "question", delegating: true)]
+        for card in excluded {
+            #expect(!Supervision.directUserRequest(card))
+            let result = split([], [session("w", "needs_you")], asks: [card], direct: true)
+            #expect(result.needsYou.isEmpty)
+            // Filtering Needs You must not reclassify the same Agent as ordinary running work.
+            #expect(result.running.isEmpty)
+        }
+        let task = split([todo("t", agent: "w")], [session("w", "needs_you", todo: "t")],
+                         asks: direct + excluded, direct: true)
+        #expect(ids(task.needsYou) == ["task:t"])
+        #expect(task.running.isEmpty)
+    }
+
+    @Test func directWaitingExcludesUnstartedFailedGenericAndSupervisorRowsWithoutMovingThem() {
+        let card: FeedItem = decode(["id": "draft", "conversation": "main", "at": iso(2), "kind": "message", "ref": "lark:1",
+                                     "body": ["text": "Synthetic draft"]])
+        // a plan waiting for Start is the owner's own decision: Main lists it, a Health plan stays in Health
+        var health = plan("health", .open, tasks: 1, at: 1)
+        health.conversation = "health-chat"
+        health.space = "health"
+        var spacePlan = plan("space", .open, tasks: 1, at: 3)
+        spacePlan.conversation = "notes-chat"
+        spacePlan.space = "zz-notes"
+        let draftOnly = split([], plans: [plan("unstarted", .open, tasks: 1, at: 2), health, spacePlan], feed: [card], direct: true)
+        #expect(Set(ids(draftOnly.needsYou)) == ["plan:unstarted", "plan:space", "message:draft"])
+
+        var failed = todo("failed")
+        failed.startError = "Synthetic failed start"
+        failed.doneAt = now - 60
+        let interruptedTask = todo("interrupted", agent: "i")
+        let interruptedSession = session("i", "idle", turnError: "Synthetic interruption", turnErrorKind: "unrecoverable")
+        let acknowledgement = todo("ack", ask: ["verdict": "Finished", "asked_at": iso(2), "outcome": "done"])
+        let doneAcceptance = todo("done-acceptance", done: true,
+                                  ask: ["verdict": "Historical acceptance", "asked_at": iso(2)])
+        let supervisor = todo("supervisor", agent: "s", supervision: "pending_review")
+        let result = split([failed, interruptedTask, acknowledgement, doneAcceptance, supervisor],
+                           [interruptedSession, session("s", "idle")], direct: true)
+        #expect(result.needsYou.isEmpty)
+        #expect(result.running.isEmpty)
+    }
+
+    @Test func directWaitingKeepsQuestionsDecisionsAcceptanceAndHeldDeliveryWithOneRowEach() {
+        let acceptance = todo("acceptance", ask: ["verdict": "Please accept this delivery", "asked_at": iso(2)])
+        let decision = todo("decision", ask: ["verdict": "Choose a rollout", "asked_at": iso(2), "outcome": "decide"])
+        let needsUser = todo("needs-user", supervision: "needs_user")
+        let userCheck = todo("user-check", supervision: "user_check")
+        var delivery = todo("delivery")
+        delivery.delivery = TodoDelivery(state: "off", unblock: "user")
+        let result = split([acceptance, decision, needsUser, userCheck, delivery], direct: true)
+        #expect(Set(ids(result.needsYou)) == ["task:acceptance", "task:decision", "task:needs-user", "task:user-check", "task:delivery"])
+        let tray = ActionTrayContent(result)
+        #expect(tray.count(.needsYou) == tray.rows(.needsYou).count)
+        #expect(tray.count(.needsYou) == 5)
+        let dismissed = split([decision, delivery], direct: true, hidden: { _ in true })
+        #expect(ids(dismissed.needsYou) == ["task:delivery"])
+        #expect(dismissed.running.isEmpty)
+    }
+
+    @Test func directRuleAppliesOnlyToTheMainConversation() {
+        let side = split([todo("review", agent: "w", origin: "side", supervision: "pending_review")], [session("w", "idle")],
+                         conversation: "side", direct: true)
+        #expect(ids(side.needsYou) == ["task:review"])
     }
 
     @Test func emptyConversationCountsNothing() {

@@ -232,7 +232,7 @@ nonisolated enum ForwardTargets {
     /// Whether `s` can take a forward from the chat `from`: another chat on the same hub that takes messages; an Agent
     /// on an online computer, live or (`ended`) one the send resumes; never Health's conversations.
     static func takes(_ s: Session, from: SessionKey, ended: Bool, online: (MachineRef) -> Bool) -> Bool {
-        guard s.key != from, s.key.group == from.group, s.canSend, !s.isHealth, s.archived != true else { return false }
+        guard s.key != from, s.key.group == from.group, s.canSend, !s.inSpace, s.archived != true else { return false }
         if s.assistant { return true }
         return online(s.machineRef) && (ended || s.state.isLive)
     }
@@ -255,7 +255,7 @@ nonisolated enum ForwardTargets {
         if !terms.isEmpty {
             let found = all.filter { s in
                 guard s.key != main, takes(s, from: from, ended: true, online: online) else { return false }
-                let hay = [s.displayTitle, detail(s, machine: s.assistant ? nil : name(s.machineRef))].joined(separator: " ").lowercased()
+                let hay = [s.displayTitle, s.slotName ?? "", detail(s, machine: s.assistant ? nil : name(s.machineRef))].joined(separator: " ").lowercased()
                 return terms.allSatisfy { hay.contains($0) }
             }
             return found.isEmpty ? [] : [Section(id: "results", kind: .results, title: "", sessions: found.sorted(by: latest))]

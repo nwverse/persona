@@ -454,9 +454,6 @@ struct PlanEditSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Start") { start(tasks) }.bold() }
             }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
         .onAppear {
             guard tasks.isEmpty else { return }
             tasks = Ultracode.editsOf(plan, choices: ultracode)
@@ -642,14 +639,12 @@ struct AnsweredLine: View {
         Haptics.tap()
         let opening = !open
         toggleInPlace(pin, pinKey, animation: Theme.Motion.state, unfold: $unfold, closing: open) { open.toggle() }
-        #if os(iOS) || os(visionOS)
         // The line as the chat's last row: the answers open under it, past the composer.
         guard opening, let pin else { return }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(Theme.Motion.revealTime))
             if open { pin.show(pinKey, bottom: bottom) }
         }
-        #endif
     }
 }
 
@@ -711,11 +706,12 @@ struct MessageCard: View {
                         .font(Theme.Font.body)
                         .lineLimit(2...8)
                 } else {
-                    let draft = text.isEmpty ? (card.draft ?? "") : text
-                    // Sent: what the hub says went out, which may have been edited on another device.
-                    Text(state == .sent ? card.sent ?? draft : draft)
-                        .font(Theme.Font.body)
-                        .foregroundStyle(filed ? .secondary : .primary)
+                    let draft = text.isEmpty ? card.draft : text
+                    if let displayed = state == .sent ? card.sent : draft, !displayed.isEmpty {
+                        Text(displayed)
+                            .font(Theme.Font.body)
+                            .foregroundStyle(filed ? .secondary : .primary)
+                    }
                 }
             }
             .padding(Theme.Space.m)
@@ -964,13 +960,8 @@ struct TaskMentionList: View {
 }
 
 extension View {
-    /// The shape a long press lifts for the context menu's preview (iOS). The Mac's right-click menu has no preview,
-    /// and `ContentShapeKinds.contextMenuPreview` does not exist there (#1083).
+    /// The shape a long press lifts for the context menu's preview.
     @ViewBuilder func menuPreviewShape(_ shape: some Shape) -> some View {
-        #if os(iOS) || os(visionOS)
         contentShape(.contextMenuPreview, shape)
-        #else
-        self
-        #endif
     }
 }

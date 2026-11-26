@@ -130,7 +130,7 @@ func TestTodoAfterReadySinglePrereqTodoCompleteRoutesToMainNotBackground(t *test
 		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 	)
-	f.hello.Assistant.CompleteAgentlessTodos = true
+	f.setHello(func(h *Hello) { h.Assistant.CompleteAgentlessTodos = true })
 
 	root := createRequestAndPiece(t, s, "conv1", "Batch rollout", "", "", nil)
 	pre := createRequestAndPiece(t, s, "conv1", "Batch 1 schema", "", root.ID, nil)
@@ -458,17 +458,7 @@ func TestTodoAfterReadyRestartAndResweepIdempotency(t *testing.T) {
 	}
 	waitFor(t, "first wake", func() bool { return len(sendsToConversation(f1, "conv1")) == 1 })
 
-	// Direct delivery completes before deliverDigest's deferred bookkeeping persists the marker. Wait for that durable
-	// commit, not only the observable send, before checking the state a restarted Service must inherit.
-	var markers map[string]todoReadyWakeMarker
-	waitFor(t, "persisted wake marker", func() bool {
-		markers = map[string]todoReadyWakeMarker{}
-		found, err := st.Setting(ctx, todoReadyWakesKey, &markers)
-		if err != nil {
-			t.Fatalf("read persisted wake markers: %v", err)
-		}
-		return found && markers[dep.ID].Key == todoReadyKey(dep)
-	})
+	waitForTodoReadyReceipt(t, st, dep)
 
 	// Repeated sweeps on the same Service must NOT re-emit.
 	s1.sweepTodoAfterReady(ctx)
@@ -897,12 +887,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		}
 		waitFor(t, "initial todo_ready wake", func() bool { return len(sendsToConversation(f, "conv1")) == 1 })
 
-		// Confirm durable marker and dedup fingerprint were persisted for the initial wake.
-		initialKey := todoReadyKey(dep)
-		markers := map[string]todoReadyWakeMarker{}
-		if found, err := st.Setting(ctx, todoReadyWakesKey, &markers); err != nil || !found || markers[dep.ID].Key != initialKey {
-			t.Fatalf("initial wake markers = %+v (found=%v err=%v), want key %q", markers, found, err, initialKey)
-		}
+		waitForTodoReadyReceipt(t, st, dep)
 		dedupKey, _ := digestFingerprint(prompts.SuperviseEntry{}, superviseSignal{Todo: dep.ID, Kind: sigTodoReady})
 		dedup := map[string]superviseFingerprint{}
 		if found, err := st.Setting(ctx, superviseDedupKey, &dedup); err != nil || !found {
@@ -926,7 +911,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		if reopenedDep.ReopenedAt == nil {
 			t.Fatalf("expected ReopenedAt set on reopened dependent")
 		}
-		if reopenedKey := todoReadyKey(reopenedDep); reopenedKey == initialKey {
+		if reopenedKey := todoReadyKey(reopenedDep); reopenedKey == todoReadyKey(dep) {
 			t.Fatalf("reopened todoReadyKey stayed %q, want new generation key", reopenedKey)
 		}
 
@@ -969,6 +954,8 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		if msg := sendsToConversation(f, "conv1")[1]; !strings.Contains(msg, dep.ID) || !strings.Contains(msg, "Reopen cycle notes") {
 			t.Fatalf("unexpected second wake:\n%s", msg)
 		}
+
+		waitForTodoReadyReceipt(t, st, reopenedDep)
 
 		// Repeated sweeps and a simulated restart (with Postgres microsecond ReopenedAt truncation) must not duplicate.
 		s.sweepTodoAfterReady(ctx)
@@ -1013,6 +1000,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 			t.Fatal(err)
 		}
 		waitFor(t, "initial wake", func() bool { return len(sendsToConversation(f, "conv1")) == 1 })
+		waitForTodoReadyReceipt(t, st, dep)
 
 		if _, err := s.editTodo(ctx, dep.ID, db.TodoEdit{Done: &done}); err != nil {
 			t.Fatal(err)
@@ -1044,6 +1032,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 			t.Fatal(err)
 		}
 		waitFor(t, "initial wake", func() bool { return len(sendsToConversation(f, "conv1")) == 1 })
+		waitForTodoReadyReceipt(t, st, dep)
 
 		if _, err := s.editTodo(ctx, dep.ID, db.TodoEdit{Done: &open}); err != nil {
 			t.Fatal(err)
@@ -1053,6 +1042,20 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		if got := len(sendsToConversation(f, "conv1")); got != 1 {
 			t.Fatalf("no-op reopen caused duplicate wake: got %d, want 1", got)
 		}
+	})
+}
+
+// Delivery records the send before the digest persists its wake marker.
+func waitForTodoReadyReceipt(t *testing.T, st *memStore, dep Todo) {
+	t.Helper()
+	key := todoReadyKey(dep)
+	waitFor(t, "persisted wake marker "+key, func() bool {
+		var markers map[string]todoReadyWakeMarker
+		found, err := st.Setting(t.Context(), todoReadyWakesKey, &markers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found && markers[dep.ID].Key == key
 	})
 }
 

@@ -6,6 +6,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seedAgentsDisplay } from "../lib/agents-display";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -97,6 +98,8 @@ const online = (features: string[] = []) => {
 beforeEach(() => {
   localStorage.clear();
   reset();
+  // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
+  seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
   history.replaceState(null, "", "/");
@@ -178,7 +181,7 @@ describe("By to-do whose to-dos cannot be read (audit item 27)", () => {
     vi.stubGlobal("fetch", hub({ todos: failed }));
     online(["sessions_list", "sessions_agents_only", "sessions_todo"]);
     await render();
-    expect(host.querySelector("[data-paged-sessions]")).not.toBeNull();
+    expect(host.querySelector("[data-paged-sessions]")).toBeNull();
     expect(checked()).toBe("按状态");
     expect(alerts().some((a) => a?.includes(t("sidebar.todos_read_failed", { error: "" }).replace(/[:：]\s*$/, "")))).toBe(true);
   });

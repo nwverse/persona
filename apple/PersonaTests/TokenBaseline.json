@@ -14,7 +14,7 @@
   "Persona\/DesignSystem\/ThemedIcon.swift" : {
     "rawSymbol" : 2
   },
-  "Persona\/Screen\/VNCPiPCard.swift" : {
+  "Modules\/ScreenShare\/VNCPiPCard.swift" : {
     "rawSymbol" : 1
   },
   "Persona\/Views\/Assistant\/AssistantProfileView.swift" : {
@@ -22,7 +22,7 @@
   },
   "Persona\/Views\/Assistant\/AssistantSidebar.swift" : {
     "padding" : 1,
-    "rawSymbol" : 3
+    "rawSymbol" : 2
   },
   "Persona\/Views\/Assistant\/OnboardingChecklist.swift" : {
     "rawSymbol" : 4

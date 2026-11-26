@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -100,6 +101,12 @@ func (s *Service) todoDecisionRoutes() {
 		if err := decisionOrigin(r, &row, strings.TrimSpace(in.Source), strings.TrimSpace(in.Ref)); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
+		}
+		if fullRole(r) && row.Source == db.DecisionManual &&
+			strings.HasPrefix(row.Question, findingDropQuestionPrefix) && row.Choice == "Drop" {
+			// A model can relay an answer and write a manual decision, but this
+			// provenance is minted only for a direct owner-app decision.
+			row.SourceMessage = findingOwnerDecisionPrefix + row.ID
 		}
 		if row.Question == "" || row.Choice == "" {
 			apierr.Write(w, http.StatusBadRequest, errors.New("question and choice cannot be empty"))
@@ -261,8 +268,10 @@ func (s *Service) cardDecisions(ctx context.Context, ix proto.Interaction, r pro
 	if st == nil || status != "resolved" || r.Dismiss || ix.Kind != proto.IxQuestion || len(r.Answers) == 0 {
 		return
 	}
-	if r.AnsweredBy == proto.AnsweredByAssistant {
-		return // the assistant's call for the user (delegate.go), not one the user made; "Change answer" is
+	if r.AnsweredBy != "" || r.Late {
+		// Not one the user made on the card: the assistant's call for them (delegate.go; "Change answer" is theirs), a
+		// recommendation taken at a deadline, the terminal's, or an answer that came after the card expired.
+		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -507,11 +516,17 @@ func contextText(s string) string {
 // withTodoDecisions puts the todo's and its continuation ancestors' decisions before text handed to an agent;
 // text as it is without any.
 func (s *Service) withTodoDecisions(ctx context.Context, todoID, text string) string {
+	return s.withTodoDecisionsForAgent(ctx, todoID, "", text)
+}
+
+// withTodoDecisionsForAgent is withTodoDecisions for a known agent kind. An agy workflow
+// command keeps its body at byte 0 and receives the decisions after it.
+func (s *Service) withTodoDecisionsForAgent(ctx context.Context, todoID, agent, text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}
 	if c := s.todoHandoffDecisionsContext(ctx, todoID); c != "" {
-		return c + "\n\n" + text
+		return agentprompt.WithContext(agent, text, c)
 	}
 	return text
 }

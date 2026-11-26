@@ -81,6 +81,12 @@ const (
 	// (#6282, docs/protocol/protocol.md "Assistant chat search"). The hub lists the assistant_search feature only while
 	// the default manager names it; the apps keep filtering titles and last messages without it.
 	CapabilityAssistantSearch = "assistant_search"
+	// CapabilityAssistantPages: the manager keeps the assistant's pages (Dashboards, #15017,
+	// docs/assistant/dashboards.md): the reserved extension -pages in GET /api/v1/extensions/-/ui and its pages, the
+	// dashboards switch in GET/PUT /api/v1/assistant and the assistant_pages event. Only the built-in manager names
+	// it, the switch on or off; the hub lists the assistant_pages feature only while the default manager names it, and
+	// the apps show the switch only then.
+	CapabilityAssistantPages = "assistant_pages"
 	// CapabilityTaskInput: the manager validates and saves structured scheduled prompts.
 	CapabilityTaskInput = "task_input"
 	// CapabilityAssistantSegments promises persistent logical routing and explicit switches.
@@ -105,6 +111,13 @@ const (
 	// rows). The hub lists the todo_view feature only while every manager whose to-dos it merges names it; until then
 	// clients keep their own rules, and draw a row without `view` as before.
 	CapabilityTodoView = "todo_view"
+	// CapabilityTodoRevision: the manager answers GET /api/v1/todos/revision with a cheap validator for the full list's
+	// to-do writes and stable view classes (#13804). The hub lists todo_revision only while every manager whose to-dos it
+	// merges names it; older and mixed fleets keep reading the complete list after a push.
+	CapabilityTodoRevision = "todo_revision"
+	// TodoRevisionHeader carries the manager's or merged hub's lightweight to-do validator on GET /api/v1/todos and
+	// GET /api/v1/todos/revision. It is separate from the full body's ETag.
+	TodoRevisionHeader = "X-Persona-Todos-Revision"
 	// CapabilityTodoPlaces: the manager answers GET /api/v1/todos/places, the To-dos sidebar's places with the list's
 	// counts (#10226, TodoPlaces). The hub lists the todo_places feature only while every manager whose to-dos it
 	// merges names it.
@@ -125,6 +138,11 @@ const (
 	CapabilityTodoImages = "todo_images"
 )
 
+// ManagerStatus is EventManagerStatus's params: live runtime status a connected manager reports to the hub's roster.
+type ManagerStatus struct {
+	PendingRestart bool `json:"pending_restart"`
+}
+
 // BodyStream is where MethodHTTPStreamed's body comes from: the relay the hub holds with ID (devicewire.RelayPath
 // ?id=, only the manager the request is for may take it), which carries exactly Size bytes as a body stream
 // (bus.WriteBody) and then closes normally.
@@ -133,16 +151,19 @@ type BodyStream struct {
 	Size int64  `json:"size"`
 }
 
-// The methods and events, by direction. The assistant's handshake is manager.hello {id, host, os, arch, deploy,
-// version, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
+// The methods and events, by direction. The assistant's handshake is manager.hello {id, host, machine_uid?, os, arch,
+// deploy, version, pending_restart?, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
 const (
 	// The assistant calls the hub (Hub).
-	MethodHello    = "manager.hello"
-	MethodDevice   = "device.call"
-	MethodApp      = "app.call"
-	MethodNotify   = "notify.request"
-	MethodSnapshot = "manager.snapshot"
-	EventBroadcast = "ws.broadcast" // one way
+	MethodHello  = "manager.hello"
+	MethodDevice = "device.call"
+	// MethodDeviceRetire forwards only session.stop_if_idle, with caller cancellation.
+	MethodDeviceRetire = "device.retire"
+	MethodApp          = "app.call"
+	MethodNotify       = "notify.request"
+	MethodSnapshot     = "manager.snapshot"
+	EventBroadcast     = "ws.broadcast"   // one way
+	EventManagerStatus = "manager.status" // one way: ManagerStatus (live roster status, e.g. pending_restart)
 
 	// The hub calls the assistant (Handler).
 	MethodHTTP = "http.request" // HTTPRequest → HTTPResponse
@@ -187,7 +208,7 @@ const (
 	CodeStaleSnapshot    = "stale_snapshot"    // ErrStaleSnapshot
 	CodeAssistantOffline = "assistant_offline" // the hub has no connection from the assistant
 	// CodeFeishuAPI: Feishu answered the bot's call with an error code (Data: {"code": n}): a refusal or a passing
-	// failure the assistant tells apart (the agent messages, feishu_cot.go).
+	// failure the assistant tells apart (the agent messages, internal/modules/lark/cot.go).
 	CodeFeishuAPI = "feishu_api"
 	// CodeFeishuSave: the image downloaded, but saving its bytes on the selected machine failed.
 	CodeFeishuSave = "feishu_save"
@@ -266,6 +287,8 @@ const (
 // Routes are the routes the assistant answers (net/http patterns): the hub relays the apps' requests on them as
 // http.request. The assistant registers exactly these (assistant.TestRoutesAreTheWireOnes).
 var Routes = []string{
+	"GET /api/v1/settings/web-fonts",
+	"PUT /api/v1/settings/web-fonts",
 	"POST /api/v1/skills/import",
 	"POST /api/v1/assistant/health/workouts",
 	"GET /api/v1/sessions/archived",
@@ -277,6 +300,8 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
+	"GET /api/v1/assistant/outbound-messages",
+	"POST /api/v1/assistant/outbound-messages",
 	"GET /api/v1/assistant/north-star",
 	"DELETE /api/v1/assistant/standing-authorizations/{id}",
 	"POST /api/v1/assistant/rule-suggestions/{id}/always",
@@ -288,6 +313,8 @@ var Routes = []string{
 	"POST /api/v1/assistant/conversations/{id}/stop",
 	"GET /api/v1/assistant/reporters",
 	"GET /api/v1/assistant/leaders",
+	"POST /api/v1/assistant/directions",
+	"POST /api/v1/assistant/directions/{id}/progress",
 	"GET /api/v1/assistant/dispatch-policy",
 	"PUT /api/v1/assistant/dispatch-policy",
 	"GET /api/v1/assistant/dispatch-guard",
@@ -390,6 +417,8 @@ var Routes = []string{
 	"PUT /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"DELETE /api/v1/todos/{id}/agents/{mid}/{sid}",
 	"GET /api/v1/todos/{id}/decisions",
+	"GET /api/v1/todos/{id}/handoffs",
+	"POST /api/v1/todos/{id}/handoff",
 	"POST /api/v1/decisions",
 	"GET /api/v1/decisions/{id}",
 	"POST /api/v1/decisions/{id}/withdraw",
@@ -470,6 +499,9 @@ var Routes = []string{
 	"GET /api/v1/assistant/conversations/{id}/segments",
 	"POST /api/v1/assistant/conversations/{id}/switch",
 	"GET /api/v1/assistant/conversations/{id}/switch/{operation}",
+	// A batch of those switches (conversations_switch.go there, docs/assistant/assistant.md, #14222).
+	"POST /api/v1/assistant/conversation-switches",
+	"GET /api/v1/assistant/conversation-switches/{batch}",
 	// The selection: what the knowledge base brings in and keeps (kb_selection.go there).
 	"GET /api/v1/kb/selection",
 	"PUT /api/v1/kb/selection",
@@ -494,10 +526,8 @@ var Routes = []string{
 	"POST /api/v1/recordings/{id}/followup",
 	// A meeting handed to an Agent after it (meeting_handoff.go there, #8852).
 	"POST /api/v1/recordings/{id}/handoff",
-	// Its photos (meeting_photos.go there, "Phase 3: photos").
+	// Its photo writes (the read-only GETs are the knowledge base's own, kb_recordings.go).
 	"POST /api/v1/recordings/{id}/photos",
-	"GET /api/v1/recordings/{id}/photos",
-	"GET /api/v1/recordings/{id}/photos/{n}",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
 	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
 	// one of SocketRoutes.

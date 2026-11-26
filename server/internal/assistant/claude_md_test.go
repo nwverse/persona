@@ -2,11 +2,13 @@ package assistant
 
 import (
 	"context"
-	"github.com/nwverse/persona/server/internal/compat"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -24,17 +26,14 @@ func claudeMDHub(devices ...Device) *fakeHub {
 	return f
 }
 
-// The secretary's instructions never send new task_plan work to a leader for acceptance (#5732).
-func TestAssistantInstructionsKeepNewTaskReviewWithMain(t *testing.T) {
-	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
+// Shared platform instructions keep ordinary work with its planning lead and escalate only owner decisions.
+func TestAssistantInstructionsKeepTaskReviewWithItsPlanningLead(t *testing.T) {
+	f := claudeMDHub(Device{ID: "server", Name: "Server", Kind: "local"})
 	s := newTestService(t, f)
 	s.kb.dir = "<hub>/data"
 	text := s.claudeMD(context.Background(), "server", false)
-	if strings.Contains(text, "交给那个主管督办") || strings.Contains(text, "任务的验收和返工由它做") {
-		t.Fatal("the assistant is still told to delegate new task_plan acceptance to a leader")
-	}
-	if !strings.Contains(text, "新任务统一由主对话督办") {
-		t.Fatal("the assistant instructions do not state universal main supervision")
+	if strings.Contains(text, "新任务统一由主对话督办") || !strings.Contains(text, "主管派的任务归该主管") || !strings.Contains(text, "主对话不直接指挥主管的 Agent") {
+		t.Fatal("the platform instructions disagree with direction ownership")
 	}
 }
 
@@ -46,6 +45,9 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	f.hello.Owner = "示例用户"
 	f.hello.OwnerNotes = "  我在示例公司做后端。\n常用 skills：demo-skill。  "
 	f.hello.KB = &KBSettings{ExtraDirs: []string{"/home/me/notes", "/home/me/facts"}} // manager.json's kb section
+	f.answerApp(assistantwire.AppPhone, assistantwire.PhoneTools, func(json.RawMessage) (any, error) {
+		return map[string]any{"tools": []map[string]string{{"name": "phone_calendar_events"}, {"name": "phone_reminders_create"}}}, nil
+	})
 	s := newTestService(t, f)
 	s.kb.dir = "<hub>/data"
 	golden(t, "assistant_claude_md.full", s.claudeMD(ctx, "server", false))
@@ -62,8 +64,12 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	if _, err := s.prepare(ctx, "server"); err != nil {
 		t.Fatal(err)
 	}
-	if got := bare.prepared[0]["claude_md"]; got != s.claudeMD(ctx, "server", true) || bare.prepared[0]["dir"] != compat.StateDir+"/assistant" {
-		t.Fatalf("assistant.prepare: %v", bare.prepared[0])
+	if got := bare.prepared[0]["views_guide_md"]; got != s.claudeMD(ctx, "server", true) {
+		t.Fatalf("assistant.prepare compact instructions: %v", bare.prepared[0])
+	}
+	full, _ := bare.prepared[0]["claude_md"].(string)
+	if !strings.Contains(full, `"title":"选择方案"`) || bare.prepared[0]["dir"] != compat.StateDir+"/assistant" {
+		t.Fatalf("assistant.prepare must retain the complete fallback for older nodes: %v", bare.prepared[0])
 	}
 }
 
@@ -71,24 +77,33 @@ func TestGoldenAssistantViewRepair(t *testing.T) {
 	golden(t, "assistant_view_repair", prompts.RenderAssistantViewRepair(prompts.AssistantViewRepair{Errors: []string{"persona-view block 0: fallback: include a plain text summary"}}))
 }
 
-func TestAssistantRichViewPromptExamplesAreValid(t *testing.T) {
+func TestAssistantRichViewPromptKeepsCoreGuidance(t *testing.T) {
 	text := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{})
-	blocks := wire.AssistantViewBlocks(text)
-	if len(blocks) != 2 {
-		t.Fatalf("prompt has %d examples, want 2", len(blocks))
+	if blocks := wire.AssistantViewBlocks(text); len(blocks) != 0 {
+		t.Fatalf("shared prompt still carries %d full view examples; want them in the on-demand skill", len(blocks))
 	}
-	for _, block := range blocks {
-		if _, err := block.Parse(); err != nil {
-			t.Fatalf("prompt teaches an invalid view: %v", err)
-		}
-	}
-	for _, want := range []string{"view_show", "view_update", "view_get", "submit=true", "ask_user", "fallback", "自动运行"} {
+	for _, want := range []string{"persona-views", "persona-view", "view_show", "view_update", "view_get", "ask_user", "fallback", "HTML", "密码"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("missing rich view guidance: %s", want)
+			t.Fatalf("missing core rich view guidance: %s", want)
 		}
 	}
-	if strings.Contains(text, "助手的卡片点不了") {
-		t.Fatal("interactive guidance still teaches read-only cards")
+	for _, moved := range []string{"getBoundingClientRect", "stat_grid 把多项放进 stats 数组", `"title":"选择方案"`} {
+		if strings.Contains(text, moved) {
+			t.Fatalf("detailed view procedure remains inline: %s", moved)
+		}
+	}
+	full := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{FullViewGuide: true})
+	blocks := wire.AssistantViewBlocks(full)
+	if len(blocks) != 1 {
+		t.Fatalf("legacy fallback has %d complete examples, want 1", len(blocks))
+	}
+	if _, err := blocks[0].Parse(); err != nil {
+		t.Fatalf("legacy fallback teaches an invalid view: %v", err)
+	}
+	for _, want := range []string{"getBoundingClientRect", "stat_grid 把多项放进 stats 数组", "persona.reply", "persona.open"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("legacy fallback lost %q", want)
+		}
 	}
 }
 

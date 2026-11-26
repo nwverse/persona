@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -181,6 +181,7 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 	t.Run("linked inbox item wakes supervisor without bypassing to agent", func(t *testing.T) {
 		ctx := context.Background()
 		s, f, todo, _, _ := setupNeedsUserTaskWithLark(t, nil)
+		f.inbox = newFakeInbox()
 		turnInboxSignalsOn(t, s)
 		beforeNotices := len(f.notices())
 		beforeAgentSent := len(sentToAgent(f))
@@ -205,6 +206,7 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 	})
 
 	t.Run("bound feishu thread reply wakes supervisor without mutating card", func(t *testing.T) {
+		needsLarkLayer(t) // the topic's message is the lark module's
 		ctx := context.Background()
 		s, f, todo, _, _ := setupNeedsUserTaskWithLark(t, nil)
 		th := TodoThread{Channel: channel.Feishu, ChatID: "oc_group1", ThreadID: "omt_thread1", Title: "Rollout topic"}
@@ -213,14 +215,15 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 		}
 		beforeNotices := len(f.notices())
 
-		ev := feishubot.MessageEvent{}
+		ev := botcard.MessageEvent{}
 		ev.Sender.SenderType = "user"
 		ev.Sender.SenderID.OpenID = "ou_me"
 		ev.Message.MessageID = "om_reply_1"
 		ev.Message.ChatID = "oc_group1"
 		ev.Message.ThreadID = "omt_thread1"
+		ev.Message.ChatType, ev.Message.MessageType, ev.Message.Content = "group", "text", `{"text":"Go ahead after QA signs off"}`
 		st := FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", Features: FeishuFeatures{Main: true, Cards: true, Reports: true}}
-		s.threadMessage(ctx, ev, st, feishubot.Content{Text: "Go ahead after QA signs off"})
+		feishuSay(t, s, f, &st, ev, "")
 
 		waitFor(t, "thread external info wake", func() bool {
 			for _, n := range f.notices()[beforeNotices:] {
@@ -307,6 +310,7 @@ func TestNeedsUserExternalInfoSilentFinishKeepsCardIntact(t *testing.T) {
 }
 
 func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
+	needsLarkLayer(t)
 	parkedArgs := personReplyParkArgs(time.Now())
 	parkedArgs["reason"] = "Waiting for external QA sign-off per thread reply"
 	verdicts := []struct {

@@ -33,15 +33,21 @@ final class TodoOutbox {
         case someday(Bool)
         /// `DELETE …/todos/{id}`.
         case delete
-        /// `POST /api/v1/todos`, under the to-do's own id here (`newID`) until the hub answers with its own.
-        case create(title: String, notes: String?)
+        /// `POST /api/v1/todos`, under the to-do's own id here (`newID`) until the hub answers with its own. Made in a
+        /// To-dos place, it starts there in the same write (#10465, proposal 3.3 "Capture default"): due on a day or at
+        /// a moment, or in a knowledge-base project. A write kept on disk before these existed reads as none of them.
+        case create(title: String, notes: String?, dueAt: Date? = nil, dueDate: String? = nil, project: String? = nil)
+        /// An answer to one of the to-do's own asks (proposal 3.7, "Three outcomes"): the asks route while the hub lists
+        /// `todo_asks`, else today's accept and retry routes. Nothing undoes a decision on the hub, so it waits out its Undo
+        /// window here.
+        case answer(AskAnswer)
 
-        /// The write that takes this one back once the hub has it; none for a delete.
+        /// The write that takes this one back once the hub has it; none for a delete or an answer.
         func reverse() -> Write? {
             switch self {
             case .done(let done): .done(!done)
             case .someday(let on): .someday(!on)
-            case .delete: nil
+            case .delete, .answer: nil
             case .create: .delete
             }
         }
@@ -50,6 +56,34 @@ final class TodoOutbox {
         var edits: Bool {
             if case .create = self { false } else { true }
         }
+
+        /// A new to-do made in a knowledge-base project.
+        var inProject: Bool {
+            guard case .create(_, _, _, _, let project?) = self else { return false }
+            return !project.isEmpty
+        }
+    }
+
+    /// One answer to a to-do's own ask, as it is held and sent.
+    nonisolated struct AskAnswer: Codable, Equatable, Sendable {
+        /// The id the row's view lists (`todo:decision@…`, `todo:retry@…`): the asks route's, and the counts' overlay's.
+        var ask: String
+        /// `OwnerAskKind`: a decision or a retry.
+        var kind: String
+        /// The round the accept route takes (the decision's `asked_at`, byte for byte); none for a retry.
+        var round: String?
+        /// One of a decision's options, by its label; the recommended one takes the recommendation.
+        var option: String?
+        /// One of the fixed answers (`TodoAsk.Response`).
+        var response: String?
+        /// What the row says while it is held ("You chose …").
+        var label: String
+        /// The step whose ask this is, lifted onto its parent's row (`step:<id>/…`): today's routes answer it on the step,
+        /// and the device keeps it by the step's round, as the tray does.
+        var step: String? = nil
+
+        /// The asks route's body: none for a retry, which is the ask's one action.
+        var body: TodoAskAnswer { TodoAskAnswer(option: option, response: response) }
     }
 
     nonisolated struct Entry: Codable, Equatable, Identifiable, Sendable {
@@ -85,10 +119,12 @@ final class TodoOutbox {
         /// A new to-do's id on the hub, once it answered: the list has its own row for it then.
         var created: String?
 
-        /// A new to-do as the list draws it until the hub has it.
+        /// A new to-do as the list draws it until the hub has it: with its due date and project, so the place it was
+        /// made in holds it at once (`TodosPlaces.holds`), and its project's place counts it.
         var newItem: TodoItem? {
-            guard case .create(let title, let notes) = write, created == nil else { return nil }
-            return TodoItem(id: todo, title: title, notes: notes, createdAt: made, updatedAt: made, manager: manager)
+            guard case .create(let title, let notes, let dueAt, let dueDate, let project) = write, created == nil else { return nil }
+            return TodoItem(id: todo, title: title, notes: notes, createdAt: made, updatedAt: made, dueAt: dueAt, dueDate: dueDate,
+                            manager: manager, project: project)
         }
     }
 
@@ -101,8 +137,17 @@ final class TodoOutbox {
         case notSent
         /// It may have reached it: nobody knows whether it was done.
         case unknown
-        /// The hub turned it down: dropped, and said.
-        case refused(String)
+        /// The hub turned it down: dropped, and said. `project`: what it turned down is the project a new to-do was made
+        /// in (a 400 to one that carried one: the hub takes the title and date as the app sends them).
+        case refused(String, project: Bool = false)
+        /// An answer whose ask no longer waits (answered elsewhere, a newer round, the to-do gone): the first answer
+        /// anywhere wins, so it is let go without a word here; the row says "Answered elsewhere".
+        case elsewhere
+        /// An answer nobody can say reached the Agent: the hub said so (502 `send_in_doubt`, `delivered: "unknown"`, which
+        /// its receipt says again to a repeat), or `tries` sends ended unanswered. Never sent again, and never said as not
+        /// sent, since the words may be with the Agent: the row says it is not sure, and the next read of the view shows
+        /// whether the ask still waits.
+        case inDoubt
     }
 
     /// A to-do as the list last read it: what a write sent again is checked against.
@@ -111,13 +156,18 @@ final class TodoOutbox {
         var updatedAt: Date?
         var done: Bool
         var someday: Bool
+        /// The asks its view lists: an answer to one it no longer lists is moot. nil while the row has no view (a manager
+        /// reconnecting): nothing is known of its asks then.
+        var asks: Set<String>? = nil
 
-        /// The to-do is already as `write` asks (the write landed before, or someone did the same).
+        /// The to-do is already as `write` asks (the write landed before, or someone did the same); for an answer, its
+        /// view no longer lists the ask.
         func has(_ write: Write) -> Bool {
             switch write {
             case .done(let d): done == d
             case .someday(let on): someday == on
             case .delete, .create: false
+            case .answer(let a): asks.map { !$0.contains(a.ask) } ?? false
             }
         }
     }
@@ -138,8 +188,12 @@ final class TodoOutbox {
         var hub: @MainActor () -> String?
         /// Sends it; `answered` is told as the hub answers, before the list is read again.
         var send: @MainActor (_ entry: Entry, _ answered: @escaping @MainActor (Answer) -> Void) async -> Sent
-        /// A write the hub turned down, or that could not be saved: said where the owner is.
-        var refused: @MainActor (Entry, String) -> Void
+        /// A write the hub turned down, or that could not be saved: said where the owner is. `project`: the hub turned
+        /// down the project a new to-do was made in (`Sent.refused`).
+        var refused: @MainActor (_ entry: Entry, _ message: String, _ project: Bool) -> Void
+        /// How an answer's send ended (`.done`, `.elsewhere`, `.refused`), or that it was let go unsent because its ask
+        /// no longer waits (`.elsewhere`): the asks' state on this device follows (`DecisionAnswers.settled`).
+        var settled: @MainActor (Entry, Sent) -> Void = { _, _ in }
         /// A to-do as the list has it now; nil when the list has none (gone from the hub).
         var standing: @MainActor (String) -> Standing? = { _ in nil }
         /// The shown hub's to-dos, for a new to-do nobody knew the hub made.
@@ -153,22 +207,24 @@ final class TodoOutbox {
                  save: { entries, number in Task(priority: .utility) { await TodoOutboxFile.shared.save(entries, number: number) } },
                  hub: { AppModel.shared.hub?.group },
                  send: { entry, answered in await TodoStore.shared.send(entry, answered: answered) },
-                 refused: { entry, message in
+                 refused: { entry, message, project in
                      Haptics.error()
                      // A new to-do the hub turned down: what was typed comes back in its sheet (Edit).
-                     var edit: Toast.Action?
-                     if case .create(let title, let notes) = entry.write {
-                         edit = Toast.Action(title: String(localized: "Edit")) { TodoOutbox.shared.edit(title: title, notes: notes) }
+                     let said = TodoOutbox.refusal(entry.write, message: message, project: project)
+                     let edit = said.draft.map { draft in
+                         Toast.Action(title: String(localized: "Edit")) { TodoOutbox.shared.edit(draft) }
                      }
-                     AppModel.shared.toast = Toast(message, style: .error, action: edit)
+                     AppModel.shared.toast = Toast(said.message, style: .error, action: edit)
                  },
+                 settled: { entry, sent in DecisionAnswers.shared.settled(entry, sent) },
                  standing: { id in
                      let store = TodoStore.shared
                      guard let item = store.byID[id] else { return nil }
                      let view = store.views[id]
                      return Standing(title: item.title, updatedAt: item.updatedAt,
                                      done: view.map { $0.phase == TodoPhase.done } ?? item.isDone,
-                                     someday: view?.section == TodoListSection.someday)
+                                     someday: view?.section == TodoListSection.someday,
+                                     asks: view.map { Set($0.asks?.map(\.id) ?? []) })
                  },
                  listed: { TodoStore.shared.todos },
                  followsScene: true)
@@ -179,10 +235,27 @@ final class TodoOutbox {
     private(set) var entries: [Entry] = []
     /// Taken back while being sent: drawn as taken back at once; once the hub has it, its reverse goes.
     private(set) var takenBack: Set<UUID> = []
-    /// What a new to-do the hub turned down said: back in New To-Do's sheet (the toast's Edit).
+    /// What a new to-do the hub turned down said: back in New To-Do's sheet (the toast's Edit), due when it was due (a
+    /// day, or a moment) and in its project, unless the project is what the hub turned down (#10465).
     nonisolated struct Draft: Equatable, Sendable {
         var title: String
         var notes: String?
+        var dueAt: Date?
+        var dueDate: String?
+        var project: String?
+    }
+
+    /// What the owner is told of a write the hub turned down and, for a new to-do, what its sheet opens with again (the
+    /// toast's Edit). One whose project the hub turned down (`project`: gone or renamed meanwhile) opens without it, and
+    /// the toast says so, or every Add would be turned down the same way; its project can be set again from its row.
+    /// Any other refusal (a role that may not add to-dos, say) keeps the project and says what the hub said.
+    nonisolated static func refusal(_ write: Write, message: String, project refused: Bool = false) -> (message: String, draft: Draft?) {
+        guard case .create(let title, let notes, let dueAt, let dueDate, let project) = write else { return (message, nil) }
+        guard refused, project != nil else {
+            return (message, Draft(title: title, notes: notes, dueAt: dueAt, dueDate: dueDate, project: project))
+        }
+        return (String(localized: "Couldn't put “\(title)” in its project. Edit adds it without one. [To-dos Toast]"),
+                Draft(title: title, notes: notes, dueAt: dueAt, dueDate: dueDate))
     }
 
     /// A new to-do the hub turned down, whose words go back into New To-Do (the toast's Edit).
@@ -247,9 +320,30 @@ final class TodoOutbox {
         guard let hub = deps.hub() else { return [:] }
         var out: [String: Entry] = [:]
         for entry in entries where entry.hub == hub && entry.created == nil && !entry.undone && !takenBack.contains(entry.id) {
+            if case .answer = entry.write { continue } // said by the row's answers, not as a change to the to-do
             out[entry.todo] = entry
         }
         return out
+    }
+
+    /// The shown hub's answers still here, the asks they answer by to-do (`TodoCountsSource`): each ask counts as answered
+    /// from the tap on, also after a relaunch, until its answer is let go.
+    var answering: [String: Set<String>] {
+        guard let hub = deps.hub() else { return [:] }
+        var out: [String: Set<String>] = [:]
+        for entry in entries where entry.hub == hub && !takenBack.contains(entry.id) {
+            if case .answer(let a) = entry.write, !a.ask.isEmpty { out[entry.todo, default: []].insert(a.ask) }
+        }
+        return out
+    }
+
+    /// The latest answer still here on hub `hub` that `matches`: `DecisionAnswers` finds a round's by its key. Read on
+    /// every draw of a decision row, so it walks the entries from the newest without building a list (P4).
+    func lastAnswer(hub: String, where matches: (Entry, AskAnswer) -> Bool) -> (entry: Entry, answer: AskAnswer)? {
+        for entry in entries.reversed() where entry.hub == hub && !takenBack.contains(entry.id) {
+            if case .answer(let a) = entry.write, matches(entry, a) { return (entry, a) }
+        }
+        return nil
     }
 
     /// What the list's rows and every number show of the shown hub's writes (`TodoCountsSource`): a deleted to-do is
@@ -352,7 +446,7 @@ final class TodoOutbox {
     }
 
     /// New To-Do reopened with what a refused one said (the toast's Edit); the sheet takes it (`tookDraft`).
-    func edit(title: String, notes: String?) { draft = Draft(title: title, notes: notes) }
+    func edit(_ draft: Draft) { self.draft = draft }
     func tookDraft() { draft = nil }
 
     /// The hub answered read `read` of the list, which has landed: the writes it shows are let go, a new to-do nobody
@@ -370,6 +464,7 @@ final class TodoOutbox {
         }
         changed = settleUnsure() || changed
         changed = expire() || changed
+        changed = settleAnsweredElsewhere() || changed
         if changed { save() }
         let now = deps.now()
         sendPicked { !$0.answered && !$0.unsure && !$0.undone && $0.due <= now }
@@ -402,6 +497,7 @@ final class TodoOutbox {
         if !loaded {
             if let groups { forgetOnLoad.groups.formUnion(groups) } else { forgetOnLoad.all = true }
         }
+        for entry in entries where gone(entry) { if case .answer = entry.write { deps.settled(entry, .refused("")) } }
         entries.removeAll(where: gone)
         landed = landed.filter { !gone($0.value.entry) }
         takenBack = takenBack.filter { id in entries.contains { $0.id == id } }
@@ -466,6 +562,16 @@ final class TodoOutbox {
     /// owner made it is let go: what the owner saw is not what is there now. Said, unless the to-do is already as it
     /// asks. One whose to-do is gone from the list is let go quietly: there is nothing left to change.
     private func stillWanted(_ entry: Entry) -> Bool {
+        if case .answer = entry.write {
+            // An answer goes unless it never left and a read shows its ask answered meanwhile (`answeredElsewhere`). One
+            // whose send began may have reached the hub, so it goes again with its op id and the receipt says the first
+            // answer; with the row or its view missing (a manager reconnecting), the hub's own answer says whether the ask
+            // still waits.
+            guard answeredElsewhere(entry) else { return true }
+            drop(entry.id)
+            deps.settled(entry, .elsewhere)
+            return false
+        }
         guard entry.waits, entry.write.edits else { return true }
         guard let now = deps.standing(entry.todo) else {
             drop(entry.id)
@@ -474,9 +580,31 @@ final class TodoOutbox {
         guard let base = entry.base, let at = now.updatedAt, at > base else { return true }
         drop(entry.id)
         if !now.has(entry.write) {
-            deps.refused(entry, String(localized: "“\(now.title)” changed in the meantime, so your change wasn't saved. [To-dos Toast]"))
+            deps.refused(entry, String(localized: "“\(now.title)” changed in the meantime, so your change wasn't saved. [To-dos Toast]"),
+                         false)
         }
         return false
+    }
+
+    /// An answer none of whose sends began, to an ask the to-do's view (read since) no longer lists: answered on another
+    /// device, asked again, or the to-do closed. Not one without the ask's id, whose row or view is missing, or that may
+    /// have reached the hub: those go, and the hub's answer says.
+    private func answeredElsewhere(_ entry: Entry) -> Bool {
+        guard case .answer(let a) = entry.write, !a.ask.isEmpty, !entry.sent, !sending.contains(entry.id) else { return false }
+        return deps.standing(entry.todo)?.has(entry.write) == true
+    }
+
+    /// A read landed: the answers held on the shown hub whose ask it shows answered meanwhile say so now, not when their
+    /// window ends. true: some were let go.
+    private func settleAnsweredElsewhere() -> Bool {
+        let hub = deps.hub()
+        let gone = entries.filter { $0.hub == hub && answeredElsewhere($0) }
+        guard !gone.isEmpty else { return false }
+        for entry in gone {
+            entries.removeAll { $0.id == entry.id }
+            deps.settled(entry, .elsewhere)
+        }
+        return true
     }
 
     /// The hub answered write `id`: kept as answered (never sent again) until a later read shows it. One taken back
@@ -506,6 +634,7 @@ final class TodoOutbox {
                 retire(kept) // a read that began after its answer landed while it was being confirmed
                 save()
             }
+            if case .answer = entry.write { deps.settled(entry, sent) }
             return
         }
         let back = takenBack.remove(entry.id) != nil
@@ -513,6 +642,10 @@ final class TodoOutbox {
         switch sent {
         case .done:
             return
+        case .elsewhere, .inDoubt:
+            entries.remove(at: i)
+            save()
+            deps.settled(entry, sent)
         case .notSent:
             if back {
                 entries.remove(at: i) // it never reached the hub: nothing went, so nothing goes
@@ -533,16 +666,23 @@ final class TodoOutbox {
                 if let reverse = taken.write.reverse() { add(reverse, todo: taken.todo, manager: taken.manager, hub: taken.hub) }
             } else if entries[i].unknown + 1 >= Self.tries {
                 let given = entries.remove(at: i)
-                deps.refused(given, String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]"))
+                if case .answer = given.write {
+                    // It may be with the Agent: never said as not sent.
+                    deps.settled(given, .inDoubt)
+                } else {
+                    deps.refused(given, String(localized: "Couldn't save your change to “\(deps.standing(given.todo)?.title ?? "")”. [To-dos Toast]"),
+                                 false)
+                }
             } else {
                 entries[i].unknown += 1
                 entries[i].waits = true
             }
             save()
-        case .refused(let message):
+        case .refused(let message, let project):
             entries.remove(at: i)
             save()
-            if !back { deps.refused(entry, message) }
+            if !back { deps.refused(entry, message, project) }
+            if case .answer = entry.write { deps.settled(entry, sent) }
         }
     }
 
@@ -572,7 +712,7 @@ final class TodoOutbox {
         var claimed = Set(entries.compactMap(\.created)).union(landed.values.compactMap(\.created))
         var changed = false
         for entry in entries where entry.unsure && entry.hub == hub {
-            guard case .create(let title, let notes) = entry.write else { continue }
+            guard case .create(let title, let notes, _, _, _) = entry.write else { continue }
             let since = entry.made.addingTimeInterval(-Self.clockSlack)
             let until = entry.made.addingTimeInterval(Self.clockSlack + Self.relayWait)
             if let row = rows.first(where: { row in
@@ -596,15 +736,29 @@ final class TodoOutbox {
         return changed
     }
 
-    /// Writes whose hub never came back in time are let go (`keepFor`, `keepNewFor`). true: some were.
+    /// Writes whose hub never came back in time are let go (`keepFor`, `keepNewFor`). An answer that never left says it
+    /// was not sent and its buttons come back; one whose send began may be with the Agent, so it says it is not sure,
+    /// never that it was not sent. true: some were.
     private func expire() -> Bool {
         let now = deps.now()
-        let before = entries.count
-        entries.removeAll { entry in
+        let gone = entries.filter { entry in
             !entry.answered && !sending.contains(entry.id)
                 && now.timeIntervalSince(entry.made) >= (entry.write.edits ? Self.keepFor : Self.keepNewFor)
         }
-        return entries.count != before
+        guard !gone.isEmpty else { return false }
+        let ids = Set(gone.map(\.id))
+        entries.removeAll { ids.contains($0.id) }
+        for entry in gone {
+            guard case .answer = entry.write else { continue }
+            if entry.sent {
+                deps.settled(entry, .inDoubt)
+            } else {
+                let why = String(localized: "Not connected to a hub [Todo Store 04f822]")
+                deps.refused(entry, String(localized: "Couldn't send your answer. \(why)"), false)
+                deps.settled(entry, .refused(""))
+            }
+        }
+        return true
     }
 
     /// What the last run kept, in: a write sent then is one nobody knows the hub took (a new to-do: "Not sure it was
@@ -690,9 +844,25 @@ final class TodoOutbox {
     /// reached nothing goes again; a refusal is dropped and said; anything else may have been done.
     nonisolated static func outcome(_ error: Error, of write: Write) -> Sent {
         let api = error as? APIError
+        if case .answer(let a) = write {
+            // The ask no longer waits: the first answer anywhere won. Today's accept route says so with a bare 409.
+            if TodoAskRefusal.answeredElsewhere(error) || (api?.status == 409 && a.kind != OwnerAskKind.retry) { return .elsewhere }
+            if let api {
+                // The words reached the Agent and what followed failed: taken, and never sent again.
+                if api.fields["delivered"] == "yes" { return .done(created: nil) }
+                // Nobody can say whether they did: the receipt says the same to a repeat, so it is not sent again.
+                if api.fields["delivered"] == "unknown" { return .inDoubt }
+                // A refusal the hub's assistant gave (a node's 423, 502 `accept_not_taken`): the receipt says the same to
+                // a repeat, so it is dropped and said rather than sent again. Not one that reached no assistant at all.
+                let away = api.status == 0 || [408, 425, 429].contains(api.status) || api.code == "assistant_offline"
+                if !away, (400..<500).contains(api.status) || (api.status >= 500 && api.fields["delivered"] == "none") {
+                    return .refused(api.message)
+                }
+            }
+        }
         if let api, write.edits, TodoNotThere.deleted(api) { return .done(created: nil) }
         if reachedNothing(error) { return .notSent }
-        if let api, (400..<500).contains(api.status) { return .refused(api.message) }
+        if let api, (400..<500).contains(api.status) { return .refused(api.message, project: api.status == 400 && write.inProject) }
         return .unknown
     }
 
