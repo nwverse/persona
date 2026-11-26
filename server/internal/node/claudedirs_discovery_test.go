@@ -89,30 +89,74 @@ func TestClaudeDiscoverySeesDirectoryChangesImmediately(t *testing.T) {
 }
 
 func TestClaudeDiscoveryResolvesParentAfterSymlink(t *testing.T) {
-	n, dirs := retainedClaudeDirs(t)
-	subdir := filepath.Join(dirs[2], "subdir")
-	if err := os.Mkdir(subdir, 0o700); err != nil {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home := t.TempDir()
+	pid := os.Getpid()
+	first, second := filepath.Join(home, "aaaaaaaa"), filepath.Join(home, "bbbbbbbb")
+	for _, profile := range []string{first, second} {
+		if err := os.MkdirAll(filepath.Join(profile, "subdir"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeClaudeConfigSession(t, profile, pid, filepath.Base(profile))
+	}
+	// A lexical join would read this session instead of following the link first.
+	writeClaudeConfigSession(t, home, pid, "cccccccc")
+	for _, tc := range []struct{ name, spelling string }{{"absolute", filepath.Join(home, "link")}, {"tilde", "~/link"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := filepath.Join(home, "link")
+			dir := tc.spelling + string(filepath.Separator) + ".."
+			n := &Node{home: home, dir: filepath.Join(home, "node"), cdirs: newClaudeDirs()}
+			n.cdirs.scan = func() map[int]procEnv { return map[int]procEnv{pid: {ConfigDir: dir}} }
+			for _, profile := range []string{first, second} {
+				if err := os.Symlink(filepath.Join(profile, "subdir"), link); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				got := liveSessionID(t, n, pid)
+				byPID := readClaudeSessionID(n.claudeSessionFile(pid))
+				if err := os.Remove(link); err != nil {
+					t.Fatal(err)
+				}
+				if want := filepath.Base(profile); got != want || byPID != want {
+					t.Fatalf("with %q pointing to %q, session list returned %q and PID lookup returned %q", dir, profile, got, byPID)
+				}
+			}
+		})
+	}
+}
+
+// The default remains eligible. A different profile whose spelling cleans to the same path can still be blocked.
+func TestClaudeDiscoveryBlocksDistinctParentSpelling(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	profile := filepath.Join(home, "profile")
+	subdir := filepath.Join(profile, "subdir")
+	if err := os.MkdirAll(subdir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(n.home, "linked-subdir")
+	link := filepath.Join(home, "link")
 	if err := os.Symlink(subdir, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	// Join would clean ".." and select home instead of the symlink target's parent.
-	spelling := link + string(filepath.Separator) + ".."
-	n.claudeStartDir.Store(&spelling)
-	got := n.claudeConfigDirs()
-	if !slices.Contains(got, spelling) || slices.Contains(got, dirs[2]) {
-		t.Fatalf("expected %q to represent %q, got %v", spelling, dirs[2], got)
+	n := &Node{home: home, dir: filepath.Join(home, "node"), cdirs: newClaudeDirs()}
+	n.cdirs.scan = func() map[int]procEnv { return nil }
+	n.setKnownClaudeDirs([]string{link + string(filepath.Separator) + ".."})
+	n.setBlockedClaudeDirs([]string{profile})
+	if got := n.claudeConfigDirs(); !slices.Equal(got, []string{home}) {
+		t.Fatalf("blocking the profile should leave just the default %q, got %v", home, got)
 	}
-	if err := os.Remove(link); err != nil {
-		t.Fatal(err)
+}
+
+func TestClaudeDiscoveryMissingDefaultWithParent(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, "gone") + string(filepath.Separator) + ".."
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	n := &Node{home: home, dir: filepath.Join(home, "node")}
+	pid := os.Getpid()
+	writeClaudeConfigSession(t, home, pid, "cccccccc")
+	if got := n.claudeConfigDirs(); !slices.Equal(got, []string{dir}) {
+		t.Fatalf("missing default fallback = %v, want %q", got, dir)
 	}
-	if err := os.Symlink(dirs[1], link); err != nil {
-		t.Fatal(err)
-	}
-	got = n.claudeConfigDirs()
-	if !slices.Contains(got, spelling) || !slices.Contains(got, dirs[2]) {
-		t.Fatalf("retargeted link: %v", got)
+	if got, byPID := liveSessionID(t, n, pid), readClaudeSessionID(n.claudeSessionFile(pid)); got != "" || byPID != "" {
+		t.Fatalf("missing default: live list returned %q and PID lookup returned %q", got, byPID)
 	}
 }

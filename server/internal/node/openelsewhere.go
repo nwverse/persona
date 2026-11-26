@@ -93,7 +93,7 @@ func (n *Node) liveClaudes() []claudeProc {
 	var out []claudeProc
 	seen := map[int]bool{}
 	var dirs []string
-	for _, dir := range n.claudeConfigDirs() {
+	for _, dir := range n.existingClaudeDirs() {
 		dirs = append(dirs, filepath.Join(dir, "sessions"))
 	}
 	listed := map[string]bool{}
