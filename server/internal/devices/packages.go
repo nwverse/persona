@@ -88,9 +88,10 @@ type packageKey struct {
 	// edition is the edition of the node the build is for (nodeproto.EditionFull or EditionCore; "" for a node that
 	// said a word this manager does not know): only a build of that edition is ever sent to it.
 	edition nodeproto.Edition
-	// own is this manager\'s edition (Devices.edition): the edition of every build it fetches and keeps in its cache.
+	// own is this manager's edition (Devices.edition): the edition of every build it fetches and keeps in its cache.
 	own         nodeproto.Edition
 	development devicewire.DevelopmentTarget
+	published   devicewire.DevelopmentTarget
 	hold        bool
 }
 
@@ -157,6 +158,9 @@ func (d *Devices) editionKey(goos, arch, program string, edition nodeproto.Editi
 	if cfg.DevelopmentTarget != nil {
 		key.development = *cfg.DevelopmentTarget
 		key.hold = key.hold || !key.development.Valid() || key.development.Version != cfg.HubVersion
+	}
+	if cfg.PublishedTarget != nil && cfg.PublishedTarget.ValidPublished() && cfg.PublishedTarget.Version == key.hub {
+		key.published = *cfg.PublishedTarget
 	}
 	return key
 }
@@ -363,8 +367,8 @@ func (d *Devices) lookupPackage(ctx context.Context, k packageKey) (nodePackage,
 	// Resident preflight requires the running program's identity, even if it is installed under another name.
 	for _, dir := range localNodeDirs() {
 		for _, local := range localNodeNames(k.program, plat) {
-			path := filepath.Join(dir, local)
-			if !fileExists(path) {
+			path := update.PackagePath(dir, local)
+			if path == "" {
 				continue
 			}
 			version, inferred := k.hub, false
@@ -404,6 +408,14 @@ func (d *Devices) lookupPackage(ctx context.Context, k packageKey) (nodePackage,
 		// other one, which keeps what it runs until a build of its edition is put in the node binary dir.
 		return nodePackage{}, i18n.Err("devices-deploy.other_edition", i18n.Args{"os": k.goos, "arch": k.arch, "name": name,
 			"edition": string(cmp.Or(k.edition, "unknown")), "hub": string(d.edition())})
+	}
+	if k.published.Commit != "" {
+		hosted := k
+		hosted.development = k.published
+		pkg, err := d.lookupDevelopment(ctx, hosted)
+		if !errors.Is(err, errNoPublishedPackage) {
+			return pkg, err
+		}
 	}
 	if k.base == "" || k.hub == "dev" || !safeVersion.MatchString(k.hub) {
 		// Nowhere to fetch from (a hub built without an update URL and no node_packages.url, or "off"; a dev build).
@@ -486,21 +498,14 @@ func releaseNodeIncompatible(m *update.Manifest) string {
 // nodeBinaryName is a cached or bundled personad for plat. A Windows executable keeps .exe; it must be looked up
 // with the same suffix that the release download and hub update retain.
 func nodeBinaryName(program, plat string) string {
-	if strings.HasPrefix(plat, "windows-") {
-		return program + "-" + plat + ".exe"
-	}
-	return program + "-" + plat
+	return update.PackageName(program, plat)
 }
 
 // localNodeNames are the names a build of program for plat may have in a local node dir, the current one first. A
 // Windows build left by a hub or a person from before Windows builds kept their .exe has none; it is still taken when
 // it is the version it would be sent as (carriesVersion).
 func localNodeNames(program, plat string) []string {
-	name := nodeBinaryName(program, plat)
-	if legacy, ok := strings.CutSuffix(name, ".exe"); ok {
-		return []string{name, legacy}
-	}
-	return []string{name}
+	return update.PackageNames(program, plat)
 }
 
 // localBuildRecent is the window in which equal-sized replacements may still share an mtime on a coarse filesystem

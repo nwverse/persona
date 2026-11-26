@@ -3,10 +3,11 @@
 Requests arrive on stdin; credentials and command output never go into the receipt.
 Run `python3 webdev.py verify BACKUP` to verify a retained recovery point offline.
 """
-import datetime
+import contextlib
 import ctypes
 import ctypes.util
-import contextlib
+import datetime
+import errno
 import fcntl
 import gzip
 import hashlib
@@ -41,15 +42,15 @@ GO_TARGET = re.compile(
 # Older/divergent installations can still explicitly choose a manual update.
 HISTORY_LIMIT = 1024
 PROGRESS_INTERVAL = 0.75
-BACKUP_STEPS = ("preflight", "quiesce", "database_dump", "archive_files", "archive_programs")
 
 
 class Progress:
-    def __init__(self, phase, send=None, *, builtin=False):
+    def __init__(self, phase, send=None):
         self.phase = phase
         self.steps = {
             "building": ("fetch", "npm_install", "web_build", "runtime_packages", "go_build", "manifest"),
-            "backing_up": BACKUP_STEPS + (() if builtin else ("resume_writers",)) + ("verify_snapshot",),
+            "backing_up": ("preflight", "quiesce", "database_dump", "archive_files",
+                           "resume_writers", "archive_programs", "verify_snapshot"),
             "applying_backup": ("verify_snapshot", "prepare_artifacts"),
         }[phase]
         self.send = send
@@ -186,12 +187,16 @@ def run(argv, cwd=None, env=None, output=False, timeout=1800, on_tick=None):
 
 
 def digest(path, on_read=None):
-    h = hashlib.sha256()
     with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(chunk)
-            if on_read is not None:
-                on_read(len(chunk))
+        return stream_digest(stream, on_read)
+
+
+def stream_digest(stream, on_read=None):
+    h = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        h.update(chunk)
+        if on_read is not None:
+            on_read(len(chunk))
     return h.hexdigest()
 
 
@@ -685,10 +690,18 @@ def inventory(request):
     backup = request["config"]["backup"]
     roots += [Path(p).expanduser().resolve(strict=True) for p in backup.get("extra_roots", [])]
     databases += backup.get("extra_databases", [])
+    previous_web = runtime / "web.prev"
+    excluded = {runtime / n for n in ("update", "bin", "cache", "logs")}
+    # An explicitly inventoried knowledge directory or extra root can live
+    # inside the old bundle. Preserve it before collapsing contained roots.
+    if (previous_web.is_dir() and not previous_web.is_symlink() and
+            not any(p.is_relative_to(previous_web) for p in roots) and
+            not (runtime / "web").resolve().is_relative_to(previous_web)):
+        excluded.add(previous_web)
     # Contained roots are already archived, and duplicate databases are dumped once.
     roots = sorted(set(roots), key=lambda p: (len(p.parts), str(p)))
     roots = [p for i, p in enumerate(roots) if not any(p.is_relative_to(q) for q in roots[:i])]
-    return runtime, roots, list(dict.fromkeys(databases))
+    return runtime, roots, list(dict.fromkeys(databases)), excluded
 
 
 class ConninfoOption(ctypes.Structure):
@@ -865,7 +878,7 @@ def archive_history(roots, excluded, target, progress):
 def backup_preflight(request):
     backup = request["config"]["backup"]
     builtin = backup.get("builtin") is True
-    runtime, roots, databases = inventory(request)
+    runtime, roots, databases, excluded = inventory(request)
     database_envs = [database_environment(database) for database in databases]
     # The Hub pauses its own writers and says so (builtin); otherwise the
     # configured hooks must pause every writer this snapshot includes.
@@ -901,7 +914,7 @@ def backup_preflight(request):
             if stat.S_ISDIR(stale.lstat().st_mode):
                 shutil.rmtree(stale)
                 print("development backup: removed an incomplete snapshot from an earlier attempt", flush=True)
-        yield runtime, roots, databases, database_envs, store, resolved_store, retain
+        yield excluded, roots, databases, database_envs, store, resolved_store, retain
 
 
 def preflight(request):
@@ -911,14 +924,79 @@ def preflight(request):
             return {}
 
 
+def recovery_program_paths(request):
+    for name, path in request.get("executables", {}).items():
+        if name not in ("personad", "persona-hub", "persona-manager"):
+            raise ValueError("unknown recovery program")
+        yield "programs", name, Path(path)
+
+    if not request.get("node_directory"):
+        return
+    node_dir = Path(request["node_directory"])
+    if node_dir.is_symlink():
+        raise ValueError("linked Node package directory")
+    # Include matching packages even for platforms with no registered node.
+    platforms = {p.name.removeprefix("personad-").removesuffix(".exe") for p in node_dir.glob("personad-*")}
+    for platform in sorted(p for p in platforms if re.fullmatch(r"[a-z0-9]+-[a-z0-9]+", p)):
+        path = node_dir / binary_name("personad", platform)
+        if platform.startswith("windows-") and not path.exists():
+            path = node_dir / ("personad-" + platform)  # earlier development builds
+        if path.is_symlink() or not path.is_file():
+            continue
+        version = path.with_name(path.name + ".version")
+        if version.exists() and version.read_text().strip() != request["from_version"]:
+            continue
+        yield "nodes", platform, path
+
+
+def program_stamp(stream):
+    info = os.fstat(stream.fileno())
+    return info.st_size, info.st_mtime_ns
+
+
+def archive_programs(sources, temporary, manifest):
+    for field, name, source, stamp in sources:
+        node = field == "nodes"
+        artifact = temporary / (("node-" if node else "program-") + name + ".gz")
+        host = manifest["programs"].get("personad")
+        compare_host = node and name == manifest["platform"] and host is not None
+        if compare_host and stream_digest(source) == host["sha256"]:
+            # Keep both v1 names, including on stores without hard-link support.
+            original = temporary / host["file"]
+            try:
+                os.link(original, artifact)
+            except OSError as exc:
+                if exc.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EMLINK):
+                    raise
+                shutil.copyfile(original, artifact)
+            native = host["sha256"]
+            manifest["files"][artifact.name] = manifest["files"][host["file"]]
+        else:
+            if compare_host:
+                source.seek(0)
+            with gzip.open(artifact, "wb") as dst:
+                checksum = hashlib.sha256()
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    checksum.update(chunk)
+                    dst.write(chunk)
+                native = checksum.hexdigest()
+            manifest["files"][artifact.name] = digest(artifact)
+        if program_stamp(source) != stamp:
+            raise ValueError("installed program changed during backup")
+        entry = {"file": artifact.name, "sha256": native}
+        if not node:
+            entry["target"] = source.name
+        manifest[field][name] = entry
+
+
 def snapshot(request, progress=None):
     backup = request["config"]["backup"]
     builtin = backup.get("builtin") is True
-    progress = progress or Progress("backing_up", builtin=builtin)
+    progress = progress or Progress("backing_up")
     progress.step("preflight")
     # Recheck under the same lock held through publication. The build and idle
     # wait may have taken place since the early preflight released it.
-    with backup_preflight(request) as (runtime, roots, databases, database_envs, store, resolved_store, retain):
+    with backup_preflight(request) as (excluded, roots, databases, database_envs, store, resolved_store, retain):
         coordination = store / "coordination-pending.json"
         ident = "snapshot-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S%f") + "-" + request["candidate"]["commit"][:12]
         if not NAME.fullmatch(ident):
@@ -929,7 +1007,7 @@ def snapshot(request, progress=None):
                     "from_build": request.get("from_build", 0), "from_updated_at": request.get("from_updated_at", ""),
                     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "platform": request.get("platform", ""),
                     "roots": [str(p) for p in roots], "databases": len(databases), "programs": {}, "nodes": {}, "files": {}}
-        with tempfile.TemporaryDirectory(prefix=".incomplete-", dir=store) as staging:
+        with tempfile.TemporaryDirectory(prefix=".incomplete-", dir=store) as staging, contextlib.ExitStack() as handles:
             temporary = Path(staging) / ident
             temporary.mkdir(mode=0o700)
             progress.step("quiesce")
@@ -943,6 +1021,11 @@ def snapshot(request, progress=None):
                 else:
                     print("development backup: pausing writers", flush=True)
                     run(backup["quiesce"], timeout=60)
+                    # A writer could have changed a configured root since preflight.
+                    # Decide exclusions against the configuration we actually archive.
+                    _, paused_roots, paused_databases, excluded = inventory(request)
+                    if paused_roots != roots or paused_databases != databases:
+                        raise ValueError("backup inventory changed while pausing writers")
                 # Hooks must stop every DB/file writer in this snapshot's scope,
                 # including independent managers, before returning successfully.
                 progress.step("database_dump", item_done=0, item_total=len(database_envs), bytes_done=0)
@@ -952,11 +1035,9 @@ def snapshot(request, progress=None):
                     target = temporary / f"database-{i}.dump"
                     # Parsed libpq fields go in the environment, never argv or the receipt.
                     dumped += dump_database(target, database_env, progress, dumped)
-                    manifest["files"][target.name] = digest(target)
                     progress.update(item_done=i + 1)
                 progress.emit(force=True)
                 progress.step("archive_files")
-                excluded = {runtime / n for n in ("update", "bin", "cache", "logs")}
                 # A chosen folder inside a collected root is never archived:
                 # each snapshot would otherwise carry every earlier one. A
                 # folder outside the roots needs no exclusion (and one that
@@ -966,54 +1047,26 @@ def snapshot(request, progress=None):
                     excluded.add(resolved_store)
                 print("development backup: configuration and history files", flush=True)
                 archive_history(roots, excluded, temporary / "files.tar.gz", progress)
-                manifest["files"]["files.tar.gz"] = digest(temporary / "files.tar.gz")
                 # Effective environment overrides can differ from hub.json. Keep
                 # restore DSNs only in this private backup, never in its manifest/API.
                 write_json(temporary / "effective-databases.json", databases)
-                manifest["files"]["effective-databases.json"] = digest(temporary / "effective-databases.json")
-                progress.step("archive_programs")
-                print("development backup: installed recovery programs", flush=True)
-                for name, path in request.get("executables", {}).items():
-                    if name not in ("personad", "persona-hub", "persona-manager"):
-                        raise ValueError("unknown recovery program")
-                    artifact = temporary / ("program-" + name + ".gz")
-                    native = hashlib.sha256()
-                    with Path(path).open("rb") as src, gzip.open(artifact, "wb") as dst:
-                        for chunk in iter(lambda: src.read(1024 * 1024), b""):
-                            native.update(chunk)
-                            dst.write(chunk)
-                    manifest["files"][artifact.name] = digest(artifact)
-                    manifest["programs"][name] = {"file": artifact.name, "target": path, "sha256": native.hexdigest()}
-                # Preserve all locally available packages for the installed
-                # version, including platforms with no currently registered Node.
-                node_dir = Path(request["node_directory"]) if request.get("node_directory") else None
-                if node_dir is not None and node_dir.is_symlink():
-                    raise ValueError("linked Node package directory")
-                platforms = {p.name.removeprefix("personad-").removesuffix(".exe")
-                             for p in node_dir.glob("personad-*")} if node_dir is not None else set()
-                for platform in sorted(p for p in platforms if re.fullmatch(r"[a-z0-9]+-[a-z0-9]+", p)):
-                    path = node_dir / binary_name("personad", platform)
-                    if platform.startswith("windows-") and not path.exists():
-                        path = node_dir / ("personad-" + platform)  # earlier development builds
-                    if path.is_symlink() or not path.is_file():
-                        continue
-                    version = path.with_name(path.name + ".version")
-                    if version.exists() and version.read_text().strip() != request["from_version"]:
-                        continue
-                    artifact = temporary / ("node-" + platform + ".gz")
-                    with Path(path).open("rb") as src, gzip.open(artifact, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
-                    manifest["files"][artifact.name] = digest(artifact)
-                    manifest["nodes"][platform] = {"file": artifact.name, "sha256": digest(Path(path))}
-                write_json(temporary / "manifest.json", manifest)
+                # Pin the selected version across atomic package replacements on resume.
+                sources = []
+                for field, name, path in recovery_program_paths(request):
+                    source = handles.enter_context(path.open("rb"))
+                    sources.append((field, name, source, program_stamp(source)))
             except BaseException as exc:
                 snapshot_error = exc
                 print("development backup: snapshot failed: " + failure_detail(exc), file=sys.stderr, flush=True)
                 raise
             finally:
-                # The Hub resumes its own writers after this helper returns.
                 if builtin:
-                    print("development backup: hub will resume writers", flush=True)
+                    if snapshot_error is None:
+                        progress.step("resume_writers")
+                        if "capture_fd" in request:
+                            os.write(request["capture_fd"], b"R")
+                            if os.read(request["resumed_fd"], 1) != b"R":
+                                raise ValueError("hub did not acknowledge writer resume")
                 else:
                     # Even partially failed quiesce hooks can have stopped a writer.
                     # A failed resume preserves its marker and blocks adoption/retry.
@@ -1034,7 +1087,15 @@ def snapshot(request, progress=None):
                         sync_dir(store)
                     if cancelled and snapshot_error is None:
                         raise InterruptedError()
+            progress.step("archive_programs")
+            archive_programs(sources, temporary, manifest)
+            handles.close()
             progress.step("verify_snapshot")
+            # Hash the immutable dumps and history after releasing live writers.
+            for path in temporary.iterdir():
+                if path.name not in manifest["files"]:
+                    manifest["files"][path.name] = digest(path)
+            write_json(temporary / "manifest.json", manifest)
             for member in temporary.iterdir():
                 sync_dir(member)
             sync_dir(temporary)
@@ -1082,7 +1143,7 @@ def main():
     fd = request.get("progress_fd")
     try:
         if phase and type(fd) is int and fd > 2:
-            progress = Progress(phase, progress_writer(fd), builtin=request["config"]["backup"].get("builtin") is True)
+            progress = Progress(phase, progress_writer(fd))
             result = action(request, progress)
         else:
             result = action(request)

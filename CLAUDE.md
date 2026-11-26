@@ -213,6 +213,7 @@ People and Agents follow the same steps, each with their own GitHub account. Tem
   Dependencies, optional path filters, coverage and cost: `docs/operations/testing.md` ("Hosted CI"). Manual dispatch defaults to all
   platform checks; no hosted repository guards run automatically on PRs.
 - Server: `scripts/test/test-server.sh` (real Postgres on the hub machine); portable CI creates its own disposable Postgres 18 container.
+  Format changed Go files before pushing (`gofmt -w` / `python3 scripts/ci/gofmt.py server sdk/go`, also run by `scripts/test/check-fast.sh`).
   Deploy: `scripts/deploy/deploy.sh [machine id…]`.
 - iOS: `scripts/app/sim.sh [--with-watch] [-openSession <machine>/<session>]` builds, installs on your simulator and pairs it; without
   `--with-watch` it leaves out the watch app and share extension, and it builds only the Rust core's simulator slice
