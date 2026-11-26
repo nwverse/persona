@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Sending a message from the phone (docs/protocol/protocol.md "Sending messages"). The app sends each message with its own
@@ -288,6 +289,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		return
 	}
 	text, isText := p["text"].(string)
+	clientMsgID, _ := p["client_msg_id"].(string)
 	if isText {
 		r = h.captureHumanSubmission(r, text)
 	}
@@ -334,9 +336,17 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 	}
 	if spokeKnown && (!terminal && m.isAssistant(spokeSession) || isText && strings.TrimSpace(text) != "") {
 		// The manager also observes owner messages to Agents before delivery, so a task's decision default can pause.
-		spoke := assistantwire.UserSpokeParams{SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid}}
+		spoke := assistantwire.UserSpokeParams{
+			SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid},
+			At:         time.Now().UTC(),
+		}
 		if (terminal || !m.isAssistant(spokeSession)) && isText && personSent(r.Context()) {
 			spoke.Text = text
+			spoke.ClientMsgID = wireids.ClientMsgID(clientMsgID)
+			spoke.Source = assistantwire.OwnerInputApp
+			if terminal {
+				spoke.Source = assistantwire.OwnerInputTerminal
+			}
 		}
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).userSpoke(r.Context(), spoke)
 	}
@@ -657,7 +667,13 @@ func (b *bufferedResponse) Header() http.Header         { return b.header }
 func (b *bufferedResponse) Write(p []byte) (int, error) { return b.body.Write(p) }
 func (b *bufferedResponse) WriteHeader(code int)        { b.status = code }
 
+// writeRaw writes a send's answer, which the hub built itself (callErrBytes, laterBody) or a node returned (a 200): a
+// server error's is the hub's own error, noted for its request line (apierr.NoteError) as WriteBody would.
 func writeRaw(w http.ResponseWriter, status int, body []byte) {
+	var e map[string]any
+	if status >= 500 && json.Unmarshal(body, &e) == nil {
+		apierr.NoteError(w, status, e)
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)

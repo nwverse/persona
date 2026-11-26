@@ -448,6 +448,16 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if m.HasDataContent() {
 		out = append(out, permissionLine(l, "assistant_data"))
 	}
+	// Giving the hub its memory to filter by scene is shown, like recalls not agreed to: it hands the program nothing,
+	// and what it already wrote for the assistant stops going in around the filter (memory_sources.go).
+	if len(m.MemorySources()) > 0 {
+		out = append(out, permissionLine(l, "memory_source"))
+	}
+	// Offering to move a computer's files elsewhere is shown, like recalls not agreed to here: nothing is handed to it
+	// until the user picks items on a computer's disk map and confirms that offload (disk_offload.go).
+	if len(m.DiskOffloads()) > 0 {
+		out = append(out, permissionLine(l, "disk_offload"))
+	}
 	if topics := m.Topics(); len(topics) > 0 {
 		var what []string
 		for _, t := range topics {

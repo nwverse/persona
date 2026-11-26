@@ -3,6 +3,7 @@ package persona.core.domain.sort
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
 import persona.core.contracts.Session
+import persona.core.contracts.Interaction
 
 /*
  * Where a session comes from and what the phone may do with it (docs/protocol/protocol.md "Codex sources and capabilities", the same rules
@@ -16,6 +17,13 @@ val Session.canRead: Boolean get() = !hasSource || capabilities?.read == true
 val Session.canSend: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.send == true)
 val Session.canInterrupt: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.interrupt == true)
 val Session.canApprove: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.approve == true)
+
+/** A desktop Codex async question is answered by sending a message to its owning window. */
+fun Session.canAnswerInteraction(request: Interaction): Boolean =
+    canApprove || canSend && capabilities?.answerQuestions == true &&
+        key == request.sessionKey && request.kind == "question" && request.agent == "codex" &&
+        request.toolName == "request_user_input_async" && !request.questions.isNullOrEmpty()
+
 /** A pane in a terminal engine: the terminal and its keys; closing and renaming where the node says nothing else ([canClose], [canRename]). */
 val Session.canTerminal: Boolean get() = !hasSource || capabilities?.terminal == true
 /**
@@ -30,6 +38,10 @@ val Session.canClose: Boolean get() = capabilities?.close ?: canTerminal
 val Session.canRename: Boolean get() = capabilities?.rename ?: canTerminal
 /** Join a Codex app-server thread live: offered until it is attached. */
 val Session.canAttach: Boolean get() = hasSource && capabilities?.attach == true && !attached
+/** Read-only Codex session whose node offers explicit takeover or continuation (`capabilities.takeover`). */
+val Session.canContinueCodex: Boolean get() = isCodex && !canSend && capabilities?.takeover != null
+/** Explicit in-place takeover is available for this read-only Codex session (`capabilities.takeover.canResume`). */
+val Session.canTakeover: Boolean get() = canContinueCodex && capabilities?.takeover?.canResume == true
 
 /** A declared modes capability wins; an older hub that omits it keeps the agent-based rule. */
 val Session.canChangeModes: Boolean get() = isLive && canSend && (capabilities?.modes ?: isClaude)

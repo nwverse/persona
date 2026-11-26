@@ -82,6 +82,9 @@ func (s *Service) taskInputContext(ctx context.Context, raw map[string]json.RawM
 			}
 		}
 	}
+	if err := readTopicPolicy(raw, &t); err != nil {
+		return taskInputTarget{}, err
+	}
 	_, hasCron := raw["cron"]
 	keepLegacyCronRule(previous, &t, hasCron)
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
@@ -278,6 +281,11 @@ func (s *Service) taskInputRoutes() {
 		}
 		if decoder.Decode(new(any)) != io.EOF {
 			apierr.Write(w, 400, errors.New("invalid request"))
+			return
+		}
+		// A topic_policy that is not one is the request's fault, not the node's (apierr.Call would answer 502).
+		if err := readTopicPolicy(raw, &Task{}); err != nil {
+			apierr.Write(w, 400, err)
 			return
 		}
 		ex, err := s.taskInputContext(r.Context(), raw)

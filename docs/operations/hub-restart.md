@@ -57,7 +57,7 @@ on the Mac, ssh machines go offline for 2–8 s, and their sessions disappear fr
 ### Work in progress inside the hub
 
 - The assistant (the Persona tab's main chat, side chats, scheduled tasks, the AI twin, Lark /agent, bots, channel extensions: `hub/assistant*.go`; the AI twin is the manager's `assistant/inbox_agent.go`; Lark /agent lives in the Lark extension (since #1571, opening chats through the hub's public API);
-  the Lark bot is `botSend` in `assistant/feishu_message.go`; channel extensions are `channelForward` in `assistant/channels_plugin.go`) all goes through `assistant.send` (bots and channel extensions now use it only to open new chats; continuing uses `session.send_once` via `sendOnce`), and **the node on the assistant's machine** starts a headless claude:
+  the Lark bot is `botSend` in `modules/lark/message.go`; channel extensions are `channelForward` in `assistant/channels_plugin.go`) all goes through `assistant.send` (bots and channel extensions now use it only to open new chats; continuing uses `session.send_once` via `sendOnce`), and **the node on the assistant's machine** starts a headless claude:
   `zsh -ic "<launcher> \"$@\"" … -p --input-format stream-json --output-format stream-json --include-partial-messages` (`spawnClaude` in `node/assistant_start.go`),
   in its own process group (`Setpgid`), with pipes for stdin / stdout.
 - Streaming output: `readAssistant` accumulates `text_delta` in memory in `p.partial` and sends a `session.delta` every 80 ms (`readAssistant`, `emitDelta` in `node/assistant.go`); the hub forwards it to subscribers
@@ -282,6 +282,10 @@ Unchanged: Docker deployment (`deploy/docker/`, no `LISTEN_FDS`, still listens i
 
 After blue-green switching ("Blue-green switching" above):
 
+- A successful `personad hub switch` checks the resident node service under the same state root. When the running
+  executable and the verified installed executable have different inodes, it sends one SIGHUP to the main process.
+  The node finishes active work before handing over its listener. `--hub-only` skips that request. An automatic Hub
+  update makes the same check after confirmation when automatic node updates are enabled.
 - Before replacing the hub binary, deploy.sh saves the old one as `personad.prev` (and `persona-hub.prev`, `persona-manager.prev` for the two programs it puts beside it).
 - When the unit has not changed and the hub is running, `hub-systemd.sh` first runs `personad hub switch --binary <personad> --prev …` (the program it means, not the default):
   - Exit code 0: switch complete, restart nothing;

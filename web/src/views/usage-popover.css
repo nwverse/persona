@@ -1,0 +1,229 @@
+/* Usage popover layout and CSS transitions (loaded only in the lazy UsagePopover chunk so FIRST_SCREEN_BUDGET is untouched). */
+
+@keyframes usage-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes usage-popover-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes usage-popover-reflow-a {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+@keyframes usage-popover-reflow-b {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
+}
+
+@keyframes usage-popover-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes usage-popover-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.usage-popover {
+  transform-origin: bottom left;
+}
+
+.usage-popover[data-ready="true"] {
+  transition: width 300ms var(--ease-out-strong);
+}
+
+.usage-popover[data-state="open"] {
+  animation: usage-popover-in 240ms var(--ease-out-strong) both;
+}
+
+.usage-popover[data-state="closing"] {
+  animation: usage-popover-out 160ms var(--ease-out-strong) forwards;
+  pointer-events: none;
+}
+
+.usage-popover-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.usage-popover-scroll[data-scrollable="true"] {
+  overflow-y: auto;
+}
+
+.usage-popover-scroll[data-scrollable="false"] {
+  overflow-y: visible;
+}
+
+.usage-popover-scroll[data-fade-top="true"][data-fade-bottom="false"] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 100%);
+}
+
+.usage-popover-scroll[data-fade-top="false"][data-fade-bottom="true"] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0, #000 calc(100% - 18px), transparent 100%);
+}
+
+.usage-popover-scroll[data-fade-top="true"][data-fade-bottom="true"] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+}
+
+.usage-popover-content[data-reflow="a"] {
+  animation: usage-popover-reflow-a 150ms var(--ease-out-strong) both;
+}
+
+.usage-popover-content[data-reflow="b"] {
+  animation: usage-popover-reflow-b 150ms var(--ease-out-strong) both;
+}
+
+.usage-popover-body {
+  display: block;
+  columns: var(--usage-cols, 1) var(--usage-col-w, 320px);
+  column-gap: 12px;
+}
+
+.usage-popover-body[data-cols="1"] {
+  columns: auto;
+}
+
+.usage-popover-card {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  margin-bottom: 12px;
+}
+
+.usage-popover-card:last-child {
+  margin-bottom: 0;
+}
+
+.usage-popover-span {
+  column-span: all;
+}
+
+.usage-popover-header {
+  margin-bottom: 10px;
+}
+
+.usage-popover-pinned {
+  margin-bottom: 10px;
+}
+
+.usage-popover-unconnected {
+  margin-top: 10px;
+}
+
+.usage-timeline-grid {
+  display: grid;
+  grid-template-columns: clamp(6.75rem, 34%, 11rem) minmax(0, 1fr);
+}
+
+.usage-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.usage-table {
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.usage-table-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.usage-table-head-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--inset);
+}
+
+/* Low-interference per-window pin toggle: stays quiet until hover/focus on desktop pointers, always visible when pinned
+ * or on touch devices, and overlays without eating meter width while nothing in the card/cell is pinned. */
+@media (hover: hover) and (pointer: fine) {
+  .usage-win-pin[data-pin-pinned="false"] {
+    opacity: 0;
+  }
+
+  .usage-win-row:hover .usage-win-pin[data-pin-pinned="false"],
+  .usage-win-row:focus-within .usage-win-pin[data-pin-pinned="false"],
+  .usage-table-cell:hover .usage-win-pin[data-pin-pinned="false"],
+  .usage-table-cell:focus-within .usage-win-pin[data-pin-pinned="false"] {
+    opacity: 1;
+  }
+
+  .usage-win-pin[data-pin-overlay="true"] {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    background: var(--surface);
+    border: 1px solid var(--line);
+  }
+
+  .usage-table-cell .usage-win-pin[data-pin-overlay="true"] {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+
+  .usage-win-pin[data-pin-overlay="true"][data-pin-pinned="false"] {
+    pointer-events: none;
+  }
+
+  .usage-win-row:hover .usage-win-pin[data-pin-overlay="true"],
+  .usage-win-row:focus-within .usage-win-pin[data-pin-overlay="true"],
+  .usage-table-cell:hover .usage-win-pin[data-pin-overlay="true"],
+  .usage-table-cell:focus-within .usage-win-pin[data-pin-overlay="true"] {
+    pointer-events: auto;
+  }
+}
+
+/* Override the global 1ms reduced-motion rule in styles.css so reduced motion keeps a 120ms opacity-only fade. */
+@media (prefers-reduced-motion: reduce) {
+  .usage-popover,
+  .usage-popover[data-ready="true"] {
+    transition: none !important;
+  }
+
+  .usage-popover[data-state="open"] {
+    animation-name: usage-popover-fade-in !important;
+    animation-duration: 120ms !important;
+  }
+
+  .usage-popover[data-state="closing"] {
+    animation-name: usage-popover-fade-out !important;
+    animation-duration: 120ms !important;
+  }
+
+  .usage-popover-content[data-reflow="a"],
+  .usage-popover-content[data-reflow="b"] {
+    animation: none !important;
+  }
+}

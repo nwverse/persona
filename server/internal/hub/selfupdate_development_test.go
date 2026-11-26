@@ -14,10 +14,52 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/operations/backup"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
+
+func TestDevelopmentProgressStatusAndCleanup(t *testing.T) {
+	for _, c := range []struct{ operation, first, step, next string }{
+		{"build", "fetch", "go_build", "downloading"},
+		{"backup", "quiesce", "archive_files", "updated"},
+		{"prepare_backup", "verify_snapshot", "prepare_artifacts", "rolled_back"},
+	} {
+		t.Run(c.operation, func(t *testing.T) {
+			h, _, _, _ := updatingHub(t, newPublisher(t, "unused", 202611021700), update.Release)
+			u := h.upd
+			first := update.DevelopmentStep(c.operation, c.first)
+			u.startDevelopmentPhase(first, "legacy")
+			if v, _ := getUpdate(t, u); v.DevelopmentProgress == nil || v.DevelopmentProgress.Step != c.first {
+				t.Fatalf("missing initial development step: %+v", v.DevelopmentProgress)
+			}
+			var late func(update.DevelopmentProgress)
+			p := update.DevelopmentStep(c.operation, c.step)
+			done, total := int64(0), int64(3)
+			p.ItemDone, p.ItemTotal, p.ElapsedSeconds = &done, &total, 29
+			u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, _ any, _ func(), report func(update.DevelopmentProgress)) error {
+				late = report
+				report(p)
+				v, raw := getUpdate(t, u)
+				if got := v.DevelopmentProgress; got == nil || got.Step != c.step || got.Phase != first.Phase ||
+					got.ItemDone == nil || *got.ItemDone != 0 || got.ElapsedSeconds != p.ElapsedSeconds || raw["progress"] != "legacy" {
+					t.Fatalf("wrong in-flight status: %+v", v)
+				}
+				return nil
+			}
+			if err := u.runDevelopment(context.Background(), c.operation, nil, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			u.set(c.next, "next", "")
+			late(p)
+			if v, raw := getUpdate(t, u); v.State != c.next || raw["development_progress"] != nil || raw["progress"] != "next" {
+				t.Fatalf("stale progress after the phase: %+v", v)
+			}
+		})
+	}
+}
 
 func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
@@ -38,15 +80,18 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 			version := update.DevelopmentVersion{ID: "snapshot-fixture", Version: "web-dev-older", Build: 202611010001, Commit: strings.Repeat("b", 40), UpdatedAt: "2026-11-01T10:00:00Z"}
 			prepared := filepath.Join(u.dir, "development", "prepare_backup-fixture", "artifacts")
 			phases := make(chan string, 8)
-			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
+			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, operation string, input map[string]any, result any, _ func(), report func(update.DevelopmentProgress)) error {
 				phases <- operation
 				var response any
 				switch operation {
+				case "preflight":
+					return nil
 				case "backups":
 					response = map[string]any{"backups": []update.DevelopmentVersion{version}}
 				case "prepare_backup":
 					if corrupt {
-						return errors.New("corrupt snapshot")
+						report(update.DevelopmentStep(operation, "verify_snapshot"))
+						return errors.New("corrupt snapshot at /fixture/private/snapshot")
 					}
 					if input["backup_id"] != version.ID {
 						return errors.New("wrong backup")
@@ -88,6 +133,12 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 			}
 			if corrupt {
 				waitFor(t, "preparation failure", func() bool { return u.view().State == "failed" })
+				v, raw := getUpdate(t, u)
+				want := su(u.h.requestLang(httptest.NewRequest(http.MethodGet, "/", nil)), "development_step_verify_snapshot")
+				if raw["development_progress"] != nil || !strings.Contains(v.Error, "prepare_backup.log") ||
+					!strings.Contains(v.Error, want) || strings.Contains(v.Error, "/fixture/private") {
+					t.Fatalf("failure did not clear progress or safely name the step: %v", raw)
+				}
 				if len(execs()) != 0 {
 					t.Fatal("restarted with corrupt backup")
 				}
@@ -116,7 +167,7 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 					t.Fatal("duplicate application accepted")
 				}
 				setSessions(machine)
-				waitFor(t, "shared restart", func() bool { return len(execs()) == 1 })
+				waitForUpdate(t, u, "shared restart", func() bool { return len(execs()) == 1 })
 				var pending update.Pending
 				if ok, err := update.Load(update.PendingPath(u.dir), &pending); !ok || err != nil {
 					t.Fatal(err)
@@ -201,10 +252,11 @@ func TestDevelopmentBackupSettingsAreValidatedAndExposed(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 	v, raw := getUpdate(t, u)
-	if v.Development.BackupDirectory != dir || v.Development.BackupRetain != 5 || !v.Development.BuiltinQuiesce {
+	// Directories come back with symlinks resolved (on macOS /tmp and /var are /private/…): compare them as the hub does.
+	if !backup.SamePath(v.Development.BackupDirectory, dir) || v.Development.BackupRetain != 5 || !v.Development.BuiltinQuiesce {
 		t.Fatalf("settings not exposed: %+v", v.Development)
 	}
-	if v.Development.BackupDefaultDirectory != filepath.Join(h.cfg.dir, "update", "development-backups") {
+	if !backup.SamePath(v.Development.BackupDefaultDirectory, filepath.Join(h.cfg.dir, "update", "development-backups")) {
 		t.Fatalf("recommended directory = %q", v.Development.BackupDefaultDirectory)
 	}
 	if raw["development"].(map[string]any)["backup_retain"] != float64(5) {
@@ -296,7 +348,7 @@ func TestDevelopmentFolderChangeRefusedWhileRecoveryPending(t *testing.T) {
 	if w.Code != http.StatusConflict {
 		t.Fatalf("folder changed with a coordination marker: %d %s", w.Code, w.Body.String())
 	}
-	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != current {
+	if v, _ := getUpdate(t, u); !backup.SamePath(v.Development.BackupDirectory, current) {
 		t.Fatalf("refused change moved the folder: %q", v.Development.BackupDirectory)
 	}
 	if err := os.Remove(filepath.Join(current, "coordination-pending.json")); err != nil {
@@ -314,7 +366,7 @@ func TestDevelopmentFolderChangeRefusedWhileRecoveryPending(t *testing.T) {
 	if w := nodePolicyRequest(t, u, http.MethodPut, fmt.Sprintf(`{"development_backup_directory":%q}`, other)); w.Code != http.StatusOK {
 		t.Fatal(w.Body.String())
 	}
-	if v, _ := getUpdate(t, u); v.Development.BackupDirectory != other {
+	if v, _ := getUpdate(t, u); !backup.SamePath(v.Development.BackupDirectory, other) {
 		t.Fatalf("folder after recovery = %q", v.Development.BackupDirectory)
 	}
 }
@@ -373,7 +425,7 @@ func TestDevelopmentBackupsAPIDistinguishesFailureFromEmptyList(t *testing.T) {
 	u.loaded, u.settings.Source = true, "web-dev"
 	h.cfg.Update.Development = &update.DevelopmentConfig{Backup: update.DevelopmentBackupConfig{Quiesce: []string{"pause"}, Resume: []string{"resume"}}}
 	failed := true
-	u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, _ any) error {
+	u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, _ any, _ func(), _ func(update.DevelopmentProgress)) error {
 		if failed {
 			return errors.New("fixture unavailable backup directory")
 		}
@@ -407,6 +459,7 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 	}{
 		{"mac", "darwin", "arm64", false, true},
 		{"same-platform", "darwin", "arm64", false, true},
+		{"remote-only", "linux", "riscv64", true, true},
 		{"offline", "linux", "arm64", true, true},
 		{"never-seen", "", "", true, true},
 		{"partial", "linux", "", true, true},
@@ -425,7 +478,12 @@ func TestDevelopmentPlatformsFollowRegisteredMachines(t *testing.T) {
 		}
 		h.machines, h.byID[c.id] = append(h.machines, m), m
 	}
-	want := []string{own, "darwin-arm64", "linux-arm64"}
+	h.devices.assign = map[string]string{"mac": "remote", "remote-only": "remote"}
+	if h.entryOwner("mac") != "remote" || !h.upd.developmentAvailable() {
+		t.Fatal("a remote assistant owning a computer should allow built-in quiesce")
+	}
+	h.bus.current = map[string]*busConn{"remote": {presence: busPresence{ID: "remote", Role: bus.RoleManager, OS: "windows", Arch: "amd64"}}}
+	want := []string{own, "darwin-arm64", "linux-arm64", "linux-riscv64", "windows-amd64"}
 	slices.Sort(want)
 	if got := h.upd.developmentPlatforms(); !slices.Equal(got, slices.Compact(want)) {
 		t.Fatalf("platforms %v, want %v", got, want)
@@ -539,7 +597,7 @@ func TestDevelopmentRepeatedCheckDoesNotMutatePublishedCandidate(t *testing.T) {
 			published := &update.Published{Manifest: &update.Manifest{Version: "frozen", Build: 202611130001}, Development: candidate}
 			u.release, u.running = published, active
 			u.settings.History = []updateRecord{{Source: "web-dev", Commit: candidate.Commit, Result: "rolled_back", ToBuild: 202611120001, ToVersion: "previous-attempt"}}
-			u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, result any) error {
+			u.devRun = func(_ context.Context, _ *update.DevelopmentConfig, _, _ string, _ map[string]any, result any, _ func(), _ func(update.DevelopmentProgress)) error {
 				*result.(*update.DevelopmentCandidate) = *candidate
 				return nil
 			}
@@ -593,7 +651,7 @@ func TestDevelopmentHeldHistorySkipsUnbuiltBadAndUnresolvedCandidates(t *testing
 }
 
 func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
-	for _, failure := range []string{"", "automatic", "build", "backup", "adopt", "preimage", "partial", "restore"} {
+	for _, failure := range []string{"", "automatic", "preflight", "build", "backup", "adopt", "preimage", "partial", "restore"} {
 		t.Run(failure, func(t *testing.T) {
 			p := newPublisher(t, "unused", 202611021700)
 			h, machine, target, execs := updatingHub(t, p, "release")
@@ -625,8 +683,24 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				os.Mkdir(filepath.Join(filepath.Dir(target), "persona-manager.new"), 0700)
 			}
 			var phases []string
-			u.devRun = func(ctx context.Context, c *update.DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
+			u.devRun = func(ctx context.Context, c *update.DevelopmentConfig, dir, operation string, input map[string]any, result any, _ func(), _ func(update.DevelopmentProgress)) error {
 				phases = append(phases, operation)
+				if operation == "preflight" && failure == "preflight" {
+					// Run the embedded helper against a synthetic installation.
+					home := t.TempDir()
+					if err := os.WriteFile(filepath.Join(home, "hub.json"), []byte(`{"database_url":"fixture-secret"}`), 0600); err != nil {
+						t.Fatal(err)
+					}
+					c.Backup.Directory = t.TempDir()
+					if err := os.Chmod(c.Backup.Directory, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(c.Backup.Directory, "coordination-pending.json"), nil, 0600); err != nil {
+						t.Fatal(err)
+					}
+					input["runtime"], input["hub_database"] = home, "fixture-secret"
+					return update.DevelopmentRequest(ctx, c, dir, operation, input, result, nil, nil)
+				}
 				if operation == failure {
 					return errors.New("fixture phase failed")
 				}
@@ -648,6 +722,13 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 					os.WriteFile(filepath.Join(artifacts, "personad-plan9-arm.gz"), gz([]byte("development node")), 0600)
 					for _, name := range update.ProgramNames {
 						os.WriteFile(filepath.Join(artifacts, name+"-"+runtime.GOOS+"-"+runtime.GOARCH+".gz"), gz(script), 0600)
+					}
+					manifest, err := update.BuildManifest(artifacts, update.Manifest{Version: input["version"].(string), Build: input["build"].(int64), Commit: strings.Repeat("b", 40)})
+					if err != nil {
+						return err
+					}
+					if err := update.Save(filepath.Join(artifacts, "manifest.json"), manifest); err != nil {
+						return err
 					}
 					response = map[string]any{"artifacts": artifacts, "ancestors": []string{h.build.Commit, strings.Repeat("b", 40)}}
 				case "backup":
@@ -732,7 +813,14 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				if u.adoptionUnresolved() {
 					t.Fatal("fully restored attempt kept an unresolved fence")
 				}
-				if failure == "build" && len(phases) != 2 {
+				if failure == "preflight" {
+					want := su(h.userLang(), "backup_reason_coordination")
+					if !slices.Equal(phases, []string{"resolve", "preflight"}) || !strings.Contains(u.view().Error, want) || strings.Contains(u.view().Error, "fixture-secret") ||
+						!strings.Contains(u.view().Error, su(h.userLang(), "development_step_preflight")) {
+						t.Fatalf("wrong preflight failure: %v, %s", phases, u.view().Error)
+					}
+				}
+				if failure == "build" && !slices.Equal(phases, []string{"resolve", "preflight", "build"}) {
 					t.Fatal("backup ran after failed build")
 				}
 				return
@@ -753,7 +841,19 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			// Simulate the next process's confirmation without touching a real service.
 			h.build.Number = pending.ToBuild
 			h.version = pending.ToVersion
+			h.build.Commit = pending.Development.Commit
+			if offered, _ := u.confirmedDevelopment(); offered != nil {
+				t.Fatal("packages advertised while the watchdog owns the adoption")
+			}
 			u.confirm(context.Background(), pending)
+			offered, held := u.confirmedDevelopment()
+			if offered == nil || held || offered.Commit != pending.Development.Commit {
+				t.Fatal("confirmed adoption was not offered", offered)
+			}
+			var hosted update.Manifest
+			if ok, err := update.Load(filepath.Join(u.packageStore(), offered.Version, "manifest.json"), &hosted); !ok || err != nil || hosted.Commit != offered.Commit || hosted.Files["plan9-arm"].BinarySHA256 == "" {
+				t.Fatal("confirmed packages did not survive staging cleanup", err)
+			}
 			if _, err := os.Stat(filepath.Join(nodes, "personad-"+runtime.GOOS+"-"+runtime.GOARCH)); err != nil {
 				t.Fatal("manual node package missing with automatic fleet updates off", err)
 			}

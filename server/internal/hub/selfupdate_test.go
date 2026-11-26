@@ -119,10 +119,68 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// waitForUpdate is waitFor for an update in progress: when it runs out it says where the update stood and where its
+// goroutines were, so a run that stalls on a loaded machine shows what it waited on.
+func waitForUpdate(t *testing.T, u *updater, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); <-time.After(10 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	v := u.view()
+	t.Fatalf("timed out waiting for %s: update %q %q %q\n%s", what, v.State, v.Progress, v.Error, updateStacks())
+}
+
+// updateStacks are the stacks of the goroutines in an update (the hub's updater, internal/update).
+func updateStacks() string {
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	var out []string
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "hub.(*updater)") || strings.Contains(g, "/internal/update.") {
+			out = append(out, g)
+		}
+	}
+	return strings.Join(out, "\n\n")
+}
+
 func setSessions(m *Machine, ss ...proto.Session) {
 	m.mu.Lock()
 	m.sessions = ss
 	m.mu.Unlock()
+}
+
+func TestUpdateViewReleaseTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		released time.Time
+		wantJSON string
+	}{
+		{name: "omitted"},
+		{name: "published", released: time.Date(2026, 11, 20, 15, 4, 5, 0, time.UTC), wantJSON: `"2026-11-20T15:04:05Z"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			h.upd.release = &update.Published{Manifest: &update.Manifest{Version: "v1.0.0", Build: 202611201504, Released: tc.released}}
+			data, err := json.Marshal(h.upd.view())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status struct {
+				Latest map[string]json.RawMessage `json:"latest"`
+			}
+			if err := json.Unmarshal(data, &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.Latest == nil {
+				t.Fatal("latest release missing from update status")
+			}
+			if got := string(status.Latest["released"]); got != tc.wantJSON {
+				t.Errorf("latest.released = %q, want %q", got, tc.wantJSON)
+			}
+		})
+	}
 }
 
 // Nothing restarts while a conversation is working or waiting for the user; once all is idle the new binary is in
@@ -703,8 +761,8 @@ func TestUpdateNodesBinariesInPlace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.gz")); !os.IsNotExist(err) {
 		t.Fatal("the download itself went in with the binaries")
 	}
-	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.version")); !os.IsNotExist(err) {
-		t.Fatal("the old build's version file stayed beside the release's")
+	if b, err := os.ReadFile(filepath.Join(nodes, "personad-darwin-arm64.version")); err != nil || string(b) != "v2\n" {
+		t.Fatalf("package version = %q, %v", b, err)
 	}
 	_ = local // the manager decides what to redeploy (internal/devices TestUpdateNodesSkipsTheHubsOwn)
 }

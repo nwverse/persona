@@ -2,6 +2,7 @@ package devices
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -78,7 +79,7 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 			return nil, err
 		}
 		sum := sha256.Sum256(n.expected)
-		if p.Size != int64(len(n.expected)) || p.SHA256 != hex.EncodeToString(sum[:]) || p.Version != "new-build" {
+		if p.Size != int64(len(n.expected)) || p.SHA256 != hex.EncodeToString(sum[:]) || p.Version != cmp.Or(n.target, "new-build") {
 			return nil, errors.New("wrong update metadata")
 		}
 		n.begin++
@@ -122,7 +123,7 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 		}
 		if !n.stayOld {
 			n.machine.mu.Lock()
-			n.machine.info.Version = "new-build"
+			n.machine.info.Version = cmp.Or(n.target, "new-build")
 			n.machine.mu.Unlock()
 		}
 		if n.committed != nil {
@@ -249,6 +250,37 @@ func TestLinkedDeployTransfersAndConfirms(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestFleetUpdateConvergesResidentsAcrossTransports(t *testing.T) {
+	program := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, "linux", "amd64", "new-build")
+	for _, kind := range []string{"local", kindLink, kindService, "ssh", "tailcat"} {
+		t.Run(kind, func(t *testing.T) {
+			isolateNodeBinaries(t)
+			d, m, n, _ := linkedDeployFixture(t, kind)
+			dir := nodeBinaryDir()
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			copyFile(t, program, filepath.Join(dir, "personad-linux-amd64"))
+			b, err := os.ReadFile(program)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n.mu.Lock()
+			n.expected = b
+			n.mu.Unlock()
+			m.updateOnConnect(t.Context())
+			waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return s.NodeVersion == "new-build" && !s.Deploying })
+			// The post-confirmation fleet sweep must be safe on the same connection.
+			d.updateNodes(t.Context())
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			if n.begin != 1 || n.commits != 1 || n.confirms != 1 {
+				t.Fatalf("transfers %d, commits %d, confirmations %d", n.begin, n.commits, n.confirms)
+			}
+		})
 	}
 }
 

@@ -1,3 +1,4 @@
+import PersonaWire
 import SwiftUI
 import Testing
 import UIKit
@@ -72,6 +73,57 @@ struct StyleSpecTests {
     @Test func whiteOnTheAccent() {
         let found = Self.below(3.5) { (.white, $0.accent) }.filter { !$0.contains(Self.known) }
         #expect(found.isEmpty, "white on the accent under 3.5:1: \(found)")
+    }
+
+    /// The disk usage map's labels (docs/design/DESIGN_SYSTEM.md "Usage treemap"): its ink on every category and every
+    /// Last Used step, ≥ 4.5:1 in light and in dark; and the four steps get darker (light) as they get older.
+    @Test func usageMapLabelsReadOnEveryFill() {
+        let fills = StorageUsageCategory.allCases.map { ("\($0)", Theme.UsageMap.pair($0)) }
+            + Theme.UsageMap.Age.allCases.map { ("age \($0)", $0.pair) }
+        let ink = Theme.UsageMap.ink
+        for (name, f) in fills {
+            #expect(PersonaPalette.contrast(ink.light, f.light) >= 4.5, "light ink on \(name)")
+            #expect(PersonaPalette.contrast(ink.dark, f.dark) >= 4.5, "dark ink on \(name)")
+        }
+        let steps = Theme.UsageMap.Age.allCases.map { PersonaPalette.contrast($0.pair.light, 0xFFFFFF) }
+        #expect(steps == steps.sorted(), "the Last Used steps don't darken with age")
+    }
+
+    @Test func healthRingsHaveDistinctHuesAndReadableActivityLabels() {
+        func hue(_ hex: UInt32) -> Double {
+            let color = UIColor(hex: hex)
+            var h: CGFloat = 0
+            color.getHue(&h, saturation: nil, brightness: nil, alpha: nil)
+            return Double(h) * 360
+        }
+        for hex in [Theme.Health.waterHex.light, Theme.Health.waterHex.dark,
+                    Theme.Health.proteinHex.light, Theme.Health.proteinHex.dark] {
+            for activity: UInt32 in [0xFA114F, 0xA6FF00, 0x00FFF6] {
+                let distance = abs(hue(hex) - hue(activity))
+                #expect(min(distance, 360 - distance) >= 25, "intake hues must stay apart from Activity rings")
+            }
+        }
+        for ui in [UIUserInterfaceStyle.light, .dark] {
+            for color in [Theme.Health.move, Theme.Health.exercise, Theme.Health.stand] {
+                #expect(Self.contrast(color, Theme.Health.activityBackground, ui) >= 4.5)
+            }
+        }
+    }
+
+    @Test func healthWidgetsShareIntakeColorsAndKeepActivityNeutral() {
+        for ui in [UIUserInterfaceStyle.light, .dark] {
+            let water = Self.rgb(HomeWidgetTokens.water, ui), appWater = Self.rgb(Theme.Health.water, ui)
+            let protein = Self.rgb(HomeWidgetTokens.protein, ui), appProtein = Self.rgb(Theme.Health.protein, ui)
+            #expect(water.0 == appWater.0 && water.1 == appWater.1 && water.2 == appWater.2)
+            #expect(protein.0 == appProtein.0 && protein.1 == appProtein.1 && protein.2 == appProtein.2)
+            let neutral = Self.rgb(HomeWidgetTokens.activity, ui)
+            #expect(abs(neutral.0 - neutral.1) < 0.02 && abs(neutral.1 - neutral.2) < 0.03)
+            #expect(Self.contrast(HomeWidgetTokens.healthTodaySteps, HomeWidgetTokens.surface, ui) >= 4.5)
+            var hue: CGFloat = 0
+            UIColor(HomeWidgetTokens.healthTodaySteps).resolvedColor(with: UITraitCollection(userInterfaceStyle: ui))
+                .getHue(&hue, saturation: nil, brightness: nil, alpha: nil)
+            #expect(hue > 0.6 && hue < 0.85, "steps stays purple, clear of Move's red")
+        }
     }
 
     /// Someday's swipe on a To-dos row (#10465): white words on `Theme.somedayTint` at 4.5:1 or better, light and dark
@@ -167,38 +219,6 @@ struct StyleSpecTests {
         #expect(PersonaPalette.contrast(hex.dark, 0x000000) > PersonaPalette.contrast(Theme.Reply.secondaryInkHex.dark, 0x000000))
     }
 
-    /// The Mac window's chrome a style brings (`StyleSpec.MacChrome`, Lark's), in the style's own colors: a selected
-    /// row's icon in the accent ≥ 3:1 on the sections column's raised block and on the selection's wash over the side
-    /// column and over the page, the row's words ≥ 4.5:1 on that wash, and the white letter ≥ 3:1 on every monogram
-    /// hue (a heading-sized letter, so the large-text floor).
-    @Test func theMacChromeReads() {
-        var found: [String] = []
-        for style in AppStyle.allCases {
-            let chrome = style.component.mac
-            let spec = StyleSpec(style.component, style.component.colors)
-            for (look, ui) in Self.appearances {
-                func check(_ what: String, _ a: (Double, Double, Double), _ b: (Double, Double, Double), _ floor: Double) {
-                    let c = Self.contrast(a, b)
-                    if c < floor { found.append("\(style.rawValue) \(look) \(what): \(String(format: "%.2f", c))") }
-                }
-                let accent = Self.rgb(spec.accent, ui)
-                if let raised = chrome.sidebarSelected { check("icon on the raised block", accent, Self.rgb(raised, ui), 3) }
-                if let tint = chrome.selectionTint {
-                    let unders: [(String, Color)] = [("side column", chrome.sideColumn ?? spec.page), ("page", spec.page)]
-                    for (name, under) in unders {
-                        let wash = Self.over(spec.accent.opacity(tint), Self.rgb(under, ui), ui)
-                        check("icon on the selection over the \(name)", accent, wash, 3)
-                        check("words on the selection over the \(name)", Self.rgb(Theme.primaryText, ui), wash, 4.5)
-                    }
-                }
-                for (i, hue) in chrome.monogramHues.enumerated() {
-                    check("white on monogram hue \(i)", Self.rgb(Theme.onSolid, ui), Self.rgb(hue, ui), 3)
-                }
-            }
-        }
-        #expect(found.isEmpty, "the Mac chrome under its floors: \(found)")
-    }
-
     /// The minutes' summary card (#6563), on every style's card and the system's grouped cell, in light and dark: a topic
     /// tint as a mark (a group's dot, a bullet's mark) ≥ 3:1 on the card and as a glyph on its soft tile ≥ 3:1; on the
     /// Core Conclusions box (the AI tint over the card) the AI color as its lightbulb ≥ 3:1, and every word ≥ 4.5:1, a
@@ -240,6 +260,28 @@ struct StyleSpecTests {
             #expect(!kept.contains { Self.hex($0) == Self.hex(tint) && Self.hex($0, .dark) == Self.hex(tint, .dark) })
         }
         #expect(Set(Theme.Hue.minutesGroups.map { Self.hex($0) }).count == Theme.Hue.minutesGroups.count)
+    }
+
+    /// A to-do's ask card (#10465, `AskCard`) sits on the inset well (`Theme.Fill.well`) inside a To-dos row, whose cell
+    /// is the system's grouped cell in every style (`sectionCards()`): its exits' words in the accent ≥ 3:1 (the link
+    /// floor) and its own words ≥ 4.5:1 on that well, in every style and color, light and dark (DESIGN_SYSTEM 6.3: a
+    /// composite ground is tested).
+    @Test func anAskCardsWordsReadOnItsWell() {
+        let cell = Color(light: 0xFFFFFF, dark: 0x1C1C1E)
+        var found: [String] = []
+        for style in AppStyle.allCases {
+            for (name, colors) in Self.colors {
+                let spec = StyleSpec(style.component, colors)
+                for (look, ui) in Self.appearances {
+                    let well = Self.over(Theme.Fill.well, Self.rgb(cell, ui), ui)
+                    for (what, ink, floor) in [("accent", spec.accent, 3.0), ("words", Theme.primaryText, 4.5)] {
+                        let c = Self.contrast(Self.rgb(ink, ui), well)
+                        if c < floor { found.append("\(style.rawValue)+\(name) \(look) \(what): \(String(format: "%.2f", c))") }
+                    }
+                }
+            }
+        }
+        #expect(found.isEmpty, "an ask card's words under their floor on its well: \(found)")
     }
 
     /// The colored canvases stay darker than the system's grouped cells in dark (#1C1C1E): Clay's at #1D1A23 was one

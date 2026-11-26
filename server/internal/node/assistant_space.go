@@ -36,8 +36,8 @@ const spaceMDLimit = 64 << 10
 
 // prepareSpaceDir keeps track directory dir (made already) as sp names it and answers its SPACE.md.
 func prepareSpaceDir(dir string, sp spacePrepare) (string, error) {
-	if !identity.ValidTrackSlug(sp.Slug) || !identity.IsAssistantDir(dir) || identity.SpaceOf(dir) != sp.Slug {
-		return "", fmt.Errorf("%s is not the directory of track %q", dir, sp.Slug)
+	if err := checkSpaceDir(dir, sp.Slug); err != nil {
+		return "", err
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return "", err
@@ -64,6 +64,14 @@ func prepareSpaceDir(dir string, sp spacePrepare) (string, error) {
 		return "", err
 	}
 	return readSpaceMD(md)
+}
+
+// checkSpaceDir: dir is track slug's own directory (tracks/<slug> in a state directory), told from the path alone.
+func checkSpaceDir(dir, slug string) error {
+	if !identity.ValidTrackSlug(slug) || !identity.IsAssistantDir(dir) || identity.SpaceOf(dir) != slug {
+		return fmt.Errorf("%s is not the directory of track %q", dir, slug)
+	}
+	return nil
 }
 
 // readSpaceMD reads a track's SPACE.md: a plain file (never a link, nor one put in its place meanwhile: openNoBlock),

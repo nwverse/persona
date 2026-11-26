@@ -6,18 +6,23 @@
 // checks it: vite.config.ts), client-rest everything else, loaded after the first screen. `client` is the whole of
 // it, for tests.
 //
+// A feature module's namespaces (src/modules/<id>, docs/web/web.md "Modules": `<id>.json` and `<id>-*.json`) are in
+// neither part: they are its own catalog, `module-<id>`, loaded with its code and never while it is off. `modules` is all
+// of them together, for tests. `client` still has every namespace, so the checks over it see the modules' keys too.
+//
 // The page loads only its own language's catalog (src/i18n/index.ts initI18n). t() still falls back to en, then
 // zh-Hans, for a key the language lacks (docs/protocol/i18n.md), so each catalog module also exports `fallbacks`: the entries
 // of those two languages that t() could still reach from this one, computed here at build time. With complete
 // catalogs (src/i18n/catalog.test.ts) that is almost nothing, instead of two more full catalogs on the first load.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Plugin } from "vite";
 import { flatten } from "./src/i18n/locales/flatten";
 import { startupMatcher } from "./src/i18n/startup-keys";
 
-type Kind = "client" | "client-startup" | "client-rest" | "admin";
-const KINDS: readonly string[] = ["client", "client-startup", "client-rest", "admin"] satisfies Kind[];
+type Kind = "client" | "client-startup" | "client-rest" | "admin" | "modules" | `module-${string}`;
+const KINDS: readonly string[] = ["client", "client-startup", "client-rest", "admin", "modules"] satisfies Kind[];
+const isKind = (kind: string): kind is Kind => KINDS.includes(kind) || /^module-[a-z][a-z0-9-]*$/.test(kind);
 type Catalog = Record<string, string>;
 
 /** The languages t() falls back to, in order: FALLBACK_LANG and SOURCE_LANG of src/i18n/index.ts (a test checks). */
@@ -37,6 +42,24 @@ export function startupEntries(metaPath: string): string[] {
 
 const split = (kind: Kind) => kind === "client-startup" || kind === "client-rest";
 
+/** The feature modules (src/modules/<id>/module.ts), from a language's _meta.json. */
+export function moduleIds(metaPath: string): string[] {
+  const dir = join(dirname(metaPath), "..", "..", "..", "modules");
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && readdirSync(join(dir, e.name)).includes("module.ts"))
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/** The module a namespace belongs to (`<id>` or `<id>-…`), if any. */
+export function namespaceModule(ns: string, modules: readonly string[]): string | undefined {
+  return modules.find((id) => ns === id || ns.startsWith(`${id}-`));
+}
+
 /**
  * The namespace JSON files of one catalog, sorted, as absolute paths. A namespace the startup list takes some keys of
  * has its file in both parts of the client catalog; readCatalog and the dev server's module keep each part's keys.
@@ -46,11 +69,29 @@ export function catalogFiles(metaPath: string, kind: Kind): string[] {
   const entries = split(kind) ? startupEntries(metaPath) : [];
   const whole = new Set(entries.filter((e) => !e.includes(".")));
   const named = new Set(entries.map((e) => e.split(".")[0]));
-  return readdirSync(dir).filter((name) => {
+  const modules = moduleIds(metaPath);
+  const files = readdirSync(dir).map((name) => join(dir, name));
+  // A module can keep its namespace files alongside its implementation. Only catalogs
+  // that include that module read its directory, including the aggregate test catalogs.
+  for (const id of modules) {
+    if (kind !== "client" && kind !== "modules" && kind !== `module-${id}`) continue;
+    const local = join(dir, "../../../modules", id, "locales", basename(dir));
+    if (existsSync(local)) {
+      for (const name of readdirSync(local)) {
+        if (namespaceModule(basename(name, ".json"), modules) === id) files.push(join(local, name));
+      }
+    }
+  }
+  return files.filter((file) => {
+    const name = basename(file);
     if (!name.endsWith(".json") || name.startsWith("_") || name.startsWith("admin-") !== (kind === "admin")) return false;
     const ns = name.slice(0, -".json".length);
+    const owner = namespaceModule(ns, modules);
+    if (kind === "modules") return owner !== undefined;
+    if (kind.startsWith("module-")) return owner === kind.slice("module-".length);
+    if (owner && split(kind)) return false;
     return kind === "client-startup" ? named.has(ns) : kind === "client-rest" ? !whole.has(ns) : true;
-  }).sort().map((name) => join(dir, name));
+  }).sort();
 }
 
 function readCatalog(dir: string, kind: Kind): Catalog {
@@ -110,9 +151,9 @@ export function catalogModule(metaPath: string, kind: Kind, inline = false): str
     return [`export default JSON.parse(${JSON.stringify(JSON.stringify(readCatalog(dir, kind)))});`, fallbacks].join("\n");
   }
   const path = (file: string) => JSON.stringify(file.replace(/\\/g, "/"));
-  const namespaces = catalogFiles(metaPath, kind).map((file) => basename(file));
-  const imports = namespaces.map((name, i) => `import ns${i} from ${path(join(dir, name))};`);
-  const entries = namespaces.map((name, i) => `${JSON.stringify(`./${name}`)}: ns${i}`);
+  const namespaces = catalogFiles(metaPath, kind);
+  const imports = namespaces.map((file, i) => `import ns${i} from ${path(file)};`);
+  const entries = namespaces.map((name, i) => `${JSON.stringify(`./${basename(name)}`)}: ns${i}`);
   const whole = `flatten({${entries.join(",")}})`;
   // A part of the client catalog keeps its own keys of the namespaces the startup list splits.
   const part = split(kind)
@@ -145,10 +186,10 @@ export const i18nCatalogs: Plugin = {
     if (!path.endsWith("/_meta.json")) return;
     const kind = new URLSearchParams(query).get("catalog");
     const absolute = path.startsWith(".") && importer ? join(dirname(importer.split("?")[0]), path) : path;
-    if (kind && KINDS.includes(kind)) return `\0i18n-catalog:${kind}:${absolute}.js`;
+    if (kind && isKind(kind)) return `\0i18n-catalog:${kind}:${absolute}.js`;
   },
   load(id) {
-    const match = /^\0i18n-catalog:([a-z-]+):(.+)\.js$/.exec(id);
+    const match = /^\0i18n-catalog:([a-z0-9-]+):(.+)\.js$/.exec(id);
     if (!match) return;
     const [, kind, path] = match;
     this.addWatchFile(path);

@@ -59,10 +59,14 @@ func TestMain(m *testing.M) {
 				return refProgram{&exampleProgram{secrets: s}}, nil
 			case "images":
 				return imageProgram{&exampleProgram{secrets: s}}, nil
+			case "views":
+				return viewProgram{&exampleProgram{secrets: s}}, nil
 			case "catalog":
 				return &catalogProgram{exampleProgram: &exampleProgram{secrets: s}}, nil
 			case "history":
 				return &historyProgram{exampleProgram: &exampleProgram{secrets: s}}, nil
+			case "chat":
+				return chatProgram{}, nil
 			}
 			return &exampleProgram{secrets: s, exitSoon: os.Getenv("PERSONA_PROC_EXIT") == "1"}, nil
 		})

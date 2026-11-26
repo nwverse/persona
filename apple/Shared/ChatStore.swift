@@ -9,6 +9,7 @@ nonisolated struct ToolCall: Identifiable, Hashable, Sendable {
     var images: [ImagePayload] = []
     var results: [Item] = []
     var agentStatus: String?
+    var toolViews: [ExtensionView] = []
 
     var id: String { use.id }
     var name: String { use.toolName ?? "tool" }
@@ -1237,6 +1238,7 @@ final class ChatStore {
                 var call = ToolCall(use: it, result: deliveries.last, results: agent ? deliveries : [],
                                     agentStatus: deliveries.last(where: { $0.task?.kind == "agent" }).map { $0.task?.status ?? "" })
                 call.images = it.toolUseID.flatMap { images[$0] } ?? []
+                call.toolViews = deliveries.flatMap { $0.toolViews ?? [] }
                 run.append(.call(call))
             case .thinking:
                 pendingThoughts.append(it)
@@ -1547,8 +1549,11 @@ nonisolated enum ChatCache {
     /// keep the notice under the call's id.
     /// v21: pages retain silent finish receipts, and narration stays distinguishable from a final reply.
     /// v22: replies retain the model that wrote each assistant item; older copies could not mark model changes.
+    /// v23: Codex image generation completions are Read items; older copies keep their notices without the image strip.
+    /// v24: tool_result and fold items carry out-of-band tool_views (interactive maps, etc.); older copies omit them.
+    /// v25: folds retain `changes` for completed Agent turn Changed Files cards (#12016); older copies lacked `changes`.
     /// Bump it whenever the item structure or the text the hub gives an item changes.
-    static let folder = "chats-v22"
+    static let folder = "chats-v25"
 
     /// Once per launch, before the first copy is read or written (a static let runs once, on whichever thread asks first).
     private static let dropOlder: Void = {
@@ -1672,6 +1677,9 @@ nonisolated struct PendingMessage: Identifiable, Hashable, Codable, Sendable {
     struct InboxHandOff: Hashable, Codable, Sendable {
         let itemID: String
         let manager: String?
+        /// The inbox the item came from; its Agent can be on another hub. The pairing survives regrouping.
+        var sourceGroup: String? = nil
+        var sourcePairing: String? = nil
         var filed = false
     }
     var id = UUID()

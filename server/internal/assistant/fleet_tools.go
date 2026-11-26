@@ -47,6 +47,7 @@ func (s *Service) mcpTools(ctx context.Context, assistant bool) []proto.Tool {
 		tools = append(tools, s.Tools(ctx)...)
 		tools = append(tools, assistantOnly...)
 	}
+	tools = append(tools, s.fileTransferTools(ctx)...) // file_transfer, unless agents.file_transfer is off (file_transfer.go)
 	return localizedMCPTools(tools, s.toolLanguage(ctx))
 }
 
@@ -134,11 +135,19 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 	if err != nil {
 		return nil, err
 	}
+	// A proxy reply's guest lists only its one tool, before any other guest's list (bot_handoff.go).
+	if id, handoff, err := s.handoffOf(ctx, machine, session); guest && err == nil && handoff {
+		_ = id
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}, nil
+		}
+		return guestTools(s.larkModule().HandoffTools(), allowed), nil
+	}
 	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
 		if s.isWorkMachine(machine) {
 			return []proto.Tool{}, nil
 		}
-		return guestTools(meetingRoomTools(), allowed), nil
+		return guestTools(s.meetingRoomTools(), allowed), nil
 	}
 	if !guest {
 		if guestHint {
@@ -154,7 +163,10 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		}
 		tools := s.mcpTools(ctx, assistant)
 		if assistant {
+			tools = append(tools, s.healthTools(ctx, machine, session)...)
+			tools = append(tools, s.externalSourceTools(ctx, machine, session)...)
 			tools = s.guardTools(ctx, machine, session, tools)
+			tools = append(tools, s.spaceTools(ctx, machine, session)...) // space_state_update (track_space_md.go)
 		}
 		if !assistant {
 			tools = append(tools, s.leaderTools(ctx, machine, session)...)
@@ -163,7 +175,7 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		cfg := s.a2aConfig(ctx)
 		_, hasA2A := s.a2aStore()
 		if hasA2A == nil && (session == "" && s.a2aMachineAllowed(ctx, cfg, s.canonical(machine)) ||
-			s.a2aAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
+			s.a2aToolAllowed(ctx, cfg, a2aRef{s.canonical(machine), session})) {
 			tools = append(tools, toolsNamed(assistantwire.A2AToolNames)...)
 		}
 		if assistant && toolSetOf(ctx) == toolSetSupervise {
@@ -219,6 +231,15 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if res, refused := s.inboxModelRefusal(ctx, machine, session, origin, name); refused {
 		return res
 	}
+	if res, refused := s.inboxVisibilityToolRefusal(ctx, machine, session, origin, name, args); refused {
+		return res
+	}
+	if isExternalSourceTool(name) {
+		if !assistant {
+			return proto.TextResult("unknown tool "+name, true)
+		}
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
+	}
 	if slices.Contains(resourceToolNames, name) {
 		return s.resourceTool(ctx, machine, session, name, args)
 	}
@@ -227,6 +248,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if assistantwire.IsA2ATool(name) {
 		return s.a2aTool(ctx, a2aRef{s.canonical(machine), session}, name, args)
+	}
+	if name == fileTransferTool { // Agents' and assistant conversations' alike (file_transfer.go)
+		return s.fileTransferToolCall(ctx, machine, session, args, assistant)
 	}
 	if isKnowledgeFolderTool(name) && !assistant {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
@@ -257,6 +281,9 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if !assistant && isDispatchTool(name) {
 		return s.dispatchTool(ctx, machine, session, name, args)
+	}
+	if assistant && (name == spaceStateTool || slices.Contains(healthToolNames, name)) { // listed per conversation, so not in Tools: its handler checks
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if assistant && s.isOwnTool(ctx, name) {
 		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})

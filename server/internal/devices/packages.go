@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -67,9 +68,10 @@ type nodePackage struct {
 	base, dir string
 	// flat: listed in <base>/latest.json, so also served at <base>/<file.Name>, where hub self-update fetches it. A
 	// source without per-version directories has it only there: a GitHub repository's releases/latest/download.
-	flat  bool
-	file  update.File
-	build int64
+	development *devicewire.DevelopmentTarget
+	flat        bool
+	file        update.File
+	build       int64
 	// The release's node protocol range and capabilities (a fetched one), kept with it in the cache so a cached
 	// fallback is judged again before it is used.
 	nodeProtocol, nodeProtocolMin int
@@ -78,7 +80,12 @@ type nodePackage struct {
 	stale bool
 }
 
-type packageKey struct{ goos, arch, program, hub, base string }
+type packageKey struct {
+	goos, arch, program, hub, base string
+	development                    devicewire.DevelopmentTarget
+	published                      devicewire.DevelopmentTarget
+	hold                           bool
+}
 
 type packageResult struct {
 	pkg nodePackage
@@ -128,7 +135,15 @@ func (d *Devices) packageKey(goos, arch, program string) packageKey {
 	if program != nodeproto.ProgramPersonaNode {
 		program = nodeproto.ProgramPersonad // personad, or an older node that does not say
 	}
-	return packageKey{goos: goos, arch: arch, program: program, hub: cfg.HubVersion, base: cfg.NodePackagesURL}
+	key := packageKey{goos: goos, arch: arch, program: program, hub: cfg.HubVersion, base: cfg.NodePackagesURL, hold: cfg.DevelopmentHold}
+	if cfg.DevelopmentTarget != nil {
+		key.development = *cfg.DevelopmentTarget
+		key.hold = key.hold || !key.development.Valid() || key.development.Version != cfg.HubVersion
+	}
+	if cfg.PublishedTarget != nil && cfg.PublishedTarget.ValidPublished() && cfg.PublishedTarget.Version == key.hub {
+		key.published = *cfg.PublishedTarget
+	}
+	return key
 }
 
 // cachedPackage is the lookup remembered for k, if it is still fresh.
@@ -308,6 +323,12 @@ func (d *Devices) packageBlocked(info proto.NodeInfo) error {
 
 // lookupPackage finds k's build (see the order above; the connector's: lookupConnector).
 func (d *Devices) lookupPackage(ctx context.Context, k packageKey) (nodePackage, error) {
+	if k.hold {
+		return nodePackage{}, i18n.Err("devices-deploy.development_hold")
+	}
+	if k.development.Commit != "" {
+		return d.lookupDevelopment(ctx, k)
+	}
 	if k.program == programConnector {
 		return d.lookupConnector(ctx, k)
 	}
@@ -319,8 +340,8 @@ func (d *Devices) lookupPackage(ctx context.Context, k packageKey) (nodePackage,
 	// Resident preflight requires the running program's identity, even if it is installed under another name.
 	for _, dir := range localNodeDirs() {
 		for _, local := range localNodeNames(k.program, plat) {
-			path := filepath.Join(dir, local)
-			if !fileExists(path) {
+			path := update.PackagePath(dir, local)
+			if path == "" {
 				continue
 			}
 			version, inferred := k.hub, false
@@ -348,6 +369,14 @@ func (d *Devices) lookupPackage(ctx context.Context, k packageKey) (nodePackage,
 				}
 			}
 			return nodePackage{Version: version, Program: k.program, goos: k.goos, arch: k.arch, path: path}, nil
+		}
+	}
+	if k.published.Commit != "" {
+		hosted := k
+		hosted.development = k.published
+		pkg, err := d.lookupDevelopment(ctx, hosted)
+		if !errors.Is(err, errNoPublishedPackage) {
+			return pkg, err
 		}
 	}
 	if k.base == "" || k.hub == "dev" || !safeVersion.MatchString(k.hub) {
@@ -431,21 +460,14 @@ func releaseNodeIncompatible(m *update.Manifest) string {
 // nodeBinaryName is a cached or bundled personad for plat. A Windows executable keeps .exe; it must be looked up
 // with the same suffix that the release download and hub update retain.
 func nodeBinaryName(program, plat string) string {
-	if strings.HasPrefix(plat, "windows-") {
-		return program + "-" + plat + ".exe"
-	}
-	return program + "-" + plat
+	return update.PackageName(program, plat)
 }
 
 // localNodeNames are the names a build of program for plat may have in a local node dir, the current one first. A
 // Windows build left by a hub or a person from before Windows builds kept their .exe has none; it is still taken when
 // it is the version it would be sent as (carriesVersion).
 func localNodeNames(program, plat string) []string {
-	name := nodeBinaryName(program, plat)
-	if legacy, ok := strings.CutSuffix(name, ".exe"); ok {
-		return []string{name, legacy}
-	}
-	return []string{name}
+	return update.PackageNames(program, plat)
 }
 
 // localBuildRecent is the window in which equal-sized replacements may still share an mtime on a coarse filesystem
@@ -594,6 +616,10 @@ func (d *Devices) fetchManifest(ctx context.Context, u string) (*update.Manifest
 	if err != nil {
 		return nil, err
 	}
+	return readPackageManifest(ctx, client, u)
+}
+
+func readPackageManifest(ctx context.Context, client *http.Client, u string) (*update.Manifest, error) {
 	ctx, cancel := context.WithTimeout(ctx, packageLookup)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -706,6 +732,10 @@ func cachedFallback(k packageKey) (nodePackage, bool) {
 
 // fetchPackage is p as a file on this machine: its own, the cache's, or downloaded into the cache and checked.
 func (d *Devices) fetchPackage(ctx context.Context, p nodePackage) (string, error) {
+	if p.development != nil {
+		path, _, err := d.fetchDevelopment(ctx, p)
+		return path, err
+	}
 	if p.path != "" {
 		if root := identity.NodePackageCacheDir(); strings.HasPrefix(p.path, root+string(filepath.Separator)) {
 			now := d.packages.clock() // a cached build used now (a stand-in): pruneCache keeps its dir a while

@@ -77,7 +77,7 @@ func (p *Proxy) handler(fixed string) http.Handler {
 		case hub:
 			allowed = rule.Hub
 		case local:
-			if rule.Local() && !p.ownPort(port) {
+			if rule.Loopback() && !p.ownPort(port) {
 				allowed = true
 			} else if lip, ok := rule.loopbackTarget(port, connect); ok && !p.ownPort(port) && !p.hubPort(port) {
 				allowed, loopbackDial = true, lip
@@ -104,13 +104,15 @@ func (p *Proxy) handler(fixed string) http.Handler {
 		}
 		p.count(ext, host, allowed)
 		if !allowed {
-			if local && rule.Local() {
+			if local && rule.Loopback() {
 				p.logf("extension %s: refused %s:%s (the proxy itself)", ext, host, port)
 				http.Error(w, fmt.Sprintf("persona: %s:%s is this proxy", host, port), http.StatusForbidden)
 				return
 			}
-			p.logf("extension %s: refused %s (not in its permissions.network)", ext, host)
-			http.Error(w, fmt.Sprintf("persona: %s is not in this extension's permissions.network", host), http.StatusForbidden)
+			// Say it is the sandbox's egress rule, with the port, in the log and in what the program reads: a connector
+			// that only reports "unreachable" is then traced to the missing grant (#15707).
+			p.logf("extension %s: sandbox egress refused %s:%s (not in its permissions.network, its settings addresses or the hosts its owner allowed)", ext, host, port)
+			http.Error(w, fmt.Sprintf("persona sandbox egress: %s:%s is not in this extension's permissions.network, its settings addresses or the hosts its owner allowed", host, port), http.StatusForbidden)
 			return
 		}
 		dial := func() (net.Conn, error) {
