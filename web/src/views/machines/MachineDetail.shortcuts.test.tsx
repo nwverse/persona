@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n";
 import { onOpenNewAgent } from "../../lib/new-agent";
 import { href, parse } from "../../lib/router";
-import { takeUsageFocus } from "../../lib/usage-map-link";
 import type { Machine, Session } from "../../lib/types";
 import { MachineDetail } from "./MachineDetail";
 import { TerminalPage } from "../terminal/TerminalPage";
@@ -94,8 +93,10 @@ it("opens a known workspace without sessions by inventory identity", async () =>
 
 it("opens an existing shell on this computer ahead of Agent panes and keeps Engine under Configuration", async () => {
   await detail();
+  await act(async () => root.render(<MachineDetail mid="b" subview="management" onToggleSidebar={noOp} />));
   const engine = host.querySelector('[data-testid="engine-section"]')!;
   expect(engine.parentElement?.querySelector("h2")?.textContent).toBe("Configuration");
+  await detail();
   await click(find(host, t("sidebar.nav_terminal"))); await terminal();
   expect(location.pathname + location.search).toBe(href({ name: "terminal", mid: "b", id: "pane:one", view: "terminals" }));
   expect(posts).toEqual([]);
@@ -113,8 +114,7 @@ it("offers a new terminal in a quiet workspace even when another workspace has a
 it("takes a disk warning straight to reclaim on the selected computer", async () => {
   await detail();
   await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes(t("machines-usagemap.reclaim_open")))!);
-  expect(location.pathname).toBe("/machines");
-  expect(takeUsageFocus()).toEqual({ mid: "b", mode: "reclaim" });
+  expect(location.pathname + location.search).toBe("/machines/b/storage?mode=reclaim");
 });
 
 it("distinguishes pending and failed workspace discovery while keeping known rows", async () => {
