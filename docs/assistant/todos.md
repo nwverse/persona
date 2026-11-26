@@ -819,6 +819,11 @@ once the hub supplies the answerable round. Lark also shows the card when task r
 Completed-task retirement does not select this Agent, and personal verification also protects it from the
 ordinary stalled-task idle limit. This does not change the closure policy for tasks that really have completed.
 
+On the web, opening a personal verification shows the task goal, supervisor summary, checked criteria and available
+deliverable link. **View raw Agent session** opens the linked worker, including a released worker whose transcript
+is still available. **Follow up in chat** opens the originating conversation with a removable quote containing the
+task title, ID and summary. The owner's draft stays in the composer and the verification round stays open.
+
 The owner's **Pass** (app, card or approval reply) marks the task verified, closes it by review, and permits normal
 completed-task retirement. Change feedback records a new work round before relaying the words to the same Agent;
 the old Pass can no longer complete that round. Failed delivery is shown as failed, not as successful rework.
@@ -1634,7 +1639,10 @@ It supplies its own home and native path semantics; no browser-provided home or
 resolved path is trusted. The pure resolver checks lexical paths; on Darwin it
 compares components without case to conservatively reserve private state even
 on case-sensitive volumes, while Linux comparisons remain case-sensitive.
-The same Node path check runs at preview and preparation. It checks the base,
+For a base under the node's home, the node resolves the home prefix before
+deriving task paths. This applies to `{home}`, `~/` and literal paths under
+that home. Receipts and mirrors likewise use physical paths under the configured
+Persona state directory. The same Node path check runs at preview and preparation. It checks the base,
 task root and each repository's path. Links to credential paths or physical
 private state return `base_scope_denied`. Other symbolic links return
 `path_symlink`. A missing tail is allowed. The preview validates branch format

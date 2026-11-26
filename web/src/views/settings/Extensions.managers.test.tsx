@@ -138,13 +138,14 @@ describe("another manager's extension page", () => {
     expect(onOpen).toHaveBeenLastCalledWith("example-wechat@m-1");
   });
 
-  it("the default's own page names no manager anywhere", async () => {
+  it("keeps default extension requests unscoped and stamps its external source bindings with the default owner", async () => {
     setRoster(ROSTER);
     await import("../../features/external-sources/ExternalSourceSettings");
     act(() => root.render(<Extensions open="example-wechat" onOpen={() => {}} onChannel={() => {}} onConnector={() => {}} />));
     await flush();
     await readExternalPolicy("assistant", { provider: "wechat" }).catch(() => {});
     await readExternalDirections("assistant").catch(() => {});
+    await act(async () => { await vi.dynamicImportSettled(); });
     const sw = host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="进收件箱"]')!;
     expect(sw.getAttribute("aria-checked")).toBe("false");
     expect(calls.some((c) => c.url.includes("/external-source-bindings/summary") && c.header === null)).toBe(true);
