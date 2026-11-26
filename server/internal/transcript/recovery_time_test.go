@@ -106,6 +106,50 @@ func TestProviderRecoveryAt(t *testing.T) {
 			ok:   true,
 		},
 		{
+			name: "json retry_after exponent",
+			text: `API Error: 503 {"error":{"retry_after":1.8e3,"type":"overloaded_error"}}`,
+			at:   at,
+			want: at.Add(30 * time.Minute),
+			ok:   true,
+		},
+		{
+			name: "json retry after millis with a signed exponent",
+			text: `API Error: 429 {"retryAfterMs":4.5E+5}`,
+			at:   at,
+			want: at.Add(450 * time.Second),
+			ok:   true,
+		},
+		{
+			name: "json recovery timestamp as exponent",
+			text: `API Error: 503 {"retry_at":1.7954352e9}`,
+			want: time.Unix(1795435200, 0).UTC(),
+			ok:   true,
+		},
+		{
+			name: "truncated json recovery timestamp exponent",
+			text: `API Error: 503 {"retry_at":1795435200e}`,
+		},
+		{
+			name: "truncated json retry exponent",
+			text: `API Error: 503 {"retry_after":6e}`,
+			at:   at,
+		},
+		{
+			name: "json retry after with a malformed numeric suffix",
+			text: `API Error: 503 {"retry_after":120abc}`,
+			at:   at,
+		},
+		{
+			name: "non-json leading zero in retry after",
+			text: `API Error: 503 {"retry_after":0600}`,
+			at:   at,
+		},
+		{
+			name: "whole json exponent retains the relative bound",
+			text: `API Error: 503 {"retry_after":1e8}`,
+			at:   at,
+		},
+		{
 			name: "json retry_after http date without anchor",
 			text: `API Error: 503 {"error":{"retry_after":"Mon, 23 Nov 2026 11:30:00 GMT"}}`,
 			at:   time.Time{},
@@ -132,6 +176,25 @@ func TestProviderRecoveryAt(t *testing.T) {
 			at:   at,
 			want: at.Add(90 * time.Minute),
 			ok:   true,
+		},
+		{
+			name: "try again in duration separated by words",
+			text: "API Error: 503 Try again in 1 hour and 30 minutes.",
+			at:   at,
+			want: at.Add(90 * time.Minute),
+			ok:   true,
+		},
+		{
+			name: "retry in three parts with commas and conjunction",
+			text: "API Error: 503 Retry in 1 hr, 30 min, and 0.5 seconds.",
+			at:   at,
+			want: at.Add(90*time.Minute + 500*time.Millisecond),
+			ok:   true,
+		},
+		{
+			name: "compound duration retains the relative bound",
+			text: "API Error: 503 Retry after 167 hours and 61 minutes.",
+			at:   at,
 		},
 		{
 			name: "retry in minutes",

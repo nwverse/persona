@@ -403,6 +403,7 @@ func (s *Service) drainConversations(machine string, ids []string) bool {
 // owner presence, rate limits, and tries in doubt. The owner's last message is forgotten once ownerPresentFor has
 // passed and what it held was handed on.
 func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
+	s.escalateStaleSupervisorRelays(ctx, now)
 	leads := s.queueLeads(ctx)
 	b := &s.relays
 	b.mu.Lock()

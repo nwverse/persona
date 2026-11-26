@@ -41,11 +41,15 @@ describe("WorkGroup", () => {
     expect(html).not.toContain("data-work-detail"); // a lazy Collapse: nothing until it opens
   });
 
-  it("done: layers and 已工作 Xs, folded", () => {
+  it("done: no leading layers icon, 已工作 Xs followed directly by chevron, folded", () => {
     const html = renderToStaticMarkup(<WorkGroup g={group([tool("t1", "Bash", { command: "ls" })], false, 65_000)} p={props} />);
     expect(html).toContain(">已工作 1m 5s<");
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("data-live-preview");
+    // Only one svg in the completed top-level header: the disclosure chevron right after the heading (no leading layers icon, no flex-1 spacer)
+    expect(html.match(/<svg /g)).toHaveLength(1);
+    expect(html).not.toContain("flex-1");
+    expect(html.indexOf("已工作 1m 5s")).toBeLessThan(html.indexOf("<svg "));
   });
 
   it("every nonempty live group can be manually opened and never previews tools", () => {
@@ -56,6 +60,18 @@ describe("WorkGroup", () => {
     expect(html).not.toMatch(/^<div[^>]*><button[^>]*disabled/);
     expect(html).not.toContain("echo 1");
     expect(html).not.toContain("echo 6");
+  });
+
+  it("thinking-only nested group omits the fallback layers icon and keeps spinner when live (#14866)", () => {
+    const thought: Step = { kind: "thinking", id: "th#0", item: { id: "th#0", seq: 1, role: "assistant", kind: "thinking", text: "Checking details" } };
+    const doneHtml = renderToStaticMarkup(<WorkGroup g={group([thought], false, 1000)} p={{ ...props, nested: true }} />);
+    expect(doneHtml).toContain(">已工作 1s<");
+    expect(doneHtml.match(/<svg\b/g)).toHaveLength(1); // chevron only, no leading layers icon
+    expect(doneHtml).not.toContain("border-l-2");
+    expect(doneHtml).toContain("pl-3");
+
+    const liveHtml = renderToStaticMarkup(<WorkGroup g={group([thought], true)} p={{ ...props, nested: true }} />);
+    expect(liveHtml).toContain("animation:spin");
   });
 });
 

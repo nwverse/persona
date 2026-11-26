@@ -785,3 +785,68 @@ func TestAgyRuntimeRowContextWindowWithoutLocalTranscript(t *testing.T) {
 		t.Fatalf("Gemini runtime row = %d/%d", s.ContextTokens, s.ContextWindow)
 	}
 }
+
+func TestAgyPaneUpdatedAtFromRuntimeAndTranscript(t *testing.T) {
+	resetAgyModelWindowCache(t)
+	n, herdr, home := herdrNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	t.Cleanup(freshOffline)
+
+	const raw = `{"step_index":0,"type":"USER_INPUT","content":"Hello"}` + "\n" +
+		`{"step_index":1,"type":"PLANNER_RESPONSE","content":"Hi there","model":"gemini-3.1-pro-low","input_tokens":500,"output_tokens":20}` + "\n"
+	transcriptPath := agyTestFile(t, n.agyDataRoot(), agyTestID, raw)
+	transcriptAt := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(transcriptPath, transcriptAt, transcriptAt); err != nil {
+		t.Fatal(err)
+	}
+	seedAgents(t, n, herdr, agyTestAgent(agyTestPane, home, agyTestID))
+
+	// Without a companion runtime row, the herdr agy pane falls back to the local transcript's mtime.
+	findPane := func() proto.Session {
+		for _, r := range listSessions(t, n) {
+			if r.SessionID == agyTestRow {
+				return r
+			}
+		}
+		t.Fatalf("missing pane row %s", agyTestRow)
+		return proto.Session{}
+	}
+	if got := findPane(); !got.UpdatedAt.Equal(transcriptAt) {
+		t.Fatalf("pane UpdatedAt without runtime = %v, want %v", got.UpdatedAt, transcriptAt)
+	}
+
+	// With a companion runtime row, the herdr agy pane inherits UpdatedAt and LastText from the runtime row
+	// and sorts ahead of older companion-only agy sessions.
+	n.runtimes = newRuntimeRegistry()
+	runtime := n.runtimes.add(nil)
+	runtime.ready, runtime.hello.Runtime, runtime.hello.Agent = true, agyAgent, agyAgent
+	olderAt := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	newerAt := time.Date(2026, 11, 24, 18, 30, 0, 0, time.UTC)
+	n.runtimes.setSessions(runtime, []proto.Session{
+		{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusWorking, UpdatedAt: newerAt, LastText: "Latest reply"},
+		{SessionID: agyAgent + "-older-companion", Agent: agyAgent, Cwd: home, Status: proto.StatusDone, UpdatedAt: olderAt, LastText: "Old reply"},
+	})
+	rows := listSessions(t, n)
+	var paneIdx, olderIdx = -1, -1
+	for i, r := range rows {
+		if r.SessionID == agyTestRow {
+			paneIdx = i
+			if !r.UpdatedAt.Equal(newerAt) || r.LastText != "Latest reply" {
+				t.Fatalf("pane with runtime = updated:%v lastText:%q, want %v / %q", r.UpdatedAt, r.LastText, newerAt, "Latest reply")
+			}
+		}
+		if r.SessionID == agyAgent+"-older-companion" {
+			olderIdx = i
+		}
+	}
+	if paneIdx < 0 || olderIdx < 0 || paneIdx >= olderIdx {
+		t.Fatalf("expected live herdr agy pane (idx=%d) to sort ahead of older companion row (idx=%d)", paneIdx, olderIdx)
+	}
+
+	companion := proto.Session{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusDone,
+		UpdatedAt: newerAt.Add(time.Minute), LastText: "BOTMUX_NOTHING_TO_SEND"}
+	n.runtimes.setSessions(runtime, normalizeRuntimeSessions(runtime, []proto.Session{companion}))
+	if got := findPane(); got.LastText != "Latest reply" || !got.UpdatedAt.Equal(companion.UpdatedAt) {
+		t.Fatalf("pane after a delivery marker: last text %q, updated %v", got.LastText, got.UpdatedAt)
+	}
+}

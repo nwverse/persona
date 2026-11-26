@@ -46,17 +46,31 @@ Query keys not listed for a row are dropped (not passed on, not acted on). Fragm
 | A knowledge entry | `/kb/<kind>/<id>` | | native | in place | native |
 | Computers | `/machines` | | Computers | in place | native |
 | A computer | `/machines/<id>` | `range` | native | in place | native |
+| A computer subview | `/machines/<id>/<subview>` | `path` for files, `range` for monitoring, `mode=reclaim` for storage | web only | in place | web only |
 | Settings | `/settings` | `tab`, the tab's item key, `manager` | the matching page | in place | native |
 | An extension's page | `/extension/<extension>/<ui>` | `state` | native | in place | native |
+
+On the web, a bare computer address opens Work. Existing links with a monitoring range
+(`1h`, `6h` or `24h`) open Monitoring. The supported subviews are `work`, `monitoring`, `files`,
+`storage`, `diagnostics`, `procs`, `services`, `toolchain`, `network` and `management` (`config` is an alias).
+The legacy `#engine` bookmark on a computer opens Management. An unknown subview shows Page not found. Older fleet history entries carrying a reclaim request resolve
+in place to `/machines/<id>/storage?mode=reclaim`. Opening reclaim displays the map and its suggestions. The older `/cleanup` and `/storage/cleanup`
+suffixes select the same recovery view. Files accepts a URL-encoded directory in `path` (also accepted as `dir`).
+The `fs` subview opens Files on the addressed computer. Switching computers starts Files at the new computer’s home.
 
 - `<kind>` is one of `projects`, `topics`, `chats`, `people`, `docs`, `meetings`, `events`, `recordings`; a meeting is
   `/kb/meetings/<id>` and a recording `/kb/recordings/<id>`. An id that holds `/` is one escaped segment (`%2F`).
 - `at` names one message to land on (`?at=<item id>`; Claude's ids hold `#`, written `%23`).
 - Settings tabs are the web's (`web/src/views/settings/nav.ts`): `general`, `persona`, `prompts`, `notifications`,
-  `models`, `agents`, `channels`, `connectors`, `sources`, `extensions`, `shortcuts`, `devices`, `hub`, `managers`,
+  `models`, `agents`, `channels`, `connectors`, `sources`, `extensions`, `shortcuts`, `advanced`, `devices`, `hub`, `managers`,
   `knowledge`, `avatar`, `labs`. Four have an item key: `models` → `purpose`, `channels` → `channel`, `extensions` →
   `extension`, `connectors` → `connector`. An extension's settings are `/settings?tab=extensions&extension=<id>`. An
   unknown tab opens Settings. The iPhone opens the page it has for a tab, else Settings.
+- The assistant's pages (Dashboards, `docs/assistant/dashboards.md`) are an extension's pages under the reserved id
+  `-pages`: the Dashboards index is `/extension/-pages/index`, one page `/extension/-pages/pg_0123456789abcdef`
+  (`persona://open/extension/-pages/pg_0123456789abcdef`). The apps draw them over HTTP only, never the native page
+  stream, and take the header's title from the drawn page, so a page not pinned in the sidebar shows its title, not
+  its id.
 - A page the iPhone has no screen for opens in the in-app web card, as any other link to the hub does.
 - **Not in the table**: every other path on the hub (`/admin`, `/share/…`, `/screen/…`, the web's own pages such as
   `/overview` or `/history`). The iPhone and Android open them in the web card; the web and the desktop app treat them

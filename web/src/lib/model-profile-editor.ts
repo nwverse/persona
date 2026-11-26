@@ -65,6 +65,8 @@ export interface ProfileDraft {
   purposes: Record<string, PurposeDraftEntry>;
   launchers: Record<string, LauncherDraftEntry>;
   tiers: TierDraftEntry[];
+  /** Tier names the hub returned with a `candidates` list when this profile was loaded. */
+  listedTierNames?: string[];
 }
 
 export function categoryIdsForProfile(profile: Pick<ModelProfile, "purposes">, catalogPurposeIds?: readonly string[]): string[] {
@@ -101,12 +103,15 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
     }
     launchers[name] = entry;
   }
+  const listedTierNames: string[] = [];
   const tiers: TierDraftEntry[] = Object.entries(profile.tiers ?? {})
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, tier], index) => {
+      const hasListedCandidates = !!tier.candidates && tier.candidates.length > 0;
+      if (hasListedCandidates) listedTierNames.push(name);
       const sourceCandidates: ModelProfileTierCandidate[] =
-        tier.candidates && tier.candidates.length > 0
-          ? tier.candidates
+        hasListedCandidates
+          ? tier.candidates!
           : [
               {
                 launcher: tier.launcher ?? "",
@@ -139,6 +144,7 @@ export function profileToDraft(profile: ModelProfile, catalogPurposeIds?: readon
     purposes,
     launchers,
     tiers,
+    listedTierNames,
   };
 }
 
@@ -283,6 +289,7 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     }
     if (any) launchers[name] = out;
   }
+  const listedTiers = new Set(draft.listedTierNames ?? []);
   const tiers: Record<string, ModelProfileTier> = {};
   for (const entry of draft.tiers) {
     const tierName = entry.name.trim();
@@ -308,7 +315,12 @@ export function draftToProfileInput(draft: ProfileDraft, revision: number): Mode
     if (primary.speed) out.speed = primary.speed;
     const description = entry.description.trim();
     if (description) out.description = description;
-    if (candidates.length > 1) out.candidates = candidates;
+    // State `candidates` when there is more than one or the submitted tier name was listed with candidates by the hub,
+    // so cutting a tier down to one (including delete-and-recreate or name swaps) sends `[the one]` rather than the
+    // flat-only shape that causes the hub to keep stored candidates. Never emit `[]`.
+    if (candidates.length > 1 || (candidates.length === 1 && listedTiers.has(tierName))) {
+      out.candidates = candidates;
+    }
     if (entry.aliases && entry.aliases.length > 0) out.aliases = [...entry.aliases];
     tiers[tierName] = out;
   }

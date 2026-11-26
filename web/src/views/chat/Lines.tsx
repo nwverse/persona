@@ -18,6 +18,7 @@ import { ErrorDetailsText, ErrorNotice } from "../../ui/ErrorNotice";
 import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { SegmentView } from "./SegmentView";
+import { LatestReplyId } from "./latest-message-time";
 import { CompactDivider } from "./Steps";
 import { t } from "../../i18n";
 import { ScrollFold } from "./fold-scroll";
@@ -53,6 +54,8 @@ export interface LineProps {
   trace?: boolean;
   /** A finished exchange before the last two may skip drawing off screen (SegmentView `offscreen`). */
   offscreen?: (section: HTMLElement) => () => void;
+  /** The latest finished reply, when this line contains it. */
+  latestReplyId?: string;
   /** The chat's last exchange while the chat is still at work (SegmentView `busy`). */
   busy?: boolean;
   retryEmpty?: (user: UserMessage, signal: AbortSignal) => Promise<boolean>;
@@ -65,7 +68,9 @@ export const ChatLineView = memo(function ChatLineView(props: LineProps) {
   // a box-less wrapper: the line's own element stays the chat's flex item; search finds the line by it (ChatSearch)
   return (
     <div className="contents" data-line={props.line.id}>
-      <LineBody {...props} />
+      <LatestReplyId.Provider value={props.latestReplyId}>
+        <LineBody {...props} />
+      </LatestReplyId.Provider>
     </div>
   );
 });
@@ -141,18 +146,23 @@ function SupervisionLine({ line, ...props }: LineProps & { line: Extract<ChatLin
   );
 }
 
-/** A notice on a line of its own: a wake opening new work (a centered capsule), "Interrupted", a long local command's output. */
+/** A notice on a line of its own: a wake opening new work (a hairline divider), "Interrupted", a long local command's output. */
 function LineNotice({ item, assistant }: { item: Item; assistant?: boolean }) {
   const [open, setOpen] = useState(false);
   if (item.model_refusal) return <Suspense fallback={null}><RefusalNotice item={item} plain={assistant} /></Suspense>;
   if (item.wake) {
     const w = wakeSummary(item);
     return (
-      <div className="flex justify-center">
-        <span className="flex max-w-full min-w-0 items-center gap-1.5 rounded-full bg-inset px-3 py-1 text-[12px] text-ink-2 shadow-hairline" title={clock(item.ts)}>
-          <Icon name="bell" size={12} className={cx("shrink-0", w.failed ? "text-red" : "text-accent")} />
-          <span className="min-w-0 truncate">{w.text}</span>
-        </span>
+      <div
+        role="separator"
+        aria-label={w.text}
+        title={clock(item.ts)}
+        data-wake-notice
+        className={cx("flex min-w-0 items-center gap-2.5 py-0.5 text-[11.5px]", w.failed ? "text-red" : "text-ink-3")}
+      >
+        <span aria-hidden className="h-px min-w-4 flex-1 bg-line" />
+        <span className="min-w-0 truncate">{w.text}</span>
+        <span aria-hidden className="h-px min-w-4 flex-1 bg-line" />
       </div>
     );
   }

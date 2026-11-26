@@ -45,6 +45,13 @@ func (s *Service) healthIntakeUI(w http.ResponseWriter, r *http.Request) {
 	if !decodeIntakeJSON(w, r, &req) {
 		return
 	}
+	var route struct {
+		Page string `json:"page"`
+	}
+	if json.Unmarshal([]byte(req.State), &route) == nil && strings.HasPrefix(route.Page, "strength.") {
+		s.healthStrengthUI(w, r, req)
+		return
+	}
 	if strings.HasPrefix(req.Action, "undo:") {
 		req.Action, req.Values = "undo", map[string]string{"id": strings.TrimPrefix(req.Action, "undo:")}
 	}

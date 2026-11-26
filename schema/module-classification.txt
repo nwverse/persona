@@ -64,21 +64,37 @@ go server/cmd/persona-node core
 go server/cmd/persona-projects core
 go server/cmd/personad core
 go server/internal/acceptloop core
+go server/internal/agentref core
+go server/internal/agentref/agentrefadapt core
 go server/internal/agents core
 go server/internal/agentsend core
+go server/internal/agentviewwire core
 go server/internal/ai core
 go server/internal/aiwire core
 go server/internal/apierr core
 go server/internal/apns core
 go server/internal/approval core
 go server/internal/archguard core
+go server/internal/archguard/domainrules core
+go server/internal/archguard/wirecount core
 go server/internal/assistant core
+go server/internal/assistant/agentview core
 go server/internal/assistant/archiverecovery core
 go server/internal/assistant/chatsearch core
+go server/internal/assistant/externalbinding core
+go server/internal/assistant/externalbinding/externalbindingadapt core
+go server/internal/assistant/externalsourcestore core
+go server/internal/assistant/fleetcount core
+go server/internal/assistant/fleetcount/fleetcountadapt core
+go server/internal/assistant/fleetcount/fleetcounttest core
+go server/internal/assistant/fleetview core
 go server/internal/assistant/kernel core
+go server/internal/assistant/kernel/seam core
 go server/internal/assistant/repository core
 go server/internal/assistant/repositorystore core
 go server/internal/assistant/saved core
+go server/internal/assistant/supervisionrole core
+go server/internal/assistant/supervisionrole/supervisionroleadapt core
 go server/internal/assistant/todo/conflict core
 go server/internal/assistant/todo/mergetrain core
 go server/internal/assistant/todo/projection core
@@ -117,6 +133,15 @@ go server/internal/depguard core
 go server/internal/devices core
 go server/internal/devicewire core
 go server/internal/dialogwire core
+go server/internal/domainkit/clock core
+go server/internal/domainkit/clock/clocktest core
+go server/internal/domainkit/defect core
+go server/internal/domainkit/domaintest core
+go server/internal/domainkit/fail core
+go server/internal/domainkit/instant core
+go server/internal/domainkit/opt core
+go server/internal/domainkit/outcome core
+go server/internal/domainkit/slot core
 go server/internal/errreport core
 go server/internal/extension core
 go server/internal/extension/conformance core
@@ -152,16 +177,19 @@ go server/internal/kb core
 go server/internal/kbwire core
 go server/internal/knowledgeuihost core
 go server/internal/larkhost core
+go server/internal/larksyncwire core
 go server/internal/lazyre core
 go server/internal/lcuconfirm core
 go server/internal/link core
 go server/internal/linktray core
+go server/internal/linkwire core
 go server/internal/machineops core
 go server/internal/mailwire core
 go server/internal/manager core
 go server/internal/managercli core
 go server/internal/managerconf core
 go server/internal/managerupdate core
+go server/internal/lookmedia core
 go server/internal/mcpserver core
 go server/internal/mcptoolgolden core
 go server/internal/mcpwait core
@@ -177,6 +205,7 @@ go server/internal/netproxy core
 go server/internal/netshape core
 go server/internal/node core
 go server/internal/node/clipshare core
+go server/internal/node/diskmap core
 go server/internal/node/imessageport core
 go server/internal/node/iphoneport core
 go server/internal/node/machdiag core
@@ -190,6 +219,7 @@ go server/internal/nodeproto core
 go server/internal/nodesign core
 go server/internal/nodeupdate core
 go server/internal/operations/backup core
+go server/internal/operations/recovery core
 go server/internal/osproc core
 go server/internal/osproc/osproctest core
 go server/internal/outboxcli core
@@ -205,6 +235,7 @@ go server/internal/proto core
 go server/internal/proxyproto core
 go server/internal/pushcrypto core
 go server/internal/quota core
+go server/internal/recordingwire core
 go server/internal/recordinghost core
 go server/internal/relay core
 go server/internal/relayproto core
@@ -249,6 +280,7 @@ go server/internal/webasset core
 go server/internal/webasset/precompress core
 go server/internal/webpush core
 go server/internal/webpush/webpushtest core
+go server/internal/wireids core
 go server/internal/workspaceboard core
 go server/internal/workspacenaming core
 go server/plugins core
@@ -256,7 +288,7 @@ go server/scripts/fleetsoak core
 go server/scripts/pushrec core
 
 # Module code still in core paths.
-go server/internal/transcribelive voice
+go server/scripts/transcribelive voice
 go server/internal/lark lark
 go server/internal/screen core
 go server/internal/protectedapps computer-use
@@ -275,6 +307,8 @@ apple apple/Modules/ScreenShare screen-share
 apple apple/Modules/Voice voice
 apple apple/PersonaCallIntents voice
 apple apple/PersonaLink screen-share
+# The independent pairing/menu-bar UI belongs to the core, not the optional screen-sharing feature.
+apple apple/PersonaLink/App core
 apple apple/PersonaNotify core
 apple apple/PersonaShare core
 apple apple/PersonaTests core
@@ -352,6 +386,7 @@ web web/src/admin/pages core
 web web/src/components core
 web web/src/core core
 web web/src/features core
+web web/src/features/external-sources core
 web web/src/features/todos core
 web web/src/i18n core
 web web/src/i18n/locales core
@@ -363,6 +398,7 @@ web web/src/sharing core
 web web/src/showcase core
 web web/src/showcase/images core
 web web/src/showcase/v6 core
+web web/src/test core
 web web/src/ui core
 web web/src/ui/brands core
 web web/src/ui/model-panel core

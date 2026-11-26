@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -70,6 +71,9 @@ func (s Segment) Project(it proto.Item, machine, session, history string) (proto
 		copy.MachineID, copy.SessionID, copy.History, copy.ItemID = machine, session, history, it.ID
 		it.Stored = &copy
 	}
+	if len(it.ToolViews) > 0 {
+		it.ToolViews = append([]wire.View(nil), it.ToolViews...)
+	}
 	if it.Fold != nil {
 		copy := *it.Fold
 		copy.ThroughSeq, err = s.Seq(copy.ThroughSeq)
@@ -84,6 +88,17 @@ func (s Segment) Project(it proto.Item, machine, session, history string) (proto
 			}
 			if copy.Images[i].ToolUseID != "" {
 				copy.Images[i].ToolUseID = s.ItemID(copy.Images[i].ToolUseID)
+			}
+		}
+		if len(copy.ToolViews) > 0 {
+			copy.ToolViews = append([]proto.FoldToolView(nil), copy.ToolViews...)
+			for i := range copy.ToolViews {
+				if copy.ToolViews[i].ItemID != "" {
+					copy.ToolViews[i].ItemID = s.ItemID(copy.ToolViews[i].ItemID)
+				}
+				if copy.ToolViews[i].ToolUseID != "" {
+					copy.ToolViews[i].ToolUseID = s.ItemID(copy.ToolViews[i].ToolUseID)
+				}
 			}
 		}
 		copy.Tasks = append([]proto.FoldTaskSnapshot(nil), copy.Tasks...)

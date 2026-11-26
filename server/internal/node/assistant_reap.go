@@ -243,8 +243,8 @@ func (p *assistantProc) idleCompactable() bool {
 	return p.agent == "claude" && !p.round && !p.compacting && !p.compacted && p.context >= threshold
 }
 
-// compactIdle sends /compact to an idle process. It is not a turn: the conversation stays as it was in the app (the
-// transcript shows a notice), and the process is let go when idle again.
+// compactIdle sends /compact to an idle process before releasing it. Main chat
+// compactions report their result using the session's existing status.
 func (n *Node) compactIdle(p *assistantProc) {
 	if n.reload.Preparing() {
 		return
@@ -277,11 +277,28 @@ func (n *Node) compactIdle(p *assistantProc) {
 		return
 	}
 	tokens := p.context
+	startedAt := time.Now().UTC()
 	p.compacting, p.compacted = true, true
-	p.lastActive = time.Now()
+	p.releaseCompaction = state.IsMain
+	p.lastActive = startedAt
 	p.mu.Unlock()
+	if state.IsMain {
+		n.state.update(p.id, func(st *sessionState) bool {
+			st.Compaction = &proto.Compaction{State: proto.CompactionRunning, StartedAt: startedAt}
+			if st.IdleCompaction != nil && !st.IdleCompaction.Attempted {
+				a := *st.IdleCompaction
+				a.recordAttempt(startedAt)
+				st.IdleCompaction = &a
+			}
+			return true
+		})
+		n.notifySessions()
+	}
 	if err := p.write(line); err != nil {
 		n.logger.Printf("assistant %s: compact: %v", p.id[:8], err)
+		if state.IsMain {
+			n.compactionEnded(p.id, "没能开始压缩："+err.Error())
+		}
 		n.stopAssistant(p.id)
 		return
 	}
@@ -349,6 +366,10 @@ func (n *Node) sweepAssistants() {
 			timedOut = append(timedOut, id)
 		}
 		if p.reapable(time.Now()) {
+			if p.releaseCompaction {
+				p.releaseCompaction = false
+				timedOut = append(timedOut, id)
+			}
 			if !reloading && p.idleCompactable() {
 				compact = append(compact, p)
 			} else {

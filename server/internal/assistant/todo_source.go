@@ -493,7 +493,7 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 	if th == nil || th.Channel != channel.Feishu || !slices.Contains(st.Chats, th.ChatID) {
 		return false
 	}
-	anchor := s.topicMessage(ctx, th.ChatID, th.ThreadID)
+	anchor := s.larkModule().TopicAnchor(ctx, th.ChatID, th.ThreadID)
 	if anchor == "" {
 		s.logf("todo %s: no message of its topic is known to reply under", t.ID)
 		return false

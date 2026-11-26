@@ -119,14 +119,14 @@ type Machine struct {
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
 	// failed. deployRun ties each waiter to one run's outcome, including one the card does not retain.
-	deploying       bool
-	deployErr       string
-	deployPhase     string
-	deploySource    string
-	deployVersion   string
-	deployRun       *deployRun
-	deployPreflight *nodeDeployPreflight
-	updateHandoff   bool // grace expired while waiting for idle: no new headless turns until the update settles
+	deploying     bool
+	deployErr     string
+	deployPhase   string
+	deploySource  string
+	deployVersion string
+	deployRun     *deployRun
+	deployWatch   *nodeDeployWatch
+	updateHandoff bool // grace expired while waiting for idle: no new headless turns until the update settles
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
 	directFailed, switchedBack time.Time
@@ -727,9 +727,22 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		// The same for an API purpose that runs on a launcher there.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_run")}
 	}
-	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
-		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
-		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+	if method == proto.MethodSecretRun {
+		if !nodeHas(info, nodeproto.SecretRun) {
+			// An older node would answer "unknown method"; this says what to do about it before the user types anything.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+		}
+		if !nodeHas(info, nodeproto.SecretRunEnv) {
+			raw, _ := json.Marshal(params)
+			var fields struct {
+				Delivery string `json:"delivery"`
+			}
+			_ = json.Unmarshal(raw, &fields)
+			if fields.Delivery == proto.SecretRunDeliveryEnv {
+				// An older node would ignore delivery and run without the secret the card promised (#11945).
+				return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+			}
+		}
 	}
 	if ctx.Err() != nil {
 		return rpc.NotSent(ctx.Err()) // waited for the connection or the resident handover: nothing went out
@@ -971,6 +984,12 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	}
 	m.noteClosed(event, params)
 	switch event {
+	case nodeproto.EventUpdateDraining:
+		m.nodeUpdateDraining(params)
+		return
+	case nodeproto.EventRestarting:
+		m.nodeUpdateHandover(params)
+		return
 	case nodeproto.EventUpdatePreflightFailed:
 		m.nodeUpdatePreflightFailed(params)
 		return
@@ -1124,6 +1143,8 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 			}
 		}
 		return map[string]any{"sessions": out}, nil
+	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
+		return map[string]any{"dirs": true}, nil
 	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
 		return m.d.usageBackfillStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill":

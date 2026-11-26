@@ -9,6 +9,7 @@ import { ConfirmedFacts } from "./ConfirmedFacts";
 import { ModuleKBDetail, useKBKindShown } from "../../core/ModuleKBDetail";
 import type { ModuleKBDetailParts } from "../../core/module-host";
 import { Relationships } from "./Relationships";
+import { RecordingReadOnlyDetail } from "./RecordingReadOnlyDetail";
 import { TopicPoints } from "./TopicPoints";
 import { ProjectLessons, projectLessonsDeps } from "./ProjectLessons";
 import { ago, sessionPreview, sessionTitle, shortPath, stateOf, tabLabel } from "../../lib/format";
@@ -64,14 +65,19 @@ const LINKS_SHOWN = 4;
 /** Search matches shown before "Show all". */
 const MATCHES_SHOWN = 5;
 
+/** The side beside the list with no entry open: an empty bar of the list's height (#16462), so the line under the list's
+ *  bar runs across the page as on Inbox and To-dos, and what to do here under it. Only shown beside the list. */
 export function EmptyDetail() {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-8 pb-[8vh] text-center" style={{ animation: `fade-in 300ms ease-out both` }}>
-      <span className="mb-3 flex size-11 items-center justify-center rounded-[12px] bg-field text-ink-3">
-        <Icon name="book" size={20} />
-      </span>
-      <p className="text-[14px] font-medium text-ink">{t("knowledge-kbdetail.empty_title")}</p>
-      <p className="mt-1 max-w-[320px] text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.empty_body")}</p>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div data-testid="kb-empty-detail-bar" aria-hidden className="h-14 shrink-0 border-b border-line" />
+      <div className="flex flex-1 flex-col items-center justify-center px-8 pb-[8vh] text-center" style={{ animation: `fade-in 300ms ease-out both` }}>
+        <span className="mb-3 flex size-11 items-center justify-center rounded-[12px] bg-field text-ink-3">
+          <Icon name="book" size={20} />
+        </span>
+        <p className="text-[14px] font-medium text-ink">{t("knowledge-kbdetail.empty_title")}</p>
+        <p className="mt-1 max-w-[320px] text-[12.5px] leading-relaxed text-ink-3">{t("knowledge-kbdetail.empty_body")}</p>
+      </div>
     </div>
   );
 }
@@ -126,14 +132,16 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   const [day, setDay] = useState<{ day: string; focus?: number; query?: string } | null>(null);
   const [moment, setMoment] = useState<KBMomentRef | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
-  // An entry of a kind only a module draws (a recording) is not there while that module is off.
-  const shown = useKBKindShown(kind);
+  // Existing recordings stay readable through the default panel when their module is off. Other kinds that only a
+  // module draws are not there while that module is off.
+  const shown = kind === "recordings" || useKBKindShown(kind);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     const version = ++request.current;
     const valid = () => current() && version === request.current && !signal?.aborted;
     try {
-      const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, { signal, ...auth });
+      // Each read owns its response and cancellation: a photos change may invalidate an older read before it answers.
+      const r = await api<KBDetailResponse>(`/kb/${enc(kind)}/${enc(id)}${query ? `?q=${enc(query)}` : ""}`, { signal, ...auth, dedupe: false });
       if (!valid()) return false;
       // The server canonicalizes source IDs (including recording UUID case); the request owns this response.
       if (r.detail.kind !== kind) throw new Error(t("knowledge-confirmedfacts.entry_changed"));
@@ -514,7 +522,7 @@ function OwnedEntryDetail({ kind, id, query, reloadKey, onToggleSidebar, onBack,
   };
 
   return (
-    <ModuleKBDetail kind={kind} id={id} query={query} detail={d} entry={e} auth={auth} current={current} manager={manager} reload={load} onSaved={onSaved} onOpen={onOpen} scroller={scroller}>
+    <ModuleKBDetail kind={kind} id={id} query={query} detail={d} entry={e} auth={auth} current={current} manager={manager} reload={load} onSaved={onSaved} onOpen={onOpen} scroller={scroller} readOnly={kind === "recordings" ? RecordingReadOnlyDetail : undefined}>
       {page}
     </ModuleKBDetail>
   );

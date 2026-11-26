@@ -390,7 +390,7 @@ func sessionLaunchers(discovered, configured []ConfiguredLauncher) []ConfiguredL
 			switch {
 			case list[i].Agent != "":
 				list[i].AgentType = list[i].Agent
-			case list[i].Name == "codex" || list[i].Name == "traex":
+			case list[i].Name == "codex" || list[i].Name == "traex" || list[i].Name == "agy":
 				list[i].AgentType = list[i].Name
 			default:
 				list[i].AgentType = "claude"
@@ -510,6 +510,9 @@ func (s *Service) machineLauncherRoutes() {
 		// the configuration runs with no pick stays, with its record, so the form can still say why this start may fail.
 		// New Agent lists the ones left out as unavailable, with why (#14535).
 		def := s.pickerDefault(ctx, r, all)
+		if (purpose == "" || purpose == "agent.new") && host == "" {
+			def = s.desktopDefaultHere(ctx, d, def, list) // no Claude desktop app here: what the start runs instead
+		}
 		keep, _ := def["provider"].(string)
 		shown, left := s.withHealth(ctx, mid, list, keep)
 		// A Persona-managed provider shows its display name over its ID (launcher_auto_name), and a runtime's provider the
@@ -637,6 +640,11 @@ func (s *Service) providerModels(w http.ResponseWriter, r *http.Request) {
 		}
 		everywhere = everywhere || len(v.Machines) == 0
 		has = append(has, v.Machines...)
+	}
+	if !found && name == claudeDesktopLauncher {
+		// Claude's desktop app is Agents' provider, not a listed one (models_desktop.go): the computers that have it.
+		p, ok := s.claudeDesktopProvider(ctx, s.zshrcLaunchers(ctx, false), nil)
+		found, has = ok, p.Machines
 	}
 	if !found {
 		apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-models_launchers.err_no_provider"))

@@ -64,6 +64,7 @@ type fakeHub struct {
 	rcFiles             map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers       map[string]bool                    // a machine whose launchers.list answers only when the call gives up
 	launcherGate        chan struct{}                      // when set, every launchers.list answer waits for this gate
+	onLauncherModels    func(context.Context, string)      // before the requested launcher returns its models, under mu
 	failLauncherRefresh bool                               // launchers.list with refresh:true fails, ordinary reads still answer
 	launcherListParams  []map[string]any                   // launchers.list params in order
 	agentModels         map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
@@ -179,6 +180,9 @@ type fakeHub struct {
 	delegateAsked []modelCall
 	tabReply      string
 	tabAsked      []string
+	// tabModelEntered / tabModelGate hold one naming-model answer open until the test releases it.
+	tabModelEntered chan struct{}
+	tabModelGate    <-chan struct{}
 	// The todo titles' model (todo.title): its answer, an error instead, and what it was asked.
 	todoTitleReply string
 	todoTitleErr   error
@@ -264,8 +268,13 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 	f.mu.Lock()
 	h, in := f.hello, f.inbox
 	f.mu.Unlock()
-	if in != nil { // the inbox's tests give the models there (inbox_fake_test.go)
-		h.Models = in.hubModels()
+	if in != nil {
+		in.mu.Lock()
+		hasModels := in.model != nil || len(in.models) > 0
+		in.mu.Unlock()
+		if hasModels { // Only an explicitly configured fake Inbox replaces the ordinary hello's models.
+			h.Models = in.hubModels()
+		}
 	}
 	return h, nil
 }
@@ -287,6 +296,9 @@ func (f *fakeHub) setLocale(locale string) {
 // Background refreshes can reach the same node independently of the action under test.
 type deviceCallsForTest struct{}
 
+// sessionListOfflineForTest lets a test drop a node read on one request while unrelated background reads proceed.
+type sessionListOfflineForTest struct{}
+
 // afterListCall marks the context of the call a test arms afterList for (listHooked).
 type afterListCall struct{}
 
@@ -304,6 +316,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.mu.Unlock()
 		if check && ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if offline, ok := ctx.Value(sessionListOfflineForTest{}).(func(string) bool); ok && offline(p.Device) {
+			return nil, fmt.Errorf("%s: %w", p.Device, apierr.ErrOffline)
 		}
 	}
 	if p.Method == DeviceSessionGet {
@@ -378,6 +393,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 	}
 	f.mu.Unlock()
+	if hooks.beforeCall != nil {
+		hooks.beforeCall(p)
+	}
 	if hooks.before != nil {
 		hooks.before(read)
 	}
@@ -387,6 +405,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	result, err := f.deviceCall(ctx, p)
 	if hooks.after != nil {
 		hooks.after(read)
+	}
+	if hooks.afterCall != nil {
+		hooks.afterCall(p)
 	}
 	return result, err
 }
@@ -623,6 +644,12 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		return json.Marshal(map[string]any{"launchers": f.launcherList})
 	case assistantwire.DeviceLaunchersModels:
 		name, _ := a["name"].(string)
+		if f.onLauncherModels != nil {
+			f.onLauncherModels(ctx, name)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		models := f.agentModels[name]
 		if models == nil {
 			models = []proto.AgentModel{}
@@ -758,6 +785,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.retired = append(f.retired, a["session_id"].(string))
 		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
+	case deviceSessionRetireGuarded:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
+		return json.RawMessage(`{"closed":true,"guard_verified":true}`), nil
 	case deviceSessionStop:
 		if f.retireErr != nil {
 			return nil, f.retireErr
@@ -813,7 +847,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
 		}
-		if !f.omitSentItems && a[holdPushesParam] == true {
+		source, _ := a["message_source"].(map[string]any)
+		if !f.omitSentItems && source["kind"] == proto.SourceSupervision {
 			if text, _ := a["text"].(string); text != "" {
 				target, _ := out["session_id"].(string)
 				if target == "" {
@@ -886,6 +921,10 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	case AppPlugins + " " + PluginsAssistant:
 		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
 			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		}
+	case assistantwire.AppPhone + " " + assistantwire.PhoneTools:
+		if f.apps[p.AppID+" "+p.Method] == nil {
+			return json.Marshal(map[string]any{"tools": []proto.Tool{}})
 		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
@@ -1720,10 +1759,13 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		}
 		f.mu.Lock()
 		reply, fail, down, delay, stop := "", false, false, time.Duration(0), "end_turn"
+		var tabModelGate <-chan struct{}
+		var tabModelEntered chan struct{}
 		switch {
 		case in.System == tabName:
 			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
 			reply = f.tabReply
+			tabModelGate, tabModelEntered = f.tabModelGate, f.tabModelEntered
 		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
 			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
 			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
@@ -1774,6 +1816,16 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 			down = f.modelDown
 		}
 		f.mu.Unlock()
+		if tabModelEntered != nil {
+			close(tabModelEntered)
+		}
+		if tabModelGate != nil {
+			select {
+			case <-tabModelGate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if fail {
 			http.Error(w, `{"error":{"message":"no model"}}`, http.StatusBadRequest)
 			return
@@ -1793,7 +1845,8 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	}))
 	t.Cleanup(srv.Close)
 	key := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(key, []byte("k"), 0o600); err != nil {
+	// ai shares a quota hold by address and credential. A recycled test port belongs to a new fixture.
+	if err := os.WriteFile(key, []byte(randomHex(16)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.hello.Models.AI = ai.Config{BaseURL: srv.URL, APIKeyFile: key, Model: "fake"}

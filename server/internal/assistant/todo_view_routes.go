@@ -31,6 +31,7 @@ type todosList struct {
 	Todos          []listedTodo               `json:"todos"`
 	Counts         assistantwire.TodoCounts   `json:"counts"`
 	SharedBlockers []projection.SharedBlocker `json:"shared_blockers,omitempty"`
+	Board          *todoBoardProjection       `json:"board,omitempty"`
 }
 
 // listedTodos are the to-dos as GET /api/v1/todos lists them, newest created first: each formatted, with its decision
@@ -118,6 +119,7 @@ func (s *Service) viewed(ctx context.Context, list []listedTodo, now time.Time) 
 	p := s.todoProjectionOf(ctx, list, now)
 	for i := range list {
 		list[i].View = &p.views[i]
+		list[i].Wait = p.waits[i]
 	}
 	return p
 }
@@ -135,14 +137,16 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 	if s.todoViewsSeen(gen, p, nil) {
 		s.todoViewDiffers()
 	}
+	s.todosCounted(gen, p) // the counts view's to-dos (counts_view.go)
 	return list, p, nil
 }
 
 // todoItem is GET /api/v1/todos/{id}'s answer: the to-do's row, and beside it the paper's rounds, results and recap
-// (todo_timeline.go, #10465).
+// (todo_timeline.go, #10465), plus the latest auditable context handoff when present (#12980).
 type todoItem struct {
 	Todo json.RawMessage `json:"todo"`
 	assistantwire.TodoItemDetail
+	Handoff *TodoContextHandoff `json:"handoff,omitempty"`
 }
 
 // viewedTodo is to-do id as GET /api/v1/todos/{id} answers it: its row as the list has it, with its view and its
@@ -200,7 +204,11 @@ func (s *Service) todoViewRoutes() {
 			}
 			// Its runs' sessions as its view read them: the timeline asks no computer again.
 			ext := r.Header.Get(RoleHeader) == roleExtension
-			apierr.WriteJSON(w, todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, sessions, ext)})
+			item := todoItem{Todo: raw, TodoItemDetail: s.todoItemDetail(r.Context(), t.Todo, raw, sessions, ext)}
+			if !ext {
+				item.Handoff = s.latestTodoContextHandoff(r.Context(), t.ID)
+			}
+			apierr.WriteJSON(w, item)
 		}
 	})
 	// GET /api/v1/todos/places: the To-dos sidebar's places with the list's counts (assistantwire.TodoPlaces).

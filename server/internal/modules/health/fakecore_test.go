@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"sync"
 	"testing"
@@ -88,6 +89,7 @@ type fakeCore struct {
 	o        Options
 	mu       sync.Mutex
 	settings Settings
+	pageBase string
 }
 
 func newService(o Options) *Service { return New(&fakeCore{o: o}) }
@@ -265,4 +267,25 @@ func (m *memStore) PutSetting(_ context.Context, key string, v any) error {
 	m.vals[key] = b
 	m.puts++
 	return nil
+}
+
+func (c *fakeCore) StrengthStore() strengthStore {
+	st, _ := c.store().(strengthStore)
+	return st
+}
+func (c *fakeCore) CardShown(ctx context.Context, card assistantwire.StrengthCard) {
+	c.Event(ctx, map[string]any{"type": "assistant_feed"})
+}
+func (c *fakeCore) CardChanged(ctx context.Context, card assistantwire.StrengthCard) {
+	c.Event(ctx, map[string]any{"type": "assistant_view"})
+}
+func (c *fakeCore) PageLink(_ context.Context, ui, state string) string {
+	if c.pageBase == "" {
+		return ""
+	}
+	return c.pageBase + "/extension/-health-intake/" + ui + "?state=" + url.QueryEscape(state)
+}
+
+func (s *Service) intakeTool(ctx context.Context, args json.RawMessage) (string, error) {
+	return s.Tool(ctx, assistantwire.HealthToolCall{Name: assistantwire.CapabilityHealthIntake, Args: args})
 }

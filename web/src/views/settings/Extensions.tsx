@@ -2,7 +2,8 @@
 // This controller owns manager routing, configuration drafts, authentication and mutation results;
 // extensions supply only their configuration fields and custom content (docs/extensions/extension-settings.md).
 import { OwnerMark } from "./OwnerMark";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { currentListViewKey, listViewCache, useListViewKey } from "../../lib/list-view-cache";
 import { enc, errorText, subscribeCredentialOwner } from "../../lib/api";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 import { defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
@@ -30,6 +31,7 @@ import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { ExtensionDownloads, packageDownloads } from "../../ui/ExtensionDownloads";
 import { Icon } from "../../ui/icons";
 import { ChannelLink } from "./Channels";
+import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { MarketCatalog, MarketItem, Markets, PackMemberRow, UninstallDialog, useInstalledNames } from "./ExtensionMarket";
 import { ExtensionSettingsPage } from "./ExtensionSettingsPage";
 import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
@@ -50,7 +52,7 @@ import { isOpenBeside } from "./open-beside";
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside }: {
+export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide }: {
   open: string | null;
   onOpen: (id: string | null) => void;
   /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
@@ -61,6 +63,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
   /** `manager`: another manager's channel / connector (its extension's page links to its own); none: the default's. */
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
+  onPageWide?: (wide: boolean) => void;
 }) {
   const r = extensionsRoute(open);
   const go = (to: Parameters<typeof routeSub>[0]) => onOpen(routeSub(to));
@@ -89,7 +92,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
     case "page":
       return (
         <OwnedExtension id={r.id} manager={r.manager}>
-          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} />}
+          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} onWide={onPageWide} />}
         </OwnedExtension>
       );
     case "catalog":
@@ -125,13 +128,14 @@ function OwnedExtension({ id: _id, manager, children }: { id: string; manager?: 
 
 /** A page an extension draws (placement plugin_page), under the extension's name. `onBack`: none where the page's top
  *  bar has the way back (a phone). */
-function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; manager?: string; onBack?: () => void }) {
+function ExtensionPage({ id, ui, manager, onBack, onWide }: { id: string; ui: string; manager?: string; onBack?: () => void; onWide?: (wide: boolean) => void }) {
   usePinnedExtension(id, manager);
   const [d, setD] = useState<HubExtensionDetail | null>(null);
   const [n, setN] = useState(0);
   useEffect(() => {
     extensionDetail(id).then(setD, () => {});
   }, [id]);
+  useEffect(() => () => onWide?.(false), [onWide]);
   const title = d?.ui?.find((u) => u.id === ui)?.title;
   return (
     <>
@@ -146,7 +150,7 @@ function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; ma
       </div>
       {/* its extension id scopes what a graph's `key` keeps (lib/extension-owner.tsx) */}
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} />
+        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
       </ExtensionOwnerScope>
     </>
   );
@@ -169,26 +173,47 @@ function StateDot({ extension }: { extension?: HubExtension | null }) {
 
 // ── the list ────────────────────────────────────────────
 
+type ExtensionListProps = { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null };
+type ExtensionListView = { extensions: HubExtension[]; markets: boolean };
+const extensionViews = listViewCache<ExtensionListView>();
+
+function ExtensionList(props: ExtensionListProps) {
+  const viewKey = useListViewKey();
+  return <ScopedExtensionList key={viewKey} viewKey={viewKey} {...props} />;
+}
+
 /** `openBeside`: the extension open beside the list (Settings' two columns): its row is marked current, and every row
  *  puts its state under its name (with a warning, when it has one, in place of the description), so the narrow column
  *  shows the name whole. */
-function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null }) {
+function ScopedExtensionList({ viewKey, onOpen, onMarket, onMarkets, openBeside }: ExtensionListProps & { viewKey: string }) {
   const picked = useChosenManager();
-  const [extensions, setExtensions] = useState<HubExtension[] | null>(null);
-  const [markets, setMarkets] = useState(false);
+  const [view, setView] = useState(() => extensionViews.read(viewKey));
+  const extensions = view?.extensions;
+  const markets = view?.markets;
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   // Reads are numbered: an answer older than the last one asked for is dropped.
   const reads = useRef(0);
-  const load = () => {
+  const active = useRef(false);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+  const load = useCallback(() => {
     const mine = ++reads.current;
+    const current = () => active.current && mine === reads.current && viewKey === currentListViewKey();
+    if (!current()) return;
     setLoading(true);
-    listExtensionsInfo()
-      .then((r) => mine === reads.current && (setExtensions(r.extensions), setMarkets(r.markets), setError(""), dropGone(r.extensions)))
-      .catch((e) => mine === reads.current && setError(errorText(e)))
-      .finally(() => mine === reads.current && setLoading(false));
-  };
-  useEffect(load, []);
+    listExtensionsInfo(current).then((r) => {
+      if (!current()) return;
+      setView(r);
+      setError("");
+      dropGone(r.extensions);
+    }, (e) => {
+      if (current()) setError(errorText(e));
+    }).finally(() => { if (current()) setLoading(false); });
+  }, [viewKey]);
+  useEffect(load, [load]);
   // An install, upgrade or uninstall that finished (here, on another device, or the hub's auto-upgrade) changes the
   // list: lib/extension-operations.ts sends EXTENSIONS_CHANGED when one succeeds. watchOperations starts its push
   // listener, which otherwise only a market page starts. Several at once read the list once.
@@ -208,15 +233,20 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
       window.removeEventListener(EXTENSIONS_CHANGED, again);
       stop();
     };
-  }, []);
+  }, [load]);
   // a sign-in that changed (signed in, out, expired) shows at once
   // only the row of the manager whose extension signed in (or out): another manager's of the same id stays as it is
-  useEffect(() => onAuthChange((id, auth, from) => setExtensions((cur) => cur?.map((x) => ((x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x)) ?? cur)), []);
+  useEffect(() => onAuthChange((id, auth, from) => setView((cur) => cur && ({
+    ...cur, extensions: cur.extensions.map((x) => (x.manager || defaultManager()) === from ? withAuth(x, id, auth) : x),
+  }))), []);
   // a reconnect the hub could not resume: the extension_auth pushes missed meanwhile are not replayed (#4954)
-  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && load()), []);
+  useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && load()), [load]);
   // the current assistant's extensions only (docs/assistant/managers.md "The current assistant"); one assistant: all
   const scope = useScope();
   const own = useMemo(() => (extensions ? scoped(extensions, scope) : null), [extensions, scope]);
+  useEffect(() => {
+    if (own && markets !== undefined) extensionViews.keep(viewKey, { extensions: own, markets });
+  }, [viewKey, own, markets]);
   const drafts = useUnsaved();
   // an offline current assistant: the hub has none of its extensions to merge in, which must not read as "none installed"
   const offline = useShownOffline();
@@ -797,6 +827,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           )}
 
           {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} />}
+          <ConnectorExternalSourceSettings ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]} manager={manager} />
           {/* source subscriptions (#2041) of its connectors, the default manager's */}
           {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} />}
 

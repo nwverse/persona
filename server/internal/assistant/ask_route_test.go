@@ -599,9 +599,21 @@ func TestUserApproval(t *testing.T) {
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"gh pr merge 12 --squash"}`)}, false},
 		{proto.Interaction{Kind: proto.IxPlan, Plan: "Merge the PR, then deploy to production."}, false},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"gh issue comment 3 --body hi"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"send the release announcement"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"delete the old user records"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"为订阅付费"}`)}, true}, // i18n-ignore: synthetic payment command
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "mcp__mail__send", Summary: "Send mail to Bob"}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Write", ToolInput: []byte(`{"file_path":"/work/notes.md","content":"删除旧数据，再发表评论"}`)}, false}, // i18n-ignore: synthetic file payload
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Edit", EditableText: "Delete this comment", ToolInput: []byte(`{"file_path":"/work/notes.md","new_string":"Delete this comment"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/draft.md", ToolInput: []byte(`{"TargetFile":"/work/draft.md","CodeContent":"删除该字段"}`)}, false}, // i18n-ignore: synthetic Antigravity file payload
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/review.md", ToolInput: []byte(`{"Path":"/work/review.md","Content":"Replay the comment"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/edit.md", ToolInput: []byte(`{"TargetFile":"/work/edit.md","TargetContent":"old","ReplacementContent":"Delete this comment"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/run.json", ToolInput: []byte(`{"command":"send mail"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", ToolInput: []byte(`{"skill":"agent-browser","args":"只读检查、不发送邮件、不改设置"}`)}, false}, // i18n-ignore: synthetic skill arguments
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", ToolInput: []byte(`{"skill":"agent-browser","args":"Do not send mail or delete files"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", Fields: []proto.Field{{Key: "otp", Label: "OTP"}}}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", Secret: true}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", OwnerProposal: true}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "mcp__mail__reply", ToolInput: []byte(`{"body":"A plain project update."}`)}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "mcp__github__issue_comment", ToolInput: []byte(`{"body":"A plain project update."}`)}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "todo_remove", ToolInput: []byte(`{"id":"item"}`)}, true},
@@ -847,22 +859,33 @@ func TestRestoredQuestionStaysWithItsSupervisor(t *testing.T) {
 	}
 }
 
-// Without leaders nothing changes: the card is the user's at once.
+// Without leaders, a non-six-class agent question still goes to the main conversation instead of pushing
+// to the owner, while ask_escalate stays disabled without leaders.
 func TestAskWithoutLeadersIsTheUsers(t *testing.T) {
 	e := newRouteEnv(t, nil, false)
 	e.raise(askQuestion("ix1", "worker-1"))
-	waitFor(t, "the push", func() bool { return e.pushesOf("ix1") == 1 })
-	if e.lastShown("ix1").Delegating {
-		t.Fatal("shown as delegating")
+	waitFor(t, "the non-owner question routed to main", func() bool {
+		for _, m := range laterFor(e.s, "conv1") {
+			if m.From == cardAgentQuestion && strings.Contains(m.Text, "interaction_id=ix1") {
+				return true
+			}
+		}
+		return false
+	})
+	if !e.lastShown("ix1").Delegating {
+		t.Fatal("not shown as delegating")
 	}
 	if _, err := runJSON(t, e.s, "conv1", "ask_escalate", map[string]any{"todo_id": e.todo.ID, "reason": "x"}); err == nil {
 		t.Fatal("ask_escalate works without leaders")
 	}
 	e.settle()
+	if n := e.pushesOf("ix1"); n != 0 {
+		t.Fatalf("non-owner question pushed to the user %d times", n)
+	}
 	for _, to := range []string{"conv1", "lead1"} {
 		for _, n := range e.f.noticesTo(to) {
 			if strings.Contains(n, "interaction_id=ix1") {
-				t.Fatalf("%s was handed the card:\n%s", to, n)
+				t.Fatalf("%s was handed a leader ask_route signal:\n%s", to, n)
 			}
 		}
 	}

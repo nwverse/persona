@@ -89,7 +89,8 @@ type agyTranscriptUsage struct {
 	compacted     bool
 	hasUsage      bool
 	contextStats  transcript.ContextStats
-	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	first         string    // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	modTime       time.Time // transcript file mtime in UTC, used as fallback UpdatedAt for herdr agy panes
 }
 
 type agyHistory struct {
@@ -401,6 +402,9 @@ func agyUserText(text string) string {
 }
 
 func agyToolOutput(text string) string {
+	if stripped := transcript.StripToolResultTimestampHeaders(text); stripped != text {
+		return stripped
+	}
 	if strings.HasPrefix(text, "Created At:") {
 		if _, output, ok := strings.Cut(text, "\nOutput:\n"); ok {
 			return output
@@ -886,15 +890,21 @@ func agyNormalizeArgValue(v any, truncated, encoded bool) (any, bool) {
 			head, tail, omitted = agyArgPreview(v)
 		}
 		if encoded {
-			decoded, ok := agyDecodeArgString(head, omitted > 0)
-			if !ok {
-				return nil, false
+			if decoded, ok := agyDecodeArgString(head, omitted > 0); ok {
+				if omitted > 0 {
+					// The missing text and any retained suffix are counted in encoded bytes.
+					return decoded + transcript.ApproximateClipNote(len(decoded)+omitted+len(tail)), true
+				}
+				return decoded, true
 			}
-			if omitted > 0 {
-				// The missing text and any retained suffix are counted in encoded bytes.
-				return decoded + transcript.ApproximateClipNote(len(decoded)+omitted+len(tail)), true
+			// Compact exports also JSON-encode non-string values (e.g. "1", "true", "null", "[...]").
+			if omitted == 0 {
+				var value any
+				if err := json.Unmarshal([]byte(head), &value); err == nil {
+					return value, true
+				}
 			}
-			return decoded, true
+			return nil, false
 		}
 		if omitted > 0 {
 			return head + transcript.ClipNote(len(head)+omitted+len(tail)), true
