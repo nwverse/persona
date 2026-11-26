@@ -194,7 +194,9 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				return "", fmt.Errorf("task %d: %v", i+1, err)
 			}
 		}
+		t.InboxOptOut = false
 		t.InboxHandoff = ""
+		t.InboxMatch, t.InboxMatchText, t.InboxNotice, t.InboxCandidates = "", "", "", nil
 		if err := s.planInboxSource(ctx, machine, sessionID, t); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
 		}
@@ -386,6 +388,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
 		return "", err
 	}
+	for i := range a.Tasks {
+		if err := s.matchPlannedInbox(ctx, machine, sessionID, &a.Tasks[i]); err != nil {
+			return "", fmt.Errorf("task %d: %w", i+1, err)
+		}
+	}
 	// A round the hub started for a scheduled task (schedule_grant.go, #8045): its plan names the schedule, so the card
 	// can offer to let it start these by itself, and that schedule's grant may start them now. Never for a plan whose
 	// words are confirmed before they leave (policy below), which always waits for Start.
@@ -504,6 +511,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		b.WriteString("This is not confirmation that any agent started: you are told when one fails to start. A worker that has " +
 			"report_to_supervisor reports to you in a message, and they cannot hand work on.")
 		b.WriteString(dups)
+		b.WriteString(s.inboxPlanNotes(ctx, started.Tasks))
 		b.WriteString(conflictHints)
 		b.WriteString(taskPlanEstimateNotes(started.Tasks))
 		return b.String(), nil
@@ -542,6 +550,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		}
 		b.WriteString("After the user taps Start, check the task cards or context snapshot for the outcome.")
 		b.WriteString(dups)
+		b.WriteString(s.inboxPlanNotes(ctx, p.Tasks))
 		b.WriteString(conflictHints)
 		b.WriteString(taskPlanEstimateNotes(p.Tasks))
 		if _, talking := s.ownersPresent(time.Now())[sessionID]; talking {
@@ -616,6 +625,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		fmt.Fprintf(&b, " Leader conversation %s supervises them: their supervision messages go there, and it reviews them with task_review.", supervisor)
 	}
 	b.WriteString(dups)
+	b.WriteString(s.inboxPlanNotes(ctx, started.Tasks))
 	b.WriteString(conflictHints)
 	b.WriteString(taskPlanEstimateNotes(started.Tasks))
 	if wait > 0 && len(started.Tasks) == 1 && scope == nil && started.Tasks[0].Error == "" {

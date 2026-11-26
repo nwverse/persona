@@ -189,6 +189,12 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	pendingPlacementBatchIdx := 0
 	for i := range p.Tasks {
 		t := &p.Tasks[i]
+		s.refreshSoftInbox(ctx, t)
+		if t.InboxNotice != "" {
+			if _, err := s.appendFeedOnce(ctx, p.ID+fmt.Sprintf("-inbox-%d", i), p.Conversation, feedNotice, p.ID, noticeBody{Text: i18n.T(s.lang(ctx), "assistant-tasks.inbox_link_removed")}); err != nil {
+				s.logf("Inbox link notice: %v", err)
+			}
+		}
 		if err := s.checkPlannedInbox(ctx, p.Conversation, *t); err != nil {
 			t.Error = err.Error()
 			continue
@@ -492,6 +498,9 @@ func (s *Service) supervisePlanTask(ctx context.Context, id, supervisor string, 
 			supervisor = v.Supervisor // a transfer that won before this write stays authoritative
 		} else if s.isLeader(ctx, supervisor) || s.liveSideSupervisor(ctx, supervisor) {
 			v.SupervisorSource = "plan"
+		}
+		if t.MultiIssueReport && v.Investigation == nil {
+			v.Investigation = &investigationFindings{}
 		}
 		if t.Continues == "" {
 			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, cleanDoneWhen(t.DoneWhen), t.ExpectMinutes

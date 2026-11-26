@@ -115,8 +115,12 @@ export function TaskDecision({ todo, rowKey, hideTitle = false, onOpenChat }: { 
 }
 
 export type NeedsYouPartProps =
+  /** A task's decision in the tray. */
   | { decision: Todo; rowKey?: string; hideTitle?: boolean; onOpenChat?: () => void }
+  /** A task's decision, acceptance ask, personal verification, or other waiting state in the tray. */
   | { task: Todo; status: TodoStatus; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string }; onOpenChat?: () => void }
+  /** A task whose Agent did not start, in the tray (#10365). */
+  | { failed: Todo; rowKey: string; countsOpenAttr: { "data-counts-open"?: string } }
   /** The suggested rule of a plan card or a passed-up question, under it. */
   | { rule: RuleCard };
 
@@ -148,5 +152,6 @@ export default function NeedsYouParts(props: NeedsYouPartProps) {
     if (props.status === "failed") return <FailedTaskRow todo={task} rowKey={rowKey ?? `task:${task.id}`} countsOpenAttr={countsOpenAttr} />;
     return <WaitingTaskRow todo={task} status={props.status} rowKey={rowKey} countsOpenAttr={countsOpenAttr} />;
   }
+  if ("failed" in props) return <FailedTaskRow todo={props.failed} rowKey={props.rowKey} countsOpenAttr={props.countsOpenAttr} />;
   return <RuleSuggestionLine of={props.rule} />;
 }

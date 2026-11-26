@@ -936,6 +936,26 @@ A failed check, a cancelled receiving to-do or a missed deadline returns the ori
 with the reason. A receiving Agent stopping by itself leaves the wait in place. New work and later reviews of the
 originating to-do end the old wait. Owner decisions and acceptance keep their existing handling.
 
+## Multi-issue investigation reports
+
+Use `task_plan.multi_issue_report` when the task investigates multiple issues and returns a report. A worker can also
+declare actionable findings with `report_to_supervisor.findings` on a done or blocked report. Each finding has a stable
+`id`, a short `summary`, a concrete `next` action, and a `source` such as a report section. Use `findings: []` when the
+current report adds no findings. Earlier findings stay on the task until they are accounted for.
+
+The supervisor reads the list using `task_review` with `verdict: "findings"`. Submit the displayed version in
+`findings_review` and record dispositions by ID. This confirms the current report without moving the task. A follow-up
+must be an independent, open supervised to-do with the finding's exact `next` action in its `done_when`. A single finding
+may remain on the parked task when its `wait_target` matches the validated external park evidence. Resolved findings carry
+`done_evidence` backed by a supervisor check for that exact next action in the current `done_when`. Submit the same evidence in `checks` with the findings review if the check is new. For a decision that only the owner can make, use `needs_user` on the open parent or an independently
+tracked follow-up. An owner's explicit drop can be recorded in the to-do's decision history as question
+`Drop investigation finding <id>?`, choice `Drop`, and a reason, then referenced by `owner_drop_decision_id`.
+
+Manual and automatic parking, final acceptance, owner Pass and other completion paths check the current report. A
+new working turn requires a fresh declaration and review, while keeping the disposition history. A follow-up with
+an outstanding finding stays open until the exact action is confirmed complete or its handoff is moved. Ordinary
+tasks keep their existing workflow.
+
 ## Parked tasks
 
 **External PR events (#9775).** On an `external_event` park, set `evidence.pr_event` to `terminal` when merge or
