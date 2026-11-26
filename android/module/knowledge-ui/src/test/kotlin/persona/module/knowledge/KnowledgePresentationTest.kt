@@ -21,8 +21,8 @@ class KnowledgePresentationTest {
 
     @Test fun projectsGroupLikeIos() {
         val sections = projectSections(projects)
-        assertEquals(listOf(R.string.knowledge_section_focus, R.string.knowledge_section_other_active, R.string.knowledge_section_done,
-            R.string.knowledge_section_not_projects), sections.map { it.title })
+        assertEquals(listOf(R.string.knowledge_ui_section_focus, R.string.knowledge_ui_section_other_active, R.string.knowledge_ui_section_done,
+            R.string.knowledge_ui_section_not_projects), sections.map { it.title })
         assertEquals(listOf("a", "e"), sections[0].entries.map { it.id })
         assertEquals(listOf("b"), sections[1].entries.map { it.id })
         assertEquals(listOf("c"), sections[2].entries.map { it.id })
@@ -30,10 +30,10 @@ class KnowledgePresentationTest {
         assertTrue(sections[3].collapsed)
         assertNotNull(sections[3].note)
         // Without anything important the rest is just "Active".
-        assertEquals(R.string.knowledge_section_active, projectSections(projects.filter { it.id == "b" }).single().title)
+        assertEquals(R.string.knowledge_ui_section_active, projectSections(projects.filter { it.id == "b" }).single().title)
         assertEquals("long", projects[1].projectKind)
         assertEquals("short", projects[0].projectKind)
-        assertEquals(R.string.knowledge_status_paused, projects[4].projectStatusLabel)
+        assertEquals(R.string.knowledge_ui_status_paused, projects[4].projectStatusLabel)
         assertNull(projects[0].projectStatusLabel)
         assertEquals("active", KnowledgeEntry("projects", "x", "X").projectStatus)
         assertEquals(listOf("#iOS"), kindSections(listOf(KnowledgeEntry("people", "p", "P")), "iOS").map { it.key })
@@ -162,7 +162,7 @@ class KnowledgePresentationTest {
         assertEquals(70, entry.relevance)
         assertEquals(listOf("t1", "t2"), entry.tags)
         assertEquals("long · done", entry.extra)
-        assertEquals(R.string.knowledge_status_done, entry.projectStatusLabel)
+        assertEquals(R.string.knowledge_ui_status_done, entry.projectStatusLabel)
         assertEquals(1, detail.agents?.size)
         // A project the hub has not given a kind or status reads as short and active.
         assertEquals("short · active", KnowledgeDetail("projects", "b", "x", meta = buildJsonObject { }).entry().extra)

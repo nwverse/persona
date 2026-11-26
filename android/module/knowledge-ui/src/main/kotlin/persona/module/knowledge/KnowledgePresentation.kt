@@ -46,17 +46,17 @@ internal fun projectSections(entries: List<KnowledgeEntry>): List<KnowledgeSecti
     val (done, active) = visible.partition { it.projectStatus == "done" }
     val (focus, rest) = active.partition { it.importance in setOf("P0", "P1") }
     return listOf(
-        KnowledgeSection(R.string.knowledge_section_focus, focus),
-        KnowledgeSection(if (focus.isEmpty()) R.string.knowledge_section_active else R.string.knowledge_section_other_active, rest),
-        KnowledgeSection(R.string.knowledge_section_done, done),
-        KnowledgeSection(R.string.knowledge_section_not_projects, ignored, collapsed = true,
-            note = R.string.knowledge_section_not_projects_note),
+        KnowledgeSection(R.string.knowledge_ui_section_focus, focus),
+        KnowledgeSection(if (focus.isEmpty()) R.string.knowledge_ui_section_active else R.string.knowledge_ui_section_other_active, rest),
+        KnowledgeSection(R.string.knowledge_ui_section_done, done),
+        KnowledgeSection(R.string.knowledge_ui_section_not_projects, ignored, collapsed = true,
+            note = R.string.knowledge_ui_section_not_projects_note),
     ).filter { it.entries.isNotEmpty() }
 }
 
 /** The other kinds keep the hub's order (importance, then relevance); a tag names the section. */
 internal fun kindSections(entries: List<KnowledgeEntry>, tag: String?): List<KnowledgeSection> =
-    if (entries.isEmpty()) emptyList() else listOf(KnowledgeSection(R.string.knowledge_section_ranked, entries, tag = tag))
+    if (entries.isEmpty()) emptyList() else listOf(KnowledgeSection(R.string.knowledge_ui_section_ranked, entries, tag = tag))
 
 /** Meetings and Persona's recordings share one list (#9994). A recording the hub matched to an imported meeting keeps
  * that meeting on its own row, and the imported row goes. Recordings without a listed match stay exactly as they are. */
@@ -97,9 +97,9 @@ internal val KnowledgeEntry.isProject: Boolean get() = kind == KnowledgeKind.Pro
 @get:StringRes
 internal val KnowledgeEntry.projectStatusLabel: Int?
     get() = if (!isProject) null else when (projectStatus) {
-        "paused" -> R.string.knowledge_status_paused
-        "done" -> R.string.knowledge_status_done
-        "ignored" -> R.string.knowledge_status_ignored
+        "paused" -> R.string.knowledge_ui_status_paused
+        "done" -> R.string.knowledge_ui_status_done
+        "ignored" -> R.string.knowledge_ui_status_ignored
         else -> null
     }
 
@@ -388,9 +388,9 @@ internal data class KnowledgeTagForm(
             status = entry.projectStatus,
         )
         val IMPORTANCE = listOf("P0", "P1", "P2", "P3")
-        val PROJECT_KINDS = listOf("short" to R.string.knowledge_kind_short, "long" to R.string.knowledge_kind_long)
-        val PROJECT_STATUSES = listOf("active" to R.string.knowledge_status_active, "paused" to R.string.knowledge_status_paused,
-            "done" to R.string.knowledge_status_done, "ignored" to R.string.knowledge_status_ignored)
+        val PROJECT_KINDS = listOf("short" to R.string.knowledge_ui_kind_short, "long" to R.string.knowledge_ui_kind_long)
+        val PROJECT_STATUSES = listOf("active" to R.string.knowledge_ui_status_active, "paused" to R.string.knowledge_ui_status_paused,
+            "done" to R.string.knowledge_ui_status_done, "ignored" to R.string.knowledge_ui_status_ignored)
     }
 }
 

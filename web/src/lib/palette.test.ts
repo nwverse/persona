@@ -119,7 +119,7 @@ describe("registered commands", () => {
     const list = appCommands(base);
     expect(list.map((c) => c.id)).toContain("app:jump");
     const jump = list.find((c) => c.id === "app:jump")!;
-    expect(jump).toMatchObject({ title: "跳转到会话或终端窗格", chord: "Mod+K", section: "全局" });
+    expect(jump).toMatchObject({ title: "前往会话或标签页", chord: "Mod+K", section: "全局" });
     expect(list.find((c) => c.id === "app:right-panel")).toMatchObject({ section: "会话页", chord: "Mod+B" });
     expect(list.find((c) => c.id === "app:collapse-tree")).toMatchObject({ section: "侧边栏", chord: "Mod+Alt+Shift+Up" });
   });

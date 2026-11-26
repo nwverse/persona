@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,21 +24,88 @@ func newQuietService(t testing.TB) (*Service, *fakeHub) {
 // newQuietServiceOn is newQuietService with st as its database (nil: none).
 func newQuietServiceOn(t testing.TB, st Store) (*Service, *fakeHub) {
 	t.Helper()
-	old := quietNoticeDelay
-	quietNoticeDelay = 30 * time.Millisecond
-	t.Cleanup(func() { quietNoticeDelay = old })
-	reachA, reachB, reachM := agentReachAttempts, agentReachBackoff, agentReachMax
-	agentReachAttempts, agentReachBackoff, agentReachMax = 2, time.Millisecond, 200*time.Millisecond
-	t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
+	return newQuietServiceTimed(t, st, shortSuperviseTimings)
+}
+
+// newQuietServiceTimed is newQuietServiceOn with times as the supervision timings. A database that already holds
+// pending signals has the fixture's own steps set the digest timer, so a test that wants other timings on such a
+// Service gives them here: written after the fixture returns, they race with that timer's read (#16344).
+func newQuietServiceTimed(t testing.TB, st Store, times superviseTimings) (*Service, *fakeHub) {
+	t.Helper()
+	if quietNoticeDelay != 30*time.Millisecond {
+		old := quietNoticeDelay
+		quietNoticeDelay = 30 * time.Millisecond
+		t.Cleanup(func() { quietNoticeDelay = old })
+	}
+	if agentReachAttempts != 2 || agentReachBackoff != time.Millisecond || agentReachMax != 200*time.Millisecond {
+		reachA, reachB, reachM := agentReachAttempts, agentReachBackoff, agentReachMax
+		agentReachAttempts, agentReachBackoff, agentReachMax = 2, time.Millisecond, 200*time.Millisecond
+		t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
+	}
 	s, f := newTaskServiceOn(t, st)
-	shortSupervise(t, s)
+	// Cleanups run last registered first: the digest and notice timers below are stopped and drained, then the
+	// answered cards' hooks still running are waited for (they read the reach timings, tasks_follow.go), and only
+	// then are the timings above put back.
+	t.Cleanup(func() { waitAnsweredCardHooks(t, s) })
+	t.Cleanup(s.stopQuietTimers)
+	superviseTimed(t, s, times)
 	f.mu.Lock()
+	f.inbox = newFakeInbox() // under the hub's lock: the service's first publish may already be reading its hello
 	f.hello.Assistant.MachineID = "server"
 	f.known["conv1"] = true
 	f.mu.Unlock()
 	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	return s, f
+}
+
+// waitAnsweredCardHooks waits for the answered cards' hooks still running on s (interactionResolvedSoon). One that
+// never ends fails the test by name rather than holding its cleanup until the package's timeout.
+func waitAnsweredCardHooks(t testing.TB, s *Service) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		s.fleet.resolvedRuns.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Errorf("an answered card's hook was still running 10 seconds after the test ended")
+	}
+}
+
+// The fixture puts the package's reach timings back when its test ends. An answered card's hook (InteractionResolved)
+// runs on its own goroutine and reads them (taskNeedsRecheck), so the fixture waits for it first (#16344).
+func TestQuietFixtureWaitsForAnsweredCardHook(t *testing.T) {
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	var ended atomic.Bool
+	t.Run("fixture", func(t *testing.T) {
+		s, _ := newQuietService(t)
+		s.ixResolved = func(InteractionResolved) {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			ended.Store(true)
+		}
+		ix := parkOwnerPrompt()
+		putPending(s, &pending{ix: ix, done: make(chan proto.Resolution, 1), told: true})
+		if err := s.resolve(ix.ID, proto.Resolution{Answers: map[string]string{ix.Questions[0].Question: "Allow read-only"}}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			close(release)
+			t.Fatal("ending the card did not run its hook")
+		}
+		time.AfterFunc(50*time.Millisecond, func() { close(release) })
+	})
+	if !ended.Load() {
+		t.Fatal("the fixture's cleanup returned while an answered card's hook was still running")
+	}
 }
 
 // sessionsListCalls counts the sessions.list calls one machine got.
@@ -265,7 +333,7 @@ func TestQuietNoticeWaitsForTheTurn(t *testing.T) {
 	}
 }
 
-// Tasks from another conversation are not quiet: the hub pushes as always and main supervises them (#5732). With the
+// Tasks from a live side conversation are not quiet and stay supervised by that side conversation (#13657). With the
 // setting off a task from the main conversation is not quiet (the hub pushes) but is still supervised.
 func TestNotQuietTasksAreNotTold(t *testing.T) {
 	for _, c := range []struct {
@@ -274,17 +342,17 @@ func TestNotQuietTasksAreNotTold(t *testing.T) {
 		supervisor string
 		told       bool
 	}{
-		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, "conv-main", true},
+		{"side conversation", func(v *Settings) { v.Main = "conv-main" }, "conv1", true},
 		{"setting off", func(v *Settings) { v.MainTasksQuiet = new(false) }, "conv1", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s, f := newQuietService(t)
 			f.judge = `{"verdict":"done","reason":"好了"}`
 			setSettings(t, s, c.set)
-			if c.supervisor != "conv1" {
-				f.known[c.supervisor] = true
+			if c.name == "side conversation" {
+				f.known["conv-main"] = true
 				f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
-					proto.Session{SessionID: c.supervisor, MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+					proto.Session{SessionID: "conv-main", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 			}
 			if todo := startedTask(t, s, f); todo.Quiet || todo.Supervision == nil || todo.Supervision.Supervisor != c.supervisor {
 				t.Fatalf("todo = %+v (supervision %+v)", todo, todo.Supervision)
@@ -565,13 +633,17 @@ func TestQueuedNeedsNoticeRecheckedAtDrain(t *testing.T) {
 			idleLark.Status = proto.StatusIdle
 			switch tc.mode {
 			case "unreachable":
+				f.mu.Lock()
 				f.sessionsFail["box"] = 100
+				f.mu.Unlock()
 				s.drainRelays("server", []proto.Session{idleLark})
 				time.Sleep(50 * time.Millisecond) // longer than the bounded retries, far below their cap
 				if q, sent := s.queuedFor("lark1"), f.sentTo("lark1"); q != 1 || sent != 0 {
 					t.Fatalf("an unreachable node was read as answered: %d queued, %d sent", q, sent)
 				}
+				f.mu.Lock()
 				f.sessionsFail["box"] = 0
+				f.mu.Unlock()
 				agentTurn(s, f, proto.StatusWorking, "", 0) // the node is back and the agent continues
 				s.drainRelays("server", []proto.Session{idleLark})
 			case "removed":

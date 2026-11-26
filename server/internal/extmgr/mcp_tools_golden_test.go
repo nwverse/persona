@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/githubwire"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
@@ -80,7 +80,7 @@ func TestGoldenConnectorTools(t *testing.T) {
 	golden(t, "connector_tools.agent", show(false))
 	// With iMessage handed to Persona (the switch is on by default): its read tools too.
 	register()
-	if err := h.addConnector(readableIMessage{imessage.NewRemote(imessage.Config{Machine: "mac"}, "Mac", nil)}); err != nil {
+	if err := h.addConnector(readableIMessage{newTestIMessage(t, imessagewire.Config{Machine: "mac"}, "Mac", nil).(fullIMessage)}); err != nil {
 		t.Fatal(err)
 	}
 	golden(t, "connector_tools.assistant_with_imessage", show(true))
@@ -98,7 +98,7 @@ func withoutGitHub(h *Manager) {
 	h.connectors = r
 }
 
-type readableIMessage struct{ *imessage.Remote }
+type readableIMessage struct{ fullIMessage }
 
 func (readableIMessage) Status(context.Context) connector.Status {
 	return connector.Status{State: connector.StateOK}

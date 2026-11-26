@@ -75,6 +75,9 @@ const subscriptionKickWait = 10 * time.Second
 // connector's thread); a write the gate leaves to the user is asked on the phone like mail_send, in that conversation.
 func (h *Manager) callConnector(ctx context.Context, by asker, name string, args json.RawMessage) proto.ToolResult {
 	h.requestLarkCLIRecovery(ctx)
+	if by.machine == "" || by.session == "" {
+		ctx = connector.WithoutOwnerCaller(ctx)
+	}
 	if inSpace(h.askerCwd(by)) { // a space conversation's writes: on the phone each time (hubglue.go inSpace)
 		ctx = connector.ConfirmEach(ctx)
 	}
@@ -686,7 +689,7 @@ func (h *Manager) registerConnectors() {
 	}
 	// GitHub on every hub that has its module (githubport): hub.json's github.auth.from_machine reads that computer's
 	// gh login; without it (or before it) the user signs in from the app with the device flow.
-	if newGitHub := githubport.Factory(); newGitHub != nil {
+	if newGitHub := githubport.Factory(h.modules()); newGitHub != nil {
 		gh := githubwire.Config{}
 		if h.cfg.GitHub != nil {
 			gh = *h.cfg.GitHub
@@ -711,7 +714,7 @@ func (h *Manager) registerConnectors() {
 	}
 	// lark-cli is a separate source from the optional Lark gateway extension. It
 	// is deliberately absent when lark.cli is unset, preserving existing hubs.
-	if h.cfg.Lark.CLI != nil && cliport.Available() {
+	if h.cfg.Lark.CLI != nil && cliport.Available(h.modules()) {
 		if err := h.syncLarkCLIProfile(context.Background()); err != nil {
 			if !errors.Is(err, errBotSettingsUnread) {
 				h.deferLarkCLIRecovery()
@@ -721,6 +724,13 @@ func (h *Manager) registerConnectors() {
 		lc := h.newLarkCLIConnector(h.effectiveLarkCLIProfile(context.Background()))
 		if err := h.addConnector(lc); err != nil {
 			h.logf("larkcli connector: %v", err)
+		}
+	}
+	// The Lark user sync's reads reach the knowledge base through its own connector (internal/modules/lark/larksync):
+	// on every hub with the lark module; it hands over nothing until a binding has run.
+	if c := h.larkSyncConnector(); c != nil {
+		if err := h.addConnector(c); err != nil {
+			h.logf("larksync connector: %v", err)
 		}
 	}
 	// Messages (imessage) is registered once the extensions are there: its Mac is the extension's, else manager.json's

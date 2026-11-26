@@ -12,9 +12,9 @@ import { MODULES } from "../modules";
 // (#2804); the same backgrounds extension themes are checked against (extension-theme.ts).
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 // The minutes' summary card's own tokens load with the Knowledge page (#6563).
-const minutesCss = readFileSync(new URL("../views/knowledge/minutes-overview.css", import.meta.url), "utf8");
+const minutesCss = readFileSync(new URL("../modules/recording/minutes-overview.css", import.meta.url), "utf8");
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
-const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
+const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-desktop"];
 
 // A color laid over another (#rrggbbaa over #rrggbb), and `color-mix(in srgb, a (1 - p), b p)`, as the browser paints them.
 const channels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -164,6 +164,20 @@ describe("default palette contrast", () => {
       }
       expect(contrast(t.ink, t["hover-2"])).toBeGreaterThanOrEqual(4.5);
     });
+    it(`${scheme}: usage timeline hues (--hue-teal, --hue-blue) keep >= 3:1 contrast on surface and inset`, () => {
+      for (const name of ["teal", "blue"]) {
+        for (const bg of ["surface", "inset"]) {
+          expect(contrast(hueOf(name), t[bg]), `--hue-${name} on --${bg}`).toBeGreaterThanOrEqual(MIN_ROLE_CONTRAST);
+        }
+      }
+    });
+    it(`${scheme}: fresh tiered and stale neutral usage percentage tokens keep >= 4.5:1 contrast on surface and inset`, () => {
+      for (const role of ["green", "orange", "red", "ink-2"]) {
+        for (const bg of ["surface", "inset"]) {
+          expect(contrast(t[role], t[bg]), `--${role} on --${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
     it(`${scheme}: no theme color or extension theme moves the named colors or the sidebar's backgrounds`, () => {
       const theme = { extension: "example-theme", extension_name: "Example Theme", id: "sea", name: "Sea", light: { accent: "#1d4ed8" }, dark: { accent: "#8ab4ff" } };
       const sets = [...ACCENT_PRESETS.map((p) => accentTokens(PRESET_COLORS[p].accent)[scheme]), extensionThemeTokens(theme, scheme)];
@@ -173,6 +187,17 @@ describe("default palette contrast", () => {
     });
     it(`${scheme}: --ink-3 stays a step quieter than --ink-2`, () => {
       expect(contrast(t["ink-3"], t.surface)).toBeLessThan(contrast(t["ink-2"], t.surface));
+    });
+    it(`${scheme}: shell/sidebar --canvas sits deeper than main card --page and elevated --surface (#14696)`, () => {
+      // Lower luminance than --page in both schemes: darker neutral shell in light, deeper charcoal backdrop in dark.
+      const lum = (hex: string) => {
+        const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex;
+        return channels(full).map((c) => c / 255).map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+          .reduce((n, c, i) => n + c * [0.2126, 0.7152, 0.0722][i], 0);
+      };
+      expect(lum(t.canvas)).toBeLessThan(lum(t.page));
+      expect(lum(t.page)).toBeLessThan(lum(t.surface));
+      if (scheme === "dark") expect(lum(t.canvas)).toBeLessThan(lum(t.inset));
     });
   }
 });

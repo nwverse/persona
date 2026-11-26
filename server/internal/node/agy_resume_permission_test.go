@@ -75,7 +75,7 @@ func TestAgyBackfillResumePreservesPermissionMode(t *testing.T) {
 				return len(f.trace("pane.report_agent_session")) > 0
 			})
 
-			wantCmd := "HERDR_AGENT=agy agy --model " + model + " --effort " + effort + tc.wantFlag + " --conversation " + convID
+			wantCmd := withHerdrAgent(resumeHerdrAgent(agyAgent), "agy --model "+model+" --effort "+effort+tc.wantFlag+" --conversation "+convID)
 			wantArgv := inAgentEnv(n.dir, wantCmd, dquote)
 			got := f.trace("pane.report_agent_session")
 			if len(got) != 1 {
@@ -601,5 +601,163 @@ func TestTakeOverInRuntimeFillsPermissionModeIndependentlyOfEffort(t *testing.T)
 	_ = json.Unmarshal(starts[0], &start)
 	if start["permission_mode"] != "plan" || start["effort"] != "high" {
 		t.Fatalf("takeover start = %v, want permission_mode=plan effort=high", start)
+	}
+}
+
+func TestAgyCompanionModeHelpersFallbackAware(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		rowMode   string
+		savedMode string
+		wantShown string
+		wantSend  string
+	}{
+		{"live auto-to-bypass fallback omits send mode", proto.ModeBypass, "auto", proto.ModeBypass, ""},
+		{"normal auto with auto row replays auto", "auto", "auto", "auto", "auto"},
+		{"normal auto survives empty row after restart", "", "auto", "auto", "auto"},
+		{"normal auto survives default row after restart", proto.ModeDefault, "auto", "auto", "auto"},
+		{"normal auto survives acceptEdits row after restart", "acceptEdits", "auto", "auto", "auto"},
+		{"normal auto survives plan row after restart", "plan", "auto", "auto", "auto"},
+		{"saved bypassPermissions always replays", "", proto.ModeBypass, proto.ModeBypass, proto.ModeBypass},
+		{"saved bypassPermissions with bypass row replays", proto.ModeBypass, proto.ModeBypass, proto.ModeBypass, proto.ModeBypass},
+		{"saved acceptEdits never escalated by bypass row", proto.ModeBypass, "acceptEdits", "acceptEdits", "acceptEdits"},
+		{"saved plan never escalated by bypass row", proto.ModeBypass, "plan", "plan", "plan"},
+		{"saved default never escalated by bypass row", proto.ModeBypass, proto.ModeDefault, proto.ModeDefault, proto.ModeDefault},
+		{"unset saved mode omits send mode", proto.ModeBypass, "", proto.ModeBypass, ""},
+		{"unset saved mode with empty row", "", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agyShownMode(tc.rowMode, tc.savedMode); got != tc.wantShown {
+				t.Errorf("agyShownMode(%q, %q) = %q, want %q", tc.rowMode, tc.savedMode, got, tc.wantShown)
+			}
+			if got := agySendMode(tc.rowMode, tc.savedMode); got != tc.wantSend {
+				t.Errorf("agySendMode(%q, %q) = %q, want %q", tc.rowMode, tc.savedMode, got, tc.wantSend)
+			}
+		})
+	}
+}
+
+// Replaying saved "auto" on session.send while the companion row already reports bypassPermissions would
+// re-trigger the companion's auto-to-bypass fallback on every turn. Omit mode in that live fallback state
+// while continuing to replay "auto" for normal auto sessions and continuing to replay non-auto modes even
+// when a fresh companion reports bypassPermissions from local settings.json.
+func TestAgyCompanionSendOmitsModeOnLiveAutoBypassFallback(t *testing.T) {
+	n, _ := runtimeNode(t)
+	const sid = "agy-66666666-7777-4888-8999-aaaaaaaaaaaa"
+
+	companion := dialRuntime(t, n, agyCompanionHello())
+	companion.mu.Lock()
+	companion.answer = func(method string, _ json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": proto.Session{
+				SessionID:      sid,
+				Agent:          agyAgent,
+				Cwd:            n.home,
+				Status:         proto.StatusIdle,
+				Launcher:       agyAgent,
+				PermissionMode: "auto",
+			}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	companion.mu.Unlock()
+
+	if _, err := nodeCall(t, n, "session.start", map[string]any{
+		"cwd": n.home, "launcher": agyAgent, "host": agyAgent, "permission_mode": "auto",
+	}); err != nil {
+		t.Fatalf("session.start: %v", err)
+	}
+	if st, ok := n.state.get(sid); !ok || st.AppMode != "auto" {
+		t.Fatalf("persisted state after auto start = %+v (ok=%v), want AppMode=auto", st, ok)
+	}
+
+	publishRow := func(rowMode string) {
+		t.Helper()
+		row := map[string]any{"session_id": sid, "agent": agyAgent, "cwd": n.home, "status": "idle", "launcher": agyAgent}
+		if rowMode != "" {
+			row["permission_mode"] = rowMode
+		}
+		_ = companion.peer.Notify("runtime.sessions", map[string]any{"sessions": []map[string]any{row}})
+		waitFor(t, "companion row mode "+rowMode, func() bool {
+			row, _, ok := n.runtimes.rowOf(sid)
+			return ok && row.PermissionMode == rowMode
+		})
+	}
+	sendAndGetLast := func(clientMsgID string) map[string]any {
+		t.Helper()
+		before := len(companion.got("session.send"))
+		if _, err := nodeCall(t, n, "session.send", map[string]any{
+			"session_id": sid, "text": "turn " + clientMsgID, "client_msg_id": clientMsgID,
+		}); err != nil {
+			t.Fatalf("session.send %s: %v", clientMsgID, err)
+		}
+		sends := companion.got("session.send")
+		if len(sends) != before+1 {
+			t.Fatalf("session.send count = %d, want %d", len(sends), before+1)
+		}
+		var sent map[string]any
+		_ = json.Unmarshal(sends[len(sends)-1], &sent)
+		return sent
+	}
+	sessionInfoMode := func() string {
+		t.Helper()
+		raw, err := nodeCall(t, n, "session.info", map[string]any{"session_id": sid})
+		if err != nil {
+			t.Fatalf("session.info: %v", err)
+		}
+		var info map[string]any
+		_ = json.Unmarshal(raw, &info)
+		mode, _ := info["permission_mode"].(string)
+		return mode
+	}
+
+	// 1. Normal auto session (row reports empty/default after restart or "auto"): replays mode "auto".
+	publishRow("")
+	if got := listed(t, n)[sid].PermissionMode; got != "auto" {
+		t.Fatalf("sessions.list with empty row = %q, want auto", got)
+	}
+	if got := sessionInfoMode(); got != "auto" {
+		t.Fatalf("session.info with empty row = %q, want auto", got)
+	}
+	if sent := sendAndGetLast("m-auto-empty-row"); sent["mode"] != "auto" {
+		t.Fatalf("session.send with empty row = %v, want mode=auto", sent)
+	}
+
+	publishRow("auto")
+	if sent := sendAndGetLast("m-auto-live"); sent["mode"] != "auto" {
+		t.Fatalf("session.send with auto row = %v, want mode=auto", sent)
+	}
+
+	// 2. Companion falls back from auto to bypassPermissions: list/info show bypassPermissions and send omits mode.
+	publishRow(proto.ModeBypass)
+	if got := listed(t, n)[sid].PermissionMode; got != proto.ModeBypass {
+		t.Fatalf("sessions.list during auto fallback = %q, want %q", got, proto.ModeBypass)
+	}
+	if got := sessionInfoMode(); got != proto.ModeBypass {
+		t.Fatalf("session.info during auto fallback = %q, want %q", got, proto.ModeBypass)
+	}
+	sentFallback := sendAndGetLast("m-auto-fallback")
+	if _, has := sentFallback["mode"]; has {
+		t.Fatalf("session.send during auto-to-bypass fallback unexpectedly replayed mode: %v", sentFallback)
+	}
+	if st, ok := n.state.get(sid); !ok || st.AppMode != "auto" {
+		t.Fatalf("persisted state after fallback send = %+v (ok=%v), want AppMode=auto", st, ok)
+	}
+
+	// 3. Switching to a non-auto mode (plan) still replays plan even if the companion row reports bypassPermissions.
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": sid, "permission_mode": "plan"}); err != nil {
+		t.Fatalf("session.modes plan: %v", err)
+	}
+	if sent := sendAndGetLast("m-plan-over-bypass-row"); sent["mode"] != "plan" {
+		t.Fatalf("session.send after switching to plan = %v, want mode=plan", sent)
+	}
+
+	// 4. Switching back to auto via session.modes while companion reports bypassPermissions fallback omits mode.
+	if _, err := nodeCall(t, n, "session.modes", map[string]any{"session_id": sid, "permission_mode": "auto"}); err != nil {
+		t.Fatalf("session.modes auto: %v", err)
+	}
+	sentModesFallback := sendAndGetLast("m-modes-auto-fallback")
+	if _, has := sentModesFallback["mode"]; has {
+		t.Fatalf("session.send after session.modes(auto) fallback unexpectedly replayed mode: %v", sentModesFallback)
 	}
 }

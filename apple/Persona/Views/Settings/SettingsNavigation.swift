@@ -81,7 +81,11 @@ struct SettingsEntry: Identifiable {
 }
 
 enum SettingsCatalog {
-    static let entries: [SettingsEntry] = {
+    /// Every entry: the core's, then the active modules' (`ModuleSlot.settings`, Live Screen).
+    @MainActor static var entries: [SettingsEntry] { coreEntries + Modules.registry.settingsEntries.map(\.info) }
+
+    /// The core's own entries.
+    private static let coreEntries: [SettingsEntry] = {
         var rows: [SettingsEntry] = [
             .init(id: "models", title: String(localized: "Models"), symbol: Theme.Icon.model, group: .assistant, page: .models,
                   aliases: String(localized: "settings.search.models")),
@@ -145,8 +149,6 @@ enum SettingsCatalog {
                   aliases: String(localized: "settings.search.knowledge"), row: "settings-knowledge-selection"),
             .init(id: "meetings", title: String(localized: "Meetings"), symbol: Theme.Icon.meeting, group: .assistant, page: .meetings,
                   aliases: String(localized: "settings.search.meetings")),
-            .init(id: "live-screen", title: String(localized: "Live Screen"), symbol: Theme.Icon.screen, group: .device, page: .liveScreen,
-                  aliases: String(localized: "settings.search.live_screen")),
             .init(id: "layout", title: String(localized: "Agents List Layout"), symbol: Theme.Icon.listView, group: .device, page: .layout,
                   aliases: String(localized: "settings.search.layout")),
             .init(id: "health", title: String(localized: "Health"), symbol: Theme.Icon.health, group: .device, page: .health,
@@ -174,16 +176,16 @@ enum SettingsCatalog {
                            "hub", "managers", "persona", "devices"]
     static let coreLimit = 10
 
-    private static let byID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
 
     /// The rows of one tier in one scope, as `model` shows them now: an entry this platform does not have (Health off
     /// the iPhone) or whose condition is not met (`SettingsEntry.Shown`) is left out.
     @MainActor static func rows(_ tier: SettingsEntry.Tier, in group: SettingsEntry.Group, _ model: AppModel) -> [SettingsEntry] {
-        (tier == .core ? core : tier == .advanced ? advanced : []).compactMap { byID[$0] }
+        let all = entries
+        return (tier == .core ? core : tier == .advanced ? advanced : []).compactMap { id in all.first { $0.id == id } }
             .filter { $0.group == group && $0.shows(in: model) }
     }
 
-    static func search(_ query: String) -> [SettingsEntry] {
+    @MainActor static func search(_ query: String) -> [SettingsEntry] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         return entries.filter { $0.matches(query) }
     }

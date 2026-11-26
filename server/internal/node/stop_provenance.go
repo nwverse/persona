@@ -21,6 +21,19 @@ func (s *stateFile) stopped(id string, cause proto.StopCause) {
 	})
 }
 
+// clearStopAfterAssistantInput retires the Stop or Exit from before an accepted input.
+// An interrupt can be recorded before it takes the typing lock, so keep any newer mark.
+func (s *stateFile) clearStopAfterAssistantInput(id string, previousStopAt int64) {
+	s.update(id, func(st *sessionState) bool {
+		if st.StopCauseAt != previousStopAt || (st.StopCause != proto.StopUser && st.StopCause != proto.StopExit) {
+			return false
+		}
+		st.StopCause = proto.StopUnknown
+		st.StopCauseAt = max(time.Now().UnixNano(), st.StopCauseAt+1)
+		return true
+	})
+}
+
 // A new running observation invalidates the previous stopped-session capability.
 func (n *Node) observedRunning(id string) {
 	release, ok := n.recovery.tryLock(id)
@@ -60,6 +73,9 @@ const (
 // state.put is one-way. Verify the cause before closing or consuming a stopped
 // capability: a failed save must not revive old recovery permission after a restart.
 func (n *Node) saveStopCause(ctx context.Context, id string, cause proto.StopCause) error {
+	if cause == proto.StopUser {
+		n.noteAgyStopped(id) // an agy pane's conversation is listed as stopped next (agystopped.go)
+	}
 	n.state.stopped(id, cause)
 	want, known := n.state.get(id)
 	if !known || n.peer == nil {

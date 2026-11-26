@@ -170,12 +170,12 @@ class KnowledgeReloadFailureTest {
 
             repository.failReads = true
             list.refresh(); detail.refresh(); runCurrent()
-            assertEquals(R.string.knowledge_unreachable, list.page.value.message)
+            assertEquals(R.string.knowledge_ui_unreachable, list.page.value.message)
             assertEquals(listOf("weather"), list.page.value.entries.map { it.id })
             assertTrue(list.page.value.loaded)
             assertFalse(list.page.value.loading)
             assertFalse(detail.page.value.loading)
-            assertEquals(R.string.knowledge_unreachable, detail.page.value.message)
+            assertEquals(R.string.knowledge_ui_unreachable, detail.page.value.message)
             assertEquals("weather", detail.page.value.detail?.id)
             assertEquals(listOf("s1"), detail.page.value.agents.map { it.sessionId })
 
@@ -194,7 +194,7 @@ class KnowledgeReloadFailureTest {
             repository.failReads = true
             list.refresh(); advanceTimeBy(300); runCurrent()
             assertEquals(listOf("weather"), list.page.value.groups.map { it.id })
-            assertEquals(R.string.knowledge_unreachable, list.page.value.message)
+            assertEquals(R.string.knowledge_ui_unreachable, list.page.value.message)
             list.query("")
             runCurrent()
 
@@ -202,7 +202,7 @@ class KnowledgeReloadFailureTest {
             repository.failReads = true
             list.kind(KnowledgeKind.People); runCurrent()
             assertTrue(list.page.value.entries.isEmpty())
-            assertEquals(R.string.knowledge_unreachable, list.page.value.message)
+            assertEquals(R.string.knowledge_ui_unreachable, list.page.value.message)
             assertFalse(list.page.value.loaded)
         } finally {
             backgroundScope.cancel()

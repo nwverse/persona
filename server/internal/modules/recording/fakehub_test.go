@@ -920,7 +920,6 @@ func (f *fakeHub) started() []map[string]any {
 	return slices.Clone(f.starts)
 }
 
-
 // itemsReadAfter reports whether a one-item session.items read (waitTurnEnd's lastItemID) came after the first
 // `from` calls.
 func (f *fakeHub) itemsReadAfter(from int) bool {
