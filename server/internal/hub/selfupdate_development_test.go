@@ -92,6 +92,9 @@ func TestDevelopmentBackupManifestKeepsHubEdition(t *testing.T) {
 					<-unblock
 					return errors.New("stop after capturing the restore manifest")
 				}
+				if operation == "preflight" {
+					return nil
+				}
 				if operation != "backups" {
 					return fmt.Errorf("unexpected operation %s", operation)
 				}
