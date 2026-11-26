@@ -167,9 +167,9 @@ export const takesTypedModel = (agent: string) =>
 export const terminalOmp = (agent: string, launcher?: Pick<Launcher, "source">) =>
   agent === "omp" && (!launcher?.source || launcher.source === "zshrc" || launcher.source === "path" || launcher.source === "builtin");
 
-/** Only the plain omp command on herdr can advertise a typed model for a new terminal session (#11964). */
+/** Only the plain omp command on herdr or Orca can advertise a typed model for a new terminal session (#11964). */
 export function nativeOmpStart(agent: string, launcher: Pick<Launcher, "name" | "source"> | undefined, host: string | undefined): boolean {
-  return terminalOmp(agent, launcher) && launcher?.name === "omp" && host === "herdr";
+  return terminalOmp(agent, launcher) && launcher?.name === "omp" && (host === "herdr" || host === "orca");
 }
 
 /** omp's start capability belongs to the terminal host, including when another launcher's destination is a desktop app. */

@@ -163,9 +163,17 @@ func (s *Service) fitNewLauncher(ctx context.Context, m Device, own startPick, p
 	return note, agent, err
 }
 
+func ompStartModelTaskHost(m Device, params map[string]any) bool {
+	host, _ := params["host"].(string)
+	if host == "" {
+		host = proto.EngineHostsOf(m.Engine).Default
+	}
+	return host == "" || host == proto.EngineHerdr || host == proto.EngineOrca
+}
+
 func (s *Service) applyOmpStartDefaults(ctx context.Context, m Device, own startPick, agent startAgent, params map[string]any) error {
 	declared, _ := params["agent_type"].(string)
-	if params["launcher"] != "omp" || agent.agent != "omp" || (declared != "" && declared != "omp") || !herdrTaskHost(m, params) {
+	if params["launcher"] != "omp" || agent.agent != "omp" || (declared != "" && declared != "omp") || !ompStartModelTaskHost(m, params) {
 		return nil
 	}
 	if source := compat.Source(agent.source); source != "" && source != "builtin" && !machineSource(source) {

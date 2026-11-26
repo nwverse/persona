@@ -25,9 +25,13 @@ func ompOptionsRefusal(ctx context.Context) error {
 	return refusal("omp_options", i18n.T(i18n.From(ctx), "rpc-errors.omp_options"), nil)
 }
 
+func ompStartModelHost(kind string) bool {
+	return kind == proto.EngineHerdr || kind == proto.EngineOrca
+}
+
 // Both the model picker and the start verify that this launcher runs omp and forwards the requested model.
 func (n *Node) checkOmpStartModel(ctx context.Context, launcher, model string) error {
-	if launcher != ompAgent || n.startKind(ctx) != proto.EngineHerdr {
+	if launcher != ompAgent || !ompStartModelHost(n.startKind(ctx)) {
 		return ompOptionsRefusal(ctx)
 	}
 	if _, managed := n.managedLauncher(launcher); managed || n.runtimeOfIn(ctx, launcher) != nil {
