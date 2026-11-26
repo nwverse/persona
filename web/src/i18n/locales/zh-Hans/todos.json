@@ -426,5 +426,16 @@
   "item_type_updated": "已切换为{type}",
   "item_type_update_failed": "切换类型失败：{error}",
   "detail_mark_unread": "标回未读",
-  "detail_marked_unread": "已标回未读"
+  "detail_marked_unread": "已标回未读",
+  "direction_include_children": "连带移动 {count} 个子任务",
+  "active_blockers_region": "阻塞依赖",
+  "active_blockers_title": "阻塞依赖 · {count}",
+  "active_blocker_kind_external_pr": "外部 PR",
+  "active_blocker_kind_todo_done": "前置任务",
+  "active_blocker_kind_todo_stage": "阶段依赖",
+  "active_blocker_kind_merge_train": "合流队列",
+  "active_blocker_kind_write_conflict": "写域冲突",
+  "active_blocker_kind_owner_decision": "等待决策",
+  "active_blocker_kind_other": "阻塞项",
+  "active_blocker_attempts": "已重试 {count} 次"
 }
