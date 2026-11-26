@@ -183,20 +183,6 @@ function reveal(el: HTMLElement): boolean {
   return false;
 }
 
-/** Keep group headings below Persona at every text size, without doing layout work on scroll. The observer's first
- *  report, after the browser's own layout and before the frame is painted, sets it: reading the row's height here made
- *  the browser lay out the whole sidebar there and then. */
-function useStickyTop(ref: React.RefObject<HTMLElement | null>) {
-  useLayoutEffect(() => {
-    const nav = ref.current;
-    const pinned = nav?.querySelector<HTMLElement>(":scope > [data-sidebar-sticky]");
-    if (!nav || !pinned) return;
-    const observer = new ResizeObserver(([e]) => nav.style.setProperty("--sidebar-sticky-top", `${e?.borderBoxSize?.[0]?.blockSize ?? pinned.getBoundingClientRect().height}px`));
-    observer.observe(pinned);
-    return () => { observer.disconnect(); nav.style.removeProperty("--sidebar-sticky-top"); };
-  }, [ref]);
-}
-
 /** The gliding highlight under a list of rows (Beautiful UI's Sidebar Nav): rows register under their keys, and the
  *  one under the pointer gets the box; the open row has its own fill (CURRENT_ROW), so the box doesn't take it away.
  *  The list is the box's scroll container (`nav`). The open row is kept in view from when it opens until the list is
@@ -224,7 +210,7 @@ function useGlide(activeKey: string) {
     let next: GlideBox | null = null;
     if (n && el?.isConnected) {
       const clips: Span[] = [];
-      for (let p = el.parentElement; p && p !== n; p = p.parentElement) if (clipsOverflow(getComputedStyle(p).overflowY)) clips.push(p.getBoundingClientRect());
+      for (let p = el.parentElement; p && p !== n; p = p.parentElement) if (clipsOverflow(getComputedStyle(p).overflowY) || p.hasAttribute("data-sidebar-scroller")) clips.push(p.getBoundingClientRect());
       next = glideBox(el.getBoundingClientRect(), clips, n.getBoundingClientRect(), n.scrollTop);
     }
     // only a real move updates
@@ -245,14 +231,17 @@ function useGlide(activeKey: string) {
     sizes.current = ro;
     // the list and its blocks (sections) change height as a group inside folds or opens, and as rows come and go;
     // the rows themselves are observed as they register (one growing moves the rest)
+    const scroller = n.querySelector("[data-sidebar-scroller]");
     const watch = () => {
       ro.observe(n);
       for (const c of n.children) ro.observe(c);
+      if (scroller) for (const c of scroller.children) ro.observe(c);
       for (const el of rows.current.values()) ro.observe(el);
     };
     watch();
     const mo = new MutationObserver(() => (ro.disconnect(), watch(), soon()));
     mo.observe(n, { childList: true });
+    if (scroller) mo.observe(scroller, { childList: true });
     // a Collapse's transition ending (it may end without a size change, e.g. its opacity) and scrolling inside the list
     n.addEventListener("transitionend", soon);
     n.addEventListener("scroll", soon, { passive: true, capture: true });
@@ -418,7 +407,6 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const [recentFolded, toggleRecent] = useFolded("recent-chats", false, { holds: recent.some((c) => activeKey === `j:${c.session_id}`) });
   const leaderTotal = visibleSectionCounts(counts, directions.map((d) => d.id), recentFolded ? [] : recent.map((c) => c.session_id));
   const { nav, reg, hover, highlight } = useGlide(activeKey);
-  useStickyTop(nav);
   const go = useGo(onNavigate);
   const [holdsSeen, setHoldsSeen] = useState(false);
 
@@ -469,14 +457,15 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       {/* isolate: the rows' own layers (the sticky Persona row and group headers at z-30, chips, segments) stay inside this
           column, so the usage popover that opens upward over it from the bottom is never drawn under them */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={nav} data-sidebar-rows data-row-scroller onMouseLeave={() => hover(null)} className="relative isolate min-h-0 flex-1 scroll-pt-16 overflow-y-auto overscroll-contain px-2.5 pb-3">
+      <div ref={nav} data-sidebar-rows onMouseLeave={() => hover(null)} className="relative isolate flex min-h-0 flex-1 flex-col scroll-pt-16 px-2.5">
         {highlight}
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
-            stays at the top while the rest scrolls (#5581), with a solid divider above the sticky groups */}
-        <div data-sidebar-sticky className="sticky top-0 z-30 flex flex-col gap-px bg-canvas pt-1">
+            stays at the top while the rest scrolls (#5581), with a solid divider above the scrollable rows */}
+        <div data-sidebar-sticky className="sticky top-0 z-30 flex shrink-0 flex-col gap-px bg-canvas pt-1">
           <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
+        <div data-row-scroller data-sidebar-scroller className="min-h-0 flex-1 -mx-2.5 overflow-y-auto overscroll-contain px-2.5 pb-3">
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
         {narrow && <NavGrid showHubNotice={active} pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
         {sections
@@ -554,6 +543,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {active && (workBrowserReady ? <PendingAgents route={route} reg={reg} hover={hover} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} />
           : !(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} workspaceActions={workspaceActions} foldable onHoldsSeen={setHoldsSeen} />)}
         {!workBrowserReady && <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon={HISTORY_ICON} />}
+        </div>
       </div>
       <SeenRowsNoticeHost shown={holdsSeen} onNavigate={onNavigate} />
       </div>

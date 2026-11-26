@@ -269,7 +269,7 @@ describe("routing the next message to a task", () => {
       text: "Use the alternative, but keep the current limits.",
     });
     expect(getFeedState().routes["decision-chat"]).toBeUndefined();
-    expect(fetcher.mock.calls.some(([url]) => url === "/api/v1/todos")).toBe(true);
+    expect(fetcher.mock.calls.some(([url]) => new URL(String(url), "http://hub").pathname === "/api/v1/todos")).toBe(true);
   });
 
   it("keeps the decision round attached when its answer fails to send", async () => {

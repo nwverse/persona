@@ -583,6 +583,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
+	if n.peer != nil {
+		n.noteCheckpointEnds(out)
+	}
 	sortNewestFirst(out)
 	return out
 }
