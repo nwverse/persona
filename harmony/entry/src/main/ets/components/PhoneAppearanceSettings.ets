@@ -9,10 +9,12 @@ import { phoneInterfaceStyleChoices, phoneInterfaceStyleID } from '../core/Phone
 import { phoneAppearancePages } from '../core/PhoneSettingsNavigation';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
 import { Colors } from '../design/Colors';
+import { Motion } from '../design/Motion';
 import { PhoneSettingsRow, PhoneStyle } from '../design/PhoneStyle';
 import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
+import { Haptics } from '../platform/Haptics';
 
 const NAVIGATION: string[] = ['merged','separate'];
 const DISPLAY: string[] = ['avatar','compact','cards','list'];
@@ -125,6 +127,8 @@ export struct PhoneAppearanceSettings {
       this.chatSwitch(true)
       this.chatSwitch(false)
     }.width('100%').backgroundColor(Colors.card(true)).borderRadius(PhoneStyle.cardRadius).clip(true)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
   @Builder chatSwitch(glow: boolean) {
     Column() {
@@ -139,7 +143,7 @@ export struct PhoneAppearanceSettings {
           .selectedColor(Colors.positive).enabled(this.active && this.look.ready)
           .accessibilityText(tr(glow ? 'phone_look_glow' : 'phone_look_return')).accessibilityDescription(tr(glow ? 'phone_look_glow_note':'phone_look_return_note'))
           .id(glow ? 'settings.appearance.glow' : 'settings.appearance.return')
-          .onChange((on:boolean) => { if (this.active && this.route==='appearance') this.look.setChatInteraction(glow ? 'ui.composerGlow' : 'ui.returnSends',on); })
+          .onChange((on:boolean) => { if (this.active && this.route==='appearance') { Haptics.tap(); this.look.setChatInteraction(glow ? 'ui.composerGlow' : 'ui.returnSends',on); } })
       }.padding({left:14,right:16,top:12,bottom:12}).width('100%').constraintSize({minHeight:PhoneStyle.formSize(glow ? 85.7 : 68,glow ? 132.7 : 106.7,this.environment.fontScale)})
       if (glow) Divider().color(Colors.divider).strokeWidth(0.5).margin({left:60})
     }.width('100%')
@@ -154,20 +158,23 @@ export struct PhoneAppearanceSettings {
         Blank()
         Text(tr('phone_look_sample_ask')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14))
           .fontColor(this.environment.dark ? this.look.palette(this.model.style).dark.userBubbleText : this.look.palette(this.model.style).light.userBubbleText)
-          .padding({left:12,right:12,top:8,bottom:8}).borderRadius(14)
+          .padding({left:12,right:12,top:8,bottom:8}).borderRadius(16)
           .backgroundColor(this.environment.dark ? this.look.palette(this.model.style).dark.userBubble : this.look.palette(this.model.style).light.userBubble)
+          .animation(Motion.state(this.environment.reduceMotion))
       }.width('100%')
       Column({space:4}) {
         Text(tr('phone_look_sample_reply')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.ink)
         Text(tr('phone_look_sample_link')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.link)
       }.width('100%').alignItems(HorizontalAlign.Start).padding(12).backgroundColor(Colors.card(true)).borderRadius(14)
+        .border({width:0.5,color:PhoneStyle.cardBorder(this.environment.dark),radius:14})
       Row({space:8}) {
-        Text(tr('phone_look_sample_add')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.onAction)
+        Text(tr('phone_look_sample_add')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Medium).fontColor(Colors.onAction)
           .padding({left:14,right:14,top:7,bottom:7}).backgroundColor(Colors.action).borderRadius(Tokens.capsule)
         Text(tr('phone_look_sample_skip')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.ink)
           .padding({left:14,right:14,top:7,bottom:7}).backgroundColor(Colors.control).borderRadius(Tokens.capsule)
       }
     }.alignItems(HorizontalAlign.Start).width('100%').padding(12).backgroundColor(Colors.sheetBackground).borderRadius(16)
+      .border({width:0.5,color:PhoneStyle.cardBorder(this.environment.dark),radius:16})
       .accessibilityGroup(true).id('settings.appearance.preview')
   }
   @Builder colors() {
@@ -180,16 +187,20 @@ export struct PhoneAppearanceSettings {
               Circle().width(32).height(32).fill(this.swatch(key))
               if (this.look.accentId === key) SymbolGlyph(Symbols.check).fontSize('18vp').fontColor([Color.White])
             }.width(40).height(40).borderWidth(this.look.accentId===key ? 2 : 0).borderColor(this.swatch(key)).borderRadius(20)
+              .scale({x:this.look.accentId===key ? 1.06 : 1,y:this.look.accentId===key ? 1.06 : 1})
+              .animation(Motion.state(this.environment.reduceMotion))
             Text(this.label('phone_look_color',key)).maxLines(1).fontSize(12).fontWeight(this.look.accentId===key ? FontWeight.Bold : FontWeight.Medium)
               .maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.ink).textAlign(TextAlign.Center)
             Text(this.colorOrigin(key)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(1)
           }.width('25%').padding({left:3,right:3,top:5,bottom:7}).accessibilityGroup(true)
             .accessibilityRole(AccessibilityRoleType.BUTTON).accessibilitySelected(this.look.accentId===key)
             .accessibilityText(this.label('phone_look_color',key)+' · '+this.colorOrigin(key)).enabled(this.active && this.look.ready)
-            .onClick(() => this.select('phone_look_color',key)).id('settings.appearance.color.'+key)
+            .onClick(() => { Haptics.selection(); this.select('phone_look_color',key); }).id('settings.appearance.color.'+key)
         },(key:string) => key)
       }.width('100%')
     }.width('100%').padding(16).backgroundColor(Colors.card(true)).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
   @Builder textSizeChoices() {
     Row({space:8}) {
@@ -202,12 +213,15 @@ export struct PhoneAppearanceSettings {
           }.layoutWeight(1).height(32).padding({left:3,right:3}).borderRadius(Tokens.capsule)
             .responseRegion({x:0,y:-6,width:'100%',height:44})
             .backgroundColor(this.textSize.choice===key ? $r('app.color.phone_filter_segment_fill') : Color.Transparent)
+            .animation(Motion.state(this.environment.reduceMotion))
             .accessibilityText(tr('phone_look_text_size')+' · '+tr('phone_look_text_'+key)).accessibilitySelected(this.textSize.choice===key)
             .enabled(this.active && this.textSize.ready && !this.textSize.saving)
-            .onClick(() => { if (this.active && this.route==='phone_look_style') this.textSize.choose(key); }).id('settings.appearance.text.'+key)
+            .onClick(() => { if (this.active && this.route==='phone_look_style') { Haptics.selection(); this.textSize.choose(key); } }).id('settings.appearance.text.'+key)
         },(key:string)=>key)
       }.width(PhoneStyle.formSize(134,160,this.environment.fontScale)).padding(2).backgroundColor(Colors.control).borderRadius(Tokens.capsule)
     }.width('100%').padding({left:20,right:20,top:12,bottom:12}).backgroundColor(Colors.card(true)).borderRadius(PhoneStyle.cardRadius)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
   @Builder styles() {
     Flex({wrap:FlexWrap.Wrap,alignItems:ItemAlign.Start}) {
@@ -230,17 +244,19 @@ export struct PhoneAppearanceSettings {
             .alignItems(HorizontalAlign.Start).justifyContent(FlexAlign.Center)
             .backgroundColor(this.previewPage(style)).borderRadius(14)
             .borderWidth(this.selected('phone_look_style')===style ? 2.5 : 1)
-            .borderColor(this.selected('phone_look_style')===style ? this.styleAccent(style) : Colors.divider)
+            .borderColor(this.selected('phone_look_style')===style ? this.styleAccent(style) : PhoneStyle.cardBorder(this.environment.dark))
+            .shadow(this.selected('phone_look_style')===style ? PhoneStyle.cardElevation(this.environment.dark) : {radius:0,color:Color.Transparent})
+            .animation(Motion.state(this.environment.reduceMotion))
           Row({space:3}) {
             if (this.selected('phone_look_style')===style) SymbolGlyph(Symbols.check).fontSize('12vp').fontColor([Colors.iconAccent])
-            Text(this.label('phone_look_style',style)).fontSize(13).fontWeight(FontWeight.Medium).maxFontScale(Tokens.interfaceScaleFor(13)).maxLines(1)
+            Text(this.label('phone_look_style',style)).fontSize(13).fontWeight(this.selected('phone_look_style')===style ? FontWeight.Bold : FontWeight.Medium).maxFontScale(Tokens.interfaceScaleFor(13)).maxLines(1)
               .fontColor(Colors.ink).textOverflow({overflow:TextOverflow.Ellipsis})
           }
           if (!['brief','board'].includes(style)) Text(tr('phone_look_style_'+style+'_note')).fontSize(12)
             .maxFontScale(Tokens.interfaceScaleFor(12)).maxLines(1).fontColor(Colors.secondary).textOverflow({overflow:TextOverflow.Ellipsis})
         }.width('33.33%').padding({left:5,right:5,top:6,bottom:10}).accessibilityGroup(true).accessibilityRole(AccessibilityRoleType.BUTTON)
           .accessibilityText(this.label('phone_look_style',style)+(['brief','board'].includes(style) ? '' : ' · '+tr('phone_look_style_'+style+'_note'))).accessibilitySelected(this.selected('phone_look_style')===style)
-          .enabled(this.active && this.look.ready).onClick(() => this.select('phone_look_style',style)).id('settings.appearance.style.'+style)
+          .enabled(this.active && this.look.ready).onClick(() => { Haptics.selection(); this.select('phone_look_style',style); }).id('settings.appearance.style.'+style)
       }, (style:string) => style)
     }.width('100%')
   }
@@ -339,10 +355,12 @@ export struct PhoneAppearanceSettings {
             page==='phone_look_navigation' ? PhoneStyle.formSize(289.7,340.3,this.environment.fontScale) : 44})
           .accessibilityGroup(true).accessibilityRole(AccessibilityRoleType.BUTTON).accessibilitySelected(this.selected(page)===key)
           .accessibilityText(this.label(page,key)+(page==='phone_look_navigation' || page==='phone_look_layout' ? ' · '+tr(page+'_'+key+'_note') : '')).enabled(this.active && this.look.ready)
-          .onClick(() => this.select(page,key)).id('settings.appearance.'+page.slice('phone_look_'.length)+'.'+key)
+          .onClick(() => { Haptics.selection(); this.select(page,key); }).id('settings.appearance.'+page.slice('phone_look_'.length)+'.'+key)
         if (index<this.options(page).length-1) Divider().color(Colors.divider).strokeWidth(0.5).margin({left:16})
       },(key:string) => key)
     }.width('100%').backgroundColor(Colors.card(true)).borderRadius(PhoneStyle.cardRadius).clip(true)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
   build() {
     ForEach([this.route], (page: string) => {

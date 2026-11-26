@@ -16,10 +16,20 @@ export class PhoneStyle {
   }
   static cardElevation(dark: boolean): ShadowOptions {
     return PhoneStyle.surfaceShadow({
-      radius: dark ? 10 : 12,
-      color: dark ? '#38000000' : '#0D000000',
-      offsetY: dark ? 2 : 3
+      radius: dark ? 14 : 14,
+      color: dark ? '#4D000000' : '#0E000000',
+      offsetY: dark ? 4 : 3
     });
+  }
+  static heroElevation(dark: boolean): ShadowOptions {
+    return PhoneStyle.surfaceShadow({
+      radius: dark ? 22 : 20,
+      color: dark ? '#66000000' : '#18000000',
+      offsetY: dark ? 8 : 6
+    });
+  }
+  static cardBorder(dark: boolean): ResourceColor {
+    return Colors.styleEdge || (dark ? Colors.glassRim : Colors.divider);
   }
   static surfaceEdgeWidth(fallback: number): number {
     return Colors.styleID === 'clay' ? 1 : Colors.styleID === 'island' ? 0 : fallback;
@@ -135,10 +145,12 @@ export struct PhoneSettingsRow {
   @Param detail: string = '';
   @Param last: boolean = false;
   @Event action: () => void = () => {};
-  @Computed get symbolScale():number { return Math.min(nativeEnvironment.fontScale,Tokens.interfaceFontMaxScale); }
+  @Local private env: NativeEnvironment = nativeEnvironment;
+  @Local private pressed: boolean = false;
+  @Computed get symbolScale():number { return Math.min(this.env.fontScale,Tokens.interfaceFontMaxScale); }
   build() {
     Column() {
-      Row({ space: PhoneStyle.formSize(8,5,nativeEnvironment.fontScale) }) {
+      Row({ space: PhoneStyle.formSize(8,5,this.env.fontScale) }) {
         if (this.artwork) {
           Image(this.artwork).supportSvg2(true).colorFilter(this.tint)
             .width(40*this.symbolScale).height(28*this.symbolScale).objectFit(ImageFit.Contain).accessibilityLevel('no')
@@ -155,11 +167,19 @@ export struct PhoneSettingsRow {
           PhoneOutlineIcon({name:'forward',color:Colors.tertiary})
             .scale({x:this.symbolScale,y:this.symbolScale}).accessibilityLevel('no')
         } else SymbolGlyph($r('sys.symbol.chevron_right')).fontSize('14vp').fontColor([Colors.secondary])
-      }.width('100%').constraintSize({ minHeight: PhoneStyle.groupedRowHeight(nativeEnvironment.fontScale) })
-        .padding({ left: PhoneStyle.formSize(12,9,nativeEnvironment.fontScale), right: this.insetGrouped ? 22 : 14, top: 5, bottom: 5 })
+      }.width('100%').constraintSize({ minHeight: PhoneStyle.groupedRowHeight(this.env.fontScale) })
+        .padding({ left: PhoneStyle.formSize(12,9,this.env.fontScale), right: this.insetGrouped ? 22 : 14, top: 5, bottom: 5 })
       if (!this.last) Divider().color(this.insetGrouped ? PhoneStyle.settingsSeparator : Colors.divider).strokeWidth(0.5)
-        .margin({ left: PhoneStyle.formSize(60,68,nativeEnvironment.fontScale),right:this.insetGrouped ? 20 : 0 })
-    }.width('100%').backgroundColor(Colors.card(this.elevated)).accessibilityGroup(true)
-      .accessibilityText(this.label + (this.detail ? ' · ' + this.detail : '')).onClick(() => this.action()).id(this.identity)
+        .margin({ left: PhoneStyle.formSize(60,68,this.env.fontScale),right:this.insetGrouped ? 20 : 0 })
+    }.width('100%')
+      .backgroundColor(this.pressed ? (this.env.dark ? '#1FFFFFFF' : '#0E000000') : Colors.card(this.elevated))
+      .animation(Motion.press(this.env.reduceMotion))
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) this.pressed = true;
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.pressed = false;
+      })
+      .accessibilityGroup(true)
+      .accessibilityText(this.label + (this.detail ? ' · ' + this.detail : ''))
+      .onClick(() => { Haptics.tap(); this.action(); }).id(this.identity)
   }
 }

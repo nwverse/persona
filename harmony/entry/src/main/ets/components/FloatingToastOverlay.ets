@@ -31,13 +31,25 @@ export struct FloatingToastOverlay {
     return Colors.link;
   }
 
+  private iconWellFor(kind: string): ResourceColor {
+    if (kind === 'error') return this.env.dark ? '#33FF453A' : '#1ABA1A1A';
+    if (kind === 'success') return this.env.dark ? '#3330D158' : '#1A237337';
+    return this.env.dark ? '#330A84FF' : '#1A007AFF';
+  }
+
   build() {
     Column({ space: 8 }) {
       if (this.toasts.current) {
         Row({ space: 10 }) {
-          SymbolGlyph(this.iconFor(this.toasts.current.kind))
-            .fontSize(Tokens.interfaceFontVp(18, this.env.fontScale))
-            .fontColor([this.tintFor(this.toasts.current.kind)])
+          Stack() {
+            SymbolGlyph(this.iconFor(this.toasts.current.kind))
+              .fontSize(Tokens.interfaceFontVp(16, this.env.fontScale))
+              .fontColor([this.tintFor(this.toasts.current.kind)])
+          }
+          .width(28)
+          .height(28)
+          .borderRadius(14)
+          .backgroundColor(this.iconWellFor(this.toasts.current.kind))
           Text(this.toasts.current.message)
             .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
             .fontWeight(FontWeight.Medium)
@@ -48,7 +60,7 @@ export struct FloatingToastOverlay {
           if (this.toasts.current.actionTitle && this.toasts.current.onAction) {
             Button(this.toasts.current.actionTitle, { type: ButtonType.Capsule })
               .height(30)
-              .padding({ left: 10, right: 10 })
+              .padding({ left: 11, right: 11 })
               .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.link)
@@ -62,13 +74,13 @@ export struct FloatingToastOverlay {
               .id('toast.action')
           }
         }
-        .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+        .padding({ left: 12, right: 16, top: 8, bottom: 8 })
         .constraintSize({ maxWidth: 420 })
-        .backgroundColor(this.env.dark ? '#E61C1C1E' : '#F2FFFFFF')
+        .backgroundColor(this.env.dark ? '#EB1C1C1E' : '#F5FFFFFF')
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(Tokens.capsule)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: Tokens.capsule })
-        .shadow(PhoneStyle.cardElevation(this.env.dark))
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
+        .shadow(PhoneStyle.heroElevation(this.env.dark))
         .onClick(() => this.toasts.dismiss())
         .transition(Motion.slideFade(this.env.reduceMotion, -16))
         .id('floating.toast')
@@ -82,11 +94,11 @@ export struct FloatingToastOverlay {
             .maxLines(1)
         }
         .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-        .backgroundColor(this.env.dark ? '#E61C1C1E' : '#F2FFFFFF')
+        .backgroundColor(this.env.dark ? '#EB1C1C1E' : '#F5FFFFFF')
         .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
         .borderRadius(Tokens.capsule)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: Tokens.capsule })
-        .shadow(PhoneStyle.cardElevation(this.env.dark))
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
+        .shadow(PhoneStyle.heroElevation(this.env.dark))
         .hitTestBehavior(HitTestMode.None)
         .transition(Motion.slideFade(this.env.reduceMotion, -14))
         .id('floating.connection')

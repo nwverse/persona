@@ -1,5 +1,6 @@
 import { Colors } from '../design/Colors';
 import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
 import { PhoneStyle } from '../design/PhoneStyle';
 import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
@@ -26,6 +27,7 @@ export struct LiveViewSettingsCard {
   @Local private liveView: NativeLiveView = nativeLiveView;
   @Local private env: NativeEnvironment = nativeEnvironment;
   @Local private previewMode: string = 'needsYou';
+  @Local private pressedId: string = '';
 
   @Computed get previewState(): FleetLiveState {
     return sampleFleetState(this.previewMode, this.liveView.lockDetails);
@@ -174,10 +176,11 @@ export struct LiveViewSettingsCard {
     }
     .width('100%')
     .padding(Tokens.page)
-    .backgroundColor(Colors.surface)
+    .backgroundColor(this.env.dark ? '#E61F1F23' : '#F8FFFFFF')
+    .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
     .borderRadius(Tokens.card)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: Tokens.card })
-    .shadow(PhoneStyle.surfaceShadow({ radius: 10, color: this.env.dark ? '#33000000' : '#14000000', offsetY: 3 }))
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.card })
+    .shadow(PhoneStyle.heroElevation(this.env.dark))
     .animation(Motion.state(this.env.reduceMotion))
     .id('live_view.preview.card')
   }
@@ -190,8 +193,8 @@ export struct LiveViewSettingsCard {
         .fontWeight(FontWeight.Bold)
         .fontColor(Colors.ink)
     }
-    .padding({ left: 7, right: 7, top: 3, bottom: 3 })
-    .backgroundColor(Colors.control)
+    .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+    .backgroundColor(this.env.dark ? '#33FFFFFF' : Colors.control)
     .borderRadius(10)
   }
 
@@ -209,9 +212,10 @@ export struct LiveViewSettingsCard {
         .fontWeight(FontWeight.Medium)
         .fontColor(Colors.secondary)
         .width('100%')
+        .padding({ left: 4 })
 
-      // Status-bar capsule + Lock-screen banner preview
-      Column({ space: 10 }) {
+      // Status-bar capsule + Lock-screen banner preview inside an ambient glass stage
+      Column({ space: 12 }) {
         Row() {
           this.previewCapsule()
         }.width('100%').justifyContent(FlexAlign.Center)
@@ -221,14 +225,20 @@ export struct LiveViewSettingsCard {
             ForEach(PREVIEW_MODES, (mode: string) => {
               Button(this.modeTitle(mode), { type: ButtonType.Capsule })
                 .height(32)
-                .padding({ left: 10, right: 10 })
+                .padding({ left: 11, right: 11 })
                 .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
-                .fontWeight(this.previewMode === mode ? FontWeight.Bold : FontWeight.Normal)
+                .fontWeight(this.previewMode === mode ? FontWeight.Bold : FontWeight.Medium)
                 .fontColor(this.previewMode === mode ? Colors.link : Colors.secondary)
-                .backgroundColor(this.previewMode === mode ? Colors.selection : Colors.control)
+                .backgroundColor(this.previewMode === mode ? Colors.selection : (this.env.dark ? '#28282B' : Colors.control))
+                .border({ width: this.previewMode === mode ? 1 : 0.5, color: this.previewMode === mode ? Colors.link : PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
+                .scale({ x: this.pressedId === mode ? MotionTokens.pressScale : 1, y: this.pressedId === mode ? MotionTokens.pressScale : 1 })
                 .animation(Motion.state(this.env.reduceMotion))
+                .onTouch((event: TouchEvent) => {
+                  if (event.type === TouchType.Down) this.pressedId = mode;
+                  else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.pressedId = '';
+                })
                 .onClick(() => {
-                  Haptics.tap();
+                  Haptics.selection();
                   Motion.run(this.getUIContext(), Motion.state(this.env.reduceMotion), () => {
                     this.previewMode = mode;
                   });
@@ -237,7 +247,15 @@ export struct LiveViewSettingsCard {
             }, (mode: string) => mode)
           }.padding({ right: 4 })
         }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
-      }.width('100%')
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 14, bottom: 12 })
+      .borderRadius(22)
+      .linearGradient({
+        direction: GradientDirection.RightBottom,
+        colors: [[Colors.heroGlow, 0], [Colors.heroGlowAlt, 0.5], [this.env.dark ? '#18181B' : '#EAECEF', 1]]
+      })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 22 })
 
       // Live View toggles
       Column() {
@@ -288,10 +306,18 @@ export struct LiveViewSettingsCard {
         Row({ space: 10 }) {
           Button(tr('live_view_test_publish'), { type: ButtonType.Capsule })
             .layoutWeight(1)
-            .height(40)
+            .height(42)
             .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
+            .fontWeight(FontWeight.Medium)
             .fontColor(Colors.onAction)
             .backgroundColor(Colors.action)
+            .shadow({ radius: 10, color: '#26007AFF', offsetY: 3 })
+            .scale({ x: this.pressedId === 'publish' ? MotionTokens.pressScale : 1, y: this.pressedId === 'publish' ? MotionTokens.pressScale : 1 })
+            .animation(Motion.release(this.env.reduceMotion))
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) this.pressedId = 'publish';
+              else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.pressedId = '';
+            })
             .enabled(this.liveView.enabled && !this.liveView.busy)
             .onClick(() => {
               Haptics.tap();
@@ -303,11 +329,19 @@ export struct LiveViewSettingsCard {
             .id('live_view.test.publish')
           if (this.liveView.active) {
             Button(tr('live_view_test_stop'), { type: ButtonType.Capsule })
-              .height(40)
+              .height(42)
               .padding({ left: 16, right: 16 })
               .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
+              .fontWeight(FontWeight.Medium)
               .fontColor(Colors.link)
               .backgroundColor(Colors.control)
+              .border({ width: 0.5, color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
+              .scale({ x: this.pressedId === 'stop' ? MotionTokens.pressScale : 1, y: this.pressedId === 'stop' ? MotionTokens.pressScale : 1 })
+              .animation(Motion.release(this.env.reduceMotion))
+              .onTouch((event: TouchEvent) => {
+                if (event.type === TouchType.Down) this.pressedId = 'stop';
+                else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.pressedId = '';
+              })
               .onClick(() => {
                 Haptics.tap();
                 this.liveView.stopNow().catch(() => {});
@@ -319,7 +353,8 @@ export struct LiveViewSettingsCard {
       .width('100%')
       .backgroundColor(Colors.surface)
       .borderRadius(PhoneStyle.cardRadius)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: PhoneStyle.cardRadius })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(this.env.dark))
 
       if (this.liveView.statusCode) {
         Row({ space: 6 }) {
