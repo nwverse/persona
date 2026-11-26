@@ -113,24 +113,15 @@ func noSpace(s string) string {
 	return strings.Join(strings.Fields(s), "")
 }
 
-// looseKind is how two texts matched by the loose tier's rules: not at all, as the same text written another way
-// (white space, placeholders, mentions), or as one that holds less of the message than the other (a title, a prefix,
-// a character fewer).
-type looseKind int
-
-const (
-	looseNone looseKind = iota
-	looseSame
-	looseShorter
-)
-
-// looseMatch says whether a and b are one message by the loose tier's text rules, and how.
-func looseMatch(a, b looseText) looseKind {
+// looseMatch says whether a and b are one message by the loose tier's text rules (match), and whether one holds less
+// of it than the other (shorter: a title, a character fewer) rather than the same text written another way (white
+// space, placeholders, mentions).
+func looseMatch(a, b looseText) (match, shorter bool) {
 	if a.full == "" || b.full == "" {
-		return looseNone
+		return false, false
 	}
 	if a.full == b.full || sameAfterMention(a.full, b.full) {
-		return looseSame
+		return true, false
 	}
 	short, long := a, b
 	if short.runes > long.runes {
@@ -145,17 +136,17 @@ func looseMatch(a, b looseText) looseKind {
 			}
 		}
 		if title {
-			return looseShorter
+			return true, true
 		}
 	}
 	ar, br := []rune(a.flat), []rune(b.flat)
 	if min(len(ar), len(br)) < looseSimilarMin || !slices.Equal(a.digits, b.digits) || !slices.Equal(a.urls, b.urls) {
-		return looseNone
+		return false, false
 	}
 	if editsWithin(ar, br, max(1, max(len(ar), len(br))/looseSimilarPer)) {
-		return looseShorter
+		return true, true
 	}
-	return looseNone
+	return false, false
 }
 
 // sameAfterMention says whether a and b (white space removed) are the same text after a leading @mention that one
@@ -212,11 +203,11 @@ func editsWithin(a, b []rune, k int) bool {
 }
 
 // syncFuller says whether the sync copy (s, with sMedia attachments) holds more than the gateway's (g): when one
-// holds less of the message (kind looseShorter), the one with more characters once placeholders and leading
+// holds less of the message (shorter), the one with more characters once placeholders and leading
 // mentions are set aside; otherwise, and on a tie, the one with more attachments. Texts that differ only in white
 // space, placeholders or how a mention is written are equally full, and the gateway's copy stays.
-func syncFuller(kind looseKind, s, g looseText, sMedia, gMedia int) bool {
-	if kind == looseShorter && s.runes != g.runes {
+func syncFuller(shorter bool, s, g looseText, sMedia, gMedia int) bool {
+	if shorter && s.runes != g.runes {
 		return s.runes > g.runes
 	}
 	return sMedia > gMedia
@@ -243,7 +234,7 @@ func (a *gatewayAligner) withinLoose(gw string, src gatewayLine, paired bool) al
 	var found gatewayLine
 	var foundDay string
 	var foundText looseText
-	var foundKind looseKind
+	var foundShorter bool
 	matches := 0
 	for _, day := range alignDays(src.exact, a.s.Zone()) {
 		for _, dst := range a.day(gw, day) {
@@ -266,16 +257,16 @@ func (a *gatewayAligner) withinLoose(gw string, src gatewayLine, paired bool) al
 				dstRaw = dst.body
 			}
 			df := looseForm(dstRaw, max(dst.mediaCount, 1))
-			if kind := looseMatch(sf, df); kind != looseNone {
+			if match, shorter := looseMatch(sf, df); match {
 				matches++
-				found, foundDay, foundText, foundKind = dst, day, df, kind
+				found, foundDay, foundText, foundShorter = dst, day, df, shorter
 			}
 		}
 	}
 	if matches != 1 {
 		return alignVerdict{}
 	}
-	if syncFuller(foundKind, sf, foundText, src.mediaCount, found.mediaCount) {
+	if syncFuller(foundShorter, sf, foundText, src.mediaCount, found.mediaCount) {
 		if !found.unique || found.key == "" {
 			return alignVerdict{} // the gateway line cannot be told from an identical one: keep both copies
 		}

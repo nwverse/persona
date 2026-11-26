@@ -60,10 +60,10 @@ func TestLooseMatchRules(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a, b := looseForm(c.a, 1), looseForm(c.b, 1)
-			if got := looseMatch(a, b) != looseNone; got != c.want {
+			if got, _ := looseMatch(a, b); got != c.want {
 				t.Fatalf("looseMatch(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 			}
-			if got := looseMatch(b, a) != looseNone; got != c.want {
+			if got, _ := looseMatch(b, a); got != c.want {
 				t.Fatalf("looseMatch is not symmetric for %q, %q", c.a, c.b)
 			}
 		})
