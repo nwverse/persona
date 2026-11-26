@@ -12,9 +12,22 @@ is read or touched. Then, for every module id in --modules:
   server-side parts answer (SERVER below); in Chrome, light and dark, its entry (WEB below) is there and opens;
 - off: the `modules` settings row {"disabled": [...]} is written into the disposable database and the hub restarted:
   the flag is gone from the hello while the marker stays, the manager leaves the module out, its extension, connector
-  and routes are absent (404), its entry is gone, an address of its page answers like a removed page, and none of its
-  chunks is requested;
+  and routes are absent (404), its entry points and new activity are gone (its entry, an address of its page, which
+  answers like a removed page), and none of its chunks is requested. The exception is data the user already has
+  (#13430), which stays listed and readable: a WEB entry with an `off` block is such data, and off it asserts the
+  opposite of "gone" (below);
 - back on: the row is deleted and the hub restarted: everything returns;
+- what the user already has stays (#13430: a module that is off must not hide or change it), for a module with a
+  `kept` row in SERVER. Recording: two recordings a hub with the module wrote (one with its transcript and minutes,
+  one whose minutes were still to be written; scripts/ci/core-only-smoke.py seed_recordings) are in the knowledge base
+  before the hub first starts. In every phase they are listed, opened and found by search through the knowledge
+  base's own routes; off, the opened recording's detail equals the on phase's, the one in flight says
+  `paused: module_off` in the response only, and every file under recordings/ is byte for byte what it was when the
+  off phase began. In the web app (the `off` block of the recording row in WEB, #15530), off: the recording uploaded
+  while on and a stored meeting with minutes are still listed under Knowledge › Meetings, each opens in the default
+  panel's read-only detail (the transcript, and the minutes of the one that has them), none of the module's controls
+  is there (rename, make or regenerate minutes, hand to an Agent, the private mark, the questions asked in the meeting), and none of
+  the module's chunks is requested, the detail opened inside the app included;
 - older hub: against the mock hub (scripts/mock/mock_hub.py) without the `modules` marker every module is on, the
   composer's voice button included; with the marker and without the module's flags they are off.
 
@@ -57,25 +70,50 @@ Failed, TimedOut, http, run = smoke.Failed, smoke.TimedOut, smoke.http, smoke.ru
 # What the hub has of a module, checked against the test hub. Every path is fetched with the hub's token.
 #   extensions: ids in /api/v1/extensions while on, absent off
 #   connectors: ids in /api/v1/connectors?all=1 while on, absent off
-#   routes: paths that answer (anything but 404) while on and 404 off
+#   routes: paths that answer (anything but 404) while on and 404 off; a [method, path, body] entry is sent so
+#   (the hub registers every relayed route with its method, so another method answers 405 whether or not it is served)
+#   features: flags of the hub's hello (/api/v1/health) the module's server half makes the hub announce, absent off
+#   (the module's own module.<id> flag is always checked). The assistant tools a module adds reach the computers'
+#   MCP only through a node, which this hub has none of: their absence is checked by the module's Go tests.
 #   seed: requests made once while the module is first on, so the web app has something of it to show: [method, path, body]
+#   kept: "recordings": the module's stored data stays listed, opened, found and unchanged while it is off (kept_checks)
 # A client-only module (modapi.ClientModules) has an empty row: only its hello flag.
 RECORDING_ID = "6f1c2a3b-0000-4000-8000-00000000e2e1"
 SERVER = {
     "voice": {"extensions": ["voice"], "routes": ["/api/v1/extensions/voice/-/assistant-data"]},
     "volc": {"extensions": ["volc"], "routes": ["/api/v1/extensions/volc/-/assistant-data"]},
-    "health": {},
+    "health": {
+        "features": ["health_intake"],
+        # The POSTs change nothing: the page's first draw, and a reminder action the manager refuses (400).
+        "routes": ["/api/v1/assistant/health/intake", "/api/v1/assistant/health/intake/changes",
+                   ["POST", "/api/v1/assistant/health/intake/ui", {}],
+                   ["POST", "/api/v1/assistant/health/water/reminder", {}]],
+    },
     "glasses": {},
+    # Its server half (the history import, the sent marks) shows nothing over HTTP on a hub with no connector: its tools
+    # reach the MCP through a node, and the selection page's chat list answers 404 for a source without history either
+    # way. Its absence is TestKnowledgeUIFollowsItsModule's; here, its flag and the manager's line.
     "knowledge-ui": {},
     "recording": {
         "routes": ["/api/v1/recordings"],
+        "kept": "recordings",
+        # started an hour ago: an upload older than recording_days (14) is refused as expired
         "seed": [["PUT", f"/api/v1/recordings/{RECORDING_ID}", {
-            "revision": 1, "started_at": "2026-11-20T09:00:00Z", "duration": 60, "language": "en", "device": "phone",
+            "revision": 1, "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600)), "duration": 60, "language": "en", "device": "phone",
             "title": "Module gate sample recording", "complete": True, "kind": "note",
             "segments": [{"start": 0, "end": 5, "text": "A made-up sample line for the module gate."}]}]],
     },
     "github": {"connectors": ["github"], "routes": ["/api/v1/connectors/github/auth"]},
     "imessage": {"extensions": ["imessage"]},
+    # Lark: its parts are the bot's client (internal/botport), the lark-cli adapter (internal/cliport) and the assistant's
+    # Feishu layer (internal/larkhost), none with a route or list entry of its own. The bot's settings
+    # (/api/v1/bots/feishu) are the extension host's and answer in every build (binding and starting are what is refused
+    # without the module), and the lark-cli connector exists only where lark.cli is configured, which the test hub is not.
+    # So what the gate sees of it is its hello flag and the manager's module list. The web app gates nothing on it.
+    "lark": {},
+    "mail": {"routes": ["/api/v1/mail/accounts"]},
+    # its sessions run on the computers (internal/modules/all/node): nothing on the manager but its flag
+    "screen-share": {},
 }
 
 # What the web app shows of a module (web/e2e/module-gate.mjs). An entry:
@@ -83,6 +121,9 @@ SERVER = {
 #   has conversations); page: the address it lives on; ready: what shows that page rendered, on or off; selector (CSS)
 #   or text (a regular expression): the entry itself, visible while on, absent off; opens: what clicking it shows while
 #   on (selector, text or url); off_page: an address of the module's own that answers like a removed page while off.
+#   off: for an entry that is data the user already has, which a module that is off must not hide (#13430). It replaces
+#   "absent off": kept is the items still listed on the page while off (name; selector or text; shows: what its opened
+#   page must show, each with a name), hides is the module's controls none of those opened pages may show.
 # chunks: regular expressions for the module's own files as the production build names them (web/dist/assets) and as
 #   the dev server serves them; none may be requested while off. chunk_when_on: the hubs where one must load while on.
 NOT_FOUND = r"no page|not found|doesn.t exist|isn.t here|no longer"
@@ -106,11 +147,93 @@ WEB = {
         "chunks": [r"/assets/(Health|HealthReports|HealthIntakePage)-[\w-]+\.js", r"/src/modules/health/"],
         "chunk_when_on": ["test", "mock"],
     },
+    "github": {
+        "entries": [
+            {"name": "Settings › Connectors row", "hubs": ["test"], "page": "/settings?tab=connectors",
+             "ready": {"text": r"^Connectors$"}, "selector": "[data-connector-row='github']", "opens": {"url": r"github"}},
+        ],
+        "chunks": [],
+    },
+    "imessage": {
+        "entries": [
+            {"name": "Settings › Extensions row", "hubs": ["test"], "page": "/settings?tab=extensions",
+             "ready": {"selector": "[data-extension-row]"}, "selector": "[data-extension-row='imessage']",
+             "opens": {"url": r"imessage"}},
+        ],
+        "chunks": [],
+    },
+    "mail": {
+        "entries": [
+            {"name": "Settings › Connectors Mail group", "hubs": ["test"], "page": "/settings?tab=connectors",
+             "ready": {"text": r"^Connectors$"}, "selector": "[data-settings-group='mail']"},
+            # A mail the hub already delivered (the mock hub's inbox). On, it opens the whole message with its replies.
+            # Off, it stays (#13430, #15995): the Inbox's own route still answers with the text the hub stored, so the
+            # page shows that and one line saying mail is off, and none of the controls that need the mail routes
+            # (StoredMailBody.tsx; the mock answers 404 on /api/v1/mail/ then, as the hub does).
+            {"name": "Inbox mail item", "hubs": ["mock"], "page": "/inbox", "ready": {"selector": "[data-item]"},
+             "selector": "[data-item='mail:acc1:t1:501']", "opens": {"selector": "button:has-text('Reply all')"},
+             "off": {
+                 "kept": [
+                     {"name": "a mail the hub already delivered", "selector": "[data-item='mail:acc1:t1:501']",
+                      "shows": [{"name": "its stored text", "selector": "[data-mail-stored-text]:has-text('Lucy')"},
+                                {"name": "the line saying mail is off", "selector": "[data-mail-off-notice]"}]},
+                 ],
+                 "hides": [{"name": "reply", "selector": "button:has-text('Reply')"},
+                           {"name": "AI draft reply", "selector": "button:has-text('AI draft reply')"},
+                           {"name": "attachment", "selector": "a[download]"},
+                           {"name": "error where the mail should be", "text": r"HTTP 404|not set up"}],
+             }},
+        ],
+        "chunks": [],
+    },
+    "screen-share": {
+        "entries": [
+            # the machine page's View screen (MOCK_COMPUTER=ready: a Mac with Screen Sharing on); the live screen itself
+            # is a page of its own (standalonePages), which an off hub answers as a removed page
+            {"name": "machine page View screen", "hubs": ["mock"], "page": "/machines/macbook",
+             "ready": {"text": r"^MacBook$"}, "selector": "a[href$='/screen/macbook']",
+             "off_page": {"path": "/screen/macbook", "text": NOT_FOUND}},
+        ],
+        "chunks": [r"/assets/(standalone|ScreenView|ScreenMenu|DisplayMenu|StatsOverlay|VideoPicture)-[\w-]+\.js",
+                   r"/src/modules/screen-share/"],
+        "chunk_when_on": [],  # the button is a link that opens a new tab: nothing of it loads on the machine page
+    },
+    "lark": {
+        "entries": [
+            # the "Show messages on home" row in the Lark section (a hub with feature `lark`: the mock hub); the Messages
+            # page's own address answers like a removed page while off
+            {"name": "Settings › Connectors › Lark row", "hubs": ["mock"], "page": "/settings?tab=connectors",
+             "ready": {"selector": "main"}, "text": r"^Show messages on home$",
+             "off_page": {"path": "/messages", "text": NOT_FOUND}},
+        ],
+        "chunks": [r"/assets/(lark-code|Messages|LarkHomeSwitch|lark-chats)-[\w-]+\.js", r"/src/modules/lark/"],
+        "chunk_when_on": ["mock"],  # the row is the module's code, loaded when the section draws
+    },
     "recording": {
         "entries": [
             {"name": "Knowledge › Meetings recording", "hubs": ["test"], "page": "/kb/meetings",
              "ready": {"text": r"^Meetings$"}, "text": r"Module gate sample recording",
-             "opens": {"selector": "main :text('A made-up sample line')"}},
+             "opens": {"selector": "main :text('A made-up sample line')"},
+             # Off, both stay (#13430, #15530): the default panel's read-only detail (RecordingReadOnlyDetail.tsx) shows
+             # what is stored and no control of the module's. The second is core-only-smoke's seeded meeting
+             # (KEPT_RECORDING: "Kept recording", with minutes). The controls are the module's English labels
+             # (web/src/i18n/locales/en: recording.rename, recording.minutes_make, recording.minutes_regenerate,
+             # recording-handoff.title, recording.private_label, recording.asks_title).
+             "off": {
+                 "kept": [
+                     {"name": "the recording uploaded while on", "text": r"Module gate sample recording",
+                      "shows": [{"name": "its transcript", "selector": "main :text('A made-up sample line')"}]},
+                     {"name": "a stored meeting with minutes", "text": r"^Kept recording$",
+                      "shows": [{"name": "its minutes", "selector": "main :text('wombat checklist')"},
+                                {"name": "its transcript", "selector": "main :text('quokka transcript')"}]},
+                 ],
+                 "hides": [{"name": "rename", "selector": "main button:has-text('Rename')"},
+                           {"name": "make minutes", "selector": "main button:has-text('Make minutes')"},
+                           {"name": "regenerate", "selector": "main button:has-text('Regenerate')"},
+                           {"name": "hand to an Agent", "selector": "main button:has-text('Hand to Agent')"},
+                           {"name": "private mark", "selector": "main :text('Private meeting')"},
+                           {"name": "questions asked in the meeting", "selector": "main :text('Questions in the meeting')"}],
+             }},
         ],
         "chunks": [r"/assets/RecordingDetail-[\w-]+\.js", r"/src/modules/recording/"],
         "chunk_when_on": ["test"],
@@ -266,9 +389,32 @@ def server_checks(rep, phase, hub, ids, on, loaded):
             rep.add(phase, id, f"extension {ext} {'listed' if want else 'absent'}", (ext in extensions) == want, sorted(extensions))
         for con in row.get("connectors", []):
             rep.add(phase, id, f"connector {con} {'registered' if want else 'absent'}", (con in connectors) == want, sorted(connectors))
-        for path in row.get("routes", []):
-            status, _ = hub.request("GET", path)
-            rep.add(phase, id, f"{path} {'answers' if want else 'is 404'}", (status != 404) == want, f"status {status}")
+        for flag in row.get("features", []):
+            rep.add(phase, id, f"hello {'has' if want else 'lacks'} {flag}", (flag in features) == want)
+        for route in row.get("routes", []):
+            method, path, body = route if isinstance(route, list) else ("GET", route, None)
+            status, _ = hub.request(method, path, body)
+            rep.add(phase, id, f"{method} {path} {'answers' if want else 'is 404'}", (status != 404) == want, f"status {status}")
+
+
+def kept_checks(rep, phase, hub, ids, on, kept, home):
+    """What a module's users already have stays listed, opened and found in every phase; off, it is unchanged."""
+    if "recording" not in ids or SERVER["recording"].get("kept") != "recordings":
+        return
+    want = on["recording"]
+    deadline = time.monotonic() + remaining(90)  # the knowledge base opens with the manager's first use of it
+    while True:
+        rows, detail = smoke.kept_recordings(hub.base, hub.token, want, home)
+        if all(ok for _, ok, _ in rows) or time.monotonic() > deadline:
+            break
+        time.sleep(2)
+    for what, ok, text in rows:
+        rep.add(phase, "recording", what, ok, text)
+    if phase == "on":
+        kept["detail"] = detail
+    else:
+        rep.add(phase, "recording", "the stored recording's detail equals the on phase's", detail == kept.get("detail"),
+                json.dumps(detail)[:300])
 
 
 def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes):
@@ -296,7 +442,8 @@ def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes):
 def mock_phase(rep, phase, ids, flags, dist, shots, work, schemes, procs):
     """The web app (vite preview of the same build) against the mock hub, as an older hub or with module flags."""
     hub_port, web_port = smoke.free_port(), smoke.free_port()
-    env = dict(os.environ, PORT=str(hub_port), MOCK_VOICE="1")
+    # MOCK_COMPUTER: a Mac with Screen Sharing on, for the screen-share module's View screen
+    env = dict(os.environ, PORT=str(hub_port), MOCK_VOICE="1", MOCK_COMPUTER="ready")
     env.pop("MOCK_HUB_MODULES", None)
     if flags is not None:
         env["MOCK_HUB_MODULES"] = ",".join(flags) or "none"
@@ -371,11 +518,22 @@ def main():
         shutil.copytree(dist, home / ".persona/web")  # newer than the build's embedded copy, so the hub serves it
         hub = Hub(bindir, work, home, port, token)
         hub.checkout = checkout
+        kept = {}
+        if "recording" in ids:  # what the user already has, before the hub first starts
+            smoke.seed_recordings(home, checkout / "server")
 
         phases = [("on", None), ("off", ids), ("back-on", [])]
         for phase, disabled in phases:
             if disabled is not None:
                 hub.stop()
+                if "recording" in ids:
+                    files = smoke.recording_files(home)
+                    if phase == "off":
+                        kept["files"] = files  # as the hub with the module left them
+                    else:
+                        changed = smoke.files_changed(kept["files"], files)
+                        rep.add("off", "recording", f"every file under recordings/ is unchanged after the off phase ({len(files)} files)",
+                                not changed, str(changed))
                 if disabled:
                     psql(container, "INSERT INTO settings (key, value) VALUES ('modules', '%s'::jsonb) ON CONFLICT (key) DO UPDATE "
                                     "SET value = EXCLUDED.value, updated_at = now()" % json.dumps({"disabled": disabled}))
@@ -391,6 +549,7 @@ def main():
                         status, text = hub.request(method, path, body)
                         smoke.check(status < 300, f"seeding {id}: {method} {path}: {status} {text[:200]}")
             server_checks(rep, phase, hub, ids, on, loaded)
+            kept_checks(rep, phase, hub, ids, on, kept, home)
             seen = browser(rep, phase, hub.base, token, "test", ids, on, shots, work, schemes)
             out["phases"][phase] = {"settings_row": row or None, "manager_line": f"modules: loaded {loaded}",
                                     "hello_module_flags": [f for f in hub.features() if f == "modules" or f.startswith("module.")],

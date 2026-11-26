@@ -36,7 +36,7 @@ func (s *tokenStore) DeviceTokenByHash(_ context.Context, hash string) (*db.Devi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, ok := s.rows[hash]
-	if !ok || s.rev[t.ID] {
+	if !ok || s.rev[t.ID] || (t.ExpiresAt != nil && !time.Now().Before(*t.ExpiresAt)) {
 		return nil, nil
 	}
 	return &t, nil
@@ -320,6 +320,12 @@ func TestAnswerRoleOnlyWhatTheWatchDoes(t *testing.T) {
 		method, path string
 		want         bool
 	}{
+		{"POST", "/api/v1/assistant/health/tell", true},
+		{"GET", "/api/v1/assistant/health/tell", false},
+		{"PUT", "/api/v1/assistant/health/tell", false},
+		{"POST", "/api/v1/assistant/health/tell/x", false},
+		{"POST", "/api/v1/assistant/health/workouts", false},
+		{"POST", "/api/v1/assistant/conversations", false},
 		{"GET", "/api/v1/machines", true},
 		{"GET", "/api/v1/sessions", true},
 		{"HEAD", "/api/v1/sessions", true},

@@ -85,6 +85,102 @@ export interface TodoCreateOptions {
 /** What the hub last read of a PR on GitHub (pr_status.go). */
 export interface PRFacts { url: string; title?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
 
+/** Server-computed weakest-link ("barrel rule") Target Repo delivery gate summary under todos_v2 (#15699). */
+export interface TodoRepoGate {
+  state:
+    | "blocked_ci"
+    | "blocked_conflict"
+    | "blocked_changes"
+    | "awaiting_review"
+    | "checks_pending"
+    | "missing_pr"
+    | "ready"
+    | "reference_only"
+    | (string & {});
+  target_count: number;
+  ready_count: number;
+  reference_count: number;
+  blocking_repo?: string;
+  blocking_pr?: string;
+  reason?: string;
+}
+
+/** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
+export type TodoBoardSectionKey =
+  | "needs_you"
+  | "in_progress"
+  | "pending_review"
+  | "waiting"
+  | "someday"
+  | "done"
+  | (string & {});
+
+/** One top-level entry in a server-computed status group, with optional folded/surfaced child IDs (#15774). */
+export interface TodoBoardEntry {
+  todo_id: string;
+  folded_child_ids?: string[];
+  surfaced_child_ids?: string[];
+  folded_count?: number;
+}
+
+/** One server-computed status group in `board.status_groups` (#15774). */
+export interface TodoBoardStatusGroup {
+  key: TodoBoardSectionKey;
+  total_count: number;
+  visible_count: number;
+  entries: TodoBoardEntry[];
+}
+
+/** Per-direction counts in `board.direction_groups` (#15774). */
+export interface TodoBoardDirectionCounts {
+  needs_you: number;
+  in_progress: number;
+  pending_review: number;
+  waiting: number;
+  done: number;
+  total: number;
+}
+
+/** One server-computed direction group in `board.direction_groups` (#15774). */
+export interface TodoBoardDirectionGroup {
+  direction_id: string;
+  label?: string;
+  counts: TodoBoardDirectionCounts;
+  todo_ids: string[];
+}
+
+/** One node in the server-computed By-to-do sidebar tree (`board.sidebar_tree`, #15774). */
+export interface TodoBoardSidebarNode {
+  todo_id: string;
+  section: TodoBoardSectionKey;
+  item_type: "personal" | "task" | (string & {});
+  direction_id?: string;
+  child_ids?: string[];
+  surfaced_child_ids?: string[];
+  folded_count: number;
+  needs_you_count: number;
+  active_count: number;
+}
+
+/** Global section and open totals in `board.counts` (#15774). */
+export interface TodoBoardCounts {
+  needs_you: number;
+  in_progress: number;
+  pending_review: number;
+  waiting: number;
+  someday: number;
+  done: number;
+  open_total: number;
+}
+
+/** Complete server-owned board projection tree returned by GET /api/v1/todos under todos_v2=true (#15774, #15800). */
+export interface TodoBoardProjection {
+  status_groups: TodoBoardStatusGroup[];
+  direction_groups: TodoBoardDirectionGroup[];
+  sidebar_tree: TodoBoardSidebarNode[];
+  counts: TodoBoardCounts;
+}
+
 export interface Todo {
   id: string;
   title: string;
@@ -105,6 +201,8 @@ export interface Todo {
   /** The to-do whose request this one is a piece of, and the pieces it waits for (docs/assistant/todos.md "Requests in
    *  pieces"); unset for a to-do that is no piece and from hubs without them. */
   part_of?: string;
+  /** The direction (leader conversation) this to-do is grouped under (#14704); unset for none. */
+  direction_id?: string;
   after?: string[];
   /** Unmet prerequisite to-do IDs for a strict piece; an empty list means none, omission keeps legacy behavior. */
   prerequisite_blockers?: string[];
@@ -124,6 +222,8 @@ export interface Todo {
   kind?: string;
   /** Additive audience metadata (#14619): "human" (personal to-do), "autonomous" (agent task), or unset for legacy rows. */
   audience?: string;
+  /** Server-derived item classification (#15758): "personal" or "task"; unset on older hubs. */
+  item_type?: "personal" | "task" | (string & {});
   /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */
   done_by?: string;
   done_reason?: string;
@@ -184,6 +284,8 @@ export interface Todo {
   /** The hub's view of the row (#10226, docs/assistant/todo-status-sop.md "The hub's view"): read only behind
    *  Developing Persona's switches for now (features/todos/model). Unset from managers without `todo_view`. */
   view?: TodoSummary;
+  /** Server-computed weakest-link Target Repo delivery gate summary, populated only when todos_v2 === true (#15699). */
+  repo_gate?: TodoRepoGate;
 }
 
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
@@ -211,6 +313,8 @@ export interface TodoAsk {
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
   recommend?: string;
+  /** Direct evidence/PR/MR URL when present and not merely the to-do's own page (#14659). */
+  link?: string;
   asked_at: string;
   /** An owner-only terminal action on this task. Older decision cards can still name it as an option. */
   resume_terminal?: { machine_id: string; session_id: string };
@@ -876,6 +980,45 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
     json: { supersedes_id: supersedesId },
   });
   return r.decision;
+}
+
+/** One explicit item sent to POST /api/v1/todos/decisions/batch (#15698). */
+export interface TodoDecisionBatchItem {
+  todo_id: string;
+  option?: string;
+  reply?: string;
+}
+
+/** Per-item result returned by POST /api/v1/todos/decisions/batch (#15698). */
+export interface TodoDecisionBatchResult {
+  todo_id: string;
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+/** Batch decision submission response (#15698). */
+export interface TodoDecisionBatchResponse {
+  results: TodoDecisionBatchResult[];
+  succeeded: number;
+  failed: number;
+}
+
+/** Submit explicit per-item options or custom replies for multiple pending decisions in one request (#15698). */
+export async function submitTodoDecisionsBatch(
+  items: readonly TodoDecisionBatchItem[],
+): Promise<TodoDecisionBatchResponse> {
+  const res = await api<TodoDecisionBatchResponse>("/todos/decisions/batch", {
+    method: "POST",
+    headers: currentHeaders(),
+    json: { items },
+  });
+  const results = Array.isArray(res?.results) ? res.results : [];
+  return {
+    results,
+    succeeded: typeof res?.succeeded === "number" ? res.succeeded : results.filter((r) => r.ok).length,
+    failed: typeof res?.failed === "number" ? res.failed : results.filter((r) => !r.ok).length,
+  };
 }
 
 // ── API helpers ──────────────────────────────────────────────

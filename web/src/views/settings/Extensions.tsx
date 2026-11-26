@@ -30,6 +30,7 @@ import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { ExtensionDownloads, packageDownloads } from "../../ui/ExtensionDownloads";
 import { Icon } from "../../ui/icons";
 import { ChannelLink } from "./Channels";
+import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { MarketCatalog, MarketItem, Markets, PackMemberRow, UninstallDialog, useInstalledNames } from "./ExtensionMarket";
 import { ExtensionSettingsPage } from "./ExtensionSettingsPage";
 import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
@@ -50,7 +51,7 @@ import { isOpenBeside } from "./open-beside";
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside }: {
+export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide }: {
   open: string | null;
   onOpen: (id: string | null) => void;
   /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
@@ -61,6 +62,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
   /** `manager`: another manager's channel / connector (its extension's page links to its own); none: the default's. */
   onChannel?: (id: string, manager?: string) => void;
   onConnector?: (id: string, manager?: string) => void;
+  onPageWide?: (wide: boolean) => void;
 }) {
   const r = extensionsRoute(open);
   const go = (to: Parameters<typeof routeSub>[0]) => onOpen(routeSub(to));
@@ -89,7 +91,7 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
     case "page":
       return (
         <OwnedExtension id={r.id} manager={r.manager}>
-          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} />}
+          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} onWide={onPageWide} />}
         </OwnedExtension>
       );
     case "catalog":
@@ -125,13 +127,14 @@ function OwnedExtension({ id: _id, manager, children }: { id: string; manager?: 
 
 /** A page an extension draws (placement plugin_page), under the extension's name. `onBack`: none where the page's top
  *  bar has the way back (a phone). */
-function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; manager?: string; onBack?: () => void }) {
+function ExtensionPage({ id, ui, manager, onBack, onWide }: { id: string; ui: string; manager?: string; onBack?: () => void; onWide?: (wide: boolean) => void }) {
   usePinnedExtension(id, manager);
   const [d, setD] = useState<HubExtensionDetail | null>(null);
   const [n, setN] = useState(0);
   useEffect(() => {
     extensionDetail(id).then(setD, () => {});
   }, [id]);
+  useEffect(() => () => onWide?.(false), [onWide]);
   const title = d?.ui?.find((u) => u.id === ui)?.title;
   return (
     <>
@@ -146,7 +149,7 @@ function ExtensionPage({ id, ui, manager, onBack }: { id: string; ui: string; ma
       </div>
       {/* its extension id scopes what a graph's `key` keeps (lib/extension-owner.tsx) */}
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} />
+        <ExtensionUI key={n} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
       </ExtensionOwnerScope>
     </>
   );
@@ -341,7 +344,7 @@ function ExtensionList({ onOpen, onMarket, onMarkets, openBeside }: { onOpen: (i
 // ── one extension ──────────────────────────────────────────
 
 /** A number field as typed, by dotted path, until it reads as one. */
-type Typed = Record<string, { text: string; integer: boolean }>;
+export type Typed = Record<string, { text: string; integer: boolean }>;
 
 /** Requests about extension id (its details, settings, models, pages) go to manager while the view is open: the same
  *  id may be installed under several managers (each one's built-ins), and the default's own keep going to it elsewhere. */
@@ -797,6 +800,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
           )}
 
           {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} />}
+          <ConnectorExternalSourceSettings ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]} manager={manager} />
           {/* source subscriptions (#2041) of its connectors, the default manager's */}
           {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && <SubscriptionsEntry pick={(l) => l.extension === p.id} scope={{ ext: p.id }} />}
 
@@ -979,7 +983,7 @@ export function adminNetworkURL(id: string): string {
 
 const inputClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] text-ink outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
 
-interface FieldProps {
+export interface FieldProps {
   field: ExtensionField;
   path: string[];
   draft: JsonObject;
@@ -1007,7 +1011,7 @@ interface FormLaunchers {
 }
 
 /** One field of the form, by its type; its title above (or beside a switch), its description and error below. */
-function FieldRow(props: FieldProps) {
+export function FieldRow(props: FieldProps) {
   const { field: f, path, draft, errors, problems, onEdit } = props;
   const key = fieldPath(path);
   const err = errors[key] ?? problems[key];
@@ -1142,13 +1146,13 @@ function Control({ field: f, path, draft, typed, errors, problems, onEdit, onTyp
   );
 }
 
-function hasLauncherField(fields?: ExtensionField[]): boolean {
+export function hasLauncherField(fields?: ExtensionField[]): boolean {
   return !!fields?.some((f) => f.format === "launcher" || hasLauncherField(f.fields) || hasLauncherField(f.items?.fields));
 }
 
 /** The hub's launchers for the form's launcher pickers, read once while the page is open (GET /launchers asks every
  *  machine): null while they load, or when they could not be read. */
-function useFormLaunchers(on: boolean, page: string | undefined): FormLaunchers {
+export function useFormLaunchers(on: boolean, page: string | undefined): FormLaunchers {
   const [state, setState] = useState<FormLaunchers>({ list: null, loading: false });
   useEffect(() => {
     if (!on) return;
@@ -1388,7 +1392,7 @@ function ListControl({ field: f, path, draft, onEdit, id, ring }: Pick<FieldProp
 // ── a secret ────────────────────────────────────────────
 
 /** Sets one secret: typed in hidden, saved to the hub, never shown again; one that is set can be cleared. */
-function SecretDialog({ extension, secret, onClose, onStart, onDone }: { extension: string; secret: ExtensionSecret; onClose: () => void; onStart: () => number; onDone: (n: number, d: HubExtensionDetail) => void }) {
+export function SecretDialog({ extension, secret, onClose, onStart, onDone }: { extension: string; secret: ExtensionSecret; onClose: () => void; onStart: () => number; onDone: (n: number, d: HubExtensionDetail) => void }) {
   // a provider's reference in place of the value (docs/extensions/secret-providers.md), where the hub takes one
   const references = useStore((s) => hubHasExt(s.features, "secret_references"));
   const [byRef, setByRef] = useState(!!secret.reference);
@@ -1521,7 +1525,7 @@ function SecretDialog({ extension, secret, onClose, onStart, onDone }: { extensi
  * A secret provider's page (docs/extensions/secret-providers.md): the settings that hold its references, each the
  * user's standing approval, and the Always rules of hand-offs to Agents, each removable (the next hand-off asks again).
  */
-function SecretProviderGroups({ extension, users, rules, editable, onStart, onDone }: {
+export function SecretProviderGroups({ extension, users, rules, editable, onStart, onDone }: {
   extension: string;
   users?: SecretUser[];
   rules?: HandoffRule[];

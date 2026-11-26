@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,14 +141,39 @@ type turnJudged struct {
 
 // turnSignal is the supervision signal a turn's outcome raised, and when a supervision message carried it (nil: not yet).
 type turnSignal struct {
-	Kind    string     `json:"kind"`
-	Key     string     `json:"key"`
-	Machine string     `json:"machine,omitempty"`
-	Detail  string     `json:"detail,omitempty"`
-	Handoff bool       `json:"handoff,omitempty"`
-	Told    *time.Time `json:"told,omitempty"`
+	Kind      string     `json:"kind"`
+	Key       string     `json:"key"`
+	Machine   string     `json:"machine,omitempty"`
+	Recipient string     `json:"recipient,omitempty"`
+	Detail    string     `json:"detail,omitempty"`
+	Handoff   bool       `json:"handoff,omitempty"`
+	Told      *time.Time `json:"told,omitempty"`
 	// JudgeDown: superviseSignal.JudgeDown, so a replay after a restart is batched as the first telling was.
 	JudgeDown bool `json:"judge_down,omitempty"`
+}
+
+func (sig *turnSignal) matches(g superviseSignal) bool {
+	if sig == nil || sig.Kind != g.Kind || sig.Recipient != g.Recipient {
+		return false
+	}
+	if sig.Key == g.Key {
+		return true
+	}
+	if g.Kind != sigReview || g.Recipient != "" || g.To != "" {
+		return false
+	}
+	// Older turn and outbox JSON kept the nanoseconds that the ordinary review's SQL row lost.
+	// Only equate that old key with its actual stored precision. Two distinct full event keys stay distinct.
+	old, stored := sig.Key, g.Key
+	if len(old) < len(stored) {
+		old, stored = stored, old
+	}
+	raw, ok := strings.CutPrefix(old, "review@")
+	if !ok {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	return err == nil && ordinaryReviewKey(at) == stored
 }
 
 // replayTurnSignal queues only the still-current, untold ledger signal. Recovery can wait on Inbox I/O while
@@ -165,9 +191,12 @@ func (s *Service) replayTurnSignal(todo string, expected taskTurn) {
 	if sig == nil || expected.Signal == nil || sig.Told != nil || *sig != *expected.Signal {
 		return
 	}
+	if s.outageHoldCoversTurn(todo, sig.Kind, sig.Key) {
+		return // already folded into an active outage hold; do not replay separately
+	}
 	// Keep the ledger lock until queued, so an obsolete replay cannot replace a newer pending signal.
 	// The digest releases its mutex before consulting or marking the turn ledger.
-	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Detail: sig.Detail, Handoff: sig.Handoff,
+	s.queueSignal(superviseSignal{Todo: todo, Kind: sig.Kind, Key: sig.Key, Machine: sig.Machine, Recipient: sig.Recipient, Detail: sig.Detail, Handoff: sig.Handoff,
 		JudgeDown: sig.JudgeDown})
 }
 
@@ -681,8 +710,11 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if sig := e.Signal; sig != nil && sig.Kind == g.Kind && sig.Told != nil && (sig.Key == g.Key || b.again[g.Todo]) {
-		if sig.Key != g.Key {
+	sig := e.Signal
+	match := sig.matches(g)
+	sameHandover := sig != nil && sig.Kind == g.Kind && g.Recipient == "" && sig.Recipient != "" && sig.Key == g.Key
+	if sig != nil && sig.Kind == g.Kind && sig.Told != nil && (match || sameHandover || b.again[g.Todo] && g.Recipient == "") {
+		if !match && !sameHandover {
 			next := *sig // a turn handed out keeps the signal it was read with
 			next.Key = g.Key
 			e.Signal = &next
@@ -691,12 +723,35 @@ func (s *Service) turnSignalled(g superviseSignal) (told bool) {
 		}
 		return true
 	}
-	if sig := e.Signal; sig == nil || sig.Kind != g.Kind || sig.Key != g.Key || sig.Handoff != g.Handoff {
-		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Detail: g.Detail, Handoff: g.Handoff, JudgeDown: g.JudgeDown}
+	if !sameHandover && (!match || sig.Handoff != g.Handoff) {
+		e.Signal = &turnSignal{Kind: g.Kind, Key: g.Key, Machine: g.Machine, Recipient: g.Recipient, Detail: g.Detail, Handoff: g.Handoff, JudgeDown: g.JudgeDown}
 		b.doc.Turns[g.Todo] = e
 		s.saveTurnsLocked(ctx)
 	}
 	return false
+}
+
+// retargetTurnSignalRecipient updates an in-flight handed-over sigReview receipt in the turn ledger when an explicit
+// transfer moves the task to a new supervisor before the earlier handover has been delivered.
+func (s *Service) retargetTurnSignalRecipient(ctx context.Context, todoID, recipient string) {
+	if todoID == "" || recipient == "" {
+		return
+	}
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.loaded {
+		return
+	}
+	e, ok := b.doc.Turns[todoID]
+	if !ok || e.Signal == nil || e.Signal.Kind != sigReview || e.Signal.Told != nil || e.Signal.Recipient == "" || e.Signal.Recipient == recipient {
+		return
+	}
+	next := *e.Signal
+	next.Recipient = recipient
+	e.Signal = &next
+	b.doc.Turns[todoID] = e
+	s.saveTurnsLocked(ctx)
 }
 
 // turnsTold keeps on the ledger that the turn signals in list need no telling any more: a supervision message carried
@@ -730,20 +785,31 @@ func (s *Service) turnsToldLocked(ctx context.Context, list []superviseSignal) b
 	b := &s.tasks.turns
 	changed := false
 	previous := map[string]*turnSignal{}
-	for _, g := range list {
-		if !turnSignalKind(g) {
-			continue
-		}
+	mark := func(g superviseSignal) {
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told == nil {
-			old := *sig
-			previous[g.Todo] = &old
+		if sig := e.Signal; ok && sig.matches(g) && sig.Told == nil {
+			if _, saved := previous[g.Todo]; !saved {
+				old := *sig
+				previous[g.Todo] = &old
+			}
 			next, now := *sig, time.Now().UTC()
 			next.Told = &now
 			e.Signal = &next
 			b.doc.Turns[g.Todo] = e
 			changed = true
 		}
+	}
+	for _, g := range list {
+		if g.Kind == sigOutageRecovery && g.Outage != nil {
+			for _, tk := range g.Outage.TurnKeys {
+				mark(superviseSignal{Todo: g.Todo, Kind: tk.Kind, Key: tk.Key})
+			}
+			continue
+		}
+		if !turnSignalKind(g) {
+			continue
+		}
+		mark(g)
 	}
 	if !changed {
 		return true
@@ -769,18 +835,27 @@ func (s *Service) turnsUntold(ctx context.Context, list []superviseSignal) {
 		return
 	}
 	changed := false
-	for _, g := range list {
-		if !turnSignalKind(g) {
-			continue
-		}
+	unmark := func(g superviseSignal) {
 		e, ok := b.doc.Turns[g.Todo]
-		if sig := e.Signal; ok && sig != nil && sig.Kind == g.Kind && sig.Key == g.Key && sig.Told != nil {
+		if sig := e.Signal; ok && sig.matches(g) && sig.Told != nil {
 			next := *sig
 			next.Told = nil
 			e.Signal = &next
 			b.doc.Turns[g.Todo] = e
 			changed = true
 		}
+	}
+	for _, g := range list {
+		if g.Kind == sigOutageRecovery && g.Outage != nil {
+			for _, tk := range g.Outage.TurnKeys {
+				unmark(superviseSignal{Todo: g.Todo, Kind: tk.Kind, Key: tk.Key})
+			}
+			continue
+		}
+		if !turnSignalKind(g) {
+			continue
+		}
+		unmark(g)
 	}
 	if changed {
 		s.saveTurnsLocked(ctx)

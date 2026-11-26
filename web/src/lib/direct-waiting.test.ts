@@ -3,7 +3,9 @@ import { decisionLaterKey, type NeedsYouItem } from "./assistant-entries";
 import { directUserInteraction, directUserWaiting, directWaitingCount } from "./direct-waiting";
 import type { FeedItem } from "./feed";
 import { hubNeedsYou } from "./todo-triage";
+import { interactionID } from "./ids-wire";
 import type { Todo, TodoStatus } from "./todos";
+import type { TodoSummary } from "./todo-view-wire";
 import type { Interaction, Session } from "./types";
 
 const at = "2026-11-01T10:00:00Z";
@@ -93,14 +95,14 @@ describe("main conversation direct-user waiting", () => {
   });
 
   it("follows the hub's view of a to-do when there is one, as the To-dos badge does", () => {
-    const view = (section: string, reason = section === "needs_you" ? "failed_start" : "persona_working") => ({ phase: section, section, reason, rank: 0 });
+    const view = (section: string, reason = section === "needs_you" ? "failed_start" : "persona_working") => ({ phase: section, section, reason, rank: 0 }) as TodoSummary;
     // a failed start the hub files under Needs you is the owner's; one its supervisor handles (working) is not
     expect(directUserWaiting([task("failed", "failed", [], { view: view("needs_you") })]).map((i) => i.key)).toEqual(["task:failed"]);
     expect(directUserWaiting([task("held", "needs_you", [card("q", "question", { delegating: true })], { view: view("working") })])).toEqual([]);
   });
 
   it("retains escalated and hub needs_you screen, permission and plan cards while excluding delegating ones", () => {
-    const agentView = (section: string, reason = section === "needs_you" ? "agent_asks" : "persona_working") => ({ phase: section, section, reason, rank: 0 });
+    const agentView = (section: string, reason = section === "needs_you" ? "agent_asks" : "persona_working") => ({ phase: section, section, reason, rank: 0 }) as TodoSummary;
     const escalated = { delegate: { reason: "Command requires owner sign-off", recommend: "Allow" } };
     const screenEscalated = card("scr_1", "screen", escalated);
     const screenCommand = card("scr_cmd", "screen", { dialog: { command: "rm -rf dist", question: "Do you want to proceed?", options: [{ key: "1", label: "Yes" }, { key: "2", label: "No" }] } });
@@ -151,7 +153,7 @@ describe("main conversation direct-user waiting", () => {
       // An owner-decision task does not get hijacked by an unrelated unescalated permission unless view.asks names it.
       task("t-decision", "needs_you", [permDirect], { view: agentView("needs_you", "owner_decides") }),
       task("t-decision-linked", "needs_you", [permDirect], {
-        view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0, asks: [{ id: "run:1", kind: "tool", home: "run", interaction: "ix_perm_hub" }] },
+        view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0, asks: [{ id: "run:1", kind: "tool", home: "run", interaction: interactionID("ix_perm_hub") }] },
       }),
     ]);
     expect(withView.map((i) => [i.key, i.kind === "task" ? i.asks.map((a) => a.id) : []])).toEqual([

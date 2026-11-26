@@ -79,7 +79,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	c.serviceTier = codexServiceTier(res.ServiceTier)
 	c.mu.Unlock()
 	n.mu.Lock()
+	c.p.mu.Lock()
 	c.p.id = res.Thread.ID
+	c.p.mu.Unlock()
 	if res.Thread.Path != "" {
 		n.paths[res.Thread.ID] = res.Thread.Path // Codex said so (CODEX_HOME may not be ~/.codex)
 		if n.pathsAt == nil {
@@ -206,7 +208,7 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 	}
 	n.ttft.arm(c.p.id, sentAt, res.Turn.ID)
 	c.mu.Lock()
-	if res.Turn.ID != "" {
+	if res.Turn.ID != "" && c.endedTurnID != res.Turn.ID {
 		c.turnID = res.Turn.ID
 	}
 	c.mu.Unlock()

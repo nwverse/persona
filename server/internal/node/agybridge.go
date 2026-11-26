@@ -245,7 +245,7 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 	if pkg == nil {
 		return nil, errors.New("this personad carries no Antigravity runtime package (built without go generate ./internal/runtimepkg)")
 	}
-	dir, err := writePackage(filepath.Join(filepath.Dir(rh.path), "runtime-packages", agyPackage), pkg)
+	dir, err := writePackageWithReservation(filepath.Join(filepath.Dir(rh.path), "runtime-packages", agyPackage+"-builtin"), pkg, true)
 	if err != nil {
 		return nil, fmt.Errorf("write Antigravity runtime: %w", err)
 	}
@@ -254,7 +254,7 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 		return nil, err
 	}
 	args := []string{filepath.Join(dir, "antigravity", "companion.mjs"),
-		"--socket", rh.path, "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
+		"--socket", rh.dialPath(), "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
 	if instance != "" {
 		args = append(args, "--instance", instance)
 	}
@@ -270,7 +270,7 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 func agyBridgeEnv(ctx context.Context, rh *RuntimeHost, base []string) []string {
 	env := slices.Clone(base)
 	if rh != nil {
-		env = setEnvVar(env, "PERSONA_RUNTIME_SOCKET", rh.path)
+		env = setEnvVar(env, "PERSONA_RUNTIME_SOCKET", rh.dialPath())
 		for _, kv := range rh.agyProviderEnv() {
 			if k, v, ok := strings.Cut(kv, "="); ok {
 				env = setEnvVar(env, k, v)

@@ -34,11 +34,13 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatComposerService
 import persona.core.designsystem.ComposerDropTargetFrame
 import persona.core.designsystem.ComposerHardwareActions
 import persona.core.designsystem.LocalComposerHardware
+import persona.core.designsystem.LocalHubImageLimits
 import persona.core.designsystem.LocalLargeWindowInput
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.hardwareShortcutTextInput
@@ -87,6 +89,7 @@ fun LargeWindowComposer(
     upload: ComposerAttachmentUpload? = null,
     wrapPlaceholder: Boolean = false,
     covered: Boolean = false,
+    imageLimits: ImageLimits = LocalHubImageLimits.current.forAgent(null),
 ) {
     val largeWindow = LocalLargeWindowInput.current
     val dictate = rememberComposerDictation(session, state, visible && enabled, onNotice)
@@ -100,6 +103,7 @@ fun LargeWindowComposer(
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
             onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, onPermissions = onPermissions, onWorkflows = onWorkflows, loop = loop,
             blockedLabel = blockedLabel, onBlocked = onBlocked, useShellSurface = useShellSurface, modelPill = modelPill, wrapPlaceholder = wrapPlaceholder,
+            imageLimits = imageLimits,
         )
     }
 
@@ -149,9 +153,8 @@ fun LargeWindowComposer(
             scope.launch {
                 try {
                     for (uri in uris) {
-                        val mediaCount = state.attachments.count { it.media }
                         val result = withContext(NonCancellable + Dispatchers.IO) {
-                            importDroppedAttachment(context, uri, mediaCount)
+                            importDroppedAttachment(context, uri, state.attachments, limits = imageLimits, canSpill = service != null)
                         }
                         result.attachment?.let { attachment ->
                             ComposerDropCleanup.track(state, context)

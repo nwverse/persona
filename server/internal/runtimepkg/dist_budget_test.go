@@ -25,9 +25,21 @@ import (
 // Antigravity multi-instance companion flags and --agy-dir env propagation (#14483) add 373 B (260,942 B).
 // An Antigravity CLI without session/set_mode: checks skip the switch and starts say to update agy (#14533), 149 B (261,091 B).
 // Antigravity Gemini API-key gateway model discovery routes through HTTP(S)_PROXY and honors NO_PROXY (#14552), 1,497 B (262,588 B).
+// Keeping Antigravity steps at a reused lower index when the export goes on past them, dropping them again once the run re-covers them (#14626), adds 230 B (262,818 B).
+// Antigravity native error backfill at every unexported index, loading conversations another agy process created, with read failures in the history token (#14627), 427 B (263,245 B).
+// Antigravity subagent reports and background task results as task notices, invoke_subagent Role / Prompt (#14625), 749 B (263,994 B).
+// Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
+// An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
+// Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
+// Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
+// Antigravity shared ACP exit cleanup (#15756) and always-allow permission choices (#15785) bring the total to 265,686 B.
+// Antigravity permission mode persistence across companion restarts and resume re-application (#15807) add 273 B (265,959 B).
+// Antigravity agent-mode MCP proxy budgeting for non-assistant leader and worker catalogs (#15822) adds 253 B (266,212 B).
+// Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
+// Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 262_588
+	const budget = 266_261
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

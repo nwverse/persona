@@ -73,6 +73,81 @@ describe("the setup a Persona chat's next message runs on", () => {
     expect(assistantSetup(running, unknown)).toEqual({ provider: "gone", model: undefined, effort: "medium", source: "default" });
   });
 
+  it("keeps a running non-Claude runtime main or leader conversation on its actual engine even while launchers load or default is Claude", () => {
+    const agySession = session({
+      agent: "agy",
+      launcher: undefined,
+      source_kind: "runtime",
+      source_instance_id: "agy",
+      model: "gemini-3-pro-high",
+      effort: "high",
+    });
+    const mainAgy = chat({ isMain: true, config: "claude", def: { provider: "claude", model: "", effort: "high" }, session: agySession });
+    // Before /launchers?purpose=assistant resolves (info === undefined), never fall back to Claude + Default (recommended).
+    const loadingSetup = assistantSetup(mainAgy, undefined);
+    expect(loadingSetup).toEqual({ provider: "agy", model: "gemini-3-pro-high", effort: "high", source: "own" });
+    expect(assistantPillView(mainAgy, loadingSetup, undefined, {})).toMatchObject({
+      engine: "agy",
+      provider: "agy",
+      model: "gemini-3-pro-high",
+      effort: "high",
+    });
+
+    // Even when Claude is absent from the assistant catalog (e.g. unavailable), keep the running AGY session.
+    const agyOnlyInfo: AssistantLaunchers = {
+      launchers: [{ name: "agy", source: "agy", assistant: true }],
+      def: { provider: "claude", model: "", effort: "high" },
+      unavailable: [{ name: "claude", kind: "launcher", agent: "claude", reason: "unavailable" }],
+    };
+    const agyCatalog: ModelList = {
+      list: { agent: "agy", models: [{ id: "gemini-3-pro-high", name: "Gemini 3 Pro (High)", default_effort: "high" }] },
+    };
+    const loadedSetup = assistantSetup(mainAgy, agyOnlyInfo);
+    expect(loadedSetup).toEqual({ provider: "agy", model: "gemini-3-pro-high", effort: "high", source: "own" });
+    expect(assistantPillView(mainAgy, loadedSetup, agyOnlyInfo, agyCatalog)).toMatchObject({
+      engine: "agy",
+      provider: "agy",
+      model: "Gemini 3 Pro",
+      effort: "high",
+    });
+
+    // A leader/direction chat running on AGY also keeps its own engine when Main chat defaults to Claude.
+    const leaderAgy = chat({ isMain: false, followsDefault: true, config: "claude", session: agySession });
+    expect(assistantSetup(leaderAgy, info)).toEqual({ provider: "agy", model: "gemini-3-pro-high", effort: "high", source: "own" });
+  });
+
+  it("resolves a default-following main chat to its concrete model instead of vague Default (recommended)", () => {
+    const emptyModelDefault: AssistantLaunchers = {
+      launchers: [{ name: "claude", source: "builtin" }, { name: "agy", source: "agy", agent: "agy", assistant: true }],
+      def: { provider: "claude", model: "", effort: "high" },
+      unavailable: [],
+    };
+    // No running session yet: resolve the catalog's default row to its concrete model name.
+    const freshMain = chat({ isMain: true, session: undefined });
+    const freshSetup = assistantSetup(freshMain, emptyModelDefault);
+    expect(assistantPillView(freshMain, freshSetup, emptyModelDefault, { list: claudeList })).toMatchObject({
+      engine: "claude",
+      model: "Opus 5.5",
+      effort: "high",
+    });
+    // Running Gemini main chat following launcher.gemini default with empty model keeps Gemini icon and running model.
+    const geminiInfo: AssistantLaunchers = {
+      launchers: [{ name: "gemini", source: "builtin", agent: "gemini" }],
+      def: { provider: "launcher.gemini", model: "", effort: "high" },
+      unavailable: [],
+    };
+    const geminiChat = chat({ isMain: true, session: session({ agent: "gemini", launcher: "gemini", model: "gemini-2.5-pro", effort: "high" }) });
+    const geminiSetup = assistantSetup(geminiChat, geminiInfo);
+    expect(assistantPillView(geminiChat, geminiSetup, geminiInfo, {
+      list: { agent: "gemini", models: [{ id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" }] },
+    })).toMatchObject({
+      engine: "gemini",
+      provider: "gemini",
+      model: "Gemini 2.5 Pro",
+      effort: "high",
+    });
+  });
+
   it("an older hub keeps this page's pick; the new-conversation page has its own, the default otherwise", () => {
     pickLauncher("server/c1", "team-api");
     pickModel("server/c1", "claude-haiku-5-5");
@@ -255,6 +330,27 @@ describe("what a pick keeps", () => {
     expect(assistantPickOf({ provider: "claude", model: "vendor model" }, claudeList, now)).toBeNull();
     expect(assistantPickOf({ provider: "claude", model: "opus", effort: "medium" }, claudeList, now)).toBeNull();
     expect(assistantPickOf({ provider: "claude", model: "opus", effort: "max" }, claudeList, now)).toEqual({ launcher: "claude", model: "opus", effort: "max" });
+  });
+
+  it("keeps a concrete model ID even when marked default, while 'default' and locked launchers still follow launcher default (#13567)", () => {
+    const concreteDefault: LauncherModels = {
+      agent: "claude",
+      models: [
+        { id: "default", name: "Default (recommended)", default: false, resolved: "claude-opus-5-5", efforts: ALL },
+        { id: "opus", name: "Opus 5.5", default: true, resolved: "claude-opus-5-5", efforts: ALL },
+        { id: "claude-opus-5-5", name: "Opus 5.5 exact", default: true, efforts: ALL },
+      ],
+    };
+    // Concrete models marked default: true keep their model ID so picking them pins the model.
+    expect(assistantPickOf({ provider: "claude", model: "opus", effort: "high" }, concreteDefault, null)).toEqual({ launcher: "claude", model: "opus", effort: "high" });
+    expect(assistantPickOf({ provider: "claude", model: "claude-opus-5-5" }, concreteDefault, null)).toEqual({ launcher: "claude", model: "claude-opus-5-5" });
+    // Explicit "default" row omits model even when launcher settings moved default: true to a concrete row.
+    expect(assistantPickOf({ provider: "claude", model: "default" }, concreteDefault, null)).toEqual({ launcher: "claude" });
+    // Locked launchers fix their own --model, so picking their sole default row still omits model.
+    const lockedConcrete: LauncherModels = { agent: "claude", locked: "--model", models: [{ id: "sonnet", name: "Sonnet", default: true }] };
+    expect(assistantPickOf({ provider: "relay", model: "sonnet" }, lockedConcrete, null)).toEqual({ launcher: "relay" });
+    // Fresh draft (current = null) pins the displayed setup instead of returning null.
+    expect(assistantPickOf(now, claudeList, null)).toEqual({ launcher: "claude", model: "opus", effort: "medium" });
   });
 });
 

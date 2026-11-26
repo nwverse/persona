@@ -64,6 +64,7 @@ type fakeHub struct {
 	rcFiles             map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers       map[string]bool                    // a machine whose launchers.list answers only when the call gives up
 	launcherGate        chan struct{}                      // when set, every launchers.list answer waits for this gate
+	onLauncherModels    func(context.Context, string)      // before the requested launcher returns its models, under mu
 	failLauncherRefresh bool                               // launchers.list with refresh:true fails, ordinary reads still answer
 	launcherListParams  []map[string]any                   // launchers.list params in order
 	agentModels         map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
@@ -108,6 +109,7 @@ type fakeHub struct {
 	replies        []string      // the model's answers, in turn (the last one again when they run out)
 	answers        []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown      bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
+	modelRequests  int           // every model HTTP request, across all purposes
 	noModel        bool
 	asked          []modelCall
 	pushes         []Notification
@@ -178,6 +180,9 @@ type fakeHub struct {
 	delegateAsked []modelCall
 	tabReply      string
 	tabAsked      []string
+	// tabModelEntered / tabModelGate hold one naming-model answer open until the test releases it.
+	tabModelEntered chan struct{}
+	tabModelGate    <-chan struct{}
 	// The todo titles' model (todo.title): its answer, an error instead, and what it was asked.
 	todoTitleReply string
 	todoTitleErr   error
@@ -233,9 +238,11 @@ type fakeHub struct {
 	doctor      map[string]string
 	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
-	// questions it got.
-	auth      map[string]proto.ClaudeAuthStatus
-	authAsked []string
+	// questions it got. authBy, when set, answers claude.auth_status from the full RPC params.
+	auth       map[string]proto.ClaudeAuthStatus
+	authBy     func(device string, params map[string]any) proto.ClaudeAuthStatus
+	authAsked  []string
+	authParams []map[string]any
 	// authHold, when set, holds claude.auth_status's answer until it is closed (a node running a slow launcher).
 	authHold chan struct{}
 	// nodes answer node methods on any machine, by method, before the answers below (answerNode).
@@ -261,15 +268,36 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 	f.mu.Lock()
 	h, in := f.hello, f.inbox
 	f.mu.Unlock()
-	if in != nil { // the inbox's tests give the models there (inbox_fake_test.go)
-		h.Models = in.hubModels()
+	if in != nil {
+		in.mu.Lock()
+		hasModels := in.model != nil || len(in.models) > 0
+		in.mu.Unlock()
+		if hasModels { // Only an explicitly configured fake Inbox replaces the ordinary hello's models.
+			h.Models = in.hubModels()
+		}
 	}
 	return h, nil
+}
+
+// setHello updates the hub's hello under f.mu so tests can mutate it after a
+// Service has started background work without racing against Hello.
+func (f *fakeHub) setHello(fn func(*Hello)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(&f.hello)
+}
+
+// setLocale sets the hub hello's locale under f.mu.
+func (f *fakeHub) setLocale(locale string) {
+	f.setHello(func(h *Hello) { h.Locale = locale })
 }
 
 // deviceCallsForTest records calls made with the test's context under fakeHub.mu.
 // Background refreshes can reach the same node independently of the action under test.
 type deviceCallsForTest struct{}
+
+// sessionListOfflineForTest lets a test drop a node read on one request while unrelated background reads proceed.
+type sessionListOfflineForTest struct{}
 
 // afterListCall marks the context of the call a test arms afterList for (listHooked).
 type afterListCall struct{}
@@ -288,6 +316,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.mu.Unlock()
 		if check && ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if offline, ok := ctx.Value(sessionListOfflineForTest{}).(func(string) bool); ok && offline(p.Device) {
+			return nil, fmt.Errorf("%s: %w", p.Device, apierr.ErrOffline)
 		}
 	}
 	if p.Method == DeviceSessionGet {
@@ -362,6 +393,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 	}
 	f.mu.Unlock()
+	if hooks.beforeCall != nil {
+		hooks.beforeCall(p)
+	}
 	if hooks.before != nil {
 		hooks.before(read)
 	}
@@ -371,6 +405,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	result, err := f.deviceCall(ctx, p)
 	if hooks.after != nil {
 		hooks.after(read)
+	}
+	if hooks.afterCall != nil {
+		hooks.afterCall(p)
 	}
 	return result, err
 }
@@ -607,6 +644,12 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		return json.Marshal(map[string]any{"launchers": f.launcherList})
 	case assistantwire.DeviceLaunchersModels:
 		name, _ := a["name"].(string)
+		if f.onLauncherModels != nil {
+			f.onLauncherModels(ctx, name)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		models := f.agentModels[name]
 		if models == nil {
 			models = []proto.AgentModel{}
@@ -642,6 +685,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case assistantwire.DeviceClaudeAuthStatus:
 		name, _ := a["name"].(string)
 		f.authAsked = append(f.authAsked, p.Device+"/"+name)
+		f.authParams = append(f.authParams, maps.Clone(a))
 		if hold := f.authHold; hold != nil {
 			f.mu.Unlock()
 			select {
@@ -649,6 +693,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			case <-ctx.Done():
 			}
 			f.mu.Lock()
+		}
+		if f.authBy != nil {
+			return json.Marshal(f.authBy(p.Device, a))
 		}
 		if f.auth == nil {
 			return nil, errors.New("unknown method claude.auth_status")
@@ -738,6 +785,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.retired = append(f.retired, a["session_id"].(string))
 		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
+	case deviceSessionRetireGuarded:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
+		return json.RawMessage(`{"closed":true,"guard_verified":true}`), nil
 	case deviceSessionStop:
 		if f.retireErr != nil {
 			return nil, f.retireErr
@@ -793,7 +847,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
 		}
-		if !f.omitSentItems && a[holdPushesParam] == true {
+		source, _ := a["message_source"].(map[string]any)
+		if !f.omitSentItems && source["kind"] == proto.SourceSupervision {
 			if text, _ := a["text"].(string); text != "" {
 				target, _ := out["session_id"].(string)
 				if target == "" {
@@ -1106,10 +1161,47 @@ type memStore struct {
 	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
-	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
+	// failPut: what writing settings fails with (nil: it writes; set through setFailPut); nothing is written then.
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+	// routing: the model_routing rows written (PutModelRouting).
+	routing []db.ModelRoutingRow
+}
+
+// rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
+func (m *memStore) rawSetting(key string) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	raw, ok := m.vals[key]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(raw), true
+}
+
+// setRawSetting stores raw JSON bytes directly for key under m.mu without incrementing puts (for seeding raw or corrupt JSON).
+func (m *memStore) setRawSetting(key string, raw []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	m.vals[key] = slices.Clone(raw)
+}
+
+// putCount returns the number of settings writes recorded under m.mu.
+func (m *memStore) putCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts
+}
+
+// snapshotRaw captures putCount and a cloned copy of key's stored JSON bytes atomically under m.mu.
+func (m *memStore) snapshotRaw(key string) (int, []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts, slices.Clone(m.vals[key])
 }
 
 // setFailSetting makes reading every setting fail with err from now on; nil reads them again. It takes the lock, as the
@@ -1143,6 +1235,22 @@ func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
 }
 
 func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
+func (m *memStore) PutModelRouting(_ context.Context, r db.ModelRoutingRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routing = append(m.routing, r)
+	return nil
+}
+
+// modelRoutings are the model_routing rows written so far.
+func (m *memStore) modelRoutings() []db.ModelRoutingRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.routing)
+}
+
+func (noPlans) PutModelRouting(context.Context, db.ModelRoutingRow) error { return nil }
 
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
@@ -1402,6 +1510,7 @@ func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
 func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
+	installTestTrackKinds(s)
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.
@@ -1626,6 +1735,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.modelRequests++
+		f.mu.Unlock()
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
 			http.NotFound(w, r)
 			return
@@ -1643,10 +1755,13 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		}
 		f.mu.Lock()
 		reply, fail, down, delay, stop := "", false, false, time.Duration(0), "end_turn"
+		var tabModelGate <-chan struct{}
+		var tabModelEntered chan struct{}
 		switch {
 		case in.System == tabName:
 			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
 			reply = f.tabReply
+			tabModelGate, tabModelEntered = f.tabModelGate, f.tabModelEntered
 		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
 			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
 			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
@@ -1697,6 +1812,16 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 			down = f.modelDown
 		}
 		f.mu.Unlock()
+		if tabModelEntered != nil {
+			close(tabModelEntered)
+		}
+		if tabModelGate != nil {
+			select {
+			case <-tabModelGate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if fail {
 			http.Error(w, `{"error":{"message":"no model"}}`, http.StatusBadRequest)
 			return
@@ -1716,7 +1841,8 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	}))
 	t.Cleanup(srv.Close)
 	key := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(key, []byte("k"), 0o600); err != nil {
+	// ai shares a quota hold by address and credential. A recycled test port belongs to a new fixture.
+	if err := os.WriteFile(key, []byte(randomHex(16)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.hello.Models.AI = ai.Config{BaseURL: srv.URL, APIKeyFile: key, Model: "fake"}

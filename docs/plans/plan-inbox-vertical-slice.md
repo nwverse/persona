@@ -44,7 +44,7 @@ The Inbox is the busiest single domain on every side, and most of its changes al
 - **Ten files outside the Inbox core** (`inbox*.go` less the task bridge's files) **reach its in-memory state**
   (`inboxBook`, `s.inbox`). Five write no item: `assistant/context.go` (`followingInboxItems`, 529-532),
   `assistant/tasks_draft_decisions.go` (88-89, 111-118), `assistant/service.go` (350), and through `b := &s.inbox`
-  `assistant/origins.go` (`gatherOriginEvidence`, 219) and `assistant/feishu_workbench.go` (`workbenchItem`, 575). Five
+  `assistant/origins.go` (`gatherOriginEvidence`, 219) and `assistant/inbox_workbench.go` (`workbenchItem`; it was in `feishu_workbench.go` until that moved into the lark module). Five
   are the task bridge's (section 2), and they also write items under the book's lock: `assistant/supervise_inbox.go`
   (51, 154; writes at 179-186), `assistant/tasks_inbox.go` (27, 65, 85; writes at 86-96; `checkTaskInbox`, a method on
   `*inboxBook`, at 43), `assistant/inbox_task_links.go` (211, 281; writes at 232-235, 247-252 and 305-313),
@@ -108,7 +108,7 @@ a communication center. "Inbox" is the user-facing Inbox, not #7563's durable in
 
 ### 3.1 Server
 
-New packages, all under the manager's tree (D1; feature modules live outside it, in server/internal/modules/<id>, as D1's 2026-11-23 amendment says): server/internal/assistant/kernel (the registration seam, D2; it already hosts the feature modules, `docs/architecture/core-and-modules.md`),
+New packages, all under the manager's tree (D1; feature modules live outside it, in server/internal/modules/<id>, as D1's 2026-11-23 amendment says): server/internal/assistant/kernel/seam (the registration seam, D2; its parent package kernel hosts the feature modules, `docs/architecture/core-and-modules.md`),
 server/internal/assistant/inbox/item (the item's lifecycle core) with its adapter inbox/item/itemadapt (the stored
 item, S8) and, only if D3's gates pass, server/internal/assistant/inbox (the stateful module behind inbox.Host).
 Archguard's `managerPart` and the hub's forbidden prefixes cover them with no new entries. Package assistant keeps the
@@ -155,13 +155,14 @@ func (k Kernel) Snapshot(fn func(ctx context.Context, snap *assistantwire.Snapsh
   line at start-up by the value that holds the mistake: an empty, malformed or duplicate name (ModuleName, BusMethod,
   ToolName, a route's pattern), a pattern outside the relayed tables, a nil function, a second hook from the same module
   (hooks have no name, so they are keyed by module), anything after Seal, and any method of a zero Kernel. Route
-  handlers registered through the kernel run under the one listed catch site, kernel/dispatch.go: a defect there is
+  handlers registered through the kernel run under the one listed catch site, kernel/seam/dispatch.go: a defect there is
   reported and answered with 500, and any other panic goes on to net/http. Tables run in registration order, which is
   today's line order, and dispatch goes through the registry, which never hands out its slices.
 - **Hosts stay with their modules.** `saved.Host` and `saved.Register` stay as saved's adapter: a new saved/module.go
   holds the dependencies `saved.NewModule` was given and builds `saved.Host` from them and the Kernel's methods, so
   `server/internal/assistant/saved/saved.go` is untouched. saved's own untyped Host stays inside package saved until
-  its open drafts merge or idle 14 days; its typed ports then replace it.
+  its open drafts merge or idle 14 days; its typed ports then replace it (#15222). The Inbox module takes typed ports
+  through its NewModule from the start, never saved's `func() any` store or map events.
 - **One registry.** The same registry backs #7891's registry stage: in-package domains register routes, loops and tools
   from their own files through package-level front doors taking the same typed names, which New feeds in before the
   modules, so there is one duplicate rule and one tool placement function. `Kernel.Bus` is the seam for any domain's
@@ -276,7 +277,7 @@ for it.
   - Web, a first byte-neutral PR separate from W1: `web/src/views/inbox/lark.svg`, the only brand mark outside
     `web/src/ui/brands`, moves there (`web/src/ui/BrandMark.tsx` and `web/src/views/inbox/InboxParts.tsx` import it),
     and a boundary test lists every outside importer of `web/src/views/inbox`: the lazy route in `web/src/App.tsx`,
-    `web/src/views/messages/Messages.tsx`'s LarkThread (the designed exception), the 7 importers of InboxParts,
+    `web/src/modules/lark/Messages.tsx`'s LarkThread (the designed exception), the 7 importers of InboxParts,
     `web/src/modules/recording/RecordingHandoff.tsx` (HandOffTargets), `web/src/lib/inbox-actions.test.ts` and
     `web/src/views/extensions/ExtensionSlots.managers.test.tsx`. The Inbox's Chip moves to `web/src/ui` only with a
     `docs/design/DESIGN_SYSTEM.md` row; its Count stays, since converging on `web/src/ui/CountBadge.tsx` changes pixels
@@ -352,6 +353,9 @@ repository and the facade; and the client steps wait for the client domain guard
   the kernel passes its domain-rules hook; `go vet ./internal/assistant/...` is clean; X6's measures are in the PR.
 - *Revised 2026-11-22 in #10613:* typed ports and names, defects and the catch site in place of an untyped Infra and
   panics, and a layer declaration in place of a line in a domain-package list.
+- *Built in #15182:* the seam is package `seam` under server/internal/assistant/kernel, because package kernel already
+  hosts the feature modules and declares no layer yet, and NewRegistry also takes a Defects port, which the catch site
+  reports to (`docs/server/architecture.md` "Validated and sealed").
 
 ### S2. Guards and contract tests
 - **Change:** an archguard parse-only test: the book (`s.inbox.*` selectors, `b := &s.inbox`, methods on `*inboxBook`)
@@ -391,7 +395,7 @@ repository and the facade; and the client steps wait for the client domain guard
   `assistant/todo_outcome.go:542`. `assistant/tasks_draft_decisions.go` reads the book through the first two Reader
   methods (the card-send lock, an item copy) and leaves the allowlist. Deferred until their PRs land: `replyInDoubt`
   (`assistant/inbox_triage.go:470`, 7 open PRs), `modelPaused` and the purpose constants (`assistant/inbox_hub.go`, 4),
-  `assistant/context.go` (7), `assistant/feishu_workbench.go` (4), `assistant/origins.go` (#2049, idle since
+  `assistant/context.go` (7), `assistant/inbox_workbench.go` (formerly `feishu_workbench.go`, 4), `assistant/origins.go` (#2049, idle since
   2026-11-09).
 - **Done when:** `go build ./...` succeeds; the full `./internal/assistant` package passes once, with its duration, and
   `./internal/archguard` passes; the allowlist is shorter; `scripts/test/test_doc_go_paths.py` passes.

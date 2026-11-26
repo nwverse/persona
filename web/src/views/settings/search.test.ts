@@ -14,6 +14,7 @@ const PAGES = [
   "./LanguageRow.tsx",
   "./TranslationSettings.tsx",
   "./AgentOpenSetting.tsx",
+  "./SeenRowsSetting.tsx",
   "./TerminalModeSetting.tsx",
   "./SidebarPages.tsx",
   "./AssistantSettings.tsx",
@@ -72,6 +73,8 @@ const views = new URL("../", import.meta.url);
 const sources = (readdirSync(views, { recursive: true }) as string[])
   .filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
   .map((f) => readFileSync(new URL(f, views), "utf8"))
+  // Advanced › Appearance's extension theme row is drawn by ui/ExtensionThemePicker.tsx when a theme is installed
+  .concat(readFileSync(new URL("../../ui/ExtensionThemePicker.tsx", import.meta.url), "utf8"))
   .join("\n");
 
 // The index reads t() at module scope, just as it does after the page loads its catalog. Build an independent
@@ -169,6 +172,26 @@ describe("the settings search's index", () => {
     expect(searchSettings("effort").groups.map((g) => g.anchor)).toEqual(expect.arrayContaining(["settings-claude", "settings-codex", "settings-model-config"]));
   });
 
+  it.each(languages)("remaps Inbox Sources search entries to integrations -sources when integrations_v2 is on in $lang", ({ t, searchSettings }) => {
+    const label = t("settings-nav.tab_sources");
+    const off = searchSettings(label, false);
+    expect(off.tabs).toContain("sources");
+    expect(off.tabs).not.toContain("integrations");
+    expect(off.groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-sources" }));
+
+    const on = searchSettings(label, true);
+    expect(on.tabs).toContain("integrations");
+    expect(on.tabs).not.toContain("sources");
+    expect(on.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+
+    const flow = searchSettings(t("settings-integrations.view_sources"), true);
+    expect(flow.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+
+    const fwdLabel = t("settings-assistantsettings.inbox_todo_forward");
+    expect(searchSettings(fwdLabel, false).groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-todo-forward" }));
+    expect(searchSettings(fwdLabel, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-todo-forward", sub: "-sources" }));
+  });
+
   it("lands every entry on something a page draws, and lists each once", () => {
     const { SEARCH_INDEX } = english;
     // anchors a page writes from a value: each one's source, and the values it takes
@@ -176,7 +199,7 @@ describe("the settings search's index", () => {
       [/^shortcut-(.+)$/, "anchor={`shortcut-${s.id}`}", (id) => [...SHORTCUTS, ...LOCAL_SHORTCUTS].some((s) => s.id === id)],
       [/^knowledge-(.+)$/, "anchor={`knowledge-${kind}`}", (kind) => kind === "messages" || kind === "docs"],
       [/^settings-(.+)$/, "id={`settings-${id}`}", (id) => ["claude", "codex", "agy", "omp", "grok"].includes(id)],
-      [/^configuration-(.+)$/, "data-settings-row={`configuration-${doc.id}-${field.id}`}", (id) => id === `${TERMINAL_LABS_ID}-renderer` || id === "assistant-work-work_guide" || id === "assistant-todos-v2-todos_v2"],
+      [/^configuration-(.+)$/, "data-settings-row={`configuration-${doc.id}-${field.id}`}", (id) => id === `${TERMINAL_LABS_ID}-renderer` || id === "assistant-work-work_guide" || id === "assistant-todos-v2-todos_v2" || id === "assistant-integrations-v2-integrations_v2"],
     ];
     const drawn = (anchor: string) =>
       new RegExp(`\\b(anchor|data-settings-row|data-settings-group|id)="${anchor}"`).test(sources) ||

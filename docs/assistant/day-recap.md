@@ -214,6 +214,12 @@ to `recordingRolling`), which the watch stores beside `WatchSync.phoneRollingKey
 The phone sets them from what its app supports, the consent and its hub's last `hello.features`; neither goes through
 the hub.
 
+One more key rides beside them since #15214: `recordingModule`, the word `allowed` or `off`, the phone's answer to
+whether its hub's recording module is on (docs/apple/recording.md, "With the hub's recording module off (#15214)"). Absent
+(a phone from before it) or any other value means allowed. While it is `off` the watch starts nothing, a start the
+phone asks for included, and the All-Day Recording face shows the mode's name alone; a day that already records goes on
+until the user stops it.
+
 ## Phone to hub
 
 Only on a hub that lists `recording_day` (WS `hello.features` and trusted `/health`), which it does only while the
@@ -438,6 +444,12 @@ The minutes' routes serve a day recording too, so no route is added for them:
   time.
 
 ## How the hub writes the recap
+
+The recap's writer is the recording module's (`server/internal/modules/recording/writers`: `day_recap_write.go` the
+round, the notes and the push, `day_recap.go` what an upload and a confirmation do to a recap). It reaches the
+knowledge base only through the storage port (`recordingwire.Core`); reading a recap that exists (`ReadDayRecap`, the
+detail, the evening briefing) is the knowledge base's own and works without the module
+(`docs/architecture/core-and-modules.md` "Recording").
 
 ### Reading as it arrives
 
