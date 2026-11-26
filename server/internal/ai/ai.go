@@ -121,8 +121,9 @@ func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
 }
 
-// NewRun is a client whose requests run answers instead of an HTTP API: no gate, no key (a launcher's CLI on a
-// computer, cfg.RunLauncher).
+// NewRun is a client whose requests run answers instead of an HTTP API (a launcher's CLI on a computer,
+// cfg.RunLauncher). When cfg.RunLauncher is non-empty, calls share limit.go's per-launcher gate so consecutive
+// full-budget timeouts back off and cap concurrency instead of piling onto a wedged launcher.
 func NewRun(cfg Config, run func(context.Context, Request) (Reply, error)) *Client {
 	return &Client{cfg: cfg, run: run}
 }
@@ -211,9 +212,29 @@ func (c *Client) chat(ctx context.Context, r Request) (Reply, error) {
 		return resolved.Chat(ctx, r)
 	}
 	if c.run != nil {
+		if c.cfg.RunLauncher == "" {
+			reply, err := c.run(ctx, r)
+			reply.Model = cmp.Or(reply.Model, c.cfg.Model)
+			return reply, err
+		}
+		g := gateForRun(c.cfg)
+		t, err := g.admit(ctx)
+		if err != nil {
+			return Reply{}, err
+		}
+		// Measure the budget actually remaining for c.run after admit returns, so time spent queued under a cap
+		// (or tight best-effort deadlines like 3s info.tag) never gets blamed on the launcher as a full-budget timeout.
+		deadline, hasDeadline := ctx.Deadline()
+		var budget time.Duration
+		if hasDeadline {
+			budget = time.Until(deadline)
+		}
 		reply, err := c.run(ctx, r)
 		reply.Model = cmp.Or(reply.Model, c.cfg.Model)
-		return reply, err
+		if err = g.doneRun(t, err, ctx.Err(), hasDeadline, budget); err != nil {
+			return Reply{}, err
+		}
+		return reply, nil
 	}
 	if !c.cfg.Configured() {
 		return Reply{}, errNotConfigured

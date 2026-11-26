@@ -34,14 +34,16 @@ const (
 )
 
 var (
-	quotaPause = 30 * time.Minute // without a Retry-After
-	busyFirst  = 5 * time.Second  // the first busy pause; each busy answer in a row doubles it
-	busyMost   = 5 * time.Minute
-	afterMost  = 24 * time.Hour // a Retry-After longer than this is taken as this
-	growAfter  = 10             // successes under a cap before it is raised by one
-	capLift    = 8              // a cap raised past this is lifted
-	now        = time.Now
-	logf       = log.Printf
+	quotaPause          = 30 * time.Minute // without a Retry-After
+	busyFirst           = 5 * time.Second  // the first busy pause; each busy answer in a row doubles it
+	busyMost            = 5 * time.Minute
+	afterMost           = 24 * time.Hour // a Retry-After longer than this is taken as this
+	growAfter           = 10             // successes under a cap before it is raised by one
+	capLift             = 8              // a cap raised past this is lifted
+	runTimeoutThreshold = 2              // consecutive normal-budget CLI timeouts before holding the launcher gate
+	runBusyMinBudget    = 10 * time.Second
+	now                 = time.Now
+	logf                = log.Printf
 )
 
 // SetBusyPauseForTest makes a busy answer's first pause d instead of five seconds until t ends, for another package's
@@ -103,9 +105,23 @@ func IsPaused(err error) bool {
 	return errors.As(err, &p)
 }
 
-// Held is the pause on cfg's connection, nil when requests go out.
+// Held is the pause on cfg's connection or CLI launcher gate, nil when requests go out.
 func Held(cfg Config) *Pause {
-	if !cfg.Configured() || cfg.RunLauncher != "" {
+	if cfg.RunLauncher != "" {
+		v, ok := gates.Load(runGateKey(cfg))
+		if !ok {
+			return nil
+		}
+		g := v.(*gate)
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		if !g.held {
+			return nil
+		}
+		p := g.pause
+		return &p
+	}
+	if !cfg.Configured() {
 		return nil
 	}
 	key, err := New(cfg).key()
@@ -126,22 +142,23 @@ func Held(cfg Config) *Pause {
 	return &p
 }
 
-// gate is one connection's state; every client of the same address and key shares it.
+// gate is one connection's (or CLI launcher's) state; every client of the same target shares it.
 type gate struct {
 	host string // for the log
 
-	mu       sync.Mutex
-	held     bool      // from the answer that paused it to the next success
-	pause    Pause     // while held
-	since    time.Time // when it was held
-	putOff   int       // requests not sent while held
-	probing  bool      // the pause is over and one request is finding out, until the upstream answers it
-	strikes  int       // busy answers in a row
-	cap      int       // requests in flight at most, 0 for no cap
-	inflight int
-	out      []time.Time   // when each request in flight went out, the longest out first, for the log (noTurn)
-	fine     int           // successes since the cap last changed
-	wake     chan struct{} // closed on every change, for requests waiting under the cap
+	mu          sync.Mutex
+	held        bool      // from the answer that paused it to the next success
+	pause       Pause     // while held
+	since       time.Time // when it was held
+	putOff      int       // requests not sent while held
+	probing     bool      // the pause is over and one request is finding out, until the upstream answers it
+	strikes     int       // busy answers in a row
+	runTimeouts int       // consecutive normal-budget CLI timeouts before entering held
+	cap         int       // requests in flight at most, 0 for no cap
+	inflight    int
+	out         []time.Time   // when each request in flight went out, the longest out first, for the log (noTurn)
+	fine        int           // successes since the cap last changed
+	wake        chan struct{} // closed on every change, for requests waiting under the cap
 	// The requests put off for want of a turn since the last log line about them (noTurn): how many, since when,
 	// and when that line was written.
 	noTurns      int
@@ -193,6 +210,30 @@ func gateForAPI(api, baseURL, key string) *gate {
 
 func gateFor(baseURL, key string) *gate {
 	return gateForAPI("", baseURL, key)
+}
+
+func runGateKey(cfg Config) string {
+	return "run:" + url.PathEscape(cfg.ViaMachine) + "#" + url.PathEscape(cfg.RunLauncher) + "#" + url.PathEscape(cfg.Model)
+}
+
+func runGateHost(cfg Config) string {
+	host := cfg.RunLauncher
+	if cfg.ViaMachine != "" {
+		host = cfg.ViaMachine + "/" + host
+	}
+	if cfg.Model != "" {
+		host += ":" + cfg.Model
+	}
+	return host
+}
+
+func gateForRun(cfg Config) *gate {
+	k := runGateKey(cfg)
+	if g, ok := gates.Load(k); ok {
+		return g.(*gate)
+	}
+	g, _ := gates.LoadOrStore(k, &gate{host: runGateHost(cfg), wake: make(chan struct{})})
+	return g.(*gate)
 }
 
 // admit lets a request go out, waits its turn, or puts it off while the connection is held. Its turn: a slot under
@@ -415,6 +456,83 @@ func (g *gate) done(t turn, probe, answered bool, err error) error {
 		if reason == ReasonQuota {
 			g.pause.Reason = ReasonQuota
 		}
+	}
+	return &PausedError{g.pause}
+}
+
+// doneRun records how a CLI model.run request ended (ai.NewRun). Consecutive normal-budget timeouts
+// (context.DeadlineExceeded, including node CodeModelRunTimeout) trip the same busy pause and concurrency cap used for
+// HTTP limits so background lanes defer cleanly instead of piling onto a slow or rate-limited CLI (#16420). Explicit
+// caller cancellations (context.Canceled) and tight remaining budgets (< runBusyMinBudget) leave the gate state
+// unchanged; non-timeout errors (offline, logged out, decode failures) reset consecutive timeout counting without
+// tripping the gate.
+func (g *gate) doneRun(t turn, err error, ctxErr error, hasDeadline bool, budget time.Duration) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.inflight--
+	for i, at := range g.out {
+		if at.Equal(t.at) {
+			g.out = append(g.out[:i], g.out[i+1:]...)
+			break
+		}
+	}
+	defer g.changed()
+	if t.probe {
+		g.probing = false
+	}
+	if err == nil {
+		g.runTimeouts = 0
+		switch {
+		case g.held && t.probe:
+			g.letGo()
+			g.strikes = 0
+		case !g.held:
+			g.strikes = 0
+			if g.cap > 0 {
+				if g.fine++; g.fine >= growAfter {
+					g.cap, g.fine = g.cap+1, 0
+					if g.cap > capLift {
+						g.cap = 0
+					}
+				}
+			}
+		}
+		return nil
+	}
+	if errors.Is(ctxErr, context.Canceled) {
+		return err
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		g.runTimeouts = 0
+		return err
+	}
+	if hasDeadline && budget < runBusyMinBudget {
+		return err
+	}
+	// A request sent before the hold that times out after another already held the gate is put off without adding
+	// another strike or double-halving the cap.
+	if g.held && !t.probe {
+		return &PausedError{g.pause}
+	}
+	g.runTimeouts++
+	if !g.held && g.runTimeouts < runTimeoutThreshold {
+		return err
+	}
+	g.strikes++
+	if g.cap == 0 {
+		g.cap = max(1, (g.inflight+1)/2)
+	} else {
+		g.cap = max(1, g.cap/2)
+	}
+	g.fine = 0
+	pause := min(busyFirst<<min(max(g.strikes-1, 0), 16), busyMost)
+	until := now().Add(pause)
+	if !g.held {
+		g.held, g.since, g.putOff = true, now(), 0
+		g.pause = Pause{Reason: ReasonBusy, Until: until}
+		logf("ai: %s is busy (timeout); requests are put off until %s", g.host, clockText(until))
+	} else if until.After(g.pause.Until) {
+		g.pause.Until = until
 	}
 	return &PausedError{g.pause}
 }
