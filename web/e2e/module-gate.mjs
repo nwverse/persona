@@ -114,6 +114,7 @@ try {
         }
         if (!on && e.off) {
           for (const k of e.off.kept) {
+            if (k.needs_on && !spec.phases.includes("on")) continue;  // only data the on phase made exists
             await go(e.page);
             const listed = await visible(page, k, 15000);
             record(id, `${e.name}: ${k.name} still listed while off`, scheme, listed, `${k.selector ?? k.text} on ${e.page}`);
@@ -158,6 +159,7 @@ try {
         // Kept data opened inside the app while its module is off: the read-only page must fetch none of the module.
         if (!spec.expect[id] && e.off) {
           for (const k of e.off.kept) {
+            if (k.needs_on && !spec.phases.includes("on")) continue;
             await page.evaluate((p) => {
               history.pushState(null, "", p);
               dispatchEvent(new PopStateEvent("popstate"));
