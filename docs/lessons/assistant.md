@@ -142,6 +142,16 @@
   Remove the older copy, retain the newer obligations, and check both decision gating and the actual synthetic
   `DeviceAssistantSend` text. This proves literal deduplication, not a stable-policy refactor or provider-context savings.
 
+- Prompt-size checks read the MCP catalog goldens, not newly added tool files (#9762). Regenerate every assistant
+  catalog and check `TestGoldenMCPTools` before trusting the footprint. Measure changed tool and shared-prompt sources
+  too, so stale goldens cannot hide growth. Fitting the total budget does not register a new per-tool baseline key;
+  keep that remaining gate explicit when baseline edits are not authorized.
+
+- Bind manual send approvals as tightly as standing grants (#9762). After the card
+  resolves, serialize the sender recheck and transport with identity changes.
+  Handed-off Inbox suggestions stay manual even when their scope matches a grant.
+  A transport's already-delivered ID proves only a prior send, not delivery of a
+  new attempted text; audit that outcome separately and never report a fresh send.
 
 - Rechecking an Inbox task link must not replay event handling (#5680). Existing processing conversations and saved
   drafts skip the initial task judge; resetting their processing fields to force another pass can duplicate work.
@@ -1061,6 +1071,22 @@ Save the hold timestamp and promotion together. Clear the active record at the e
 turn's decision to the delayed push and channel mirror. Reading the conversation's current hold at notification
 time can pick up the next round. A restart test for promotion must show the hold still exists before it checks
 that a silent finish is refused.
+
+## A wait the Agent names outranks the state the hub guessed (#14899)
+
+A supervised Agent reported `blocked` / `unblock: other` ("someone has to fill in the web form") while two of its old
+polling shells were still running. Triage's background rule read the turn as "N background tasks running, it wakes
+itself" before it looked at the closeout, and the same background work kept the task's turn from settling, so no
+receipt, judgment or supervision signal went out. The task also sat in `needs_user` from an earlier decision the owner
+had dismissed, and `superviseJudged` returned early in that state. Nobody heard of the wait for three and a half hours.
+A rule that runs before the closeout is read must give way when the closeout names a person to wait for, and
+holding a decision open must not silence the task's later turns. The supervisor decides whether the news replaces the
+decision. A `done` closeout that still names the owner as the one to unblock it (`unblock: user` with a `waiting`
+line and no delivery) is a question, not finished work.
+
+Settling such a turn right after triage must not read the work state from the session lists: they pick up the
+triage's state only on the next publish, so the settle saw the previous turn's state and put the turn off again, with
+nothing left to wake it. The settle takes the triage's own entry for that turn (`withPersonWait`).
 
 ## An inbox row can carry more than one provider event (#15517)
 
