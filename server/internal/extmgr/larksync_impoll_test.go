@@ -728,7 +728,7 @@ func TestLarkSyncBackfillV2ResolvesExternalSendersAndUnnamedDMsIdempotently(t *t
 	if _, err := w.h.larkSyncChange(ctx, func(st *larkSyncState) error {
 		b := st.binding(key)
 		b.Tier = larksyncwire.TierFull
-		b.BackfillVersion = 1 // already ran v1 under personal 1-person tenant with 0/N resolved
+		b.BackfillVersion = 2 // already ran v2; v3 (on-demand member lists, the name book, mention scans) runs again
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -743,7 +743,8 @@ func TestLarkSyncBackfillV2ResolvesExternalSendersAndUnnamedDMsIdempotently(t *t
 	}
 	at := w.now().Add(-time.Hour)
 	if err := w.store.CommitLarkSyncRun(ctx, key, map[string]string{
-		"im:p2p_chats": `{"oc_dm_human":"","oc_dm_owner_only":"","oc_dm_bot":""}`,
+		"im:p2p_chats":                 `{"oc_dm_human":"","oc_dm_owner_only":"","oc_dm_bot":""}`,
+		larksyncwire.SenderNamesCursor: `{"ou_left":{"n":"Former Member","t":1}}`,
 	}, []larksyncwire.IndexRecord{
 		{Key: larksyncwire.KeyMessage + "om_ext", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: key, Entry: larksyncwire.EntryChat}}},
 		{Key: larksyncwire.KeyMessage + "om_dm_h", Kind: "message", Sources: []larksyncwire.SourceRef{{Binding: key, Entry: larksyncwire.EntryChat}}},
@@ -805,6 +806,15 @@ func TestLarkSyncBackfillV2ResolvesExternalSendersAndUnnamedDMsIdempotently(t *t
 	}
 	if !slices.Equal(gotReq.ChatSenders["oc_ext_grp"], []string{"ou_ext"}) || !slices.Equal(gotReq.ChatSenders["oc_dm_bot"], []string{"cli_helper"}) {
 		t.Fatalf("ChatSenders = %v", gotReq.ChatSenders)
+	}
+	if gotReq.NameBook != `{"ou_left":{"n":"Former Member","t":1}}` {
+		t.Fatalf("NameBook = %q, want the binding's stored book", gotReq.NameBook)
+	}
+	if !gotReq.SampleTimes["ou_ext"].Equal(at) || gotReq.SampleChats["ou_ext"] != "oc_ext_grp" || gotReq.SampleMessages["ou_ext"] != "om_ext" {
+		t.Fatalf("sample of ou_ext = %v %v %v", gotReq.SampleMessages["ou_ext"], gotReq.SampleTimes["ou_ext"], gotReq.SampleChats["ou_ext"])
+	}
+	if larkSyncBackfillVersion != 3 {
+		t.Fatalf("larkSyncBackfillVersion = %d, want 3", larkSyncBackfillVersion)
 	}
 	if got := w.binding(t, key).BackfillVersion; got != larkSyncBackfillVersion {
 		t.Fatalf("BackfillVersion = %d, want %d", got, larkSyncBackfillVersion)

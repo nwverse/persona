@@ -20,6 +20,107 @@ import (
 // before escalating to supervision (#15733).
 const maxRestartRecoveryAttempts = 2
 
+// runtimeBootEpoch returns this Service's stable per-process boot epoch, initializing it lazily
+// for zero-value Service{} instances in tests (#16099).
+func (s *Service) runtimeBootEpoch() string {
+	if s == nil {
+		return ""
+	}
+	if p := s.todosV2BootEpoch.Load(); p != nil && *p != "" {
+		return *p
+	}
+	gen := "boot_" + randomHex(8)
+	if s.todosV2BootEpoch.CompareAndSwap(nil, &gen) {
+		return gen
+	}
+	if p := s.todosV2BootEpoch.Load(); p != nil && *p != "" {
+		return *p
+	}
+	return gen
+}
+
+// setBootEpoch overrides this Service's boot epoch (tests).
+func (s *Service) setBootEpoch(epoch string) {
+	if s == nil {
+		return
+	}
+	v := strings.TrimSpace(epoch)
+	s.todosV2BootEpoch.Store(&v)
+}
+
+// maybeRunStartupRestartRecovery executes RunRestartRecoverySweep at most once per process boot
+// when todos_v2 is enabled and the session snapshots for machines with prior-epoch checkpoints
+// are ready (#16099).
+func (s *Service) maybeRunStartupRestartRecovery(ctx context.Context, lists machineSessions) {
+	if s == nil || !s.settings(ctx).todosV2On() || s.todosV2RecoverySwept.Load() {
+		return
+	}
+	st := s.todoRecoveryStore()
+	if st == nil {
+		return
+	}
+	states, err := st.ListTodoRecoveryStates(ctx)
+	if err != nil {
+		s.logf("todos_v2 startup restart recovery: list states: %v", err)
+		return
+	}
+	bootEpoch := s.runtimeBootEpoch()
+	needMachines := make(map[string]struct{})
+	for _, rec := range states {
+		if rec.LastActiveBootEpoch != "" && rec.LastActiveBootEpoch != bootEpoch && rec.MachineID != "" {
+			needMachines[rec.MachineID] = struct{}{}
+		}
+	}
+	if len(needMachines) == 0 {
+		for _, l := range lists {
+			if l.err == nil && len(l.list) > 0 {
+				s.todosV2RecoverySwept.CompareAndSwap(false, true)
+				return
+			}
+		}
+		if s.fleetUp.Load() {
+			s.todosV2RecoverySwept.CompareAndSwap(false, true)
+		}
+		return
+	}
+	if lists == nil {
+		lists = machineSessions{}
+	}
+	var sessions []proto.Session
+	seen := make(map[[2]string]struct{})
+	for mid := range needMachines {
+		l, ok := lists[mid]
+		if !ok {
+			l.list, l.err = s.sessions(ctx, mid)
+			lists[mid] = l
+		}
+		if l.err != nil {
+			// Node not synced/reachable yet; wait for a later supervision tick before claiming the one-shot sweep.
+			return
+		}
+		for _, sess := range l.list {
+			if sess.MachineID == "" {
+				sess.MachineID = mid
+			}
+			key := [2]string{sess.MachineID, sess.SessionID}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			sessions = append(sessions, sess)
+		}
+	}
+	if len(sessions) == 0 {
+		return
+	}
+	if !s.todosV2RecoverySwept.CompareAndSwap(false, true) {
+		return
+	}
+	if _, err := s.RunRestartRecoverySweep(ctx, bootEpoch, sessions); err != nil {
+		s.logf("todos_v2 startup restart recovery sweep: %v", err)
+	}
+}
+
 // restartRecoveryResult reports what a startup restart recovery sweep acted on.
 type restartRecoveryResult struct {
 	RecoveredTodoIDs []string
