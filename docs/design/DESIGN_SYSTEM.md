@@ -384,6 +384,7 @@ Reduce Motion:
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
 - The web sidebar's page icons are the neutral ink: `--ink-3`, the open page's `--ink` on its fill, never a page's own color. **Colored** sidebar icons are an opt-in (Settings › Appearance › Sidebar icons, #10822) that gives each page a named color; Monochrome stays the default, pixel-identical. The map and its contrast: "Sidebar icon colors" below.
+- Each built-in entry of the web sidebar has a glyph of its own, so a monochrome sidebar and the folded rail tell them apart (#16282): the main chat `home` (iOS `house`, Android `House`), Overview `grid` (a dashboard of cards, the glyph of its Arrange button), Scheduled tasks `clock` (iOS `alarm`, Android `Clock`), History `activity` (an activity log of the Agents' sessions that are not running, by day, #10240; Recent keeps `history`), All Persona chats `list`; the pages' own in the "Sidebar icon colors" table below. A built-in entry should also avoid the extension icon vocabulary: an extension's `nav_page` may name any icon a row can (`docs/extensions/extensions.md`, "Row icon / avatar / thumbnail"), so a built-in glyph one of those names draws can always meet an extension page with the same one. Overview and History are outside it. Known overlaps, left as they are for now: the main chat `home`, Scheduled tasks `clock` (both kept to match iOS and Android), Health `heart`, Messages `chat`, Starred `star`, Settings `gear` and All Persona chats `list`. `web/src/views/SidebarDistinctIcons.test.tsx` renders the sidebar and fails when two built-in entries draw the same glyph, or when Overview or History draws one an extension icon name draws.
 - `pullDown` (#10422, an alias of `expand`'s chevron) follows an action's words that open a menu of how far the action goes (a pull-down, as UIKit draws one): the Inbox group titles' **Mark All Seen ⌄** / **Clear All ⌄** (`docs/assistant/inbox.md` "Group titles"). A value that opens a menu of choices keeps `choices`; the web draws its `chevron`.
 - `someday` (#10465, `moon.stars.fill`, drawn as written in every style, being a menu's and a swipe's `Label`; Android's Phosphor `couch`, since `moon-stars` is `quietHours`') is Someday on a to-do, the owner's own "not now": the To-dos row's swipe and menu (iOS, hubs with `todo_view`, from #10465's switch-on). Not `time`, the clock that marks Waiting. Its swipe is `Theme.somedayTint` (the system indigo), beside Done's `positive`; Remove from Someday, its opposite, is `undo`.
 - `sideSessions` (#7944) is a session's side sessions on every platform: SF Symbol `rectangle.stack` on Apple, its Phosphor match on Android, Lucide's gallery-vertical-end on the web.
@@ -465,6 +466,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
+- Web selection comments (#14518): while writing a comment on selected chat text, paste an image into its field or
+  use the labeled image button beside the keyboard hint. The card reuses the composer's attachment tiles and their
+  remove controls so the picture stays with the text it illustrates. Saving or reopening the note keeps its images.
+  Escape discards a new comment or restores the note and images from before the edit. All pictures in the draft share
+  the message's limits. Selecting text preloads the draft editor, which also loads when a saved comment opens.
 - Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
   field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
   about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,
@@ -1200,6 +1206,11 @@ by the hub, and quiet Previous and Next buttons. A refresh that removes the curr
 
 #### Sessions that need the user
 
+On the web, Agents **By status** groups sessions into Needs you, Error, Working, Done and Idle. Each row uses the
+manager's phase, reason and rank. A question in a finished reply belongs in Done. A restart that interrupted work
+belongs in Error. The Needs you badge and quick filter count the rows the manager marks for the owner.
+See `docs/protocol/agent-states.md` ("Five phases").
+
 In every grouping a list offers, a session that needs the user is visible without opening anything: in a section at the top, or by the state mark on its row, with a folded group counting it on its header. Grouping by location (computer, repository, worktree, tab) never hides it, and nobody has to pick a computer or a repository first to see their own work.
 
 The web's To-dos page (#11838) files to-dos by their state, so one the sidebar's To-dos badge counts can sit outside Needs you: a to-do no Agent is on, under Other open. Each row the badge counts carries the badge's mark, **Up to you** (`Tag` in the accent tone the badge is drawn in), why it counts in its tooltip and spoken label, and a folded heading over one says how many ("1 up to you"). The marks and the badge come from one hook (`useOwnerNeeds`), so they never disagree. Why a mark and not a section: what the badge counts spreads over several sections (Needs you, Parked, Other open, Just finished, Working for work held for the user's OK), and Other open also holds to-dos it leaves out (a goal its pieces carry). Why not Needs you as the mark's words: that is a section of its own with a narrower rule (principle 4).
@@ -1212,7 +1223,9 @@ A herdr tab's workers are the same (web, #5180; the owner asked on 2026-11-12 th
 
 A row read from Unread or Just finished and held in that place ("Rows read during a visit" below) does not need the user: it is drawn and counted as Seen, so it never stands in for, or hides, one that does.
 
-On the web, people opening a computer see waiting Agents first. Each session has a conversation link and, when the hub supplies it, a separate to-do link. Workspaces with active sessions precede other known workspaces. Files, Terminal and New agent carry the selected computer and workspace. Work shows its workspace shortcuts before secondary navigation. Files has one directory listing on the selected computer. Every disk alert opens that computer’s Storage map with reclaim suggestions. Cleanup shows the server’s targets, asks for confirmation and reports individual outcomes. Diagnostics groups self-check, network, ports and processes, services and toolchain. Management holds the computer name, engine, launchers, Link and deployment controls (#16196).
+On the web, people opening a computer see waiting Agents first. Each session has a conversation link and, when the hub supplies it, a separate to-do link. Workspaces with active sessions precede other known workspaces. Files, Terminal and New agent carry the selected computer and workspace. Files has one directory listing on the selected computer. Every disk alert opens that computer’s Storage map with reclaim suggestions. Cleanup shows the server’s targets, asks for confirmation and reports individual outcomes. Diagnostics groups self-check, network, ports and processes, services and toolchain. Management holds the computer name, engine, launchers, Link and deployment controls (#16196).
+
+The web computer header keeps New agent and the available Terminal action together across views. They sit beside the computer identity when space allows and wrap below it on a phone. Immediately below the header, underlined links mark the primary views on a single horizontally scrollable row. The selected link stays in view. Work lists waiting sessions and workspace actions below these links. Compact pills within Diagnostics select a tool. Both levels expose the current link and give adjacent touch controls their own 44 px targets. The fleet switcher aligns with its cards. A single computer has direct Files and Storage shortcuts, and the detail rail appears only when there is another computer to switch to on a wide screen (#16328).
 
 #### Finished work nobody has seen
 
@@ -1760,6 +1773,10 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.
+- Catalog refresh (#15481): a quiet **Refresh models** button with the retry icon sits above the selected launcher's
+  models in the wide panel and above each expanded list in the narrow panel. Its accessible label names the launcher.
+  The existing loading status appears while the button is disabled and the last list stays usable. If the request fails,
+  the launcher shows the error with Retry.
 - Provider identity on model rows (#7360): every row in New Agent and in saved setups and flat search results names
   its owning launcher in its model label or at the start of the second line, on web, Android and Apple. The rest of
   that line keeps the model ID, resolved model, description or typed-model explanation; an expanded or filtered
@@ -2177,8 +2194,10 @@ The web Changes panel's secondary file tree (#10477) reuses the existing `Resize
 Settings › Hub shows a stage strip and an inset step list during updates (#15240). The
 strip borrows the task stage markers so users can see what is running and what remains
 even when a phase has no detailed progress. A development update takes the rollback
-snapshot after the idle wait, so the backup marker stays pending until the Hub reaches
-it. Use a green check for completed work, an accent mark for the current stage and a
+snapshot after the idle wait. Show Build (or Prepare backup), Waiting for idle, Backup
+and Restart in that order. For people updating their hub, the pipeline offers a secondary
+Cancel update button while the hub reports it can cancel. Confirm with the shared dialog.
+Keep the action disabled during cancellation and announce when a backup must finish first. Use a green check for completed work, an accent mark for the current stage and a
 hollow mark for pending work. The inset list pairs the localized step with the shared
 spinner, live status label and an accent bar when the Hub reports a percentage. The
 header shows the short target and elapsed time when the start of the update can be
@@ -2722,6 +2741,10 @@ The existing Agent state column continues to describe the Agent, not the task. O
 task; change feedback returns it to ongoing work and invalidates that verification round. Reuse the existing
 verification card, Pass action and chat feedback path; no new setting, component, group or polling loop.
 
+For everyday Assistant users on the web (#16313), Open on a personal verification leads with its report.
+The worker transcript is one secondary action away. Follow up in chat places a removable task quote above the
+existing draft in the originating conversation. Opening or removing the quote leaves the Pass action available.
+
 The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
 
 - **One card per task, when it is handed out** (#8237, replacing #5569's conclusion cards): the hand-off card is a task's only card in the chat, and it updates in place: its state word follows the task, and a start that failed or a turn the model service cut off reads as such on it, in the danger color, with why in plain words (a raw error stays in the task's details; one naming no known cause reads "Didn't start. Open it for details."). Receipts (done, stopped, failed to start, interrupted), reviews and reports are not drawn, old ones in the history neither, and nothing in the chat says where progress went. The task's row says it: In Progress and Needs You below. iOS, the web and Android since #8237 (Android: #8312). A failed start's and an interrupted task's Needs you row keeps `--danger-wash` with `--ink` words, as the conclusion cards had (contrast in D10 of `docs/design/task-cards.md`).
@@ -3025,6 +3048,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Spacing | 0-32 with `sm` 6 | Tailwind default | same scale | web differs |
 | Radius | 6/10/14/20/22 | 6/8/10 plus literals | 6/10/14/20/22, per-style variants | web and Android differ |
 | Min target | 44 | 44 hit area, 28-32 visuals | 48 dp touch targets, 32-40 visuals | violated on web visuals |
+| Inline selection comment images | Tracked in #5785 | Paste or pick, preview, remove | Outside #14518 scope | Web first |
 | Motion | token set | 150/220/300 ms | Glass: the iOS state and layout springs, the composer's send swap and press | web differs |
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
 | Toast | capsule, top | dark capsule, bottom | capsule, top (`JToastHost`) | web differs |
@@ -3273,6 +3297,11 @@ item states its own scope, then one configuration form per module. Where a featu
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
 
+For people updating their Hub on the web, Pages shows one compact update notice directly beneath Settings (#16380).
+It follows Settings when pages are reordered and folds away with Pages. In the phone drawer it occupies a full row
+below the row of icons containing Settings. Status text wraps and inline actions keep their single-line labels.
+Opening the status takes the user to Settings › Hub.
+
 The Labs reminder (#15802) helps people who want to try a feature find it in Settings. The main sidebar's Settings
 entry and the Settings category list put a still accent dot beside their existing labels when an experiment is available,
 off and unseen. The labels include the reminder for screen readers. The dots clear on opening the Labs category. Each new
@@ -3324,6 +3353,7 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 Dashboards are pages a conversation drafts and the owner keeps with one tap on Keep; where they live is 4.1, the line under
 a page's title is "Ownership line (#15017)" below. What the iPhone and iPad do of their own:
 
+- **Version history.** Open history from a kept page’s footer. Mark the current version, label earlier versions by time and writer, and keep the preview read-only. Restoring requires confirmation and pauses updates until the owner chooses Resume updates.
 - **No new host.** The hub lists Dashboards as ordinary extension places under the reserved id `-pages` (the index, then up
   to three pinned pages); the drawer and the iPad sidebar draw them with the extension rows they have, and a page opens in
   `ExtensionNavPage` / `ExtensionPageView` like any extension page. Settings › Extensions leaves them out: they are the
@@ -3371,7 +3401,7 @@ With Colored:
 
 | Page | Icon | Color | Light: on `--canvas` / `--hover` | Dark: on `--canvas` / `--hover` |
 | --- | --- | --- | --- | --- |
-| Overview | `home` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
+| Overview | `grid` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
 | Inbox | `inbox` | orange | 3.01 / 3.09 | 7.16 / 6.01 |
 | Health | `heart` | pink | 3.82 / 3.93 | 6.44 / 5.41 |
 | Messages | `chat` | green | 3.25 / 3.34 | 6.87 / 5.76 |
@@ -4014,6 +4044,10 @@ it). Reason: the ID is an engineering detail that a person should not have to in
 rule for every place keeps a provider recognizable wherever it is picked (principle 4). This reuses the wizard's
 fields and More options disclosure and the existing row and chip styles; it adds no setting, style or motion. The chat
 page's composer chip and model panel adopt the same module in their own change; iOS and Android have not caught up yet.
+
+## Choosing an approved document in New Agent
+
+For team members starting an Agent on the web, the first-message form keeps project documents behind its existing disclosure. After the member supplies the project and credential, they may browse document names, open a document's approved versions, or look up a known name. Fetch additional results on request. Opening a preview shows the selected revision's text, approver and digest. Attaching that preview requires a separate action, and the member can remove it before sending.
 
 ## New Agent's model choice (#5104)
 
@@ -4660,3 +4694,22 @@ VoiceOver drop hint on Apple).
   actor so GIF, APNG and animated WebP keep all their frames). Dropping on a picker card only opens the upload or edit
   dialog with the file ready to crop; nothing is saved until Upload / Save, and **Keep current** / **Keep Current
   Picture** / Cancel reverts it (principle 3).
+
+## Integrations & Extensions in web Settings
+
+People connecting a service can find its account, delivery and sync settings under one name. With
+the selected assistant’s Integrations experiment on, each service appears once. The capability chips
+(All, Chat channels, Data sources, Tools & appearance) filter those rows. A service can match more
+than one chip. Each chip exposes its selection with `aria-pressed` and shows its matching count.
+
+Opening a detail uses a single column on phones and narrow Settings hosts. On desktop the split
+starts at **740 CSS pixels of Settings content width**, measured after both sidebars. The
+`data-integrations-split` container reserves 300 px for the list and at least 440 px for the detail.
+Its list header stays visible, the chips can scroll horizontally within it, and the list and detail
+scroll vertically independently. Opening another detail returns that pane to the top.
+
+When Inbox Sources is available, the **Integrations | Data flow** segmented switcher opens either the
+catalog or a full-width view of where data goes. A `SubscriptionAlertBadge` belongs to the row that
+owns the subscription. A single alert names its state, multiple alerts show their count. The most
+severe state supplies the detail and tone (failure red, missing recipe, rate limit or disconnected
+source orange). Standalone push sources have their own rows. See [web Settings](../web/web.md#labs).

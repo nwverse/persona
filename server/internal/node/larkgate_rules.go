@@ -168,6 +168,7 @@ var larkActions = []struct {
 	{lazyre.New(`^CLI /mail/.*(?:send|reply|forward)$`), "发邮件", larkOutbound},
 	{lazyre.New(`^CLI /mail/\+.*(?:send|reply|forward)`), "发邮件", larkOutbound},
 	{lazyre.New(`^(POST|PUT|PATCH) /(?:open-apis/)?im/(?:v[0-9]+/)?(?:messages|batch_messages|threads)(?:/|$)`), "发消息", larkOutbound},
+	{lazyre.New(`^POST /(?:conversations/[^/]+/messages/[^/]+/replies|messages/[^/]+/replies)(?:/|$)`), "回复消息", larkOutbound},
 	{lazyre.New(`^POST /(?:conversations/[^/]+/(?:messages|files|images)|messages/[^/]+/(?:reply|forward|recall|reactions))`), "发消息", larkOutbound},
 	{lazyre.New(`^(POST|PUT|PATCH) /.*(?:comments|replies)(?:/|$)`), "发表评论", larkOutbound},
 	{lazyre.New(`^POST /.*(?:mail|mailboxes).*/(?:send|reply|forward)$`), "发邮件", larkOutbound},
@@ -192,8 +193,9 @@ func larkSummary(gates []proto.CommandGate, calls []larkCall) string {
 	return larkSummaryWithContext(gates, calls, nil, i18n.Default)
 }
 
-// larkSummaryWithContext uses the readable message context when it was fetched; a failed lookup leaves that call's
-// old summary untouched. Other gated calls keep their existing text.
+// larkSummaryWithContext renders clean human-readable summaries for unambiguous message sends/replies (with
+// resolved conversation/reply context when available, or target id fallback otherwise). Ambiguous, dynamic,
+// query-bearing, extra-field, or non-message calls keep the full method/path/body summary.
 func larkSummaryWithContext(gates []proto.CommandGate, calls []larkCall, contexts []larkCardContext, lang i18n.Lang) string {
 	var b strings.Builder
 	for i, c := range calls {
@@ -220,7 +222,7 @@ func larkSummaryWithContext(gates []proto.CommandGate, calls []larkCall, context
 			continue
 		}
 		if i < len(contexts) {
-			if summary, ok := larkMessageSummary(c, contexts[i], lang); ok {
+			if summary, ok := larkMessageSummary(gates, c, contexts[i], lang); ok {
 				b.WriteString(summary)
 				continue
 			}

@@ -104,6 +104,9 @@ type ExtensionView struct {
 	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
 	// is connected.
 	Attached *ExtensionAttached `json:"attached,omitempty"`
+	// MarketSignature: how an extension installed from a market was verified (extension_market_keys.go).
+	// State: official | signed | key_removed | unsigned | market_invalid.
+	MarketSignature *MarketSignatureView `json:"market_signature,omitempty"`
 }
 
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
@@ -224,10 +227,11 @@ type extensions struct {
 	dev devTaps
 	// badges are the plugins' badges on their nav_pages' entries ("<plugin>/<ui>" → extension.Badge; extension_ui.go).
 	badges sync.Map
-	// events and todoEvents keep slow extension programs out of the assistant bus read loop: the knowledge base's and the
-	// todos' queues, apart so that a flood of one does not push out the other's.
+	// events, todoEvents and larkEvents keep slow extension programs out of the assistant bus read loop and sync runs:
+	// separate queues so a flood of one does not push out another's.
 	events     extensionEvents
 	todoEvents extensionEvents
+	larkEvents extensionEvents
 	// filtersSent are the agent filters last handed to the nodes, as JSON (agent_filters.go); nil before the first.
 	filtersSent []byte
 	// invalid are the extensions' ui.invalidate waiting to be told to the apps (extension_ui.go), at most one a second.
@@ -418,6 +422,7 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	if ps.h != nil {
 		ps.h.extensionUpgrades().decorate(ctx, &v, p)
 		ps.h.decorateMarketMetadata(ctx, &v, p)
+		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
 		ps.h.decorateInstalledLogo(&v, p)
 	}
 	if m.NodeProgram() != nil {
@@ -1245,7 +1250,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.storageCall(ctx, p, method, params)
 		}
 		switch method {
-		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
+		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent", "kb.put_recording":
 			return ps.extensionKBCall(ctx, id, method, params)
 		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)

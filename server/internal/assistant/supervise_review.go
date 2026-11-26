@@ -267,6 +267,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	// are deliberate closures the guards let through. A withdrawn needs_user is exactly a task the owner was asked
 	// about: its supervisor took that back and decided it itself, so the owner-blocker words in the agent's own replies
 	// do not refuse it.
+	if verdict == reviewAccepted && t.DoneAt == nil && !a.UserCheck {
+		if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
+			return "", errors.New("bare accepted refused: " + why + ". Ask the Agent to address it and report, revise " +
+				"done_when with task_scope and re-review, or use accepted with user_check so the owner explicitly confirms the result")
+		}
+	}
 	if verdict == reviewAccepted && !a.UserCheck && a.Outcome != outcomeCannot && !withdraw {
 		evidence := s.acceptGuardEvidence(ctx, t, note, strings.TrimSpace(a.Reason), checks)
 		if matched, _ := acceptGuardBlock(evidence); matched != "" {
@@ -367,6 +373,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				}
 			}
 			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note, UserCheck: a.UserCheck, WithdrewNeedsUser: withdraw}
+			if r.UserCheck {
+				r.Reason, r.Link = strings.TrimSpace(a.Reason), validWebURL(a.Link)
+			}
 			reviewedAt = r.At
 			v.applyChecks(checks, r.At, "supervisor:"+self)
 			if verdict == reviewNeedsUser {

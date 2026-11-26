@@ -167,7 +167,7 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthTell, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityCountsView, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability}, svc), svc), id, svc)}
+					assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability, devicewire.PublishedPackagesCapability}, svc), svc), id, svc)}
 			if uid := b.machineUID(); uid != "" {
 				params["machine_uid"] = uid
 			}
@@ -726,6 +726,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return s.FeishuAction(ctx, p)
+	case assistantwire.MethodFeishuHandoff:
+		var p assistantwire.FeishuHandoff
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.larkModule().Handoff(ctx, p)
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
 	case assistantwire.MethodFleetAsk:
@@ -960,6 +966,9 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		var p assistantwire.UserSpokeParams
 		if err := decode(&p); err != nil {
 			return err
+		}
+		if p.Source != "" {
+			s.noteOwnerInstruction(ctx, p.SessionRef, p.Text, p.Source, p.ClientMsgID.String(), p.At)
 		}
 		s.userSpokeText(ctx, p.SessionRef, p.Text)
 	case assistantwire.EventUserStopped:

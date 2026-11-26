@@ -100,6 +100,8 @@ export interface Segment {
   cut?: boolean;
   /** A settled user turn without a visible response or an explicit closing notice. */
   emptyResponse?: boolean;
+  /** The transcript recorded an assistant reply consisting of whitespace. */
+  blankReply?: boolean;
   /** What its items used (#5426, lib/turn-usage.ts): every item counts, those it does not show too (a tool's result, a
    *  Codex turn's duration, a stopped turn's notice); each subagent counts once in the chat, in the exchange that
    *  launched it (chatLines' lineUsage). Absent when none of them carries tokens. */
@@ -376,6 +378,7 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
         break;
       case "text":
         if (it.text?.trim()) cur.steps.push({ kind: "text", id: it.id, item: it });
+        else if (it.role === "assistant" && it.text) cur.blankReply = true;
         break;
       case "notice":
         cur.steps.push({ kind: "notice", id: it.id, item: it });
@@ -983,9 +986,12 @@ export interface ChatLinesOptions {
   foldRoutineRelayReplies?: boolean;
   /** The current session needs attention, even if its latest completed reply came from a relay. */
   latestReplyNeedsAttention?: boolean;
+  /** The items may predate what the transcript holds: a cached page shown before the hub's newest page landed, or after
+   *  that read failed. A turn without an answer there may have one the page has not read, so none is called empty. */
+  stale?: boolean;
 }
 
-function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>): ChatLine[] {
+function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>, stale = false): ChatLine[] {
   const out: ChatLine[] = [];
   let ordered = t.ordered;
   // work a background task woke the agent for opens with that notice, where a message would be (a subagent's report
@@ -1009,7 +1015,7 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>):
   const end = segs.at(-1), at = t.ordered.at(-1)?.seq ?? 0;
   if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && (!end.answer || n.seq > at))) end.cut = true;
   const user = end?.user;
-  if (end && user && !live && !end.answer && !t.trailing.length && isOwnMessage(user) && !user.queued && !isLoopTick(user) &&
+  if (end && user && !live && !stale && !end.answer && !t.trailing.length && isOwnMessage(user) && !user.queued && !isLoopTick(user) &&
       !end.steps.some((step) => step.kind === "visualization" || (step.kind === "image" && step.item.role === "assistant") ||
         (step.kind === "tool" && !step.result && supervisionTool(step.use.tool_name) === "supervision_finish" && step.use.tool_input?.visibility === "silent")) &&
       !supervisionVisibility(ordered, results, false).completedSilent) {
@@ -1082,7 +1088,7 @@ export function chatLines(items: Item[], opts: ChatLinesOptions = {}): ChatLine[
       append([isCompaction(b.item) ? { kind: "compact", id: b.item.id, item: b.item } : { kind: "recaps", id: b.item.id, items: [b.item] }], [b.item], false);
     } else {
       const live = b.turn.id === liveId;
-      append(turnLines(b.turn, live, results), round ? [...b.turn.ordered, ...b.turn.trailing] : b.turn.ordered, live);
+      append(turnLines(b.turn, live, results, opts.stale), round ? [...b.turn.ordered, ...b.turn.trailing] : b.turn.ordered, live);
     }
   }
   // Working with nothing of this run yet (the last thing is a recap): retain the supervision round's visibility.
