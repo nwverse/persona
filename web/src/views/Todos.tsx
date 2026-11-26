@@ -2432,6 +2432,7 @@ const DOT_STATE: Record<TodoStatus, AgentState> = {
  *  else what its agent last reported to its supervisor (#3156). */
 export function todoRowView(todo: Todo, lookup: SessionLookup, interactions: Interaction[]): TodoRowView {
   const view = agentRowView(todo, lookup, interactions);
+  if (todo.wait != null) return view;
   // Nobody is working on it (#3618): the hub's finding goes ahead of what a stopped agent last said (Interrupted,
   // Follow up; docs/assistant/todos.md). A card that waits for the user still says its question.
   const orphan = view.status !== "needs_you" ? orphanedLine(todo) : undefined;
@@ -2463,7 +2464,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
   const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup) };
-  if (todo.done_at || !urgent?.session) return view;
+  if (todo.wait != null || todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
     view.urgentLine = true;
@@ -2567,9 +2568,10 @@ const TodoListItem = memo(function TodoListItem({
 }) {
   const { status, dotState, activeCount } = view;
   const effectiveSection = section ?? view.section;
-  const showWait = effectiveSection === "parked";
+  const parkedRow = effectiveSection === "parked";
   // the PR it waits on: its current one, or an earlier one still open (#7935)
-  const openPR = effectiveSection === "parked" ? openMergePRs(todo, Date.now())[0] : undefined;
+  const legacyMerges = todo.wait == null && parkedRow ? openMergePRs(todo, Date.now()) : [];
+  const openPR = todo.wait?.kind === "pr_merge" || legacyMerges.length > 0;
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
   const look = todoLook(todo, status, view.wait);
   // its steps as the hub counts them (#11858, lib/todo-steps.ts): in place of Not started, or after its Agent count
@@ -3047,7 +3049,7 @@ const TodoListItem = memo(function TodoListItem({
         )}
 
         {/* Status Line (parked rows collapse to title + concise TaskWaitInfo summary line) */}
-        {!showWait && (
+        {!parkedRow && (
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
             {open && <StatusMark state={dotState} size="sm" />}
             <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
@@ -3099,7 +3101,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
-        {showWait && <div className="mt-1" data-testid={openPR ? "todo-pr-line" : undefined}><TaskWaitInfo todo={todo} merges={openMergePRs(todo, Date.now())} /></div>}
+        {(todo.wait != null || parkedRow) && <div className="mt-1" data-testid={openPR ? "todo-pr-line" : undefined}><TaskWaitInfo todo={todo} merges={legacyMerges} /></div>}
 
         {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
         {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
@@ -3122,7 +3124,7 @@ const TodoListItem = memo(function TodoListItem({
         )}
 
         {/* Most Urgent Agent Line */}
-        {view.urgentLine && !showWait && (
+        {view.urgentLine && !parkedRow && todo.wait == null && (
           <div className="mt-1 truncate text-[11.5px] text-ink-3" data-orphaned={view.orphaned || undefined}>
             {view.urgentLead && <span className={cx("font-medium", view.orphaned ? "text-orange" : "text-attention")}>{view.urgentLead}</span>}
             {view.urgentText}
@@ -3391,7 +3393,7 @@ export function ReviewChecklist({ todo, lookup }: { todo: Todo; lookup?: Session
   if (!sup) return null;
   const list = checklist(sup);
   const review = latestReview(sup);
-  const parked = triage(todo, lookup, Date.now()).section === "parked";
+  const parked = todo.wait == null && triage(todo, lookup, Date.now()).section === "parked";
   // What this list cannot say of finished work (#3822): the criteria a scope change dropped, and what was done beyond the brief.
   const extras = todo.done_at ? resultExtras(todo) : undefined;
   const assistantMatchesTodo = Boolean(assistant && sameManager(assistant.manager ?? shown, todo.manager));
@@ -4559,6 +4561,7 @@ function TodoDetail({
           <TaskBriefPanel todo={todo} />
         </Suspense>
       )}
+      {todo.wait != null && <div className="mt-2 select-text"><TaskWaitInfo todo={todo} expanded /></div>}
       <ReviewChecklist todo={todo} lookup={lookup} />
       {todo.brief && (
         <Suspense fallback={null}>
