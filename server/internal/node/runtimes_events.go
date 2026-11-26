@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/nodeclient"
@@ -283,6 +285,7 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		} else if s.ContextBreakdown() != nil {
 			s.SetContextBreakdown(nil)
 		}
+		runtimeLastText(&s)
 		runtimeWork(&s)
 		out = append(out, s)
 	}
@@ -557,4 +560,18 @@ func runtimeInSpace(h *runtimeConn, ix proto.Interaction) bool {
 func runtimeModes(declared bool, rt, rtAgent string, s proto.Session) bool {
 	own := (s.Agent == rt || (rtAgent != "" && s.Agent == rtAgent)) && rt != paseoRuntimeID
 	return declared && !strings.Contains(s.SessionID, subagentSep) && (s.Agent == "claude" || own)
+}
+
+// runtimeLastText bounds a runtime row's last_text, its preview (docs/integrations/runtimes.md), as the node's own
+// rows' are (#16343): a runtime may report the whole reply there, which every list and frame would then carry. The
+// question a long reply ends with is read off the whole of it first, as for a host's answer (sessionListIn): the
+// manager reads a question off last_text itself only while it is the whole reply (assistant decorateAwaits).
+func runtimeLastText(s *proto.Session) {
+	if utf8.RuneCountInString(s.LastText) <= maxRuntimeLastText {
+		return
+	}
+	if !s.AsksRead && s.Asks == "" {
+		s.Asks, s.AsksRead = closeout.AskOf(s.LastText), true
+	}
+	s.LastText = snippet(s.LastText)
 }

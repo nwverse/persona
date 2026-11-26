@@ -13,6 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/sessionhistory"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // Sessions active in a time window, archived, finished and offline ones too (sessions.history; docs/protocol/protocol.md
@@ -80,6 +81,7 @@ func (n *Node) sessionsHistory(ctx context.Context, raw json.RawMessage) (sessio
 	}
 	page, next := sessionhistory.Merge(parts, q.Limit)
 	for _, it := range page {
+		it.V.Session.Title = transcript.ListTitle(it.V.Session.Title) // as the live list's rows (sessionListIn, #16343)
 		ans.Rows = append(ans.Rows, it.V)
 	}
 	if next != nil {
