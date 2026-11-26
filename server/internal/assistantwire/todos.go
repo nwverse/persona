@@ -18,6 +18,7 @@ var todoRoutes = []string{
 	"POST /api/v1/todos/{id}/blockers",               // add external PR blocker under todos_v2 (todo_blockers_routes.go, #16198)
 	"DELETE /api/v1/todos/{id}/blockers/{blockerId}", // cancel blocker under todos_v2 (todo_blockers_routes.go, #16198)
 	"GET /api/v1/todos/mergetrain",                   // read-only per-repo merge-train queue snapshot under todos_v2 (todo_mergetrain_wiring.go, #16432)
+	"GET /api/v1/todos/{id}/trace",                   // read-only causal audit trace under todos_v2 (todo_causal_trace.go, #16433)
 }
 
 func init() { Routes = append(Routes, todoRoutes...) }
