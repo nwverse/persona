@@ -105,7 +105,7 @@ func (n *Node) liveClaudes() []claudeProc {
 				continue
 			}
 			st, err := os.Stat(f)
-			if err != nil || st.Size() > 64<<10 {
+			if err != nil || st.Size() > claudeFileMaxBytes {
 				continue
 			}
 			listed[f] = true

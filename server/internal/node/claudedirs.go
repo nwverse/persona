@@ -77,51 +77,78 @@ func claudeDirOf(home string) string { return nodeclient.ClaudeDir(home) }
 
 // claudeConfigDirs lists every config directory in use, the default first, each once (by real path), existing only.
 func (n *Node) claudeConfigDirs() []string {
+	return n.discoverClaudeDirs(filepath.EvalSymlinks)
+}
+
+func (n *Node) discoverClaudeDirs(resolve func(string) (string, error)) []string {
 	if n.sessionScope != nil {
 		return []string{n.sessionScope.claude}
 	}
-	d := n.cdirs
 	n.refreshClaudeDirs()
-	cands := []string{n.defaultClaudeDir()}
-	// Include private assistant profiles even before a process scan, including
-	// after a node restart when only their transcripts remain.
+	var candidates []string
+	spellings := make(map[string]bool)
+	add := func(dir string) {
+		// Keep the spelling passed to EvalSymlinks: cleaning link/../dir before following link can name a different directory.
+		if spellings[dir] {
+			return
+		}
+		expanded := proto.ExpandHome(dir, n.home)
+		if !spellings[expanded] {
+			candidates = append(candidates, expanded)
+			spellings[expanded] = true
+		}
+		spellings[dir] = true
+	}
+	def := n.defaultClaudeDir()
+	add(def)
 	profiles, _ := filepath.Glob(filepath.Join(n.dir, "profiles", "*"))
-	cands = append(cands, profiles...)
-	cands = append(cands, filepath.Join(n.home, ".claude"))
+	for _, profile := range profiles {
+		add(profile)
+	}
+	add(filepath.Join(n.home, ".claude"))
 	if dir := n.claudeStartDir.Load(); dir != nil && *dir != "" {
-		cands = append(cands, *dir)
+		add(*dir)
 	}
 	if n.state != nil {
 		n.state.mu.Lock()
-		for _, st := range n.state.Sessions {
-			if st.ConfigDir != "" && st.ConfigDir != "default" {
-				cands = append(cands, st.ConfigDir)
+		for id := range n.state.Sessions {
+			if dir := n.state.Sessions[id].ConfigDir; dir != "" && dir != "default" {
+				add(dir)
 			}
 		}
 		n.state.mu.Unlock()
 	}
-	if d != nil {
+	var blocked []string
+	if d := n.cdirs; d != nil {
 		d.mu.Lock()
-		cands = append(append(cands, d.found...), d.known...)
+		for _, dir := range d.found {
+			add(dir)
+		}
+		for _, dir := range d.known {
+			add(dir)
+		}
+		blocked = d.blocked
 		d.mu.Unlock()
 	}
-	var out, seen []string
-	for i, c := range cands {
-		c = proto.ExpandHome(c, n.home)
-		real, err := filepath.EvalSymlinks(c)
-		if err != nil {
-			continue // missing
-		}
-		if i > 0 && n.claudeDirBlocked(c, real) {
+
+	var out []string
+	var defaultReal string
+	seen := make(map[string]bool)
+	for i, dir := range candidates {
+		real, err := resolve(dir)
+		if err != nil || seen[real] {
 			continue
 		}
-		if !slices.Contains(seen, real) {
-			seen = append(seen, real)
-			out = append(out, c)
+		if i == 0 {
+			defaultReal = real
+		} else if n.blockedBy(dir, real, candidates[0], defaultReal, blocked) {
+			continue
 		}
+		seen[real] = true
+		out = append(out, dir)
 	}
 	if len(out) == 0 {
-		out = []string{n.defaultClaudeDir()}
+		return []string{def}
 	}
 	return out
 }
@@ -220,7 +247,12 @@ func (n *Node) claudeDirBlocked(dir, real string) bool {
 	d.mu.Lock()
 	blocked := d.blocked
 	d.mu.Unlock()
-	return n.blockedBy(dir, real, blocked)
+	def := proto.ExpandHome(n.defaultClaudeDir(), n.home)
+	var defReal string
+	if len(blocked) != 0 && real != "" {
+		defReal, _ = filepath.EvalSymlinks(def)
+	}
+	return n.blockedBy(dir, real, def, defReal, blocked)
 }
 
 // cwdBlocked: true if a session's working directory matches any of the machine's blocked patterns.
@@ -246,18 +278,13 @@ func (n *Node) claudeDirBlocks(cwd string) bool {
 	return n.dirMatches(cwd, blocked)
 }
 
-func (n *Node) blockedBy(dir, real string, patterns []string) bool {
+func (n *Node) blockedBy(dir, real, def, defReal string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return false
 	}
-	def := proto.ExpandHome(n.defaultClaudeDir(), n.home)
-	if dir = proto.ExpandHome(dir, n.home); filepath.Clean(dir) == filepath.Clean(def) {
+	dir = proto.ExpandHome(dir, n.home)
+	if filepath.Clean(dir) == filepath.Clean(def) || (real != "" && real == defReal) {
 		return false
-	}
-	if real != "" {
-		if defReal, err := filepath.EvalSymlinks(def); err == nil && real == defReal {
-			return false
-		}
 	}
 	return proto.ClaudeDirBlocked(dir, n.home, patterns) || (real != "" && proto.ClaudeDirBlocked(real, n.home, patterns))
 }
@@ -265,9 +292,14 @@ func (n *Node) blockedBy(dir, real string, patterns []string) bool {
 // reportableDirs: the found directories the hub may remember, those patterns do not block.
 func (n *Node) reportableDirs(found, patterns []string) []string {
 	var out []string
+	def := proto.ExpandHome(n.defaultClaudeDir(), n.home)
+	var defReal string
+	if len(patterns) > 0 && len(found) > 0 {
+		defReal, _ = filepath.EvalSymlinks(def)
+	}
 	for _, dir := range found {
 		real, _ := filepath.EvalSymlinks(proto.ExpandHome(dir, n.home))
-		if !n.blockedBy(dir, real, patterns) {
+		if !n.blockedBy(dir, real, def, defReal, patterns) {
 			out = append(out, dir)
 		}
 	}
