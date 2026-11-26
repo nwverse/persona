@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PERSONA_SERVERS } from "./compatibility";
-import { chatLines, freshWords, humanizeTool, isLoopTick, mcpServerName, mergeItems, withoutFolded, parseUserText, pickSubject, segments, openRecap, personaToolVerb, supervisionTool, supervisionVisible, toolChip, toolDisplayName, toolLabel, formatDuration } from "./turns";
+import { chatLines, freshWords, humanizeTool, insideFold, isLoopTick, mcpServerName, mergeItems, withoutFolded, parseUserText, pickSubject, segments, openRecap, personaToolVerb, supervisionTool, supervisionVisible, toolChip, toolDisplayName, toolLabel, formatDuration } from "./turns";
 import type { Item } from "./types";
 
 const u = (seq: number, text: string, extra: Partial<Item> = {}): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text, ...extra });
@@ -404,6 +404,25 @@ describe("chatLines", () => {
     const ls = chatLines([wake(1, "build"), tool(2, "x"), res(3, "x"), a(4, "build is up")]);
     expect(kinds(ls)).toEqual(["notice", "segment"]);
     expect(ls[1].kind === "segment" && ls[1].seg.answer?.text).toBe("build is up");
+  });
+
+  it("orders a #-1 wake notice before non-numeric same-seq steps even when merged late", () => {
+    const prior = [u(1, "run build"), a(2, "Complete first reply.")];
+    const resumedThinking: Item = { id: "3@b#thinking", seq: 3, role: "assistant", kind: "thinking", text: "Checking build output" };
+    const resumedText: Item = { id: "3@b#text", seq: 3, role: "assistant", kind: "text", text: "Checking next step..." };
+    const lateWake: Item = { id: "2@a#-1", seq: 3, role: "system", kind: "notice", wake: true, text: "Background task updated" };
+    // Simulate resumed non-numeric steps landing before the #-1 wake notice at the same seq.
+    const merged = mergeItems([...prior, resumedThinking, resumedText], [lateWake]);
+    expect(merged.map((i) => i.id)).toEqual(["u1#0", "a2#0", "2@a#-1", "3@b#thinking", "3@b#text"]);
+    const ls = chatLines(merged, { live: true });
+    expect(kinds(ls)).toEqual(["segment", "notice", "segment"]);
+    expect(ls[0].kind === "segment" && ls[0].live).toBe(false);
+    expect(seg(ls[0])?.answer?.text).toBe("Complete first reply.");
+    expect(ls[2].kind === "segment" && ls[2].live).toBe(true);
+    expect(seg(ls[2])?.answer?.text).toBe("Checking next step...");
+    // A fold starting at the same seq with a non-numeric id must not claim the #-1 wake notice.
+    const sameSeqFold: Item = { id: "fold:3@b#thinking", seq: 3, role: "assistant", kind: "fold", fold: { items: 2, tools: 1, thoughts: 1, through_seq: 3, through_id: "3@b#tool0" } };
+    expect(insideFold(lateWake, sameSeqFold)).toBe(false);
   });
 
   it("turns API errors into cards and folds retries of the same one", () => {

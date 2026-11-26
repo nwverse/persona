@@ -162,6 +162,43 @@ test('a reused lower step index keeps earlier steps when the export goes on past
   assert.deepEqual(contents(readTranscript(parallelWhole.brain, true).steps), rewoundOrder)
 })
 
+test('a background RUNNING step completing in place keeps later completed replies intact', (t) => {
+  const { brain, directory } = logs(t)
+  const file = join(directory, 'transcript_full.jsonl')
+  const rows = [
+    { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: '2026-01-01T00:00:00Z', content: 'Run check.' },
+    { step_index: 1, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:01Z', tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }] },
+    { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'RUNNING', created_at: '2026-01-01T00:00:02Z', content: 'running' },
+    { step_index: 3, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:03Z', content: 'Complete first reply.' },
+  ]
+  writeFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  const before = readTranscript(brain, true)
+  assert.equal(before.steps.length, 4)
+
+  // Background command finishes and updates step 2 from RUNNING -> DONE after step 3 was already logged.
+  appendFileSync(file, JSON.stringify({ step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', created_at: '2026-01-01T00:00:02Z', content: 'exit 0' }) + '\n')
+  const updated = readTranscript(brain, true)
+  assert.equal(updated.branch, before.branch, 'in-place RUNNING -> DONE update must not start a rewind branch')
+  assert.deepEqual(updated.steps.map((s) => [s.step_index, s.type, s.status, s.content ?? '']), [
+    [0, 'USER_INPUT', 'DONE', 'Run check.'],
+    [1, 'PLANNER_RESPONSE', 'DONE', ''],
+    [2, 'GENERIC', 'DONE', 'exit 0'],
+    [3, 'PLANNER_RESPONSE', 'DONE', 'Complete first reply.'],
+  ])
+
+  // Subsequent SYSTEM_MESSAGE + resumed reply keeps step 2 once and emits a wake notice after step 3.
+  appendFileSync(file, [
+    { step_index: 4, source: 'SYSTEM', type: 'SYSTEM_MESSAGE', status: 'DONE', created_at: '2026-01-01T00:00:10Z', content: 'task done' },
+    { step_index: 5, source: 'MODEL', type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-01-01T00:00:11Z', content: 'Follow-up update.' },
+  ].map((r) => JSON.stringify(r)).join('\n') + '\n')
+  const after = readTranscript(brain, true)
+  assert.equal(after.steps.filter((s) => s.step_index === 2).length, 1, 'step 2 must not be duplicated')
+  assert.deepEqual(
+    stepsToItems(after.steps).items.filter((it) => it.wake || it.kind === 'text').map((it) => it.wake ? 'wake' : it.text),
+    ['Run check.', 'Complete first reply.', 'wake', 'Follow-up update.'],
+  )
+})
+
 test('parsed transcript cache retains a full inventory of 80 sessions', async (t) => {
   const entries = Array.from({ length: 80 }, () => logs(t))
   for (const { directory } of entries) writeFileSync(join(directory, 'transcript_full.jsonl'), record('Cached reply.'))

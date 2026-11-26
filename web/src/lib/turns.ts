@@ -113,8 +113,7 @@ function blockPart(id: string) {
 }
 
 function blockOrder(a: Pick<Item, "id" | "seq">, b: Pick<Item, "id" | "seq">) {
-  if (a.seq !== b.seq) return a.seq - b.seq;
-  return blockPart(a.id) - blockPart(b.id);
+  return a.seq - b.seq || (blockPart(a.id) || 0) - (blockPart(b.id) || 0);
 }
 
 /** Fold bounds are seq + numeric block, not seq alone: a final answer can share the fold's last line. */
