@@ -1634,7 +1634,10 @@ It supplies its own home and native path semantics; no browser-provided home or
 resolved path is trusted. The pure resolver checks lexical paths; on Darwin it
 compares components without case to conservatively reserve private state even
 on case-sensitive volumes, while Linux comparisons remain case-sensitive.
-The same Node path check runs at preview and preparation. It checks the base,
+For a base under the node's home, the node resolves the home prefix before
+deriving task paths. This applies to `{home}`, `~/` and literal paths under
+that home. Receipts and mirrors likewise use physical paths under the configured
+Persona state directory. The same Node path check runs at preview and preparation. It checks the base,
 task root and each repository's path. Links to credential paths or physical
 private state return `base_scope_denied`. Other symbolic links return
 `path_symlink`. A missing tail is allowed. The preview validates branch format
