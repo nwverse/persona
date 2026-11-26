@@ -802,12 +802,13 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend) {
-		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
-		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
-		// on its launcher's window (and never adopts the spare).
-		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
-			putMainCompactWindow(s.settings(ctx), p)
-		}
+		// The window the main conversation and each direction's lead are held to (main_compact_window.go), as sendModel
+		// puts it: a start, a relay, an internal message (a lead's supervision digest, #15318) and the spare warmed for
+		// the main conversation's next start carry it, or the node starts the conversation again on its launcher's
+		// window (and never adopts the spare). Put on every send, a value a caller set included: the node applies the
+		// window that comes with any conversation, so only this manager says which ones are held to it.
+		id, _ := p["session_id"].(string)
+		putMainCompactWindow(s.settings(ctx), p, s.isLeader(ctx, id))
 		// Interactive Claude Code (#10058) is part of what a process runs: every send and warm carries it, or the node
 		// restarts a conversation between the two kinds as messages without it come.
 		if _, set := p["claude_interactive"]; !set && s.claudeInteractive(ctx) {
@@ -853,6 +854,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		unlock := s.lockTaskSpace(taskRoot)
 		defer unlock()
 	}
+	assignmentAt := time.Now().UTC()
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return beforeNodeWrite(method, err)
@@ -874,6 +876,15 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
+	}
+	if err == nil && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+		if sent, ok := params.(map[string]any); ok {
+			if id, _ := sent["session_id"].(string); id != "" {
+				actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				s.notePersonaAssignment(actx, device, id, assignmentAt)
+				cancel()
+			}
+		}
 	}
 	laterTaken(err == nil)
 	if sent, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
@@ -1005,13 +1016,15 @@ func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult,
 	}
 	// A track's push_cap holds the level (track_attention.go).
 	s.capTrackPush(ctx, &n)
+	s.applyTodosV2PushAttention(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
-	s.noteCard(ctx, "", n) // its source is on ctx (withCard; card_layers.go)
 	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
 	if err != nil {
 		s.logf("assistant: push: %v", err)
+	} else {
+		s.noteCardResult(ctx, "", n, res) // its source is on ctx (withCard; card_layers.go)
 	}
 	return res, err
 }
@@ -1267,6 +1280,12 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 // a goroutine asleep through the window would hold a stack per pending turn end (#2472). Each call is its own run.
 func (s *Service) afterSettle(ctx context.Context, settled func(context.Context, string, string), machine, sid string) {
 	time.AfterFunc(s.settleDelay(ctx), func() { settled(ctx, machine, sid) })
+}
+
+// interactionResolvedSoon is InteractionResolved on its own goroutine: whoever ended the card does not wait for the
+// hook. The run is counted, so a test's fixture can wait for it before it puts back what the hook reads.
+func (s *Service) interactionResolvedSoon(ctx context.Context, r InteractionResolved) {
+	s.fleet.resolvedRuns.Go(func() { s.InteractionResolved(ctx, r) })
 }
 
 // InteractionResolved: the user dealt with a card of a task's agent: the conversation keeps a record of it, and the

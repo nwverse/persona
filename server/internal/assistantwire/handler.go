@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // ---- what the hub sends the assistant (Handler) ----
@@ -118,7 +119,18 @@ type SessionRef struct {
 type UserSpokeParams struct {
 	SessionRef
 	Text string `json:"text,omitempty"`
+	// Source is set only with Text from authenticated owner input to an Agent: "app" for the app's message route,
+	// "terminal" for the terminal Agent-message route. It is never a runtime transcript role.
+	Source      string              `json:"source,omitempty"`
+	ClientMsgID wireids.ClientMsgID `json:"client_msg_id,omitempty"`
+	At          time.Time           `json:"at,omitempty"`
 }
+
+// Verified owner-input provenance carried by UserSpokeParams.
+const (
+	OwnerInputApp      = "app"
+	OwnerInputTerminal = "terminal"
+)
 
 // ContextParams is assistant.context's params. MachineID is the asking node's machine: the hub sets it from the
 // node's connection, never from the node's params. With Ack the call only confirms that a message carrying those
@@ -200,7 +212,7 @@ type MessageCard struct {
 	ProgressVersion string `json:"progress_version,omitempty"`
 	// SentAt: the reply to the item went out (from this card or from the inbox, on any device) and Sent is what it
 	// said; set when the inbox sent the reply (the inbox is the assistant's too), never cleared, so the card stays sent
-	// when the item opens again. A card sent before that was recorded has no Sent (the draft is what went out).
+	// when the item opens again. Older send records can lack Sent, in which case the sent text is unknown.
 	SentAt *time.Time `json:"sent_at,omitempty"`
 	Sent   string     `json:"sent,omitempty"`
 	// Dismissal is per draft card, not inbox filing or task completion. Undo

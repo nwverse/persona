@@ -106,7 +106,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		t.RetryFromAgent, t.RetryFromAllowAll = "", false // a new plan cannot import another retry's provenance
 		t.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
 		t.TodoID, t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", "", nil, nil
-		t.HandoffID, t.HandoffOperationID = "", ""
+		t.HandoffID, t.HandoffOperationID, t.handoffLauncherSwitch = "", "", false
 		t.WorkspaceResolved, t.ReservedTodoID, t.WorkspaceInferred = nil, "", false
 		t.OwnerStarted = false // the hub's: only the owner's Start on the card sets it (startPlan)
 		t.MemoryTopic = nil    // the hub's: the plan's own confirmation decision sets it (below)
@@ -147,8 +147,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				}
 				t.BlockedByPR = normPRs
 			}
+			t.UnlockStage, t.UnlockContracts, err = parseUnlockStageRule(t.UnlockStage, t.UnlockContracts)
+			if err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
 		} else {
 			t.BlockedByPR = nil
+			t.UnlockStage, t.UnlockContracts = "", nil
 		}
 		if err := t.checkRole(scope != nil); err != nil {
 			return "", fmt.Errorf("task %d: %w", i+1, err)
@@ -282,7 +287,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		// resolved the actual landing machine and launcher (#12980).
 		if t.Continues != "" {
 			if prevTodo, ok := s.todoNow(t.Continues); ok {
-				providerSwitch := s.isProviderSwitchContinuation(ctx, prevTodo, t.Machine, resolvedLauncher)
+				targetAgent := ""
+				if fitOK {
+					targetAgent = fit.agent
+				}
+				sw := s.continuationSwitchKind(ctx, prevTodo, t.Machine, resolvedLauncher, targetAgent)
+				providerSwitch := sw.any()
 				if providerSwitch {
 					if pred, ok := s.todoPredecessor(ctx, prevTodo); ok {
 						srcPerm := cmp.Or(pred.permission(), "default")
@@ -309,6 +319,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 				}
 				if providerSwitch {
 					t.HandoffOperationID = "op_" + randomHex(12)
+					t.handoffLauncherSwitch = sw.launcherChanged
 				}
 			}
 		}
@@ -501,12 +512,21 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
 	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, a cross-provider
-	// or cross-launcher continuation handoff (#12980), an explicit owner step, and an ordinary conversation's writable
-	// work where the owner has not let such work start by itself.
+	// or cross-launcher continuation handoff (#12980), an implicit health-detour or non-orchestrator cross-machine
+	// handoff, an explicit owner step, and an ordinary conversation's writable work where the owner has not let such
+	// work start by itself. Main chat and direction leaders explicitly moving a task to another owned machine on the
+	// same engine/launcher auto-start once continuation blockers and non-escalation checks pass (still recording an
+	// auditable TodoContextHandoff).
 	step := planOwnerStep(p.Tasks)
 	needsOwner := policy.ConfirmOutbound || step != "" ||
 		slices.ContainsFunc(p.Tasks, func(task PlanTask) bool {
-			return task.RequestGate != "" || task.HandoffOperationID != ""
+			if task.RequestGate != "" {
+				return true
+			}
+			if task.HandoffOperationID == "" {
+				return false
+			}
+			return task.handoffLauncherSwitch || task.Reroute != nil || !orchestrates
 		})
 	var autoStartReasons []string
 	if !needsOwner && !orchestrates {
