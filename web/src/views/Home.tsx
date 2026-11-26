@@ -19,7 +19,7 @@ import { heldAsWorking, userCards } from "../lib/supervisor-held";
 import { agentLabel } from "../lib/mentions";
 import { hubLabel, machineWithHub } from "../lib/mesh";
 import { isPending, machineErrorText } from "../lib/add-computer";
-import { machineDeployment } from "../lib/machine-deploy";
+import { disconnectExpected } from "../lib/machine-connection-state";
 import { classifyConnection } from "../lib/connection-failure";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
@@ -813,6 +813,6 @@ export function offlineLine(m: Machine): string {
   if (isPending(m)) return t("machines.never_connected");
   const coded = machineErrorText(m.error_code);
   if (coded) return coded;
-  if (machineDeployment(m).expectedDisconnect) return t("machines.waiting_node");
+  if (disconnectExpected(m)) return t("machines.waiting_node");
   return classifyConnection(m)?.title ?? (m.error || t("home.offline"));
 }
