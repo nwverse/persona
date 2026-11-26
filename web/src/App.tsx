@@ -85,11 +85,10 @@ const AgentArchives = lazyPage(() => import("./views/agents/AgentArchives").then
 const CompareRuns = lazyPage(() => import("./views/CompareRuns").then((m) => m.CompareRuns), { routes: ["compare"] });
 const RequestPage = lazyPage(() => import("./views/RequestPage").then((m) => m.RequestPage), { routes: ["request"] });
 const WorkspaceBoard = lazyPage(() => import("./views/WorkspaceBoard").then((m) => m.WorkspaceBoard), { routes: ["workspace-board"] });
-const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines"] });
+const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines", "machine"] });
 const TerminalPage = lazyPage(() => import("./views/terminal/TerminalPage").then((m) => m.TerminalPage), { routes: ["terminal"] });
 const LarkOAuthReturn = lazyPage(() => import("./views/settings/LarkOAuthReturn").then((m) => m.LarkOAuthReturn), { routes: ["lark-oauth"] });
 const SubscriptionsPage = lazyPage(() => import("./views/subscriptions/SubscriptionsPage").then((m) => m.SubscriptionsPage), { routes: ["subscriptions"] });
-const MachineDetail = lazyPage(() => import("./views/machines/MachineDetail").then((m) => m.MachineDetail), { routes: ["machine"] });
 const SpacePage = lazyPage(() => import("./views/SpacePage").then((m) => m.SpacePage), { routes: ["space"] });
 const Settings = lazyPage(() => import("./views/Settings").then((m) => m.Settings), { routes: ["settings"] });
 const SpaceExtensionEntry = lazyPage(() => import("./views/spaces/SpaceExtensionEntry").then((m) => m.SpaceExtensionEntry), { routes: ["track", "track-new"] });
@@ -614,17 +613,15 @@ function Shell() {
     case "compare":
       main = <CompareRuns id={route.id} onToggleSidebar={toggle} />;
       break;
+    case "machine":
     case "machines":
       main = <Machines onToggleSidebar={toggle} />;
       break;
     case "terminal":
       main = <TerminalPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} />;
       break;
-    case "machine":
-      main = <MachineDetail key={route.mid} mid={route.mid} onToggleSidebar={toggle} />;
-      break;
     case "space":
-      main = <SpacePage key={`${route.mid}/${route.space}`} mid={route.mid} space={route.space} onToggleSidebar={toggle} />;
+      main = <SpacePage key={`${route.mid}/${route.workspace ?? route.space}`} workspaceId={route.workspace} mid={route.mid} space={route.space} onToggleSidebar={toggle} />;
       break;
     case "settings":
       main = <Settings onToggleSidebar={toggle} />;

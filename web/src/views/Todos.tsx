@@ -32,6 +32,8 @@ import { lazyPage } from "../lib/lazy-page";
 import { dropTodo, putTodo, refresh, refreshTodos, useStore } from "../lib/store";
 import {
   addTodoDecision,
+  addTodoExternalPRBlocker,
+  cancelTodoBlocker,
   createTodo,
   DECISIONS_FIRST,
   type DecisionsView,
@@ -3666,22 +3668,141 @@ function activeBlockerLink(raw: string): { url: string; label: string } | null {
   return { url: u.href, label: path ? `${u.host}${path}` : u.host };
 }
 
-/** Compact strip of active persistent blocker edges projected by the server under todos_v2 (#16135, #16138). */
-function TodoActiveBlockersStrip({ blockers }: { blockers: readonly TodoActiveBlocker[] }) {
+function validateExternalPRUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:" || !u.hostname) return null;
+  return u.href;
+}
+
+/** Compact inline form to add an external PR blocker edge under todos_v2 (#16199). */
+function TodoAddPRBlockerForm({
+  value,
+  error,
+  busy,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  value: string;
+  error: string | null;
+  busy: boolean;
+  onChange: (next: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form
+      noValidate
+      data-testid="todo-add-pr-blocker-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+      className="mt-2 rounded-control border border-line bg-inset/70 p-2.5 text-meta"
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        <input
+          type="url"
+          value={value}
+          disabled={busy}
+          autoFocus
+          data-testid="todo-add-pr-blocker-input"
+          aria-label={t("todos.active_blocker_pr_input_aria")}
+          placeholder={t("todos.active_blocker_pr_placeholder")}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && !busy) {
+              e.preventDefault();
+              onCancel();
+            }
+          }}
+          className="h-7 min-w-0 flex-1 rounded-control border border-line bg-surface px-2 text-meta text-ink outline-none placeholder:text-ink-3 focus:border-accent disabled:opacity-50"
+        />
+        <Button
+          type="submit"
+          tone="primary"
+          size="sm"
+          busy={busy}
+          disabled={busy}
+          testId="todo-add-pr-blocker-submit"
+          className="h-7 shrink-0 px-2.5 text-label whitespace-nowrap"
+        >
+          {t("todos.active_blocker_pr_submit")}
+        </Button>
+        <Button
+          type="button"
+          tone="quiet"
+          size="sm"
+          disabled={busy}
+          testId="todo-add-pr-blocker-cancel"
+          onClick={onCancel}
+          className="h-7 shrink-0 px-2 text-label whitespace-nowrap"
+        >
+          {t("todos.active_blocker_pr_cancel")}
+        </Button>
+      </div>
+      {error && (
+        <p data-testid="todo-add-pr-blocker-error" role="alert" className="mt-1.5 text-submeta text-red">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/** Compact strip of active persistent blocker edges projected by the server under todos_v2 (#16135, #16138, #16199). */
+function TodoActiveBlockersStrip({
+  blockers,
+  canAddPR = false,
+  addingPROpen = false,
+  onToggleAddPR,
+  cancellingId = null,
+  onCancelBlocker,
+}: {
+  blockers: readonly TodoActiveBlocker[];
+  canAddPR?: boolean;
+  addingPROpen?: boolean;
+  onToggleAddPR?: () => void;
+  cancellingId?: string | null;
+  onCancelBlocker?: (blockerId: string) => void;
+}) {
   return (
     <section
       data-testid="todo-active-blockers"
       aria-label={t("todos.active_blockers_region")}
       className="mt-3 rounded-control border border-orange/30 bg-orange-tint/40 px-3 py-2 text-meta text-ink-2"
     >
-      <div className="mb-1.5 flex items-center gap-1.5 text-label font-semibold text-orange">
-        <Icon name="alertCircle" size={12} stroke={2} className="shrink-0" />
-        <span>{t("todos.active_blockers_title", { count: blockers.length })}</span>
+      <div className="mb-1.5 flex items-center justify-between gap-2 text-label font-semibold text-orange">
+        <span className="inline-flex min-w-0 items-center gap-1.5">
+          <Icon name="alertCircle" size={12} stroke={2} className="shrink-0" />
+          <span className="truncate">{t("todos.active_blockers_title", { count: blockers.length })}</span>
+        </span>
+        {canAddPR && onToggleAddPR && (
+          <Button
+            tone="quiet"
+            size="sm"
+            icon="plus"
+            expanded={addingPROpen}
+            testId="todo-add-pr-blocker-btn"
+            onClick={onToggleAddPR}
+            className="h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+          >
+            {t("todos.active_blocker_add_pr")}
+          </Button>
+        )}
       </div>
       <ul className="flex flex-col gap-1">
         {blockers.map((blocker) => {
           const link = activeBlockerLink(blocker.target_ref);
           const attempts = typeof blocker.attempts === "number" && blocker.attempts > 0 ? blocker.attempts : 0;
+          const cancelling = cancellingId === blocker.id;
           return (
             <li
               key={blocker.id}
@@ -3718,6 +3839,19 @@ function TodoActiveBlockersStrip({ blockers }: { blockers: readonly TodoActiveBl
                 >
                   {t("todos.active_blocker_attempts", { count: attempts })}
                 </span>
+              )}
+              {onCancelBlocker && (
+                <button
+                  type="button"
+                  data-testid={`todo-cancel-blocker-${blocker.id}`}
+                  disabled={cancelling}
+                  aria-label={t("todos.active_blocker_cancel_aria", { target: link?.label ?? blocker.target_ref })}
+                  title={t("todos.active_blocker_cancel")}
+                  onClick={() => onCancelBlocker(blocker.id)}
+                  className="touch-hit ml-auto inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-chip text-ink-3 transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50"
+                >
+                  {cancelling ? <Spinner size={11} /> : <Icon name="x" size={12} stroke={2} />}
+                </button>
               )}
             </li>
           );
@@ -3798,6 +3932,64 @@ function TodoDetail({
   const [parentPickerOpen, setParentPickerOpen] = useState(false);
   const [itemTypeBusy, setItemTypeBusy] = useState(false);
   const [unseeing, setUnseeing] = useState(false);
+  // Manual external PR blocker add & active blocker cancel strictly gated behind todos_v2 (#16199).
+  const [prBlockerOpen, setPrBlockerOpen] = useState(false);
+  const [prBlockerUrl, setPrBlockerUrl] = useState("");
+  const [prBlockerError, setPrBlockerError] = useState<string | null>(null);
+  const [prBlockerBusy, setPrBlockerBusy] = useState(false);
+  const [cancellingBlockerId, setCancellingBlockerId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPrBlockerOpen(false);
+    setPrBlockerUrl("");
+    setPrBlockerError(null);
+    setPrBlockerBusy(false);
+    setCancellingBlockerId(null);
+  }, [todo.id, todosV2]);
+
+  const hasActiveBlockers = Boolean(todo.active_blockers && todo.active_blockers.length > 0);
+  const canAddPRBlocker = todosV2 === true && open;
+
+  const toggleAddPRBlocker = () => {
+    setPrBlockerOpen((prev) => !prev);
+    setPrBlockerError(null);
+  };
+
+  const submitExternalPRBlocker = async () => {
+    if (prBlockerBusy) return;
+    const validUrl = validateExternalPRUrl(prBlockerUrl);
+    if (!validUrl) {
+      setPrBlockerError(t("todos.active_blocker_pr_url_invalid"));
+      return;
+    }
+    setPrBlockerBusy(true);
+    setPrBlockerError(null);
+    try {
+      await addTodoExternalPRBlocker(todo.id, validUrl);
+      await refreshTodos();
+      setPrBlockerOpen(false);
+      setPrBlockerUrl("");
+      toast(t("todos.active_blocker_added"), "ok");
+    } catch (e) {
+      setPrBlockerError(t("todos.active_blocker_add_failed", { error: errorText(e) }));
+    } finally {
+      setPrBlockerBusy(false);
+    }
+  };
+
+  const handleCancelBlocker = async (blockerId: string) => {
+    if (cancellingBlockerId) return;
+    setCancellingBlockerId(blockerId);
+    try {
+      await cancelTodoBlocker(todo.id, blockerId);
+      await refreshTodos();
+      toast(t("todos.active_blocker_cancelled"), "ok");
+    } catch (e) {
+      toast(t("todos.active_blocker_cancel_failed", { error: errorText(e) }), "error");
+    } finally {
+      setCancellingBlockerId(null);
+    }
+  };
   const canChangeDirection =
     todosV2 === true &&
     Boolean(onReorganizeDirection) &&
@@ -4294,6 +4486,19 @@ function TodoDetail({
             {t("todos.detail_mark_unread")}
           </Button>
         )}
+        {canAddPRBlocker && !hasActiveBlockers && (
+          <Button
+            tone="quiet"
+            size="sm"
+            icon="plus"
+            expanded={prBlockerOpen}
+            testId="todo-add-pr-blocker-btn"
+            onClick={toggleAddPRBlocker}
+            className="h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+          >
+            {t("todos.active_blocker_add_pr")}
+          </Button>
+        )}
       </div>
       {isCancelled(todo) && cancellationReason(todo) && (
         <p className="mt-2 text-xs leading-[1.6] text-ink-3" data-testid="todo-detail-cancelled-reason">
@@ -4316,9 +4521,33 @@ function TodoDetail({
       <TodoAskPanel todo={todo} />
       <HeldForBriefing todo={todo} />
 
-      {/* Active persistent blocker edges projected by the server under todos_v2 (#16135, #16138) */}
-      {todosV2 === true && todo.active_blockers && todo.active_blockers.length > 0 && (
-        <TodoActiveBlockersStrip blockers={todo.active_blockers} />
+      {/* Active persistent blocker edges projected by the server under todos_v2 (#16135, #16138, #16199) */}
+      {todosV2 === true && hasActiveBlockers && (
+        <TodoActiveBlockersStrip
+          blockers={todo.active_blockers!}
+          canAddPR={open}
+          addingPROpen={prBlockerOpen}
+          onToggleAddPR={toggleAddPRBlocker}
+          cancellingId={cancellingBlockerId}
+          onCancelBlocker={(blockerId) => void handleCancelBlocker(blockerId)}
+        />
+      )}
+      {canAddPRBlocker && prBlockerOpen && (
+        <TodoAddPRBlockerForm
+          value={prBlockerUrl}
+          error={prBlockerError}
+          busy={prBlockerBusy}
+          onChange={(next) => {
+            setPrBlockerUrl(next);
+            if (prBlockerError) setPrBlockerError(null);
+          }}
+          onSubmit={() => void submitExternalPRBlocker()}
+          onCancel={() => {
+            setPrBlockerOpen(false);
+            setPrBlockerUrl("");
+            setPrBlockerError(null);
+          }}
+        />
       )}
 
       {/* Due date, reminder, priority (#1683) */}

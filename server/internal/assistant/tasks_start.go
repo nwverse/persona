@@ -299,7 +299,12 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			q := s.pendingPlacementQueueEntry(ctx, p.ID, pendingPlacementBatchSize, pendingPlacementBatchIdx, s.placementNow())
 			pendingPlacementBatchIdx++
 			t.Queue = &q
-		} else if t.Workspace != nil && t.Workspace.Mode == workspaceExisting && (!t.WorkspaceInferred || t.Workspace.Queue) && t.WorkspaceResolved != nil {
+		} else if s.settings(ctx).todosV2On() && len(t.BlockedByPR) > 0 {
+			if refs := s.activeTodoBlockerRefs(ctx, todo.ID); len(refs) > 0 {
+				t.Queue = s.blockerWaitQueue(refs)
+			}
+		}
+		if t.Queue == nil && t.Workspace != nil && t.Workspace.Mode == workspaceExisting && (!t.WorkspaceInferred || t.Workspace.Queue) && t.WorkspaceResolved != nil {
 			effMachine := s.effectiveBoardMachine(t.Machine)
 			wsPath := t.WorkspaceResolved.Path
 			wsKey := effMachine + "\x00" + s.taskDirKey(ctx, t.Machine)(wsPath)
@@ -389,6 +394,14 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 					batchSize = task.Queue.Placement.BatchSize
 				}
 				s.onPendingPlacementEnqueued(ctx, p.ID, task.TodoID, batchSize)
+				continue
+			}
+			if task.Queue != nil && task.Queue.Key == blockerWaitQueueKey {
+				held := task.ReuseTodo
+				if held == "" && task.InboxItem != "" {
+					held = task.TodoID
+				}
+				s.releaseTakenTodo(held)
 				continue
 			}
 			if task.Queue != nil && task.Queue.Key == workspaceQueueKey && task.Queue.Workspace != nil {
@@ -1147,7 +1160,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		}
 		args["launcher"] = s.startLauncher(ctx, t.Launcher)
 	}
-	if !t.backendWorkspace() && t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
+	if !t.usesPreparedWorkspace() && t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
 		return
 	}
 	// A retry the assistant asked for that failed so its tab is gone: the start fails for good, and the supervisor and
@@ -1172,7 +1185,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		var problem *taskworkspace.Problem
 		if errors.As(err, &problem) {
 			pt.WorkspaceError = problem
-		} else if t.backendWorkspace() && t.backendRequest != nil {
+		} else if t.usesPreparedWorkspace() && t.backendRequest != nil {
 			pt.WorkspaceError = taskworkspace.Failure("engine_start_failed", "start", t.backendRequest.OperationID, "", t.Cwd)
 		}
 		pt.ErrorCode, pt.ErrorArgs, pt.RetryWith = code, args, retryWith

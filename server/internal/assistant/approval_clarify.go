@@ -352,6 +352,7 @@ func (s *Service) keepWaitingGen(p *pending, gen uint64) bool {
 		a.decisionTimer = time.AfterFunc(approvalWaitingWindow, func() { s.expirePreparedGen(p, nextGen) })
 		s.fleet.mu.Unlock()
 		s.show(ix) // the apps keep the card, with its new deadline
+		s.armPendingReminder(ix)
 		close(a.release)
 		return true
 	}
