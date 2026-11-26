@@ -18,6 +18,35 @@ it("keeps an Agent interaction on a verifying task under its original conversati
   ]);
 });
 
+it("keeps a verification and a live confirmation under the same counted parent", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const view = { section: "needs_you" as const, phase: "needs_you" as const, rank: 0 };
+  const parent: Todo = {
+    id: "request", title: "Prepare the release", origin: "direction", created_at: at, updated_at: at, agents: [],
+    view: { ...view, reason: "verify", steps: { done: 0, total: 2 } },
+  };
+  const verification: Todo = {
+    ...parent, id: "verify", title: "Review the result", part_of: parent.id,
+    supervision: { state: "user_check", supervisor: "worker-supervisor" }, ask: { verdict: "Please verify", asked_at: at },
+    view: { ...view, reason: "verify" },
+  };
+  const interaction: Interaction = { id: "confirm", kind: "permission", machine_id: "box", session_id: "worker", created_at: at };
+  const confirmation: Todo = {
+    ...parent, id: "confirm", title: "Allow the change", part_of: parent.id,
+    agents: [{ machine_id: "box", session_id: "worker", linked_at: at }], view: { ...view, reason: "agent_asks" },
+  };
+  const entries = assistantEntries({
+    conversation: "direction", main: "main", todos: [parent, verification, confirmation], sessions: [],
+    interactions: [interaction], plans: {}, feed: [], now: Date.parse(at),
+  });
+  expect(entries.needsYou).toHaveLength(1);
+  expect(entries.needsYou[0]).toMatchObject({
+    key: "task:request", countsOpen: true,
+    steps: [{ todo: { id: "confirm" }, asks: [interaction] }, { todo: { id: "verify" } }],
+  });
+  expect(entries.running).toEqual([]);
+});
+
 // Android reads the same fixture (AssistantEntriesFixtureTest): the two entries split the same input the same way.
 describe("the Assistant's Needs you and In progress entries (spec/fixtures/entries)", () => {
   for (const c of fixture.cases) {
