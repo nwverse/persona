@@ -144,8 +144,8 @@ type gate struct {
 	putOff      int       // requests not sent while held
 	probing     bool      // the pause is over and one request is finding out, until the upstream answers it
 	strikes     int       // busy answers in a row
-	runTimedOut bool          // the previous eligible CLI run timed out
-	cap         int           // requests in flight at most, 0 for no cap
+	runTimedOut bool      // the previous eligible CLI run timed out
+	cap         int       // requests in flight at most, 0 for no cap
 	inflight    int
 	out         []time.Time   // when each request in flight went out, the longest out first, for the log (noTurn)
 	fine        int           // successes since the cap last changed
