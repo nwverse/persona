@@ -73,7 +73,7 @@ export function ProjectExtensionSections({ project, manager }: { project: string
               {p.extension_name && p.extension_name !== p.title && <span className="truncate text-submeta text-ink-2">{p.extension_name}</span>}
               {p !== opened && <Icon name="chevronRight" size={16} />}
             </a>
-            {p === opened && <IconButton icon="chevronUp" label={t("knowledge-kbdetail.close_section")} onClick={() => navigate(base, true)} />}
+            {p === opened && <IconButton icon="x" label={t("knowledge-kbdetail.close_section")} onClick={() => navigate(base, true)} />}
           </div>;
         })}
         {opened && <div className="border-t border-line p-2">
