@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // Unit & integration tests for the lazy-loaded unified IntegrationDetail view (integrations_v2, #14847).
+import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -405,7 +406,9 @@ describe("integrations_v2 gating & legacy isolation", () => {
 });
 
 describe("Built-in services", () => {
-  it("renders Mail with Account & Connection accounts and Inbox & Sync switch", async () => {
+  it.skipIf(!installedMailbox)("renders Mail with Account & Connection accounts and Inbox & Sync switch", async () => {
+    await preloadMailbox("Settings");
+    await preloadMailbox("InboxSwitch");
     act(() => {
       root.render(<IntegrationDetail target={{ kind: "builtin", id: "mail" }} />);
     });
@@ -504,7 +507,7 @@ describe("Built-in services", () => {
     });
 
     for (const target of [
-      { kind: "builtin", id: "mail" } as const,
+      ...(installedMailbox ? [{ kind: "builtin", id: "mail" } as const] : []),
       { kind: "builtin", id: "lark" } as const,
       { kind: "builtin", id: "chat-history", connectorId: "chat-history" } as const,
     ]) {
@@ -526,7 +529,7 @@ describe("Built-in services", () => {
   it("omits the Back button when onBack is undefined (desktop split-pane / phone) and renders it when provided", async () => {
     const onBack = vi.fn();
     for (const target of [
-      { kind: "builtin", id: "mail" } as const,
+      ...(installedMailbox ? [{ kind: "builtin", id: "mail" } as const] : []),
       { kind: "builtin", id: "feishu-bot" } as const,
       { kind: "extension", id: "larkx" } as const,
     ]) {
@@ -545,7 +548,7 @@ describe("Built-in services", () => {
       expect(visibleBack, `${target.id} with onBack`).toBeDefined();
       act(() => visibleBack!.click());
     }
-    expect(onBack).toHaveBeenCalledTimes(3);
+    expect(onBack).toHaveBeenCalledTimes(installedMailbox ? 3 : 2);
   });
 });
 

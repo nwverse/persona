@@ -2,6 +2,7 @@
 // Composes Account & Connection, Chat & Delivery (with thread_mode & thread_idle_hours),
 // Inbox & Sync, section-grouped Extension Settings, and Plugin Management on a single page
 // for both built-in services and installed extensions. Strictly gated by integrations_v2.
+import { useMailboxEnabled } from "../../lib/mail";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatList, t } from "../../i18n";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
@@ -224,9 +225,12 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
   const picked = useChosenManager();
   const effectiveManager = props.target.manager ?? otherManager(picked ?? undefined);
   const storeEnabled = useStore((s) => isIntegrationsV2Active(s.assistant, effectiveManager, picked));
+  const mailEnabled = useMailboxEnabled();
   const enabled = props.integrationsV2 ?? storeEnabled;
 
   if (!enabled) return <>{props.fallback ?? null}</>;
+
+  if (props.target.kind === "builtin" && props.target.id === "mail" && !mailEnabled) return null;
 
   if (props.target.kind === "extension") {
     return (

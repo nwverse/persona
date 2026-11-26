@@ -2,6 +2,7 @@
 // Unit & integration tests for the lazy-loaded unified Integrations & Extensions list view,
 // object deduplication, capability filter chips, Extension Market entry, IntegrationDetail mounting,
 // bidirectional legacy route redirects, and Settings navigation collapse under integrations_v2 (#14874).
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -493,6 +494,8 @@ function stubFullHubFetch(overrides?: {
     }),
   );
 }
+
+registerTestMailbox();
 
 describe("buildIntegrationCatalog deduplication and capability classification", () => {
   it("deduplicates multi-capability extensions and built-in services into single canonical rows", () => {

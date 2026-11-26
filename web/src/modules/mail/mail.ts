@@ -1,16 +1,8 @@
-// Mail beyond the inbox's own reply (docs/extensions/mail.md): writing a new mail or answering one by hand (the app's ComposeView),
-// and marking a mail read once it is opened (MailDetailView). The accounts are read once per page load and shared.
-
-import { t } from "../i18n";
-import { useEffect, useState } from "react";
-import { hubServes, moduleFeature } from "../core/module-host";
-import { api, enc } from "./api";
-import { itemHeaders, useItemManager } from "./manager-choice";
-
-export interface MailAddress {
-  name?: string;
-  email?: string;
-}
+import { api, enc } from "../../lib/api";
+import type { MailAccount } from "../../lib/agent-settings";
+import { itemHeaders } from "../../lib/manager-choice";
+import { addressText, type MailAddress } from "../../lib/mail-stored";
+import { t } from "../../i18n";
 
 export interface MailMessage {
   uid: number;
@@ -25,46 +17,6 @@ export interface MailMessage {
   seen?: boolean;
   references?: string[];
   attachments?: { id?: string; filename?: string; mime?: string; size?: number }[];
-}
-
-// ── where a mail's words come from ───────────────────────
-
-/** How an opened mail is read, decided in one place (mailReading) from the hub's module flag and handed down
- *  (components follow the hub's hello through views/inbox/item-write-gate.ts):
- *  - `full`: the hub has the mail module (or says nothing about modules): the whole message is asked of the mail
- *    server as it opens, and replies, flags and attachments work.
- *  - `stored`: the hub turned mail off (#15995). Its mail routes are gone, so only the text the hub kept with the
- *    Inbox item can be shown, and nothing can be written to the mailbox. */
-export type MailReading = { kind: "full" } | { kind: "stored"; reason: "mail-off" };
-
-const FULL: MailReading = { kind: "full" };
-const STORED: MailReading = { kind: "stored", reason: "mail-off" };
-
-/** The hub flag rule for `module.mail` (hubServes): no hello yet or a hub without module flags reads in full. */
-export function mailReading(s?: Parameters<typeof hubServes>[1]): MailReading {
-  return hubServes(moduleFeature("mail"), s) ? FULL : STORED;
-}
-
-/** Whether the text the hub stored for a mail is all of the newest mail (#15995), from the item's own page:
- *  - `clipped`: the hub cut it at the 3,000 characters it stores;
- *  - `whole`: the stored text is the whole text;
- *  - `unknown`: the hub did not say: a hub from before it sent `mail_body_truncated`, an item stored before the hub
- *    recorded it, a mail whose text the hub never read, or the list's own copy of the item (which never carries it). */
-export type StoredMailClipping = "clipped" | "whole" | "unknown";
-
-/** `mail_body_truncated` of GET /inbox/{id} as the closed type; anything but a boolean is `unknown`, never `whole`. */
-export function storedMailClipping(item?: { mail_body_truncated?: unknown }): StoredMailClipping {
-  const v = item?.mail_body_truncated;
-  return v === true ? "clipped" : v === false ? "whole" : "unknown";
-}
-
-/** Whether `item`'s replies would be mail the hub can no longer send (`reading` is `stored`). */
-export function mailItemReadOnly(reading: MailReading, item?: { source: string; mail?: unknown }): boolean {
-  return reading.kind === "stored" && Boolean(item && (item.mail || item.source === "mail"));
-}
-
-export function addressText(a?: MailAddress): string {
-  return a ? (a.name && a.email ? `${a.name} <${a.email}>` : a.email || a.name || "") : "";
 }
 
 // ── writing ──────────────────────────────────────────────
@@ -155,14 +107,14 @@ function quoteDate(iso?: string): string {
 export function replyDraft(accountID: string, msg: MailMessage): ComposeDraft {
   const subject = msg.subject ?? "";
   const quoted = (msg.text ?? "").split("\n").slice(0, 40).map((l) => `> ${l}`).join("\n");
-  const head = [quoteDate(msg.date), addressText(msg.from)].filter(Boolean).join(t("lib-mail.quote_head_separator"));
+  const head = [quoteDate(msg.date), addressText(msg.from)].filter(Boolean).join(t("mail.quote_head_separator"));
   return {
     accountID,
     to: msg.from?.email ?? "",
     cc: "",
     bcc: "",
     subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`,
-    body: `\n\n${t("lib-mail.quote_head", { head })}\n${quoted}`,
+    body: `\n\n${t("mail.quote_head", { head })}\n${quoted}`,
     inReplyTo: msg.message_id || undefined,
     references: [...(msg.references ?? []), ...(msg.message_id ? [msg.message_id] : [])],
   };
@@ -218,62 +170,7 @@ export function markMailSeen(accountID: string, uid: number, mailbox: string, ma
   return api(`/mail/messages/${enc(accountID)}/${uid}/flags`, { method: "POST", json: { mailbox, seen: true }, headers: itemHeaders(manager) }).catch(() => undefined);
 }
 
-// ── accounts ─────────────────────────────────────────────
-
-export interface MailAccount {
-  id: string;
-  name?: string;
-  email: string;
-}
-
-// by manager ("": the default's): each manager keeps its own mail accounts
-const known = new Map<string, MailAccount[]>();
-const inFlight = new Map<string, Promise<MailAccount[]>>();
-const accountsKey = (manager?: string) => (itemHeaders(manager) ? manager! : "");
-
-/** The mail accounts of manager (none: the default's), read again on every call (calls while one is out share it);
- *  the last answer is kept. */
-export function loadMailAccounts(manager?: string): Promise<MailAccount[]> {
-  // A hub without the mail module (built out or switched off: no module.mail flag) has no mail routes: ask nothing.
-  if (mailReading().kind === "stored") return Promise.resolve([]);
-  const key = accountsKey(manager);
-  let p = inFlight.get(key);
-  if (!p) {
-    p = api<{ accounts?: MailAccount[] }>("/mail/accounts", { headers: itemHeaders(manager) })
-      .then((r) => {
-        const list = r.accounts ?? [];
-        known.set(key, list);
-        return list;
-      })
-      .finally(() => inFlight.delete(key));
-    inFlight.set(key, p);
-  }
-  return p;
-}
-
-/** The accounts of the manager whose item is shown (ItemManager; none: the default's), or of `owner.manager` when given
- *  (a new mail on the Inbox page: the current assistant's), the last known ones at once and the hub's answer when it
- *  comes. */
-export function useMailAccounts(owner?: { manager: string | undefined }): MailAccount[] {
-  const shown = useItemManager();
-  const manager = owner ? owner.manager : shown;
-  const key = accountsKey(manager);
-  const [state, setState] = useState(() => ({ key, list: known.get(key) ?? [] }));
-  useEffect(() => {
-    let live = true;
-    loadMailAccounts(manager)
-      .then((list) => live && setState({ key, list }))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [manager, key]);
-  // A same-id account under another manager is not evidence of this item's receiving address.
-  return state.key === key ? state.list : known.get(key) ?? [];
-}
-
-/** Tests only. */
-export function resetMailForTests() {
-  known.clear();
-  inFlight.clear();
+export async function accounts(manager?: string): Promise<MailAccount[]> {
+  const response = await api<{ accounts?: MailAccount[] }>("/mail/accounts", { headers: itemHeaders(manager) });
+  return response.accounts ?? [];
 }

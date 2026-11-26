@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,6 +78,8 @@ afterEach(() => {
   getState().assistant = null;
   history.replaceState(null, "", "/");
 });
+
+registerTestMailbox();
 
 describe("AI reply drafts", () => {
   it("opens the AI twin's archived conversation on its computer and keeps the item address", async () => {
