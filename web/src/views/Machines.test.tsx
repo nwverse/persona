@@ -139,6 +139,37 @@ describe("Machines", () => {
     expect(reads).not.toContain("/api/v1/machines/a/storage");
   });
 
+  it("restores the fleet tab and scroll offset when leaving detail through Back", async () => {
+    fake.machines = ["a", "b"].map(id => ({ id, name: id, online: true }));
+    await show();
+    await act(async () => buttons(t("machines.view_capabilities"))[0]!.click());
+    const scroller = () => host.querySelector<HTMLDivElement>(".overflow-y-auto")!;
+    scroller().scrollTop = 175;
+    scroller().dispatchEvent(new Event("scroll"));
+    await follow("/machines/b");
+    await act(async () => {
+      const popped = new Promise(resolve => window.addEventListener("popstate", resolve, { once: true }));
+      host.querySelector<HTMLAnchorElement>("header a")!.click();
+      await popped;
+    });
+    expect(location.pathname).toBe("/machines");
+    expect(scroller().scrollTop).toBe(175);
+    expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe(t("machines.view_capabilities"));
+  });
+
+  it("keeps Overview as the previous page and restores an old engine bookmark", async () => {
+    fake.machines = [{ id: "b", name: "Computer B", online: true }];
+    history.replaceState(null, "", "/overview");
+    navigate({ name: "machine", mid: "b" });
+    await show();
+    expect(host.querySelector("header a")?.getAttribute("href")).toBe("/overview");
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/machines/b#engine");
+    await show();
+    expect(location.pathname).toBe("/machines/b/management");
+    expect(host.querySelector("#engine")).not.toBeNull();
+  });
+
   it("waits for the directory and reports a refused tool request on the requested machine", async () => {
     fake.loaded = false;
     history.replaceState(null, "", "/machines/b/network");

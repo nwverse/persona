@@ -53,7 +53,7 @@ Query keys not listed for a row are dropped (not passed on, not acted on). Fragm
 On the web, a bare computer address opens Work. Existing links with a monitoring range
 (`1h`, `6h` or `24h`) open Monitoring. The supported subviews are `work`, `monitoring`, `files`,
 `storage`, `diagnostics`, `procs`, `services`, `toolchain`, `network` and `management` (`config` is an alias).
-An unknown subview shows Page not found. Older fleet history entries carrying a reclaim request resolve
+The legacy `#engine` bookmark on a computer opens Management. An unknown subview shows Page not found. Older fleet history entries carrying a reclaim request resolve
 in place to `/machines/<id>/storage?mode=reclaim`. Opening reclaim displays the map and its suggestions.
 
 - `<kind>` is one of `projects`, `topics`, `chats`, `people`, `docs`, `meetings`, `events`, `recordings`; a meeting is

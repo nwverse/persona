@@ -11,6 +11,7 @@ import { canAddComputer, isPending, machineErrorText, neverConnected } from "../
 import { api, enc, errorText } from "../lib/api";
 import { readinessChanged } from "../lib/readiness";
 import "./machines/machine-views.css";
+import { ENGINE_SECTION_ID } from "./machines/engine-anchor";
 import { openNewAgent } from "../lib/new-agent";
 import { stateCount } from "../lib/state-labels";
 import { stateOf } from "../lib/format";
@@ -74,11 +75,13 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const route = useRoute();
   const [savedView, setView] = useState<MachinesView>(() => fleetChoice(storedValue(VIEW_KEY)));
   const choice = fleetChoice(history.state?.fleetView ?? savedView);
-  const view = machines.length === 0 || (machines.length === 1 && choice === "capabilities") ? "cards" : choice;
+  const view = machines.length < 2 && choice === "capabilities" ? "cards" : choice;
   const fleetView = view !== "resources";
   const chooseView = (v: MachinesView) => {
     history.replaceState({ ...history.state, fleetView: v }, "");
-    storeValue(VIEW_KEY, v);
+    if (v !== "resources") {
+      storeValue(VIEW_KEY, v);
+    }
     setView(v);
   };
   const [sheet, setSheet] = useState<{ mid: string; kind: AlertKind } | null>(null);
@@ -87,6 +90,10 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const req = takeUsageFocus();
     if (req) navigate({ name: "machine", mid: req.mid, subview: "storage", mode: "reclaim" }, true);
   }, [route.name]);
+  const legacyEngine = route.name === "machine" && !route.subview && location.hash === "#" + ENGINE_SECTION_ID ? route.mid : null;
+  useEffect(() => {
+    if (legacyEngine) navigate({ name: "machine", mid: legacyEngine, subview: "management" }, true);
+  }, [legacyEngine]);
   const openAlert = useCallback((mid: string, kind: AlertKind) => setSheet({ mid, kind }), []);
   const records = useLauncherHealth();
   const issues = useMemo(() => {
@@ -165,7 +172,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         </nav>
         <div className="min-w-0 flex-1">
           <Suspense fallback={<Loading />}><MachineDetail key={route.mid} mid={route.mid}
-            subview={route.subview ?? (route.range ? "monitoring" : "work")} mode={route.mode} onToggleSidebar={onToggleSidebar} /></Suspense>
+            subview={route.subview ?? (legacyEngine ? "management" : route.range ? "monitoring" : "work")} mode={route.mode} onToggleSidebar={onToggleSidebar} /></Suspense>
         </div>
       </div>
     </div>;
@@ -186,13 +193,13 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {machines.length > 0 && canAdd && add}
       </header>
       <FleetScroll view={view}>
-        {machines.length > 0 && <div className="machine-views mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
+        <div className="machine-views mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
           <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
             { v: "cards", label: t("machines.view_cards") },
             ...(machines.length > 1 ? [{ v: "capabilities" as const, label: t("machines.view_capabilities") }] : []),
             { v: "resources", label: t("resources.assistant_resources") },
           ]} />
-        </div>}
+        </div>
         {/* two columns, three on a wide screen: the cards used to stop at 1000px and leave half a wide window empty; a full-row item takes col-span-full, since md:col-span-2 alone leaves a third of the row to the next card */}
         <div className={cx("mx-auto grid grid-cols-1 gap-3 px-5 py-6 sm:px-8", machines.length === 1 ? "max-w-3xl" : "max-w-[1560px] md:grid-cols-2 2xl:grid-cols-3")}>
           {fleetView && machines.length > 1 && <TodayTokens machines={machines} metrics={metrics} />}
