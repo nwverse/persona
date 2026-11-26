@@ -2,7 +2,7 @@
 // Imports only SidebarParts among the sidebar's files.
 import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../i18n";
-import { stateOf } from "../lib/format";
+import { activityOf } from "../lib/format";
 import { href, type Route } from "../lib/router";
 import { pickMainChat } from "../lib/handoff";
 import { useStore } from "../lib/store";
@@ -20,7 +20,7 @@ import { useMainWaiting } from "./assistant/use-main-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
 
 /** The button that folds the sidebar to the rail and opens it again (⌘⌥B by default; the hint follows a rebinding). */
-export function CollapseButton({ collapsed, chord }: { collapsed: boolean; chord?: string }) {
+export function CollapseButton({ collapsed, chord, size = "md" }: { collapsed: boolean; chord?: string; size?: "sm" | "md" }) {
   const label = collapsed ? t("sidebar.expand") : t("sidebar.collapse");
   // pressed with the focus on it, this one is drawn in place of the other (the rail ⇄ the sidebar) and takes the focus
   const self = useRef<HTMLButtonElement>(null);
@@ -35,7 +35,10 @@ export function CollapseButton({ collapsed, chord }: { collapsed: boolean; chord
       aria-label={label}
       aria-expanded={!collapsed}
       title={chord ? `${label} (${formatChord(chord)})` : label}
-      className="touch-hit relative z-10 flex size-8 shrink-0 items-center justify-center rounded-control text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]"
+      className={cx(
+        "touch-hit relative z-10 flex shrink-0 items-center justify-center rounded-control text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]",
+        size === "sm" ? "size-7" : "size-8",
+      )}
     >
       <Icon name="sidebar" size={15} stroke={1.8} />
     </button>
@@ -72,7 +75,7 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
   const activeKey = useActiveKey(route);
   const go = useGo();
   const status = connStatus(phase, online, total);
-  const st = main ? stateOf(main) : undefined;
+  const st = main ? activityOf(main) : undefined;
   const mainWaiting = useMainWaiting(main);
   const pending = mainWaiting.count;
   // `color`: a page's icon color (NavPage.color, #10822), kept under the pointer as well
@@ -96,12 +99,14 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
     );
   };
   return (
-    <aside className="flex h-full w-full flex-col items-center bg-canvas py-2.5">
-      <CollapseButton collapsed chord={bindings["left-sidebar"]} />
-      <button type="button" onClick={onSearch} aria-label={t("sidebar.search_sessions")} title={`${t("sidebar.search_sessions")} (${jumpHint(bindings)})`} className={cx(RAIL_ITEM, "mt-1 text-ink-3 hover:bg-hover hover:text-ink")}>
-        <Icon name="search" size={15} stroke={1.8} />
-      </button>
-      <span aria-hidden className="my-2 h-px w-6 shrink-0 bg-line" />
+    <aside data-sidebar-rail className="flex h-full w-full flex-col items-center bg-canvas py-2.5">
+      <div data-rail-top-controls className="flex flex-col items-center">
+        <CollapseButton collapsed chord={bindings["left-sidebar"]} />
+        <button type="button" onClick={onSearch} aria-label={t("sidebar.search_sessions")} title={`${t("sidebar.search_sessions")} (${jumpHint(bindings)})`} className={cx(RAIL_ITEM, "mt-1 text-ink-3 hover:bg-hover hover:text-ink")}>
+          <Icon name="search" size={15} stroke={1.8} />
+        </button>
+        <span aria-hidden className="my-2 h-px w-6 shrink-0 bg-line" />
+      </div>
       <nav aria-label={t("sidebar.pages")} className="flex min-h-0 w-full flex-1 flex-col items-center gap-0.5 overflow-y-auto overscroll-contain">
         {hasAssistant && link("j:new", { name: "persona-new" }, t("sidebar.new_chat"), <Icon name="compose" size={15} stroke={1.8} />)}
         {link(

@@ -98,6 +98,28 @@ Use a new path in an existing local folder that supports hard links. The documen
 read and the file write succeed, and an existing file is never replaced. On platforms with Unix file permissions the
 file is created with owner-only access. The credential is sent only to the supplied hub and never added to the export.
 
+## Find and export a recording from the terminal
+
+Search for a meeting by its title or a phrase you remember hearing, then use the recording ID from the results to
+save its notes or a subtitle track. Use the same hub address and paired-device token as for conversation export.
+
+```sh
+personad recordings list --hub '<hub URL>' --token-file '<private token file>' --query 'design review'
+personad recordings export --hub '<hub URL>' --token-file '<private token file>' \
+  --output meeting.md '<recording ID>'
+personad recordings export --hub '<hub URL>' --token-file '<private token file>' \
+  --format vtt --output meeting.vtt '<recording ID>'
+```
+
+Omit `--query` to browse all recordings. Add `--json` for a script. The command can also read the paired-device
+token from `PERSONA_RECORDINGS_TOKEN`. Markdown includes the available notes and the timestamped transcript.
+WebVTT uses elapsed time from the beginning of the recording so captions line up with playback.
+
+Omit `--output` to print the document. For a file, choose a new name in an existing directory that supports hard
+links. The command publishes the completed export with owner-only file permissions on Unix. It can read stored
+recordings while the recording module is off. If the transcript has expired and the minutes are still available,
+export them as Markdown. A subtitle export requires retained transcript lines.
+
 ## Held Agent messages from the terminal
 
 Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or
@@ -197,6 +219,10 @@ awk '{print "Authorization: Bearer " $0}' member.token > member.header
    curl --fail-with-body -H @member.header "$API/approved"
    curl --fail-with-body -H @member.header "$API/revisions/1"
    ~~~
+
+Members can also discover documents before requesting their text. `GET /v1/projects/{project}/documents` lists one entry per document with an approval, ordered by document identifier in ASCII order. Each entry describes the latest approved revision. `GET /v1/projects/{project}/documents/{document}/approvals` lists that document's approved revisions, newest first. Both return an `items` array containing the project, document, revision, SHA-256 digest, author, approver and approval time. Fetch the numbered revision for the text.
+
+Both lists accept `limit` from 1 to 100 (default 25). When more rows are available, pass the response's `next` string as `after` for documents or `before` for revisions. Each request reads the current approvals. Restart the list to see a document or a new revision that sorts before your cursor.
 
 Publishing and approving are separate actions. A reader may retrieve a published, pending revision by number. Members can distinguish approval from authorship using `approved_by`, `approved_at` and `author`. A later draft leaves the previous approved revision current until an approver accepts the new head. Writers editing the same head receive one success and one conflict. A document holds up to 256 KiB of UTF-8 text per revision. The [team project proposal](../design/proposals/team-project-spaces.md) covers the planned Web experience, attachments and opening a revision in a personal agent.
 

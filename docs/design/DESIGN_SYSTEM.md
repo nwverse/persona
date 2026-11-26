@@ -190,7 +190,7 @@ Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android r
 | `ModeTone` (permission modes, #3719) | asks first: secondary ink; plans: teal `#0E7C86`/`#4FD1C5`; acts within limits (Auto-Edit, Auto): `Hue.purple`; allows everything: `danger`. None is an agent state's color | `apple/Shared/Design/Theme.swift` (`Theme.ModeTone`) |
 | `Shell` (same in every style) | composer `#FFFFFF`/`#1F1F21`, stroke `#E3E3E3`/`#3A3A3C`, ink `#0D0D0D`/`#F2F2F2`, segment `#E6E6E6`/`#3A3A3C`, drawer `#F9F9F9`/`#171717` | `apple/Shared/Design/Theme.swift:840-873` |
 | `ChatBox` | user `#E3EDFD`/`#1C2F47`, persona `#F0F0F3`/`#2A2A2E` | `apple/Shared/Design/ChatLayoutTokens.swift:18-23` |
-| `UsageColor` | input, output, cache write, cache read; color-blind checked; same on web | `apple/Shared/Design/UsageColor.swift:8-15` |
+| `UsageColor` | input, output, cache write, cache read; color-blind checked; same on web. Web also has `--project-other`, By project's non-development projects (#16530, development takes the accent) | `apple/Shared/Design/UsageColor.swift:8-15`, `web/src/styles.css` |
 | `Syntax` | eight colors, each 4.5:1 on `codeBackground` | `apple/Shared/Design/Theme.swift:888` |
 
 Android mirrors `Shell`, `ChatBox` and the roles hex for hex (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/HomeTokens.kt`).
@@ -384,6 +384,7 @@ Reduce Motion:
   version and status instead of squeezing all three beside the logo.
 - Web draws about 80 stroke glyphs (`web/src/ui/icons.tsx`, 15 px, stroke 1.9). Android uses Phosphor. There is no shared glyph map.
 - The web sidebar's page icons are the neutral ink: `--ink-3`, the open page's `--ink` on its fill, never a page's own color. **Colored** sidebar icons are an opt-in (Settings › Appearance › Sidebar icons, #10822) that gives each page a named color; Monochrome stays the default, pixel-identical. The map and its contrast: "Sidebar icon colors" below.
+- Each built-in entry of the web sidebar has a glyph of its own, so a monochrome sidebar and the folded rail tell them apart (#16282): the main chat `home` (iOS `house`, Android `House`), Overview `grid` (a dashboard of cards, the glyph of its Arrange button), Scheduled tasks `clock` (iOS `alarm`, Android `Clock`), History `activity` (an activity log of the Agents' sessions that are not running, by day, #10240; Recent keeps `history`), All Persona chats `list`; the pages' own in the "Sidebar icon colors" table below. A built-in entry should also avoid the extension icon vocabulary: an extension's `nav_page` may name any icon a row can (`docs/extensions/extensions.md`, "Row icon / avatar / thumbnail"), so a built-in glyph one of those names draws can always meet an extension page with the same one. Overview and History are outside it. Known overlaps, left as they are for now: the main chat `home`, Scheduled tasks `clock` (both kept to match iOS and Android), Health `heart`, Messages `chat`, Starred `star`, Settings `gear` and All Persona chats `list`. `web/src/views/SidebarDistinctIcons.test.tsx` renders the sidebar and fails when two built-in entries draw the same glyph, or when Overview or History draws one an extension icon name draws.
 - `pullDown` (#10422, an alias of `expand`'s chevron) follows an action's words that open a menu of how far the action goes (a pull-down, as UIKit draws one): the Inbox group titles' **Mark All Seen ⌄** / **Clear All ⌄** (`docs/assistant/inbox.md` "Group titles"). A value that opens a menu of choices keeps `choices`; the web draws its `chevron`.
 - `someday` (#10465, `moon.stars.fill`, drawn as written in every style, being a menu's and a swipe's `Label`; Android's Phosphor `couch`, since `moon-stars` is `quietHours`') is Someday on a to-do, the owner's own "not now": the To-dos row's swipe and menu (iOS, hubs with `todo_view`, from #10465's switch-on). Not `time`, the clock that marks Waiting. Its swipe is `Theme.somedayTint` (the system indigo), beside Done's `positive`; Remove from Someday, its opposite, is `undo`.
 - `sideSessions` (#7944) is a session's side sessions on every platform: SF Symbol `rectangle.stack` on Apple, its Phosphor match on Android, Lucide's gallery-vertical-end on the web.
@@ -465,6 +466,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
+- Web selection comments (#14518): while writing a comment on selected chat text, paste an image into its field or
+  use the labeled image button beside the keyboard hint. The card reuses the composer's attachment tiles and their
+  remove controls so the picture stays with the text it illustrates. Saving or reopening the note keeps its images.
+  Escape discards a new comment or restores the note and images from before the edit. All pictures in the draft share
+  the message's limits. Selecting text preloads the draft editor, which also loads when a saved comment opens.
 - Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
   field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
   about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,
@@ -1200,6 +1206,11 @@ by the hub, and quiet Previous and Next buttons. A refresh that removes the curr
 
 #### Sessions that need the user
 
+On the web, Agents **By status** groups sessions into Needs you, Error, Working, Done and Idle. Each row uses the
+manager's phase, reason and rank. A question in a finished reply belongs in Done. A restart that interrupted work
+belongs in Error. The Needs you badge and quick filter count the rows the manager marks for the owner.
+See `docs/protocol/agent-states.md` ("Five phases").
+
 In every grouping a list offers, a session that needs the user is visible without opening anything: in a section at the top, or by the state mark on its row, with a folded group counting it on its header. Grouping by location (computer, repository, worktree, tab) never hides it, and nobody has to pick a computer or a repository first to see their own work.
 
 The web's To-dos page (#11838) files to-dos by their state, so one the sidebar's To-dos badge counts can sit outside Needs you: a to-do no Agent is on, under Other open. Each row the badge counts carries the badge's mark, **Up to you** (`Tag` in the accent tone the badge is drawn in), why it counts in its tooltip and spoken label, and a folded heading over one says how many ("1 up to you"). The marks and the badge come from one hook (`useOwnerNeeds`), so they never disagree. Why a mark and not a section: what the badge counts spreads over several sections (Needs you, Parked, Other open, Just finished, Working for work held for the user's OK), and Other open also holds to-dos it leaves out (a goal its pieces carry). Why not Needs you as the mark's words: that is a section of its own with a narrower rule (principle 4).
@@ -1299,6 +1310,9 @@ On the web a list keeps no standing search field of its own beside the app's one
 - **iOS Agents Search In** (#7443): the list's ⋯ menu (beside Group By, Sort and Display) has a Search In submenu, its row naming the current scope under it, with the web's Filter › Search in scopes in its order and words, Full Text checked by default. A scope other than Full Text lives inside the search field as a system search token (`UISearchToken` on the phone's field, `searchable(tokens:)` on the iPad's), its scope's symbol and name at the field's start in place of the prompt, so a narrowed search shows at rest and while typing; deleting the token, as in any search field, or picking Full Text sets it back; × with words typed clears only the words. It narrows only a search: the closed search's list is whole. No chip, no change to the header's layout. The Sidebar layout's field searches chats and Agents together and cannot hold the token: it stays Full Text and its menu leaves Search In out.
 - **Inbox section bar** (#9053, `docs/assistant/inbox.md` "Section bar"; the To-dos list draws the same states as a Filter at its foot, 3.4, since it lands on all of them): a filter of states, drawn with each client's quick-filter component (iOS `CapsuleFilterBar`, Android `QuickFilterBar`, the web Agents filter bar's look) with Needs you, In progress, FYI, Done and All. Needs you and All always show; the others while they have rows or are chosen; Collapsed stays under All. Needs you carries the `.needs` `CountBadge`, In progress and FYI the neutral one, Done and All none. It opens on Needs you on each entry and is not kept across visits; All is the stacked page as before, the filter's reset. Grouping sits in the bar's trailing menu, not in a row of its own; on Android it is "Group by" in the Inbox's ⋯ sheet, since `QuickFilterBar` has no trailing control and its five choices already run past a phone's width (hidden while In progress or Done is chosen, as the menu is). Why: the stacked page put FYI and Done several screens below a long Needs you; a bar that lands on Needs you keeps what needs the user first and one tap from everything else (3.4 "Sessions that need the user": the Needs you count stays in sight from every choice).
 
+- **By project on iOS and Android** (#13558): same-named projects on one computer show their parent folder in regular weight.
+  The heading's add action uses the existing New Agent form with the computer, folder and usual launcher selected.
+  It appears for known folders on online computers. On iOS an idle project's heading offers the action in its menu.
 - **HarmonyOS Agents groups** (#8966): the existing native grouping Select offers By Status (default), By Machine and By Project. It reuses the native list, Select and 48 vp control tokens, not a new style or a second flat/repository/worktree taxonomy. The shared Rust projection owns pinned, quiet, folded and filtered rows and their counts. Group headers expose the current localized state/machine/space title, state counts and a 48 vp Expand/Collapse control; quiet projects have an explicit idle-projects heading. Default idle sections stay folded; the header expands them and their rows with the core's `folded`, `expanded_idle` and `expanded_quiet` settings. A folded header still exposes Needs You. All labels ship in en, zh-Hans and ja. The previous native sorter and debug shadow are deleted; no release-only platform-specific sorter remains. These rules serve people monitoring Agents and follow iOS, rather than adding an independent HarmonyOS presentation.
 
 A list row found by what is inside it, not by its own name (a Persona chat found by a message, #6283), keeps its title and puts the sentence that matched in place of its second line, the match marked as search in chat marks it (the accent tint), the line starting a few characters before the match so a narrow row still shows it (each client cuts for its own width, #7045); opening it goes to that message, ringed as a search hit. A row found by its name keeps its usual second line and opens as usual. Local matches show at once; what the server finds merges in, and a short line under the field says when the server's results may be incomplete. A search over what the device already holds whole has no server pass and no such line: the iOS To-dos list's (3.4; iOS, hubs with `todo_view`, from #10465's switch-on), since the phone holds every to-do; it opens a to-do found by its notes as usual, its page lighting nothing yet.
@@ -1762,6 +1776,10 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.
+- Catalog refresh (#15481): a quiet **Refresh models** button with the retry icon sits above the selected launcher's
+  models in the wide panel and above each expanded list in the narrow panel. Its accessible label names the launcher.
+  The existing loading status appears while the button is disabled and the last list stays usable. If the request fails,
+  the launcher shows the error with Retry.
 - Provider identity on model rows (#7360): every row in New Agent and in saved setups and flat search results names
   its owning launcher in its model label or at the start of the second line, on web, Android and Apple. The rest of
   that line keeps the model ID, resolved model, description or typed-model explanation; an expanded or filtered
@@ -3033,6 +3051,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Spacing | 0-32 with `sm` 6 | Tailwind default | same scale | web differs |
 | Radius | 6/10/14/20/22 | 6/8/10 plus literals | 6/10/14/20/22, per-style variants | web and Android differ |
 | Min target | 44 | 44 hit area, 28-32 visuals | 48 dp touch targets, 32-40 visuals | violated on web visuals |
+| Inline selection comment images | Tracked in #5785 | Paste or pick, preview, remove | Outside #14518 scope | Web first |
 | Motion | token set | 150/220/300 ms | Glass: the iOS state and layout springs, the composer's send swap and press | web differs |
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
 | Toast | capsule, top | dark capsule, bottom | capsule, top (`JToastHost`) | web differs |
@@ -3042,6 +3061,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
 | Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
 | Chat question rail | Outside scope of #15813 | Dense scroll track and on-demand preview and jump | Outside scope of #15813 | Web interaction |
+| Extension page setup | Outside scope of #16553 | Missing settings and a link to that installation's settings on a direct page visit | Outside scope of #16553 | Web deep-link recovery |
 | Assistant update status | Outside scope of #15687 | Live update and idle-restart notice in Assistant | Outside scope of #15687 | web change |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
@@ -3337,6 +3357,7 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 Dashboards are pages a conversation drafts and the owner keeps with one tap on Keep; where they live is 4.1, the line under
 a page's title is "Ownership line (#15017)" below. What the iPhone and iPad do of their own:
 
+- **Version history.** Open history from a kept page’s footer. Mark the current version, label earlier versions by time and writer, and keep the preview read-only. Restoring requires confirmation and pauses updates until the owner chooses Resume updates.
 - **No new host.** The hub lists Dashboards as ordinary extension places under the reserved id `-pages` (the index, then up
   to three pinned pages); the drawer and the iPad sidebar draw them with the extension rows they have, and a page opens in
   `ExtensionNavPage` / `ExtensionPageView` like any extension page. Settings › Extensions leaves them out: they are the
@@ -3384,7 +3405,7 @@ With Colored:
 
 | Page | Icon | Color | Light: on `--canvas` / `--hover` | Dark: on `--canvas` / `--hover` |
 | --- | --- | --- | --- | --- |
-| Overview | `home` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
+| Overview | `grid` | amber | 3.26 / 3.35 | 9.05 / 7.59 |
 | Inbox | `inbox` | orange | 3.01 / 3.09 | 7.16 / 6.01 |
 | Health | `heart` | pink | 3.82 / 3.93 | 6.44 / 5.41 |
 | Messages | `chat` | green | 3.25 / 3.34 | 6.87 / 5.76 |
@@ -4027,6 +4048,10 @@ it). Reason: the ID is an engineering detail that a person should not have to in
 rule for every place keeps a provider recognizable wherever it is picked (principle 4). This reuses the wizard's
 fields and More options disclosure and the existing row and chip styles; it adds no setting, style or motion. The chat
 page's composer chip and model panel adopt the same module in their own change; iOS and Android have not caught up yet.
+
+## Choosing an approved document in New Agent
+
+For team members starting an Agent on the web, the first-message form keeps project documents behind its existing disclosure. After the member supplies the project and credential, they may browse document names, open a document's approved versions, or look up a known name. Fetch additional results on request. Opening a preview shows the selected revision's text, approver and digest. Attaching that preview requires a separate action, and the member can remove it before sending.
 
 ## New Agent's model choice (#5104)
 

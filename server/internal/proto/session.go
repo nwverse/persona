@@ -249,11 +249,14 @@ type Session struct {
 	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
 	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
 	LogicalPlaceholder bool `json:"-"`
-	// BackgroundStalledSince (#13744): the time since which this session's background commands have used no CPU and
-	// written no output, set only when a known worker (a build, tests, a download) runs there and that has lasted ten
-	// minutes while the turn is over. State stays working: a running tool is work, this only tells a client the work
-	// looks stuck. Zero (omitted) otherwise. Whole seconds in a uint32, in the padding before Ultracode: a Session
-	// stays in its allocation size class (TestSessionFitsItsSizeClass).
+	// BackgroundStalledSince (#13744, #16418): the time since which this session's background commands have used no CPU
+	// and written no output, set while the turn is over once that lasted the node's grace (ten minutes for a known
+	// worker such as a build, tests or a download; three for a process it does not know or a command moved from the
+	// foreground; two for shells gone from under the live claude). Beside a subagent, workflow or Monitor, state stays
+	// working and this only tells a client the work looks stuck; when stalled background commands are all that is left,
+	// the manager leaves the finished turn's own state and the task's turn settles. Zero (omitted) otherwise. Whole
+	// seconds in a uint32, in the padding before Ultracode: a Session stays in its allocation size class
+	// (TestSessionFitsItsSizeClass).
 	BackgroundStalledSince UnixTime32 `json:"background_stalled_since,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
@@ -566,6 +569,10 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeCodexNotLoggedIn: a Codex start met Codex's sign-in screen (node/codex_start.go): Codex has no login on that
+	// computer, so no wait would bring its session up. The launcher's sign-in (launcher health's auth), not a stalled
+	// start; the new tab is closed, and someone runs `codex login` on that computer.
+	CodeCodexNotLoggedIn = "codex_not_logged_in"
 	// CodeShellWaiting: the new tab's shell stopped on a question of its startup files (an update prompt, [Y/n]) before
 	// the start command was typed (#2570). Nothing ran; the tab is kept a while for someone to answer (node/shellsettle.go).
 	CodeShellWaiting = "shell_waiting"

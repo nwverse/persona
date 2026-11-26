@@ -45,6 +45,7 @@
     <string name="agents_subtitle_two">%1$s, %2$s.</string>
     <string name="agents_action_todos">To-dos</string>
     <string name="agents_action_new_session">New session</string>
+    <string name="agents_new_agent_in_project">New Agent in %1$s</string>
     <string name="agents_action_list_settings">List settings</string>
     <string name="agents_search_placeholder">Search spaces, sessions or latest messages</string>
     <string name="agents_action_search">Search</string>
@@ -429,6 +430,15 @@
     <string name="agents_todo_state_working">In progress</string>
     <string name="agents_todo_state_follow_up">Follow up</string>
     <string name="agents_todo_state_not_started">Not started</string>
+    <string name="agents_todo_state_pr_conflicts">Merge conflicts</string>
+    <string name="agents_todo_state_pr_changes_requested">Changes requested</string>
+    <string name="agents_todo_state_pr_checks_failed">Checks failed</string>
+    <string name="agents_todo_state_pr_in_review">In review</string>
+    <string name="agents_todo_state_pr_checks_pending">Checks running</string>
+    <string name="agents_todo_state_pr_waiting_merge">Waiting to merge</string>
+    <string name="agents_todo_state_parked_merge_review">Review or merge</string>
+    <string name="agents_todo_state_parked">Parked</string>
+    <string name="agents_todo_state_tracking">Tracking</string>
     <string name="agents_todo_detail">To-do</string>
     <string name="agents_todo_gone">To-do no longer exists</string>
     <string name="agents_todo_gone_hint">It may have been deleted.</string>
