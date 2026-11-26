@@ -17,9 +17,9 @@ import (
 // takeover called session.stop, the node answered "invalid session id", and that hard error kept
 // the stale link forever, so every retry failed the same way.
 
-// goneAgySessionID mirrors the real incident id (agy-64c84f4d): a short pane/worker-derived row id,
-// not the companion's agy-<conversation-uuid> form.
-const goneAgySessionID = "agy-64c84f4d"
+// goneAgySessionID stands in for a short pane/worker-derived row id (the production incident's
+// agy-<8hex> form), not the companion's agy-<conversation-uuid> form.
+const goneAgySessionID = "agy-ab12cd34"
 
 func armStopAnswer(e *todoEnv, err error) {
 	e.t.Helper()
@@ -95,6 +95,7 @@ func TestStopContinuedTaskAgentsKeepsUncertainStopsHard(t *testing.T) {
 		{"context deadline", context.DeadlineExceeded, "cannot stop agent"},
 		{"another rpc refusal code", &rpc.Error{Code: "not_retirable", Message: "still starting"}, "cannot stop agent"},
 		{"invalid id of another session", &rpc.Error{Message: `invalid session id "agy-some-other-row"`}, "cannot stop agent"},
+		{"exact legacy text carrying a code", &rpc.Error{Code: "weird_refusal", Message: fmt.Sprintf("invalid session id %q", goneAgySessionID)}, "cannot stop agent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newTodoEnv(t, nil)
@@ -289,6 +290,48 @@ func TestContinuesTakeStopsALiveAgent(t *testing.T) {
 	e.s.releaseTakenTodo(todo.ID)
 }
 
+// The production form of the orphaned link is the full companion id agy-<conversation-uuid> (the short
+// agy-<8hex> in early notes was only its abbreviation). A current node that ran the authoritative local
+// pane scan answers typed not_found for it; the real task_plan continues entry must release that link and
+// start the replacement on the same to-do.
+func TestTaskPlanContinuesReleasesOrphanedCompanionUUID(t *testing.T) {
+	const companionID = "agy-44444444-5555-6666-7777-888888888888"
+	e := newThreadEnv(t, nil) // box lists agent01, not the orphaned companion id
+	armStopAnswer(e.todoEnv, &rpc.Error{Code: codeSessionNotFound, Message: `session "` + companionID + `" is not on this computer`})
+	todo := Todo{
+		ID:     "todo_orphan_companion_uuid",
+		Title:  "rework",
+		Origin: "m1",
+		Agents: []TodoAgent{{MachineID: "box", SessionID: companionID}},
+	}
+	putTodo(e.s, todo)
+
+	if _, err := e.s.toolTaskPlan(context.Background(), "m1", continuesArgs(todo.ID)); err != nil {
+		t.Fatalf("task_plan continues must release the orphaned companion uuid, got: %v", err)
+	}
+	waitFor(t, "the replacement agent to link", func() bool {
+		for _, a := range todoNow(e.s, todo.ID).Agents {
+			if a.SessionID != companionID && a.active() {
+				return true
+			}
+		}
+		return false
+	})
+	var orphanReleased bool
+	for _, a := range todoNow(e.s, todo.ID).Agents {
+		if a.SessionID == companionID {
+			orphanReleased = a.ReleasedAt != nil
+		}
+	}
+	if !orphanReleased {
+		t.Fatal("the orphaned agy-<uuid> link was not released through task_plan continues")
+	}
+	assertOneStopFor(t, e.todoEnv, companionID)
+	if todoCount(e.s) != 1 {
+		t.Fatalf("continuation made %d todos, want the same one", todoCount(e.s))
+	}
+}
+
 // The real task_plan(continues=...) entry: an orphaned agy link whose stop answers the legacy
 // invalid-session-id error is released and the replacement Agent starts on the same to-do, instead
 // of the plan failing forever.
@@ -335,4 +378,112 @@ func TestTaskPlanContinuesRestartsAfterOrphanedAgySession(t *testing.T) {
 	if todoCount(e.s) != 1 {
 		t.Fatalf("continuation made %d todos, want the same one", todoCount(e.s))
 	}
+}
+
+// A node answer {stopped:false} with no error is the ordinary idempotent "not running any more" success:
+// the link is released exactly as after a stopped:true.
+func TestStopContinuedTaskAgentsAcceptsIdempotentStoppedFalse(t *testing.T) {
+	e := newTodoEnv(t, nil)
+	e.f.answerNode(deviceSessionStop, func(string, json.RawMessage) (any, error) {
+		return map[string]any{"stopped": false}, nil
+	})
+	todo := Todo{ID: "todo_stopped_false", Agents: []TodoAgent{{MachineID: "server", SessionID: goneAgySessionID}}}
+
+	stopped, err := e.s.stopContinuedTaskAgents(context.Background(), todo)
+	if err != nil {
+		t.Fatalf("a nil-error stopped:false answer must release idempotently, got %v", err)
+	}
+	if len(stopped) != 1 {
+		t.Fatalf("stopped agents = %d, want the one link", len(stopped))
+	}
+}
+
+// The subtlest double-pane case: a STOPPED exact companion row names agy-<uuid>, while two live panes
+// run the conversation under unaliased pane rows (the node omitted the alias on double attribution).
+// Presence alone would say stopped and skip the RPC; for the uuid form the hub must still ask the node,
+// and the node's hard agy_in_terminal answer keeps the takeover fail-closed rather than releasing live work.
+func TestStopContinuedCompanionUUIDStoppedExactRowPlusLivePanesStaysHard(t *testing.T) {
+	const companionID = "agy-66666666-7777-8888-9999-aaaaaaaaaaaa"
+	e := newTodoEnv(t, nil)
+	e.sessions("server",
+		proto.Session{SessionID: companionID, Status: proto.StatusOffline},
+		proto.Session{SessionID: "agy-w1-p1", Status: proto.StatusWorking},
+		proto.Session{SessionID: "agy-w2-p2", Status: proto.StatusWorking},
+	)
+	armStopAnswer(e, &rpc.Error{Code: "agy_in_terminal", Message: "multiple terminal panes"})
+	todo := Todo{ID: "todo_stopped_row_double_pane", Agents: []TodoAgent{{MachineID: "server", SessionID: companionID}}}
+
+	stopped, err := e.s.stopContinuedTaskAgents(context.Background(), todo)
+	if err == nil {
+		t.Fatal("a stopped exact row plus two live unaliased panes must not be released without the node's say-so")
+	}
+	if len(stopped) != 0 {
+		t.Fatalf("stopped agents = %d, want none", len(stopped))
+	}
+	assertOneStopFor(t, e, companionID)
+}
+
+// Cross-to-do alias ownership: another open to-do owns the live pane row that aliases the companion uuid.
+// Continuing the uuid-linked to-do must release only its own stale link and never stop the other to-do's pane.
+func TestStopContinuedCompanionUUIDAliasOwnedByAnotherTodo(t *testing.T) {
+	const (
+		companionID = "agy-88888888-9999-aaaa-bbbb-cccccccccccc"
+		paneID      = "agy-w3-p3"
+	)
+	e := newTodoEnv(t, nil)
+	row := proto.Session{SessionID: paneID, Status: proto.StatusWorking}
+	row.SetAliases([]string{companionID})
+	e.sessions("server", row)
+
+	other := Todo{ID: "todo_owner_b", Agents: []TodoAgent{{MachineID: "server", SessionID: paneID}}}
+	putTodo(e.s, other)
+	todoA := Todo{
+		ID:     "todo_uuid_a",
+		Agents: []TodoAgent{{MachineID: "server", SessionID: companionID}},
+	}
+	putTodo(e.s, todoA)
+
+	stopped, err := e.s.stopContinuedTaskAgents(context.Background(), todoA)
+	if err != nil {
+		t.Fatalf("an alias owned by another to-do releases only this link without a stop, got %v", err)
+	}
+	if len(stopped) != 1 || stopped[0].SessionID != companionID {
+		t.Fatalf("stopped = %+v, want only A's uuid link returned for release", stopped)
+	}
+	if ids := stopCallIDs(e); len(ids) != 0 {
+		t.Fatalf("the other to-do's pane must not be stopped, stop targets=%v", ids)
+	}
+}
+
+// Review P2: the legacy empty-code "invalid session id" forgiveness is AGY-pane/worker-only. Another
+// non-hex otherSession row such as opencode's omp-w1-p2 must stay fail-closed even with the exact text.
+func TestStopContinuedTaskAgentsDoesNotForgiveLegacyTextForNonAgyRow(t *testing.T) {
+	const ompID = "omp-w1-p2"
+
+	// Classifier-level pin: typed not_found is still accepted for the non-agy id, legacy text is not.
+	legacy := &rpc.Error{Message: fmt.Sprintf("invalid session id %q", ompID)}
+	if stopErrSaysSessionGone(legacy, ompID) {
+		t.Fatal("legacy invalid-id text must not be forgiven for a non-agy otherSession id")
+	}
+	if !stopErrSaysSessionGone(&rpc.Error{Code: codeSessionNotFound, Message: "gone"}, ompID) {
+		t.Fatal("typed not_found must remain authoritative for every id form")
+	}
+	if !legacyAgyPaneID(goneAgySessionID) || legacyAgyPaneID("agy-11111111-2222-3333-4444-555555555555") || legacyAgyPaneID(ompID) {
+		t.Fatal("legacyAgyPaneID must accept a short agy pane id and reject companion uuid / non-agy ids")
+	}
+
+	// End-to-end through stopContinuedTaskAgents: exact legacy text for omp-w1-p2 is a hard error,
+	// nothing is released, and the stop was attempted with the right target.
+	e := newTodoEnv(t, nil)
+	armStopAnswer(e, legacy)
+	todo := Todo{ID: "todo_omp_legacy", Agents: []TodoAgent{{MachineID: "server", SessionID: ompID}}}
+
+	stopped, err := e.s.stopContinuedTaskAgents(context.Background(), todo)
+	if err == nil || !strings.Contains(err.Error(), "cannot stop agent") {
+		t.Fatalf("omp legacy text must stay a hard cannot-stop error, got %v", err)
+	}
+	if len(stopped) != 0 {
+		t.Fatalf("stopped agents = %d, want none for a non-agy legacy id", len(stopped))
+	}
+	assertOneStopFor(t, e, ompID)
 }
