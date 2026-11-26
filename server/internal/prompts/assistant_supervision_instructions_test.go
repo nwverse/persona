@@ -6,17 +6,16 @@ import (
 )
 
 func TestSupervisionRoleInstructionsPreserveTheFullPolicy(t *testing.T) {
-	roles := []SupervisionRole{SupervisionRoleMain, SupervisionRoleLeader, SupervisionRoleBackground, SupervisionRoleSide}
-	rendered := make(map[SupervisionRole]string, len(roles))
-	for _, role := range roles {
-		text, err := RenderSupervisionInstructionsForRole(role)
-		if err != nil {
-			t.Fatalf("%s: %v", role, err)
-		}
+	// Which parts a role gets is the assistant's (supervisionPolicy, from supervisionrole's IsLeader and IsBackground);
+	// here each combination a role can get is held to the full policy.
+	parts := map[string]SupervisionParts{"common": {}, "leader": {Leader: true}, "background": {Background: true}}
+	rendered := make(map[string]string, len(parts))
+	for name, p := range parts {
+		text := RenderSupervisionInstructionsFor(p)
 		if text == "" {
-			t.Fatalf("%s: empty policy", role)
+			t.Fatalf("%s: empty policy", name)
 		}
-		rendered[role] = text
+		rendered[name] = text
 	}
 	full := RenderSupervisionInstructions()
 	fullLines := strings.Split(full, "\n")
@@ -56,12 +55,12 @@ func TestSupervisionRoleInstructionsPreserveTheFullPolicy(t *testing.T) {
 	}
 	for role, text := range rendered {
 		for _, prefix := range leaderOnly {
-			if strings.Contains(text, prefix) != (role == SupervisionRoleLeader) {
+			if strings.Contains(text, prefix) != (role == "leader") {
 				t.Errorf("%s: leader-only rule %q leaked or disappeared", role, prefix)
 			}
 		}
 		for _, prefix := range backgroundOnly {
-			if strings.Contains(text, prefix) != (role == SupervisionRoleBackground) {
+			if strings.Contains(text, prefix) != (role == "background") {
 				t.Errorf("%s: background-only rule %q leaked or disappeared", role, prefix)
 			}
 		}
@@ -87,15 +86,7 @@ func TestSupervisionRoleInstructionsPreserveTheFullPolicy(t *testing.T) {
 			t.Errorf("full policy is not reconstructible from its roles; missing %q", line)
 		}
 	}
-	if rendered[SupervisionRoleMain] != rendered[SupervisionRoleSide] {
-		t.Fatal("main and side common policies differ without a role-specific reason")
-	}
-}
-
-func TestSupervisionRoleInstructionsRejectUnknownRoles(t *testing.T) {
-	for _, role := range []SupervisionRole{"", "worker", "MAIN"} {
-		if text, err := RenderSupervisionInstructionsForRole(role); err == nil || text != "" {
-			t.Fatalf("role %q: got %d bytes, %v; want fail-closed error", role, len(text), err)
-		}
+	if got := RenderSupervisionInstructionsFor(SupervisionParts{Leader: true, Background: true}); got != full {
+		t.Fatal("both role-private parts together differ from the full policy union")
 	}
 }
