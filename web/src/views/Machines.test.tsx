@@ -154,7 +154,7 @@ describe("Machines", () => {
       const path = view === "work" ? "/machines/b" : "/machines/b/" + view;
       if (view !== "work") await follow(path);
       expect(actions()).toEqual([t("space-page.new_agent"), t("sidebar.nav_terminal")]);
-      expect(header.textContent).not.toContain(t("machines.home_folder"));
+      expect(header.querySelector('a[href="/machines/b/files"]')).toBeNull();
       const nav = host.querySelector(`nav[aria-label="${t("machines.view_label")}"]`)!;
       const active = nav.querySelector('a[aria-current="page"]')!;
       expect(active.getAttribute("href")).toBe(view === "services" ? "/machines/b/diagnostics" : path);
