@@ -335,7 +335,11 @@ export const WorkspaceCard = memo(function WorkspaceCard({ card, machine, worksp
 });
 function WorkspaceDetail({ card, column, machine, sessions, readonly, activity, onClose }: { card: BoardCard; column: string; machine?: Machine; sessions: readonly Session[]; readonly: boolean; activity: boolean; onClose: () => void }) {
   const [showActivity, setShowActivity] = useState(false);
-  const open = (kind: "files" | "git") => { onClose(); openPanel({ kind, mid: card.machine_id, sid: sessions[0]?.session_id ?? "", cwd: card.cwd }); };
+  const open = (kind: "files" | "git") => {
+    onClose();
+    if (kind === "files") navigate({ name: "machine", mid: card.machine_id, subview: "files", path: card.cwd });
+    else openPanel({ kind, mid: card.machine_id, sid: sessions[0]?.session_id ?? "", cwd: card.cwd });
+  };
   return <Dialog open title={card.title} onClose={onClose}><div className="space-y-4"><p className="text-xs text-ink-3">{[column, card.archived && t("workspaceboard.archived"), machine?.name || card.machine_id, machine?.online === false && t("workspaceboard.offline")].filter(Boolean).join(" · ")}</p><p className="break-all rounded-control bg-inset p-3 font-mono text-xs text-ink-2">{card.cwd}</p>{card.branch && <p className="text-xs text-ink-2">{t("workspaceboard.branch", { branch: card.branch })}</p>}
     <div className="flex flex-wrap gap-2"><Button icon="folder" disabled={!machine?.online} onClick={() => open("files")}>{t("workspaceboard.files")}</Button><Button icon="git" disabled={!machine?.online} onClick={() => open("git")}>Git</Button><Button icon="plus" disabled={readonly || !machine?.online} onClick={() => { onClose(); openNewAgent(boardAgentPreset(card)); }}>{t("workspaceboard.new_agent")}</Button></div>
     <div className="border-t border-line pt-3"><h3 className="mb-2 text-xs font-medium text-ink-3">{t("workspaceboard.agents_here")}</h3>{sessions.length ? <div className="space-y-1">{sessions.map((s) => <button type="button" key={s.session_id} className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left hover:bg-hover" onClick={() => { onClose(); openAgent(s.machine_id, s.session_id); }}><Icon name="agent" size={14} className="text-ink-3" /><span className="min-w-0 flex-1 truncate text-sm text-ink">{sessionTitle(s)}</span><StatePill state={stateOf(s)} /></button>)}</div> : <p className="text-sm text-ink-3">{t("workspaceboard.no_agents_detail")}</p>}</div>

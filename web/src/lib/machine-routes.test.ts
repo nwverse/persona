@@ -16,3 +16,14 @@ it.each(["/machines/b/missing", "/machines/b/files/extra"])("rejects an unknown 
   expect(parse(path).name).toBe("not-found");
   expect(appPath("persona://open" + path)).toBeNull();
 });
+
+it.each([
+  ["/machines/Computer%20B/fs?dir=%2FProjects%2FA%20%26%20B", "/machines/Computer%20B/files?path=%2FProjects%2FA%20%26%20B"],
+  ["/machines/b/files?path=C%3A%5CWork", "/machines/b/files?path=C%3A%5CWork"],
+  ["/machines/b/cleanup", "/machines/b/storage?mode=reclaim"],
+  ["/machines/b/storage/cleanup", "/machines/b/storage?mode=reclaim"],
+])("maps the incoming address %s to the same computer and target", (input, canonical) => {
+  const [path, query] = input.split("?");
+  expect(href(parse(path!, query))).toBe(canonical);
+  expect(appPath("persona://open" + input)).toBe(canonical);
+});
