@@ -96271,6 +96271,29 @@
       },
       "extractionState": "manual"
     },
+    "Lark is turned off on the hub machine, so the Lark bot can't be set up or changed here. Everything you already have stays.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lark is turned off on the hub machine, so the Lark bot can't be set up or changed here. Everything you already have stays."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ハブのマシンでLarkがオフのため、ここではLarkボットの設定や変更はできません。すでにある内容はそのまま残ります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "hub 所在的机器上关闭了飞书，所以这里不能设置或更改飞书机器人。已有的内容都会保留。"
+          }
+        }
+      }
+    },
     "Lark account": {
       "localizations": {
         "en": {

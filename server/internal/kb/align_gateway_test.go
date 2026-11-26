@@ -513,8 +513,11 @@ func TestGatewayAlignerEquivalentBodyAndAttachmentFormats(t *testing.T) {
 	}
 }
 
+// The format tier's refusals still hold with the loose tier behind it (align_loose.go). A placeholder-only difference
+// ("Before [image] after" against "Before after", with any attachment count) is no longer refused: it is one of the
+// loose tier's four kinds (TestGatewayAlignerLooseTierFourKinds).
 func TestGatewayAlignerFormatFallbackRefusesUncertainMatches(t *testing.T) {
-	for _, name := range []string{"different_sender", "unknown_sender", "different_time", "minute_only", "different_url", "url_case", "literal_media", "media_count", "file_name", "code", "attachment_only", "ambiguous_lines", "ambiguous_chats"} {
+	for _, name := range []string{"different_sender", "unknown_sender", "different_time", "minute_only", "different_url", "url_case", "file_name", "code", "attachment_only", "ambiguous_lines", "ambiguous_chats"} {
 		t.Run(name, func(t *testing.T) {
 			e, _ := alignEngine(t)
 			ctx := context.Background()
@@ -534,11 +537,6 @@ func TestGatewayAlignerFormatFallbackRefusesUncertainMatches(t *testing.T) {
 				m.Text = "Read guide (https://example.com/other)"
 			case "url_case":
 				m.Text = "Read guide (https://example.com/guide)"
-			case "literal_media":
-				g.Text, m.Text = "Before after", "Before [image] after"
-			case "media_count":
-				g.Text, m.Text = "Before after", "Before [image] after"
-				g.Media, m.Media = []string{"one"}, []string{"one", "two"}
 			case "file_name":
 				m.Text += " [file different-report.pdf]"
 				g.Media, m.Media = []string{"one"}, []string{"other"}
