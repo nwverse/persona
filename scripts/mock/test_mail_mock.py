@@ -4,6 +4,7 @@ the module answers, and the Inbox item's stored text still readable.
 
     python3 scripts/mock/test_mail_mock.py
 """
+import os
 from pathlib import Path
 import re
 import sys
@@ -89,6 +90,24 @@ class MailOffTests(unittest.TestCase):
         d = registered("none", MAIL_BODIES={501: "x" * 5000})
         _, (_, body) = d.answer("GET", "/api/v1/inbox/mail:acc1:t1:501")
         self.assertEqual(len(body["context"].partition("\n\n")[2]), 3000)
+
+    def test_the_item_page_says_whether_the_stored_text_was_clipped(self):
+        path = "/api/v1/inbox/mail:acc1:t1:501"
+        with patch.dict(os.environ, {"MOCK_MAIL_STORED_TEXT": ""}):
+            self.assertIs(registered("none").answer("GET", path)[1][1]["mail_body_truncated"], False)
+            self.assertIs(registered("none", MAIL_BODIES={501: "x" * 5000}).answer("GET", path)[1][1]["mail_body_truncated"], True)
+        with patch.dict(os.environ, {"MOCK_MAIL_STORED_TEXT": "clipped"}):
+            body = registered("none").answer("GET", path)[1][1]
+            self.assertIs(body["mail_body_truncated"], True)
+            text = body["context"].partition("\n\n")[2]
+            self.assertEqual(len(text), 3000)
+            self.assertTrue(text.startswith("Hi,\n\nThe agenda is below.\nAna"))
+        with patch.dict(os.environ, {"MOCK_MAIL_STORED_TEXT": "unknown"}):
+            body = registered("none").answer("GET", path)[1][1]
+            self.assertNotIn("mail_body_truncated", body)
+            self.assertEqual(body["context"].partition("\n\n")[2], "Hi,\n\nThe agenda is below.\nAna")
+        with patch.dict(os.environ, {"MOCK_MAIL_STORED_TEXT": "whole"}), self.assertRaises(SystemExit):
+            registered("none").answer("GET", path)
 
     def test_on_or_an_older_hub_serves_mail_and_leaves_the_inbox_route_alone(self):
         for mode in ("", "module.mail"):
