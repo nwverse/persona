@@ -191,13 +191,13 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
   const dirty = !sameRules(draft, saved);
   const hasOverrides = RULE_FIELDS.some((field) => draft[field] !== undefined);
   return <div data-workspace-naming className="min-w-0">
-    <Button tone="quiet" expanded={open} aria-controls={id}
+    <Button tone="quiet" expanded={open} aria-controls={open ? id : undefined}
       className="workspace-naming-toggle"
       onClick={() => { setOpen(!open); if (!open && !loaded) void load(); }}>
       <span className="flex-1 text-left">{t("workspace-naming.title")}</span>
       <Icon name={open ? "chevronDown" : "chevronRight"} size={14} className="text-ink-3" />
     </Button>
-    <div id={id} hidden={!open} className="min-w-0 space-y-4 border-t border-line px-4 py-3">{open && <>
+    {open && <div id={id} className="min-w-0 space-y-4 border-t border-line px-4 py-3">
       <p className="text-label text-ink-2">{t("workspace-naming.scope")}</p>
       {busy && !loaded && <Loading />}
       {loaded && !supported && <p className="text-label text-ink-2">{t("workspace-naming.unsupported")}</p>}
@@ -240,6 +240,6 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
       </>}
       {error && <><p role="alert" className="text-label text-red">{error}</p>{loaded && supported && <Button tone="quiet" disabled={busy} onClick={() => { invalidate(); void load(true); }}>{t("workspace-naming.reload")}</Button>}</>}
       {!loaded && !busy && <Button tone="quiet" onClick={() => void load()}>{t("task-repositories.retry")}</Button>}
-    </>}</div>
+    </div>}
   </div>;
 }
