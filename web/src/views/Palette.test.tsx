@@ -46,7 +46,7 @@ describe("the palette's command mode", () => {
   it("is the same search as ever without a `>`", () => {
     const html = render("");
     expect(html).toContain('aria-label="搜索会话"');
-    expect(html).toContain("搜索会话、收件箱、终端、目录、空间、机器、页面…");
+    expect(html).toContain("搜索会话、收件箱、标签页、文件夹、空间、机器、页面…");
     expect(html).not.toContain("命令面板");
   });
   it("hints at `>` in the search's footer", () => {
@@ -88,7 +88,7 @@ describe("the palette's command mode", () => {
   it("says so when no command matches, and how to get back to the search", () => {
     const html = render(">zzzz");
     expect(html).toContain("没有匹配的命令");
-    expect(html).toContain("删掉「&gt;」");
+    expect(html).toContain("删除「&gt;」");
   });
 });
 
@@ -103,7 +103,7 @@ describe("设置 › 快捷键", () => {
     const html = renderToStaticMarkup(<ShortcutSettings />);
     expect(html).toContain("命令面板");
     expect(html).toContain("全部恢复默认");
-    expect(html).toContain("跳转到会话或终端窗格");
+    expect(html).toContain("前往会话或标签页");
     expect(html).toContain("切到第 1–9 台电脑");
     // nothing is rebound: no per-row "Reset to default"
     expect(html).not.toContain("的默认快捷键");

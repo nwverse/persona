@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -279,6 +280,13 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
 		}
+		// A proxy reply's one tool is answered here, before a meeting room's (bot_handoff.go).
+		if id, handoff, err := s.handoffOf(ctx, machine, p.SessionID); err == nil && handoff {
+			if s.isWorkMachine(machine) {
+				return proto.TextResult("unknown tool "+p.Name, true), true, nil
+			}
+			return s.larkModule().HandoffToolCall(ctx, id, p.Name, p.Args), true, nil
+		}
 		if rec, room, err := s.roomOf(ctx, machine, p.SessionID); err == nil && room {
 			if s.isWorkMachine(machine) {
 				return proto.TextResult("unknown tool "+p.Name, true), true, nil
@@ -296,7 +304,7 @@ func (s *Service) FleetUp(ctx context.Context) {
 	if !s.fleetOn() {
 		return
 	}
-	s.fleetStart(context.WithoutCancel(ctx))
+	s.fleetStart(ctx)
 	defer s.boardFleetUp() // the pending cards are read: the board may have changed while the assistant was away
 	s.fleet.sentMu.Lock()
 	s.fleet.sent, s.fleet.archived = nil, nil
@@ -321,9 +329,19 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 		var c assistantwire.Clients
 		if json.Unmarshal(params, &c) == nil {
 			s.fleet.mu.Lock()
+			before := s.fleet.clients.Viewing
 			wasOnline := s.fleet.clients.AppOnline
 			s.fleet.clients = c
 			s.fleet.mu.Unlock()
+			for _, ref := range c.Viewing {
+				s.cancelSessionRetirement(ref.MachineID, ref.SessionID)
+			}
+			for _, ref := range before {
+				if !slices.Contains(c.Viewing, ref) {
+					// Leaving a quiet page is the last owner activity, not its old transcript time.
+					s.rememberSessionActivity(ctx, ref.MachineID, ref.SessionID)
+				}
+			}
 			if c.AppOnline && !wasOnline {
 				go s.ownerAppeared(context.WithoutCancel(ctx), "app_online", "")
 			}
