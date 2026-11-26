@@ -288,7 +288,7 @@ go server/scripts/fleetsoak core
 go server/scripts/pushrec core
 
 # Module code still in core paths.
-go server/internal/transcribelive voice
+go server/scripts/transcribelive voice
 go server/internal/lark lark
 go server/internal/screen core
 go server/internal/protectedapps computer-use

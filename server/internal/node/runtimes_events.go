@@ -120,10 +120,15 @@ func (n *Node) runtimeEvent(h *runtimeConn, event string, params json.RawMessage
 	}
 }
 
-// normalizeRuntimeSessions keeps the sessions a runtime may list (valid ids, once each) and fills what the apps expect:
+// normalizeRuntimeSessions prepares a live row update, using the preceding snapshot from this connection.
+func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Session {
+	return normalizeRuntimeRows(h, list, h.runtimePreviews())
+}
+
+// normalizeRuntimeRows keeps the sessions a runtime may list (valid ids, once each) and fills what the apps expect:
 // the agent and its label, the space kind (the runtime's id). It works in place: the rows kept are list's first ones,
 // in list's own array, the rest cleared, so list is the caller's to give up. Rows share read-only capabilities when equal.
-func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Session {
+func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id, text string) string) []proto.Session {
 	h.mu.Lock()
 	rt, agent, label, caps, daemon := h.hello.Runtime, h.hello.Agent, h.hello.Name, h.hello.Caps, h.daemon != ""
 	h.mu.Unlock()
@@ -283,7 +288,8 @@ func normalizeRuntimeSessions(h *runtimeConn, list []proto.Session) []proto.Sess
 		} else if s.ContextBreakdown() != nil {
 			s.SetContextBreakdown(nil)
 		}
-		runtimeWork(&s)
+		s.LastText = preview(s.SessionID, s.LastText)
+		runtimeWork(&s, preview)
 		out = append(out, s)
 	}
 	clear(list[len(out):]) // the rows left out hold no strings

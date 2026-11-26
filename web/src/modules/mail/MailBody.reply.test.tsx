@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 // A reply being written by hand survives the mail under it changing (#4563): a new mail of the thread moves the item
 // to that mail, and the body reads it again, which took the dialog down with what was typed.
+import "./test-register";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InboxItem } from "../../lib/inbox";
-import type { MailMessage } from "../../lib/mail";
+import type { MailMessage } from "./mail";
 
 const answers = new Map<string, (v: unknown) => void>();
 vi.mock("../../lib/api", async (orig) => ({
@@ -18,7 +19,7 @@ vi.mock("../../lib/api", async (orig) => ({
 }));
 vi.mock("../../lib/translate", async (orig) => ({ ...(await orig<typeof import("../../lib/translate")>()), useTranslatePrefs: () => ({ enabled: false, target: "zh-Hans" }) }));
 
-import { MailBody } from "./InboxBodies";
+import { FullMailBody as MailBody } from "./FullMailBody";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

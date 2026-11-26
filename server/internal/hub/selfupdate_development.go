@@ -280,7 +280,7 @@ func (u *updater) startDevelopmentPhase(p update.DevelopmentProgress, legacyProg
 	u.setLocked(p.Phase, legacyProgress, "")
 	u.developmentProgress, u.developmentStarted = &p, time.Now()
 	u.mu.Unlock()
-	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
+	u.broadcastStatus()
 }
 
 // quiesceDevelopmentWriters pauses the writers a snapshot must not see moving.
@@ -355,19 +355,26 @@ func (u *updater) waitDevelopmentQuiesced(ctx context.Context) error {
 }
 
 func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, error) {
+	r, err := u.resolveDevelopment(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u.mu.Lock()
+	if !u.updateActiveLocked() {
+		u.release, u.blocked, u.lastCheck = r, nil, time.Now()
+	}
+	u.mu.Unlock()
+	return r, nil
+}
+
+func (u *updater) resolveDevelopment(ctx context.Context) (*update.Published, error) {
 	if err := u.developmentUnavailableErr(); err != nil {
 		return nil, err
 	}
 	var candidate update.DevelopmentCandidate
 	err := u.runDevelopment(ctx, "resolve", nil, &candidate)
-	u.mu.Lock()
-	u.lastCheck = time.Now()
-	u.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	if !devicewire.ValidDevelopmentCommit(candidate.Commit) {
-		return nil, errors.New("development source did not resolve to a full commit")
+	if err != nil || !devicewire.ValidDevelopmentCommit(candidate.Commit) {
+		return nil, i18n.Err("hub-selfupdate.err_resolve_latest")
 	}
 	number := update.DevelopmentNumber(u.h.build.Number)
 	m := &update.Manifest{Version: fmt.Sprintf("web-dev-%s-%d", candidate.Commit[:12], number), Build: number,
@@ -380,6 +387,7 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 		copy := *u.release
 		manifest := *copy.Manifest
 		copy.Manifest = &manifest
+		copy.Development = &candidate
 		r = &copy
 	}
 	for _, record := range u.settings.History {
@@ -387,9 +395,6 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 			r.Manifest.Build = record.ToBuild
 			r.Manifest.Version = record.ToVersion
 		}
-	}
-	if !u.updateActiveLocked() {
-		u.release, u.blocked = r, nil
 	}
 	u.mu.Unlock()
 	return r, nil
