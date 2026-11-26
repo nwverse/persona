@@ -47,7 +47,9 @@ import (
 // lines before shortening runtime previews adds 549 B (#16310).
 // Antigravity detached pending approval turn cancellation (including sibling-ask withdrawal and stale-turn/racing-ask/refusal guards) and explicit deny-with-note refusal follow-up add 436 B (279,319 B).
 // Antigravity native usage account name and subscription plan enrichment via GetUserStatus (#16277) adds 286 B (279,605 B).
-// Antigravity /compact divider notice mapping, CHECKPOINT pre_tokens, and empty-prompt retry exemption (#16604) add 600 B (280,205 B).
+// Main then measured 280,046 B (#16595): #16490 (+21 B), #15678 (+406 B) and #16027 (+22 B) grew the packages without raising
+// the budget, and #16285 adds 278 B on main (its 286 B was measured on its own branch).
+// Antigravity /compact divider notice mapping, CHECKPOINT pre_tokens, and empty-prompt retry exemption (#16604) add 159 B (280,205 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
 	const budget = 280_205
