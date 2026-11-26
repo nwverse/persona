@@ -158,13 +158,14 @@ describe("Machines", () => {
       const nav = host.querySelector(`nav[aria-label="${t("machines.view_label")}"]`)!;
       const active = nav.querySelector('a[aria-current="page"]')!;
       expect(active.getAttribute("href")).toBe(view === "services" ? "/machines/b/diagnostics" : path);
-      expect(nav.classList.contains("border-b")).toBe(true);
-      expect(active.classList.contains("border-b-2")).toBe(true);
+      expect(header.nextElementSibling?.contains(nav)).toBe(true);
+      expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
       const tools = host.querySelector(`nav[aria-label="${t("machines.view_diagnostics")}"]`);
       if (view === "services" || view === "diagnostics") {
         const pill = tools!.querySelector('a[aria-current="page"]')!;
         expect(pill.getAttribute("href")).toBe(path);
-        expect(pill.classList.contains("rounded-full")).toBe(true);
+        expect(nav.compareDocumentPosition(tools!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(tools!.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
       } else expect(tools).toBeNull();
     }
     fake.features = [];
@@ -234,12 +235,12 @@ describe("Machines", () => {
     await show();
     expect(link("/machines/a")).toBeTruthy();
     expect(buttons(t("machines.view_capabilities"))).toHaveLength(0);
-    const start = buttons(t("space-page.new_agent"))[0]!;
+    const actions = buttons(t("space-page.new_agent"))[0]!.parentElement!;
     for (const view of ["files", "storage"]) {
       const shortcut = link("/machines/a/" + view)!;
       expect(shortcut.querySelector("svg")).not.toBeNull();
-      expect(shortcut.classList.contains("shadow-btn")).toBe(true);
-      expect([shortcut, start].every(action => action.classList.contains("h-8"))).toBe(true);
+      expect(actions.contains(shortcut)).toBe(true);
+      expect(shortcut.textContent).toBe(t(view === "files" ? "machines.view_files" : "machines.view_storage"));
     }
     await follow("/machines/a/files");
     expect(host.querySelector(`nav[aria-label="${t("machines.title")}"]`)).toBeNull();

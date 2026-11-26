@@ -1,4 +1,4 @@
-import { Suspense } from "react";
+import { Suspense, useLayoutEffect, useRef } from "react";
 import { t } from "../../i18n";
 import { lazyPage } from "../../lib/lazy-page";
 import { href, onLinkClick } from "../../lib/router";
@@ -27,20 +27,31 @@ function isDiagnostic(view: MachineSubview): view is Diagnostic {
 
 export function MachineViewLinks({ mid, view }: { mid: string; view: MachineSubview }) {
   const active = isDiagnostic(view) ? "diagnostics" : view === "config" ? "management" : view;
+  const primaryNav = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const nav = primaryNav.current;
+    const selected = nav?.querySelector('[aria-current="page"]');
+    if (!nav || !selected) return;
+    // Reveal a bookmarked or newly selected view without disturbing the page's vertical scroll.
+    const tab = selected.getBoundingClientRect();
+    const bar = nav.getBoundingClientRect();
+    if (tab.left < bar.left) nav.scrollLeft += tab.left - bar.left;
+    else if (tab.right > bar.right) nav.scrollLeft += tab.right - bar.right;
+  }, [active]);
   function link(v: keyof typeof labels, current: string, className: string, label: string = labels[v]) {
     const to = { name: "machine" as const, mid, subview: v === "work" ? undefined : v };
     return <a key={v} href={href(to)} onClick={e => onLinkClick(e, to)} aria-current={current === v ? "page" : undefined}
       className={className}>{t(label)}</a>;
   }
-  const tab = "flex min-h-11 items-center whitespace-nowrap border-b-2 px-3 text-label hover:text-ink";
-  const pill = "flex min-h-8 items-center whitespace-nowrap rounded-full px-3 text-label hover:bg-hover [@media(pointer:coarse)]:min-h-11";
+  const tab = "-mb-px flex min-h-11 shrink-0 items-center whitespace-nowrap border-b-2 px-3 text-label font-medium hover:text-ink";
+  const pill = "flex min-h-8 items-center whitespace-nowrap rounded-full px-3 text-label font-medium hover:bg-hover [@media(pointer:coarse)]:min-h-11";
   return <div className="grid gap-2">
-    <nav aria-label={t("machines.view_label")} className="flex flex-wrap border-b border-line">
-      {primary.map(v => link(v, active, tab + (v === active ? " border-ink font-semibold text-ink" : " border-transparent text-ink-2")))}
+    <nav ref={primaryNav} aria-label={t("machines.view_label")} className="flex min-w-0 flex-nowrap overflow-x-auto border-b border-line scrollbar-none">
+      {primary.map(v => link(v, active, tab + (v === active ? " border-ink text-ink" : " border-transparent text-ink-2")))}
     </nav>
     {active === "diagnostics" && <nav aria-label={t("machines.view_diagnostics")} className="flex flex-wrap gap-1">
       {(["diagnostics", ...Object.keys(tools) as Diagnostic[]] as const).map(v =>
-        link(v, view, pill + (v === view ? " bg-field font-medium text-ink" : " text-ink-2"), v === "diagnostics" ? "node-health.title" : labels[v]))}
+        link(v, view, pill + (v === view ? " bg-surface text-ink shadow-hairline" : " text-ink-2"), v === "diagnostics" ? "node-health.title" : labels[v]))}
     </nav>}
   </div>;
 }

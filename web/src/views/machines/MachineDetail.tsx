@@ -354,7 +354,8 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
         )}
         {online && m.error && <p className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red">{m.error}</p>}
       </section>
-      {deployment?.visible && !management && <div role="status" className="flex flex-wrap items-center gap-2 px-4 pb-3 text-label text-orange">
+      <MachineViewLinks mid={mid} view={subview} />
+      {deployment?.visible && !management && <div role="status" className="flex flex-wrap items-center gap-2 rounded-card bg-surface px-4 py-2 text-label text-orange shadow-card">
         <span>{deployment.message} {deployment.error}</span>
         <a className="text-accent-ink" href={href({ name: "machine", mid, subview: "management" })}
           onClick={e => onLinkClick(e, { name: "machine", mid, subview: "management" })}>{t("machines.view_management")}</a>
@@ -436,7 +437,6 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
           </div>
         </section>}
       </>}
-      <MachineViewLinks mid={mid} view={subview} />
       {subview === "monitoring" && <>
         {/* its token usage, then how busy it is, then the engine and what it can do (#4973, as in the apps) */}
         <UsageSection mid={mid} heading={(right) => <Heading title={t("machines-usage.title")} right={right} />} />
@@ -488,7 +488,7 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
       </>}
       {subview === "diagnostics" && <>
         {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Doctor: what this computer can do") */}
-        <NodeHealth machine={m} heading={<Heading title={t("node-health.title")} />} />
+        <NodeHealth machine={m} heading={null} />
 
         {/* system */}
         <section>
