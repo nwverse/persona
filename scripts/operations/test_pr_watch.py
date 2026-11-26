@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import importlib.util
+import io
 from datetime import datetime, timezone
 import json
 import os
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, redirect_stderr
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -2155,7 +2156,9 @@ class WatcherTests(unittest.TestCase):
         import pr_watch_test_guards
         failing = "import unittest\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.fail('x')\n"
         sources = {":scripts/check-docs.py": "def main():\n    return False\n", ":scripts/test-docs.py": failing}
+        # Keep the planted failure's report out of the suite log; only the raised guard error matters.
         with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules), \
+                redirect_stderr(io.StringIO()), \
                 patch.object(pr_watch_test_guards, "checked",
                              side_effect=lambda argv, **kwargs: sources[argv[2][len(SHA_BASE):]]):
             with self.assertRaisesRegex(pr_watch_common.WatchError, "scripts/test-docs.py"):
