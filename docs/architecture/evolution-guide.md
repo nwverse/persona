@@ -93,14 +93,18 @@ Details: `CONTRIBUTING.md` ("Changing Persona Core"), `docs/architecture/core-an
 - A client must not invent a fallback of its own for missing data; where a fallback is needed for older hubs, it is
   written once and shared.
 
+Details: `docs/architecture/server-first-logic.md` (what the server owns, what clients own, and the bounded exceptions).
+
 ### Rolling upgrades
 
 - Every change must keep working between an older and a newer hub, manager, node and client, in both directions.
 - A new behaviour is used only when the other side announces it; a missing announcement means an older peer. Never
   guess from a build number, a date or a version string.
+- Wire contracts change additively: new fields are optional, and an existing field keeps its name and meaning while
+  older peers still read it.
 - Old field names, values and identities stay readable; compatibility literals live in each platform's compatibility
   files.
 - Compatibility must never loosen authentication, permissions, signatures or deduplication.
 
 Details: `docs/protocol/rolling-upgrade-compatibility.md`, `docs/protocol/protocol.md` ("Health check and feature
-flags").
+flags"), `docs/architecture/server-first-logic.md` ("Rule 3 — Additive evolution, compatibility, and rollback").
