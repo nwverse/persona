@@ -298,6 +298,7 @@ done
 		return ""
 	}
 	var inFlight, maxInFlight atomic.Int32
+	hold := make(chan struct{})
 	openCodexQueueThread = func(_ context.Context, _ string, _ codexSource) error {
 		cur := inFlight.Add(1)
 		for {
@@ -306,7 +307,7 @@ done
 				break
 			}
 		}
-		time.Sleep(50 * time.Millisecond)
+		<-hold
 		inFlight.Add(-1)
 		return nil
 	}
@@ -327,6 +328,7 @@ done
 			errs[idx] = err
 		}(i, id)
 	}
+	close(hold)
 	wg.Wait()
 	for i, err := range errs {
 		if err != nil {
@@ -389,16 +391,15 @@ func TestCodexDesktopHeldMessageFallbackPreservesClientIDAndOrder(t *testing.T) 
 
 	// Turn completes: held delivery falls back to native queue preserving order and firstID.
 	write(turnComplete)
-	deadline := time.Now().Add(5 * time.Second)
 	var wire []byte
-	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(filepath.Join(home, "requests"))
-		if err == nil && strings.Contains(string(b), `"method":"thread/queue/add"`) {
+	waitFor(t, "held native queue delivery", func() bool {
+		b, readErr := os.ReadFile(filepath.Join(home, "requests"))
+		if readErr == nil && strings.Contains(string(b), `"method":"thread/queue/add"`) {
 			wire = b
-			break
+			return true
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
+		return false
+	})
 	if len(wire) == 0 {
 		t.Fatal("held messages were not delivered via native queue fallback after turn completed")
 	}

@@ -3,6 +3,7 @@ package assistant
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,7 +25,7 @@ func TestRecordingFailedUploadHTTPRetainsAcceptedRevision(t *testing.T) {
 	server := httptest.NewServer(service)
 	defer server.Close()
 	const id = "11111111-1111-4111-8111-111111111111"
-	upload := kb.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Title: "Accepted sample", Segments: []kb.RecordingSegment{{Text: "accepted orchard", End: 1}}}
+	upload := recordingwire.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Title: "Accepted sample", Segments: []kb.RecordingSegment{{Text: "accepted orchard", End: 1}}}
 	request := func(method, path string, body any, want int) string {
 		t.Helper()
 		var data []byte
@@ -99,10 +100,9 @@ func TestKBSearchKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	const id = "33333333-3333-4333-8333-333333333333"
-	if _, err := e.PutRecording(id, kb.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Kind: "meeting", Title: "Vendor review",
-		Segments: []kb.RecordingSegment{{Text: "we keep the orchard vendor", End: 1}}}, time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	// Stored through the knowledge base's own commit: this test runs without the recording module too.
+	seedModuleOffUpload(t, e, id, recordingwire.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Kind: "meeting", Title: "Vendor review",
+		Segments: []kb.RecordingSegment{{Text: "we keep the orchard vendor", End: 1}}}, time.Now())
 	get := func(path string, want int) string {
 		t.Helper()
 		r := httptest.NewRecorder()
@@ -166,8 +166,8 @@ func TestRecordingInKBRefusesSpace(t *testing.T) {
 	server := httptest.NewServer(service)
 	defer server.Close()
 	const id = "22222222-2222-4222-8222-222222222222"
-	upload := kb.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Title: "Kept sample", Segments: []kb.RecordingSegment{{Text: "kept", End: 1}}}
-	put := func(u kb.RecordingUpload) (int, string) {
+	upload := recordingwire.RecordingUpload{Revision: 1, StartedAt: time.Now().UTC(), Device: "phone", Title: "Kept sample", Segments: []kb.RecordingSegment{{Text: "kept", End: 1}}}
+	put := func(u recordingwire.RecordingUpload) (int, string) {
 		t.Helper()
 		data, err := json.Marshal(u)
 		if err != nil {

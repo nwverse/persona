@@ -70,14 +70,16 @@ export function draftText(raw: string): string {
   return start < 0 ? raw : visibleInlineText(readInlineDraft(raw.slice(start)));
 }
 
+export const INLINE_TRAILER_START = "<!-- persona-inline-v1 ";
 export const INLINE_TRAILER = /\n\n<!-- persona-inline-v1 (\[[^\r\n]*\]) -->$/;
 
 export function splitInlineTrailer(body: string): { text: string; inlineTrailer?: string } {
+  if (!body.includes(INLINE_TRAILER_START)) return { text: body };
   const match = INLINE_TRAILER.exec(body);
-  return match ? { text: body.slice(0, match.index), inlineTrailer: match[0] } : { text: body };
+  // A cut page or a forward joining transcript blocks may contain a trailer without a usable anchor map.
+  const text = (match ? body.slice(0, match.index) : body).replace(/(?:^|\r?\n\r?\n)<!-- persona-inline-v1 \[[^\r\n]*/gm, "");
+  return match ? { text, inlineTrailer: match[0] } : { text };
 }
-
-export const INLINE_TRAILER_START = "<!-- persona-inline-v1 ";
 
 let wire: typeof import("./inline-message") | undefined;
 export const inlineMessage = () => wire;

@@ -223,7 +223,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	if c, ok := s.session(ctx, machine, session); ok {
 		from.From = agentLabel(c)
 	}
-	title := s.tabName(sctx, a.Prompt)
+	title := localTabName(a.Prompt)
 	params := map[string]any{"cwd": a.Cwd, "launcher": strings.TrimSpace(a.Launcher), "model": "", "effort": "",
 		"tab_name": title, "title": title, "prompt": s.withCloseoutBrief(sctx, am.ID, prompts.RenderDispatchTask(from), false)}
 	if err := s.applyModel(sctx, "agent.new", params); err != nil {
@@ -273,6 +273,7 @@ func (s *Service) dispatchStart(ctx context.Context, machine, session string, ar
 	s.finishDispatchA2A(sctx, tracker, res.Session, true, nil)
 	finished = true
 	title = s.nameStartedAgent(sctx, am.ID, res.Session, title)
+	s.nameAgentTabLater(agentTabNameStart(am.ID, res.Session, title, a.Prompt))
 	if tracker == nil {
 		s.addDispatched(ctx, dispatchTask{FromMachine: machine, FromSession: session, Machine: s.canonical(am.ID),
 			Session: res.Session.SessionID, Cwd: a.Cwd, Title: title, At: now})

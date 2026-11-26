@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"math"
 	"net/http"
 	"strings"
@@ -63,7 +64,7 @@ func TestDaySegmentsHTTP(t *testing.T) {
 	if wantCode(t, changed, codeBaseChanged); changed["base"] != float64(100) || changed["next"] != float64(5) || changed["error"] == "" {
 		t.Fatalf("base changed: %v", changed)
 	}
-	many := make([]map[string]any, kb.MaxAppendSegments+1)
+	many := make([]map[string]any, recordingwire.MaxAppendSegments+1)
 	for i := range many {
 		many[i] = map[string]any{"start": 4000 + i, "end": 4000 + i, "text": "x"}
 	}
@@ -124,10 +125,10 @@ func TestDaySegmentsHTTP(t *testing.T) {
 		}
 	}
 
-	// Expired: the day started before recording_days now (nothing written), as for a PUT.
+	// Expired: the day started before recording_text_days now (nothing written), as for a PUT.
 	old := time.Now().Add(-50 * time.Hour)
 	d.putDay(dayPart2, 10, d.owner, map[string]any{"started_at": old.Format(time.RFC3339), "day": old.In(d.owner).Format(time.DateOnly)})
-	setSettings(t, d.s, func(v *Settings) { one := 1; v.RecordingDays = &one })
+	setSettings(t, d.s, func(v *Settings) { one := 1; v.RecordingTextDays = &one })
 	if out := d.do("POST", segmentsPath(dayPart2), "", dayLines(10, 11), http.StatusOK); out["status"] != "expired" {
 		t.Fatalf("expired: %v", out)
 	}
@@ -290,6 +291,7 @@ func TestDayRecapAskTodosAndPush(t *testing.T) {
 // phone's uploads of it are expired, and its to-dos can still be confirmed; kb_get says only the recap is left.
 func TestDayRecapAfterTheTrim(t *testing.T) {
 	d := newDayFixture(t)
+	setSettings(t, d.s, func(v *Settings) { days := 14; v.RecordingTextDays = &days }) // the text is kept forever by default
 	path := "/api/v1/recordings/" + dayRec
 	d.putDay(dayRec, 100, d.owner, nil)
 	d.do("POST", segmentsPath(dayRec), "", dayLines(100, 101), http.StatusOK)

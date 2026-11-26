@@ -7,7 +7,8 @@ import {
 import { composing } from "../../lib/send-history";
 import { COMPOSITION_TAIL_MS } from "../../lib/ime";
 import type { ContextRef } from "../../lib/links";
-import { Icon, type IconName } from "../../ui/icons";
+import { Icon } from "../../ui/icons";
+import { referenceIcon } from "./reference-icon";
 
 export interface InlineMentionInputHandle {
   element: HTMLElement | null;
@@ -97,16 +98,6 @@ function placeSelection(el: HTMLElement, [start, end]: InlineSelection) {
   const selection = el.ownerDocument.getSelection();
   selection?.removeAllRanges();
   selection?.addRange(range);
-}
-
-function iconFor(ref: ContextRef): IconName {
-  switch (ref.kind) {
-    case "skill": return "sparkles";
-    case "file": return ref.attrs?.path?.endsWith("/") ? "folder" : "file";
-    case "workspace": return "folder";
-    case "repository": return "git";
-    default: return "chat";
-  }
 }
 
 function preview(ref: ContextRef): string {
@@ -361,7 +352,7 @@ export function InlineMentionInput({ inputRef, label, placeholder, value, onChan
       }}
     />
     {portals.map(({ ref, node }, i) => createPortal(<>
-      <Icon name={iconFor(ref)} size={14} className="relative top-0.5 shrink-0" />
+      <Icon name={referenceIcon(ref)} size={14} className="relative top-0.5 shrink-0" />
       <span className="min-w-0 truncate">{mentionLabel(ref)}</span>
     </>, node, String(i)))}
   </>;

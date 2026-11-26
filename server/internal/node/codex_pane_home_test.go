@@ -99,7 +99,7 @@ func TestColdHerdrUUIDWaitsForItsRolloutHome(t *testing.T) {
 }
 
 func TestHerdrRefreshIsolatesBlockedRolloutFromOtherAgents(t *testing.T) {
-	n := remoteTestNode(t)
+	n := boundedTestNode(t)
 	const healthyID = "eeee0000-0000-4000-8000-000000000002"
 	slowRoot, fastRoot := t.TempDir(), t.TempDir()
 	writeThread(t, slowRoot, remoteRaw, n.home, "slow")
@@ -241,7 +241,14 @@ func TestCodexPaneIdentitySupersedesTimedOutReadAfterCooldown(t *testing.T) {
 		}
 
 		// 3. After cooldown, the pane's owner points to the healthy home while the old syscall is still wedged.
-		time.Sleep(codexPaneReadRetry + 10*time.Millisecond)
+		waitFor(t, "pane lookup retry cooldown", func() bool {
+			n.codices.paneReads.Lock()
+			defer n.codices.paneReads.Unlock()
+			for _, read := range n.codices.paneReads.pending {
+				return time.Since(read.started) >= codexPaneReadRetry
+			}
+			return false
+		})
 		a.AgentSession = &host.AgentSession{Kind: "id", Value: fastID}
 		n.codices.mu.Lock()
 		n.codices.byPane[a.PaneID] = fast
@@ -285,7 +292,14 @@ func TestCodexPaneIdentitySupersedesTimedOutReadAfterCooldown(t *testing.T) {
 
 		for range 5 {
 			n.codexPaneIdentity(a, "", false, nil, time.Now().Add(5*time.Millisecond))
-			time.Sleep(codexPaneReadRetry + 5*time.Millisecond)
+			waitFor(t, "next pane retry", func() bool {
+				n.codices.paneReads.Lock()
+				defer n.codices.paneReads.Unlock()
+				for _, read := range n.codices.paneReads.pending {
+					return time.Since(read.started) >= codexPaneReadRetry
+				}
+				return false
+			})
 		}
 		n.codices.paneReads.Lock()
 		inflight := n.codices.paneReads.inflight[a.PaneID]

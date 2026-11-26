@@ -87,7 +87,10 @@ func (s *Service) quietNotify(ctx context.Context, t Todo, machine, state, ask, 
 			}
 		}
 		b.wg.Add(1)
-		b.timers[id] = time.AfterFunc(quietNoticeDelay, func() { s.runQuietNoticeTimer(id) })
+		b.timers[id] = time.AfterFunc(quietNoticeDelay, func() {
+			defer b.wg.Done()
+			s.runQuietNoticeTimer(id)
+		})
 	}
 	b.mu.Unlock()
 }
@@ -106,7 +109,6 @@ func appendOnce(list []string, s string) []string {
 
 func (s *Service) runQuietNoticeTimer(id string) {
 	b := &s.quiet
-	defer b.wg.Done()
 	b.mu.Lock()
 	stopped := b.stopped
 	b.mu.Unlock()
@@ -248,7 +250,10 @@ func (s *Service) queueNotice(id string, n *quietNotice, to string, msg relayMsg
 	}
 	delay := quietNoticeDelay
 	b.wg.Add(1)
-	b.timers[id] = time.AfterFunc(delay, func() { s.runQuietNoticeTimer(id) })
+	b.timers[id] = time.AfterFunc(delay, func() {
+		defer b.wg.Done()
+		s.runQuietNoticeTimer(id)
+	})
 	b.mu.Unlock()
 	s.logf("task %s: quiet notice: the relay queue can't be read; trying again in %s", id, delay)
 	return false

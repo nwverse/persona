@@ -1,12 +1,14 @@
 package assistant
 
 import (
+	"cmp"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -101,6 +103,11 @@ type inboxBook struct {
 
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 
+	// Scoped routing receives source arrivals under mu and wakes the outbox worker after persistence.
+	externalCapture bool
+	externalTriage  externalInboxTriager
+	externalWake    chan struct{}
+
 	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
 	forwarding      sync.Mutex
 	forwardAgain    atomic.Bool
@@ -124,6 +131,7 @@ type inboxVia struct {
 func (b *inboxBook) init() {
 	b.once.Do(func() {
 		b.items = map[string]*InboxItem{}
+		b.externalWake = make(chan struct{}, 1)
 		b.extensions, b.builtin, b.kinds, b.names = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]string{}
 		b.vias = map[string]inboxVia{}
 		b.retriaged, b.settleAsked, b.settleSeen = map[string]bool{}, map[string]time.Time{}, map[string]string{}
@@ -322,4 +330,34 @@ func (b *inboxBook) readSource(id, name string) {
 	if b.batch != nil {
 		b.batch.read[id] = name
 	}
+}
+
+// inboxChatTitle returns the best known display title for a Lark chat feed from Inbox items, or "".
+func (s *Service) inboxChatTitle(feed string) string {
+	if feed == "" {
+		return ""
+	}
+	ib := &s.inbox
+	ib.mu.Lock()
+	defer ib.mu.Unlock()
+	for _, it := range ib.items {
+		if it == nil {
+			continue
+		}
+		if it.Lark != nil && it.Lark.FeedID == feed {
+			if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+				return title
+			}
+		}
+		if it.Connector != nil {
+			for _, tag := range it.Connector.Tags {
+				if tag.Key == connector.TagChat && tag.Value == feed {
+					if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+						return title
+					}
+				}
+			}
+		}
+	}
+	return ""
 }

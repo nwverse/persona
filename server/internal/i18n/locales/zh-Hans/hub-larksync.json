@@ -10,7 +10,7 @@
   "auth_denied": "授权在飞书里被拒绝了",
   "register_hint": "在飞书里打开页面并确认：Persona 会创建一个应用，把你的聊天和文档读进知识库。在另一台设备上，也可以用飞书扫码。",
   "device_hint": "在飞书里打开页面（或用飞书扫码），允许 Persona 以你的身份读取",
-  "device_open": "在飞书中打开",
+  "device_open_link": "在飞书中打开",
   "reauth_title": "飞书同步需要你重新授权",
   "reauth_body_one": "请在 {count} 天内重新授权 {label}，每日同步才能继续",
   "reauth_body_other": "请在 {count} 天内重新授权 {label}，每日同步才能继续",

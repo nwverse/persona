@@ -6,13 +6,12 @@ import (
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
-// The recording module's write side while its writers are still in this package (docs/plans/plan-kb-recording-port.md,
-// section 6: PRs 3 to 5 move them into internal/modules/recording, and this file goes with the last of them). The
-// module gives it to a knowledge base in its hook; nothing in the Core names it.
+// The one recording round whose code is the knowledge base's own (docs/plans/plan-kb-recording-port.md, "PR 5 has
+// landed"): the summary round (recordings_summary.go). The recording module gives it to a knowledge base in its hook as
+// part of its provider, so it runs only with the module; nothing in the Core names it.
 
-// RecordingWriters is the writers of engine e that are still in this package (recordingwire.WritersInCore): the
-// summary round. The others are the module's (internal/modules/recording/writers), whose provider carries this one
-// for the rest.
+// RecordingWriters is the summary round of engine e (recordingwire.WritersInCore). Every other writer is the module's
+// (internal/modules/recording/writers), whose provider carries this one.
 func RecordingWriters(e *Engine) recordingwire.WritersInCore { return recordingWriters{e: e} }
 
 type recordingWriters struct{ e *Engine }

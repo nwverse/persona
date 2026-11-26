@@ -72,7 +72,7 @@ A single binary `personad`, four modes:
 ## The hub is only a communication center
 
 The hub only handles communication: app and other clients ↔ managers, hub ↔ hub (linked hubs), connections (WebSocket, node / connector links), pairing and auth, the admin UI, push delivery, and various relays.
-Business logic lives in the managers (`server/internal/assistant`, `devices`, `extmgr`; see `docs/server/machines.md`, `docs/extensions/extensions.md` ("Who owns what"), `docs/assistant/assistant.md`):
+Business logic lives in the managers (`server/internal/assistant`, `devices`, `extmgr`; see `docs/server/machines.md`, `docs/extensions/extensions.md` ("Who owns what"), `docs/assistant/assistant.md`, and `docs/architecture/server-first-logic.md` for the server-first / thin-client boundary):
 the data for the assistant, Inbox, to-dos, usage limits, board, extensions and devices, plus model calls (triage, titles, summaries, judgments). The hub forwards these endpoints to the managers as-is (`assistantwire.Routes`, `devicewire.Routes`, `extwire.Routes`), except the merged lists, which it joins, adding up the to-dos' `counts` and joining their places over the JSON as the managers send it (`server/internal/hub/ownership_lists.go`, `server/internal/hub/todo_view.go`); it never works out a to-do's phase. A few relayed writes keep an operation receipt at the hub (`client_ops`): a meeting's Just me and follow-up (`server/internal/hub/meeting_receipts.go`), and the answer to a to-do's ask and a message to a to-do on its conversation's route (`server/internal/hub/todo_receipts.go`); the hub keeps the manager's reply for the same op id, while the manager decides the answer. For the two to-do writes the hub also says on the socket that it has the write (`todo_send_state`) before the manager answers, as it does for a session's message (`message_send_state`): transport only, never the to-do's state.
 An ordinary route goes as one `http.request` on the bus, its body read whole (a body of 1 MiB or more goes on a relay stream of its own beside the bus, `http.request_streamed`, so the bus is not held up behind it: `docs/protocol/protocol.md` "Forwarding App requests"); a route that upgrades to a WebSocket cannot, so the extensions' routes and the assistant's
 WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/assistant/meeting-minutes.md` "Audio from the phone") go over a relay stream instead
@@ -90,6 +90,26 @@ WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/
 - **Store** methods = `testdata/hub_store_methods.txt`: new business tables go in the manager's own storage, not in `hub.Store`.
 
 The lists are edited by hand, with no auto-rewrite switch: the changed line shows up in the PR diff, so a reviewer can see whether it really belongs to the hub.
+
+### External source bindings
+
+The assistant manager owns external source bindings and forwarding policies for people who want to connect incoming
+updates to their work. The hub relays the full-credential routes through `assistantwire`. The manager's
+`externalbinding` core validates canonical paths and resolves policy inheritance. Its adapter uses the existing
+repository identity contract to normalize GitHub references. [External source bindings](../protocol/protocol.md#external-source-bindings)
+
+The manager migration stores canonical reference keys and sparse policies in PostgreSQL. Each reference can have
+multiple target bindings, and each target can have multiple references. A GIN index on the existing
+`todo_repository_sets.repositories` data supplies the GitHub issue and pull request projection. This indexes existing
+rows and follows committed edits, including role changes, without maintaining a second copy of repository links.
+The lookup reads explicit bindings and projected links from one snapshot. The repository write paths and delivery
+gate keep their own existing contracts.
+
+For opted-in sources, the manager commits Inbox writes and routing receipts together. The receipt uses the
+canonical object and provider event identity. The worker resolves a policy from the store snapshot, reserves a
+single action owner, and uses the existing conversation relay or task activity feed for delivery. Each routed
+source version bypasses the automatic legacy task routes. The worker owns its Postgres journal and schedules
+digest work independently of the hub's source collections.
 
 ## Contract packages
 
@@ -136,8 +156,10 @@ Domain code on the server is strict, and the rules are code: each one below is a
 section is copied from a compliant twin there, and archguard's `TestDomainModelExamples` keeps them the same. New
 domain code follows the rules from its first line. Code that predates them is held by shrink-only counts and frozen
 names in `server/internal/archguard/testdata/domain_layers`, which only fall: copy the domain kit
-(`server/internal/domainkit`), the first shared kernel (`server/internal/agentref` and its adapter) and the planted
-twins, never the packages those lists hold. A new domain package starts from the scaffold,
+(`server/internal/domainkit`), the first shared kernel (`server/internal/agentref` and its adapter), the first core
+(`server/internal/assistant/fleetcount`: the agents' and cards' Needs you, with its adapter `fleetcountadapt`, which
+fills the Live Activity's state and Persona Link's summary, and its testkit `fleetcounttest`) and the planted twins,
+never the packages those lists hold. A new domain package starts from the scaffold,
 `python3 scripts/gen/new_domain_slice.py go <dir> --doc "<one sentence>" [flags]`, which writes the compliant shape with
 its black-box tests and its hook; its output with every flag but `--shared` is the golden
 `server/internal/archguard/testdata/scaffold`, which archguard's `TestScaffoldGoldenPasses` holds to the rules and
@@ -150,9 +172,12 @@ names those modules and the checks that hold them.
 
 Each sentence below states a rule, and the rule holds whether or not a check sees a breach. The checks read syntax
 only (`go/ast`, no type information) and enforce each rule where the source shows it: in names, declarations,
-signatures, literals, imports and the calls they can resolve. The routes they do not see yet are listed in #15088, and
-the type-aware check #10613 plans with the fleetcount core (its item 5.2) closes more of them. A route found later is
-a bug in the check, never permission to take it.
+signatures, literals, imports and the calls they can resolve; archguard's `TestDomainTyped`
+(`server/internal/archguard/domain_typed_test.go`) adds the rules that take a value's type to see, with `go/types` over
+the gc export data of what the packages import (`go list -export -deps`), for the cores the baseline does not hold and
+every package whose production imports reach one, directly or through another package such as the core's adapter
+(the `typed-*` rows below). The routes neither sees yet are listed in #15088. A route found later is a bug in the
+check, never permission to take it.
 
 Why the rules exist, in this repository's own code:
 
@@ -749,6 +774,11 @@ stated above; #15088 lists the ones known.
 | `out-log-use` | an adapter's `Log` result only as an argument of a logging call | the package it is in |
 | `recover-site` | every production `.go` file under `server/` that calls the builtin `recover()` has a line with its reason in `server/internal/archguard/testdata/recover_sites.txt`, and every line's file still calls it; archguard's `TestRecoverOnlyAtListedSites` checks it ("Validated and sealed") | fails at once |
 | `catch-site` | every production `.go` file under `server/` that refers to `defect.Catch` has a line with its reason in `server/internal/archguard/testdata/catch_sites.txt`, and every line's file still does; archguard's `TestCatchOnlyAtListedSites` checks it ("Validated and sealed") | fails at once |
+| `typed-visitor-impl` | a type that implements a core's `*Visitor` interface, whatever its methods' parameters are spelled, only in adapters, testkit and cores: read where it is declared in a package that reaches the core (imported, or through an adapter that hands out the core's values), and where such a package uses a type declared elsewhere, a generic one instantiated included | fails at once |
+| `typed-discard` | no `outcome.Of` or failure dropped, by a call written as a statement or an assignment to `_`, outside cores | fails at once |
+| `typed-codec` | no core value, nor a value that holds one, passed to `fmt`, `log`, `slog`, `json.Marshal`, `MarshalIndent` or `Encode`, or a template's `Execute` | fails at once |
+| `typed-map-range` | no range over a value whose type is a map in a core, a field or a named map type included | fails at once |
+| `typed-fail-compare` | no `==` or `!=` between two failures (a failure's code cannot be compared, so it panics); comparing with `nil` is fine | fails at once |
 | `adapter-name` | an adapter exports no type named like one of its core's | the adapter |
 | `adapter-exported-result` | an adapter hands out only what the section above lists, in results (a map's keys included, and what a contract's, `db`'s or `prompts`' type can be called with), through parameters (none of type `any`, `interface{}`, a type parameter or another package's type but `io.Writer` and `http.ResponseWriter`; a contract's, `db`'s or `prompts`' type only where what it can be called with takes what an adapter may hand out, what is called on what its methods and funcs return included) and in exported fields; it has no exported variable or constant, and no exported alias or named slice, map, array, func or chan type. What it does not read is listed above | the adapter |
 | `app-exported-record` | exported structs with an exported field, in undeclared, application and library packages (contracts, `db` and `prompts` aside) | the package |
@@ -758,7 +788,10 @@ stated above; #15088 lists the ones known.
 | `contract-bare-id` | in a contract package's production files, a struct field of plain `string` or `[]string` named `*ID`, `*Id` or `*IDs` whose `<Type>.<Field>` the wire-types baseline (`scripts/ci/wire_types_baseline.json`, bare-id in `metrics`, `wide` or `exceptions`) does not hold. Strict, no count: a field that moved between contract packages or was lifted from a Core package or module keeps its name and passes; one written anew fails at its line, a rename is a new name (add it to the baseline's `exceptions` with a PR reference) | strict |
 
 The `app-*` counts hold the habits this model replaces from spreading in code that has not moved yet, and, given a
-base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`.
+base, a new package starts at zero; they run only in `TestDomainLayers`, as does `layer-declared`. The `typed-*` rules
+run only in `TestDomainTyped`, over production files, with a planted case and a compliant twin each under
+`server/internal/archguard/testdata/domaintyped` (`TestDomainTypedPlanted`); it fails when it inspected nothing and
+logs its time.
 
 ### The domain kit
 
@@ -803,7 +836,9 @@ their names, never through a list, so a module is checked from the day it exists
 is named like a domain module the manifests do not declare fails (`swift-discovery`, `kotlin-discovery`) rather than
 passing unseen, and so does a Swift target that ends in `Domain` or `Adapt` without the `Persona<Ctx>` form, which is
 checked all the same. No client has a domain module yet: #10613 plans the first ones (items 6.1 for the web, 6.5 for
-Swift and 6.11 for Kotlin), and until then the guard finds none and says so.
+Swift and 6.11 for Kotlin), and until then the guard finds none and says so. Client domain modules hold only bounded
+client-side logic that cannot live on the server (offline or low-latency UX per
+`docs/architecture/server-first-logic.md`); shared product truth and cross-client rules belong in the Go server first.
 
 | | Swift | Kotlin | TypeScript |
 | --- | --- | --- | --- |
@@ -1047,9 +1082,10 @@ of entry goes through the same design. The central lists keep the entries they h
 ### One registry per Service
 
 - **The registry**: package `seam`, under `server/internal/assistant/kernel`, holds one registry per assistant
-  `Service`, with a slot for each kind of entry. Routes (installed through `Service.handle`) are the first; bus methods,
-  tools (each placed after a named anchor tool), the hooks for a settled turn and a new connection, snapshot parts,
-  and loops come with the steps below. `Kernel.Bus` is where any domain adds a new bus method, not only the Inbox.
+  `Service`, with a slot for each kind of entry. Routes (installed through `Service.handle`), bus methods, the hooks
+  for a settled turn and a new connection, and snapshot parts are there; tools (each placed after a named anchor
+  tool) and loops come with the steps below. `Kernel.Bus` is where any domain adds a new bus method, not only the
+  Inbox.
   Package `kernel` itself hosts the built-in feature modules (`docs/architecture/core-and-modules.md`), which a build
   may leave out and the owner may switch off; the modules registered here are part of Persona Core.
 - **Two ways in, one registry**:
@@ -1071,7 +1107,8 @@ of entry goes through the same design. The central lists keep the entries they h
   `server/internal/assistant/kernel/seam/dispatch.go`.
 - **When each part lands**:
   1. the registry, with `saved` (S1, #15182);
-  2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
+  2. the Inbox's routes, bus methods, hooks and snapshot part (S4, #15418), as the module "inbox"
+     (`server/internal/assistant/inbox_module.go`);
   3. `registerRoutes` and `registerLoop` (#7891);
   4. `registerTools`, with or just before the Inbox's tools (S5).
 
@@ -1110,16 +1147,49 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
   `assistantwire.Routes` nor `assistantwire.InboxRoutes` and a nil handler, and `Kernel.Route` a pattern already
   registered. Only their constructors make a `ModuleName` or a `Route`: a zero one is a defect wherever it is used.
 - **The Kernel.** Only `Registry.Register` makes one, for the module it registers, and any method of a zero `Kernel`
-  is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and, with later steps, the
-  slots that replace central lines; never a store, an untyped event or a domain method. A module takes its own
+  is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and the slots that replace
+  central lines (`Bus`, `TurnSettled`, `Connected` and `Snapshot` below; tools and loops with later steps); never a
+  store, an untyped event or a domain method. `Kernel.Publish(ctx, assistantwire.Event)`, the service that publishes
+  contract events to the apps, comes with its first user, saved's events (#15222, with `assistantwire.Event` and a
+  golden per event kind): no module of the kernel builds a `map[string]any` event yet. A module takes its own
   dependencies through its own constructor, as typed port interfaces `New` hands it: no `any`, no map of them and no
   runtime assertion to get a port back ("Domain model", "Typed seams").
 - **saved's legacy ports.** `saved.NewModule` is the one exception, and not an example to copy: it takes saved's store
   as `func() any` and its events as `func(context.Context, map[string]any)`, the shape `saved.Host` always had, and
   saved asserts its ports back out of that store at run time. It stays only because open drafts edit `saved.go` and
   the files that make those assertions; #15222 gives saved typed ports once they land.
-- **Sealed.** `New` seals the registry before it returns. `Register`, `Kernel.Route` or `Seal` after that is a
-  defect; `Full` and `BodyError` stay open, because requests use them.
+- **Bus methods.** `seam.NewBusMethod[P, R](name, fn)` refuses an empty name, one that is not lower-case words joined
+  by dots (`inbox.repo_mutes`), a name no domain lists as a module's, and a nil `fn`; `Kernel.Bus` refuses a name
+  another module registered. A domain lists its modules' methods from an init() in its own wire file,
+  `func init() { addModuleMethods(…) }` (`server/internal/assistantwire/module_methods.go`; the Inbox's are in
+  `server/internal/assistantwire/inbox_bus.go`), so a module cannot take a name the central dispatch answers.
+  `BusHub.request` asks `Registry.Answer` after its own cases, where the Inbox's switch was, and before the extension
+  manager and the devices: the params are decoded into `P` once (a field `P` lacks is ignored), a body that does not
+  decode is answered `invalid_params` as the switch answered it, and the reply is encoded as the bus encodes answers.
+  `P` and `R` are contract types. archguard's `TestModuleBusMethodsAreNoCentralCase` keeps the list off the central
+  dispatch: it reads the cases of `BusHub.request`, of each function in package assistant it hands the method name
+  to, and of the extension manager's and the devices' `Request`, and fails on a listed name among them or on a case
+  whose name is not a string literal or constant. `TestTheCentralSwitchLeavesTheKernelsBusMethods`
+  (`server/internal/assistant/inbox_module_test.go`) sends each listed name through `BusHub.request` with a kernel
+  that has no module.
+- **Settled turn.** `Kernel.TurnSettled(func(ctx, agentref.Ref))`: `turnEnded` parses the session once with
+  `agentrefadapt.FromWire` and, inside its `!meeting` branch, runs the hooks after the settle delay
+  (`server/internal/assistant/seam_slots.go`). Ids that name no session run no hook and are logged as they came: that
+  is the hub's bad input, not a defect. No hook takes `(machine, session string)`.
+- **Handshake.** `Kernel.Connected(func(ctx))`: after each handshake with the hub, once the connection counts as up,
+  on a goroutine of its own (`BusHub.onHello`).
+- **Snapshot part.** `Kernel.Snapshot(func(ctx, *assistantwire.Snapshot))`: where `Service.snapshot` filled the
+  Inbox's part, before `snap.Work`, because `fleetTakeSnapshot` reads the parts back.
+- **One hook of a kind per module.** A hook has no name of its own, so its module is its key: a second hook of a
+  kind from one module, or a nil one, is a defect. Hooks run in registration order; route handlers run under the
+  catch site below, and bus methods and hooks run where the lines they replaced ran.
+- **Route functions written before the kernel.** `routesThrough(k, routes)` runs a module's existing route functions
+  with each `Service.handle` in them registering through `k`, so the Inbox's `inboxRoutes` stays as it was; a new
+  module calls `Kernel.Route` itself. archguard's `TestCentralFilesNameNoInboxCode` keeps the Inbox's names out of
+  `bus.go` and `handler.go`, and in `service.go` to a shrink-only list.
+- **Sealed.** `New` seals the registry before it returns. `Register`, any slot (`Route`, `Bus`, `TurnSettled`,
+  `Connected`, `Snapshot`) or `Seal` after that is a defect; `Full` and `BodyError` stay open, because requests use
+  them, and so do the `Registry` methods that run the slots (`Answer`, `TurnSettled`, `Connected`, `Snapshot`).
 - **One catch site.** Each route registered through the kernel is served under `defer defect.Catch(…)` in
   `server/internal/assistant/kernel/seam/dispatch.go`: a defect raised while serving is reported (the assistant logs it
   with its stack) and answered with 500 (`internal`), so that request fails alone and the manager goes on. Any other

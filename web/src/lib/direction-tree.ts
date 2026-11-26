@@ -24,6 +24,8 @@ export interface DirectionCounts {
   needs_you: number;
   stuck: number;
   review: number;
+  /** Open tasks accepted by their supervisor awaiting optional owner verification (`user_check`), subset of `review`. */
+  user_check?: number;
   /** Not started (#5846): absent from an older hub; normalizeCounts makes it 0. */
   planned?: number;
 }
@@ -121,7 +123,8 @@ export function normalizeTree(raw: unknown): DirectionTree {
 function normalizeCounts(raw: unknown): DirectionCounts {
   const c = (raw ?? {}) as Partial<Record<keyof DirectionCounts, unknown>>;
   const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-  return { working: n(c.working), needs_you: n(c.needs_you), stuck: n(c.stuck), review: n(c.review), planned: n(c.planned) };
+  const user_check = n(c.user_check);
+  return { working: n(c.working), needs_you: n(c.needs_you), stuck: n(c.stuck), review: n(c.review), ...(user_check > 0 ? { user_check } : {}), planned: n(c.planned) };
 }
 
 function validAgent(a: unknown): a is DirectionAgent {
@@ -218,6 +221,7 @@ let generation = 0;
  *  at once, a hello's beside one sent before the socket opened, and they can come back in any order). */
 let readSeq = 0;
 let appliedSeq = 0;
+const activeAborts = new Set<AbortController>();
 
 function set(next: Snapshot) {
   if (next === tree) return;
@@ -228,11 +232,13 @@ function set(next: Snapshot) {
 /** An answer that is not a tree (a layer in front of an older hub): a tree always lists its secretary group. */
 class NoTree extends Error {}
 
-function read(): Promise<DirectionTree | null> {
+function read(fresh = false): Promise<DirectionTree | null> {
   const n = generation;
   const at = Date.now();
   const seq = ++readSeq;
-  const p: Promise<DirectionTree | null> = api<unknown>(DIRECTION_TREE_PATH)
+  const abort = new AbortController();
+  activeAborts.add(abort);
+  const p: Promise<DirectionTree | null> = api<unknown>(DIRECTION_TREE_PATH, { dedupe: !fresh, signal: abort.signal })
     .then((res) => {
       if (!Array.isArray((res as { directions?: unknown } | null)?.directions)) throw new NoTree();
       const next = normalizeTree(res);
@@ -251,6 +257,7 @@ function read(): Promise<DirectionTree | null> {
       return null;
     })
     .finally(() => {
+      activeAborts.delete(abort);
       if (reading === p) reading = null;
     });
   reading = p;
@@ -266,7 +273,7 @@ export function readDirectionTreeOnce(since?: number): Promise<DirectionTree | n
   if (since === undefined) return reading ?? helloWait?.promise ?? read();
   if (reading && readingSince >= since) return reading;
   if (!reading && lastRead && lastRead.at >= since) return Promise.resolve(lastRead.tree);
-  return read();
+  return read(Boolean(reading));
 }
 
 let helloWait: { promise: Promise<DirectionTree | null>; resolve: (p: Promise<DirectionTree | null>) => void } | null = null;
@@ -305,6 +312,8 @@ export function refreshDirectionTree(): Promise<DirectionTree | null> {
 /** Forget the tree (another login, tests; lib/direction-names.ts's reset calls it). */
 export function resetDirectionTree() {
   generation++;
+  for (const abort of activeAborts) abort.abort();
+  activeAborts.clear();
   reading = null;
   queued = null;
   lastRead = null;

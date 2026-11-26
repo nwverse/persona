@@ -113,7 +113,9 @@ func (n *Node) codexTerminalRow(id string, s *proto.Session, m quickMeta) {
 	s.Efforts = codexEffortLevels
 	if e, listed := codexModelEffortsIn(t.home, s.Model); listed {
 		s.Efforts = e.levels
-		s.ServiceTiers = codexSpeedChoices(e.tiers)
+		if n.terminalSpeedAvailable(s) {
+			s.ServiceTiers = codexSpeedChoices(e.tiers)
+		}
 	}
 	if len(s.Efforts) == 0 {
 		s.Effort = ""
@@ -123,7 +125,13 @@ func (n *Node) codexTerminalRow(id string, s *proto.Session, m quickMeta) {
 // codexTerminalSettingsOf uses native settings as soon as the rollout records a model. A rollout with only startup
 // metadata has no turn settings yet, so read the launcher's options in the home identified by that rollout.
 func (n *Node) codexTerminalSettingsOf(id string, t codexTerminal, m quickMeta) codexTerminalSettings {
-	settings := codexTerminalSettings{model: m.model, effort: m.effort, tier: m.serviceTier}
+	settings := codexTerminalSettings{model: m.model, effort: m.effort, tier: codexTierID(m.serviceTier)}
+	if m.speed.Model != "" && !m.speed.At.Before(m.modelAt) {
+		settings.model = m.speed.Model
+	}
+	if m.speed.Tier != "" && m.speed.At.After(m.serviceTierAt) {
+		settings.tier = m.speed.Tier
+	}
 	if settings.model != "" {
 		return settings
 	}
@@ -157,10 +165,7 @@ func (n *Node) codexTerminalSettingsOf(id string, t codexTerminal, m quickMeta) 
 	tier, _ := cfg["service_tier"].(string)
 	settings.model = cmp.Or(settings.model, model)
 	settings.effort = cmp.Or(settings.effort, effort)
-	settings.tier = cmp.Or(settings.tier, tier, "default")
-	if settings.tier == "fast" {
-		settings.tier = "priority"
-	}
+	settings.tier = codexTierID(cmp.Or(settings.tier, tier, "default"))
 	if settings.model == "" {
 		for _, entry := range readCodexHomeModels(t.home) {
 			if entry.Default {
@@ -179,13 +184,13 @@ func (n *Node) codexTerminalSettingsOf(id string, t codexTerminal, m quickMeta) 
 
 // setCodexTerminalSettings switches the Codex in t to model and / or effort ("" leaves one as it is) by typing Codex's
 // own /model into its box.
-func (n *Node) setCodexTerminalSettings(ctx context.Context, id string, t codexTerminal, model, effort string) error {
+func (n *Node) setCodexTerminalSettings(ctx context.Context, id string, t codexTerminal, model, effort string) (bool, error) {
 	model, effort = strings.TrimSpace(model), strings.TrimSpace(effort)
 	if model == "" && effort == "" {
-		return nil
+		return false, nil
 	}
 	if model != "" && !proto.ValidModelID(model) {
-		return fmt.Errorf("invalid model %q", model)
+		return false, fmt.Errorf("invalid model %q", model)
 	}
 	n.forgetMeta(n.transcriptPath(id)) // a change made at the computer a moment ago counts
 	now := n.codexTerminalSettingsOf(id, t, n.metaOf(id))
@@ -197,7 +202,7 @@ func (n *Node) setCodexTerminalSettings(ctx context.Context, id string, t codexT
 			levels = target.levels
 		}
 		if err := codexEffortRefusal(levels, effort); err != nil {
-			return err
+			return false, err
 		}
 	case listed && slices.Contains(target.levels, now.effort):
 		// A model alone: Codex would put the new model on that model's default level. The app-server route keeps the
@@ -205,17 +210,17 @@ func (n *Node) setCodexTerminalSettings(ctx context.Context, id string, t codexT
 		effort = now.effort
 	}
 	if (model == "" || model == now.model) && (effort == "" || effort == now.effort) {
-		return nil // what it runs with already
+		return false, nil // what it runs with already
 	}
 	cmd, err := codexModelArgsCommand(model, effort)
 	if err != nil {
-		return err
+		return false, err
 	}
 	return n.applyCodexTerminalSettings(ctx, id, t, cmd, codexTerminalSettings{model: model, effort: effort})
 }
 
 // applyCodexTerminalSettings retries only Codex's explicit temporary startup refusal.
-func (n *Node) applyCodexTerminalSettings(ctx context.Context, id string, t codexTerminal, cmd string, target codexTerminalSettings) error {
+func (n *Node) applyCodexTerminalSettings(ctx context.Context, id string, t codexTerminal, cmd string, target codexTerminalSettings) (bool, error) {
 	for try := 0; ; try++ {
 		err := n.typeCodexSettings(ctx, id, t, cmd, target)
 		var starting codexStarting
@@ -223,15 +228,16 @@ func (n *Node) applyCodexTerminalSettings(ctx context.Context, id string, t code
 			if err == nil {
 				n.forgetMeta(n.transcriptPath(id)) // the row shows what Codex just recorded, not a read from before it
 				n.notifySessions()
+				return true, nil
 			}
-			return err
+			return false, err
 		}
 		if try > 0 {
-			return refusal(proto.CodeModesCodexRefused, starting.words, nil)
+			return false, refusal(proto.CodeModesCodexRefused, starting.words, nil)
 		}
 		select { // nothing was applied: typed once more after a moment
 		case <-ctx.Done():
-			return refusal(proto.CodeModesCodexRefused, starting.words, nil)
+			return false, refusal(proto.CodeModesCodexRefused, starting.words, nil)
 		case <-time.After(codexStartingRetry):
 		}
 	}
@@ -239,13 +245,17 @@ func (n *Node) applyCodexTerminalSettings(ctx context.Context, id string, t code
 
 // typeCodexSettings types cmd into the Codex in t after the checks a message gets, then waits for the outcome: nil once
 // the rollout records the requested settings, Codex's refusal once the screen shows one, else,
-// after codexSettingsWait, the unconfirmed error. The session's typing lock is held only while typing.
+// after codexSettingsWait, the unconfirmed error. Model and effort changes take the input lock only while typing.
+// Speed changes hold it in setSessionSpeed until confirmation.
 func (n *Node) typeCodexSettings(ctx context.Context, id string, t codexTerminal, cmd string, target codexTerminalSettings) error {
-	unlock := n.typing.lock(id) // one at a time with the messages: a send in flight types into the same box
+	unlock := func() {}
+	if target.tier == "" {
+		unlock = n.typing.lock(id)
+	}
 	var once sync.Once
 	release := func() { once.Do(unlock) }
 	defer release()
-	if err := n.checkPane(ctx, t.pane, "codex", ""); err != nil {
+	if err := n.codexReady(ctx, t.pane, target.tier != ""); err != nil {
 		return err // a draft in the box, a dialog on the screen, the agent gone: nothing typed
 	}
 	before, _ := n.readPane(ctx, t.pane, "visible", 60)

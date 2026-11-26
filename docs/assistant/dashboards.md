@@ -58,6 +58,27 @@ On with no kept page, nothing on any screen changes.
 4. **Update.** The conversation answers with `page update`: the whole View again, with the version it read
    (`version_conflict` otherwise). The apps showing the page draw it again (`extension_ui` invalidate); nothing is pushed.
 
+### Keep a live card as a dashboard
+
+An owner can ask the conversation to keep a card it already showed. For example, after displaying a reading list,
+the conversation can offer that list as a dashboard without generating the entries again:
+
+```json
+{
+  "action": "create",
+  "title": "Weekend reading",
+  "why": "Come back to the books you picked for the weekend.",
+  "from_view": {"id": "view_0123456789abcdef", "version": 2}
+}
+```
+
+Use the live card ID and the version the owner saw. The manager reads that version from the calling conversation on
+its machine and checks the contents against the dashboard rules. If the card has changed, inspect it again before
+offering the updated content. An unsupported card produces an error before any draft is created.
+
+The usual preview offers **Keep in Dashboards**. It contains a snapshot of the card's contents. Later edits to the
+card and answers submitted to it stay in the conversation.
+
 ## Ownership and writers
 
 | Page of | Who writes it | Where taps go |
@@ -81,7 +102,13 @@ restored; its drafts go unlisted.
 
 Once kept, a page's title and icon are the owner's (the page's **Rename**); an Agent changes the contents only. After
 the owner paused a page or restored an older version, writes are refused (`paused_by_owner`) and the model is told to
-ask first (phase 2 adds pausing and history; the refusal exists now).
+ask first. The owner can resume updates from the footer.
+
+## Version history
+
+Open **Version history** from a kept dashboard's footer to see when each retained version was written and who wrote it. Select an earlier version to inspect its title and content. Confirming a restore creates a new version and pauses updates. Use **Resume updates** when the conversation or routine should start writing again.
+
+Restoring a version changes the title and page content. Readings, alerts, routine settings and sidebar placement keep their current values. If another device updates the page before confirmation, reopen history and review the new current version before restoring. A title already used by another kept dashboard must be freed before restoring that title.
 
 ## Titles and icons
 
@@ -105,7 +132,7 @@ settings, security and the app's own places' icons.
 | Writes | 60 an hour a page, 600 an hour for all pages together (both survive restarts); past them `rate_limited` |
 | Taps | 10 a minute a page; the same tap within 30 seconds is the first |
 | Tap records | 90 days, 200 a page |
-| Versions | the latest 20 a page, stored, not shown yet |
+| Versions | the latest 20 per page, including the current version |
 
 ## Events
 
@@ -135,6 +162,13 @@ tap is received within its request, a thousand writes stay within the event budg
 | Events | `server/internal/assistant/pages_events.go` |
 | The tool, Keep, callers | `server/internal/assistant/pages_tool.go`; prompt `server/internal/prompts/mcp/assistant/page.md` |
 | Feature flag | `server/internal/hub/assistant_pages.go` |
+| Phase 2: watch, readings, grants (storage) | `server/internal/db/assistant_page_watch.go`, `assistant_page_readings.go`, `assistant_page_grants.go` |
+| Phase 2: the watch, the reading, the rule's trips | `sdk/go/wire/agentpagewatch.go` |
+| Phase 2: drawing a watch, the footer, Refresh now | `server/internal/assistant/pages_watch_ui.go` |
+| Phase 2: alerts | `server/internal/assistant/pages_alert.go` |
+| Phase 2: Overview cards | `server/internal/assistant/pages_overview.go` |
+| Phase 2: `page patch` | `server/internal/assistant/pages_patch.go` |
+| Phase 2: the bound routine, its grant and run header | `server/internal/assistant/pages_routine.go`; prompt `server/internal/prompts/assistant/page_routine_run.md` |
 
 ## Phase 2: watch pages (#13020)
 
@@ -270,12 +304,14 @@ A kept page's footer (phase 1's, the hub's own) adds, before Pin / Rename / Remo
   now…" (received), which stays while the run works and clears when the run writes a reading; a run that ended without
   one leaves "The check didn't update the page", a failed one "The check failed" with **Retry**. At most 6 an hour a
   page, and never while one is checking ("Already checking"). The tap, the run's start and the reading are timed apart
-  (principle 7) and logged with the day's page taps;
+  (principle 7) and logged once a day as tap to start and start to reading, p50 / p95 / max (`pageRefreshDayLine`);
 - **Pause updates** (`persona.pause`): the page is paused by the owner; the routine's runs are skipped and every write
   is refused (`paused_by_owner`) until **Resume updates** (`persona.resume`). Paused, the footer says "Updates paused"
   and has no Refresh now. Any kept page has Pause updates, with a routine or not;
 - with an alert rule: a row **Alert me**, the rule in words under it, with a switch (`persona.alert`, values
-  `{on: "true" | "false"}`); only the owner changes it.
+  `{on: "true" | "false"}`); only the owner changes it;
+- for the web and the desktop app only: a row **Show on Overview** with a switch (`persona.overview`, values
+  `{overview: "true" | "false"}`).
 
 ### Alerts
 
@@ -288,7 +324,8 @@ The only push a page ever makes, decided by the manager from the owner's switch 
   it; turning the switch on while tripped does not push ("pushes" in the fixture);
 - the push: source `page_alert` (kind 1 of the card ledger: the owner switched it on, as their own reminders), level
   P1 (held for the briefing in low-distraction mode), the page's title, the question and the reading in words, then
-  `alert_text` if the reading came with one, opening the page; related key `page-alert:<page id>`.
+  `alert_text` if the reading came with one; related key `page-alert:<page id>`. Tapping it opens the app, not yet the
+  page: a push carries no destination for now (#15417).
 
 Drafts, updates, patches, readings, refreshes and failed checks never push and never count in the card ledger, as in
 phase 1.
@@ -302,8 +339,8 @@ grantee kind `routine`, the routine's id, rights `data`, who granted it and when
 
 ### Later
 
-Not in phase 2 (they stay with Dashboards, issue to follow): the history of versions with restore (which pauses
-updates), copying a live card into a page (`from_view`), opening a page from a card's link, the number of pages in the
-apps' delete-conversation confirmations, labelling a tap's message "from a dashboard", and whether the switch turns on
-by default. Phase 3 attaches pages to spaces, directions and to-dos, gives task Agents a data-only `todo_page`, and adds
+Not in phase 2 (they stay with Dashboards, #15417): opening a page from a card's link, the number of pages in the
+apps' delete-conversation confirmations, labelling a tap's message "from a dashboard", an alert push that opens its
+page, Overview's heading for these cards (they sit under Extensions on the web), and whether the switch turns on by
+default. Phase 3 attaches pages to spaces, directions and to-dos, gives task Agents a data-only `todo_page`, and adds
 the Apple Watch glance.

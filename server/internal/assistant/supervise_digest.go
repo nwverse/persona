@@ -62,12 +62,21 @@ func (s *Service) sendDigestLocked(ctx context.Context) {
 	if b.timer != nil {
 		b.timer.Stop()
 	}
-	if !s.autoSupervisionOn(ctx) {
+	mode := s.supervisionMode(ctx)
+	if mode == supervisionModeOff {
 		// Switched off while this digest waited for its turn: nothing is taken out of the gather, and the withdrawal
 		// empties it.
 		b.mu.Unlock()
 		s.syncAutoSupervision(ctx)
 		return
+	}
+	if mode == supervisionModeOutcomes && slices.ContainsFunc(slices.Collect(maps.Values(b.pending)), func(g superviseSignal) bool {
+		return !supervisionSignalAllowed(mode, g)
+	}) {
+		// Switched to outcomes while this digest waited: its withdrawal takes the routine signals out first.
+		b.mu.Unlock()
+		s.syncAutoSupervision(ctx)
+		b.mu.Lock()
 	}
 	b.timer, b.timerAt = nil, time.Time{}
 	b.syncBatchInterval(batch)
@@ -708,6 +717,11 @@ func mergeSignals(a, b []superviseSignal) []superviseSignal {
 			if g.Kind == sigOutageRecovery {
 				g = joinOutageRecovery(out[i], g)
 			}
+			if g.Recipient == "" && out[i].Recipient != "" && out[i].Key == g.Key &&
+				(g.To == "" || g.To == out[i].Recipient) &&
+				(out[i].To == "" || g.To == "" || out[i].To == g.To) {
+				g.Recipient = out[i].Recipient
+			}
 			g = preserveIdleHandoff(out[i], g)
 			out[i] = g
 		} else {
@@ -1015,7 +1029,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false // parked meanwhile: it waits on purpose (parked.go)
 		}
 	case sigParkedDue:
-		if r := v.parking(); st != reviewParked || r == nil || parkKey(r) != g.Key {
+		if r := v.parking(); st != reviewParked || r == nil || parkDueKey(r) != g.Key {
 			return prompts.SuperviseEntry{}, false // its agent works again, or it was reviewed again, meanwhile
 		}
 	case sigParkDecided:
@@ -1188,6 +1202,9 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	}
 	if g.Kind == sigParkedDue || g.Kind == sigParkedSummary {
 		e.Detail, e.Parked = "", s.parkedEntry(ctx, v.parking())
+	}
+	if g.Kind == sigParkedDue && e.Parked != nil {
+		e.Parked.Resent = parkedDueResend(v.parking())
 	}
 	if g.Kind == sigParkDecided && st == reviewParked { // parked again before this went: what it waits for now
 		e.Parked = s.parkedEntry(ctx, v.parking())
@@ -1362,7 +1379,10 @@ func (s *Service) shouldHoldSupervisionPushes(ctx context.Context, to string, ms
 
 // noteSideSupervisionPush records the task and conversation links to attach when a side conversation's user-level
 // supervision round finishes and pushes the owner.
-func (s *Service) noteSideSupervisionPush(ctx context.Context, to string, msg relayMsg) {
+func (s *Service) noteSideSupervisionPush(ctx context.Context, to string, msg relayMsg) error {
+	if err := s.releasePushes(ctx, to); err != nil {
+		return err
+	}
 	cfg := s.settings(ctx)
 	web := s.webBase(ctx)
 	var links []string
@@ -1384,14 +1404,9 @@ func (s *Service) noteSideSupervisionPush(ctx context.Context, to string, msg re
 	b := &s.supervise
 	b.mu.Lock()
 	b.init()
-	_, held := b.hold[to]
-	delete(b.hold, to)
-	delete(b.visible, to)
 	b.sideLinks[to] = links
 	b.mu.Unlock()
-	if held {
-		s.publish(ctx)
-	}
+	return nil
 }
 
 // consumeSideSupervisionLinks returns and clears any pending task/conversation links recorded for conversation id's
@@ -1405,53 +1420,6 @@ func (s *Service) consumeSideSupervisionLinks(id string) []string {
 	return links
 }
 
-// holdPushes: a supervision message went into conversation id: its turn's normal finish is not pushed (the hub and the
-// channels read it off the snapshot, SessionView.Supervising) until the user or anything else speaks there.
-func (s *Service) holdPushes(ctx context.Context, id string) {
-	b := &s.supervise
-	b.mu.Lock()
-	b.init()
-	b.hold[id] = time.Now()
-	delete(b.visible, id)
-	delete(b.sideLinks, id)
-	b.mu.Unlock()
-	s.publish(ctx)
-}
-
 // holdPushesParam marks an assistant.send whose supervision turn holds the conversation's pushes (holdPushes).
 // Any other send releases them (call); scheduled inputs carry their own persisted push mode.
 const holdPushesParam = "hold_pushes"
-
-// releasePushes: someone else speaks in conversation id: its turns are pushed as ever.
-func (s *Service) releasePushes(ctx context.Context, id string) {
-	b := &s.supervise
-	b.mu.Lock()
-	_, held := b.hold[id]
-	delete(b.hold, id)
-	delete(b.visible, id)
-	delete(b.sideLinks, id)
-	b.mu.Unlock()
-	if held {
-		s.publish(ctx)
-	}
-}
-
-// supervising: conversation id's current turn was started by a supervision message.
-func (s *Service) supervising(id string) bool {
-	b := &s.supervise
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, ok := b.hold[id]
-	return ok
-}
-
-func (s *Service) heldConversations() []string {
-	b := &s.supervise
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]string, 0, len(b.hold))
-	for id := range b.hold {
-		out = append(out, id)
-	}
-	return out
-}

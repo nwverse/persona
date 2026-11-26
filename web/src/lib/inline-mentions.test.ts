@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { LEGACY_SCHEME } from "./compatibility";
 import { contextXML, withContexts } from "./context-xml";
 import {
   draftText, editorText, readInlineDraft, replaceInlineRange, writeInlineDraft,
@@ -6,6 +7,7 @@ import {
 import { inlineBody, inlineReferences, readInlineBody } from "./inline-message";
 import type { ContextRef } from "./links";
 import { skillContext, splitSkillDraft } from "./skill-mentions";
+import { parseUserText } from "./turns";
 
 const skill = skillContext({ id: "personal-review", name: "Review", source: "user · ~/.skills", description: "Review & check" });
 const projectSkill = skillContext({ id: "project-review", name: "Review", source: "project · ./skills" });
@@ -65,8 +67,15 @@ describe("inline mention message bodies", () => {
     expect(readInlineBody("Use Review and @docs/notes & plans.md", [skill, file]).used.size).toBe(0);
   });
 
+  it("keeps plain prose when an anchor trailer is malformed or truncated", () => {
+    const text = "Use Review.";
+    const body = `${text}\n\n<!-- persona-inline-v1 [[invalid]] -->`;
+    expect(readInlineBody(body, [skill])).toEqual({ text, document: [text], used: new Set() });
+    expect(parseUserText(body.slice(0, -8)).text).toBe(text);
+  });
+
   it("rebinds references after session-link spelling changes and the workspace body is enriched", () => {
-    const legacy = { ...session, url: session.url.replace("persona:", "jarvis:") };
+    const legacy = { ...session, url: session.url.replace("persona:", `${LEGACY_SCHEME}:`) };
     const enriched = { ...workspace, attrs: { machine: "fixture", cwd: "/work/design" }, text: "Resolved workspace" };
     expect(readInlineBody(inlineBody([workspace, " and ", session]), [legacy, enriched]).document).toEqual([enriched, " and ", legacy]);
   });

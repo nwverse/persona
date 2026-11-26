@@ -338,7 +338,7 @@ func (s *Service) inboxSignalHolds(t Todo) bool {
 // signal it gave (receivedSince), and remembers that count. Under b.mu.
 func inboxSignalOf(it *InboxItem, linked bool) (superviseSignal, bool) {
 	a := it.Agent
-	if a == nil || a.TodoID == "" || it.VisibilityExcluded || !it.open() || it.Kind == KindBot || !inboxTaskLinkEligible(it) ||
+	if a == nil || a.TodoID == "" || it.VisibilityExcluded || !it.open() || it.externallyRouted() || it.Kind == KindBot || !inboxTaskLinkEligible(it) ||
 		a.SentOf != "" && a.SentOf == it.Last ||
 		a.signaledOf != "" && a.signaledOf == it.Last {
 		return superviseSignal{}, false

@@ -112,6 +112,9 @@ func (n *Node) waitCodexBox(ctx context.Context, pane string, maxWait time.Durat
 		if err := n.codexStartupFailure(ctx, pane, text, exit); err != nil {
 			return err
 		}
+		if codexSignInScreen(text) { // no input box comes before someone signs in (codex_start.go)
+			return codexNotLoggedIn()
+		}
 		if n.answerCodexStartDialog(ctx, pane, text) {
 			continue
 		}
@@ -392,7 +395,7 @@ func (n *Node) newCodexThreads(w *codexWait, held codexHeld) []newThread {
 	}
 	var out []newThread
 	seen := map[string]bool{}
-	scanBy := time.Now().Add(codexHomeListWait)
+	scanBy := time.Now().Add(n.codexHomeListBudget())
 	for _, home := range n.codexRolloutHomes(w.pane) {
 		for _, r := range n.firstMessageRollouts(home, scanBy) {
 			if r.sub || (r.cwd != w.cwd && r.cwd != resolved) || r.mtime.Before(w.began.Add(-time.Second)) {

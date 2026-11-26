@@ -16,7 +16,7 @@ import (
 )
 
 func TestCodexIndexListsHealthyHomeWhileAnotherScanIsBlocked(t *testing.T) {
-	n := remoteTestNode(t)
+	n := boundedTestNode(t)
 	slowRoot := t.TempDir()
 	slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
 	const slowID = "aaaa0000-0000-4000-8000-000000000001"
@@ -86,6 +86,47 @@ func TestCodexIndexSharesBlockedWork(t *testing.T) {
 	<-finished
 }
 
+func TestCodexSessionsCarryGoalAndPlan(t *testing.T) {
+	n := remoteTestNode(t)
+	const threadID = "cccc0000-0000-4000-8000-000000000003"
+	writeThread(t, n.home, threadID, n.home, "fix the parser")
+	matches, err := filepath.Glob(filepath.Join(n.home, ".codex", "sessions", "*", "*", "*", "rollout-*-"+threadID+".jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("find rollout: matches=%v err=%v", matches, err)
+	}
+	rollout := matches[0]
+	extra := `{"timestamp":"2026-11-22T10:00:02Z","type":"event_msg","payload":{"type":"thread_goal_updated","goal":{"objective":"Keep all tests green","status":"active","tokensUsed":120,"tokenBudget":1000,"timeUsedSeconds":15}}}` + "\n" +
+		`{"timestamp":"2026-11-22T10:00:03Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"call_reg_1","arguments":"{\"plan\":[{\"step\":\"Reproduce\",\"status\":\"completed\"},{\"step\":\"Fix\",\"status\":\"in_progress\"}]}"}}` + "\n" +
+		`{"timestamp":"2026-11-22T10:00:04Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_reg_1","output":"Plan updated"}}` + "\n"
+	f, err := os.OpenFile(rollout, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(extra); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	rows := n.codexSessions(map[string]bool{})
+	var found *proto.Session
+	for i := range rows {
+		if rows[i].SourceThreadID == threadID {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("codexSessions did not return thread %s: %+v", threadID, rows)
+	}
+	if found.Goal == nil || found.Goal.Objective != "Keep all tests green" || found.Goal.Status != proto.GoalActive {
+		t.Fatalf("codexSessions Goal = %+v, want active goal", found.Goal)
+	}
+	if found.Plan == nil || found.Plan.Done != 1 || found.Plan.Total != 2 || found.Plan.Current != "Fix" {
+		t.Fatalf("codexSessions Plan = %+v, want 1/2 Fix", found.Plan)
+	}
+}
+
 func TestCodexIndexUsesOneWaitBudgetForAList(t *testing.T) {
 	var index codexHomeIndex
 	release := make(chan struct{})
@@ -114,7 +155,7 @@ func TestCodexIndexUsesOneWaitBudgetForAList(t *testing.T) {
 }
 
 func TestCodexIndexRetainsObservedRowsWhenWorkersAreBusy(t *testing.T) {
-	n := remoteTestNode(t)
+	n := boundedTestNode(t)
 	const id = "cccc0000-0000-4000-8000-000000000003"
 	writeThread(t, n.home, id, n.home, "keep this history")
 	rows := n.codexSessions(map[string]bool{})
@@ -158,7 +199,7 @@ func TestCodexFirstMessageFindsHealthyHomePastABlockedOne(t *testing.T) {
 			name = "empty pane receives its first message"
 		}
 		t.Run(name, func(t *testing.T) {
-			n := remoteTestNode(t)
+			n := boundedTestNode(t)
 			slowRoot, fastRoot := t.TempDir(), t.TempDir()
 			const oldID = "dddd0000-0000-4000-8000-000000000004"
 			const newID = "eeee0000-0000-4000-8000-000000000005"
@@ -208,7 +249,7 @@ func TestCodexFirstMessageFindsHealthyHomePastABlockedOne(t *testing.T) {
 // another reader acquiring the home's rollout cache mutex before decoration must not block codexSessions
 // or sessionList across homes: downstream reads use TryLock and emit unavailable snapshots instead.
 func TestCodexListDoesNotBlockWhenMutexTakenAfterFreshIndex(t *testing.T) {
-	n := remoteTestNode(t)
+	n := boundedTestNode(t)
 	slowRoot := t.TempDir()
 	slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
 	const slowID = "f0000000-0000-4000-8000-000000000001"
@@ -386,7 +427,7 @@ func TestCodexIndexDoesNotCacheFailedScanAsFresh(t *testing.T) {
 // instead of making the thread vanish.
 func TestCodexListPreservesSnapshotAcrossLiveOwnershipAndRuntimeClaims(t *testing.T) {
 	t.Run("history -> healthy live ownership -> home stall -> pane removal -> recovery", func(t *testing.T) {
-		n := remoteTestNode(t)
+		n := boundedTestNode(t)
 		slowRoot := t.TempDir()
 		slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
 		const slowID = "f3000000-0000-4000-8000-000000000001"
@@ -462,7 +503,7 @@ func TestCodexListPreservesSnapshotAcrossLiveOwnershipAndRuntimeClaims(t *testin
 	})
 
 	t.Run("history -> live runtime claim -> home stall -> runtime removal", func(t *testing.T) {
-		n := remoteTestNode(t)
+		n := boundedTestNode(t)
 		slowRoot := t.TempDir()
 		slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
 		const slowID = "f4000000-0000-4000-8000-000000000001"
@@ -501,7 +542,7 @@ func TestCodexListPreservesSnapshotAcrossLiveOwnershipAndRuntimeClaims(t *testin
 	})
 
 	t.Run("live-first pane preserved when home stalls and pane drops", func(t *testing.T) {
-		n := remoteTestNode(t)
+		n := boundedTestNode(t)
 		slowRoot := t.TempDir()
 		slowHome := canonicalCodexHome(filepath.Join(slowRoot, ".codex"), n.home)
 		const slowID = "f5000000-0000-4000-8000-000000000001"
@@ -547,5 +588,60 @@ func TestCodexListPreservesSnapshotAcrossLiveOwnershipAndRuntimeClaims(t *testin
 		}) {
 			t.Fatalf("live-first pane vanished when home stalled and pane dropped: %+v", stalled)
 		}
+	})
+}
+
+// Cold Codex home scans that invoke sqlite3 subprocesses (desktop projects and sidebar threads) can
+// exceed the production 100ms per-home scan cutoff under multi-shard CI load. remoteTestNode raises
+// its per-node index wait budget so healthy fixtures do not return empty lists, while boundedTestNode
+// (and zero-value production codexHomeIndex) still cut off stalled homes at codexHomeScanWait.
+func TestCodexIndexCustomWaitBudgetAllowsSlowHealthyScan(t *testing.T) {
+	delay := codexHomeScanWait + 40*time.Millisecond
+
+	t.Run("remoteTestNode waits for healthy scan slower than codexHomeScanWait", func(t *testing.T) {
+		n := remoteTestNode(t)
+		const id = "f8000000-0000-4000-8000-000000000001"
+		writeThread(t, n.home, id, n.home, "slow healthy scan")
+		home := canonicalCodexHome(n.codexHome(), n.home)
+		cache := rolloutCacheFor(home)
+		cache.mu.Lock()
+		var once sync.Once
+		release := func() { once.Do(cache.mu.Unlock) }
+		timer := time.AfterFunc(delay, release)
+		defer func() { timer.Stop(); release() }()
+
+		rows := n.codexSessions(map[string]bool{})
+		if !slices.ContainsFunc(rows, func(s proto.Session) bool { return s.SourceThreadID == id }) {
+			t.Fatalf("remoteTestNode missed healthy thread after %v scan delay: %+v", delay, rows)
+		}
+	})
+
+	t.Run("boundedTestNode keeps production codexHomeScanWait cutoff", func(t *testing.T) {
+		n := boundedTestNode(t)
+		const id = "f9000000-0000-4000-8000-000000000001"
+		writeThread(t, n.home, id, n.home, "stalled scan")
+		home := canonicalCodexHome(n.codexHome(), n.home)
+		cache := rolloutCacheFor(home)
+		cache.mu.Lock()
+		released := make(chan struct{})
+		var once sync.Once
+		release := func() {
+			once.Do(func() {
+				cache.mu.Unlock()
+				close(released)
+			})
+		}
+		defer release()
+
+		if rows := n.codexSessions(map[string]bool{}); len(rows) != 0 {
+			t.Fatalf("boundedTestNode did not cut off blocked scan at production budget: %+v", rows)
+		}
+		release()
+		<-released
+		waitFor(t, "released bounded home recovers", func() bool {
+			return slices.ContainsFunc(n.codexSessions(map[string]bool{}), func(s proto.Session) bool {
+				return s.SourceThreadID == id
+			})
+		})
 	})
 }

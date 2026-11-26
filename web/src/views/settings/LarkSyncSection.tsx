@@ -16,7 +16,7 @@ import { ago, clock } from "../../lib/format";
 import {
   addSyncScopes, approvalOf, authorizeSyncBot, bindingsOf, bindingTitle, botTitle, createSyncBot, healthOf, leaveFor,
   needsAuthorize, oauthRedirectURI, orderedBots, pollSyncAuthorize, reauthSoon, registerSyncBot, rememberReturn,
-  removeSyncBinding, removeSyncBot, runSyncBinding, setSyncSchedule, syncView, tierText, TIER_DOCS, TIER_FULL, TIERS,
+  removeSyncBinding, removeSyncBot, runSyncBinding, setSyncIMPoll, setSyncSchedule, syncView, tierText, TIER_DOCS, TIER_FULL, TIERS,
   updateSyncBinding, type LarkSyncAuthorize, type LarkSyncBinding, type LarkSyncBot, type LarkSyncView,
 } from "../../lib/lark-sync";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
@@ -198,6 +198,16 @@ export function LarkSyncSection({ appID }: { appID?: string }) {
             ))}
           </select>
         </Row>
+        {typeof view.im_poll === "boolean" && (
+          <Row label={t("settings-larksync.im_poll_label")} hint={t("settings-larksync.im_poll_hint")} wrapHint>
+            <Switch
+              on={view.im_poll}
+              disabled={busy === "im_poll"}
+              label={t("settings-larksync.im_poll_label")}
+              onChange={(on) => void change(t("settings-larksync.save_failed"), "im_poll", () => setSyncIMPoll(on))}
+            />
+          </Row>
+        )}
         {!flow && (
           <div className="px-4 py-2.5">
             <Button tone="secondary" icon="plus" onClick={() => setFlow({ phase: "choose" })}>
@@ -347,7 +357,7 @@ function BindingRow({ view, b, botTier, busy, upgrading, anyBusy, confirming, se
       <Row label={name} hint={statusLine(b)} wrapHint stackOnNarrow>
         {withoutChat && <Pill tone="orange">{t("settings-larksync.no_chat_badge")}</Pill>}
         <Pill tone={state.tone}>{state.text}</Pill>
-        <Switch on={b.enabled} disabled={busy || authorize} label={t("settings-larksync.enabled_label", { name })} onChange={onToggle} />
+        <Switch on={b.enabled} disabled={busy || (authorize && b.health !== "scope_missing")} label={t("settings-larksync.enabled_label", { name })} onChange={onToggle} />
       </Row>
       {b.error && !b.running && <SettingsHint caution>{b.error}</SettingsHint>}
       {soon !== null && <SettingsHint caution>{t("settings-larksync.reauth_soon", { count: soon })}</SettingsHint>}

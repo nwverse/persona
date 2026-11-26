@@ -668,7 +668,7 @@ func (s *Service) sendReports() {
 	}
 	// A notifications companion takes the report (feishu_companions.go); the decisions' own cards, which answer for
 	// the owner, still go to the chat below.
-	if s.divertNotices(ctx, "report", cards, fallbacks) {
+	if s.divertNotices(ctx, assistantwire.NoticeReport(), cards, fallbacks) {
 		s.postReportAsks(append(asks, keep...))
 		return
 	}

@@ -49,28 +49,36 @@ struct RecordingsSection: View {
             if e.isDay { return RecordingStatusText.dayStillHere(days.cell(e.id).summary) }
             return RecordingStatusText.stillHere(e, sync: sync)
         }
+        // The hub's recording module (#15214): off, nothing here starts or renames a recording; what is listed stays.
+        let recording = RecordingModule.allowance
         #if os(iOS)
         // Today's calendar meetings, each a tap from starting (#8731 v2), above the quick start.
-        if capture.state == .idle { MeetingUpcomingSection(form: form ?? ownForm) }
+        if capture.state == .idle, recording.offersWrites { MeetingUpcomingSection(form: form ?? ownForm) }
         #endif
         Section {
             #if os(iOS)
-            RecordingCaptureControls(part: startAtBottom ? .options : .inline, sharedForm: form ?? ownForm)
+            RecordingCaptureControls(part: startAtBottom ? .options : .inline, sharedForm: form ?? ownForm, recording: recording)
             #else
             RecordingCaptureControls()
             #endif
         } header: {
             #if os(iOS)
-            if capture.state == .idle, !(form ?? ownForm).upcoming.isEmpty { Text("Quick Start") }
+            if capture.state == .idle, recording.offersWrites, !(form ?? ownForm).upcoming.isEmpty { Text("Quick Start") }
             #endif
         } footer: {
             // Read once, before a recording: not under the controls of one that runs.
             if capture.state == .idle {
                 #if os(iOS)
-                Text(startPrivacy)
-                    .accessibilityIdentifier("recording-start-privacy")
+                if recording.offersWrites {
+                    Text(startPrivacy)
+                        .accessibilityIdentifier("recording-start-privacy")
+                } else {
+                    // In the start's place: why there is none, and that nothing already here went with it.
+                    Text("Meeting recording is off on this hub. The recordings you already have stay here to read or delete.")
+                        .accessibilityIdentifier("recording-module-off")
+                }
                 #else
-                Text("Audio stays on this device. Its text syncs to Knowledge and is kept for \(sync.store.days) days.")
+                Text("Audio stays on this device. Its text syncs to Knowledge and is \(RecordingRetentionText.kept(sync.textRetentionDays)).")
                 #endif
             }
         }
@@ -102,7 +110,7 @@ struct RecordingsSection: View {
         // exists. Without either, the page is as it always was.
         let dayOffered = RecordingDayDefaults.offered(model.hubFeatures)
         if today != nil || days.watchAppInstalled {
-            RecordingDayTodaySection(dayID: today, offered: dayOffered)
+            RecordingDayTodaySection(dayID: today, offered: dayOffered, recording: recording)
         }
         #endif
         Section {
@@ -115,10 +123,7 @@ struct RecordingsSection: View {
                     NavigationLink { RecordingOpen(id: entry.id) } label: { RecordingRow(entry: entry) }
                         .accessibilityIdentifier("recording-row")
                         // Rename (#8873): a touch and hold, and VoiceOver's actions (a menu is no control of its own).
-                        .contextMenu {
-                            Button { renaming = entry.id } label: { Label("Rename", systemImage: Theme.Icon.edit) }
-                        }
-                        .accessibilityAction(named: Text("Rename")) { renaming = entry.id }
+                        .recordingRenameActions(offered: recording.offersWrites) { renaming = entry.id }
                         // Only the swiped row's dialog shows, so its popover points at that row.
                         .accessibleConfirmationDialog("Delete This Recording?", isPresented: Binding(get: { pendingDelete == entry.id }, set: { if !$0, pendingDelete == entry.id { pendingDelete = nil } }),
                                             titleVisibility: .visible) {
@@ -204,7 +209,8 @@ extension RecordingsSection {
         let mode = meeting && MeetingAttendees.conversation(model)
             ? MeetingAttendees.startTranscription(model, picked: MeetingAttendees.offersHub(model) ? form.pickedTranscription : nil) : nil
         let talk = meeting && MeetingCallRule.talkSendsAudio(conversation: MeetingAttendees.conversation(model), role: role, voice: voice)
-        return MeetingTranscriptionWords.startPrivacy(mode, service: transcriptionService, talk: talk, days: sync.store.days)
+        return MeetingTranscriptionWords.startPrivacy(mode, service: transcriptionService, talk: talk,
+                                                       textDays: sync.textRetentionDays)
     }
 }
 
@@ -365,6 +371,9 @@ struct RecordingCaptureControls: View {
     var part: Part = .inline
     /// The choices shared with the other part; nil: this view's own.
     var sharedForm: RecordingStartForm?
+    /// The hub's recording module (#15214), handed down by the page: off, nothing here starts a recording. One that
+    /// already runs keeps its card, which opens it (and its Stop).
+    var recording = RecordingAllowance.on
     @State private var ownForm = RecordingStartForm()
     private var form: RecordingStartForm { sharedForm ?? ownForm }
     #endif
@@ -414,7 +423,7 @@ struct RecordingCaptureControls: View {
             if capture.state == .recording || capture.state == .paused {
                 // A card as in the list it came from: in the bar it has no row behind it.
                 nowRecording.card(padding: Theme.Space.m)
-            } else {
+            } else if recording.offersWrites {
                 hero(busy: preparing != .idle)
             }
         }
@@ -440,7 +449,7 @@ struct RecordingCaptureControls: View {
         #if os(iOS)
         if capture.state == .recording || capture.state == .paused {
             if part == .inline { nowRecording }
-        } else {
+        } else if recording.offersWrites {
             idleControls
         }
         banners
@@ -808,12 +817,7 @@ struct RecordingsPage: View {
         // recording stay at the top of the list.
         List { RecordingsSection(form: form, startAtBottom: true) }
             .listStyle(.insetGrouped)
-            .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
-                RecordingCaptureControls(part: .bar, sharedForm: form)
-                    .padding(.horizontal, Theme.Space.page)
-                    .padding(.vertical, Theme.Space.s)
-                    .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
-            }
+            .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) { RecordingsStartBar(form: form) }
         #else
         List { RecordingsSection() }
             .listStyle(.insetGrouped)
@@ -897,6 +901,51 @@ struct RecordingsPage: View {
                 #endif
             }
             #endif
+    }
+}
+
+#if os(iOS)
+/// The Meetings page's bottom bar: Start Meeting, or the running recording's card. A view of its own: it reads the hub's
+/// recording module (#15214) and whether something records, so neither redraws the page (P5). With the module off and
+/// nothing recording there is no bar at all, rather than an empty one.
+private struct RecordingsStartBar: View {
+    var form: RecordingStartForm
+    @State private var capture = RecordingCapture.shared
+
+    var body: some View {
+        let recording = RecordingModule.allowance
+        if recording.offersWrites || capture.state == .recording || capture.state == .paused {
+            RecordingCaptureControls(part: .bar, sharedForm: form, recording: recording)
+                .padding(.horizontal, Theme.Space.page)
+                .padding(.vertical, Theme.Space.s)
+                .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
+        }
+    }
+}
+#endif
+
+/// Rename on a recording's row (#8873): a touch and hold, and VoiceOver's action. Not offered while the hub's recording
+/// module is off (#15214): the row then has neither.
+private struct RecordingRenameActions: ViewModifier {
+    var offered: Bool
+    var rename: () -> Void
+
+    func body(content: Content) -> some View {
+        if offered {
+            content
+                .contextMenu {
+                    Button(action: rename) { Label("Rename", systemImage: Theme.Icon.edit) }
+                }
+                .accessibilityAction(named: Text("Rename"), rename)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func recordingRenameActions(offered: Bool, rename: @escaping () -> Void) -> some View {
+        modifier(RecordingRenameActions(offered: offered, rename: rename))
     }
 }
 
@@ -1062,7 +1111,7 @@ struct RecordingDetailView: View {
             }
             if !entry.active {
                 Section {
-                    if !entry.isDay {
+                    if !entry.isDay, minutes.offersWrites {
                         Button("Rename") { renaming = id }.lineLimit(1)
                             .accessibilityIdentifier("recording-rename")
                     }
@@ -1092,7 +1141,8 @@ struct RecordingDetailView: View {
                 // A meeting whose audio went through the hub (#3862 phase 5) says so, before its `detail.meta` too.
                 if entry.attendance?.transcription != nil {
                     RecordingRetentionFooter(id: id, attendance: entry.attendance, meta: minutes.transcription,
-                                             days: sync.store.days, device: retentionFooter(entry))
+                                             audioDays: sync.audioRetentionDays, textDays: sync.textRetentionDays,
+                                             device: retentionFooter(entry))
                 } else {
                     Text(retentionFooter(entry))
                 }
@@ -1123,7 +1173,7 @@ struct RecordingDetailView: View {
         if entry.isRolling {
             return String(localized: "Rolling keeps the last \(Int(RecordingRolling.keepHours)) hours. Pull a range to transcribe it; text syncs into Knowledge. Audio stays on this device.")
         }
-        return String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. After the retention period (\(sync.store.days) days) it's cleared from this device and Knowledge.")
+        return String(localized: "Only the text and timestamps go into Knowledge; the original audio isn't uploaded. Audio on this device is \(RecordingRetentionText.kept(sync.audioRetentionDays)). Its text in Knowledge is \(RecordingRetentionText.kept(sync.textRetentionDays)).")
     }
 
     /// The transcript, a line a row with its time; a line a time in the minutes jumped to is lit.
@@ -1208,7 +1258,8 @@ struct RecordingDetailView: View {
         let showsPrivate = entry.isMeeting && !notMeeting
         let showsThread = !fromMeetingPage && MeetingTalk.offered(entry, conversation: offered, minutes: minutes.ready != nil, meeting: meeting,
                                               text: hasText, expired: sync.isExpired(entry))
-        if offered, showsPrivate || showsThread {
+        // Neither with the hub's recording module off (#15214): the private mark and a question both write through it.
+        if offered, minutes.offersWrites, showsPrivate || showsThread {
             Section {
                 if showsPrivate {
                     Toggle(isOn: Binding(get: { pendingPrivate ?? MeetingPage.isPrivate(entry, meeting) }, set: { setPrivate($0) })) {
@@ -1241,7 +1292,9 @@ struct RecordingDetailView: View {
 
     /// Reads the meeting's private mark and room while the page shows a meeting (`GET …/live`, then `meeting_live`).
     private func watchMeeting() {
-        guard !watching, library.entry(id)?.isMeeting == true, MeetingAttendees.conversation(model) else { return }
+        // Not with the hub's recording module off (#15214): `…/live` is gone with it.
+        guard !watching, library.entry(id)?.isMeeting == true, MeetingAttendees.conversation(model),
+              RecordingModule.allowance.offersWrites else { return }
         watching = true
         conversation.watch(id, by: owner)
     }

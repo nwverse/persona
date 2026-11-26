@@ -37,8 +37,23 @@ func ReadLists(dir string) (Lists, error) {
 		text[name] = string(b)
 	}
 	l = ParseLists(text[contractsFile], text[undeclaredFile], text[edgesFile], text[baselineFile])
-	// archguard/testdata is four directories below the repository root.
-	b, err := os.ReadFile(filepath.Join(dir, "..", "..", "..", "..", filepath.FromSlash(wireBaselineFile)))
+	// Find the baseline next to this testdata's module, not relative to the package under test.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return l, err
+	}
+	var baselinePath string
+	for candidate := dir; ; candidate = filepath.Dir(candidate) {
+		path := filepath.Join(candidate, filepath.FromSlash(wireBaselineFile))
+		if _, statErr := os.Stat(path); statErr == nil {
+			baselinePath = path
+			break
+		}
+		if parent := filepath.Dir(candidate); parent == candidate {
+			return l, &os.PathError{Op: "open", Path: wireBaselineFile, Err: os.ErrNotExist}
+		}
+	}
+	b, err := os.ReadFile(baselinePath)
 	if err != nil {
 		return l, err
 	}
@@ -180,6 +195,10 @@ var legacyCores = map[string]bool{
 	"internal/sessionhistory":          true,
 	"internal/tokenuse":                true,
 }
+
+// LegacyCore says whether the package at rel (under the server's root) is a core that predates the rules, which the
+// baseline holds: the type-aware rules hold every other core in full.
+func LegacyCore(rel string) bool { return legacyCores[rel] }
 
 // legacyCoreList is legacyCores sorted, for messages.
 func legacyCoreList() []string {

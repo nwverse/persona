@@ -10,7 +10,7 @@
   "auth_denied": "Larkで認可が拒否されました",
   "register_hint": "Larkでページを開いて確認してください。Personaが、あなたのチャットとドキュメントをナレッジベースに読み込むアプリを作成します。別のデバイスでは、Larkでコードをスキャンすることもできます。",
   "device_hint": "Larkでページを開き（またはLarkでコードをスキャンし）、Personaがあなたとして読み取ることを許可してください",
-  "device_open": "Larkで開く",
+  "device_open_link": "Larkで開く",
   "reauth_title": "Larkの同期にもう一度許可が必要です",
   "reauth_body_one": "毎日の同期を続けるには、{count}日以内に{label}をもう一度認可してください",
   "reauth_body_other": "毎日の同期を続けるには、{count}日以内に{label}をもう一度認可してください",
