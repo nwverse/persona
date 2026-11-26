@@ -38,7 +38,7 @@ import (
 // Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
 // Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
 // Runtime package lifecycle support for preserving tools across upgrades (#16016) adds 4,368 B (270,629 B).
-// Later Antigravity runtime changes on main (#16052) bring the total to 270,873 B.
+// ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
 // Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
 // its matching visible step (#14297) add 331 B (271,204 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
