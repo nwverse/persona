@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/modapi"
 )
 
@@ -82,4 +83,15 @@ func TestModuleRoutesServeTheLayer(t *testing.T) {
 	if code := call(routeCompanions, string(bad), ""); code != http.StatusBadRequest {
 		t.Errorf("unknown kind: %d, want 400", code)
 	}
+}
+
+func TestDivertNoticesRaisesDefectForUnknownNoticeKind(t *testing.T) {
+	s := newTestService(t, newFakeHub())
+	defer func() {
+		r := recover()
+		if err, ok := r.(error); !ok || err.Error() != `assistantwire.NoticeKind: unknown notice kind ""` {
+			t.Errorf("DivertNotices panic = %v, want an unknown notice kind defect", r)
+		}
+	}()
+	s.layer.DivertNotices(t.Context(), assistantwire.NoticeKind{}, nil, nil)
 }

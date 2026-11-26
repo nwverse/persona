@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { brotliCompressSync, brotliDecompressSync, constants, gzipSync } from "node:zlib";
 import { LANG_MATCHES, LANGS, preferredLanguage } from "./i18n";
+import { rememberHubModules } from "./core/module-hub-storage";
 import {
   brotliCopies, BROTLI_MIN_SIZE, EXPORT_NAME_PLACEHOLDER, FIRST_SCREEN_LOW_ROOM, firstScreenBytes, firstScreenOverBudget, firstScreenRoom, gzipBytes,
   HASH_PLACEHOLDER, idleImports, localeDirs, nameHashes, placeholderExportNames, placeholderHashes, preloadScript, standalonePages, startupGaps,
@@ -85,6 +86,46 @@ describe("startup preload script", () => {
       expect(run()).toEqual([files.catalogs[preferredLanguage()], ...files.shared, ...files.standalone.screen.files]);
       localStorage.setItem("persona.modules.off", "not json");
       expect(run()).toEqual([files.catalogs[preferredLanguage()], ...files.shared, ...files.standalone.screen.files]);
+    } finally {
+      window.history.pushState(null, "", "/");
+    }
+  });
+
+  it("follows the hub's remembered module flags before a fresh hello", () => {
+    const key = `persona.modules.hub:${location.origin}`;
+    const app = [files.catalogs[preferredLanguage()], ...files.shared, ...files.app];
+    const screen = [files.catalogs[preferredLanguage()], ...files.shared, ...files.standalone.screen.files];
+    window.history.pushState(null, "", "/screen/mac");
+    try {
+      localStorage.setItem(key, JSON.stringify([]));
+      expect(run()).toEqual(app);
+      localStorage.setItem(key, JSON.stringify(["module.screen-share"]));
+      expect(run()).toEqual(screen);
+      localStorage.removeItem(key);
+      expect(run()).toEqual(screen);
+      localStorage.setItem(key, JSON.stringify(["modules"]));
+      expect(run()).toEqual(screen);
+      localStorage.setItem(key, "not json");
+      expect(run()).toEqual(screen);
+      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("Storage access denied", "SecurityError"); });
+      expect(run()).toEqual(screen);
+    } finally {
+      window.history.pushState(null, "", "/");
+    }
+  });
+
+  it("keeps remembered hub flags separate by origin and reverse-proxy base", () => {
+    const app = [files.catalogs[preferredLanguage()], ...files.shared, ...files.app];
+    const screen = [files.catalogs[preferredLanguage()], ...files.shared, ...files.standalone.screen.files];
+    window.history.pushState(null, "", "/persona/screen/mac");
+    try {
+      rememberHubModules(["modules"], location.origin, "/persona");
+      expect(localStorage.getItem(`persona.modules.hub:${location.origin}/persona`)).toBe("[]");
+      expect(run("/persona/")).toEqual(app);
+      rememberHubModules(["modules", "module.screen-share"], location.origin, "/persona");
+      expect(run("/persona/")).toEqual(screen);
+      rememberHubModules(["modules"], location.origin, "/other");
+      expect(run("/persona/")).toEqual(screen);
     } finally {
       window.history.pushState(null, "", "/");
     }
@@ -371,6 +412,13 @@ describe("idle tier", () => {
     const host = readFileSync(join(__dirname, "views/CloseAgentHost.tsx"), "utf8");
     expect(host).toContain('lazyDialog(() => import("./chat/CloseAgentDialog").then((m) => m.CloseAgentDialog))');
     expect(idleImports(host)).toEqual([]);
+  });
+
+  it("loads AssistantCardBody and LiveCardBody only when a card mounts, outside the idle tier", () => {
+    const card = readFileSync(join(__dirname, "ui/AssistantCard.tsx"), "utf8");
+    expect(card).toContain('lazyPage(() => import("./AssistantCardBody").then((m) => m.AssistantCardBody))');
+    expect(card).toContain('lazyPage(() => import("./AssistantCardBody").then((m) => m.LiveCardBody))');
+    expect(idleImports(card)).toEqual([]);
   });
 
   it("counts each file gzipped at the best level, or as it is under 1 KB", async () => {

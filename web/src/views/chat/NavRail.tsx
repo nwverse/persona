@@ -1,12 +1,17 @@
 // The chat's left-gutter user-input navigator. Only this small component updates while scrolling.
 // cached content offsets are rebuilt on transcript/layout changes, never once per tick on a scroll frame.
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { activeNavRailOffset, navRailMark, NAV_RAIL_MIN_HEIGHT, planNavRailTicks, type NavRailTick } from "../../lib/nav-rail";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { activeNavRailOffset, navRailMark, NAV_RAIL_MIN_HEIGHT, planNavRailTicks, withInputPreview, type NavRailTick } from "../../lib/nav-rail";
+import type { UserInputPosition } from "../../lib/user-input-index";
 import { useFinePointer } from "../../lib/viewport";
 import { NAV_RAIL_METRICS as M } from "../../ui/nav-rail-metrics";
 import { cx } from "../../ui/atoms";
 import { t } from "../../i18n";
 import type { QuestionMark, QuestionState } from "../../lib/question-states";
+import "./nav-rail.css";
+
+interface PreviewSelection { id: string; origin: "pointer" | "keyboard" | "drag" }
+interface RailDrag { pointer: number; ticks: NavRailTick[]; pitch: number; top: number; height: number; y: number }
 
 /** A question's state as its tick draws it (#13021): read keeps the plain rail's colors. */
 const STATE_TICK: Record<QuestionState, string> = {
@@ -79,11 +84,13 @@ function isTailOnlyMutation(
   return true;
 }
 
-export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
+export function NavRail({ ticks, total, scroller, onJump, onPreview, previewAt, reset, marks }: {
   ticks: NavRailTick[];
   total?: number;
   scroller: HTMLDivElement | null;
   onJump: (id: string) => void | Promise<void>;
+  onPreview?: (index: number) => void;
+  previewAt?: (index: number) => { excerpt?: UserInputPosition; loading: boolean } | undefined;
   reset: string;
   /** Each question's state by line id in Persona chats. A follow-up's tick is shorter. These marks also allow touch
    *  navigation when the gutter fits the rail. */
@@ -93,22 +100,23 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
   /** A touch screen's rail: only with question states (the plain rail stays off without a precise pointer). */
   const touch = !finePointer && Boolean(marks);
   const enabled = finePointer || touch;
-  const markOf = (tick: NavRailTick | undefined) => (tick ? marks?.get(tick.lineId ?? tick.id) : undefined);
-  const [height, setHeight] = useState(0);
+  const markOf = (tick: NavRailTick | undefined) => (tick ? marks?.get(tick.lineId ?? tick.retainedLineId ?? tick.id) : undefined);
+  const [layout, setLayout] = useState<{ height: number; width: number; compact: boolean } | null>(null);
+  const [trackTop, setTrackTop] = useState(0);
   const [active, setActive] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [windowCenter, setWindowCenter] = useState<string | null>(null);
-  const [announcement, setAnnouncement] = useState("");
+  const [preview, setPreview] = useState<PreviewSelection | null>(null);
   const card = useRef<HTMLDivElement>(null);
+  const track = useRef<HTMLDivElement>(null);
   const frame = useRef(0);
+  const dragFrame = useRef(0);
   const jumpRun = useRef(0);
   const hovered = useRef(false);
-  const focused = useRef(false);
-  const drag = useRef<{ pointer: number; ids: string[]; pitch: number; top: number } | null>(null);
-  const selected = useRef<string | null>(null);
-  const previewOrigin = useRef<"pointer" | "keyboard" | "drag" | null>(null);
+  const wheelUntil = useRef(0);
+  const drag = useRef<RailDrag | null>(null);
+  const selected = useRef<PreviewSelection | null>(null);
   const suppressClick = useRef(false);
+  const keepActiveVisible = useRef<(index: number | null) => void>(() => {});
   const list = useRef(ticks);
   list.current = ticks;
   const anchorList = useRef<NavRailTick[]>([]);
@@ -124,14 +132,15 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
   const previewId = useId();
 
   const resetInteraction = useCallback(() => {
-    hovered.current = focused.current = false;
+    hovered.current = false;
+    wheelUntil.current = 0;
     drag.current = null;
+    cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = 0;
     selected.current = null;
-    previewOrigin.current = null;
     suppressClick.current = false;
     setPreview(null);
-    setWindowCenter(null);
-    setAnnouncement("");
+    setTrackTop(0);
   }, []);
 
   const measure = useCallback(() => {
@@ -161,17 +170,20 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
       const content = lineParent(scroller);
       const availableHeight = scroller.clientHeight - M.padding * 2;
       // The centered column's outer margin is the available gutter. clientWidth excludes the right scrollbar.
-      const gutter = (scroller.clientWidth - content.clientWidth) / 2;
-      if (gutter < M.edgeGap + M.width + M.contentGap || availableHeight < NAV_RAIL_MIN_HEIGHT) {
+      const width = scroller.clientWidth;
+      const gutter = (width - content.clientWidth) / 2;
+      const wide = gutter >= M.edgeGap + M.width + M.contentGap;
+      const compact = !wide && width >= M.compactMinWidth && width <= M.compactMaxWidth && list.current.length >= M.compactMinTicks;
+      if ((!wide && !compact) || availableHeight < NAV_RAIL_MIN_HEIGHT) {
         offsets.current = [];
         lastTick.current = null;
         trackedIds.current = EMPTY_TRACKED;
-        setHeight(0);
+        setLayout(null);
         setActive(null);
         resetInteraction();
         return;
       }
-      setHeight(availableHeight);
+      setLayout((old) => old?.height === availableHeight && old.width === width && old.compact === compact ? old : { height: availableHeight, width, compact });
       const rows = new Map<string, { line: HTMLElement; row: HTMLElement }>();
       for (const el of content.children) {
         const child = el.firstElementChild;
@@ -196,6 +208,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
     }
     const index = activeNavRailOffset(offsets.current, scroller.scrollTop + M.activeOffset);
     setActive(index === null ? null : list.current[index]?.id ?? null);
+    keepActiveVisible.current(index);
   }, [scroller, enabled, resetInteraction]);
 
   const schedule = useCallback(() => {
@@ -299,7 +312,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
     jumpRun.current++;
     setActive(null);
     setPending(null);
-    setHeight(0);
+    setLayout(null);
     lastTick.current = null;
     trackedIds.current = EMPTY_TRACKED;
     checkResize.current = false;
@@ -313,62 +326,134 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
     jumpRun.current++;
     if (frame.current) cancelAnimationFrame(frame.current);
     frame.current = 0;
+    cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = 0;
   }, []);
 
-  const indexOf = (id: string | null) => id === null ? -1 : ticks.findIndex((tick) => tick.id === id);
-  const marked = pending ?? active;
-  const center = indexOf(windowCenter ?? marked);
-  const plan = planNavRailTicks(ticks.length, height, center < 0 ? ticks.length - 1 : center);
-  const shown = ticks.slice(plan.start, plan.start + plan.count);
-  const previewIndex = indexOf(preview);
-  const previewTick = previewIndex >= plan.start && previewIndex < plan.start + plan.count ? ticks[previewIndex] : undefined;
-  const currentIndex = indexOf(marked);
-  const focusedMark = preview ?? pending;
-  const focusedIndex = previewIndex >= 0 ? previewIndex : indexOf(pending);
+  const positions = useMemo(() => new Map(ticks.map((tick, i) => [tick.id, i])), [ticks]);
+  const display = drag.current?.ticks ?? ticks;
+  const displayPositions = useMemo(() => display === ticks ? positions : new Map(display.map((tick, i) => [tick.id, i])), [display, ticks, positions]);
+  const indexOf = (id: string | null | undefined) => id ? displayPositions.get(id) ?? -1 : -1;
+  const height = layout?.height ?? 0;
+  const plan = planNavRailTicks(display.length, height, trackTop);
+  const overflow = plan.content > plan.viewport;
+  const shown = display.slice(plan.start, plan.start + plan.count);
+  const railHeight = height + M.padding * 2;
+  const trackY = (railHeight - plan.viewport) / 2;
+  const edge = layout?.compact ? M.compactEdge : M.edgeGap;
+  const previewWidth = Math.min(M.previewWidth + M.previewGap, (layout?.width ?? 0) - edge - M.width - M.previewGap);
+  const previewIndex = indexOf(preview?.id);
+  const previewY = (previewIndex + 0.5) * plan.pitch - trackTop;
+  const previewBase = previewIndex >= 0 && previewY >= 0 && previewY <= plan.viewport ? display[previewIndex] : undefined;
+  const requestAt = previewBase ? positions.get(previewBase.id) ?? -1 : -1;
+  const previewRead = previewAt?.(requestAt);
+  const previewTick = previewBase && withInputPreview(previewBase, previewRead?.excerpt);
+  const currentIndex = indexOf(pending ?? active);
+  const focusedIndex = previewBase ? previewIndex : indexOf(pending);
   const focusTarget = previewTick?.id ?? (shown.some((tick) => tick.id === active) ? active : shown.at(-1)?.id);
   const previewMark = markOf(previewTick);
   const previewTitle = previewTick && labelOf(previewTick);
-  const railHeight = height + M.padding * 2;
-  const ticksTop = (railHeight - plan.count * plan.pitch) / 2;
+  const previewAnswer = previewTick?.answerExcerpt ?? "";
+  const announcement = preview?.origin === "keyboard" && previewTick ? t("chat-navrail.selection", {
+    index: previewTick.ordinal ?? previewIndex + 1, count: total ?? ticks.length,
+    preview: previewTitle || previewAnswer, answer: previewTitle ? previewAnswer : "",
+  }) : "";
+
+  const scrollTrack = (top: number) => {
+    const el = track.current;
+    if (!el) return;
+    const next = Math.max(0, Math.min(plan.content - plan.viewport, top));
+    if (el.scrollTop !== next) el.scrollTop = next;
+    setTrackTop(el.scrollTop);
+  };
+  const reveal = (index: number) => {
+    const el = track.current;
+    if (!el || !overflow || index < 0) return;
+    const top = index * plan.pitch;
+    const bottom = top + plan.pitch;
+    if (top < el.scrollTop) scrollTrack(top);
+    else if (bottom > el.scrollTop + plan.viewport) scrollTrack(bottom - plan.viewport);
+  };
+  keepActiveVisible.current = (index) => {
+    if (!hovered.current && !drag.current && selected.current?.origin !== "keyboard" && performance.now() >= wheelUntil.current) {
+      reveal(index ?? display.length - 1);
+    }
+  };
+  const revealSelection = useRef(reveal);
+  revealSelection.current = reveal;
+  const activeAt = displayPositions.get(active ?? "") ?? null;
+  useLayoutEffect(() => { keepActiveVisible.current(activeAt); }, [activeAt, plan.viewport, plan.pitch, display.length]);
+  useLayoutEffect(() => {
+    if (preview?.origin === "keyboard") revealSelection.current(previewIndex);
+  }, [preview, previewIndex, plan.viewport, plan.pitch]);
+
+  const compact = layout?.compact;
+  useLayoutEffect(() => {
+    if (!compact || !scroller) return;
+    scroller.setAttribute("data-nav-compact", "");
+    scroller.style.setProperty("--nav-compact-inset", `${M.compactEdge + M.width + M.previewGap}px`);
+    return () => {
+      scroller.removeAttribute("data-nav-compact");
+      scroller.style.removeProperty("--nav-compact-inset");
+    };
+  }, [compact, scroller]);
+
+  const requestPreview = useRef(onPreview);
+  requestPreview.current = onPreview;
+  useEffect(() => {
+    if (previewBase?.loadPreview && requestAt >= 0) requestPreview.current?.(requestAt);
+  }, [previewBase?.id, previewBase?.loadPreview, requestAt]);
 
   useLayoutEffect(() => {
     if (!card.current || !previewTick) return;
-    const y = ticksTop + (previewIndex - plan.start + 0.5) * plan.pitch;
     const cardHeight = card.current.offsetHeight;
-    card.current.style.top = `${Math.max(0, Math.min(y - cardHeight / 2, railHeight - cardHeight))}px`;
-  }, [previewTick, previewIndex, previewMark, railHeight, ticksTop, plan.start, plan.pitch]);
+    card.current.style.top = `${Math.max(0, Math.min(trackY + previewY - cardHeight / 2, railHeight - cardHeight))}px`;
+  }, [previewTick, previewRead?.loading, previewMark, railHeight, trackY, previewY]);
 
   const dismissPreview = () => {
-    previewOrigin.current = null;
     selected.current = null;
     setPreview(null);
   };
-  const pick = (id: string, origin: "pointer" | "keyboard" | "drag" = "pointer") => {
-    previewOrigin.current = origin;
-    selected.current = id;
-    setPreview(id);
+  const pick = (id: string, origin: PreviewSelection["origin"] = "pointer") => {
+    if (selected.current?.id === id && selected.current.origin === origin) return;
+    selected.current = { id, origin };
+    setPreview(selected.current);
   };
   const jump = async (id: string) => {
-    if (!list.current.some((tick) => tick.id === id)) return;
+    if (!positions.has(id)) return;
     const run = ++jumpRun.current;
     setPending(id);
-    const result = onJump(id);
-    if (!result) {
-      setPending(null);
-      return;
-    }
     try {
-      await result;
+      const result = onJump(id);
+      if (result) await result;
     } finally {
       if (run === jumpRun.current) setPending(null);
     }
   };
-  const pickY = (y: number) => {
-    const bounds = drag.current;
-    if (!bounds?.ids.length) return;
-    const i = Math.max(0, Math.min(bounds.ids.length - 1, Math.floor((y - bounds.top) / bounds.pitch)));
-    const id = bounds.ids[i];
-    if (list.current.some((tick) => tick.id === id)) pick(id, "drag");
+  const pickInDrag = (scrub: RailDrag, el: HTMLElement) => {
+    const y = Math.max(0, Math.min(scrub.height - 1, scrub.y - scrub.top));
+    const i = Math.min(scrub.ticks.length - 1, Math.floor((y + el.scrollTop) / scrub.pitch));
+    const tick = scrub.ticks[i];
+    if (tick) pick(tick.id, "drag");
+  };
+  const glideDrag = () => {
+    dragFrame.current = 0;
+    const scrub = drag.current;
+    const el = track.current;
+    if (!scrub || !el) return;
+    const direction = scrub.y < scrub.top ? -1 : scrub.y >= scrub.top + scrub.height ? 1 : 0;
+    if (!direction) return;
+    const top = el.scrollTop;
+    scrollTrack(top + direction * scrub.pitch);
+    pickInDrag(scrub, el);
+    if (el.scrollTop !== top) dragFrame.current = requestAnimationFrame(glideDrag);
+  };
+  const stopDrag = () => {
+    const scrub = drag.current;
+    drag.current = null;
+    cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = 0;
+    if (scrub && track.current?.hasPointerCapture?.(scrub.pointer)) track.current.releasePointerCapture(scrub.pointer);
   };
 
   if (!enabled || !shown.length) return null;
@@ -383,108 +468,48 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
       data-nav-source={total === undefined ? "loaded" : "server"}
       tabIndex={0}
       data-nav-touch={touch || undefined}
+      data-nav-compact={compact || undefined}
       className="group/nav pointer-events-none absolute inset-y-0 z-10 flex flex-col justify-center focus-visible:outline-none"
-      style={{ left: M.edgeGap, width: M.width, touchAction: touch ? "none" : undefined }}
-      onMouseEnter={() => {
-        if (touch) return;
-        hovered.current = true;
-        if (!drag.current) setWindowCenter(preview ?? active);
-      }}
+      style={{ left: edge, width: M.width }}
+      onMouseEnter={() => { if (!touch) hovered.current = true; }}
       onMouseLeave={() => {
-        if (touch) return;
         hovered.current = false;
-        if (!drag.current) {
-          if (previewOrigin.current === "pointer") dismissPreview();
-          if (!focused.current) setWindowCenter(null);
-        }
+        if (!drag.current && selected.current?.origin === "pointer") dismissPreview();
       }}
-      onFocus={() => {
-        focused.current = true;
-        if (preview !== null || drag.current) return;
-        const id = active ?? shown[shown.length - 1].id;
-        pick(id, "keyboard");
-        setWindowCenter(id);
+      onFocus={(e) => {
+        if (selected.current || drag.current) return;
+        const button = (e.target as HTMLElement).closest<HTMLElement>("[data-tick]");
+        const id = (button && display[Number(button.dataset.tick)]?.id) || active || display.at(-1)?.id;
+        if (id) pick(id, "keyboard");
       }}
       onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-          focused.current = false;
-          if (!drag.current) {
-            if (hovered.current) previewOrigin.current = "pointer";
-            else {
-              dismissPreview();
-              setWindowCenter(null);
-            }
-          }
-        }
+        if (drag.current || e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        if (hovered.current && selected.current) pick(selected.current.id, "pointer");
+        else dismissPreview();
       }}
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
-        const old = indexOf(preview ?? active);
-        let next: number | null = null;
+        const old = indexOf(preview?.id ?? active);
+        let next: number | undefined;
         if (e.key === "ArrowDown" || e.key === "ArrowRight") next = Math.min(ticks.length - 1, Math.max(0, old + 1));
         if (e.key === "ArrowUp" || e.key === "ArrowLeft") next = Math.max(0, old - 1);
         if (e.key === "Home") next = 0;
         if (e.key === "End") next = ticks.length - 1;
-        if (next !== null) {
+        if (next !== undefined) {
           e.preventDefault();
           e.stopPropagation();
+          stopDrag();
           pick(ticks[next].id, "keyboard");
-          setWindowCenter(ticks[next].id);
-          const tick = ticks[next];
-          const m = markOf(tick);
-          const title = labelOf(tick);
-          const answer = tick.answerExcerpt ?? "";
-          const said = t("chat-navrail.selection", { index: tick.ordinal ?? next + 1, count: total ?? ticks.length, preview: title || answer, answer: title ? answer : "" });
-          setAnnouncement(m ? `${said} ${stateWord(m.state)}` : said);
         } else if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           e.stopPropagation();
-          const id = preview ?? active ?? shown[shown.length - 1].id;
-          jump(id);
+          const id = preview?.id ?? active ?? shown.at(-1)?.id;
+          if (id) void jump(id);
         } else if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
-          drag.current = null;
+          stopDrag();
           dismissPreview();
-          setWindowCenter(null);
-        }
-      }}
-      onPointerDown={(e) => {
-        if (e.button !== 0 || card.current?.contains(e.target as Node)) return;
-        e.preventDefault();
-        const rect = e.currentTarget.getBoundingClientRect();
-        drag.current = { pointer: e.pointerId, ids: shown.map((tick) => tick.id), pitch: plan.pitch, top: rect.top + ticksTop };
-        setWindowCenter(windowCenter ?? marked ?? shown[shown.length - 1].id);
-        suppressClick.current = true;
-        e.currentTarget.setPointerCapture(e.pointerId);
-        pickY(e.clientY);
-      }}
-      onPointerMove={(e) => { if (drag.current?.pointer === e.pointerId) pickY(e.clientY); }}
-      onPointerUp={(e) => {
-        if (drag.current?.pointer !== e.pointerId) return;
-        pickY(e.clientY);
-        drag.current = null;
-        e.currentTarget.releasePointerCapture(e.pointerId);
-        if (selected.current) jump(selected.current);
-        previewOrigin.current = "pointer";
-        if (!hovered.current) {
-          dismissPreview();
-          if (!focused.current) setWindowCenter(null);
-        }
-      }}
-      onPointerCancel={() => { drag.current = null; suppressClick.current = false; dismissPreview(); setWindowCenter(null); }}
-      onLostPointerCapture={() => { if (drag.current) { drag.current = null; dismissPreview(); setWindowCenter(null); } }}
-      onWheel={(e) => {
-        if (plan.hidden) {
-          if (!e.deltaY) return;
-          // Adjacent wheel windows share a tick so every position can be passed in either direction.
-          const step = Math.max(1, plan.count - 1);
-          const i = Math.max(0, Math.min(ticks.length - 1, (center < 0 ? ticks.length - 1 : center) + Math.sign(e.deltaY) * step));
-          setWindowCenter(ticks[i].id);
-          pick(ticks[i].id);
-        } else if (scroller) {
-          const unit = e.deltaMode === 1 ? M.tickPitch : e.deltaMode === 2 ? railHeight : 1;
-          scroller.scrollBy({ top: e.deltaY * unit, left: e.deltaX * unit });
         }
       }}
     >
@@ -493,50 +518,97 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
           {t("chat-navrail.loading_target")}
         </span>
       )}
-      <span className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</span>
-      {shown.map((tick, k) => {
-        const i = plan.start + k;
-        const isCurrent = tick.id === active;
-        const isPreview = tick.id === focusedMark;
-        const emphasized = isCurrent || tick.id === pending;
-        const mark = navRailMark(i, ticks.length, currentIndex < 0 ? null : currentIndex, focusedIndex < 0 ? null : focusedIndex);
-        const q = markOf(tick);
-        const label = t("chat-navrail.jump", { index: tick.ordinal ?? i + 1, preview: labelOf(tick) || tick.answerExcerpt || "" });
-        const stateTone = q && !emphasized && !isPreview ? STATE_TICK[q.state] : "";
-        return (
-          <button
-            key={tick.id}
-            type="button"
-            data-tick={i}
-            tabIndex={-1}
-            aria-label={q ? t(q.follows ? "chat-navrail.jump_follow_state" : "chat-navrail.jump_state", { label, state: stateWord(q.state) }) : label}
-            data-question-state={q?.state}
-            data-question-follow={q?.follows ? "" : undefined}
-            aria-current={isCurrent ? "true" : undefined}
-            aria-describedby={tick.id === preview ? previewId : undefined}
-            className={cx("pointer-events-auto relative flex shrink-0 items-center", tick.id === focusTarget && "rounded-control group-focus-visible/nav:outline group-focus-visible/nav:-outline-offset-1 group-focus-visible/nav:outline-accent")}
-            style={{ height: plan.pitch, paddingLeft: M.tickInset }}
-            onMouseEnter={() => { if (!touch) pick(tick.id); }}
-            onClick={() => {
-              if (suppressClick.current) { suppressClick.current = false; return; }
-              jump(tick.id);
-            }}
-          >
-            <span
-              aria-hidden
-              data-nav-mark={mark.state}
-              className={cx("shrink-0 rounded-full transition-[width,height,background-color,opacity] duration-150 motion-reduce:transition-none", stateTone || (emphasized ? "bg-ink" : isPreview ? "bg-ink-2" : "bg-ink-3"))}
-              style={{
-                // a follow-up's tick is shorter, under the question it follows
-                width: q?.follows ? mark.width * M.followWidth : mark.width,
-                height: mark.height,
-                opacity: emphasized || isPreview ? 1 : q?.state === "pending" ? mark.opacity * M.pendingOpacity : q?.state === "running" || q?.state === "unread" ? Math.max(mark.opacity, M.stateOpacity) : mark.opacity,
-              }}
-            />
-            {q?.state === "unread" && <span aria-hidden data-question-dot className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full bg-red" style={{ width: M.dotSize, height: M.dotSize }} />}
-          </button>
-        );
-      })}
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {announcement}{announcement && previewMark ? ` ${stateWord(previewMark.state)}` : ""}
+      </span>
+      <div ref={track} data-nav-track className="nav-rail-track pointer-events-auto"
+        style={{ height: plan.viewport, touchAction: touch ? "none" : undefined }}
+        onScroll={(e) => setTrackTop(e.currentTarget.scrollTop)}
+        onWheel={(e) => {
+          if (!e.deltaY && !e.deltaX) return;
+          if (overflow) {
+            wheelUntil.current = performance.now() + M.wheelHoldMs;
+            e.stopPropagation(); // the track's native wheel scroll owns this gesture
+          } else if (scroller) {
+            const unit = e.deltaMode === 1 ? M.tickPitch : e.deltaMode === 2 ? railHeight : 1;
+            scroller.scrollBy({ top: e.deltaY * unit, left: e.deltaX * unit });
+          }
+        }}
+        onPointerDown={(e) => {
+          if (e.button !== 0 || drag.current) return;
+          e.preventDefault();
+          const el = e.currentTarget;
+          drag.current = { pointer: e.pointerId, ticks, pitch: plan.pitch, top: el.getBoundingClientRect().top, height: plan.viewport, y: e.clientY };
+          suppressClick.current = true;
+          el.setPointerCapture(e.pointerId);
+          pickInDrag(drag.current, el);
+        }}
+        onPointerMove={(e) => {
+          if (drag.current?.pointer !== e.pointerId) return;
+          drag.current.y = e.clientY;
+          pickInDrag(drag.current, e.currentTarget);
+          if (!dragFrame.current && overflow) dragFrame.current = requestAnimationFrame(glideDrag);
+        }}
+        onPointerUp={(e) => {
+          if (drag.current?.pointer !== e.pointerId) return;
+          drag.current.y = e.clientY;
+          pickInDrag(drag.current, e.currentTarget);
+          const id = selected.current?.id;
+          stopDrag();
+          if (id) void jump(id);
+          if (id && hovered.current) pick(id);
+          else dismissPreview();
+        }}
+        onPointerCancel={() => { stopDrag(); suppressClick.current = false; dismissPreview(); }}
+        onLostPointerCapture={() => { if (drag.current) { stopDrag(); dismissPreview(); } }}
+      >
+        <div style={{ height: plan.content, paddingTop: plan.start * plan.pitch }}>
+          {shown.map((base, k) => {
+            const i = plan.start + k;
+            const tick = withInputPreview(base, previewAt?.(positions.get(base.id) ?? -1)?.excerpt);
+            const isCurrent = tick.id === active;
+            const isPreview = i === focusedIndex;
+            const emphasized = isCurrent || tick.id === pending;
+            const mark = navRailMark(i, display.length, currentIndex < 0 ? null : currentIndex, focusedIndex < 0 ? null : focusedIndex);
+            const q = markOf(tick);
+            const label = t("chat-navrail.jump", { index: tick.ordinal ?? i + 1, preview: labelOf(tick) || tick.answerExcerpt || "" });
+            const stateTone = q && !emphasized && !isPreview ? STATE_TICK[q.state] : "";
+            return (
+              <button
+                key={tick.id}
+                type="button"
+                data-tick={i}
+                tabIndex={-1}
+                aria-label={q ? t(q.follows ? "chat-navrail.jump_follow_state" : "chat-navrail.jump_state", { label, state: stateWord(q.state) }) : label}
+                data-question-state={q?.state}
+                data-question-follow={q?.follows ? "" : undefined}
+                aria-current={isCurrent ? "true" : undefined}
+                aria-describedby={tick.id === previewTick?.id ? previewId : undefined}
+                className={cx("relative flex w-full items-center", tick.id === focusTarget && "rounded-control group-focus-visible/nav:outline group-focus-visible/nav:-outline-offset-1 group-focus-visible/nav:outline-accent")}
+                style={{ height: plan.pitch, paddingLeft: M.tickInset }}
+                onMouseEnter={() => { if (!touch && !drag.current) pick(tick.id); }}
+                onClick={(e) => {
+                  if (suppressClick.current && e.detail > 0) { suppressClick.current = false; return; }
+                  void jump(tick.id);
+                }}
+              >
+                <span
+                  aria-hidden
+                  data-nav-mark={mark.state}
+                  className={cx("shrink-0 rounded-full transition-[width,height,background-color,opacity] duration-150 motion-reduce:transition-none", stateTone || (emphasized ? "bg-ink" : isPreview ? "bg-ink-2" : "bg-ink-3"))}
+                  style={{
+                    // a follow-up's tick is shorter, under the question it follows
+                    width: q?.follows ? mark.width * M.followWidth : mark.width,
+                    height: mark.height,
+                    opacity: emphasized || isPreview ? 1 : q?.state === "pending" ? mark.opacity * M.pendingOpacity : q?.state === "running" || q?.state === "unread" ? Math.max(mark.opacity, M.stateOpacity) : mark.opacity,
+                  }}
+                />
+                {q?.state === "unread" && <span aria-hidden data-question-dot className="absolute left-0 top-1/2 -translate-y-1/2 rounded-full bg-red" style={{ width: M.dotSize, height: M.dotSize }} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       {previewTick && (
         <div
           ref={card}
@@ -545,7 +617,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
           data-nav-rail-preview
           className="pointer-events-auto absolute z-20"
           // Padding connects the card's hit box to the rail without a timer or an unhoverable gap.
-          style={{ left: M.width, width: M.previewWidth + M.previewGap, paddingLeft: M.previewGap }}
+          style={{ left: M.width, width: previewWidth, paddingLeft: M.previewGap }}
         >
           <div data-nav-preview-surface className="overflow-hidden rounded-nav-preview border border-line bg-surface shadow-nav-preview" style={{ maxHeight: railHeight, padding: M.previewPadding }}>
             {(previewTitle || previewMark) && (
@@ -555,6 +627,7 @@ export function NavRail({ ticks, total, scroller, onJump, reset, marks }: {
               </div>
             )}
             {previewTick.answerExcerpt && <p data-nav-preview-excerpt className={cx("line-clamp-3 break-words text-sm leading-relaxed text-ink-2", (previewTitle || previewMark) && "mt-2")}>{previewTick.answerExcerpt}</p>}
+            {previewRead?.loading && <p data-nav-preview-loading role="status" className="mt-2 text-sm text-ink-3">{t("chat-navrail.loading_preview")}</p>}
           </div>
         </div>
       )}

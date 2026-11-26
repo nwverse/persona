@@ -13,7 +13,8 @@ import {
   type TaskRepositoryRole, type TaskRepositorySet,
 } from "../lib/task-repositories";
 import { normalizedPR } from "../lib/todo-triage";
-import type { PRFacts } from "../lib/todos";
+import type { PRFacts, TodoRepoGate } from "../lib/todos";
+import { repoGatePRLabel, repoGateReasonLabel, repoGateTone, type RepoGateTone } from "../features/todos/repo-gate";
 import type { RepositoryIdentity } from "../lib/repository-identity";
 import { Group, Pill, Row, RowFailed, settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Collapse, Dialog, IconButton, Loading, Menu, toast, useMenu } from "./atoms";
@@ -295,7 +296,7 @@ const isUnsupported = (error: unknown) => error instanceof ApiError && error.sta
 
 /** A to-do's own PR, as the page already parses it (the editor does not read the stage bar, a first-screen chunk). */
 type LegacyPR = { url: string; text: string };
-type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; onRepositoriesCount?: (count: number) => void };
+type TodoRepositoryBindingsProps = { manager: string; owner: string; todoId: string; legacyPRs?: LegacyPR[]; prStatus?: PRFacts; otherPRs?: PRFacts[]; version?: unknown; todosV2?: boolean; repoGate?: TodoRepoGate; onRepositoriesCount?: (count: number) => void };
 
 function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, PRFacts>, saved?: TaskRepositorySet) {
   if (previous === current) return false;
@@ -311,7 +312,7 @@ function hasNewPRLinkTitle(previous: Map<string, PRFacts>, current: Map<string, 
 export function TodoRepositoryBindings(props: TodoRepositoryBindingsProps) {
   return <TodoRepositoryBindingsSession key={`${props.owner}:${props.manager}:${props.todoId}`} {...props} />;
 }
-function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, onRepositoriesCount }: TodoRepositoryBindingsProps) {
+function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [], prStatus, otherPRs, version, todosV2, repoGate, onRepositoriesCount }: TodoRepositoryBindingsProps) {
   const prByURL = useMemo(() => {
     const facts = new Map<string, PRFacts>();
     if (prStatus) facts.set(normalizedPR(prStatus.url), prStatus);
@@ -528,6 +529,72 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
       })}
     </Fragment>;
   };
+  const renderRepoGateBanner = () => {
+    if (todosV2 !== true || !repoGate) return null;
+    const tone = repoGateTone(repoGate.state);
+    const toneText: Record<RepoGateTone, string> = {
+      green: "text-green",
+      red: "text-red",
+      orange: "text-orange",
+      muted: "text-ink-3",
+    };
+    const toneBg: Record<RepoGateTone, string> = {
+      green: "bg-inset",
+      red: "bg-danger-wash",
+      orange: "bg-orange-tint",
+      muted: "bg-inset",
+    };
+    const headline =
+      repoGate.state === "reference_only"
+        ? t("todos.repo_gate_detail_reference_only", { count: repoGate.reference_count })
+        : repoGate.state === "ready"
+          ? t("todos.repo_gate_detail_ready", { ready: repoGate.ready_count, total: repoGate.target_count })
+          : repoGate.blocking_repo?.trim()
+            ? t("todos.repo_gate_detail_blocked", {
+                ready: repoGate.ready_count,
+                total: repoGate.target_count,
+                repo: repoGate.blocking_repo.trim(),
+              })
+            : t("todos.repo_gate_detail_pending", { ready: repoGate.ready_count, total: repoGate.target_count });
+    const reasonText = repoGateReasonLabel(repoGate);
+    const blockingPR = repoGate.blocking_pr?.trim();
+    return (
+      <div
+        data-testid="todo-detail-repo-gate"
+        data-gate-state={repoGate.state}
+        className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-submeta ${toneBg[tone]}`}
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+          <span className={`inline-flex items-center gap-1.5 font-medium ${toneText[tone]}`}>
+            <Icon name={tone === "green" ? "check" : "alertCircle"} size={13} className="shrink-0" />
+            <span className="tabular-nums">{headline}</span>
+          </span>
+          {repoGate.state !== "reference_only" && repoGate.state !== "ready" && reasonText && (
+            <span data-testid="todo-detail-repo-gate-reason" className="text-ink-2">
+              · {reasonText}
+            </span>
+          )}
+          {repoGate.state !== "reference_only" && repoGate.reference_count > 0 && (
+            <span data-testid="todo-detail-repo-gate-refs" className="text-ink-3 tabular-nums">
+              · {t("todos.repo_gate_detail_refs_note", { count: repoGate.reference_count })}
+            </span>
+          )}
+        </div>
+        {blockingPR && (
+          <a
+            href={blockingPR}
+            target="_blank"
+            rel="noreferrer noopener"
+            data-testid="todo-detail-repo-gate-pr"
+            className="touch-hit inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-accent-ink hover:underline"
+          >
+            <span>{repoGatePRLabel(blockingPR)}</span>
+            <Icon name="external" size={11} />
+          </a>
+        )}
+      </div>
+    );
+  };
   return <section className="mt-6" data-todo-repositories>
     <Group title={t("task-repositories.section")} right={!unsupported &&
       // It stays enabled while the editor opens: a disabled button that had the focus drops it to the page, and the
@@ -539,6 +606,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
         ? legacyPRs.map((p) => <Row key={p.url} icon="pullRequest" hint={t("task-repositories.legacy_note")}
             label={<a href={p.url} target="_blank" rel="noreferrer noopener" className="text-accent-ink hover:underline">{p.text}</a>} />)
         : <>
+          {renderRepoGateBanner()}
           {matrix
             ? <div data-repo-matrix className="divide-y divide-line">
                 {renderMatrixGroup("target", matrix.target)}

@@ -69,6 +69,8 @@ export interface LarkSyncView {
   available: boolean;
   /** The local hour the daily run starts at. */
   schedule_hour: number;
+  /** Whether chat-enabled bindings run a lightweight 15-minute incremental chat sync; absent on older hubs. */
+  im_poll?: boolean;
   accounts: LarkSyncAccount[];
   bots: LarkSyncBot[];
   bindings: LarkSyncBinding[];
@@ -93,6 +95,7 @@ export function asSyncView(raw: unknown): LarkSyncView | null {
   return {
     available: true,
     schedule_hour: typeof v.schedule_hour === "number" && v.schedule_hour >= 0 && v.schedule_hour < 24 ? Math.floor(v.schedule_hour) : 3,
+    ...(typeof v.im_poll === "boolean" ? { im_poll: v.im_poll } : {}),
     accounts: Array.isArray(v.accounts) ? v.accounts : [],
     bots: v.bots,
     bindings: v.bindings,
@@ -120,6 +123,8 @@ export async function syncView(): Promise<LarkSyncView | null> {
 }
 
 export const setSyncSchedule = (hour: number) => api<unknown>(SYNC, { method: "PUT", json: { schedule_hour: hour } }).then(view);
+
+export const setSyncIMPoll = (on: boolean) => api<unknown>(SYNC, { method: "PUT", json: { im_poll: on } }).then(view);
 
 /** Starts creating a sync-only bot's app by scanning: the prompt carries the QR code. */
 export const createSyncBot = (body: { label: string; tier: string; region?: string }) =>
@@ -213,7 +218,7 @@ export function tierText(tier?: string): string {
 
 /** The binding has to be authorized (again) before it can sync. */
 export function needsAuthorize(b: LarkSyncBinding): boolean {
-  return b.health === "needs_reauth" || b.health === "unauthorized";
+  return b.health === "needs_reauth" || b.health === "unauthorized" || b.health === "scope_missing";
 }
 
 /** Days left when the authorization ends soon enough to say so; null otherwise. */

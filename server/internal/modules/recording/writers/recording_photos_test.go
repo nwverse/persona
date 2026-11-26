@@ -133,7 +133,7 @@ func TestPhotosStoredAndListed(t *testing.T) {
 	// While it records, a photo's time stops at now.
 	const live = "1a8fad5b-d9cb-469f-a165-70867728950e"
 	liveStart := time.Now().Add(-time.Minute)
-	putRecording(t, e, live, attendedUpload(1, liveStart, kb.AttendanceListener), time.Now())
+	putRecording(t, e, live, attendedUpload(1, liveStart, recordingwire.AttendanceListener), time.Now())
 	p := addPhoto(t, e, live, photoUpload(4, 3600, "", ""), false)
 	if p.At < 59 || p.At > time.Since(liveStart).Seconds() || p.N != 1 {
 		t.Fatalf("recording now: %+v", p)

@@ -7,6 +7,7 @@
 import { Suspense, act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { storedKeyAlias } from "../lib/compatibility";
 import type { Interaction } from "../lib/types";
 import type { ChatPageProps, ChatSlotComponents, ComposerAction, ModuleCode, ModuleDescriptor } from "./module-host";
 
@@ -15,7 +16,7 @@ import type { ChatPageProps, ChatSlotComponents, ComposerAction, ModuleCode, Mod
 const HUB_A = "https://hub-a.example";
 const HUB_B = "https://hub-b.example";
 const PROXY_ORIGIN = "https://proxy.example";
-const CREDENTIAL_KEYS = new Set(["persona.token", "persona.tokenId", "jarvis.token", "jarvis.tokenId"]);
+const CREDENTIAL_KEYS = new Set(["persona.token", "persona.tokenId"].flatMap((key) => [key, storedKeyAlias(key)!]));
 
 class Socket {
   static last: Socket | undefined;
@@ -398,9 +399,9 @@ describe("remembering hub module flags across reloads (#14431)", () => {
     expect(host.moduleState(descriptors.recording)).toBe("on");
     expect(host.moduleState(descriptors.notes)).toBe("on");
 
-    expect(router.parse("/health")).toEqual({ name: "not-found", path: "/health" });
-    expect(router.parse("/health/water")).toEqual({ name: "not-found", path: "/health/water" });
-    expect(router.parse("/tracks/health")).toEqual({ name: "not-found", path: "/tracks/health" });
+    expect(router.parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
+    expect(router.parse("/health/water")).toEqual({ name: "track", slug: "health", sid: "water" });
+    expect(router.parse("/tracks/health")).toEqual({ name: "track", slug: "health", fresh: true });
     expect(router.parse("/voice")).toEqual({ name: "not-found", path: "/voice" });
     expect(router.parse("/recording")).toEqual({ name: "module", module: "recording", base: "recording", path: [] });
     expect(router.parse("/notes")).toEqual({ name: "module", module: "notes", base: "notes", path: [] });
@@ -447,7 +448,7 @@ describe("remembering hub module flags across reloads (#14431)", () => {
     expect(host.moduleState(descriptors.recording)).toBe("off");
     expect(host.moduleState(descriptors.notes)).toBe("on");
 
-    expect(router.parse("/health")).toEqual({ name: "not-found", path: "/health" });
+    expect(router.parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
     expect(router.parse("/recording")).toEqual({ name: "not-found", path: "/recording" });
     expect(router.parse("/notes")).toEqual({ name: "module", module: "notes", base: "notes", path: [] });
     expect(host.enabledNavItems().map((n) => n.key)).toEqual(["notes"]);
@@ -542,7 +543,7 @@ describe("remembering hub module flags across reloads (#14431)", () => {
     expect(second.host.moduleState(second.descriptors.voice)).toBe("on");
     expect(second.host.hubServes(second.host.moduleFeature("health"))).toBe(false);
     expect(second.host.moduleState(second.descriptors.health)).toBe("off");
-    expect(second.router.parse("/health")).toEqual({ name: "not-found", path: "/health" });
+    expect(second.router.parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
     expect(second.host.enabledNavItems().map((n) => n.key)).toEqual(["voice", "notes"]);
 
     // Voice chat slots reactively load and draw now that the live hello enabled it.
@@ -560,7 +561,7 @@ describe("remembering hub module flags across reloads (#14431)", () => {
     expect(third.host.moduleState(third.descriptors.voice)).toBe("on");
     expect(third.host.hubServes(third.host.moduleFeature("health"))).toBe(false);
     expect(third.host.moduleState(third.descriptors.health)).toBe("off");
-    expect(third.router.parse("/health")).toEqual({ name: "not-found", path: "/health" });
+    expect(third.router.parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
     expect(third.host.enabledNavItems().map((n) => n.key)).toEqual(["voice", "notes"]);
 
     await mountShell(third);
@@ -644,7 +645,7 @@ describe("remembering hub module flags across reloads (#14431)", () => {
     expect(a2.host.hubServes(a2.host.moduleFeature("voice"))).toBe(false);
     expect(a2.host.moduleState(a2.descriptors.health)).toBe("off");
     expect(a2.host.moduleState(a2.descriptors.voice)).toBe("off");
-    expect(a2.router.parse("/health")).toEqual({ name: "not-found", path: "/health" });
+    expect(a2.router.parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
     expect(a2.host.enabledNavItems().map((n) => n.key)).toEqual(["notes"]);
 
     // Switching back to Hub B before hello still remembers Hub B's own flags.
@@ -681,7 +682,7 @@ describe("remembering hub module flags across reloads (#14431)", () => {
     const a2 = await reload();
     expect(a2.host.hubServes(a2.host.moduleFeature("health"))).toBe(false);
     expect(a2.host.hubServes(a2.host.moduleFeature("voice"))).toBe(false);
-    expect(a2.router.parse("/health")).toEqual({ name: "not-found", path: "/health" });
+    expect(a2.router.parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
     expect(a2.host.enabledNavItems().map((n) => n.key)).toEqual(["notes"]);
 
     // Returning to /hub-b/ still remembers /hub-b/ had voice ON and health OFF.

@@ -7,7 +7,6 @@ import { getSession, getState, useStore } from "../../lib/store";
 import { withChildSessions } from "../../lib/child-cards";
 import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
-import { TurnImages } from "./TurnImages";
 import { turnToolViews } from "../../lib/turn-tool-views";
 import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, toolChip, type Context, type Segment, type UserMessage } from "../../lib/turns";
 import { usageKey } from "../../lib/turn-usage";
@@ -32,8 +31,8 @@ import type { InlineBubbleContent } from "./InlineUserBubble";
 import { ForwardBlock, ForwardCards } from "./ForwardCard";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { useFullText } from "./FullText";
-import { FileCards, ReplyFiles } from "./FileCards";
-import { ReplyPorts } from "./PortChips";
+import { LazyFileCards, LazyReplyFiles } from "./LazyFileCards";
+import { LazyReplyPorts, LazyTurnChanges, LazyTurnImages } from "./LazyTurnExtras";
 import { MessageActions } from "./MessageActions";
 import { skillEditText } from "../../lib/skill-mentions";
 import { contextXML } from "../../lib/context-xml";
@@ -47,8 +46,7 @@ import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
-import { TurnChanges, turnChangesHeight } from "./TurnChanges";
-import { turnChanges } from "../../lib/turn-changes";
+import { turnChanges, turnChangesHeight } from "../../lib/turn-changes";
 import type { Step } from "../../lib/turns";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
@@ -86,6 +84,8 @@ export const MODEL_DIVIDER_HEIGHT = 42.5;
 export const ENGINE_DIVIDER_HEIGHT = MODEL_DIVIDER_HEIGHT;
 /** Compact tool view card height estimate before a deferred turn mounts. */
 export const TOOL_VIEW_HEIGHT = 244;
+/** A promoted relay's collapsed source row before it mounts: card padding, source title, disclosure and their gaps. */
+const PROMOTED_RELAY_SOURCE_HEIGHT = 72;
 
 /** A finished exchange's height in px before it is first drawn (content-visibility, docs/web/web.md "Long chats"), by
  *  its text the way bubbleLines counts it: its bubble (folded past BUBBLE_MAX_LINES), its words at 2.5 times the
@@ -95,8 +95,8 @@ export const TOOL_VIEW_HEIGHT = 244;
 export function segmentHeight(user: UserMessage | undefined, nodes: WorkNode[], modelChange = false, engineSwitch = false, toolViews = 0): number {
   // gap: the exchange's blocks stand 14 px apart (`gap-3.5`, cindy's msg-stream-items)
   const line = 24, gap = 14, row = 28;
-  const lines = user ? bubbleLines(user.text) : 0;
-  let h = user ? (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0) : 0;
+  const lines = user && !user.promotedRelay ? bubbleLines(user.text) : 0;
+  let h = user ? (user.promotedRelay ? PROMOTED_RELAY_SOURCE_HEIGHT : (lines > BUBBLE_MAX_LINES ? 10 : lines) * line + 20 + (user.images.length ? 102 : 0)) : 0;
   for (const n of nodes) h += n.kind === "step" && n.step.kind === "text" ? bubbleLines(n.step.item.text ?? "", CHARS_PER_LINE * 2.5) * line : row;
   if (modelChange) h += MODEL_DIVIDER_HEIGHT;
   if (engineSwitch) h += ENGINE_DIVIDER_HEIGHT;
@@ -141,7 +141,7 @@ export function UserBubble({ msg, mid, sid, pending, sendState, starting, onDele
         )}
         {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
         {remaining.length > 0 && <ContextGroup contexts={remaining} />}
-        {msg.files && <FileCards files={msg.files} mid={mid} />}
+        {msg.files && <LazyFileCards files={msg.files} mid={mid} />}
         {(msg.text || forwards.length > 0) &&
           (starting || pending ? bubble : (
             <MessageActions text={msg.text} editText={msg.inlineTrailer
@@ -309,8 +309,8 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
         </CardItem.Provider>
       </div>
       {full.more}
-      {!live && mid && sid && <ReplyFiles text={text} mid={mid} cwd={cwd} />}
-      {!live && mid && sid && <ReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
+      {!live && mid && sid && <LazyReplyFiles text={text} mid={mid} cwd={cwd} />}
+      {!live && mid && sid && <LazyReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
     </MessageActions>
   );
 });
@@ -417,7 +417,7 @@ export const SegmentView = memo(function SegmentView({
   // When the dock bar already shows the foreground turn's Working… status and elapsed timer, skip the empty non-expandable
   // stream placeholder unless batched live text is streaming above it (#12380).
   const liveRow = working && (!dockTurnClock || streaming !== undefined) && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
-  const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
+  const imageStrip = images.length > 0 && <LazyTurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
   const box = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const el = box.current;
@@ -460,7 +460,7 @@ export const SegmentView = memo(function SegmentView({
   // `contain-intrinsic-block-size: auto`, and the later rich mount starts from a different height than the old body did.
   const placeholder = useMemo(() => {
     if (mounted) return "";
-    const user = trace && seg.user?.rawInput ? seg.user.rawInput.map((i) => i.text) : [seg.user?.text, ...(seg.user?.contexts.map((c) => c.text) ?? [])];
+    const user = trace && seg.user?.rawInput ? seg.user.rawInput.map((i) => i.text) : seg.user?.promotedRelay ? [] : [seg.user?.text, ...(seg.user?.contexts.map((c) => c.text) ?? [])];
     return [...user, ...own.flatMap((s) => s.kind === "tool" ? [toolChip(s.use), s.result?.text] : [s.item.text])].filter(Boolean).join("\n");
   }, [mounted, own, seg.user, trace]);
   return (
@@ -480,7 +480,7 @@ export const SegmentView = memo(function SegmentView({
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
       {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
-      {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
+      {changes && <LazyTurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
       </Fragment> : <div className="whitespace-pre-wrap" style={{ blockSize: "var(--seg-est)" }} data-segment-placeholder>{placeholder}</div>}
     </section>
   );
