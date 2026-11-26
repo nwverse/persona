@@ -802,7 +802,7 @@ func (n *Node) handleModelRouteFailureForced(p *assistantProc, result string, fo
 	}
 	st, ok := n.state.get(p.id)
 	staleRecovery := ok && (st.ModelFromRecovery ||
-		(st.ModelRecovery != nil && st.ModelRecovery.To == model))
+		(st.ModelRecovery != nil && st.ModelRecovery.To == model && !modelRecoveryIsOriginal(st.ModelRecovery, model)))
 	if !persisted && !fromRecovery && !staleRecovery {
 		return
 	}
@@ -810,7 +810,7 @@ func (n *Node) handleModelRouteFailureForced(p *assistantProc, result string, fo
 	if n.clearStalePersistedModel(p.id, launcher, model) {
 		n.logger.Printf("assistant %s: cleared stale persisted model %q on %s after model-route failure", short(p.id), model, launcher)
 	}
-	if ok && st.ModelRecovery != nil && st.ModelRecovery.To == model && !st.ModelRecovery.ChainExhausted {
+	if ok && st.ModelRecovery != nil && st.ModelRecovery.To == model && !modelRecoveryIsOriginal(st.ModelRecovery, model) && !st.ModelRecovery.ChainExhausted {
 		n.clearModelRecovery(p.id)
 	}
 }
@@ -854,6 +854,31 @@ func (n *Node) clearStalePersistedModel(id, launcher, badModel string) bool {
 	return cleared
 }
 
+// modelRecoveryIsOriginal reports whether model is the conversation's original configured model recorded in marker r,
+// rather than a fallback target chosen by automatic recovery (#15622).
+func modelRecoveryIsOriginal(r *proto.ModelRecovery, model string) bool {
+	if r == nil || model == "" {
+		return false
+	}
+	return model == r.From || ((r.From == "" || r.From == "default") && r.ProbeFrom != "" && model == r.ProbeFrom)
+}
+
+// modelRecoveryTargetsModel reports whether marker r identifies model as a fallback target chosen by automatic
+// recovery rather than the conversation's original configured model (#15622).
+func modelRecoveryTargetsModel(r *proto.ModelRecovery, model string) bool {
+	if r == nil || model == "" || modelRecoveryIsOriginal(r, model) {
+		return false
+	}
+	if r.To == model {
+		return true
+	}
+	// A chain that never switched leaves From and To empty while still recording the original model in Tried.
+	if !r.ChainExhausted || (r.From == "" && r.To == "") {
+		return false
+	}
+	return slices.Contains(r.Tried, model)
+}
+
 // sanitizePersistedModel drops a persisted sessionState.Model back to the launcher's default when reusing it would
 // trap the conversation on a stale, unavailable, or recovery-selected model (#15622). Explicit per-turn choices never
 // reach this helper (execution.PersistedModel is false).
@@ -886,7 +911,7 @@ func (n *Node) sanitizePersistedModel(ctx context.Context, id, launcher string, 
 		drop("persisted from automatic recovery")
 		return
 	}
-	if r := st.ModelRecovery; r != nil && (r.To == model || (r.ChainExhausted && slices.Contains(r.Tried, model))) {
+	if r := st.ModelRecovery; modelRecoveryTargetsModel(r, model) {
 		if !crossEngine && r.From != "" && r.From != model && proto.ValidModelID(r.From) && !n.isModelUnavailable(launcher, r.From) &&
 			n.persistedModelAvailableOnLauncher(ctx, launcher, r.From) {
 			n.logger.Printf("assistant %s: restoring configured model %q in place of recovery model %q on %s", short(id), r.From, model, launcher)

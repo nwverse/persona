@@ -271,6 +271,41 @@ func TestAssistantCrossEngineResumeDropsSettingFollowingAndRecoveryModel(t *test
 			},
 			expectNoModelID: "recovered-haiku",
 		},
+		{
+			name:          "ModelRecovery exhausted Tried fallback model drops on cross-engine resume",
+			askedLauncher: codexKindLauncher,
+			askedExec:     []modelExecution{{Model: "gpt-model", Fingerprint: "codex-fp"}},
+			state: sessionState{
+				Launcher:         "claude",
+				Model:            "recovered-haiku",
+				ModelFingerprint: "fp-rec",
+				ModelRecovery: &proto.ModelRecovery{
+					From:           "primary-model",
+					To:             "last-fallback",
+					ChainExhausted: true,
+					Tried:          []string{"primary-model", "recovered-haiku", "last-fallback"},
+				},
+			},
+			expectNoModelID: "recovered-haiku",
+		},
+		{
+			name:          "ModelRecovery exhausted fallback without From drops on same-engine resume",
+			askedLauncher: "claude",
+			askedExec:     nil,
+			state: sessionState{
+				Launcher:         "claude",
+				Model:            "recovered-haiku",
+				ModelFingerprint: "fp-rec",
+				ModelRecovery: &proto.ModelRecovery{
+					From:           "",
+					ProbeFrom:      "primary-model",
+					To:             "recovered-haiku",
+					ChainExhausted: true,
+					Tried:          []string{"primary-model", "recovered-haiku"},
+				},
+			},
+			expectNoModelID: "recovered-haiku",
+		},
 	}
 
 	for _, tc := range cases {
@@ -671,6 +706,241 @@ done
 			if n.isModelUnavailable("claude", "kept-model") {
 				t.Fatalf("%q unexpectedly marked model unavailable", errText)
 			}
+		}
+	})
+
+	t.Run("same-engine resume preserves persisted original model with exhausted recovery marker", func(t *testing.T) {
+		cases := []struct {
+			name           string
+			followsSetting bool
+			marker         *proto.ModelRecovery
+		}{
+			{
+				name: "exhausted switched chain with original model in Tried",
+				marker: &proto.ModelRecovery{
+					From:           "primary-model",
+					To:             "fallback-model",
+					ChainExhausted: true,
+					Tried:          []string{"primary-model", "fallback-model"},
+				},
+			},
+			{
+				name:           "protected setting-following session with exhausted switched chain",
+				followsSetting: true,
+				marker: &proto.ModelRecovery{
+					From:           "primary-model",
+					To:             "fallback-model",
+					ChainExhausted: true,
+					Tried:          []string{"primary-model", "fallback-model"},
+				},
+			},
+			{
+				name: "exhausted chain with From equal to To and original model in Tried",
+				marker: &proto.ModelRecovery{
+					From:           "primary-model",
+					To:             "primary-model",
+					ChainExhausted: true,
+					Tried:          []string{"fallback-model", "primary-model"},
+				},
+			},
+			{
+				name: "non-exhausted marker with From equal to To",
+				marker: &proto.ModelRecovery{
+					From: "primary-model",
+					To:   "primary-model",
+				},
+			},
+			{
+				name: "no-switch exhausted chain with original model in Tried",
+				marker: &proto.ModelRecovery{
+					ChainExhausted: true,
+					Tried:          []string{"primary-model"},
+				},
+			},
+			{
+				name: "exhausted launcher-default chain with ProbeFrom matching persisted model",
+				marker: &proto.ModelRecovery{
+					From:           "",
+					ProbeFrom:      "primary-model",
+					To:             "fallback-model",
+					ChainExhausted: true,
+					Tried:          []string{"primary-model", "fallback-model"},
+				},
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Setenv("CLAUDE_CONFIG_DIR", "")
+				f := cliTest(t)
+				writeFakeClaudeTranscript(t, f.n, claudeConversation)
+				f.n.state.put(claudeConversation, sessionState{
+					Launcher:         "claude",
+					Cwd:              t.TempDir(),
+					Model:            "primary-model",
+					ModelEffort:      "high",
+					ModelFingerprint: "fp-primary",
+					FollowsSetting:   tc.followsSetting,
+					ModelRecovery:    tc.marker,
+				})
+
+				if _, err := f.n.assistantSend(context.Background(), claudeConversation, "", "claude", "follow up", nil, "", ""); err != nil {
+					t.Fatal(err)
+				}
+				f.idle(t, claudeConversation)
+
+				argv := f.file("cli-argv")
+				if !strings.Contains(argv, "--model primary-model") {
+					t.Fatalf("same-engine resume dropped original configured model: %q", argv)
+				}
+				if in := f.file("stdin.jsonl"); !strings.Contains(in, `"subtype":"apply_flag_settings"`) || !strings.Contains(in, `"effortLevel":"high"`) {
+					t.Fatalf("same-engine resume did not apply persisted effort: %s", in)
+				}
+				p := f.proc(claudeConversation)
+				if p == nil {
+					t.Fatal("missing process after same-engine resume")
+				}
+				p.mu.Lock()
+				gotExec := p.model
+				p.mu.Unlock()
+				if gotExec.Model != "primary-model" || gotExec.Effort != "high" || !gotExec.UseEffort || gotExec.Fingerprint != "fp-primary" {
+					t.Fatalf("unexpected process execution after same-engine resume: %+v", gotExec)
+				}
+				st, ok := f.n.state.get(claudeConversation)
+				if !ok || st.Model != "primary-model" || st.ModelEffort != "high" || st.ModelFingerprint != "fp-primary" {
+					t.Fatalf("persisted original model/effort/fingerprint was modified: %+v (ok=%v)", st, ok)
+				}
+			})
+		}
+	})
+
+	t.Run("cross-engine resume still drops setting-following session when exhausted marker matches r.From", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		f := cliTest(t)
+		probedLaunchers(t, map[string]string{codexKindLauncher: "codex"})
+		writeFakeClaudeTranscript(t, f.n, claudeConversation)
+		f.n.state.put(claudeConversation, sessionState{
+			Launcher:         "claude",
+			Cwd:              t.TempDir(),
+			Model:            "primary-model",
+			ModelEffort:      "high",
+			ModelFingerprint: "fp-primary",
+			FollowsSetting:   true,
+			ModelRecovery: &proto.ModelRecovery{
+				From:           "primary-model",
+				To:             "primary-model",
+				ChainExhausted: true,
+				Tried:          []string{"fallback-model", "primary-model"},
+			},
+		})
+
+		if _, err := f.n.assistantSend(context.Background(), claudeConversation, "", codexKindLauncher, "follow up", nil, "", "",
+			modelExecution{Model: "gpt-model", Fingerprint: "codex-fp", FollowsSetting: true}); err != nil {
+			t.Fatal(err)
+		}
+		f.idle(t, claudeConversation)
+
+		argv := f.file("cli-argv")
+		if strings.Contains(argv, "primary-model") || strings.Contains(argv, "gpt-model") {
+			t.Fatalf("cross-engine resume did not drop setting-following model: %q", argv)
+		}
+		if st, _ := f.n.state.get(claudeConversation); st.Model != "" || st.ModelFingerprint != "launcher-default" {
+			t.Fatalf("expected cleared model state on cross-engine resume, got: %+v", st)
+		}
+	})
+
+	t.Run("same-engine resume restores From when exhausted marker targets a fallback model", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		f := cliTest(t)
+		writeFakeClaudeTranscript(t, f.n, claudeConversation)
+		f.n.state.put(claudeConversation, sessionState{
+			Launcher:         "claude",
+			Cwd:              t.TempDir(),
+			Model:            "recovered-haiku",
+			ModelFingerprint: "fp-rec",
+			ModelRecovery: &proto.ModelRecovery{
+				From:           "primary-model",
+				To:             "last-fallback",
+				ChainExhausted: true,
+				Tried:          []string{"primary-model", "recovered-haiku", "last-fallback"},
+			},
+		})
+
+		if _, err := f.n.assistantSend(context.Background(), claudeConversation, "", "claude", "follow up", nil, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		f.idle(t, claudeConversation)
+
+		argv := f.file("cli-argv")
+		if strings.Contains(argv, "recovered-haiku") || !strings.Contains(argv, "--model primary-model") {
+			t.Fatalf("expected same-engine resume to restore r.From, got: %q", argv)
+		}
+		if st, _ := f.n.state.get(claudeConversation); st.Model != "primary-model" {
+			t.Fatalf("expected restored original model to be persisted, got: %+v", st)
+		}
+	})
+
+	t.Run("same-engine resume drops fallback model when r.From is unavailable", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "")
+		f := cliTest(t)
+		writeFakeClaudeTranscript(t, f.n, claudeConversation)
+		f.n.mu.Lock()
+		f.n.noteUnavailable("claude", "primary-model")
+		f.n.mu.Unlock()
+		f.n.state.put(claudeConversation, sessionState{
+			Launcher:         "claude",
+			Cwd:              t.TempDir(),
+			Model:            "recovered-haiku",
+			ModelFingerprint: "fp-rec",
+			ModelRecovery: &proto.ModelRecovery{
+				From:           "primary-model",
+				To:             "recovered-haiku",
+				ChainExhausted: true,
+				Tried:          []string{"primary-model", "recovered-haiku"},
+			},
+		})
+
+		if _, err := f.n.assistantSend(context.Background(), claudeConversation, "", "claude", "follow up", nil, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		f.idle(t, claudeConversation)
+
+		argv := f.file("cli-argv")
+		if strings.Contains(argv, "recovered-haiku") || strings.Contains(argv, "primary-model") {
+			t.Fatalf("expected fallback model to drop to launcher default, got: %q", argv)
+		}
+		if st, _ := f.n.state.get(claudeConversation); st.Model != "" || st.ModelFingerprint != "launcher-default" {
+			t.Fatalf("expected cleared model state, got: %+v", st)
+		}
+	})
+
+	t.Run("explicit pick matching From equal to To is not treated as stale recovery", func(t *testing.T) {
+		n := assistantNode(t)
+		const id = "11111111-2222-3333-4444-555555555555"
+		n.state.put(id, sessionState{
+			Launcher:         "claude",
+			Cwd:              t.TempDir(),
+			Model:            "primary-model",
+			ModelFingerprint: "fp-primary",
+			ModelRecovery: &proto.ModelRecovery{
+				From:           "primary-model",
+				To:             "primary-model",
+				ChainExhausted: true,
+				Tried:          []string{"fallback-model", "primary-model"},
+			},
+		})
+		p := &assistantProc{
+			id:       id,
+			agent:    "claude",
+			launcher: "claude",
+			model:    modelExecution{Model: "primary-model", PersistedModel: false, FromRecovery: false},
+		}
+		n.handleModelRouteFailure(p, "API Error: 404 model_not_found: primary-model")
+		if st, _ := n.state.get(id); st.Model != "primary-model" {
+			t.Fatalf("explicit pick matching r.From == r.To was unexpectedly cleared: %+v", st)
+		}
+		if n.isModelUnavailable("claude", "primary-model") {
+			t.Fatalf("explicit pick matching r.From == r.To was unexpectedly marked unavailable")
 		}
 	})
 }
