@@ -99,7 +99,7 @@ class HttpExtensionManagement internal constructor(
         return ExtensionListing(extensions, canInstall = flag("can_install"), markets = flag("markets"))
     }
 
-    override suspend fun extension(id: String) = detail(call(path(id, "-", ""), "GET"))
+    override suspend fun extension(id: String) = detail(call(withEntryLists(path(id, "-", "")), "GET"))
 
     override fun adminNetworkUrl(id: String): String? = iconBase()?.toHttpUrlOrNull()?.newBuilder()
         ?.addPathSegments("admin/extensions")
@@ -109,10 +109,10 @@ class HttpExtensionManagement internal constructor(
         ?.build()?.toString()
 
     override suspend fun setEnabled(id: String, enabled: Boolean, cascade: Boolean) =
-        detail(call(path(id, "-", "enabled"), "PUT", buildJsonObject { put("enabled", enabled); if (cascade) put("cascade", true) }))
+        detail(call(withEntryLists(path(id, "-", "enabled")), "PUT", buildJsonObject { put("enabled", enabled); if (cascade) put("cascade", true) }))
 
     override suspend fun setContribution(id: String, point: String, contribution: String, enabled: Boolean) =
-        detail(call(path(id, "-", "contributions", point.also { require(it.matches(ContributionPoint)) }, id(contribution)),
+        detail(call(withEntryLists(path(id, "-", "contributions", point.also { require(it.matches(ContributionPoint)) }, id(contribution))),
             "PUT", buildJsonObject { put("enabled", enabled) }))
 
     override suspend fun quickPrompts() = declared("prompts", "prompts", ExtensionQuickPrompt.serializer())
@@ -128,19 +128,22 @@ class HttpExtensionManagement internal constructor(
     }
 
     override suspend fun setConfig(id: String, config: JsonObject) =
-        detail(call(path(id, "-", "config"), "PUT", buildJsonObject { put("config", config) }))
+        detail(call(withEntryLists(path(id, "-", "config")), "PUT", buildJsonObject { put("config", config) }))
+
+    override suspend fun setConfigPreservingEntries(id: String, config: JsonObject) =
+        detail(call("${withEntryLists(path(id, "-", "config"))}&preserve_entries=1", "PUT", buildJsonObject { put("config", config) }))
 
     override suspend fun setSecret(id: String, name: String, value: String) =
-        detail(call(path(id, "-", "secrets", secret(name)), "PUT", buildJsonObject { put("value", value) }))
+        detail(call(withEntryLists(path(id, "-", "secrets", secret(name))), "PUT", buildJsonObject { put("value", value) }))
 
     override suspend fun setSecretReference(id: String, name: String, reference: String) =
-        detail(call(path(id, "-", "secrets", secret(name)), "PUT", buildJsonObject { put("reference", reference) }))
+        detail(call(withEntryLists(path(id, "-", "secrets", secret(name))), "PUT", buildJsonObject { put("reference", reference) }))
 
     override suspend fun clearSecret(id: String, name: String) =
-        detail(call(path(id, "-", "secrets", secret(name)), "DELETE"))
+        detail(call(withEntryLists(path(id, "-", "secrets", secret(name))), "DELETE"))
 
     override suspend fun removeHandoffRule(id: String, rule: String) =
-        detail(call(path(id, "-", "handoff-rules", this@HttpExtensionManagement.id(rule)), "DELETE"))
+        detail(call(withEntryLists(path(id, "-", "handoff-rules", this@HttpExtensionManagement.id(rule))), "DELETE"))
 
     // ---- declarative UI (docs/extensions/extensions.md "Declarative UI")
 
@@ -245,6 +248,8 @@ class HttpExtensionManagement internal constructor(
             (context?.locale ?: app.locale)?.takeIf { it.isNotEmpty() }?.let { put("locale", it) }
             (context?.platform ?: app.platform)?.takeIf { it.isNotEmpty() }?.let { put("platform", it) }
             (context?.uiVersion ?: app.uiVersion)?.let { put("ui_version", it) }
+            val unsupported = (app.unsupported.orEmpty() + context?.unsupported.orEmpty()).distinct()
+            if (unsupported.isNotEmpty()) put("unsupported", JsonArray(unsupported.map { JsonPrimitive(it) }))
             // Inbox Sources (#5278, #5661): the key itself, even "", says this app opens Set Up with ….
             // Only those pages set it. Empty is not dropped: without the key the pages leave the row out.
             context?.assistant?.let { put("assistant", it) }
@@ -372,7 +377,7 @@ class HttpExtensionManagement internal constructor(
     // ---- auto-upgrades (docs/extensions/extensions.md "Auto-upgrade")
 
     override suspend fun setAutoUpgrade(id: String, auto: Boolean) =
-        detail(call(path(id, "-", "auto-upgrade"), "PUT", buildJsonObject { put("auto", auto) }))
+        detail(call(withEntryLists(path(id, "-", "auto-upgrade")), "PUT", buildJsonObject { put("auto", auto) }))
 
     /** A hub without auto-upgrades has no route (404): null, and the switch is not shown. */
     override suspend fun autoUpgrades(): Boolean? = try {
@@ -448,6 +453,9 @@ class HttpExtensionManagement internal constructor(
         else -> null
     }
 
+    /** Every detail-returning settings request opts into entry lists so responses never hide the entry editor. */
+    private fun withEntryLists(path: String): String = "$path${if ('?' in path) '&' else '?'}entry_lists=1"
+
     /** `/api/v1/extensions[/id/…]` (or `/api/v1/plugins`); an empty last segment keeps the trailing slash the detail route has. */
     private fun path(id: String? = null, vararg rest: String): String {
         if (id != null) require(id.matches(ExtensionId)) { "Invalid extension id" }
@@ -482,9 +490,9 @@ class HttpExtensionManagement internal constructor(
          * date / time / multichoice / multiline fields, title styles, named colours and more icons (#5464); 7 a section's
          * key, which only the native stream reads; 8 the columns layout of a dashboard page and a section's span, icon,
          * link and rows side by side (#9158); 9 gauge rings on grid and carousel tiles (#9337); 10 native graph canvases
-         * (#9727). The native stream sends the same version, but its components still exclude graphs and receive rows.
+         * (#9727); 11 native scenes (#12544); 12 interactive maps. The client draws scenes and maps directly.
          */
-        const val UI_VERSION = 10
+        const val UI_VERSION = 12
         /** Exceeds the hub's 20 s uiTimeout (server/internal/extmgr/extension_ui.go) and matches iOS APIClient / ExtensionUIStreamController (30 s). */
         internal const val UI_READ_TIMEOUT_SECONDS = 30L
 

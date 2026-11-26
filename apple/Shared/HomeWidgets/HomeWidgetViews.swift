@@ -5,7 +5,7 @@ import WidgetKit
 
 /// Persona's widgets: one widget, one job (docs/apple/home-widgets.md).
 enum HomeKind: String, CaseIterable, Codable, Sendable {
-    case agents, today, todos, usage, computers, record, health, inbox
+    case agents, today, todos, usage, computers, record, health, inbox, water, protein, healthToday
 
     /// The kind's name in WidgetKit (its configurations and reloads); never change one.
     var widgetKind: String { "persona.home.\(rawValue)" }
@@ -20,6 +20,9 @@ enum HomeKind: String, CaseIterable, Codable, Sendable {
         case .record: "Record [Home Widgets]"
         case .health: "Health [Home Widgets]"
         case .inbox: "Inbox [Home Widgets]"
+        case .water: "Water [Home Widgets]"
+        case .protein: "Protein [Home Widgets]"
+        case .healthToday: "Today's Health [Home Widgets]"
         }
     }
 
@@ -34,6 +37,9 @@ enum HomeKind: String, CaseIterable, Codable, Sendable {
         case .record: "Start a meeting recording with one tap. [Home Widgets]"
         case .health: "Today's steps, last night's sleep and your resting heart rate. [Home Widgets]"
         case .inbox: "Messages that need you, and the newest. [Home Widgets]"
+        case .water: "Today's water, what is left and the last seven days. [Home Widgets]"
+        case .protein: "Today's protein, what is left and the last seven days. [Home Widgets]"
+        case .healthToday: "Four health items you choose, at a glance. [Home Widgets]"
         }
     }
 
@@ -42,12 +48,14 @@ enum HomeKind: String, CaseIterable, Codable, Sendable {
         let lock: [WidgetFamily] = [.accessoryCircular, .accessoryRectangular, .accessoryInline]
         switch self {
         case .record: return [.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular]
+        case .water, .protein: return [.systemSmall, .systemMedium] + lock
+        case .healthToday: return [.systemSmall, .systemMedium]
         default: return [.systemSmall, .systemMedium, .systemLarge] + lock
         }
     }
 
     /// Inbox messages and health numbers are the user's own: the system blurs them while the phone is locked.
-    var isPrivate: Bool { self == .inbox || self == .health }
+    var isPrivate: Bool { self == .inbox || self == .health || self == .healthToday }
 }
 
 /// What a widget draws at one moment: the snapshot, the persona's pictures, and the settings from Edit Widget.
@@ -66,11 +74,12 @@ struct HomeEntry: TimelineEntry {
     var calendarView: HomeCalendarView = .today
     var calendarSlot: HomeCalendarState.Slot?
     var calendarKey = ""
+    var healthItems: [HomeHealthItem] = HomeHealthItem.defaults
     var relevance: TimelineEntryRelevance?
 
     var context: HomeContext {
         HomeContext(snapshot: snapshot, date: date, agentKind: agentKind, machine: machine, account: account,
-                    calendarView: calendarView, calendarSlot: calendarSlot, calendarKey: calendarKey)
+                    calendarView: calendarView, calendarSlot: calendarSlot, calendarKey: calendarKey, healthItems: healthItems)
     }
 }
 
@@ -84,6 +93,7 @@ struct HomeContext {
     var calendarView: HomeCalendarView = .today
     var calendarSlot: HomeCalendarState.Slot?
     var calendarKey = ""
+    var healthItems: [HomeHealthItem] = HomeHealthItem.defaults
 
     var stale: Bool { snapshot.isStale(at: date) }
     var now: Double { date.timeIntervalSince1970 }
@@ -184,6 +194,10 @@ struct HomeContext {
             return .idle
         case .inbox:
             return (snapshot.inbox?.needsYou ?? 0) > 0 ? .needsYou : .idle
+        case .water, .protein:
+            let value = kind == .water ? intake?.water : intake?.protein
+            return value.map { $0.goal > 0 && $0.today >= $0.goal ? .done : .idle } ?? .idle
+        case .healthToday: return .idle
         }
     }
 }
@@ -258,6 +272,9 @@ struct HomeWidgetView: View {
         case .record: HomeWidgetTokens.recording
         case .health: HomeWidgetTokens.steps
         case .inbox: HomeWidgetTokens.inbox.dot
+        case .water: HomeWidgetTokens.water
+        case .protein: HomeWidgetTokens.protein
+        case .healthToday: HomeWidgetTokens.water
         }
     }
 
@@ -272,6 +289,8 @@ struct HomeWidgetView: View {
         case .record: HomeRecordWidget(c: c, family: family, pictures: p)
         case .health: HomeHealthWidget(c: c, family: family, pictures: p)
         case .inbox: HomeInboxWidget(c: c, family: family, pictures: p)
+        case .water, .protein: HomeIntakeWidget(kind: kind, c: c, family: family, pictures: p)
+        case .healthToday: HomeHealthTodayWidget(c: c, family: family, pictures: p)
         }
     }
 }
@@ -1036,7 +1055,7 @@ private struct HomeComputerRing: View {
 
     var body: some View {
         let state = computerState(machine)
-        let spoken = [machine.name, state.words, machine.online ? machine.load.map { interfaceText("Load \($0)% [Home Widgets]") } : nil] // perf-ok: drawn once per timeline entry, in the widget extension
+        let spoken = [machine.name, state.words, machine.online ? machine.load.map { interfaceText("Load \(FleetText.perCore(percent: $0)) per core") } : nil] // perf-ok: drawn once per timeline entry, in the widget extension
             .compactMap { $0 }.joined(separator: ", ")
         VStack(spacing: HomeWidgetTokens.tight) {
             ZStack {
@@ -1075,7 +1094,11 @@ private struct HomeComputerLine: View {
                 }
                 .font(HomeWidgetTokens.caption).lineLimit(1)
                 if machine.online, let load = machine.load {
-                    Text("Load \(load)% [Home Widgets]").font(HomeWidgetTokens.caption).lineLimit(1).homeInk(.tertiary)
+                    // Load per core, as Machines writes it: "Load 110%" read as CPU use (#12519). The ring beside it is the
+                    // load and VoiceOver says "Load 0.5 per core", so the line is the figure and its unit ("0.5 per core"):
+                    // with "Load" too, half a standard iPhone's large widget shrank it below 0.8 in Japanese.
+                    Text("\(FleetText.perCore(percent: load)) per core").font(HomeWidgetTokens.caption).lineLimit(1)
+                        .minimumScaleFactor(HomeWidgetTokens.nameMinScale).homeInk(.tertiary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1093,6 +1116,9 @@ private struct HomeRecordWidget: View {
     var pictures: HomeFacePictures?
 
     private var recording: HomeSnapshot.Recording? { c.snapshot.recording }
+    /// Nothing records and the hub's recording module is off (#15214): no start is offered, the widget only says so and
+    /// a tap opens the app (the widget's own link). A recording that runs keeps its Stop.
+    private var off: Bool { recording == nil && !c.snapshot.offersRecordingStart }
 
     var body: some View {
         if family == .systemSmall {
@@ -1100,7 +1126,7 @@ private struct HomeRecordWidget: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HomeHeader(title: HomeKind.record.title, color: HomeWidgetTokens.recording, mood: recording == nil ? nil : .working, pictures: pictures)
                     Spacer(minLength: 0)
-                    HomeRecordDisc(side: HomeWidgetTokens.recordHero * (recording == nil ? 0.82 : 0.6), recording: recording != nil)
+                    HomeRecordDisc(side: HomeWidgetTokens.recordHero * (recording == nil ? 0.82 : 0.6), recording: recording != nil, off: off)
                     Spacer(minLength: 0)
                     words(lines: 1)
                 }
@@ -1109,10 +1135,10 @@ private struct HomeRecordWidget: View {
         } else {
             button {
                 HStack(spacing: HomeWidgetTokens.halves) {
-                    HomeRecordDisc(side: HomeWidgetTokens.recordMedium, recording: recording != nil)
+                    HomeRecordDisc(side: HomeWidgetTokens.recordMedium, recording: recording != nil, off: off)
                     VStack(alignment: .leading, spacing: HomeWidgetTokens.tight) {
                         words(lines: 2)
-                        if recording == nil {
+                        if recording == nil, !off {
                             Text("Audio stays on this iPhone; the transcript goes to Knowledge. [Home Widgets]")
                                 .font(HomeWidgetTokens.caption).lineLimit(2).homeInk(.tertiary)
                         }
@@ -1127,6 +1153,8 @@ private struct HomeRecordWidget: View {
     @ViewBuilder private func button<Label: View>(@ViewBuilder label: () -> Label) -> some View {
         if let recording {
             Button(intent: StopRecordingIntent(recordingID: recording.id), label: label).buttonStyle(.plain)
+        } else if off {
+            label() // no button: nothing would start
         } else {
             Button(intent: StartMeetingRecordingIntent(), label: label).buttonStyle(.plain)
         }
@@ -1139,6 +1167,8 @@ private struct HomeRecordWidget: View {
                     .font(HomeWidgetTokens.heroSmall).monospacedDigit().homeTone(HomeWidgetTokens.recording)
                 Text(verbatim: recording.title).font(HomeWidgetTokens.headline).lineLimit(lines).homeInk(.primary)
                 Text("Tap to stop [Home Widgets]").font(HomeWidgetTokens.caption).homeInk(.secondary)
+            } else if off {
+                Text("Meeting recording is off on this hub.").font(HomeWidgetTokens.caption).lineLimit(lines + 2).homeInk(.secondary)
             } else {
                 Text("Record a Meeting [Home Widgets]").font(HomeWidgetTokens.headline).lineLimit(1).homeInk(.primary)
                 if let now = c.eventNow {
@@ -1155,12 +1185,14 @@ private struct HomeRecordWidget: View {
 private struct HomeRecordDisc: View {
     var side: CGFloat
     var recording: Bool
+    /// The hub's recording module is off: the same mark without the recording red, and not named as a button.
+    var off = false
     @Environment(\.widgetRenderingMode) private var mode
 
     var body: some View {
         let full = mode == .fullColor
         ZStack {
-            Circle().fill(full ? HomeWidgetTokens.recordButton : .white)
+            Circle().fill(full ? (off ? AnyShapeStyle(.tertiary) : AnyShapeStyle(HomeWidgetTokens.recordButton)) : AnyShapeStyle(.white))
             HomeWidgetTokens.symbol(recording ? HomeWidgetTokens.stopSymbol : HomeWidgetTokens.recordSymbol)
                 .font(.system(size: side * 0.4, weight: .bold))
                 .foregroundStyle(full ? Color.white : Color.black)
@@ -1169,7 +1201,8 @@ private struct HomeRecordDisc: View {
         .compositingGroup()
         .frame(width: side, height: side)
         .homeAccent()
-        .accessibilityLabel(Text(recording ? "Stop Recording [Home Widgets]" : "Record a Meeting [Home Widgets]"))
+        .accessibilityLabel(off ? Text("Meeting recording is off on this hub.")
+                            : Text(recording ? "Stop Recording [Home Widgets]" : "Record a Meeting [Home Widgets]"))
     }
 }
 
@@ -1252,10 +1285,22 @@ private struct HomeHealthWidget: View {
 }
 
 /// Steps a day this week, today lit, the average a dashed line.
-private struct HomeWeekChart: View {
-    var days: [Int]
-    var average: Int?
+struct HomeWeekChart: View {
+    var days: [Double]
+    var average: Double?
     var now: Date
+    var color: Color = HomeWidgetTokens.steps
+    var calendar: Calendar = .current
+
+    init(days: [Int], average: Int?, now: Date) {
+        self.days = days.map(Double.init)
+        self.average = average.map(Double.init)
+        self.now = now
+    }
+
+    init(values: [Double], goal: Double, now: Date, color: Color, calendar: Calendar) {
+        days = values; average = goal; self.now = now; self.color = color; self.calendar = calendar
+    }
 
     var body: some View {
         let peak = max(1, max(days.max() ?? 1, average ?? 0))
@@ -1265,7 +1310,7 @@ private struct HomeWeekChart: View {
                     UnevenRoundedRectangle(topLeadingRadius: HomeWidgetTokens.tight, topTrailingRadius: HomeWidgetTokens.tight)
                         .frame(maxWidth: .infinity)
                         .frame(height: max(HomeWidgetTokens.hair, HomeWidgetTokens.chartHeight * CGFloat(n) / CGFloat(peak)))
-                        .modifier(Tone(today: i == min(6, days.count - 1)))
+                        .modifier(Tone(today: i == min(6, days.count - 1), color: color))
                 }
             }
             .frame(height: HomeWidgetTokens.chartHeight, alignment: .bottom)
@@ -1278,7 +1323,7 @@ private struct HomeWeekChart: View {
             }
             HStack(spacing: HomeWidgetTokens.gap) {
                 ForEach(0..<min(7, days.count), id: \.self) { i in
-                    Text(Calendar.current.date(byAdding: .day, value: i - (min(7, days.count) - 1), to: now) ?? now, format: .dateTime.weekday(.narrow))
+                    Text(calendar.date(byAdding: .day, value: i - (min(7, days.count) - 1), to: now) ?? now, format: weekdayFormat)
                         .font(HomeWidgetTokens.caption).homeInk(.tertiary).frame(maxWidth: .infinity)
                 }
             }
@@ -1287,12 +1332,20 @@ private struct HomeWeekChart: View {
 
     private struct Tone: ViewModifier {
         var today: Bool
+        var color: Color
         @Environment(\.widgetRenderingMode) private var mode
         func body(content: Content) -> some View {
-            if today { content.homeTone(HomeWidgetTokens.steps) }
-            else if mode == .fullColor { content.foregroundStyle(HomeWidgetTokens.steps.opacity(0.35)) }
+            if today { content.homeTone(color) }
+            else if mode == .fullColor { content.foregroundStyle(color.opacity(0.35)) }
             else { content.homeInk(.secondary) }
         }
+    }
+
+    private var weekdayFormat: Date.FormatStyle {
+        var format = Date.FormatStyle().weekday(.narrow)
+        format.calendar = calendar
+        format.timeZone = calendar.timeZone
+        return format
     }
 }
 
@@ -1405,6 +1458,8 @@ struct HomeLockView: View {
         Group {
             if !c.snapshot.paired {
                 unpaired
+            } else if kind == .water || kind == .protein {
+                HomeIntakeLock(kind: kind, c: c, family: family)
             } else {
                 switch family {
                 case .accessoryCircular: circular
@@ -1447,6 +1502,9 @@ struct HomeLockView: View {
         case .record: HomeWidgetTokens.recordSymbol
         case .health: HomeWidgetTokens.stepsSymbol
         case .inbox: HomeWidgetTokens.inboxSymbol
+        case .water: HomeWidgetTokens.waterSymbol
+        case .protein: HomeWidgetTokens.proteinSymbol
+        case .healthToday: HomeWidgetTokens.healthSymbol
         }
     }
 
@@ -1474,13 +1532,22 @@ struct HomeLockView: View {
             Gauge(value: min(1, Double(steps) / Double(avg))) { HomeWidgetTokens.symbol(symbol) } currentValueLabel: { Text(verbatim: homeSteps(steps)).minimumScaleFactor(HomeWidgetTokens.heroMinScale) }
                 .gaugeStyle(.accessoryCircular).privacySensitive()
         case .record:
-            Button(intent: StartMeetingRecordingIntent()) {
+            if c.snapshot.offersRecordingStart {
+                Button(intent: StartMeetingRecordingIntent()) {
+                    ZStack {
+                        AccessoryWidgetBackground()
+                        HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.recordMarkLock).homeAccent()
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                // The hub's recording module is off (#15214): the mark, dimmed, and no button.
                 ZStack {
                     AccessoryWidgetBackground()
-                    HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.recordMarkLock).homeAccent()
+                    HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.recordMarkLock).foregroundStyle(.secondary)
                 }
+                .accessibilityLabel(Text("Meeting recording is off on this hub."))
             }
-            .buttonStyle(.plain)
         case .today:
             ZStack {
                 AccessoryWidgetBackground()
@@ -1515,11 +1582,13 @@ struct HomeLockView: View {
         HStack(spacing: HomeWidgetTokens.gap) {
             if kind == .agents {
                 HomeFace(size: HomeWidgetTokens.faceLock, mood: c.mood(.agents), pictures: entry.pictures)
-            } else if kind == .record {
+            } else if kind == .record, c.snapshot.offersRecordingStart {
                 Button(intent: StartMeetingRecordingIntent()) {
                     HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.recordMarkLock).homeAccent()
                 }
                 .buttonStyle(.plain)
+            } else if kind == .record {
+                HomeWidgetTokens.symbol(symbol).font(HomeWidgetTokens.recordMarkLock).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 0) {
                 Text(verbatim: lockTitle).font(HomeWidgetTokens.lockTitle).lineLimit(1).homeAccent()
@@ -1547,11 +1616,14 @@ struct HomeLockView: View {
         case .computers:
             return interfaceText("\(c.machines.filter(\.online).count) of \(c.machines.count) online [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .record:
+            // The hub's recording module is off (#15214): the page's name, not a start.
+            guard c.snapshot.offersRecordingStart else { return interfaceText("Record [Home Widgets]") } // perf-ok: drawn once per timeline entry, in the widget extension
             return interfaceText("Record a Meeting [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .health:
             return interfaceText("\(c.snapshot.health?.steps ?? 0) steps [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
         case .inbox:
             return interfaceText("\(c.snapshot.inbox?.needsYou ?? 0) messages need you [Home Widgets]") // perf-ok: drawn once per timeline entry, in the widget extension
+        case .water, .protein, .healthToday: return ""
         }
     }
 
@@ -1569,12 +1641,14 @@ struct HomeLockView: View {
         case .computers:
             return c.machines.prefix(2).map { $0.name + " · " + computerState($0).words }
         case .record:
+            guard c.snapshot.offersRecordingStart else { return [interfaceText("Off on this hub")] } // perf-ok: drawn once per timeline entry, in the widget extension
             return c.eventNow.map { [interfaceText("Named “\($0.title)” [Home Widgets]")] } ?? [] // perf-ok: drawn once per timeline entry, in the widget extension
         case .health:
             guard let hrs = c.snapshot.health?.sleepHours else { return [] }
             return [Duration.seconds(hrs * 3600).formatted(.units(allowed: [.hours, .minutes], width: .narrow)) + " " + interfaceText("Asleep [Home Widgets]")] // perf-ok: drawn once per timeline entry, in the widget extension
         case .inbox:
             return c.snapshot.inbox?.latest.prefix(1).map { $0.sender + ": " + $0.summary } ?? []
+        case .water, .protein, .healthToday: return []
         }
     }
 

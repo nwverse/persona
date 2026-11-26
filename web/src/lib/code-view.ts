@@ -115,7 +115,9 @@ export function buildTree(entries: readonly TreeEntry[]): TreeNode[] {
 
 /** The directories on the way to path (to open them when it is selected). */
 export function ancestors(path: string): string[] {
-  const parts = path.split("/");
+  const clean = path.replace(/^\/+|\/+$/g, "");
+  if (!clean) return [];
+  const parts = clean.split("/").filter(Boolean);
   return parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join("/"));
 }
 
@@ -192,11 +194,14 @@ export function splitRows(rows: readonly DiffRow[]): SplitRow[] {
 
 /** How many lines lie hidden before hunk i (after the one before it), or undefined when not known (the file's end). */
 export function gapBefore(hunks: readonly Hunk[], i: number): number {
-  const h = hunks[i];
-  if (i === 0) return Math.max(0, h.new_start - 1);
-  const prev = hunks[i - 1];
-  const end = prev.new_start + prev.lines.filter((l) => l[0] !== "-" && l[0] !== "\\").length;
-  return Math.max(0, h.new_start - end);
+  const span = (h: Hunk) => {
+    const count = h.lines.filter((l) => l[0] !== "-" && l[0] !== "\\").length;
+    const start = count === 0 && h.lines.some((l) => l[0] === "-") ? h.new_start + 1 : h.new_start;
+    return { start, end: start + count };
+  };
+  const cur = span(hunks[i]);
+  if (i === 0) return Math.max(0, cur.start - 1);
+  return Math.max(0, cur.start - span(hunks[i - 1]).end);
 }
 
 /** Threads by where they show: under the line they are at (side:line), or at the end when it is not in the diff. */
@@ -349,8 +354,10 @@ export function useDiffMode(): ["unified" | "split", (m: "unified" | "split") =>
   return [mode, setDiffMode];
 }
 
-/** Whether a view needs the room of a wide page: split or columns (UI version 8), or with code or diffs in it. */
+const WIDE_ITEMS = new Set(["diff", "code", "graph", "scene", "map"]);
+
+/** Whether a view needs the room of a wide page: split or columns (UI version 8), or with code, diffs, or canvas components (graph, scene, map). */
 export function wideView(view?: { layout?: string; sections: { items: { type: string }[] }[] } | null): boolean {
   if (!view) return false;
-  return view.layout === "split" || view.layout === "columns" || view.sections.some((s) => s.items.some((it) => it.type === "diff" || it.type === "code"));
+  return view.layout === "split" || view.layout === "columns" || view.sections.some((s) => s.items.some((it) => WIDE_ITEMS.has(it.type)));
 }

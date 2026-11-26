@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { t } from "../../i18n";
-import { contextUsage } from "../../lib/context-usage";
+import { currentContextTokens } from "../../lib/context-usage";
 import { togglePanel } from "../../lib/panel";
 import { countdown, liveAccounts, resetLabel, useUsageWindows, windowKey, type UsageAccount } from "../../lib/usage-windows";
 import type { Item, Session } from "../../lib/types";
@@ -47,11 +47,12 @@ export function AgentStatusLine({ session, source, assistant, items, onCompact, 
 }) {
   const isAssistant = Boolean(assistant || session.assistant);
   const place = isAssistant ? null : workingLocation(session);
-  const hasContext = contextUsage(session) !== null || hasSessionTokenUsage(items);
+  const hasContext = currentContextTokens(session) > 0 || hasSessionTokenUsage(items);
   const accounts = useUsageWindows();
   const now = useNow(30_000, !isAssistant && accounts.length > 0);
   const quota = isAssistant ? null : sessionQuota(accounts, session, now);
-  if (!place && !hasContext && !quota && !source) return null;
+  const externalTrigger = Boolean(session.botmux_external_trigger);
+  if (!place && !hasContext && !quota && !source && !externalTrigger) return null;
 
   const placeLabel = place && [place.folder || place.name, place.branch].filter(Boolean).join(" · ");
   const placeContent = place && (
@@ -102,6 +103,11 @@ export function AgentStatusLine({ session, source, assistant, items, onCompact, 
           </a>
         )}
       </div>
+      {externalTrigger && (
+        <div role="status" data-testid="botmux-external-trigger-note" className="truncate pt-0.5 text-submeta text-ink-3">
+          {t("chat-botmux.external_trigger_notice")}
+        </div>
+      )}
     </div>
   );
 }
