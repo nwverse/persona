@@ -15,7 +15,7 @@ import { agentKey } from "./pins";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { heldLaunchRows, observeLaunchRows } from "./launch-handoff";
-import { cardSessionRow, getState, onHubEvent, subscribe, useStore } from "./store";
+import { cardSessionRow, getState, onHubEvent, subscribe, useStore, type State } from "./store";
 import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { runtimeAgents, runtimeSessions, supportsPagedAgents } from "./runtime-list";
 import { heldCounts, heldRows } from "./seen-outbox";
@@ -324,9 +324,14 @@ const scopedAgentCounts = () => runtimeAgents.getSnapshot().counts;
 const scopedAgentRows = () => runtimeAgents.getSnapshot().rows;
 const listedRows = () => runtimeSessions.getSnapshot().rows;
 
+/** A newer manager can supply views through a paging hub with an older hello. */
+export function hasAgentViews(s: Pick<State, "features" | "sessionSummaries">): boolean {
+  return s.features.includes("agent_view") || (s.features.includes(SESSIONS_LIST_FEATURE) && s.sessionSummaries.some(row => !!row.view));
+}
+
 export function useCounts() {
   const all = useAgentSessions();
-  const typed = useStore((s) => s.features.includes("agent_view"));
+  const typed = useStore(hasAgentViews);
   const complete = useFullAgentSessions(typed);
   const allInteractions = useStore((s) => s.interactions);
   const grading = useStore((s) => s.pushGrading);
@@ -351,7 +356,7 @@ export function useCounts() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- heldAt: heldSidesOf reads the held rows, which it versions
   const counts = useMemo(() => read && coupled ? heldCounts(read, pagedAgents ? agentRows : rows, marks, Date.now(), heldSidesOf) : read, [read, coupled, pagedAgents, agentRows, rows, marks, heldAt]);
   return useMemo(() => {
-    if (typed && complete.loaded) return { ...stateCounts(complete.sessions, allInteractions, grading), interactions, quietCounted: false };
+    if (typed) return { ...stateCounts(complete.loaded ? complete.sessions : all, allInteractions, grading), interactions, quietCounted: false };
     if (!bounded || !counts) return { ...stateCounts(all, allInteractions, grading), interactions, quietCounted: false };
     return { ...boundedCounts(counts, grading), interactions, quietCounted: true };
   }, [all, allInteractions, grading, interactions, counts, bounded, typed, complete]);

@@ -6,7 +6,7 @@ import type { AgentView } from "./agent-view-wire";
 import { byAttention, stateOf, viewOf } from "./format";
 import { managerBadges } from "./manager-attention";
 import { rowLine } from "./row-line";
-import { listedAgents, othersWaiting, stateCounts } from "./sessions";
+import { hasAgentViews, listedAgents, othersWaiting, stateCounts } from "./sessions";
 import type { Interaction, Session } from "./types";
 
 const machine = { id: "work", name: "Work", online: true };
@@ -40,6 +40,12 @@ describe("the Agents list reads the manager's view on each row", () => {
     expect(othersWaiting(1, reviewing)).toBe(1);
     expect(othersWaiting(1, waiting)).toBe(0);
     expect(Object.values(managerBadges({ default: "default", managers: [{ id: "default", name: "Default", online: true }] }, rows, [card]))).toEqual([1]);
+  });
+
+  it("recognizes views in paged rows during a rolling upgrade", () => {
+    expect(hasAgentViews({ features: ["sessions_list"], sessionSummaries: [reviewing] })).toBe(true);
+    expect(hasAgentViews({ features: ["sessions_list"], sessionSummaries: [{ ...reviewing, view: undefined }] })).toBe(false);
+    expect(hasAgentViews({ features: ["agent_view"], sessionSummaries: [] })).toBe(true);
   });
 
   it("resolves only missing views with each manager's original rows and cards", () => {
