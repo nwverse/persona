@@ -18,9 +18,10 @@ All HarmonyOS entry points share `harmony/entry/src/main/ets/xiaoyi/HeadlessHubS
 
 - **Lock-screen fail-closed approvals**: `ApproveFirstPending` and inline `AgentCardPage` confirmations query `screenLock.isScreenLocked()` and fail closed (`xiaoyi_unlock_required`) whenever the phone is locked or lock status cannot be verified.
 - **No silent auto-run outside the app**: Background and card approvals allow only plain tool permissions (`allow: true`) or edit-mode plans (`mode: "acceptEdits"`). `bypassPermissions`, secret-field prompts, questions, and terminal screens always defer to the foreground Persona app.
+- **Fail-closed recording-module guard**: When the paired Hub publishes the `modules` feature marker without `module.recording`, `StartPersonaRecordingIntent`, `persona://open?dest=recording`, `XiaoYiA2AEngine` (including omitting the `start_recording` suggestion chip), `AssistantSkill.startRecording()`, and the OpenClaw bridge refuse to start a recording with `"Meeting recording is off on this hub."` while keeping existing recordings readable and stoppable.
 - **No cloud relay approvals**: `harmony/scripts/xiaoyi-openclaw-bridge.mjs` explicitly refuses approval mutations over the cloud OpenClaw WebSocket and directs the user to confirm on their unlocked phone.
-- **Tenant isolation on Forget Hub**: Per-Hub XiaoYi state (`xiaoyi:` prefix in `harmony/entry/src/main/ets/core/StorageOwnership.ts`) is wiped automatically by `LocalStore.purgeHub(hub)`, and `ClientModel.forgetProfile()` clears shared XiaoYi Suggestions.
-- **SSH-tunnel detection**: Hubs configured with SSH-tunnel-only access fail cleanly in background extensions (`xiaoyi_ssh_open_app`) instead of hanging.
+- **Tenant isolation on Forget Hub**: Per-Hub XiaoYi state (`xiaoyi:` prefix in `harmony/entry/src/main/ets/core/StorageOwnership.ts`, including A2A context bindings, push outbox, and remembered Hub module flags) is wiped automatically by `LocalStore.purgeHub(hub)`, and `ClientModel.forgetProfile()` clears shared XiaoYi Suggestions.
+- **SSH-tunnel detection**: Hubs configured with SSH-tunnel-only access (`routePolicy` `legacy` or `always`) fail cleanly in background extensions (`xiaoyi_ssh_open_app`) instead of hanging, while `fallback` Hubs continue using direct HTTPS whenever reachable.
 - **No secrets in repository**: Tracked manifests keep the example bundle ID `com.example.persona.harmony` and placeholder `persona_harmony_agent`. Real Access Keys, Secret Keys, Agent IDs, and Hub tokens live exclusively in environment variables or local git-ignored config files.
 
 ## Immediate testing with a personal Huawei developer account (OpenClaw mode)
@@ -28,7 +29,7 @@ All HarmonyOS entry points share `harmony/entry/src/main/ets/xiaoyi/HeadlessHubS
 Once you have signed the XiaoYi Open Platform agreement and verified your developer account:
 
 1. In the XiaoYi Open Platform console, create an **OpenClaw** agent, copy its `AK`, `SK`, and `Agent ID`, and add your own Huawei ID under **Whitelist Management**.
-2. Export your local credentials (never commit them) and start the zero-dependency Node 24 bridge on a machine that can reach your Persona Hub:
+2. Export your local credentials (never commit them), run the 60-second preflight check (`--check --check-ws`), and start the zero-dependency Node 24 bridge on a machine that can reach your Persona Hub:
 
    ```sh
    export XIAOYI_AK="<your-ak>"
@@ -36,10 +37,11 @@ Once you have signed the XiaoYi Open Platform agreement and verified your develo
    export XIAOYI_AGENT_ID="<your-agent-id>"
    export PERSONA_HUB_URL="https://<hub-address>"
    export PERSONA_HUB_TOKEN="<your-persona-token>"
+   node harmony/scripts/xiaoyi-openclaw-bridge.mjs --check --check-ws
    node harmony/scripts/xiaoyi-openclaw-bridge.mjs
    ```
 
-   Alternatively, place those fields (`ak`, `sk`, `agentId`, `hubUrl`, `hubToken`, optional `manager` and `wsUrl`) in a `0600` JSON file outside the repository and run `XIAOYI_CONFIG_FILE=/path/to/xiaoyi-openclaw.json node harmony/scripts/xiaoyi-openclaw-bridge.mjs`.
+   Alternatively, place those fields (`ak`, `sk`, `agentId`, `hubUrl`, `hubToken`, optional `manager` and `wsUrl`) in a `0600` JSON file outside the repository and run `node harmony/scripts/xiaoyi-openclaw-bridge.mjs --config /path/to/xiaoyi-openclaw.json --check --check-ws`. The bridge signs WebSocket upgrades with Huawei OpenClaw headers (`x-access-key`, `x-ts`, `x-sign`, `x-agent-id`, `x-hag-trace-id`), sends `clawd_bot_init` and periodic `heartbeat` frames, and wraps streaming replies in `agent_response` envelopes.
 3. Open XiaoYi on your HarmonyOS phone (signed into the whitelisted Huawei ID) and invoke your test agent with everyday prompts such as `"Check status"`, `"Add a to-do: review weekly notes"`, `"Search knowledge: release"`, or any Persona question.
 
 ## HarmonyOS developer publishing checklist (On-Device A2A, Intents Kit, Skills)
