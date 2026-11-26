@@ -105,6 +105,15 @@ export interface TodoRepoGate {
   reason?: string;
 }
 
+/** Active persistent blocker edge projected on a to-do under todos_v2 (#16135, #16138). */
+export interface TodoActiveBlocker {
+  id: string;
+  kind: string;
+  target_ref: string;
+  state: string;
+  attempts?: number;
+}
+
 /** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
 export type TodoBoardSectionKey =
   | "needs_you"
@@ -286,6 +295,8 @@ export interface Todo {
   view?: TodoSummary;
   /** Server-computed weakest-link Target Repo delivery gate summary, populated only when todos_v2 === true (#15699). */
   repo_gate?: TodoRepoGate;
+  /** Active persistent blocker edges blocking this to-do, populated only when todos_v2 === true (#16135, #16138). */
+  active_blockers?: TodoActiveBlocker[];
 }
 
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
