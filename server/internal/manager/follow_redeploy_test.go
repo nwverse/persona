@@ -480,7 +480,7 @@ func TestManagerRunRestartLoopGuard(t *testing.T) {
 	}
 }
 
-// Unsupervised runs (manual CLI, tests, development worker) do not watch or exit when the binary is replaced.
+// A standalone manager follows its replaced launcher in place after draining.
 func TestManagerRunUnsupervisedReexecsWhenIdle(t *testing.T) {
 	dir, _, write := boundBinaryEnv(t)
 	release := make(chan struct{})
@@ -497,8 +497,10 @@ func TestManagerRunUnsupervisedReexecsWhenIdle(t *testing.T) {
 		map[string]string{}, // PERSONA_ASSISTANT_DEPLOY unset
 		func(context.Context) (bool, string) { return true, "" },
 		nil,
-		func(int) {
-			write(goodBinary+"# v2\n", 0o755)
+		func(run int) {
+			if run == 1 {
+				write(goodBinary+"# v2\n", 0o755)
+			}
 		},
 		release,
 	)
