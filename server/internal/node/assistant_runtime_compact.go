@@ -11,12 +11,13 @@ import (
 )
 
 type runtimeCompaction struct {
-	runtime   *runtimeConn
-	state     *proto.Compaction
-	revision  int64
-	turnError string
-	sawWork   bool
-	settled   chan string
+	runtime    *runtimeConn
+	state      *proto.Compaction
+	prevStatus string
+	revision   int64
+	turnError  string
+	sawWork    bool
+	settled    chan string
 }
 
 func (n *Node) assistantCompactRuntime(ctx context.Context, id string, onlyRunning bool) error {
@@ -52,6 +53,11 @@ func (n *Node) assistantCompactRuntime(ctx context.Context, id string, onlyRunni
 	}
 	n.publishSessionsSoon()
 	params := map[string]any{"session_id": id, "text": "/compact", "assistant": true}
+	st, _ := n.state.get(id)
+	cwd := n.runtimeAssistantCwd(id, "", st)
+	if env := n.assistantEnvForRuntime(host, cwd, id); env != nil {
+		params["env"] = env
+	}
 	var reply struct {
 		Queued bool `json:"queued"`
 	}
@@ -107,8 +113,12 @@ func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn
 	if onlyRunning {
 		return nil, refusal("not_running", "The runtime cannot confirm this conversation is already running.", nil)
 	}
+	prevStatus := row.Status
+	if prevStatus == "" || prevStatus == proto.StatusWorking || prevStatus == proto.StatusBlocked {
+		prevStatus = proto.StatusIdle
+	}
 	compaction := &runtimeCompaction{
-		runtime: host, revision: row.Rev, turnError: row.TurnError, settled: make(chan string, 1),
+		runtime: host, prevStatus: prevStatus, revision: row.Rev, turnError: row.TurnError, settled: make(chan string, 1),
 		state: &proto.Compaction{State: proto.CompactionRunning, StartedAt: time.Now().UTC()},
 	}
 	if b.compactions == nil {

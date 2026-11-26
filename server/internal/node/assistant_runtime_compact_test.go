@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -299,5 +301,64 @@ func TestAssistantRuntimeHandoff(t *testing.T) {
 	}
 	if len(pages) != 1 || json.Unmarshal(pages[0], &page) != nil || page.SessionID != runtimeCompactTestID || page.Limit != 400 {
 		t.Fatalf("runtime pages: %s", pages)
+	}
+}
+
+func TestAssistantRuntimeCompactionKeepsSilentStatus(t *testing.T) {
+	n, _, push := runtimeCompactFixture(t)
+	id := runtimeCompactTestID
+	push(proto.StatusDone, 5, "")
+	if _, err := nodeCall(t, n, "assistant.compact", map[string]any{"session_id": id}); err != nil {
+		t.Fatal(err)
+	}
+	push(proto.StatusWorking, 5, "")
+	during := listed(t, n)[id]
+	if during.Compaction == nil || during.Compaction.State != proto.CompactionRunning {
+		t.Fatalf("expected running compaction: %+v", during.Compaction)
+	}
+	if during.Status != proto.StatusDone {
+		t.Fatalf("runtime compaction leaked working status %q, want %q", during.Status, proto.StatusDone)
+	}
+	push(proto.StatusDone, 6, "")
+	waitFor(t, "silent compaction settled", func() bool {
+		got := listed(t, n)[id].Compaction
+		return got != nil && got.State == proto.CompactionDone && got.FinishedAt != nil
+	})
+}
+
+func TestAssistantRuntimeCompactionForwardsEnvironment(t *testing.T) {
+	n, hub := runtimeNode(t)
+	assistantHub(hub)
+	cwd := prepareRuntimeAssistantEnvironment(t, n, false)
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["name"], hello["launcher"] = "agy", "Antigravity", "agy"
+	hello["caps"].(map[string]any)["assistant_environment"] = true
+	host := dialRuntime(t, n, hello)
+	id := runtimeCompactTestID
+	row := proto.Session{SessionID: id, Cwd: cwd, Status: proto.StatusDone, Rev: 3}
+	if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{row}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "runtime row listed", func() bool {
+		got, _, ok := n.runtimes.rowOf(id)
+		return ok && got.Rev == 3
+	})
+	if _, err := nodeCall(t, n, "assistant.compact", map[string]any{"session_id": id}); err != nil {
+		t.Fatal(err)
+	}
+	sends := host.got("session.send")
+	if len(sends) != 1 {
+		t.Fatalf("runtime sends: %d", len(sends))
+	}
+	env := runtimeAssistantEnvironment(t, sends[0])
+	wantEnv := n.assistantEnvForRuntime(n.runtimes.ownerOf(id), cwd, id)
+	if len(env) == 0 || !maps.Equal(env, wantEnv) {
+		t.Fatalf("compact env = %v, want %v", env, wantEnv)
+	}
+	if env["PERSONA_ASSISTANT_BIN"] != n.assistantBin(cwd) || env["PERSONA_SPACE"] != "main" {
+		t.Fatalf("compact env missing assistant paths/space: %v", env)
+	}
+	if runtime.GOOS != "windows" && (env["EXAMPLE_ACCOUNT"] != "2" || env["EXAMPLE_TOKEN"] != "fake-credential-handle=with-equals") {
+		t.Fatalf("compact env missing assistant credentials: %v", env)
 	}
 }

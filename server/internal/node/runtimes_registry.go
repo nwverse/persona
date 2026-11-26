@@ -833,6 +833,9 @@ func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 				row := h.sessions[i]
 				if compact := b.compactions[row.SessionID]; compact != nil {
 					row.Compaction = compact.state
+					if compact.state.State == proto.CompactionRunning && row.Status == proto.StatusWorking {
+						row.Status = compact.prevStatus
+					}
 				}
 				dst = append(dst, row)
 			}

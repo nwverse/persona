@@ -266,6 +266,7 @@ type Service struct {
 	prefs            settingsBook           // profile.go
 	guard            dispatchGuardBook      // dispatch_guard.go
 	main             mainBook               // start.go
+	mainAutoCompact  mainAutoCompactBook    // main_auto_compact.go
 	archived         archiveBook            // conversations.go
 	tags             conversationTagsBook   // conversation_tags.go
 	directionFilings directionSessionsBook  // direction_sessions.go
@@ -790,6 +791,9 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || sessionSend) && p["is_main"] == true {
 		p["idle_compaction"] = s.idleCompactionPolicy(ctx)
+		if id, _ := p["session_id"].(string); id != "" {
+			s.noteMainAutoCompactInput(device, id)
+		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || sessionSend) {
 		// Every manager-owned send into an existing conversation attests the cache refresh role here, not only those
@@ -1173,6 +1177,7 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
+	s.noteMainAutoCompactInput(r.MachineID, r.SessionID)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
 	}
@@ -1256,6 +1261,9 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
 		// A usage limit moves a conversation the owner relies on to a backup launcher (limit_fallback.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.limitFallbackTurnSettled, r.MachineID, r.SessionID)
+		// Main conversation idle automatic compaction (main_auto_compact.go).
+		s.noteMainAutoCompactTurnEnded(ctx, r.MachineID, r.SessionID)
+		s.afterSettle(context.WithoutCancel(ctx), s.mainAutoCompactTurnSettled, r.MachineID, r.SessionID)
 	}
 	if !meeting {
 		s.spawnPinAfterTurn(ctx, r.MachineID, r.SessionID)
@@ -1318,6 +1326,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	s.followStarts(ctx, d)              // the app's starts, for launcher health (launcher_health_starts.go)
 	s.directionTreeSessions(d)          // an Agent of the direction tree may have moved (direction_tree.go)
 	s.agentNamesChanged(d)
+	s.mainAutoCompactSessions(ctx, d.MachineID, d.Sessions)
 }
 
 func randomHex(n int) string {
