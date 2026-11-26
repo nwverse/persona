@@ -934,6 +934,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		if st.Model != "" {
 			info["model"] = st.Model
 		}
+		if st.AppMode != "" {
+			info["permission_mode"] = st.AppMode
+		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
 		if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
@@ -944,7 +947,7 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			if runtimeRow.Model != "" {
 				info["model"] = runtimeRow.Model
 			}
-			if runtimeRow.PermissionMode != "" {
+			if _, hasMode := info["permission_mode"]; !hasMode && runtimeRow.PermissionMode != "" {
 				info["permission_mode"] = runtimeRow.PermissionMode
 			}
 			if runtimeRow.Effort != "" {

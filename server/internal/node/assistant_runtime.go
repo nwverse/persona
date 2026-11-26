@@ -385,11 +385,17 @@ func clientMsgIDFrom(ctx context.Context) string {
 	return id
 }
 
-// assistantModeOf is the permission mode the conversation was last set to (session.modes, or a message's), "" none.
+// assistantModeOf is the permission mode the conversation was last set to (session.modes, or a message's),
+// falling back to the persisted session state after a node restart, "" none.
 func (n *Node) assistantModeOf(id string) string {
 	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.modes[id].Mode
+	mode := n.modes[id].Mode
+	n.mu.Unlock()
+	if mode != "" || n.state == nil {
+		return mode
+	}
+	st, _ := n.state.get(id)
+	return st.AppMode
 }
 
 // assistantInterruptRuntime stops the turn of an assistant conversation a runtime runs; nothing when it is away.

@@ -45,6 +45,7 @@
     <string name="agents_subtitle_two">%1$s, %2$s.</string>
     <string name="agents_action_todos">To-dos</string>
     <string name="agents_action_new_session">New session</string>
+    <string name="agents_new_agent_in_project">New Agent in %1$s</string>
     <string name="agents_action_list_settings">List settings</string>
     <string name="agents_search_placeholder">Search spaces, sessions or latest messages</string>
     <string name="agents_action_search">Search</string>

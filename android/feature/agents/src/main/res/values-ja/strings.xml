@@ -37,6 +37,7 @@
     <string name="agents_subtitle_two">%1$s、%2$s。</string>
     <string name="agents_action_todos">ToDo</string>
     <string name="agents_action_new_session">新規セッション</string>
+    <string name="agents_new_agent_in_project">%1$s にエージェントを作成</string>
     <string name="agents_action_list_settings">リスト設定</string>
     <string name="agents_search_placeholder">スペース、セッション、最新メッセージを検索</string>
     <string name="agents_action_search">検索</string>
