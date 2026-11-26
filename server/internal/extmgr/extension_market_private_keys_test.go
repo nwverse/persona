@@ -187,7 +187,7 @@ func TestPrivateMarketKeyVerifiesInstallAndUpgrade(t *testing.T) {
 	if state, kid := signatureOf(mk); state != extension.SigSigned || kid != k.id {
 		t.Fatalf("signature: %v", mk["signature"])
 	}
-	if keys, _ := mk["trusted_keys"].([]any); len(keys) != 1 || keys[0].(map[string]any)["key_id"] != k.id {
+	if keys, _ := mk["trusted_keys"].(map[string]any); len(keys) != 1 || keys[k.id] != k.text {
 		t.Fatalf("trusted_keys: %v", mk["trusted_keys"])
 	}
 	pm.install("1.0.0")
@@ -311,7 +311,7 @@ func TestPrivateMarketKeyRotation(t *testing.T) {
 	pm.install("1.0.0")
 
 	code, out := call(t, pm.mux, "POST", keys+pm.id+"/keys", pm.phone, fmt.Sprintf(`{"key":%q}`, newKey.text))
-	if code != 200 || len(out["trusted_keys"].([]any)) != 2 {
+	if code != 200 || len(out["trusted_keys"].(map[string]any)) != 2 {
 		t.Fatalf("add key: %d %v", code, out)
 	}
 	waitMarketsRead(t, pm.h) // the background read a key change starts, before the publisher changes the catalog
@@ -335,7 +335,7 @@ func TestPrivateMarketKeyRotation(t *testing.T) {
 	}
 
 	code, out = call(t, pm.mux, "DELETE", keys+pm.id+"/keys/"+oldKey.id, pm.phone, "")
-	if code != 200 || len(out["trusted_keys"].([]any)) != 1 {
+	if code != 200 || len(out["trusted_keys"].(map[string]any)) != 1 {
 		t.Fatalf("remove old key: %d %v", code, out)
 	}
 	waitMarketsRead(t, pm.h)
@@ -379,7 +379,7 @@ func TestPrivateMarketKeyRotation(t *testing.T) {
 	}
 	waitMarketsRead(t, pm.h)
 	_, list := call(t, pm.mux, "GET", keys+pm.id+"/keys", pm.phone, "")
-	if len(list["keys"].([]any)) != 0 {
+	if len(list["keys"].(map[string]any)) != 0 {
 		t.Fatalf("keys left: %v", list)
 	}
 	if code, out := pm.refresh(); code != 200 {

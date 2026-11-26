@@ -38,7 +38,9 @@ beforeEach(() => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       calls.push({ path, method, body });
       const m = markets[0];
-      const keys = method === "POST" ? [...(m.trusted_keys ?? []), { key: body.key, key_id: "2222222222222222" }] : (m.trusted_keys ?? []).filter((k) => !path.endsWith("/" + k.key_id));
+      const keys = { ...(m.trusted_keys ?? {}) };
+      if (method === "POST") keys["2222222222222222"] = body.key;
+      else delete keys[path.split("/").pop()!];
       markets = [{ ...m, trusted_keys: keys }];
       return reply(markets[0]);
     }
@@ -115,7 +117,7 @@ describe("the admin page's markets", () => {
 
   it("shows a private market's signing keys and edits them", async () => {
     const key = { key: "ed25519:" + "A".repeat(43) + "=", key_id: "1111111111111111" };
-    markets = [{ ...github("private"), signature: { state: "signed", key_id: key.key_id }, trusted_keys: [key] }];
+    markets = [{ ...github("private"), signature: { state: "signed", key_id: key.key_id }, trusted_keys: { [key.key_id]: key.key } }];
     await open();
     expect(text()).toContain("1 把公钥");
     act(() => button("签名公钥")!.click());

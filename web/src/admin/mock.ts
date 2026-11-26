@@ -258,7 +258,7 @@ export function installMock(scenario: string) {
       : [
           { id: MA, spec: "https://extensions.example.com/persona/", name: "Example 扩展", description: "Example 官方维护的扩展", has_token: false, extensions: 4, warnings: [], fetched_at: iso(42), added_at: iso(60 * 72), official: true },
           { id: MB, spec: "github:example/team-extensions", name: "团队扩展", has_token: true, extensions: 2, warnings: ["第 3 个扩展：没有 manifest，跳过"], fetched_at: iso(95), added_at: iso(60 * 48),
-            signature: { state: "signed", key_id: "5d1e0c7a9b3f2468" }, trusted_keys: [{ key: "ed25519:" + "Q".repeat(43) + "=", key_id: "5d1e0c7a9b3f2468" }] },
+            signature: { state: "signed", key_id: "5d1e0c7a9b3f2468" }, trusted_keys: { "5d1e0c7a9b3f2468": "ed25519:" + "Q".repeat(43) + "=" } },
         ];
   const catalogItems = (): CatalogItem[] => {
     const raw: CatalogItem[] = [
@@ -567,13 +567,11 @@ export function installMock(scenario: string) {
     if (mkKeys) {
       const m = markets.find((x) => x.id === decodeURIComponent(mkKeys[1]));
       if (!m) return fail(404, "not_found", "没有这个市场");
-      if (method === "GET") return json({ keys: m.trusted_keys ?? [] });
-      const keys = m.trusted_keys ?? [];
-      const next =
-        method === "POST"
-          ? [...keys, { key: String(body.key), key_id: Math.random().toString(16).slice(2, 10).padEnd(16, "0") }]
-          : keys.filter((k) => k.key_id !== decodeURIComponent(mkKeys[2] ?? ""));
-      const read: Market = { ...m, trusted_keys: next, signature: next.length ? m.signature : { state: "unsigned" } };
+      if (method === "GET") return json({ keys: m.trusted_keys ?? {} });
+      const next = { ...(m.trusted_keys ?? {}) };
+      if (method === "POST") next[Math.random().toString(16).slice(2, 10).padEnd(16, "0")] = String(body.key);
+      else delete next[decodeURIComponent(mkKeys[2] ?? "")];
+      const read: Market = { ...m, trusted_keys: next, signature: Object.keys(next).length ? m.signature : { state: "unsigned" } };
       markets = markets.map((x) => (x.id === m.id ? read : x));
       return json(read);
     }

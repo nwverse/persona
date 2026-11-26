@@ -33,13 +33,20 @@ export interface Market {
   official?: boolean;
   /** A private market's trusted public keys (docs/extensions/extensions.md "Private market keys"): while there are any,
    *  its index must be signed by one of them. Absent on unsigned markets, the official one and older hubs. */
-  trusted_keys?: MarketKey[];
+  trusted_keys?: Record<string, string>; // key id → "ed25519:<base64>"
 }
 
 /** One trusted public key of a private market. */
 export interface MarketKey {
   key: string;
   key_id: string;
+}
+
+/** A market's trusted keys, by key id. */
+export function marketKeys(m?: Market | null): MarketKey[] {
+  return Object.entries(m?.trusted_keys ?? {})
+    .map(([key_id, key]) => ({ key_id, key }))
+    .sort((a, b) => a.key_id.localeCompare(b.key_id));
 }
 
 /** How an installed market extension was verified (ExtensionView.market_signature). */

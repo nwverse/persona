@@ -7,7 +7,7 @@ import { tRich } from "../../i18n/rich";
 import { useEffect, useRef, useState } from "react";
 import { previewBlocked } from "../../lib/extension-model";
 import { ago } from "../../lib/format";
-import { agreeLabel, canUninstall, isGitMarket, itemState, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, parseKeyList, specLabel, wantsGitHubToken, GITHUB_TOKEN_URL, isGitHubMarket, type CatalogItem, type Catalog, type Market } from "../../lib/extension-market";
+import { agreeLabel, canUninstall, isGitMarket, itemState, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketKeys, marketLine, parseKeyList, specLabel, wantsGitHubToken, GITHUB_TOKEN_URL, isGitHubMarket, type CatalogItem, type Catalog, type Market } from "../../lib/extension-market";
 import { Button, cx, Dialog, IconButton, toast, useNow } from "../../ui/atoms";
 import { addMarket, addMarketKey, AdminError, errorText, getCatalog, getMarkets, installExtension, previewFromMarket, refreshMarket, removeMarket, removeMarketKey, setMarketToken, upgradeExtension } from "../api";
 import { AdminIcon } from "../icons";
@@ -111,10 +111,10 @@ export function ExtensionMarkets({ onChanged }: { onChanged: () => void }) {
                       token
                     </Tag>
                   )}
-                  {(m.trusted_keys?.length ?? 0) > 0 && (
-                    <Tag tone="green" title={m.trusted_keys!.map((k) => k.key_id).join(", ")}>
+                  {marketKeys(m).length > 0 && (
+                    <Tag tone="green" title={marketKeys(m).map((k) => k.key_id).join(", ")}>
                       <AdminIcon name="shield" size={10} />
-                      {t("admin-pages-extensionmarket.keys_tag", { count: m.trusted_keys!.length })}
+                      {t("admin-pages-extensionmarket.keys_tag", { count: marketKeys(m).length })}
                     </Tag>
                   )}
                 </div>
@@ -495,7 +495,7 @@ function KeysDialog({ market, onClose, onChanged }: { market: Market | null; onC
       setBusy("");
     }
   };
-  const keys = market?.trusted_keys ?? [];
+  const keys = marketKeys(market);
   return (
     <Dialog
       open={Boolean(market)}

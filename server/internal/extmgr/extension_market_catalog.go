@@ -31,7 +31,7 @@ type MarketView struct {
 	Signature MarketSignatureView `json:"signature"`
 	// TrustedKeys are a private market's owner-configured public keys (extension_market_keys.go); while there are
 	// any, its catalog must be signed by one of them. Never set for the official market.
-	TrustedKeys []MarketKeyView `json:"trusted_keys,omitempty"`
+	TrustedKeys map[string]string `json:"trusted_keys,omitempty"` // key id → "ed25519:<base64>"
 }
 
 // MarketSignatureView is a market's signature as the apps show it.

@@ -105,7 +105,8 @@ type ExtensionView struct {
 	// is connected.
 	Attached *ExtensionAttached `json:"attached,omitempty"`
 	// MarketSignature: how an extension installed from a market was verified (extension_market_keys.go).
-	MarketSignature *ExtensionSignatureView `json:"market_signature,omitempty"`
+	// State: official | signed | key_removed | unsigned | market_invalid.
+	MarketSignature *MarketSignatureView `json:"market_signature,omitempty"`
 }
 
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").

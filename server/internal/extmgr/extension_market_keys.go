@@ -17,35 +17,30 @@ import (
 // key. A market without keys stays unsigned, exactly as before. The keys verify provenance only: the default sandbox
 // exemption stays with the compiled-in official key (extension_sandbox.go).
 
-// MarketKeyView is one of a private market's trusted public keys (public, so shown whole).
-type MarketKeyView struct {
-	Key   string `json:"key"`
-	KeyID string `json:"key_id"`
+// marketKeysOut is GET …/markets/{id}/keys: the trusted keys by key id (public, so shown whole).
+type marketKeysOut struct {
+	Keys map[string]string `json:"keys"`
 }
 
-// ExtensionSignatureView is how an installed market extension's package was verified (ExtensionView.MarketSignature):
+// How an installed market extension's package was verified (ExtensionView.MarketSignature, a MarketSignatureView):
 //   - official: by the official market's compiled-in key;
 //   - signed: by one of its private market's trusted keys, still trusted (KeyID says which);
 //   - key_removed: by a private market key the owner no longer trusts, or whose market is gone;
 //   - unsigned: not verified (an unsigned market, or installed before the market had keys);
 //   - market_invalid: verified when installed, but the market's catalog no longer verifies (no upgrades from it).
-type ExtensionSignatureView struct {
-	State string `json:"state"`
-	KeyID string `json:"key_id,omitempty"`
-}
-
 const (
 	extSigOfficial      = "official"
-	extSigSigned        = "signed"
+	extSigSigned        = extension.SigSigned
 	extSigKeyRemoved    = "key_removed"
-	extSigUnsigned      = "unsigned"
+	extSigUnsigned      = extension.SigUnsigned
 	extSigMarketInvalid = "market_invalid"
 )
 
-func marketKeyViews(keys []string) []MarketKeyView {
-	out := []MarketKeyView{}
+// marketKeyViews are keys by key id.
+func marketKeyViews(keys []string) map[string]string {
+	out := map[string]string{}
 	for _, k := range keys {
-		out = append(out, MarketKeyView{Key: k, KeyID: keyIDOf(k)})
+		out[keyIDOf(k)] = k
 	}
 	return out
 }
@@ -126,16 +121,16 @@ func (h *Manager) marketKeysEdit(ctx context.Context, id string, edit func([]str
 }
 
 // marketSignatureOf is how p, installed from a market, was verified; nil for an extension not from a market.
-func (h *Manager) marketSignatureOf(ctx context.Context, p *extension.Extension) *ExtensionSignatureView {
+func (h *Manager) marketSignatureOf(ctx context.Context, p *extension.Extension) *MarketSignatureView {
 	market := extension.FromMarket(p.Record.Origin)
 	if p.Record.Source != extension.SourceInstalled || market == "" {
 		return nil
 	}
 	key := p.Record.MarketKey
 	if key == "" {
-		return &ExtensionSignatureView{State: extSigUnsigned}
+		return &MarketSignatureView{State: extSigUnsigned}
 	}
-	v := &ExtensionSignatureView{State: extSigKeyRemoved, KeyID: keyIDOf(key)}
+	v := &MarketSignatureView{State: extSigKeyRemoved, KeyID: keyIDOf(key)}
 	if extension.Official.SigningKey != "" && key == extension.Official.SigningKey {
 		v.State = extSigOfficial
 	}
@@ -173,7 +168,7 @@ func (h *Manager) marketKeyRoutes(api *http.ServeMux, base string, gate func(htt
 			fail(w, errNoMarket, "")
 			return
 		}
-		writeJSON(w, map[string]any{"keys": marketKeyViews(keys)})
+		writeJSON(w, marketKeysOut{Keys: marketKeyViews(keys)})
 	}))
 	api.HandleFunc("POST "+base+"/markets/{mid}/keys", gate(func(w http.ResponseWriter, r *http.Request) {
 		var in struct {

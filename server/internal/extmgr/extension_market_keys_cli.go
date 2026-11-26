@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/clitext"
@@ -38,17 +40,15 @@ func marketKeyCommand(ctx context.Context, c *extensionClient, l i18n.Lang, args
 	var m MarketView
 	switch {
 	case args[0] == "list" && len(args) == 2:
-		var out struct {
-			Keys []MarketKeyView `json:"keys"`
-		}
+		var out marketKeysOut
 		if err := c.do(ctx, "GET", base, nil, &out); err != nil {
 			return err
 		}
 		if len(out.Keys) == 0 {
 			fmt.Fprintln(stdout, i18n.T(l, "extmgr-cli.market_keys_none"))
 		}
-		for _, k := range out.Keys {
-			fmt.Fprintf(stdout, "%s  %s\n", k.KeyID, k.Key)
+		for _, id := range slices.Sorted(maps.Keys(out.Keys)) {
+			fmt.Fprintf(stdout, "%s  %s\n", id, out.Keys[id])
 		}
 		return nil
 	case args[0] == "add" && len(args) == 3:
