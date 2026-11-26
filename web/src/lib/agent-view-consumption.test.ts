@@ -58,4 +58,22 @@ describe("the Agents list reads the manager's view on each row", () => {
     const future = { ...waiting, view: JSON.parse('{"phase":"paused","rank":45,"counted":true}') };
     expect(viewOf(future)).toEqual({ phase: "idle", reason: { kind: "host_unknown" }, rank: 45, counted: true });
   });
+
+  it("keeps a cross-computer child's counted request visible where its manager put it", () => {
+    const parent = row("parent", { phase: "working", rank: 20 });
+    const child = { ...waiting, machine_id: "second", is_subagent: true, folded_under: parent.session_id, folded_under_machine_id: parent.machine_id };
+    const card: Interaction = { id: "question", kind: "question", machine_id: child.machine_id, session_id: child.session_id };
+    for (const sessions of [[parent, child], [{ ...parent, view: undefined }, { ...child, view: undefined }]]) {
+      const shown = listedAgents(sessions, [card]);
+      expect(shown.filter(s => s.view?.counted).map(s => s.session_id)).toEqual([child.session_id]);
+      expect(stateCounts(shown).badge).toBe(1);
+      expect(buildAgentGroups(shown, [machine], "state")[0].sessions[0].session_id).toBe(child.session_id);
+    }
+  });
+
+  it("looks up card ownership in the manager that sent the card", () => {
+    const managers = [{ id: "alpha", name: "Alpha", online: true }, { id: "beta", name: "Beta", online: true }];
+    const card: Interaction = { id: "approval", manager: "beta", kind: "permission", machine_id: machine.id, session_id: reviewing.session_id };
+    expect(managerBadges({ default: "alpha", managers }, [{ ...reviewing, manager: "alpha" }], [card])).toEqual({ alpha: 0, beta: 1 });
+  });
 });

@@ -61,7 +61,9 @@ export function foldRows(rows: Session[]): Session[] {
   let changed = false;
   const out: Session[] = [];
   for (const s of rows) {
-    if (s.is_subagent || isFoldedIn(s, listed)) {
+    // Views are published per computer. A child on another computer can own
+    // a counted request even when the client also has its parent's row.
+    if (!s.view?.counted && (s.is_subagent || isFoldedIn(s, listed))) {
       changed = true;
       continue;
     }

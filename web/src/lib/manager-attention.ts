@@ -30,7 +30,8 @@ export function waitingAgents(list: ManagerList, sessions: readonly Session[], i
     waiting.get(id)!.add(key);
   };
   const keyOf = (mid: string, sid: string) => `${mid}/${sid}`;
-  const byKey = new Map(sessions.map((s) => [keyOf(s.machine_id, s.session_id), s]));
+  const scopedKey = (manager: string | undefined, key: string) => JSON.stringify([ownerIn(list, manager), key]);
+  const byKey = new Map(sessions.map((s) => [scopedKey(s.manager, keyOf(s.machine_id, s.session_id)), s]));
   const counted = (s: Session) => !s.quiet && !isMuted(s, mutes);
   // an agent waiting only on cards its task's supervisor holds, and those cards, are not the user's yet (lib/supervisor-held.ts)
   const held = supervisorHeldOnly(interactions);
@@ -50,7 +51,7 @@ export function waitingAgents(list: ManagerList, sessions: readonly Session[], i
     const homeMid = requestHomeMachine(ix);
     const home = requestHome(ix);
     const key = keyOf(homeMid, home);
-    const s = byKey.get(key);
+    const s = byKey.get(scopedKey(ix.manager, key));
     // a session not in the list (not read yet): muted by its own switch only, as interactionMuted does
     if (s?.view && !s.assistant) continue;
     if (s ? !counted(s) : isMuted({ machine_id: homeMid, session_id: home }, mutes)) continue;

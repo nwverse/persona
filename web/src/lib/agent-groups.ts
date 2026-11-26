@@ -102,7 +102,7 @@ export interface AgentGroup {
 export function splitAgentSessions(all: Session[], machines: Machine[], keepOffline?: (s: Session) => boolean) {
   const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
   const agents = all.filter((s) => !s.assistant);
-  const live = agents.filter((s) => (activityOf(s) !== "offline" && online.has(s.machine_id)) || keepOffline?.(s));
+  const live = agents.filter((s) => s.view?.counted || (activityOf(s) !== "offline" && online.has(s.machine_id)) || keepOffline?.(s));
   const listed = new Set(live);
   const recent = agents
     .filter((s) => !listed.has(s))
@@ -190,6 +190,7 @@ export function replyAsk(s: Session): string {
 /** Nothing to look at: seen (or unknown), not held in Unread, not waiting on the hub or itself, not waiting for the
  *  user's reply, and not just finished. */
 export function isQuiet(s: Session, mutes: AgentMutes = NO_MUTES, held?: HeldOrderOptions): boolean {
+  if (stateOf(s) === "error") return false;
   return ["idle", "unknown"].includes(activityOf(s)) && heldPlace(s, held) !== "unread" && !isWaiting(s) && !awaitsReply(s, mutes) && !justFinished(s, mutes, held);
 }
 
