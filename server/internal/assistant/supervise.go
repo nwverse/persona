@@ -106,7 +106,7 @@ type Supervision struct {
 	// OwnerWork is server-only evidence for the close guard (#15406): the latest owner-authored instruction and the
 	// latest Persona assignment per linked Agent session. Keeping it out of the wire shape prevents another Agent or
 	// an ordinary to-do reader from seeing an excerpt meant for the owner and the responsible supervisor.
-	OwnerWork []OwnerSessionWork `json:"-"`
+	OwnerWork []ownerSessionWork `json:"-"`
 }
 
 // assigned records a current ownership decision, rather than a pre-policy legacy ledger.
@@ -129,6 +129,10 @@ type TaskProgress struct {
 	// is Text (one line of at most 200 characters).
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
+	// machine and session name the Agent that sent this report (in memory only, never on the wire), so a done report
+	// only settles left-over shells of the Agent that wrote it (#16418).
+	machine string
+	session string
 }
 
 // TaskReview is one review: the assistant's verdict, with each criterion's evidence or gap.
@@ -163,6 +167,8 @@ type TaskReview struct {
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	Parks     int       `json:"parks,omitempty"`
 	DueAt     time.Time `json:"due_at,omitzero"`
+	// DueResends: how many times its parked_due was told again because no task_review followed the reminder.
+	DueResends int `json:"due_resends,omitempty"`
 	// ParkEndedAt is recorded when this wait is replaced or resolved, so its time is excluded from stalled checks.
 	ParkEndedAt time.Time `json:"park_ended_at,omitzero"`
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
@@ -174,6 +180,8 @@ type TaskReview struct {
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
 	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
 	ExternalPR *externalPRObservation `json:"external_pr,omitempty"`
+	// ExternalIssue is the last read of the GitHub issue this park's evidence names (park_issue_wake.go, #14050).
+	ExternalIssue *externalIssueObservation `json:"external_issue,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -254,7 +262,7 @@ func (v *Supervision) clone() *Supervision {
 		p := *v.Progress
 		out.Progress = &p
 	}
-	out.OwnerWork = make([]OwnerSessionWork, len(v.OwnerWork))
+	out.OwnerWork = make([]ownerSessionWork, len(v.OwnerWork))
 	for i, w := range v.OwnerWork {
 		out.OwnerWork[i] = w
 		if w.Instruction != nil {
@@ -632,6 +640,24 @@ func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) b
 		s.todosChanged(ctx)
 	}
 	return ok
+}
+
+// clearDoneProgress drops a prior turn's in-memory done report when a new turn begins on supervised task id, so an
+// earlier done report cannot settle shells left behind by a later turn (#16418).
+func (s *Service) clearDoneProgress(ctx context.Context, id string) {
+	s.todos.mu.Lock()
+	cur := s.todos.todos[id]
+	cleared := false
+	if cur != nil && cur.Supervision != nil && cur.Supervision.Progress != nil && cur.Supervision.Progress.Kind == upReportDone {
+		v := cur.Supervision.clone()
+		v.Progress = nil
+		cur.Supervision = v
+		cleared = true
+	}
+	s.todos.mu.Unlock()
+	if cleared {
+		s.todosChanged(ctx)
+	}
 }
 
 // ---- the snapshot ----

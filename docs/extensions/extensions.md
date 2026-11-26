@@ -1684,6 +1684,21 @@ An option the command does not take, a missing argument or an extra one is refus
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
 What the commands print reads in the terminal's language (`PERSONA_LANG`, else `LC_ALL` / `LC_MESSAGES` / `LANG`; English when none is set or it is `C`), and they ask the hub for its text (errors, permission lines, statuses) in the same language, not in the user language an app last set ([i18n.md](../protocol/i18n.md), "Command line"). `show` stays JSON. The quotes below are the English text.
 
+Commands that can change an extension (`install`, `upgrade`, `rollback`, `attach` / `detach`, `enable` / `disable`,
+`sandbox`, `auth login` / `logout`, `config`, `secret`, `auto-upgrade`, `contribution`, `market` writes, `dev` and
+`uninstall`) print the resolved state directory and loopback hub before their preview or first request:
+
+```text
+PERSONA_HOME: /absolute/path/to/state
+Hub: http://127.0.0.1:18660
+```
+
+`--yes` skips the confirmation, not this target line. For scripts, add `--expect-home <absolute path>` and/or
+`--expect-hub <host:port>` to make a wrong target impossible: a mismatch fails before any preview, HTTP request or
+filesystem change, and the error names both the expected and actual target. Without either flag, an ordinary install
+keeps its existing behavior apart from the extra target line. The old `JARVIS_HOME` environment name is still accepted;
+when neither variable is set, the default is `$HOME/.persona` (or the old state directory when that is what exists).
+
 ```text
 personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "; still needs: …"
 personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set, its data directory (data_dir)
@@ -2703,8 +2718,8 @@ In the manifest:
 ```
 
 - Only `nav_page` can name a `group` (#9071): `{"id": "workbench", "title": "工作台"}`, the id `^[a-z][a-z0-9-]{0,31}$` and the title 1–40 characters in the manifest's language, translated in `l10n/<language>.json` under `groups` (`{"groups": {"workbench": "Workbench"}}`). Pages of any extension naming the same id share the group (the first one listed names it). It is only where the page goes by default: the user can move any page to another group, rename, reorder or remove groups, and a removed group's pages go back to **Pages**. `GET …/-/ui` lists it as the place's `group`, its title in the request's language. A hub from before reads manifests strictly and refuses one with `group`; iOS and Android ignore the field until their own PRs.
-- Only `nav_page` can set `icon`, picked from a fixed few: `plugin` (default), `chart`, `gauge`, `list`, `bell`, `doc`, `calendar`, `money`; each client maps them to the icon with the same meaning in its own design system,
-  and draws unknown ones as `plugin`. Extensions cannot supply images or SF Symbol names, and their only color is `icon_color` below.
+- Only `nav_page` can set `icon`, picked from the fixed set a row's icon uses (`NavIcon`, "Row icon / avatar / thumbnail" below): `extension` (default, old name `plugin`), `chart`, `gauge`, `list`, `bell`, `doc`, `calendar`, `money`, `person`, `chat`, `mail`, `link`, `folder`, `star`, `check`, `warning`, `clock`, `tag`, `search`, `settings`, the code-hosting names of UI version 4 (`branch`, `commit`, `code`, `pull_request`, `merge`, `file`) and the names UI version 6 adds; each client maps them to the icon with the same meaning in its own design system (the same one a row draws for the name),
+  and draws unknown ones as `extension`. The web drew only the first eight, the code-hosting four and the UI version 6 names on a `nav_page` before #16281 (the rest as `extension`); iOS and Android drew the whole set. Extensions cannot supply images or SF Symbol names, and their only color is `icon_color` below.
 - Only `nav_page` can set `icon_color` (#10822): one of the named colors (`Color`, the same as a row's `icon_color`), for the page's icon in the sidebar. It is drawn only while the owner chose **Colored** in Settings › Appearance › **Sidebar icons** (off by default, `docs/design/DESIGN_SYSTEM.md` "Sidebar icon colors"); in **Monochrome**, and for a page without it, the icon stays the sidebar's neutral ink, and the open page's icon keeps the open row's ink either way. `GET …/-/ui` lists it as the place's `icon_color`. A hub from before reads manifests strictly and refuses one with `icon_color`; iOS and Android ignore the field until their own PRs (#10822 tracks them).
 - Only `overview_card` can set `opens`: the id of a `nav_page` or `plugin_page` of the same extension; without it the card is not tappable (buttons and rows inside the card still are).
 - Titles are 1–40 characters; when they do not fit in navigation, each client truncates them (single line), never wrapping.
@@ -3018,7 +3033,7 @@ The app sends `4` in `context.ui_version`; `hub.extension_points.ui` in `initial
 - **`Action.values`** (at most 8): values carried by the action. After a tap, `values` sent to `ui.action` merge in this order: page fields (with `submit`) → the component's own values (documented below for each component) → the action's values (win on duplicate names).
   A row of commits or a sequence of paths no longer needs parameters embedded in `id`.
 - **`Filter.choices`**: at most 100 (previously 20; branch dropdowns). Older apps receive at most 20, always including the selected one.
-- New icons: `branch`, `commit`, `code`, `pull_request`, `merge`, `file` (`nav_page` can use `branch` / `code` / `pull_request` / `merge` from these).
+- New icons: `branch`, `commit`, `code`, `pull_request`, `merge`, `file` (`nav_page` can use them all; the web drew `commit` and `file` there as `extension` before #16281).
 
 ### Components
 
@@ -3578,6 +3593,8 @@ replaces a scene in place (`items`) makes an older app draw the whole page again
 An interactive 2D geographic map showing routes, points of interest, markers and external map links in UI slots or out-of-band inline chat `tool_views`. The app sends `12` in `context.ui_version`; `hub.extension_points.ui` is `12`. A client that draws `map` but does not yet draw an earlier component (such as `scene` from version 11) declares `context.unsupported: ["scene"]` so the hub runs the matching downgrade while leaving `map` intact. One new component, `map`, authoritative in `schema/extension/view.schema.json` (`MapComponent`, `MapViewport`, `MapCoordinate`, `MapMarker`, `MapRoute`, `MapLink`, `x-since: 12`); example: `schema/extension/examples/View.v12-map-route.json`.
 
 **Coordinates**: WGS-84 decimal degrees everywhere (`lat` in `[-90, 90]`, `lon` in `[-180, 180]`), regardless of vendor coordinate systems (for example, an extension reading GCJ-02 or BD-09 converts to WGS-84 before returning). Renderers draw with native map views matching the shell's light and dark appearance.
+
+Android draws the supplied points and routes on its own map canvas. An inline view opens the full-screen controls for pan, zoom, route selection and camera reset. The same renderer draws read-only tool views in the transcript, including views on folded work. The Android client declares `tool_views` for both HTTP transcript reads and the live socket. It advertises UI version 12 and requests fallback components for `scene`.
 
 | Field | What it does |
 | --- | --- |
