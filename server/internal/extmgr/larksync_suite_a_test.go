@@ -292,30 +292,24 @@ func TestLarkSyncSuiteA(t *testing.T) {
 		if code, body := doSyncReq(t, mux, http.MethodPost, "/api/v1/bots/feishu/sync/bindings/"+key+"/run", ""); code != 200 {
 			t.Fatalf("start run %s: %d %v", key, code, body)
 		}
-		deadline := time.Now().Add(15 * time.Second)
-		for {
+		var found map[string]any
+		waitLong(t, "run "+key+" finished", func() bool {
 			_, view := doSyncReq(t, mux, http.MethodGet, "/api/v1/bots/feishu/sync", "")
-			var found map[string]any
 			for _, raw := range view["bindings"].([]any) {
 				m := raw.(map[string]any)
 				if m["key"] == key {
 					found = m
-					break
+					running, _ := m["running"].(bool)
+					return !running
 				}
 			}
-			if found == nil {
-				t.Fatalf("binding %s missing from view", key)
-			}
-			if running, _ := found["running"].(bool); !running {
-				if health, _ := found["health"].(string); health != larksyncwire.HealthOK {
-					t.Fatalf("run %s: health %s (%v)", key, health, found["error"])
-				}
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("run %s did not finish", key)
-			}
-			time.Sleep(10 * time.Millisecond)
+			return false
+		})
+		if found == nil {
+			t.Fatalf("binding %s missing from view", key)
+		}
+		if health, _ := found["health"].(string); health != larksyncwire.HealthOK {
+			t.Fatalf("run %s: health %s (%v)", key, health, found["error"])
 		}
 		advance(time.Hour)
 	}

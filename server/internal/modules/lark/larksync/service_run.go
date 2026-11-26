@@ -353,6 +353,9 @@ func (s *Service) runHeld(ctx context.Context, key, mode string, rt *bindingRunt
 		commitErr = store.CommitLarkSyncRun(ctx, key, moved, idx.records(), rows)
 		if commitErr == nil {
 			committedLinksBackfillVer = linksBackfillVer
+			if len(res.Messages) > 0 {
+				s.host.EmitLarkMessages(binding.Key, res.Messages)
+			}
 			if tier == larksyncwire.TierFull && b.BackfillVersion < backfillVersion {
 				book := cursors[larksyncwire.SenderNamesCursor]
 				if v, ok := moved[larksyncwire.SenderNamesCursor]; ok {

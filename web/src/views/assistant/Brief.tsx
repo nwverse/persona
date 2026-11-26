@@ -2,6 +2,7 @@
 // what happened in the last hours, what is to be verified), as the hub worked it out when the run started; the same
 // rows as the Lark card, with an Accept button for each task to verify and a Handled button for each question that can wait
 // (docs/extensions/bots.md "Morning and evening briefings").
+import { EvidenceLink } from "./EvidenceLink";
 import { leaveChat, openAgent, openTask } from "../../lib/handoff";
 import { conversationRoute } from "../../lib/conversation-page";
 import { type ReactNode, Suspense, useRef, useState } from "react";
@@ -9,7 +10,8 @@ import { lazyPage } from "../../lib/lazy-page";
 import { errorText } from "../../lib/api";
 import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { updateTodo } from "../../lib/todos";
-import { acceptBrief, briefBody, failedKey, handledLater, type BriefBody, type BriefRow, type FeedItem } from "../../lib/feed";
+import { briefBody } from "../../lib/brief-rows";
+import { acceptBrief, failedKey, handledLater, type BriefBody, type BriefRow, type FeedItem } from "../../lib/feed";
 import { shortDuration } from "../../lib/format";
 import { formatDate, t } from "../../i18n";
 import { Button, cx, toast } from "../../ui/atoms";
@@ -160,7 +162,8 @@ export function AcceptRow({ row, stacked = false, admission, onBusyChange, block
             {row.verdict}
           </div>
         )}
-        {row.detail && <div className="text-label text-ink-2 [overflow-wrap:anywhere]">{row.detail}</div>}
+        {row.detail && <div className={cx("text-label text-ink-2 [overflow-wrap:anywhere]", !row.outcome && "line-clamp-4 leading-relaxed")} title={row.detail}>{row.detail}</div>}
+        {!row.outcome && <EvidenceLink verification link={row.evidence_link} todoId={row.id} />}
         {row.recommend && <div className="text-label text-ink-2 [overflow-wrap:anywhere]" data-brief-recommend>{t("assistant-brief.recommend", { option: row.recommend })}</div>}
         <div className={cx("text-label", stacked ? "text-ink-3" : "text-ink-2")} data-brief-meta>{meta(row)}</div>
       </div>

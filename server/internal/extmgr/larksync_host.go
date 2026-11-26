@@ -73,6 +73,13 @@ func (a larkSyncHost) KBKick(connectorID string, scope connectorwire.Scope) {
 	a.h.kbKick(connectorID, scope)
 }
 
+func (a *larkSyncHost) EmitLarkMessages(binding string, msgs []larksyncwire.Message) {
+	if a == nil || a.h == nil {
+		return
+	}
+	a.h.emitLarkMessages(binding, msgs)
+}
+
 func (a larkSyncHost) PushLocalized(build func(i18n.Lang) map[string]any, collapseID string) {
 	a.h.pushLocalized(build, collapseID)
 }
@@ -87,7 +94,7 @@ func (h *Manager) larkSync() botport.SyncService {
 	h.bots.syncMu.Lock()
 	defer h.bots.syncMu.Unlock()
 	if h.bots.sync == nil {
-		h.bots.sync = botport.NewSyncService(larkSyncHost{h})
+		h.bots.sync = botport.NewSyncService(&larkSyncHost{h})
 	}
 	return h.bots.sync
 }

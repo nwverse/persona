@@ -24,11 +24,12 @@ type larkSyncMemStore struct {
 	*botStore
 	now func() time.Time
 
-	lmu     sync.Mutex
-	cursors map[string]map[string]string
-	index   map[string]larksyncwire.IndexRecord
-	outbox  []db.LarkSyncOutbox
-	seq     int64
+	lmu       sync.Mutex
+	cursors   map[string]map[string]string
+	index     map[string]larksyncwire.IndexRecord
+	outbox    []db.LarkSyncOutbox
+	seq       int64
+	commitErr error
 }
 
 func newLarkSyncMemStore(now func() time.Time) *larkSyncMemStore {
@@ -74,6 +75,9 @@ func (s *larkSyncMemStore) LarkSyncIndex(_ context.Context, keys []string) (map[
 func (s *larkSyncMemStore) CommitLarkSyncRun(_ context.Context, binding string, cursors map[string]string, recs []larksyncwire.IndexRecord, outbox []db.LarkSyncOutbox) error {
 	s.lmu.Lock()
 	defer s.lmu.Unlock()
+	if s.commitErr != nil {
+		return s.commitErr
+	}
 	if len(cursors) > 0 && s.cursors[binding] == nil {
 		s.cursors[binding] = map[string]string{}
 	}

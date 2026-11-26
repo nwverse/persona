@@ -300,6 +300,8 @@ Regression coverage: `server/internal/larksyncwire/scopes_test.go` checks the au
 client sync model/component tests cover the reauthorization prompt and action.
 
 
+The sync's runs commit cursors, the dedup index and the outbox rows together in one transaction; once committed, any round that wrote new messages emits batched, paginated `lark.messages` metadata events (no message bodies) to enabled extensions subscribed to `lark.messages` and explicitly granted `lark.messages.read` (`docs/extensions/extensions.md` "Events").
+
 Requests are rate-limited per binding and per API family, and a 429, `99991400`, `230020` or `1061045` waits as the platform
 asks before trying again. **A read that fails leaves its cursor where it was**: the cursors, the dedup index and what the
 knowledge base will collect are committed together after a run, so nothing is skipped and nothing half-read is kept. A failed
