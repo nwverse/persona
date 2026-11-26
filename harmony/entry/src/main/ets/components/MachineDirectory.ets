@@ -431,7 +431,7 @@ export struct MachineDirectory {
   }
   private metricDetail(m:MachineReading,key:string,cores:number = Wire.number(m.system,'cores')):string {
     if (key === 'cpu') return Wire.has(m.latest,'load') ?
-      tr('machine_load')+' '+formatMachineLoad(Wire.number(m.latest,'load',-1),cores,tr('machine_load_per_core')) : '';
+      formatMachineLoad(Wire.number(m.latest,'load',-1),cores,tr('machine_load_per_core')) : '';
     if (key === 'mem') return Wire.has(m.latest,'mem_used') && Wire.number(m.latest,'mem_total') > 0 ?
       machineBytes(Wire.number(m.latest,'mem_used'))+' / '+machineBytes(Wire.number(m.latest,'mem_total')) : '';
     if (key === 'network') return Wire.has(m.latest,'net_tx') ? '↑ '+this.present('network',Wire.number(m.latest,'net_tx',-1)) : '';
@@ -448,7 +448,7 @@ export struct MachineDirectory {
         .minFontSize(Tokens.interfaceFontVp(12,nativeEnvironment.fontScale)).maxFontSize(Tokens.interfaceFontVp(Tokens.body,nativeEnvironment.fontScale))
         .fontWeight(FontWeight.Bold).fontColor(Colors.ink).maxLines(1)
       Text(this.metricDetail(m,key,cores) || ' ').fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
-        .minFontSize(Tokens.interfaceFontVp(9,nativeEnvironment.fontScale)).maxFontSize(Tokens.interfaceFontVp(12,nativeEnvironment.fontScale)).fontColor(Colors.secondary).maxLines(1)
+        .minFontSize(Tokens.interfaceFontVp(8,nativeEnvironment.fontScale)).maxFontSize(Tokens.interfaceFontVp(12,nativeEnvironment.fontScale)).fontColor(Colors.secondary).maxLines(1)
       MachineChart({points:machineTrace(m,key,3600,this.chartEnd),end:this.chartEnd,tint:this.tint(key),
         ceiling:key === 'cpu' || key === 'mem' ? 100 : 0,alternateTint:key === 'network' ? this.tint('upload') : '',dark:nativeEnvironment.dark,
         chartHeight:PhoneStyle.sidebarMetric(30,nativeEnvironment.fontScale)}).margin({top:2})
