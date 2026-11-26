@@ -1070,13 +1070,16 @@ export interface LauncherHealth {
 export type TodosV2AutoSeen = "off" | "subtasks" | "all_autonomous";
 export type TodosV2PendingReviewSLAHours = 0 | 12 | 24 | 48;
 export type TodosV2CanWaitSLAHours = 0 | 24 | 48 | 72;
+export type TodosV2DigestWindowMinutes = 0 | 30 | 60 | 120;
 
-/** Additive user-configurable attention preferences under todos_v2 (#16098, #16111). */
+/** Additive user-configurable attention preferences under todos_v2 (#16098, #16111, #16433). */
 export interface TodosV2AttentionPrefs {
   todos_v2_auto_seen?: TodosV2AutoSeen;
   todos_v2_pending_review_sla_hours?: TodosV2PendingReviewSLAHours;
   todos_v2_can_wait_sla_hours?: TodosV2CanWaitSLAHours;
   todos_v2_fold_children?: boolean;
+  todos_v2_quiet_hours?: string;
+  todos_v2_digest_window_minutes?: TodosV2DigestWindowMinutes;
 }
 
 export interface AssistantInfo {
@@ -1121,6 +1124,10 @@ export interface AssistantInfo {
   todos_v2_can_wait_sla_hours?: TodosV2CanWaitSLAHours;
   /** Fold non-urgent child tasks under top-level goals in board projection under todos_v2 (#16098, #16111); defaults to true. */
   todos_v2_fold_children?: boolean;
+  /** Daily quiet-hours window ("HH:MM-HH:MM" 24h range with distinct start/end, or "" for off) under todos_v2 (#16433). */
+  todos_v2_quiet_hours?: string;
+  /** Digest batching window in minutes (0, 30, 60, or 120) for non-urgent notifications under todos_v2 (#16433). */
+  todos_v2_digest_window_minutes?: TodosV2DigestWindowMinutes;
   /** Unified experimental Integrations & Extensions Labs toggle (#14802, #14805); off by default and absent from older hubs. */
   integrations_v2?: boolean;
   work_guide?: boolean;
