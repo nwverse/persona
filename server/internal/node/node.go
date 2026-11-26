@@ -3332,10 +3332,12 @@ func interactiveShell() (string, error) {
 	return "", errors.New("这台电脑上没有 Git Bash（Git for Windows）：Claude Code 在 Windows 上也要它，装上后再试")
 }
 
-// loginShell runs a command in an interactive zsh so ~/.zshrc functions and PATH are available (loginShellProgram:
-// bash without zsh, Git Bash on Windows).
+// loginShell runs a command in the user's shell the way their terminal starts it, so the rc files' functions and PATH
+// are available (loginShellProgram, shellFlag: zsh -ic, or bash -ic; on macOS the account's own bash or zsh, -lic; Git
+// Bash on Windows).
 func loginShell(ctx context.Context, script string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, loginShellProgram(), "-ic", script)
+	shell := loginShellProgram()
+	cmd := exec.CommandContext(ctx, shell, shellFlag(shell), script)
 	cmd.Stdin = nil
 	return cmd
 }
