@@ -2,14 +2,20 @@ package recordingwire
 
 import (
 	"errors"
+	"slices"
+	"strconv"
 	"time"
 )
+
+// PhotoID is a photo's id: the phone's, a lowercase UUID, the same in every retry of its upload. It is stored and sent
+// as the text it is.
+type PhotoID string
 
 // Photo is a meeting photo as the apps read it (GET …/photos): Cited follows the current minutes, Forwarded says the
 // hub sent it into the room (deleting it withdraws it there).
 type Photo struct {
 	N         int       `json:"n"`
-	ID        string    `json:"id"`
+	ID        PhotoID   `json:"id"`
 	At        float64   `json:"at"`
 	Mime      string    `json:"mime"`
 	Width     int       `json:"width"`
@@ -26,7 +32,7 @@ type Photo struct {
 // recording's start (clamped into it here), Data the decoded image of Mime, Width × Height pixels, Text and Caption
 // trimmed ("" when blank), Digest of the request's body, so that a retry with the same body is the same photo.
 type PhotoUpload struct {
-	ID            string
+	ID            PhotoID
 	At            float64
 	Mime          string
 	Data          []byte
@@ -37,8 +43,8 @@ type PhotoUpload struct {
 
 // PhotoRef names a photo: its number and the phone's id.
 type PhotoRef struct {
-	N  int    `json:"n"`
-	ID string `json:"id"`
+	N  int     `json:"n"`
+	ID PhotoID `json:"id"`
 }
 
 // PhotoText is a listed photo's words, all the hub's models read of it: the owner's caption, the phone's recognized
@@ -76,3 +82,57 @@ var (
 	// ErrBadPhoto wraps what is wrong with a photo to add.
 	ErrBadPhoto = errors.New("invalid photo")
 )
+
+// PhotoBook is photos.json.
+type PhotoBook struct {
+	Next   int           `json:"next"` // the next n; n is never reused
+	Rev    int64         `json:"rev"`  // PartPhotos' revision: only goes up
+	Photos []StoredPhoto `json:"photos"`
+	// Deleted are the photos the owner deleted: deleting one again answers false, adding its id again ErrPhotoDeleted.
+	Deleted []PhotoRef `json:"deleted,omitempty"`
+	// Withdraw are the photos deleted after they went into the room, which the room is still to be told of.
+	Withdraw []PhotoRef `json:"withdraw,omitempty"`
+}
+
+// Index is the position of the listed photo n, -1 when none is.
+func (b *PhotoBook) Index(n int) int {
+	return slices.IndexFunc(b.Photos, func(p StoredPhoto) bool { return p.N == n })
+}
+
+// StoredPhoto is a photo in photos.json: Photo without Cited (the minutes say that), with the request's digest and
+// Queued while it waits to go into the room (until its send succeeded: Queued and Forwarded is a send in doubt).
+type StoredPhoto struct {
+	N         int       `json:"n"`
+	ID        PhotoID   `json:"id"`
+	At        float64   `json:"at"`
+	Mime      string    `json:"mime"`
+	Width     int       `json:"width"`
+	Height    int       `json:"height"`
+	Text      string    `json:"text,omitempty"`
+	Caption   string    `json:"caption,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	Forwarded bool      `json:"forwarded,omitempty"`
+	Queued    bool      `json:"queued,omitempty"`
+	AddedAt   time.Time `json:"added_at"`
+	Digest    string    `json:"digest"`
+}
+
+// Photo is p as the apps read it, cited as the minutes say.
+func (p StoredPhoto) Photo(cited map[int]bool) Photo {
+	return Photo{N: p.N, ID: p.ID, At: p.At, Mime: p.Mime, Width: p.Width, Height: p.Height, Text: p.Text, Caption: p.Caption,
+		Note: p.Note, Cited: cited[p.N], Forwarded: p.Forwarded, AddedAt: p.AddedAt}
+}
+
+// Words is p's words.
+func (p StoredPhoto) Words() PhotoText {
+	return PhotoText{N: p.N, At: p.At, Caption: p.Caption, Text: p.Text, Note: p.Note}
+}
+
+// FileName is the photo's file in attachments/.
+func (p StoredPhoto) FileName() string {
+	ext := ".jpg"
+	if p.Mime == PhotoPNG {
+		ext = ".png"
+	}
+	return "p" + strconv.Itoa(p.N) + ext
+}

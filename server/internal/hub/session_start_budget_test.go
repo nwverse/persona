@@ -23,10 +23,12 @@ import (
 func TestSessionStartBudgetMatchesNodeStartup(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
+		launcher   string
 		agentType  string
 		configured string
 		async      bool
 		short      bool
+		omitPrompt bool
 	}{
 		{name: "default Claude async", async: true, short: true},
 		{name: "explicit Claude async", agentType: "claude", async: true, short: true},
@@ -35,14 +37,22 @@ func TestSessionStartBudgetMatchesNodeStartup(t *testing.T) {
 		{name: "explicit AGY async", agentType: "agy", async: true},
 		{name: "configured Codex async", configured: "codex", async: true},
 		{name: "configured TRAE CLI async", configured: "traex", async: true},
+		{name: "untyped Pi async request", launcher: "pi", async: true},
+		{name: "untyped Pi async request without prompt", launcher: "pi", async: true, omitPrompt: true},
 		{name: "Claude sync"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newTestHub(t)
 			connectAssistant(t, h) // it says what a start runs on; without it nothing starts
+			launcher := tc.launcher
+			if launcher == "" {
+				launcher = "wrapper"
+			}
 			startReceiptNode(t, h, func(_ context.Context, params json.RawMessage) (any, error) {
 				var in struct {
 					AgentType string `json:"agent_type"`
+					Async     bool   `json:"async"`
+					Prompt    string `json:"prompt"`
 				}
 				if err := json.Unmarshal(params, &in); err != nil {
 					return nil, err
@@ -54,13 +64,26 @@ func TestSessionStartBudgetMatchesNodeStartup(t *testing.T) {
 				if in.AgentType != want {
 					t.Errorf("node agent_type = %q, want %q", in.AgentType, want)
 				}
+				if wantAsync := startsAsync(tc.async, "", launcher, want); in.Async != wantAsync {
+					t.Errorf("node async = %v, want %v", in.Async, wantAsync)
+				}
+				if launcher == "pi" && tc.omitPrompt && in.Prompt != "" {
+					t.Errorf("promptless Pi request carried prompt %q", in.Prompt)
+				}
 				return map[string]any{"session": proto.Session{SessionID: "created"}}, nil
 			})
-			h.byID["machine"].cfg.Launchers = []assistantwire.ConfiguredLauncher{{Launcher: proto.Launcher{Name: "wrapper"}, AgentType: tc.configured}}
-			body, err := json.Marshal(map[string]any{
-				"machine_id": "machine", "cwd": "/code", "launcher": "wrapper", "prompt": "hello", "tab_name": "test",
-				"agent_type": tc.agentType, "async": tc.async,
-			})
+			h.byID["machine"].cfg.Launchers = []assistantwire.ConfiguredLauncher{{Launcher: proto.Launcher{Name: launcher}, AgentType: tc.configured}}
+			fields := map[string]any{
+				"machine_id": "machine", "cwd": "/code", "launcher": launcher, "tab_name": "test",
+				"async": tc.async,
+			}
+			if !tc.omitPrompt {
+				fields["prompt"] = "hello"
+			}
+			if tc.agentType != "" {
+				fields["agent_type"] = tc.agentType
+			}
+			body, err := json.Marshal(fields)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +97,7 @@ func TestSessionStartBudgetMatchesNodeStartup(t *testing.T) {
 			if want == "" {
 				want = tc.configured
 			}
-			budget := startBudget(startsAsync(tc.async, "", "wrapper", want))
+			budget := startBudget(startsAsync(tc.async, "", launcher, want))
 			min, max := 60*time.Second, 101*time.Second
 			if tc.short {
 				min, max = 10*time.Second, 16*time.Second
@@ -208,7 +231,7 @@ func TestSessionStartUsesManagerResolvedBudget(t *testing.T) {
 	}
 }
 
-func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
+func TestSessionStartResolvedSyncKeepsLocalNameAndCompletion(t *testing.T) {
 	for _, fallback := range []bool{false, true} {
 		t.Run(map[bool]string{false: "manager disables async", true: "fallback changes inferred type"}[fallback], func(t *testing.T) {
 			h := newTestHub(t)
@@ -218,7 +241,7 @@ func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
 			srv := httptest.NewServer(mux)
 			t.Cleanup(srv.Close)
 			startReceiptNode(t, h, func(context.Context, json.RawMessage) (any, error) {
-				return map[string]any{"session": proto.Session{SessionID: "created"}}, nil
+				return map[string]any{"session": proto.Session{SessionID: "created", SpaceKind: "herdr", SlotID: "w1:t1", SlotName: "hello"}}, nil
 			})
 			m := h.byID["machine"]
 			m.owner = "m-budget"
@@ -230,7 +253,6 @@ func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
 				{Launcher: proto.Launcher{Name: "resolved"}, AgentType: "codex"},
 			}
 			resolvedAt := make(chan time.Time, 1)
-			names := make(chan string, 1)
 			manager := connectGuardManager(t, h, srv.URL, m.owner, func(method string, raw json.RawMessage) (any, error) {
 				switch method {
 				case assistantwire.MethodAgentStartParams:
@@ -238,9 +260,10 @@ func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
 					if err := json.Unmarshal(raw, &in); err != nil {
 						return nil, err
 					}
-					if in.NameFrom != "" {
-						t.Errorf("initial async resolution asked for name %q", in.NameFrom)
+					if in.NameFrom != "hello" {
+						t.Errorf("start naming input = %q, want hello", in.NameFrom)
 					}
+					in.Params["tab_name"] = "hello" // the manager's local tabSlug placeholder
 					if fallback {
 						in.Params["launcher"] = "resolved"
 					} else {
@@ -249,22 +272,24 @@ func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
 					resolvedAt <- time.Now()
 					return map[string]any{"params": in.Params}, nil
 				case assistantwire.MethodAgentTabName:
-					var in struct {
-						Prompt string `json:"prompt"`
-					}
-					if err := json.Unmarshal(raw, &in); err != nil {
-						return nil, err
-					}
-					names <- in.Prompt
-					return map[string]any{"name": "resolved-name"}, nil
+					t.Error("the resolved synchronous start asked for a model name")
+					return nil, errors.New("synchronous naming")
 				}
 				return map[string]any{}, nil
 			})
 			events := make(chan string, 4)
+			nameStarted := make(chan assistantwire.AgentTabNameStart, 1)
 			manager.mu.Lock()
-			manager.onEvent = func(method string, _ json.RawMessage) {
-				if method == assistantwire.EventStartEnded || method == assistantwire.EventModelUsed {
+			manager.onEvent = func(method string, raw json.RawMessage) {
+				if method == assistantwire.EventStartEnded || method == assistantwire.EventModelUsed || method == assistantwire.EventAgentTabNameStarted {
 					events <- method
+				}
+				if method == assistantwire.EventAgentTabNameStarted {
+					var p assistantwire.AgentTabNameStart
+					if err := json.Unmarshal(raw, &p); err != nil {
+						t.Errorf("decode tab naming event: %v", err)
+					}
+					nameStarted <- p
 				}
 			}
 			manager.mu.Unlock()
@@ -272,7 +297,7 @@ func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
 			observeSessionStartBudget(t, m, func(ctx context.Context, raw any) error {
 				observed = true
 				params := raw.(map[string]any)
-				if params["async"] != false || params["tab_name"] != "resolved-name" {
+				if params["async"] != false || params["tab_name"] != "hello" {
 					t.Errorf("synchronous start not normalized: %+v", params)
 				}
 				if fallback && params["agent_type"] != "codex" {
@@ -290,16 +315,8 @@ func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
 			if w.Code != http.StatusOK || !observed {
 				t.Fatalf("start = %d %s; observed=%v", w.Code, w.Body, observed)
 			}
-			select {
-			case name := <-names:
-				if name != "hello" {
-					t.Errorf("name prompt = %q, want hello", name)
-				}
-			default:
-				t.Error("owning manager was not asked to name the synchronous start")
-			}
 			seen := map[string]bool{}
-			for len(seen) < 2 {
+			for len(seen) < 3 {
 				select {
 				case event := <-events:
 					seen[event] = true
@@ -307,35 +324,70 @@ func TestSessionStartResolvedSyncKeepsNameAndCompletion(t *testing.T) {
 					t.Fatalf("synchronous completion events missing: %v", seen)
 				}
 			}
+			select {
+			case p := <-nameStarted:
+				if p.SessionID != "created" || p.TabID != "w1:t1" || p.ExpectedTabName != "hello" || p.NameFrom != "hello" {
+					t.Fatalf("tab naming event = %+v", p)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("the started session was not sent for background naming")
+			}
 		})
 	}
 }
-func TestSessionStartAgyUsesSynchronousBudget(t *testing.T) {
+func TestSessionStartKnownNonClaudeUsesSynchronousBudget(t *testing.T) {
 	for _, tc := range []struct {
-		name, requested, resolved, agent string
-		replyAt                          time.Duration
-		wantOK                           bool
+		name, requested, resolved, agent, prompt string
+		replyAt                                  time.Duration
+		wantOK                                   bool
 	}{
-		{"named launcher", "agy", "agy", "", 20 * time.Second, true},
-		{"manager resolved launcher", "", "agy-wrapper", "agy", 99 * time.Second, true},
-		{"manager resolved launcher times out", "", "agy-wrapper", "agy", 101 * time.Second, false},
+		{"named launcher", "agy", "agy", "", "", 20 * time.Second, true},
+		{"manager resolved launcher", "", "agy-wrapper", "agy", "", 99 * time.Second, true},
+		{"manager resolved launcher times out", "", "agy-wrapper", "agy", "", 101 * time.Second, false},
+		{"untyped pi launcher", "pi", "pi", "", "hello", 20 * time.Second, true},
+		{"untyped pi launcher without prompt", "pi", "pi", "", "", 20 * time.Second, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newTestHub(t)
 				startReceiptNode(t, h, func(ctx context.Context, raw json.RawMessage) (any, error) {
-					var params struct{ Launcher string }
+					var params map[string]json.RawMessage
 					if err := json.Unmarshal(raw, &params); err != nil {
 						return nil, err
 					}
-					if params.Launcher != tc.resolved {
-						t.Errorf("node launcher = %q, want %q", params.Launcher, tc.resolved)
+					var in struct {
+						Launcher string `json:"launcher"`
+						Async    bool   `json:"async"`
+						Prompt   string `json:"prompt"`
+					}
+					if err := json.Unmarshal(raw, &in); err != nil {
+						return nil, err
+					}
+					if in.Launcher != tc.resolved {
+						t.Errorf("node launcher = %q, want %q", in.Launcher, tc.resolved)
+					}
+					if tc.resolved == "pi" {
+						if in.Async {
+							t.Error("untyped Pi start was sent asynchronously")
+						}
+						for _, key := range []string{"session_id", "agent_type"} {
+							if _, ok := params[key]; ok {
+								t.Errorf("untyped Pi request unexpectedly got %s: %s", key, params[key])
+							}
+						}
+						if in.Prompt != tc.prompt {
+							t.Errorf("first prompt = %q, want %q", in.Prompt, tc.prompt)
+						}
 					}
 					select {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					case <-time.After(tc.replyAt):
-						return map[string]any{"session": proto.Session{SessionID: "created", Agent: "agy"}}, nil
+						agent := tc.agent
+						if agent == "" && tc.resolved == "pi" {
+							agent = "pi"
+						}
+						return map[string]any{"session": proto.Session{SessionID: "created", Agent: agent}}, nil
 					}
 				})
 				hubIn, managerOut := io.Pipe()
@@ -367,9 +419,13 @@ func TestSessionStartAgyUsesSynchronousBudget(t *testing.T) {
 				h.bus.current = map[string]*busConn{assistantwire.AssistantID: {peer: hubPeer}}
 				h.bus.mu.Unlock()
 
-				body, err := json.Marshal(map[string]any{
+				fields := map[string]any{
 					"machine_id": "machine", "cwd": "/code", "launcher": tc.requested, "tab_name": "test", "async": true,
-				})
+				}
+				if tc.prompt != "" {
+					fields["prompt"] = tc.prompt
+				}
+				body, err := json.Marshal(fields)
 				if err != nil {
 					t.Fatal(err)
 				}

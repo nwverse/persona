@@ -1,6 +1,6 @@
 # Lock Screen / Dynamic Island Live Activity (Fleet)
 
-The whole phone has a single Live Activity, "Fleet": it rolls up every Agent that needs you, is working, or finished unseen onto the Lock Screen and the Dynamic Island. The manager that talks to computers computes the content (`server/internal/assistant/fleet_live.go`, delivered to the hub over the bus as `fleet.live`); the hub fills in each device's fields and pushes over APNs at a set pace.
+The whole phone has a single Live Activity, "Fleet": it rolls up every Agent that needs you, is working, or finished unseen onto the Lock Screen and the Dynamic Island. The manager that talks to computers computes the content (`server/internal/assistant/fleet_live.go`, which agents and cards need you decided in `server/internal/assistant/fleetcount`; delivered to the hub over the bus as `fleet.live`); the hub fills in each device's fields and pushes over APNs at a set pace.
 The App starts the activity and reports tokens; the Widget extension (source `apple/PersonaWidgets`, module still `PersonaWidgets`) draws it. The design rationale is in the lane notes (an analysis of the ChatGPT Codex / Sand activities);
 this page covers only implementation and conventions.
 
@@ -324,7 +324,7 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
 ## Buttons (`apple/LiveActivity/FleetIntents.swift`)
 
 - The first request actionable with buttons (permission, plan) has them: permission Deny / Allow; plan View (opens chat) / Approve. Rejecting a plan requires feedback, so that's left to the App.
-  A card with fields (the password card, adding a mail account) is filled in in the App: the manager leaves its row's `interaction` empty (`server/internal/assistant/fleet_live.go`), so it is not actionable (`FleetState.firstActionable`): another agent's permission or plan behind it takes the buttons, and with none the row shows without them and a tap opens its conversation.
+  A card with fields (the password card, adding a mail account) is filled in in the App: the manager leaves its row's `interaction` empty (`needItem` in `server/internal/assistant/fleetcount/fleetcountadapt/render.go`), so it is not actionable (`FleetState.firstActionable`): another agent's permission or plan behind it takes the buttons, and with none the row shows without them and a tap opens its conversation.
   The Lock Screen and expanded view only show this item + buttons + "+N" (a second item won't fit vertically).
 - Allow and Approve use `authenticationPolicy = .requiresAuthentication` (Face ID first on the Lock Screen), Deny uses `.alwaysAllowed`, as with notification buttons.
   Approving a plan from the Lock Screen uses `acceptEdits` (you haven't read the full plan, so commands still require individual permission).
@@ -335,7 +335,7 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
   #12982 the stale Lock Screen draws only the persona and "Waiting for hub…": no counts and no rows, which are no longer known to be true.
 - **Buttons only with context** (#12982): Allow / Deny or Approve appear only when the card can say who asks, what, and what
   approving does. The manager leaves `interaction` empty for a permission without a summary (a bare tool name), a plan without a
-  title and a private ("Just me") permission or plan (`decidable` in `server/internal/assistant/fleet_live.go`); with Lock Screen
+  title and a private ("Just me") permission or plan (`decidable` in `server/internal/assistant/fleetcount/fleetcountadapt/render.go`); with Lock Screen
   details off (rows read "A permission request is waiting") both the hub (`forDevice`) and the app (`FleetState.tailored`) drop it
   from every permission and plan row. Questions and terminal cards never have buttons and keep their `interaction`. Without buttons a tap on the request opens it in the app.
 
@@ -354,6 +354,7 @@ A second, independent activity while the phone records (docs/apple/recording.md,
 
 - `apple/LiveActivity/RecordingActivityAttributes.swift` (app and extension): `recordingID` in the attributes; `ContentState` is `phase` (`recording` / `paused` / `interrupted` by a call; `stopped` is drawn only, below), `runningSince` (Unix seconds, while recording), `elapsed` (where the time stands while paused), `title`, `meeting`, `marks`, `aliveAt` (while recording, the minute the app last confirmed it). A few hundred bytes. The name is the system's identity: never rename it.
 - `RecordingActivity` (`apple/Persona/Recording/`, iOS only) follows `RecordingCapture` and the recording's entry with `withObservationTracking`: one activity per recording, requested when recording starts (`pushType: nil`, local only), updated on pause, a call, a bookmark or a new title, ended at once when it stops; one left over from a killed app is ended. The time is `Text(timerInterval:)` from `runningSince`, so each segment and transcript save recomputes the content, which keeps the earlier `runningSince` and so compares equal.
+- The hub's recording module (#15214, [recording.md](recording.md) "With the hub's recording module off (#15214)"): `ContentState.module` is `off` while the hub has the module off, and then Bookmark and Ask Persona / Talk are not drawn (they would do nothing); End and Stop always are. Absent with the module on and in a state from before; an unknown word reads as allowed.
 - Stale once the app is gone (#9108): a killed app can't end its activity, and iOS ends a recording app in the background without a word (CPU or memory). So while it records, the content carries `aliveAt`, the minute the app last confirmed it (`RecordingActivity.alive`, one update a minute: `aliveEvery`), and the activity's `staleDate` is `staleAfter` (150 s) past it; paused, both are nil. Once stale, the widget draws the state as `drawn(stale:)` gives it: `phase` `stopped` (never sent by the app), the stop sign as its mark, the time standing at `aliveAt`, "Stopped · Open Persona to see the recording" under the name, no answer or role, and End (a meeting's, which asks nothing then) or Stop alone, whose tap opens the app, which ends the activity. Before, the island counted on for as long as the app stayed dead. A state from before has no `aliveAt` and never goes stale. Shots: `-showMeetingSample stopped` sends a recording's activity stale at once (`PERSONA_MEETING_PHASE=stopped`).
 - `relevanceScore` 2 (Fleet's are at most 1): while recording, the Dynamic Island shows the recording, and Fleet stays on the Lock Screen below it.
 - Drawn by `apple/PersonaWidgets/RecordingLiveActivity.swift`, a meeting's as a meeting app's (#8731 V4).

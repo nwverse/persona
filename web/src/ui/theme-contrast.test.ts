@@ -14,7 +14,7 @@ const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 // The minutes' summary card's own tokens load with the Knowledge page (#6563).
 const minutesCss = readFileSync(new URL("../modules/recording/minutes-overview.css", import.meta.url), "utf8");
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
-const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
+const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-desktop"];
 
 // A color laid over another (#rrggbbaa over #rrggbb), and `color-mix(in srgb, a (1 - p), b p)`, as the browser paints them.
 const channels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -187,6 +187,17 @@ describe("default palette contrast", () => {
     });
     it(`${scheme}: --ink-3 stays a step quieter than --ink-2`, () => {
       expect(contrast(t["ink-3"], t.surface)).toBeLessThan(contrast(t["ink-2"], t.surface));
+    });
+    it(`${scheme}: shell/sidebar --canvas sits deeper than main card --page and elevated --surface (#14696)`, () => {
+      // Lower luminance than --page in both schemes: darker neutral shell in light, deeper charcoal backdrop in dark.
+      const lum = (hex: string) => {
+        const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex;
+        return channels(full).map((c) => c / 255).map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+          .reduce((n, c, i) => n + c * [0.2126, 0.7152, 0.0722][i], 0);
+      };
+      expect(lum(t.canvas)).toBeLessThan(lum(t.page));
+      expect(lum(t.page)).toBeLessThan(lum(t.surface));
+      if (scheme === "dark") expect(lum(t.canvas)).toBeLessThan(lum(t.inset));
     });
   }
 });

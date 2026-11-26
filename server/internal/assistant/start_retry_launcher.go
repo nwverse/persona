@@ -57,7 +57,11 @@ func launcherSpecificFailure(err error) bool {
 	if errors.As(err, &m) && (m.Key == "assistant-tasks.fixed_launcher_unhealthy" || m.Key == "assistant-tasks.launcher_not_on_machine") {
 		return true
 	}
-	switch classifyLauncherError(err.Error()) {
+	kind := codedLauncherErrorKind(err)
+	if kind == "" {
+		kind = classifyLauncherError(err.Error())
+	}
+	switch kind {
 	case errKindAuth, errKindModelRoute, errKindUsageLimit:
 		return true
 	}
@@ -187,6 +191,9 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 		return cmp.Or(strings.Join(s.launcherAlternatives(ctx, m, *t, name), ", "), "—")
 	}
 	params := map[string]any{"launcher": name}
+	if t.Host != "" {
+		params["host"] = t.Host
+	}
 	if model != "" {
 		params["model"] = model
 	}
@@ -199,6 +206,7 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 			"launcher": name, "machine": machine, "reason": r.Error, "launchers": alternatives()})}
 	}
 	if t.Readonly {
+		s.companionStartHost(ctx, m, agent, params)
 		if err := s.readonlyLauncherRefusal(ctx, m, params, agent); err != nil {
 			return retryRefused{err}
 		}
@@ -206,7 +214,7 @@ func (s *Service) retryOn(ctx context.Context, t *PlanTask, m Device, with retry
 	t.Launcher, t.Model, t.Tier = name, model, ""
 	t.LauncherDefaultModel = model == ""
 	modes := startTakesModes(agent.agent)
-	if !modes {
+	if !startTakesEffort(agent.agent) {
 		t.Effort = ""
 	}
 	if !t.preservePermission {

@@ -353,12 +353,12 @@ func TestModelProfilesFailuresAreAtomicAndPropagated(t *testing.T) {
 				}
 				failed := errors.New("test database failure")
 				failing := &profileFailureStore{memStore: st.memStore, readError: failed}
-				s.store = func() Store { return failing }
+				s.setStore(func() Store { return failing })
 				switch failure {
 				case "write":
 					failing.writeError = failed
 				case "non-atomic":
-					s.store = func() Store { return nonAtomicProfileStore{Store: failing} }
+					s.setStore(func() Store { return nonAtomicProfileStore{Store: failing} })
 				default:
 					failing.readKey = failure
 				}
@@ -420,7 +420,7 @@ func TestModelProfileMissingLauncherRejectedBeforeTransaction(t *testing.T) {
 					t.Fatal(err)
 				}
 				fs := &profileFailureStore{memStore: st.memStore}
-				s.store = func() Store { return fs }
+				s.setStore(func() Store { return fs })
 				before, puts := profileStoreSnapshot(st.memStore)
 				var err error
 				if rollback {
@@ -691,7 +691,7 @@ func (st *recordReadStore) takeReads() map[string]int {
 // countRecordReads makes s read its settings through a recordReadStore on st.
 func countRecordReads(s *Service, st *downStore) *recordReadStore {
 	counter := &recordReadStore{downStore: st, reads: map[string]int{}}
-	s.store = func() Store { return counter }
+	s.setStore(func() Store { return counter })
 	return counter
 }
 

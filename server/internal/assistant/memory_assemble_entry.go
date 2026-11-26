@@ -24,9 +24,6 @@ func (s *Service) memoryEntrySrc() memoryEntrySource {
 	if s.memoryEntries != nil {
 		return s.memoryEntries
 	}
-	if s.store == nil {
-		return nil
-	}
 	st, _ := s.store().(memoryEntrySource)
 	return st
 }

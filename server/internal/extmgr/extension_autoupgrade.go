@@ -597,11 +597,14 @@ func (u *extensionUpgrades) watched(ctx context.Context, id, from, to string, ro
 	key := u.storageKey(id)
 	u.mu.Lock()
 	auto := u.inflight[key] == to
-	delete(u.inflight, key)
+	if auto {
+		delete(u.inflight, key)
+	}
 	u.mu.Unlock()
+	cur := u.h.extensions.reg.Get(id)
 	name := id
-	if p := u.h.extensions.reg.Get(id); p != nil {
-		name = p.Manifest.Name
+	if cur != nil {
+		name = cur.Manifest.Name
 	}
 	if rolledBack {
 		n := ExtensionUpgradeNote{Kind: "rolled_back", From: from, To: to, Detail: why, At: time.Now()}
@@ -615,6 +618,9 @@ func (u *extensionUpgrades) watched(ctx context.Context, id, from, to string, ro
 		})
 		u.tell(id, n, "rolled_back", func(i18n.Lang) i18n.Args { return i18n.Args{"name": name, "version": to, "from": from} })
 		return
+	}
+	if cur == nil || cur.Record.Version != to {
+		return // superseded by a newer upgrade, manual rollback, or uninstall
 	}
 	if !auto {
 		_ = u.change(ctx, func(s *extensionUpgradeSettings) { delete(s.Last, key) })

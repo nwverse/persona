@@ -1,4 +1,5 @@
 import type { JsonObject, JsonValue, TranscriptItem } from './Domain';
+import { legacyContextTag, legacyProduct } from './WireCompatibility.ts';
 
 export interface BackgroundRound {
   readonly id: string;
@@ -23,10 +24,10 @@ function parsed(text: string): JsonObject | undefined {
 
 function visibilityTool(raw: JsonValue | undefined): string {
   if (typeof raw !== 'string') return '';
-  const single = /^mcp_(?:persona|jarvis)(?:_[0-9a-f]{8,16})?_([a-z][a-z0-9_]*)$/i.exec(raw);
+  const single = new RegExp('^mcp_(?:persona|' + legacyProduct + ')(?:_[0-9a-f]{8,16})?_([a-z][a-z0-9_]*)$', 'i').exec(raw);
   if (single) return single[1];
   if (!raw.startsWith('mcp__')) return raw;
-  return /^mcp__(?:plugin_)?(?:persona|jarvis)__([a-z][a-z0-9_]*)$/.exec(raw)?.[1] || '';
+  return new RegExp('^mcp__(?:plugin_)?(?:persona|' + legacyProduct + ')__([a-z][a-z0-9_]*)$').exec(raw)?.[1] || '';
 }
 
 function timeOf(item: TranscriptItem): number {
@@ -38,7 +39,7 @@ function timeOf(item: TranscriptItem): number {
 function persistedSource(text: string): JsonObject | null | undefined {
   let rest = text;
   for (;;) {
-    const context = /^\s*<(persona-context|jarvis-context)\b([^>]*)>([\s\S]*?)<\/\1>\s*/.exec(rest);
+    const context = new RegExp('^\\s*<(persona-context|' + legacyContextTag + ')\\b([^>]*)>([\\s\\S]*?)<\\/\\1>\\s*').exec(rest);
     if (!context) return undefined;
     if (/\bkind="message-source"/.test(context[2])) {
       const source = parsed(context[3]);

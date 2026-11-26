@@ -24,7 +24,7 @@ func (s *Service) runScheduledLimitRetry(ctx context.Context, w delayedWait, per
 	if w.Retry == nil || !waitForDelayedWait(ctx, w.At) {
 		return
 	}
-	durable := persisted || s.store != nil && s.store() != nil
+	durable := persisted || s.store() != nil
 	if durable && !persisted {
 		pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err := s.persistScheduledRetry(pctx, w)
@@ -143,7 +143,7 @@ func (s *Service) rearmScheduledLimitRetry(ctx context.Context, w delayedWait, p
 	}
 	s.logf("scheduled retry %s: %v", w.ID, why)
 	nextAt := delayedWaitRetryAt()
-	if persisted || s.store != nil && s.store() != nil {
+	if persisted || s.store() != nil {
 		rescheduled, err := s.rescheduleDelayedWait(ctx, w, nextAt, !persisted)
 		if err != nil {
 			s.logf("rearm scheduled retry %s: %v", w.ID, err)
