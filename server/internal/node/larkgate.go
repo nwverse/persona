@@ -234,7 +234,8 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		}
 		return "allow", "读操作", nil
 	}
-	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, callTitle(cfg.Gates, ask[0]),
+	title := callTitle(cfg.Gates, ask[0])
+	ix.Kind, ix.ToolName, ix.Summary = proto.IxPermission, cmp.Or(title, "Bash"),
 		larkSummaryWithContext(cfg.Gates, ask, n.larkCardContexts(ctx, cfg, ask), i18n.From(ctx))
 	// The hub remembers these routes for assistant conversations and checks them again on every call.
 	ix.AlwaysKeys = nil
@@ -248,7 +249,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		remember = nil // hard boundaries are confirmed each time
 	}
 	ix.OutwardWrite = slices.ContainsFunc(ask, larkCallOutwardWrite)
-	decision, reason, card, err := n.confirmLark(ctx, session, ix, remember, confirmWrites, ix.ToolName)
+	decision, reason, card, err := n.confirmLark(ctx, session, ix, remember, confirmWrites, title)
 	if decision == "allow" {
 		n.grantGateCalls(cfg, session, ask, card)
 		n.grantGateCalls(cfg, session, bypassed, proto.LarkLetThrough{Kind: proto.LarkThroughBypass})
@@ -339,7 +340,10 @@ func callTitle(gates []proto.CommandGate, c larkCall) string {
 	if c.Gate >= 0 && c.Gate < len(gates) && gates[c.Gate].Title != "" {
 		return gates[c.Gate].Title
 	}
-	return "飞书" // lark-cli
+	if r := larkGateRules(); r != nil {
+		return r.DefaultTitle()
+	}
+	return ""
 }
 
 // wholeCommandReads says whether every call the gate identified is an ordinary read. An opaque non-Lark part may
