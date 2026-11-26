@@ -1684,6 +1684,21 @@ An option the command does not take, a missing argument or an extra one is refus
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
 What the commands print reads in the terminal's language (`PERSONA_LANG`, else `LC_ALL` / `LC_MESSAGES` / `LANG`; English when none is set or it is `C`), and they ask the hub for its text (errors, permission lines, statuses) in the same language, not in the user language an app last set ([i18n.md](../protocol/i18n.md), "Command line"). `show` stays JSON. The quotes below are the English text.
 
+Commands that can change an extension (`install`, `upgrade`, `rollback`, `attach` / `detach`, `enable` / `disable`,
+`sandbox`, `auth login` / `logout`, `config`, `secret`, `auto-upgrade`, `contribution`, `market` writes, `dev` and
+`uninstall`) print the resolved state directory and loopback hub before their preview or first request:
+
+```text
+PERSONA_HOME: /absolute/path/to/state
+Hub: http://127.0.0.1:18660
+```
+
+`--yes` skips the confirmation, not this target line. For scripts, add `--expect-home <absolute path>` and/or
+`--expect-hub <host:port>` to make a wrong target impossible: a mismatch fails before any preview, HTTP request or
+filesystem change, and the error names both the expected and actual target. Without either flag, an ordinary install
+keeps its existing behavior apart from the extra target line. The old `JARVIS_HOME` environment name is still accepted;
+when neither variable is set, the default is `$HOME/.persona` (or the old state directory when that is what exists).
+
 ```text
 personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "; still needs: …"
 personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set, its data directory (data_dir)
