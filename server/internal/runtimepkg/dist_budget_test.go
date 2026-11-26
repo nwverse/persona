@@ -37,9 +37,28 @@ import (
 // Antigravity agent-mode MCP proxy budgeting for non-assistant leader and worker catalogs (#15822) adds 253 B (266,212 B).
 // Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
 // Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
+// Runtime package lifecycle support for preserving tools across upgrades (#16016) adds 4,368 B (270,629 B).
+// ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
+// Antigravity settled-turn recovery across delayed shifted-index exports and structured agy_turn_end turn_duration items (#15619) add 1,169 B (272,042 B).
+// Antigravity non-rewind negative cache for summary_behind GetCascadeTrajectory checks + summarizeTranscript prefix summary reuse (#13086) add 872 B (272,914 B).
+// Antigravity Desktop session.start (ConversationService/CreateConversation), model discovery, and lifecycle controls (#15994) add 4,922 B (277,836 B).
+// Antigravity Assistant run_command command-gate routing, unclipped command & per-call Cwd forwarding, fail-closed reconnect, tracks Assistant detection, and Assistant allow_always bypass guard (#16202) add 511 B (278,347 B).
+// After preserving Antigravity modes (#16300), the packages measured 278,334 B. Filtering botmux marker
+// lines before shortening runtime previews adds 549 B (#16310).
+// Antigravity detached pending approval turn cancellation (including sibling-ask withdrawal and stale-turn/racing-ask/refusal guards) and explicit deny-with-note refusal follow-up add 436 B (279,319 B).
+// Antigravity native usage account name and subscription plan enrichment via GetUserStatus (#16277) adds 286 B (279,605 B).
+// Main then measured 280,046 B (#16595): #16490 (+21 B), #15678 (+406 B) and #16027 (+22 B) grew the packages without raising
+// the budget, and #16285 adds 278 B on main (its 286 B was measured on its own branch).
+// Later runtime changes on main (#16591, #16122) bring the total to 280,892 B.
+// Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
+// its matching visible step (#14297) add 304 B (281,196 B).
+// Applying the configured Antigravity model before the first prompt after ACP resume (#15537) adds 67 B (281,263 B).
+// Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings
+// (#15546), adding 1,397 B (282,660 B).
+// Antigravity form elicitation (#16645) and background task and schedule tracking (#13594) bring the total to 286,816 B.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 266_261
+	const budget = 286_816
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

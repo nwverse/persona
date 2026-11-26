@@ -68,8 +68,12 @@ internal fun rememberLarkBotEntry(): LarkBotEntry {
  * have where there is no hub to ask (the demo).
  */
 @Composable
-internal fun LarkBotOffPage(title: String, onBack: () -> Unit) {
+internal fun LarkBotOffPage(title: String, onBack: () -> Unit) = ModuleOffPage(title, stringResource(R.string.settings_lark_bot_module_off), onBack)
+
+/** A settings page of a hub module that is off there: its [title], its way back and [line], nothing to press. */
+@Composable
+internal fun ModuleOffPage(title: String, line: String, onBack: () -> Unit) {
     JListPage(title = title, onBack = onBack) {
-        item("lark-bot-off") { JNotice(stringResource(R.string.settings_lark_bot_module_off)) }
+        item("module-off") { JNotice(line) }
     }
 }

@@ -158,6 +158,13 @@ class Model(unittest.TestCase):
 class Languages(unittest.TestCase):
     """What each keyword turns into, language by language (2.1, 2.3, 2.4, 2.5 of the typed core plan)."""
 
+    def test_outputs_have_no_extra_terminal_blank_line(self):
+        for language in ("go", "ts", "arkts", "swift", "kotlin", "rust"):
+            with self.subTest(language):
+                generated = generate(language)
+                self.assertTrue(generated.endswith("\n"))
+                self.assertFalse(generated.endswith("\n\n"))
+
     def test_go(self):
         go = generate("go")
         # x-enum closed + x-unknown count
@@ -213,7 +220,13 @@ class Languages(unittest.TestCase):
                 ts = generate(flavor)
                 self.assertIn('export type Phase = "needs_you" | "working" | "done" | "error" | "idle" | "unknown";', ts)
                 self.assertNotIn('"unknown" | (string & {})', ts)
-                self.assertIn('export type Legacy = "a" | "b" | (string & {});', ts)  # open: as before
+                if flavor == "arkts":
+                    self.assertIn("export type Legacy = string;", ts)
+                    self.assertIn('export const LEGACIES: readonly string[] = ["a", "b"];', ts)
+                    self.assertNotIn("as const", ts)
+                    self.assertNotIn("(string & {})", ts)
+                else:
+                    self.assertIn('export type Legacy = "a" | "b" | (string & {});', ts)  # open: as before
                 self.assertIn("export function parsePhase(raw: string): Phase | UnknownPhase {", ts)
                 self.assertIn('hook("Phase", raw);', ts)
                 self.assertIn("export class TypedWireDefects {", ts)
@@ -221,7 +234,7 @@ class Languages(unittest.TestCase):
                 self.assertIn("export function sessionID(raw: string): SessionID {", ts)
                 self.assertIn("counts: ViewCounts;", ts)
                 self.assertIn("loose?: Record<string, number>;", ts)
-                self.assertIn("export type ToolInput = unknown;", ts)
+                self.assertIn(f"export type ToolInput = {'Object' if flavor == 'arkts' else 'unknown'};", ts)
                 self.assertIn("related?: SessionID[];", ts)
                 # x-text: a plain alias, so string literals still type-check; x-tristate: an optional boolean
                 self.assertIn("export type Label = string;", ts)

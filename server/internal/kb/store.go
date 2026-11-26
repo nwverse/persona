@@ -85,6 +85,12 @@ type Chat struct {
 	State     string    `json:"state,omitempty"`
 	StateAt   time.Time `json:"state_at,omitzero"`
 	SourceURL string    `json:"source_url,omitempty"`
+
+	// HeldOffProjects: the user took the chat off every project and held its list (a removal from the chat's side
+	// with lock_lists that left none). While its projects stay locked, compression links it to none of the projects
+	// it names (heldOffProjects). The user linking a project to it by hand, or allowing one again, lifts it; an
+	// extension's link does not.
+	HeldOffProjects bool `json:"held_off_projects,omitempty"`
 }
 
 // Ended reports whether the conversation has ended at its source (a pull request merged or closed, an issue closed).
@@ -240,6 +246,9 @@ type Store struct {
 	// sources' distill marks (topic_distill.go). Acquire before metaMu.
 	topicMu  sync.Mutex
 	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
+	// superseded: gateway lines the aligner found shorter than a sync message it let through (align_loose.go), by
+	// sync chat id and message id, dropped once that message is written (Engine.settleSuperseded). Under ingestMu.
+	superseded map[string]map[string]gatewayDrop
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
 	// reads the chat again under it and changes only the fields it owns. Hand edits (Apply, unlink) take it through

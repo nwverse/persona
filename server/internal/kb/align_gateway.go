@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"html"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,7 +42,7 @@ const crosswalkFile = ".crosswalk.json"
 // (<data>/chats/.larksync_repair.json).
 const (
 	larkSyncRepairFile    = ".larksync_repair.json"
-	larkSyncRepairVersion = 3
+	larkSyncRepairVersion = 5
 )
 
 // alignNamesEvery is how long the gateway chats' names are kept before they are listed again: a chat the gateway
@@ -91,6 +93,8 @@ type gatewayLine struct {
 	formatBody string // retains named file placeholders for the stricter format-only comparison
 	media      bool   // it had attachments
 	mediaCount int    // number of archived attachment markers, or live media references
+	key        string // "15:04 " + receiptBodyHash of the line, as the receipts bind it; "" for a sync message
+	unique     bool   // no other line of its day file has the same key, so it can be dropped alone
 }
 
 func (a *gatewayAligner) align(src Source, sc SourceChat, m SourceMessage) bool {
@@ -102,26 +106,45 @@ func (a *gatewayAligner) align(src Source, sc SourceChat, m SourceMessage) bool 
 	id := ChatID(src.Name(), sc.ID)
 	walk := a.crosswalk()
 	if gw, ok := walk[id]; ok {
-		return a.within(gw, sc, m, true) // L1: only the paired chat
+		return a.settle(id, m.ID, a.within(gw, sc, m, true)) // L1: only the paired chat
 	}
 	name := normalizeText(sc.Name)
 	if name == "" {
 		return false
 	}
-	match := ""
+	match, found := "", alignVerdict{}
 	for _, gw := range a.gatewayChats()[name] {
-		if a.within(gw, sc, m, false) {
+		if v := a.within(gw, sc, m, false); v.matched() {
 			if match != "" {
 				return false // same-name chats are ambiguous: never choose the first one
 			}
-			match = gw
+			match, found = gw, v
 		}
 	}
 	if match != "" {
 		a.pair(id, match)
-		return true
+		return a.settle(id, m.ID, found)
 	}
 	return false
+}
+
+// settle turns a verdict on sync message msgID of sync chat id into align's answer: a duplicate is not written; a
+// sync message fuller than the gateway's line is written, and that line is noted to be dropped once it is
+// (Engine.settleSuperseded). Without an ID the write cannot be checked, so both copies stay.
+func (a *gatewayAligner) settle(id, msgID string, v alignVerdict) bool {
+	if v.drop != nil {
+		if msgID != "" && !a.s.ReadOnly() {
+			if a.s.superseded == nil {
+				a.s.superseded = map[string]map[string]gatewayDrop{}
+			}
+			if a.s.superseded[id] == nil {
+				a.s.superseded[id] = map[string]gatewayDrop{}
+			}
+			a.s.superseded[id][msgID] = *v.drop
+		}
+		return false
+	}
+	return v.dup
 }
 
 // syncSource: src is the Lark user sync (its archive source or its connector).
@@ -142,7 +165,7 @@ const ownerSender = "我" // i18n-ignore: archive data
 const unknownSender = "?"
 
 // within reports whether gateway chat gw archived m. paired is true when gw came from chats/.crosswalk.json (L1).
-func (a *gatewayAligner) within(gw string, sc SourceChat, m SourceMessage, paired bool) bool {
+func (a *gatewayAligner) within(gw string, sc SourceChat, m SourceMessage, paired bool) alignVerdict {
 	sender, body, media := syncMessage(m)
 	senderUnknown := sender == unknownSender
 	want := map[string]bool{}
@@ -173,12 +196,12 @@ func (a *gatewayAligner) within(gw string, sc SourceChat, m SourceMessage, paire
 			fallbackSender := (senderUnknown && l.sender != ownerSender) || (l.sender == unknownSender && sender != ownerSender)
 			if !l.exact.IsZero() {
 				if want[messageFingerprint(sc.Name, l.sender, l.exact, l.body)] {
-					return true
+					return dupVerdict
 				}
 				if fallbackSender {
 					ensureNoSender()
 					if wantNoSender[messageFingerprint(sc.Name, "", l.exact, l.body)] {
-						return true
+						return dupVerdict
 					}
 				}
 				continue
@@ -188,19 +211,23 @@ func (a *gatewayAligner) within(gw string, sc SourceChat, m SourceMessage, paire
 				continue
 			}
 			if messageFingerprint(sc.Name, l.sender, m.At, l.body) == same {
-				return true
+				return dupVerdict
 			}
 			// On a minute-only line (no exact timestamp), require a non-empty body before ignoring the sender so
 			// two unnamed attachment-only messages in the same minute do not collide.
 			if fallbackSender && body != "" {
 				ensureNoSender()
 				if messageFingerprint(sc.Name, "", m.At, l.body) == sameNoSender {
-					return true
+					return dupVerdict
 				}
 			}
 		}
 	}
-	return a.withinFormatted(gw, gatewayLine{exact: m.At, sender: sender, body: body, formatBody: m.Text, media: media, mediaCount: len(m.Media)}, paired)
+	src := gatewayLine{exact: m.At, sender: sender, body: body, formatBody: m.Text, media: media, mediaCount: len(m.Media)}
+	if a.withinFormatted(gw, src, paired) {
+		return dupVerdict
+	}
+	return a.withinLoose(gw, src, paired)
 }
 
 // syncPlaceholder is the text the sync gives an image or a file of a message ("[image]", "[file <name>]"), which the
@@ -274,6 +301,7 @@ func (a *gatewayAligner) day(id, day string) []gatewayLine {
 		exact[k] = append(exact[k], at)
 	}
 	var lines []gatewayLine
+	keys := map[string]int{}
 	for _, msg := range messages(string(raw)) {
 		t := msg.text
 		if len(t) < 6 || t[5] != ' ' {
@@ -287,13 +315,17 @@ func (a *gatewayAligner) day(id, day string) []gatewayLine {
 		if !ok {
 			continue
 		}
-		l := gatewayLine{minute: minute, sender: sender}
-		if ts := exact[t[:6]+receiptBodyHash(t[6:])]; len(ts) == 1 {
+		l := gatewayLine{minute: minute, sender: sender, key: t[:6] + receiptBodyHash(t[6:])}
+		if ts := exact[l.key]; len(ts) == 1 {
 			l.exact = ts[0]
 		}
+		keys[l.key]++
 		text, l.formatBody, l.media, l.mediaCount = stripArchiveMedia(text)
 		l.body = text
 		lines = append(lines, l)
+	}
+	for i := range lines {
+		lines[i].unique = keys[lines[i].key] == 1
 	}
 	if len(a.days) >= alignDaysMost {
 		clear(a.days)
@@ -379,7 +411,7 @@ type larkSyncRepairState struct {
 
 // alignArchivedLine reports whether an already-archived larksync day-file line (with optional exact timestamp from
 // .receipts.json) duplicates a message in a gateway ("lark") chat, recording the crosswalk pair on first L2 match.
-func (a *gatewayAligner) alignArchivedLine(id, chatName string, gl gatewayLine) bool {
+func (a *gatewayAligner) alignArchivedLine(id, chatName string, gl gatewayLine) alignVerdict {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	walk := a.crosswalk()
@@ -388,30 +420,47 @@ func (a *gatewayAligner) alignArchivedLine(id, chatName string, gl gatewayLine) 
 	}
 	name := normalizeText(chatName)
 	if name == "" {
-		return false
+		return alignVerdict{}
 	}
-	match := ""
+	match, found := "", alignVerdict{}
 	for _, gw := range a.gatewayChats()[name] {
-		if a.withinArchived(gw, chatName, gl, false) {
+		if v := a.withinArchived(gw, chatName, gl, false); v.matched() {
 			if match != "" {
-				return false
+				return alignVerdict{}
 			}
-			match = gw
+			match, found = gw, v
 		}
 	}
 	if match != "" {
 		a.pair(id, match)
-		return true
 	}
-	return false
+	return found
 }
 
-// The additional format-only match is deliberately stricter than the legacy fingerprint: both exact receipt
-// times, equal attachment counts, a non-empty equivalent body (or matching explicit media-kind placeholder on both
-// sides) and exactly one candidate are required. On unpaired chats (L2), the same known sender is also required; on
-// already-paired crosswalk chats (L1), an unknown sender ("?") may match a non-owner gateway line so bot/app and
-// pre-backfill external-member lines still deduplicate. URLs, URL case, named files and code remain significant.
-// No edit distance, substring match or attachment-only guess is used.
+// withinTimeWindow reports whether srcExact and dst agree in time: when dst has an exact receipt timestamp, both must
+// fall in the same or a neighbouring 2-second bucket; on an already-paired crosswalk chat (L1) whose gateway archive
+// lacks .receipts.json (dst.exact is zero), srcExact must fall within dst's minute widened by one 2-second bucket on
+// each side (the same window withinArchived uses). Unpaired chats (L2) never fall back to minute precision here.
+func withinTimeWindow(srcExact time.Time, dst gatewayLine, paired bool) bool {
+	if !dst.exact.IsZero() {
+		bucket := dst.exact.Unix()/2 - srcExact.Unix()/2
+		return bucket >= -1 && bucket <= 1
+	}
+	if !paired || dst.minute.IsZero() {
+		return false
+	}
+	return !srcExact.Before(dst.minute.Add(-2*time.Second)) && srcExact.Before(dst.minute.Add(time.Minute+2*time.Second))
+}
+
+// The additional format-only match is deliberately stricter than the legacy fingerprint: exact receipt times (or, on an
+// already-paired crosswalk chat whose legacy gateway archive has no .receipts.json, a minute-level window widened by
+// one 2-second bucket on each side), equal attachment counts, a non-empty equivalent body (or matching explicit
+// media-kind placeholder on both sides) and exactly one candidate are required. On unpaired chats (L2), exact receipt
+// times on both sides and the same known sender are required; on already-paired crosswalk chats (L1), an unknown sender
+// ("?") may match a non-owner gateway line when there is a non-empty body (or exact timestamps on both sides) so
+// bot/app and pre-backfill external-member lines still deduplicate without colliding unnamed media-only lines in the
+// same minute. URLs, URL case, named files and code remain significant. No edit distance, substring match or
+// attachment-only guess is used.
 func (a *gatewayAligner) withinFormatted(gw string, src gatewayLine, paired bool) bool {
 	if src.exact.IsZero() {
 		return false
@@ -435,19 +484,18 @@ func (a *gatewayAligner) withinFormatted(gw string, src gatewayLine, paired bool
 	matches := 0
 	for _, day := range alignDays(src.exact, a.s.Zone()) {
 		for _, dst := range a.day(gw, day) {
-			if dst.exact.IsZero() || dst.media != src.media || dst.mediaCount != src.mediaCount {
+			if dst.media != src.media || dst.mediaCount != src.mediaCount {
+				continue
+			}
+			if !withinTimeWindow(src.exact, dst, paired) {
 				continue
 			}
 			dstUnknown := dst.sender == "" || dst.sender == unknownSender
 			senderMatch := !srcUnknown && !dstUnknown && normalizeText(dst.sender) == normalizeText(src.sender)
-			if !senderMatch && paired {
+			if !senderMatch && paired && (!dst.exact.IsZero() || srcNorm != "") {
 				senderMatch = (srcUnknown && dst.sender != ownerSender) || (dstUnknown && src.sender != ownerSender)
 			}
 			if !senderMatch {
-				continue
-			}
-			bucket := dst.exact.Unix()/2 - src.exact.Unix()/2
-			if bucket < -1 || bucket > 1 {
 				continue
 			}
 			dstRaw := dst.formatBody
@@ -621,7 +669,7 @@ func (a *gatewayAligner) hasGatewayCandidate(id, chatName string) bool {
 
 // withinArchived compares an already-archived larksync line against gateway chat gw using the same fingerprint and
 // senderless-fallback rules as within. paired is true when gw came from chats/.crosswalk.json (L1).
-func (a *gatewayAligner) withinArchived(gw, chatName string, src gatewayLine, paired bool) bool {
+func (a *gatewayAligner) withinArchived(gw, chatName string, src gatewayLine, paired bool) alignVerdict {
 	sender := src.sender
 	if sender == "" {
 		sender = unknownSender
@@ -665,12 +713,12 @@ func (a *gatewayAligner) withinArchived(gw, chatName string, src gatewayLine, pa
 			fallbackSender := (senderUnknown && l.sender != ownerSender) || (l.sender == unknownSender && sender != ownerSender)
 			if hasExact && !l.exact.IsZero() {
 				if want[messageFingerprint(chatName, l.sender, l.exact, l.body)] {
-					return true
+					return dupVerdict
 				}
 				if fallbackSender {
 					ensureNoSender()
 					if wantNoSender[messageFingerprint(chatName, "", l.exact, l.body)] {
-						return true
+						return dupVerdict
 					}
 				}
 				continue
@@ -689,17 +737,20 @@ func (a *gatewayAligner) withinArchived(gw, chatName string, src gatewayLine, pa
 				}
 			}
 			if messageFingerprint(chatName, l.sender, at, l.body) == same {
-				return true
+				return dupVerdict
 			}
 			if fallbackSender && body != "" {
 				ensureNoSender()
 				if messageFingerprint(chatName, "", at, l.body) == sameNoSender {
-					return true
+					return dupVerdict
 				}
 			}
 		}
 	}
-	return a.withinFormatted(gw, src, paired)
+	if a.withinFormatted(gw, src, paired) {
+		return dupVerdict
+	}
+	return a.withinLoose(gw, src, paired)
 }
 
 // parseArchiveLine parses one formatted dayLine (from dayLines) into a gatewayLine for alignment.
@@ -774,14 +825,26 @@ func (e *Engine) DedupeLarkSyncChats() int {
 
 	totalDropped := 0
 	allOK := true
+	// Gateway lines a fuller sync line supersedes (align_loose.go), by gateway chat: dropped after every sync chat
+	// was read, so the aligner compared against the gateway archive as it was.
+	gatewayDrops := map[string]map[string]bool{}
 	for _, tc := range targets {
 		if !aligner.hasGatewayCandidate(tc.ID, tc.Name) {
 			continue
 		}
-		dropped, err := e.dedupeLarkSyncChat(aligner, tc.ID)
+		dropped, err := e.dedupeLarkSyncChat(aligner, tc.ID, gatewayDrops)
 		if err != nil {
 			allOK = false
 			e.logf("dedupe larksync %s: %v", tc.ID, err)
+			continue
+		}
+		totalDropped += dropped
+	}
+	for _, gw := range slices.Sorted(maps.Keys(gatewayDrops)) {
+		dropped, err := e.dropGatewayLines(gw, gatewayDrops[gw])
+		if err != nil {
+			allOK = false
+			e.logf("dedupe superseded gateway lines %s: %v", gw, err)
 			continue
 		}
 		totalDropped += dropped
@@ -800,9 +863,40 @@ func (e *Engine) DedupeLarkSyncChats() int {
 }
 
 // dedupeLarkSyncChat removes already-ingested lines in larksync chat id that match a gateway chat, keeping their
-// receipt IDs (so replay never re-writes them) and updating counts and retention ledgers atomically.
+// receipt IDs (so replay never re-writes them) and updating counts and retention ledgers atomically. A line fuller
+// than its gateway copy stays, and the gateway line is added to gatewayDrops ("<day>\x00<key>" by gateway chat).
 // Caller holds e.Store.ingestMu.
-func (e *Engine) dedupeLarkSyncChat(aligner *gatewayAligner, id string) (int, error) {
+func (e *Engine) dedupeLarkSyncChat(aligner *gatewayAligner, id string, gatewayDrops map[string]map[string]bool) (int, error) {
+	return e.dropChatLines(id, func(chatName, day string, dl dayLine, _ string, _ bool, exact time.Time) bool {
+		gl, ok := parseArchiveLine(dl, day, e.Store.Zone(), exact)
+		if !ok {
+			return false
+		}
+		v := aligner.alignArchivedLine(id, chatName, gl)
+		if v.drop != nil {
+			if gatewayDrops[v.drop.chat] == nil {
+				gatewayDrops[v.drop.chat] = map[string]bool{}
+			}
+			gatewayDrops[v.drop.chat][v.drop.day+"\x00"+v.drop.key] = true
+			return false
+		}
+		return v.dup
+	})
+}
+
+// dropGatewayLines removes the lines of gateway chat gw that keys names ("<day>\x00<key>"), each only while it is the
+// one line of its day with that key; their receipt IDs stay. Caller holds e.Store.ingestMu.
+func (e *Engine) dropGatewayLines(gw string, keys map[string]bool) (int, error) {
+	return e.dropChatLines(gw, func(_, day string, _ dayLine, key string, unique bool, _ time.Time) bool {
+		return unique && key != "" && keys[day+"\x00"+key]
+	})
+}
+
+// dropChatLines removes the lines of chat id that drop picks (given the chat's name, the line's day, the line, its
+// receipt key, whether that key is the only one of its day and its exact time when the receipts bind it), keeping
+// their receipt IDs (so replay never re-writes them) and updating counts and retention ledgers atomically.
+// Caller holds e.Store.ingestMu.
+func (e *Engine) dropChatLines(id string, drop func(chatName, day string, dl dayLine, key string, unique bool, exact time.Time) bool) (int, error) {
 	s := e.Store
 	s.chatMu.Lock()
 	if err := s.recoverIngest(id); err != nil {
@@ -880,8 +974,7 @@ func (e *Engine) dedupeLarkSyncChat(aligner *gatewayAligner, id string) (int, er
 			if k != "" && lineCounts[k] == 1 && len(byReceipt[k]) == 1 {
 				exact = byReceipt[k][0].at
 			}
-			gl, ok := parseArchiveLine(dl, day, zone, exact)
-			if ok && aligner.alignArchivedLine(id, c.Name, gl) {
+			if drop(c.Name, day, dl, k, k != "" && lineCounts[k] == 1, exact) {
 				droppedDay++
 				for row := dl.first; row <= dl.last; row++ {
 					gone[row] = true
