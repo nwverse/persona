@@ -561,17 +561,25 @@ var (
 // payload the JSON the connector hands the knowledge base as it is. db.LarkSyncOutbox aliases this type.
 type OutboxRow struct {
 	Seq          int64
-	Kind         string
+	Kind         OutboxKind
 	CanonicalKey string
-	Payload      json.RawMessage
+	Payload      OutboxPayload
 	CreatedAt    time.Time
 }
 
+// OutboxKind is what an outbox row carries: a chat batch or a document, the only two the sync writes
+// (db.CommitLarkSyncRun refuses any other).
+type OutboxKind string
+
 // Outbox kinds (db.LarkSyncChat / db.LarkSyncDoc alias these).
 const (
-	OutboxChat = "chat"
-	OutboxDoc  = "doc"
+	OutboxChat OutboxKind = "chat"
+	OutboxDoc  OutboxKind = "doc"
 )
+
+// OutboxPayload is a row's payload as stored: the JSON of a connectorwire.ChatBatch for OutboxChat, of a kbwire.Item
+// for OutboxDoc, handed to the knowledge base exactly as it was written.
+type OutboxPayload json.RawMessage
 
 // Store keeps what the sync's runs read and hand over (Postgres tables lark_sync_cursors, lark_sync_index and
 // lark_sync_outbox). A manager whose store does not implement it leaves the sync unavailable.
@@ -580,7 +588,7 @@ type Store interface {
 	DeleteLarkSyncCursors(ctx context.Context, binding string) error
 	LarkSyncIndex(ctx context.Context, keys []string) (map[string]IndexRecord, error)
 	CommitLarkSyncRun(ctx context.Context, binding string, cursors map[string]string, recs []IndexRecord, outbox []OutboxRow) error
-	LarkSyncOutboxAfter(ctx context.Context, kind string, after int64, limit int) ([]OutboxRow, error)
+	LarkSyncOutboxAfter(ctx context.Context, kind OutboxKind, after int64, limit int) ([]OutboxRow, error)
 	LarkSyncDocsSince(ctx context.Context, since time.Time) ([]OutboxRow, error)
 	PruneLarkSyncOutbox(ctx context.Context, before time.Time) (int64, error)
 }

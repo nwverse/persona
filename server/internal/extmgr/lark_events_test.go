@@ -47,7 +47,7 @@ func (s *larkSyncExtStore) CommitLarkSyncRun(ctx context.Context, binding string
 	return s.sync.CommitLarkSyncRun(ctx, binding, cursors, recs, outbox)
 }
 
-func (s *larkSyncExtStore) LarkSyncOutboxAfter(ctx context.Context, kind string, after int64, limit int) ([]db.LarkSyncOutbox, error) {
+func (s *larkSyncExtStore) LarkSyncOutboxAfter(ctx context.Context, kind larksyncwire.OutboxKind, after int64, limit int) ([]db.LarkSyncOutbox, error) {
 	return s.sync.LarkSyncOutboxAfter(ctx, kind, after, limit)
 }
 

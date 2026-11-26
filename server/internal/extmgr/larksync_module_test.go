@@ -102,7 +102,7 @@ func (s *larkSyncMemStore) CommitLarkSyncRun(_ context.Context, binding string, 
 	return nil
 }
 
-func (s *larkSyncMemStore) LarkSyncOutboxAfter(_ context.Context, kind string, after int64, limit int) ([]db.LarkSyncOutbox, error) {
+func (s *larkSyncMemStore) LarkSyncOutboxAfter(_ context.Context, kind larksyncwire.OutboxKind, after int64, limit int) ([]db.LarkSyncOutbox, error) {
 	s.lmu.Lock()
 	defer s.lmu.Unlock()
 	var out []db.LarkSyncOutbox

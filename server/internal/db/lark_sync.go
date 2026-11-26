@@ -112,10 +112,10 @@ func (d *DB) CommitLarkSyncRun(ctx context.Context, binding string, cursors map[
 		}
 		for _, row := range outbox {
 			if row.Kind != LarkSyncChat && row.Kind != LarkSyncDoc {
-				return errors.New("lark sync outbox: unknown kind " + row.Kind)
+				return errors.New("lark sync outbox: unknown kind " + string(row.Kind))
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO lark_sync_outbox (kind, canonical_key, payload) VALUES ($1, $2, $3)`,
-				row.Kind, row.CanonicalKey, []byte(row.Payload)); err != nil {
+				string(row.Kind), row.CanonicalKey, []byte(row.Payload)); err != nil {
 				return err
 			}
 		}
@@ -206,12 +206,12 @@ func mergeLarkSyncRecord(have larksyncwire.IndexRecord, ok bool, add larksyncwir
 }
 
 // LarkSyncOutboxAfter are the outbox rows of kind after the sequence after, oldest first, at most limit.
-func (d *DB) LarkSyncOutboxAfter(ctx context.Context, kind string, after int64, limit int) ([]LarkSyncOutbox, error) {
+func (d *DB) LarkSyncOutboxAfter(ctx context.Context, kind larksyncwire.OutboxKind, after int64, limit int) ([]LarkSyncOutbox, error) {
 	if limit < 1 {
 		limit = 100
 	}
 	rows, err := d.pool.Query(ctx, `SELECT seq, kind, canonical_key, payload, created_at FROM lark_sync_outbox
-		WHERE kind = $1 AND seq > $2 ORDER BY seq LIMIT $3`, kind, after, limit)
+		WHERE kind = $1 AND seq > $2 ORDER BY seq LIMIT $3`, string(kind), after, limit)
 	if err != nil {
 		return nil, err
 	}
