@@ -11,7 +11,7 @@ import persona.android.navigation.terminalLink
 import persona.core.navigation.MachinesRoute
 import persona.core.navigation.TerminalPanesRoute
 import persona.core.navigation.RouteInput
-import persona.feature.knowledge.KnowledgeRoute
+import persona.core.navigation.KnowledgeRoute
 import persona.core.contracts.api.PairingRequest
 import persona.core.navigation.AppTab
 import persona.core.navigation.ResolvedRoute
@@ -41,7 +41,7 @@ private val pages = mapOf(
     "triage" to ResolvedRoute(AppTab.Persona, persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Triage)),
 )
 
-/** A carried module's page for captures (`debug.openPage voice`); its modules open on the Persona tab. */
+/** A carried module's page for captures (`debug.openPage <name>`, `PersonaModule.debugPages`); they open on the Persona tab. */
 private fun modulePage(name: String): ResolvedRoute? =
     persona.android.Modules.carried.debugPages()[name]?.let { ResolvedRoute(AppTab.Persona, it) }
 
@@ -85,7 +85,7 @@ class DebugLaunchAdapter : LaunchAdapter {
         arguments.remove("debug.translateChats")?.let { persona.feature.settings.TranslationPreview.picking = it == "1" }
         // "New session" (debug.openPage new-agent) takes steps once loaded: launcher:<name>, effort:<level>, model:<id>, models[:<query>].
         arguments.remove("debug.newAgent")?.let { persona.feature.agents.NewAgentPreview.steps = it }
-        // Each carried module takes its own debug arguments (Modules.kt), e.g. the voice module's fake audio.
+        // Each carried module takes its own debug arguments (Modules.kt, `PersonaModule.debugArguments`).
         persona.android.Modules.carried.modules.forEach { it.debugArguments(arguments) }
         return LaunchInput(
             resolve = { router ->

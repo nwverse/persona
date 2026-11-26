@@ -12,7 +12,7 @@
 // (not the turn's leftover clock); the count stays whole on a narrow screen. A subagent still running (#5030, cindy's
 // background subtasks) gets cindy's Activity mark and "Background subtasks running, still consuming model usage…" with
 // no time and no tokens; cindy's "Stop all" waits for a node that can stop one (#5044). Commands that only wait (#6045,
-// `background_waiting`) get a still, lighter line, timed from when the wait began, with no breath and no tokens. A real
+// `background_waiting`) get a still line, timed from when the wait began, with no breath and no tokens. A real
 // background command or Monitor (#7341) instead gets the working treatment: a terminal mark and "Background task", then
 // the command's description or one-line command and "N more", timed only from that command's own start, with no time
 // when it has none and never the turn's tokens or speed. With the hub out of reach the bar says so in front of the last
@@ -122,6 +122,7 @@ export interface RunningStatusProps {
   subtasks?: boolean;
   /** A real background command after the turn, with its own optional start (#7341). */
   command?: WaitLine | null;
+  onStop?: () => void;
 }
 
 export function RunningStatusBar({ mid, sid, wait, ...props }: RunningStatusProps & { mid: string; sid: string; wait?: WaitLine | null }) {
@@ -136,7 +137,7 @@ function Disconnected() {
   return <span className="shrink-0 text-ink-3" data-running-offline>{t("chat-runningstatusbar.disconnected")} ·</span>;
 }
 
-/** The bar of an agent that only waits in the background (#6045): still, in the waiting color, timed from when it began. */
+/** The bar of an agent that only waits in the background (#6045): still, timed from when it began. */
 export function WaitingView({ wait, offline }: { wait: WaitLine; offline?: boolean }) {
   const now = useNow(1000, !offline);
   const since = wait.since ? Date.parse(wait.since) : NaN;
@@ -145,8 +146,8 @@ export function WaitingView({ wait, offline }: { wait: WaitLine; offline?: boole
   const words = [wait.what || stateName("bg_waiting"), wait.more > 0 ? t("chat-runningstatusbar.more_waits", { count: wait.more }) : ""].filter(Boolean).join(" · ");
   return (
     <div data-running-status="on" data-running-background="waiting" className="flex select-none items-center justify-between gap-3 px-2 py-1.5 text-[13px] font-medium">
-      <div className="flex min-w-0 items-center gap-1.5 text-status-waiting">
-        <Icon name="clock" size={14} className="shrink-0 -translate-y-px" />
+      <div className="flex min-w-0 items-center gap-1.5 text-ink-2">
+        <Icon name="clock" size={14} className="shrink-0 -translate-y-px text-accent-ink" />
         {offline && <Disconnected />}
         <span className="truncate" data-running-verb>{words}</span>
       </div>
@@ -180,15 +181,59 @@ function BackgroundWords({ line }: { line: BackgroundLine }) {
   );
 }
 
+const CRON_WHAT = /^Cron:\s*([^\r\n]+?)(?:,\s*Prompt:\s*([\s\S]*))?$/i;
+
+function formatCronSchedule(expr: string): string {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return "";
+  const [min, hour, dom, mon, dow] = parts;
+  if (dom !== "*" || mon !== "*" || dow !== "*") return "";
+  const everyMin = /^\*\/(\d+)$/.exec(min);
+  if (everyMin && hour === "*") {
+    const count = Number(everyMin[1]);
+    if (count > 0) return t("chat-runningstatusbar.every_minutes", { count });
+  }
+  if (min === "*" && hour === "*") return t("chat-runningstatusbar.every_minutes", { count: 1 });
+  if (min === "0" && hour === "*") return t("chat-runningstatusbar.hourly");
+  const everyHour = /^\*\/(\d+)$/.exec(hour);
+  if (min === "0" && everyHour) {
+    const count = Number(everyHour[1]);
+    if (count === 1) return t("chat-runningstatusbar.hourly");
+    if (count > 0) return t("chat-runningstatusbar.every_hours", { count });
+  }
+  if (/^\d{1,2}$/.test(min) && /^\d{1,2}$/.test(hour)) {
+    const h = Number(hour);
+    const m = Number(min);
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      return t("chat-runningstatusbar.daily_at", { time: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}` });
+    }
+  }
+  return "";
+}
+
+/** Cleans raw `Cron: ..., Prompt: ...` strings into a concise single-line summary. */
+export function formatBackgroundWhat(raw: string): string {
+  const trimmed = raw.trim();
+  const match = CRON_WHAT.exec(trimmed);
+  if (!match) return raw;
+  const schedule = formatCronSchedule(match[1]);
+  const prompt = (match[2] ?? "").replace(/\s+/g, " ").trim();
+  if (schedule && prompt) return `${schedule} · ${prompt}`;
+  if (prompt) return prompt;
+  if (schedule) return schedule;
+  return match[1].trim();
+}
+
 function BackgroundCommandWords({ line, now }: { line: WaitLine; now: number }) {
   const stalled = stalledText(line.stalled, now);
+  const what = line.what ? formatBackgroundWhat(line.what) : "";
   return (
     <span className="flex min-w-0 items-center whitespace-pre" data-running-verb>
       <span className="shrink-0">{t("chat-runningstatusbar.background_task")}</span>
-      {line.what && (
+      {what && (
         <>
           <span className="shrink-0" data-running-command-separator>{` · `}</span>
-          <span className="min-w-0 truncate">{line.what}</span>
+          <span className="min-w-0 truncate">{what}</span>
         </>
       )}
       {line.more > 0 && <span className="shrink-0">{` · ${t("chat-runningstatusbar.more_waits", { count: line.more })}`}</span>}
@@ -201,7 +246,7 @@ type Phase = "on" | "linger" | "fading" | "off";
 
 /** The bar for a given status line (RunningStatusBar subscribes; tests render this). `speedKey`: the conversation its
  *  speed history is kept for while the page is open. */
-export function RunningStatusView({ live, working, done: finished, startedAt, clock = true, plain, step, background, subtasks, command, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
+export function RunningStatusView({ live, working, done: finished, startedAt, clock = true, plain, step, background, subtasks, command, onStop, offline, speedKey = "" }: RunningStatusProps & { live: SessionLive | null; offline?: boolean; speedKey?: string }) {
   const phase = usePhase(working);
   const [pinned, setPinned] = useState(false);
   // after the turn: what it last said, while it lingers and fades. Its status line goes a moment before the turn ends,
@@ -216,12 +261,12 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const retry = working && live?.retry_error && (live.retry_attempt ?? 0) > 0 && (live.retry_max ?? 0) > 0
     ? { error: live.retry_error, attempt: live.retry_attempt!, max: live.retry_max!, info: parseRetryAPIError(live.retry_error) }
     : null;
-  const bg = kept.background;
+  const bg = retry ? null : kept.background;
   const behind = inBackground(bg, shown, kept.clock, kept.step);
   // the turn is over and background subagents run on: neither the turn's time nor its tokens say anything of them
-  const usage = Boolean(kept.subtasks);
+  const usage = !retry && Boolean(kept.subtasks);
   // a real background command has its own optional clock; there is no turn-clock or mount-time fallback for it
-  const task = kept.command;
+  const task = retry ? null : kept.command;
   const commandStart = task?.since ? Date.parse(task.since) : NaN;
   // The hub can serialize Go's zero time as 0001-01-01: that is an absent start, not a gigantic elapsed time.
   const commandTimed = Number.isFinite(commandStart) && commandStart > 0;
@@ -239,7 +284,7 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const tokens = useCountUp(shown?.tokens_down ?? 0);
   const done = !working && Boolean(finished) && !behind && !usage && !task;
   const state = statusWords(shown, kept.step, plain);
-  const commandWords = task ? [t("chat-runningstatusbar.background_task"), task.what, task.more > 0 ? t("chat-runningstatusbar.more_waits", { count: task.more }) : ""].filter(Boolean).join(" · ") : "";
+  const commandWords = task ? [t("chat-runningstatusbar.background_task"), task.what ? formatBackgroundWhat(task.what) : "", task.more > 0 ? t("chat-runningstatusbar.more_waits", { count: task.more }) : ""].filter(Boolean).join(" · ") : "";
   const words = retry ? t("chat-runningstatusbar.retrying", { attempt: formatNumber(retry.attempt), max: formatNumber(retry.max), reason: retry.info?.reason ?? t("lib-api-errors.failed") }) : behind ? "" : usage ? t("chat-runningstatusbar.background_subtasks") : task ? commandWords : done ? t("chat-runningstatusbar.done") : state.text;
   const compacting = !retry && !behind && !usage && !task && !done && state.compacting;
   const breath = useBreath(useMoves(`${words}\n${shown?.tokens_down ?? ""}`), phase === "on");
@@ -250,7 +295,8 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const hidden = phase === "off";
   // each side fades on its own: a pinned card's button stays as it is (cindy)
   const fade: CSSProperties | undefined = hidden ? undefined : { opacity: phase === "fading" ? 0 : 1, transition: `opacity ${FADE_OUT_MS}ms ease-out` };
-  const icon: IconName = behind ? "workflow" : usage ? "activity" : task ? "terminal" : done ? "check" : compacting ? "layers" : "sparkles";
+  const icon: IconName = retry ? "retry" : behind ? "workflow" : usage ? "activity" : task ? "terminal" : done ? "check" : compacting ? "layers" : "sparkles";
+  const iconTone = retry ? "text-status-working" : behind ? "text-ai" : "text-accent-ink";
   const count = own && shown?.tokens_down ? (
     <>
       <Icon name="arrowDown" size={13} className="shrink-0" />
@@ -267,18 +313,14 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
       <div
         onAnimationEnd={done ? undefined : breath.ended}
         aria-hidden={hidden || undefined}
-        className={`flex min-w-0 items-center gap-1.5 ${behind ? "text-ai" : "text-status-accent"} ${hidden ? "invisible" : done ? "status-done" : breath.cycle ? "status-breath" : ""}`}
+        className={`flex min-w-0 items-center gap-1.5 ${retry ? "text-orange" : "text-ink-2"} ${hidden ? "invisible" : done ? "status-done" : breath.cycle ? "status-breath" : ""}`}
         data-running-done={done || undefined}
         style={breath.cycle && !done && !hidden && !(breath.cycle % 2) ? { ...fade, animationName: "status-breath-again" } : fade}
       >
-        <Icon name={icon} size={14} stroke={done ? 2.5 : undefined} className={`shrink-0 ${done ? "" : "-translate-y-px"}`} />
+        <Icon name={icon} size={14} stroke={done ? 2.5 : undefined} className={`shrink-0 ${iconTone} ${done ? "" : "-translate-y-px"}`} />
         {offline && <Disconnected />}
-        {behind ? <BackgroundWords line={bg} /> : task ? <BackgroundCommandWords line={task} now={now} /> : retry ? (
-          <span className="flex min-w-0 flex-col" data-running-verb>
-            <span className="truncate">{words}</span>
-            <span className="truncate text-ink-3 font-normal" data-running-retry-detail>{retry.error}</span>
-          </span>
-        ) : <span className="truncate" data-running-verb>{words}</span>}
+        {behind ? <BackgroundWords line={bg} /> : task ? <BackgroundCommandWords line={task} now={now} />
+          : <span className={!retry && phase === "on" && !done ? "chat-shimmer truncate" : "truncate"} data-running-verb title={retry?.error}>{words}</span>}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-ink-3 tabular-nums" style={pinned ? undefined : fade}>
         {usage || (task && !commandTimed) ? null : own && SpeedView ? (
@@ -289,6 +331,18 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
             {count && <span aria-hidden>·</span>}
             {count}
           </>
+        )}
+        {working && onStop && (
+          <button
+            type="button"
+            onClick={onStop}
+            aria-label={t("chat-runningstatusbar.interrupt")}
+            title={t("chat-runningstatusbar.interrupt_hint")}
+            className="ml-1 hidden items-center gap-1 rounded-[6px] border border-line bg-surface/80 px-1.5 py-0.5 text-label font-medium text-ink-2 transition-colors hover:border-line-strong hover:bg-hover hover:text-ink sm:inline-flex"
+          >
+            <span>{t("chat-runningstatusbar.interrupt")}</span>
+            <kbd className="rounded-[4px] bg-inset px-1 py-px font-mono text-submeta leading-tight text-ink-3">Esc</kbd>
+          </button>
         )}
       </div>
     </div>

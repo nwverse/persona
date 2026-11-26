@@ -134,6 +134,12 @@ const (
 // be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
 const CodedStartErrorMax = 600
 
+// TitleMax is the most runes a session's title has in a list of sessions or a session frame (#16343): the node, the
+// manager and the hub cut a longer one (transcript.ListTitle), and the list answers' rows were already cut to it. A
+// title that long is an opening prompt an agent stored as its title (a Codex thread name, a runtime's own title),
+// which no row shows; the transcript keeps the prompt whole.
+const TitleMax = 256
+
 // ToolLoop is a node-detected repetition. It contains no tool input or output.
 // Since identifies the start of this repetition within the current turn.
 type ToolLoop struct {
@@ -245,11 +251,18 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
-	// BackgroundStalledSince (#13744): the time since which this session's background commands have used no CPU and
-	// written no output, set only when a known worker (a build, tests, a download) runs there and that has lasted ten
-	// minutes while the turn is over. State stays working: a running tool is work, this only tells a client the work
-	// looks stuck. Zero (omitted) otherwise. Whole seconds in a uint32, in the padding before Ultracode: a Session
-	// stays in its allocation size class (TestSessionFitsItsSizeClass).
+	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
+	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
+	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
+	LogicalPlaceholder bool `json:"-"`
+	// BackgroundStalledSince (#13744, #16418): the time since which this session's background commands have used no CPU
+	// and written no output, set while the turn is over once that lasted the node's grace (ten minutes for a known
+	// worker such as a build, tests or a download; three for a process it does not know or a command moved from the
+	// foreground; two for shells gone from under the live claude). Beside a subagent, workflow or Monitor, state stays
+	// working and this only tells a client the work looks stuck; when stalled background commands are all that is left,
+	// the manager leaves the finished turn's own state and the task's turn settles. Zero (omitted) otherwise. Whole
+	// seconds in a uint32, in the padding before Ultracode: a Session stays in its allocation size class
+	// (TestSessionFitsItsSizeClass).
 	BackgroundStalledSince UnixTime32 `json:"background_stalled_since,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
@@ -562,6 +575,10 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeCodexNotLoggedIn: a Codex start met Codex's sign-in screen (node/codex_start.go): Codex has no login on that
+	// computer, so no wait would bring its session up. The launcher's sign-in (launcher health's auth), not a stalled
+	// start; the new tab is closed, and someone runs `codex login` on that computer.
+	CodeCodexNotLoggedIn = "codex_not_logged_in"
 	// CodeShellWaiting: the new tab's shell stopped on a question of its startup files (an update prompt, [Y/n]) before
 	// the start command was typed (#2570). Nothing ran; the tab is kept a while for someone to answer (node/shellsettle.go).
 	CodeShellWaiting = "shell_waiting"
@@ -572,6 +589,10 @@ const (
 	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
 	// the request, not the launcher's fault.
 	CodeDirectoryUntypable = "directory_untypable"
+	// CodeAgyCompanionOffline: the start named HostAgy on a computer whose Antigravity companion is not connected
+	// (node/starthost.go). Nothing ran. A task start the hub sent there by default starts again in the computer's
+	// default host (assistant/tasks_placement.go, #13447); one that named the host is refused.
+	CodeAgyCompanionOffline = "agy_companion_offline"
 )
 
 // Codes session.modes refuses with (node/modes.go), the text in the request's language (apierr.Call). 409.
@@ -584,6 +605,16 @@ const (
 	// CodeModesUnsupported: an agent in a terminal whose mode, effort and model are its start's (cursor, agy).
 	CodeModesUnsupported    = "modes_unsupported"
 	CodeEffortChangePending = "effort_change_pending"
+	// A Codex on the terminal route, whose model and effort the node types as `/model <model> --reasoning=<level>`
+	// (node/codex_terminal_modes.go, #12572). CodeModesCodexVersion: a Codex older than 0.169 started the session, and
+	// its /model takes no arguments. CodeModesCodexNoRollout: the session has no rollout yet to confirm a change by.
+	// CodeModesCodexRefused: Codex answered the command with a refusal; the message is Codex's own words.
+	// CodeModesCodexUnconfirmed: the command went in, and the rollout did not record the change in time (delivered
+	// "unknown": it may still have taken).
+	CodeModesCodexVersion     = "modes_codex_version"
+	CodeModesCodexNoRollout   = "modes_codex_no_rollout"
+	CodeModesCodexRefused     = "modes_codex_refused"
+	CodeModesCodexUnconfirmed = "modes_codex_unconfirmed"
 )
 
 // CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an
@@ -760,7 +791,7 @@ type QueueEdit struct {
 	Images [][]Image `json:"images,omitempty"`
 }
 
-// ServiceTier is a speed advertised by the native Codex model catalog.
+// ServiceTier is an advertised running-session speed or a native Codex catalog tier.
 type ServiceTier struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`

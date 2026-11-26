@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,8 @@ vi.mock("../../ui/atoms", async (original) => ({
 
 import { t } from "../../i18n";
 import { getInbox, itemKey, itemPath, itemRequest, resetInboxForTests, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { inboxReturnTo } from "../../lib/inbox-nav";
+import { getState } from "../../lib/store";
 import { DraftDialog } from "./InboxDialogs";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -72,9 +75,53 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   resetInboxForTests();
+  getState().assistant = null;
+  history.replaceState(null, "", "/");
 });
 
+registerTestMailbox();
+
 describe("AI reply drafts", () => {
+  it("replaces stale bot copy with the configured sender and binds it to Send", async () => {
+    const lark = item({ source: "larkcli", connector: { thread: "larkcli:chat:oc_example", can_reply: true, reply_to: "Old bot description" } });
+    let identity = "bot";
+    request.mockImplementation(async (path) => path === "/assistant/outbound-messages" ? { identity } : lark);
+    await open(lark);
+    const copy = (sender: string) => t("inbox-inboxdialogs.lark_sender_" + sender, { chat: lark.title });
+    expect(document.querySelector("[role=dialog]")?.textContent).toContain(copy("bot"));
+    identity = "user";
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(document.querySelector("[role=dialog]")?.textContent).toContain(copy("user"));
+    expect(document.querySelector("[role=dialog]")?.textContent).not.toContain("Old bot description");
+    await click(t("inbox-inboxdialogs.send"));
+    expect(request).toHaveBeenCalledWith(itemPath(lark.id) + "/reply", expect.objectContaining({
+      json: expect.objectContaining({ expected_sender_identity: "user" }),
+    }));
+  });
+
+  it("opens the AI twin's archived conversation on its computer and keeps the item address", async () => {
+    const draft = item({ agent: { state: "drafted", draft: "Generated reply", machine_id: "remote", session_id: "inbox-chat" } });
+    history.replaceState(null, "", `/inbox/${encodeURIComponent(draft.id)}?manager=owner-a`);
+    await open(draft);
+    await click(t("inbox-inboxdialogs.view_process"));
+    expect(location.pathname + location.search).toBe("/persona/inbox-chat?machine=remote&manager=owner-a");
+    expect(inboxReturnTo(history.state)).toEqual({ id: draft.id, manager: draft.manager });
+    expect(area()).toBeNull();
+  });
+
+  it("opens the draft process in its space when the session is only in the assistant's list", async () => {
+    const draft = item({ agent: { state: "drafted", draft: "Generated reply", machine_id: "m1", session_id: "draft-chat" } });
+    getState().assistant = { machine_id: "m1", conversations: [
+      { machine_id: "m1", session_id: "draft-chat", assistant: true, space: "notes", title: "Draft", cwd: "", status: "idle" },
+    ] };
+    history.replaceState(null, "", `/inbox/${encodeURIComponent(draft.id)}?manager=owner-a`);
+    await open(draft);
+    await click(t("inbox-inboxdialogs.view_process"));
+    expect(location.pathname + location.search).toBe("/tracks/notes/draft-chat");
+    expect(inboxReturnTo(history.state)).toEqual({ id: draft.id, manager: draft.manager });
+    expect(area()).toBeNull();
+  });
+
   it.each(["Escape", "backdrop", "close button"])("retains exact edited text after %s and reopen", async (how) => {
     await open();
     const edited = "  My edited reply\nwith a second line.  ";

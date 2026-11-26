@@ -68,9 +68,11 @@ func failedDirectionTodoStart(t *testing.T, e *threadEnv, failure error) (Todo, 
 }
 
 func TestDirectionTodoFailedStartRetriesCurrentAssignment(t *testing.T) {
-	// The node never answers session.start: the start reconciles with the machine before it fails (#6540), in
-	// milliseconds here.
-	shortTaskStartReconcile(t)
+	// The fake returns DeadlineExceeded on the first start. Shorten only the search for that missing session so
+	// the healthy retry still has its normal budget for database reads and starting the agent.
+	oldWait := taskStartAdoptWait
+	taskStartAdoptWait = time.Second
+	t.Cleanup(func() { taskStartAdoptWait = oldWait })
 	for _, backend := range []string{"memory", "database"} {
 		for _, entry := range []string{"http", "mcp"} {
 			t.Run(backend+"/"+entry, func(t *testing.T) {
@@ -144,7 +146,7 @@ func TestDirectionTodoFailedStartRetriesCurrentAssignment(t *testing.T) {
 }
 
 func TestDirectionTodoWithoutAssignmentStaysNotRetryable(t *testing.T) {
-	shortTaskStartReconcile(t)
+	shortTaskStartAdopt(t)
 	for _, backend := range []string{"memory", "database"} {
 		t.Run(backend, func(t *testing.T) {
 			var store Store
@@ -210,7 +212,7 @@ func TestDirectionTodoWithoutAssignmentStaysNotRetryable(t *testing.T) {
 // Two started plans binding the same plan-less to-do is ambiguous: every retry and remedy entry fails closed instead
 // of guessing which plan owns it, the same guarantee continuation to-dos already had (#8770).
 func TestDirectionTodoAmbiguousAssignmentStaysNotRetryable(t *testing.T) {
-	shortTaskStartReconcile(t)
+	shortTaskStartAdopt(t)
 	for _, backend := range []string{"memory", "database"} {
 		t.Run(backend, func(t *testing.T) {
 			var store Store
@@ -327,7 +329,7 @@ func TestRemedyWatchSharesTheSweepsPlanHistoryRead(t *testing.T) {
 			var counting *countingPlanHistoryStore
 			if base != nil {
 				counting = &countingPlanHistoryStore{Store: s.store()}
-				s.store = func() Store { return counting }
+				s.setStore(func() Store { return counting })
 			}
 			s.superviseWatch(ctx, time.Now())
 			for _, plan := range plans {

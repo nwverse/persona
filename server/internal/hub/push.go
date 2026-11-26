@@ -39,6 +39,10 @@ type Pusher struct {
 	direct *apns.Client
 	// relay posts to the devices' relays over connections kept between pushes (apns.NewTransport, #4800).
 	relay *http.Client
+	// privateOnly is office network mode (private_network.go): no relay is ever posted to, the hub's own key pushes only
+	// sealed payloads with the relay's content-free envelope (sealedDirect), and Live Activities, which iOS reads in the
+	// clear, are not pushed.
+	privateOnly bool
 	// retryWaits: how long a push the relay did not take for a reason that may pass waits before each further try
 	// (postRelayRetrying); tests shorten them.
 	retryWaits []time.Duration
@@ -90,14 +94,16 @@ type Pusher struct {
 	// and mu, never by a push.
 	prefsEdit sync.Mutex
 
-	// gradingMu guards the low-distraction mode state (push_grading.go): the cached switch, the per-key push times for the
-	// 12-hour rule, the held-push list and the delivered-push counts.
+	// gradingMu guards the low-distraction mode state (push_grading.go): the cached switch, per-manager push times for
+	// repeat suppression, the held-push list and the delivered-push counts. gradingSwitchMu serializes owner switch
+	// writes across the database and in-memory cache so concurrent toggles never invert cached state.
+	gradingSwitchMu   sync.Mutex
 	gradingMu         sync.Mutex
 	gradingCached     *bool
 	gradingCachedAt   time.Time
 	gradingRefreshing bool
 	gradingVersion    uint64 // bumped by setPushGrading, so a refresh that read before it does not undo it
-	gradingLastAlert  map[string]time.Time
+	gradingLastAlert  map[string]map[string]time.Time
 	intercepts        []heldPushRecord
 	sent              []pushSent
 	heldDirty         bool // the held-push list changed since the last save
@@ -113,6 +119,10 @@ type Pusher struct {
 	sentMirrorMu   sync.Mutex
 	gradingWriting bool // the one saver goroutine is running
 
+	// Cached versioned push grading configuration snapshot (hub.push_grading and
+	// hub.push_grading_layer), resolved independently per manager.
+	gradingEffective *pushGradingEffectiveCache
+
 	maintenanceWake     chan struct{}
 	maintenanceDeferred bool
 	pendingForgets      []Device
@@ -126,6 +136,8 @@ func newPusher(dir string, store Store, logf func(string, ...any)) *Pusher {
 		retryWaits: []time.Duration{time.Second, 4 * time.Second}, now: time.Now, storeTimeout: deviceStoreTimeout,
 		// Web Push in memory here; the hub gives it the store when it starts (hub.go): a test's store may have no settings.
 		web: newWebPusher(nil, logf)}
+	p.gradingEffective = newPushGradingEffectiveCache(gradingConfigTTL)
+	p.gradingEffective.now = func() time.Time { return p.now() }
 	if store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), deviceStoreTimeout)
 		if _, err := store.ReconcilePushDevices(ctx, p.now().UTC(), pushDeviceMaxIdle); err != nil {
@@ -268,7 +280,7 @@ func (p *Pusher) writeDeviceIn(parent context.Context, d Device) error {
 
 // relayed: this device can be pushed through its relay (the hub has no key of its own).
 func (p *Pusher) relayed(d Device) bool {
-	return p.direct == nil && d.RelayURL != "" && d.RelayGrant != "" && d.PushKey != ""
+	return !p.privateOnly && p.direct == nil && d.RelayURL != "" && d.RelayGrant != "" && d.PushKey != ""
 }
 
 // reachable: a push to this device can go anywhere.

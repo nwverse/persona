@@ -1,18 +1,23 @@
 package update
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // DevelopmentConfig is trusted installation configuration, never supplied by an
@@ -85,6 +90,82 @@ type DevelopmentBackup struct {
 	ID       string   `json:"id"`
 	Retained int      `json:"retained"`
 	Pruned   []string `json:"pruned"`
+}
+
+// DevelopmentProgress is the latest step in a development phase. Zero counts
+// and percentages are meaningful, so unknown metrics are represented by nil.
+type DevelopmentProgress struct {
+	Phase          string   `json:"phase"`
+	Step           string   `json:"step"`
+	StepIndex      int      `json:"step_index"`
+	StepTotal      int      `json:"step_total"`
+	Steps          []string `json:"steps,omitempty"`
+	ItemLabel      string   `json:"item_label,omitempty"`
+	ItemDone       *int64   `json:"item_done,omitempty"`
+	ItemTotal      *int64   `json:"item_total,omitempty"`
+	BytesDone      *int64   `json:"bytes_done,omitempty"`
+	BytesTotal     *int64   `json:"bytes_total,omitempty"`
+	BytesPerSecond *int64   `json:"bytes_per_second,omitempty"`
+	Percent        *int64   `json:"percent,omitempty"`
+	ElapsedSeconds int64    `json:"elapsed_seconds"`
+}
+
+func developmentSteps(operation string) (string, []string) {
+	switch operation {
+	case "build":
+		return "building", []string{"fetch", "npm_install", "web_build", "runtime_packages", "go_build", "manifest"}
+	case "preflight":
+		return "backing_up", []string{"preflight"}
+	case "backup":
+		return "backing_up", []string{"preflight", "quiesce", "database_dump", "archive_files", "resume_writers", "archive_programs", "verify_snapshot"}
+	case "prepare_backup":
+		return "applying_backup", []string{"verify_snapshot", "prepare_artifacts"}
+	}
+	return "", nil
+}
+
+// DevelopmentStep describes a step that can be reported for an operation.
+func DevelopmentStep(operation, step string) DevelopmentProgress {
+	phase, steps := developmentSteps(operation)
+	if i := slices.Index(steps, step); i >= 0 {
+		return DevelopmentProgress{Phase: phase, Step: step, StepIndex: i + 1, StepTotal: len(steps), Steps: steps}
+	}
+	return DevelopmentProgress{}
+}
+
+// Progress labels can only name compiled programs and Go's public target
+// components. Paths, configuration, filenames and command output are excluded.
+var developmentTargetLabel = lazyre.New(`^(personad|persona-(hub|node|manager)) \((aix|android|darwin|dragonfly|freebsd|illumos|ios|js|linux|netbsd|openbsd|plan9|solaris|wasip1|windows)-(386|amd64|arm|arm64|loong64|mips|mipsle|mips64|mips64le|ppc64|ppc64le|riscv64|s390x|wasm)\)$`)
+
+func readDevelopmentProgress(r io.Reader, operation string, report func(DevelopmentProgress)) {
+	s := bufio.NewScanner(r)
+	s.Buffer(make([]byte, 1024), 4096)
+	for s.Scan() {
+		var p DevelopmentProgress
+		if json.Unmarshal(s.Bytes(), &p) != nil {
+			continue
+		}
+		step := DevelopmentStep(operation, p.Step)
+		if step.Phase == "" || p.Phase != step.Phase || p.StepIndex != step.StepIndex || p.StepTotal != step.StepTotal ||
+			(p.ItemLabel != "" && (p.Step != "go_build" || !developmentTargetLabel.MatchString(p.ItemLabel))) {
+			continue
+		}
+		if p.ElapsedSeconds < 0 || p.Percent != nil && *p.Percent > 100 {
+			continue
+		}
+		valid := true
+		for _, count := range []*int64{p.ItemDone, p.ItemTotal, p.BytesDone, p.BytesTotal, p.BytesPerSecond, p.Percent} {
+			valid = valid && (count == nil || *count >= 0)
+		}
+		if valid {
+			p.Steps = step.Steps // Only Hub-defined step names reach clients.
+			report(p)
+		}
+	}
+	if s.Err() != nil {
+		// Keep consuming after an invalid oversized record so it cannot stall the helper.
+		_, _ = io.Copy(io.Discard, r)
+	}
 }
 
 // The adoption fence reserves the attempt, then becomes a write-ahead recovery
@@ -180,9 +261,26 @@ func ClearDevelopmentAdoption(dir string, p Pending) {
 //go:embed webdev.py
 var developmentHelper string
 
+type backupFailure struct {
+	Reason   string `json:"reason"`
+	ExitCode int    `json:"exit_code,omitempty"`
+}
+
+func (backupFailure) Error() string { return "development backup failed" }
+
+// DevelopmentBackupReason returns a catalog lookup code and numeric exit
+// status. Only a recognized translation may be shown to the user.
+func DevelopmentBackupReason(err error) (string, int) {
+	var failure backupFailure
+	if errors.As(err, &failure) {
+		return failure.Reason, failure.ExitCode
+	}
+	return "", 0
+}
+
 // DevelopmentRequest runs one bounded phase in an owned private directory. Raw
 // subprocess output stays in log, since tools/hooks may print private details.
-func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, operation string, input map[string]any, result any) error {
+func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, operation string, input map[string]any, result any, resume func(), report func(DevelopmentProgress)) error {
 	if config == nil {
 		return errors.New("development updates are not configured")
 	}
@@ -204,6 +302,16 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 		}
 	}()
 	logPath := filepath.Join(dir, operation+".log")
+	if operation == "backup" {
+		info, err := os.Lstat(logPath)
+		if err == nil && info.Size() > 0 {
+			if err := os.Rename(logPath, filepath.Join(dir, "backup.prev.log")); err != nil {
+				return err
+			}
+		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -217,6 +325,52 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 	}
 	input["operation"], input["config"], input["work"] = operation, config, work
 	input["result"] = filepath.Join(work, "result.json")
+	delete(input, "progress_fd")
+	var reader, writer *os.File
+	if phase, _ := developmentSteps(operation); report != nil && phase != "" {
+		reader, writer, err = os.Pipe()
+		if err != nil {
+			return err
+		}
+		defer reader.Close()
+		defer writer.Close()
+		input["progress_fd"] = 3 // the first exec.Cmd.ExtraFiles descriptor
+	}
+	// Writer coordination is a reliable request/ack pair. Progress events
+	// are optional and may be dropped if their pipe fills.
+	var extraFiles []*os.File
+	if writer != nil {
+		extraFiles = append(extraFiles, writer)
+	}
+	var releaseCapture func()
+	delete(input, "capture_fd")
+	delete(input, "resumed_fd")
+	if operation == "backup" && config.Backup.Builtin && resume != nil {
+		captured, notify, err := os.Pipe()
+		if err != nil {
+			return err
+		}
+		defer captured.Close()
+		defer notify.Close()
+		resumed, ack, err := os.Pipe()
+		if err != nil {
+			return err
+		}
+		defer resumed.Close()
+		defer ack.Close()
+		input["capture_fd"], input["resumed_fd"] = 3+len(extraFiles), 4+len(extraFiles)
+		extraFiles = append(extraFiles, notify, resumed)
+		releaseCapture = func() {
+			notify.Close()
+			resumed.Close()
+			var request [1]byte
+			if _, err := io.ReadFull(captured, request[:]); err == nil && request[0] == 'R' {
+				resume()
+				_, _ = ack.Write(request[:])
+			}
+			ack.Close() // A helper that lost its acknowledgement cannot publish.
+		}
+	}
 	data, err := json.Marshal(input)
 	if err != nil {
 		return err
@@ -229,13 +383,42 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "python3", "-c", developmentHelper)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(data), log, log
+	cmd.ExtraFiles = extraFiles
 	// Interrupt lets the helper resume writers on cancellation. A killed helper leaves
 	// its durable coordination marker; a later attempt fails closed.
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	// Allow child-group escalation (6s) plus a fresh 60s resume deadline and
 	// its own escalation, with margin for journal syncing and process exit.
 	cmd.WaitDelay = 90 * time.Second
-	if err := cmd.Run(); err != nil {
+	err = cmd.Start()
+	if err == nil {
+		var drained chan struct{}
+		if writer != nil {
+			_ = writer.Close()
+			drained = make(chan struct{})
+			go func() {
+				defer close(drained)
+				readDevelopmentProgress(reader, operation, report)
+			}()
+		}
+		if releaseCapture != nil {
+			releaseCapture()
+		}
+		err = cmd.Wait()
+		if drained != nil {
+			<-drained
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err() // The helper and its child group have exited before work is removed.
+	}
+	if err != nil {
+		if operation == "backup" || operation == "preflight" {
+			var failure backupFailure
+			if ok, readErr := Load(filepath.Join(work, "failure.json"), &failure); ok && readErr == nil {
+				return failure
+			}
+		}
 		return fmt.Errorf("development %s failed; inspect update/development/%s.log on the Hub", operation, operation)
 	}
 	data, err = os.ReadFile(filepath.Join(work, "result.json"))

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fakeHub, *db.DB, *db.LogicalConversation) {
@@ -40,7 +42,7 @@ func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fake
 	if err := d.PutConversationHandoff(ctx, "server", "side-chat", "operation", json.RawMessage(`{"summary":"fake source summary","recent":[{"role":"user","text":"same conversation"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "operation", conversationlog.Segment{ID: "two", MachineID: "server", SessionID: "target-chat", Engine: engine, SourceHistory: "h2", Launcher: engine, Model: "target-model", Effort: "medium"}, 6); err != nil {
+	if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "operation", logicalFixtureTarget(engine), 6); err != nil {
 		t.Fatal(err)
 	}
 	c, err := d.LogicalConversation(ctx, "server", "side-chat")
@@ -49,6 +51,11 @@ func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fake
 	}
 	return s, f, d, c
 }
+
+func logicalFixtureTarget(engine string) conversationlog.Segment {
+	return conversationlog.Segment{ID: "two", MachineID: "server", SessionID: "target-chat", Engine: engine, SourceHistory: "h2", Launcher: engine, Model: "target-model", Effort: "medium"}
+}
+
 func activatePair(t *testing.T, d *db.DB) *db.LogicalConversation {
 	t.Helper()
 	ctx := t.Context()
@@ -60,6 +67,53 @@ func activatePair(t *testing.T, d *db.DB) *db.LogicalConversation {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func TestLogicalUserInputsKeepsExcerptsWithinVisibleSegments(t *testing.T) {
+	s, f, d, _ := logicalPair(t, "pi")
+	c := activatePair(t, d)
+	f.answerNode(DeviceSessionItems, func(_ string, raw json.RawMessage) (any, error) {
+		var p historyParams
+		if err := json.Unmarshal(raw, &p); err != nil || !p.UserInputs {
+			t.Fatalf("not an input index request: %s, %v", raw, err)
+		}
+		if p.SessionID == "target-chat" {
+			if p.Before != nil {
+				t.Fatalf("active source was bounded: %s", raw)
+			}
+			return proto.UserInputIndex{Total: 2, History: "h2", Inputs: []proto.UserInputPosition{
+				{ID: "input#0", Seq: 1, Attachments: 2, Answer: "I see the files."},
+				{ID: "legacy#0", Seq: 4},
+			}}, nil
+		}
+		if p.SessionID != "side-chat" || p.Before == nil || *p.Before != 7 {
+			t.Fatalf("retired source must stop at its frozen boundary: %s", raw)
+		}
+		items := []proto.Item{
+			{ID: "input#0", Seq: 1, Role: "user", Kind: proto.KindText, Text: "First question"},
+			{ID: "reply#0", Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "**Visible** reply"},
+			{ID: "late#0", Seq: 7, Role: "assistant", Kind: proto.KindText, Text: "Private retired reply"},
+		}
+		items = slices.DeleteFunc(items, func(it proto.Item) bool { return it.Seq >= *p.Before })
+		inputs := transcript.UserInputPositions(items)
+		return proto.UserInputIndex{Total: len(inputs), History: "h1", Inputs: inputs}, nil
+	})
+	raw, err := s.logicalHistoryCall(t.Context(), d, c, DeviceSessionItems, json.RawMessage(`{"user_inputs":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index proto.UserInputIndex
+	if err := json.Unmarshal(raw, &index); err != nil {
+		t.Fatal(err)
+	}
+	want := []proto.UserInputPosition{
+		{ID: "input#0", Seq: 1, Preview: "First question", Answer: "Visible reply"},
+		{ID: "segment:two:input#0", Seq: 7, Attachments: 2, Answer: "I see the files."},
+		{ID: "segment:two:legacy#0", Seq: 10},
+	}
+	if index.Total != len(want) || !slices.Equal(index.Inputs, want) || index.History != c.History {
+		t.Fatalf("user input index %+v, want %+v", index, want)
+	}
 }
 
 func TestLogicalHistoryProjectsDatabaseAcrossSegmentsAndFrozenTail(t *testing.T) {
@@ -395,6 +449,55 @@ func TestLogicalOperationReceiptIsScopedToConversation(t *testing.T) {
 	}
 	if logicalNodeOperation(first, "same-id") != logicalNodeOperation(first, "same-id") {
 		t.Fatal("receipt changed after restart")
+	}
+}
+
+func TestLogicalQueuedInputKeepsModeProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		engine      string
+		wantMode    any
+		wantDefault any
+	}{
+		{engine: "claude", wantDefault: proto.ModePlan},
+		{engine: "codex", wantMode: proto.ModeBypass},
+	} {
+		t.Run(tc.engine, func(t *testing.T) {
+			s, f, d, _ := logicalPair(t, tc.engine)
+			ctx := t.Context()
+			c := activatePair(t, d)
+			if err := d.ResolveConversationSwitch(ctx, "server", "side-chat", "operation", "accepted", ""); err != nil {
+				t.Fatal(err)
+			}
+			f.setSessions("server",
+				proto.Session{SessionID: "side-chat", Assistant: true, Agent: "claude", Status: proto.StatusIdle},
+				proto.Session{SessionID: "target-chat", Assistant: true, Agent: tc.engine, Status: proto.StatusIdle})
+			f.answerNode("session.modes", func(string, json.RawMessage) (any, error) { return map[string]bool{"ok": true}, nil })
+			_, handled, err := s.logicalCall(ctx, "server", "session.modes", json.RawMessage(`{"session_id":"side-chat","permission_mode":"bypassPermissions"}`))
+			if err != nil || !handled {
+				t.Fatalf("seed the inherited segment mode: handled=%v err=%v", handled, err)
+			}
+			c, err = d.LogicalConversation(ctx, "server", "side-chat")
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.answerNode(DeviceAssistantSend, func(_ string, raw json.RawMessage) (any, error) {
+				var got map[string]any
+				_ = json.Unmarshal(raw, &got)
+				if got["permission_mode"] != tc.wantMode || got["default_permission_mode"] != tc.wantDefault || got["permission_mode_explicit"] != nil {
+					t.Fatalf("queued mode provenance changed: %v", got)
+				}
+				return map[string]bool{"ok": true}, nil
+			})
+			payload, _ := json.Marshal(logicalInput{Method: DeviceAssistantSend, Params: map[string]any{
+				"text": "continue", "client_msg_id": "queued", "default_permission_mode": proto.ModePlan,
+			}})
+			if err := d.EnqueueConversationInput(ctx, c.MachineID, c.SessionID, "queued", c.Epoch, payload); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.drainLogicalInput(ctx, d, c); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
