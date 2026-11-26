@@ -135,7 +135,11 @@ func (s *Service) addTodoBlocker(ctx context.Context, row db.TodoBlockerRow) (*d
 }
 
 func todoBlockerID(todoID, kind, targetRef string) string {
-	sum := sha256.Sum256([]byte(todoID + "\x00" + kind + "\x00" + targetRef))
+	hashRef := targetRef
+	if kind == todoBlockerKindExternalPR {
+		hashRef = strings.ToLower(normalizeTodoBlockerPRRef(targetRef))
+	}
+	sum := sha256.Sum256([]byte(todoID + "\x00" + kind + "\x00" + hashRef))
 	return "blk_" + hex.EncodeToString(sum[:8])
 }
 
@@ -368,7 +372,10 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 	}
 
 	for _, todoID := range result.UnblockedTodoIDs {
-		s.notifyTodoBlockerUnblocked(ctx, todoID, onUnblocked)
+		s.notifyTodoBlockerUnblockedOnly(ctx, todoID, onUnblocked)
+	}
+	if len(result.UnblockedTodoIDs) > 0 && s.settings(ctx).todosV2On() {
+		s.sweepAdmissionQueue(ctx)
 	}
 
 	return todoBlockerReconcileSummary{
@@ -416,7 +423,7 @@ func (s *Service) hasActiveTodoBlockers(ctx context.Context, todoID string) bool
 	return len(s.activeTodoBlockerRefs(ctx, todoID)) > 0
 }
 
-func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
+func (s *Service) notifyTodoBlockerUnblockedOnly(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
 	key := "blockers_unblocked:" + todoID
 	to := ""
 	if t, ok := s.todoNow(todoID); ok {
@@ -432,6 +439,10 @@ func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string,
 	if hook != nil {
 		hook(ctx, todoID)
 	}
+}
+
+func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
+	s.notifyTodoBlockerUnblockedOnly(ctx, todoID, hook)
 	if s.settings(ctx).todosV2On() {
 		s.sweepAdmissionQueue(ctx)
 	}
