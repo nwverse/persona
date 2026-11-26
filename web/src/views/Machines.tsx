@@ -84,7 +84,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     }
     setView(v);
   };
-  const [sheet, setSheet] = useState<{ mid: string; kind: AlertKind } | null>(null);
+  const [sheet, setSheet] = useState<{ mid: string; kind: Exclude<AlertKind, "disk"> } | null>(null);
   useEffect(() => {
     if (route.name !== "machines") return;
     const req = takeUsageFocus();
@@ -94,7 +94,12 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   useEffect(() => {
     if (legacyEngine) navigate({ name: "machine", mid: legacyEngine, subview: "management" }, true);
   }, [legacyEngine]);
-  const openAlert = useCallback((mid: string, kind: AlertKind) => setSheet({ mid, kind }), []);
+  const openAlert = useCallback((mid: string, kind: AlertKind) => {
+    if (kind === "disk") {
+      setSheet(null);
+      openUsageMap(mid);
+    } else setSheet({ mid, kind });
+  }, []);
   const records = useLauncherHealth();
   const issues = useMemo(() => {
     const by = new Map<string, number>();
@@ -147,13 +152,13 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   if (route.name === "machine") {
     return <div className="@container h-full">
       <div className="flex h-full min-w-0">
-        <nav aria-label={t("machines.title")} className="hidden w-52 shrink-0 overflow-y-auto border-r border-line p-2 @3xl:block">
+        {machines.length > 1 && <nav aria-label={t("machines.title")} className="hidden w-52 shrink-0 overflow-y-auto border-r border-line p-2 @3xl:block">
           <a className="flex min-h-11 items-center gap-2 px-2 text-label font-medium text-ink-2 hover:text-ink"
             href={href({ name: "machines" })} onClick={e => onLinkClick(e, { name: "machines" })}>
             <Icon name="chevronLeft" size={14} />{t("machines.title")}
           </a>
           {ordered.map(m => {
-            const to = { ...route, mid: m.id, mode: undefined };
+            const to = { ...route, mid: m.id, mode: undefined, path: m.id === route.mid ? route.path : undefined };
             const counts = agents.get(m.id);
             const alert = machineAlerts({ machine: m, metrics: metrics?.find(mm => mm.machine_id === m.id),
               launchers: launcherIssues(m.id), managerOffline: !!offlineManagerOf(roster, m) })[0];
@@ -169,7 +174,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {alert && alert.kind !== "offline" && <span className="block text-submeta text-orange">{alertLabel(alert)}</span>}
             </a>;
           })}
-        </nav>
+        </nav>}
         <div className="min-w-0 flex-1">
           <Suspense fallback={<Loading />}><MachineDetail key={route.mid} mid={route.mid}
             subview={route.subview ?? (legacyEngine ? "management" : route.range ? "monitoring" : "work")} mode={route.mode} onToggleSidebar={onToggleSidebar} /></Suspense>
@@ -178,6 +183,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     </div>;
   }
 
+  const fleetWidth = machines.length === 1 ? "max-w-3xl" : "max-w-[1560px]";
   const add = (
     <Button tone="primary" icon="plus" onClick={() => (canAdd ? setAdding({ again: null }) : setHelping(true))}>
       {t("machines.add")}
@@ -193,15 +199,17 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {machines.length > 0 && canAdd && add}
       </header>
       <FleetScroll view={view}>
-        <div className="machine-views mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
-          <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
-            { v: "cards", label: t("machines.view_cards") },
-            ...(machines.length > 1 ? [{ v: "capabilities" as const, label: t("machines.view_capabilities") }] : []),
-            { v: "resources", label: t("resources.assistant_resources") },
-          ]} />
+        <div className={cx("mx-auto px-5 pt-3 sm:px-8", fleetWidth)}>
+          <div className="machine-views w-fit max-w-full">
+            <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
+              { v: "cards", label: t("machines.view_cards") },
+              ...(machines.length > 1 ? [{ v: "capabilities" as const, label: t("machines.view_capabilities") }] : []),
+              { v: "resources", label: t("resources.assistant_resources") },
+            ]} />
+          </div>
         </div>
         {/* two columns, three on a wide screen: the cards used to stop at 1000px and leave half a wide window empty; a full-row item takes col-span-full, since md:col-span-2 alone leaves a third of the row to the next card */}
-        <div className={cx("mx-auto grid grid-cols-1 gap-3 px-5 py-6 sm:px-8", machines.length === 1 ? "max-w-3xl" : "max-w-[1560px] md:grid-cols-2 2xl:grid-cols-3")}>
+        <div className={cx("mx-auto grid grid-cols-1 gap-3 px-5 py-6 sm:px-8", fleetWidth, machines.length !== 1 && "md:grid-cols-2 2xl:grid-cols-3")}>
           {fleetView && machines.length > 1 && <TodayTokens machines={machines} metrics={metrics} />}
           {view === "resources" && <div className="col-span-full"><Suspense fallback={<Loading />}><ResourcesPanel /></Suspense></div>}
           {fleetView && !metrics && !error && (!loaded || machines.length > 0) && <Loading />}
@@ -258,7 +266,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           )}
         </div>
       </FleetScroll>
-      <AlertSheetHost sheet={sheet} machines={machines} metrics={metrics} sessions={full.sessions} known={known} records={records} launcherIssues={launcherIssues} roster={roster} onKind={openAlert} onClose={() => setSheet(null)} onReconnect={reconnect} onUsageMap={mid => { setSheet(null); openUsageMap(mid); }} />
+      <AlertSheetHost sheet={sheet} machines={machines} metrics={metrics} sessions={full.sessions} known={known} records={records} launcherIssues={launcherIssues} roster={roster} onKind={openAlert} onClose={() => setSheet(null)} onReconnect={reconnect} />
       <AddComputer open={!!adding} again={adding?.again} onClose={() => setAdding(null)} />
       {helping && <HelpDialog topic="add_computer" machine="" step={null} onClose={() => setHelping(false)} onAction={() => {}} />}
     </div>
@@ -311,7 +319,7 @@ const MachineCard = memo(function MachineCard({ m, onlyComputer, index, metrics:
   const alerts = machineAlerts({ machine: m, metrics: mm, launchers: launcherIssues, managerOffline: !!managerOffline }).filter((a) => a.kind !== "mismatch" && a.kind !== "deploy_failed");
   const versions = [m.claude_version && `claude ${m.claude_version}`, m.herdr_version && `herdr ${m.herdr_version}`].filter(Boolean).join(" · ");
   return (
-    <section onClick={(e) => openFromCard(e, detail)} className="cursor-pointer overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} ${index * 60}ms both` }}>
+    <section onClick={(e) => openFromCard(e, detail)} className="cursor-pointer overflow-hidden rounded-card bg-surface shadow-card card-interactive" style={{ animation: `fade-up 420ms ${EASE} ${index * 60}ms both` }}>
       <div className="flex items-start gap-3 px-4 pt-3.5">
         <span className={cx("flex size-9 shrink-0 items-center justify-center rounded-[9px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
           <Icon name="machine" size={16} />
@@ -429,19 +437,19 @@ const MachineCard = memo(function MachineCard({ m, onlyComputer, index, metrics:
         </p>
       )}
       {/* an offline card has no metrics under them: the chips keep their own room above the footer */}
-      <AlertChips alerts={alerts} onOpen={(kind) => kind === "disk" ? openUsageMap(m.id) : onAlert(m.id, kind)} className={m.online ? undefined : "mb-3"} />
-      {alerts.some(a => a.kind === "disk") && <div className="mx-4">
-        <Button tone="quiet" testId="disk-details" onClick={() => onAlert(m.id, "disk")}>{t("machines.disk_details")}</Button>
-      </div>}
+      <AlertChips alerts={alerts} onOpen={(kind) => onAlert(m.id, kind)} className={m.online ? undefined : "mb-3"} />
       {deployment.visible && (
         <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mt-2" onDetails={() => onAlert(m.id, m.deploy_error ? "deploy_failed" : "mismatch")} onClose={NOOP} />
       )}
       {onlyComputer && !pending && m.online && <div className="flex flex-wrap gap-2 px-4 py-2">
-        <Button tone="primary" icon="plus" onClick={() => openNewAgent({ machineId: m.id })}>{t("space-page.new_agent")}</Button>
+        <Button tone="primary" className="[@media(pointer:coarse)]:min-h-11" icon="plus" onClick={() => openNewAgent({ machineId: m.id })}>{t("space-page.new_agent")}</Button>
         {(["files", "storage"] as const).map(subview => {
           const to = { ...detail, subview };
           return <a key={subview} href={href(to)} onClick={e => onLinkClick(e, to)}
-            className="inline-flex min-h-11 items-center rounded-control px-3 text-label text-ink-2 hover:bg-hover">{t(subview === "files" ? "machines.view_files" : "machines.view_storage")}</a>;
+            className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-control bg-surface px-3 text-label font-medium text-ink shadow-btn hover:bg-hover [@media(pointer:coarse)]:min-h-11">
+            <Icon name={subview === "files" ? "folder" : "archive"} size={14} stroke={2.1} />
+            {t(subview === "files" ? "machines.view_files" : "machines.view_storage")}
+          </a>;
         })}
       </div>}
       <MachineMetricsSummary machine={m} metrics={mm} />
@@ -554,8 +562,8 @@ function useLauncherHealth(): { list: LauncherHealthRecord[]; merge: (records: L
 }
 
 /** The alert sheet for the computer and alert asked for; closed (with its exit) when none is. */
-function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, launcherIssues, roster, onKind, onClose, onReconnect, onUsageMap }: {
-  sheet: { mid: string; kind: AlertKind } | null;
+function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, launcherIssues, roster, onKind, onClose, onReconnect }: {
+  sheet: { mid: string; kind: Exclude<AlertKind, "disk"> } | null;
   machines: Machine[];
   metrics: MachineMetrics[] | null;
   sessions: readonly Session[];
@@ -566,7 +574,6 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
   onKind: (mid: string, kind: AlertKind) => void;
   onClose: () => void;
   onReconnect: (id: string) => Promise<void>;
-  onUsageMap: (mid: string) => void;
 }) {
   const m = sheet ? machines.find((x) => x.id === sheet.mid) : undefined;
   const mm = m ? metrics?.find((x) => x.machine_id === m.id) : undefined;
@@ -588,7 +595,6 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
       onClose={onClose}
       onReconnect={onReconnect}
       onRecords={records.merge}
-      onUsageMap={onUsageMap}
       onReloadRecords={records.reload}
     />
   );
