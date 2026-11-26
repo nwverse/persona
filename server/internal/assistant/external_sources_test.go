@@ -16,7 +16,7 @@ import (
 
 func externalSourceHTTPFixture(t *testing.T) (*Service, *repositorystore.Store) {
 	t.Helper()
-	database, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func externalSourceHTTPFixture(t *testing.T) (*Service, *repositorystore.Store) 
 	if err := store.PutSetting(t.Context(), directionsKey, map[string]*direction{"dir_source": {At: now, By: directionByUser}}); err != nil {
 		t.Fatal(err)
 	}
-	s := New(Options{Hub: newFakeHub(), Store: func() Store { return store }, Logf: testLogf(t)})
+	s := New(Options{Hub: newFakeHub().withMachine(), Store: func() Store { return store }, Logf: testLogf(t)})
 	return s, store
 }
 

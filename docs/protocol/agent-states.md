@@ -9,7 +9,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | --- | --- | --- | --- | --- |
 | `needs_you` Needs you | Stuck somewhere a person must step in | `blocked` (a question / confirm box in the TUI) | A pending question, plan, permission or terminal interaction (herdr still shows working while a hook holds it) | Blue, breathing |
 | `working` Working | Running | `working` | Claude: herdr reports `done` / `idle` / `unknown`, but the session has hooks (Persona's, or the global report-only ones) and the hook turn count says the turn isn't over (see "Hook turn signals" below); for sessions without hooks, the terminal title shows Claude Code's working spinner glyph (◐◓◑◒; older versions used braille dots), or the transcript shows this turn has started and not ended (no `turn_duration`, not interrupted) and was written within 45 seconds (#2069; if the transcript shows the turn ended, herdr's state is used). "Written" is its newest timestamped line, not the file's mtime: Claude Code rewrites its trailing metadata in place while idle (#5967); or the turn has stopped but its background commands / sub-Agents / Monitor / workflow are still running (#2228, #2935: when they finish they hand it the result and it carries on; assistant chats excluded). Codex: herdr reports `done` / `idle` / `unknown`, but its app-server runs a turn in its thread or its title shows Codex's spinner ("Codex" below, #4865) | Amber, breathing |
-| Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count. A known worker that used no CPU at any look and wrote no output for 10 minutes (a test hung on a lock, an esbuild service nobody talks to) is still Working, since a running tool is work, but the session carries `background_stalled_since` (#13744) and clients add a muted "background commands quiet for 3 hr" line; CPU or output clears it. iOS and Android do not show it yet | Amber, faded, still |
+| Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count. Stalled background commands carry `background_stalled_since` (#13744, #16418): a known worker that used no CPU at any look and wrote no output for 10 minutes (a test hung on a lock, an esbuild service nobody talks to); after 3 minutes, a process nothing here knows or a command Claude Code's timeout moved to the background (`moved_from_foreground`) with no waiter under it (a `cmp` reading a stdin nobody writes to); after 2 minutes of looks in a row, background commands alone whose shells are gone from under the live `claude` with no output (one that ended without a notification). A waiter the agent started is never stalled, and CPU or output clears it. Beside a subagent, a workflow or a Monitor the Agent stays Working and clients add a muted "background commands quiet for 3 hr" line. Stalled background commands that are all that is left no longer make a finished turn Working (#16418): `state` is the turn's own (Unread, Idle), `background_working` is false, and `background` and `background_stalled_since` stay on the row, so the task's turn settles and its supervisor hears of it as usual. A task's lone Agent that reported the task done (`report_to_supervisor`) in the round under way settles at once with background commands left that only wait, were moved from the foreground or stalled. iOS and Android do not show the stall yet; the web shows it on Working rows only | Amber, faded, still |
 | `unread` Unread | A turn finished and the result hasn't been seen | `done` (never focused in herdr) | And not viewed in the App since it finished | Green |
 | `idle` Seen | Finished and seen, waiting for input | `idle` (seen in herdr) | Or herdr still says `done` but it was viewed in the App | Gray |
 | Just finished (a kind of `idle`) | The triage found the turn done before anybody looked, less than three hours ago ("Just finished" below, #9751, `work.just_finished`) | — | Session Triage on, and the turn Unread before the triage took it out | Green, a plain dot |
@@ -19,7 +19,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 
 A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
-List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
+The Web Agents list uses `Session.view.rank` ("Five phases" below). Clients using the older list order (iOS / Mac `AgentListOrder.rank`, Android `agentRank`) show Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
 
 Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
@@ -292,6 +292,82 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
 
 - The list is grouped by state, newest first within a group. Normally that's `updated_at`, but a working agent's `updated_at` changes with every step and would jump around within the group,
   so "Working" uses `state_since`: the hub records when each agent entered its current state (in memory; after a hub restart it counts from the restart).
+
+## Five phases
+
+`Session.view` (`schema/wire/agent-view.schema.json`, #15397, the typed core plan's 2.1, step P5) is the one view of
+an Agent every client draws: `{phase, reason, counted, rank}`. The manager computes it on every list it publishes
+(`server/internal/assistant/agentview`, through `fleetcountadapt.Views` in `fleet_views.go`), the archived rows a hub
+takes apart included; the hub relays it and
+advertises the feature `agent_view` (`proto.FeatureAgentView`). `state` and `status` above stay frozen and are still
+sent, for older clients. A new client draws `view` and sorts by `rank`; it never derives a phase, a count or an order
+of its own. `spec/fixtures/agent-view` pins every case.
+
+| Phase | Absorbs | Reasons (`reason.kind`, with its fields) |
+| --- | --- | --- |
+| `needs_you` | `state=needs_you`, and a row the hub folds a waiting child or side under | `cards` (`n`: the cards in its row, its folded ones' included; `held`: none is the owner's yet, D11) · `terminal_dialog` (a dialog its terminal shows that no card stands for) |
+| `error` | `turn_error*`, `start_error*` and `interrupted`, on a session that is not working | `model` (`code`: `turn_error_code`) · `usage_limit` (`resets_at`, `resumes`) · `start_refused` (`code`: `start_error_code`, `args`: `start_error_args`) · `restart_interrupted` (`resumable`, D-C) |
+| `working` | `working`, background work, background waiting; a session whose task's supervisor holds every card it asked | `turn` · `background` (`waiting`: that work only waits, #6045) |
+| `done` | `unread`, Just finished (`work.just_finished`) and Awaiting your reply (`awaits_reply`, D-A) | `unseen` · `just_finished` · `asks` (`question`: `asks`; `unseen`: the owner has not seen the reply) |
+| `idle` | `idle` (Seen), `offline`, `unknown` | `seen` · `not_running` · `host_unknown` (D-B: a screen may say "status unknown") |
+
+Decided by the owner on 2026-11-25 (#15397): **D-A** Awaiting your reply is `done`, reason `asks`, never counted in
+Needs you; **D-B** `unknown` (and a state this hub does not know) is `idle`, reason `host_unknown`; **D-C**
+`interrupted` is `error`, reason `restart_interrupted{resumable}`, which carries the "Continue" remedy. Before this,
+`agentState` had no interrupted branch, so an interrupted session read as `unknown`.
+
+- **Needs you first, from fleetcount.** The phase is `needs_you` when fleetcount's Agents list
+  (`fleetcount.AgentsNeedsYou` on the badge surface, `spec/fixtures/needs-you`) has a row for the session, by its cards
+  or by its dialog; `counted` is that row's `Why.Counted()`, never computed again (muted, quiet and held rows are
+  listed, not counted). A session with cards and no row of its own (a folded child, a directory-hidden one, one of the
+  assistant's conversations) is `needs_you`, `cards`, not counted; one whose every card its task's supervisor holds is
+  in no row and reads `working`, `turn` (D11). A session the hub says waits with no card and no row is `needs_you`,
+  `terminal_dialog`, not counted.
+- **Then its own turn**: working (with its background), then `interrupted`, then an error (a start error first, then a
+  turn error; Persona's own Stop is none), then a finished turn: `asks`, `unseen`, `just_finished`, `seen`; then not
+  running; anything else is `host_unknown`.
+- **Per computer.** Each machine's list is told on its own, so a row is decided with its own computer's rows and every
+  pending card: a child folded under a parent on another computer is decided as a row of its own (`counted` on the
+  child, not on the parent). The Web Agents list keeps that counted child visible. Clients using the older hierarchy
+  can fold it under the parent. Cross-computer folds are rare (A2A subagents). Deciding the whole fleet at once is a follow-up.
+
+### Rank
+
+`rank` is one total order for every list, lower first: the phase, then the reason within it, then a muted session
+last in its phase. Equal ranks go by the shared tie-break: newest first by `state_since` for `working`, else
+`updated_at`; then session id, then machine id (the web's `byAttention`, iOS `AgentListOrder.ordered`).
+
+| Rank | Phase | Reason |
+| --- | --- | --- |
+| 0 | `needs_you` | counted |
+| 1 | `needs_you` | not counted (muted, quiet, held, no row of its own) |
+| 10 | `error` | `model`, `start_refused`, `restart_interrupted`, `usage_limit` that does not resume by itself |
+| 11 | `error` | `usage_limit` whose CLI goes on by itself once it resets |
+| 19 | `error` | muted |
+| 20 | `working` | `turn` |
+| 21 | `working` | `background` |
+| 22 | `working` | `background`, only waiting |
+| 29 | `working` | muted |
+| 30 | `done` | `unseen`, and `asks` the owner has not seen |
+| 31 | `done` | `asks`, seen |
+| 32 | `done` | `just_finished` |
+| 39 | `done` | muted |
+| 40 | `idle` | `seen` (muted or not) |
+| 41 | `idle` | `host_unknown` |
+| 42 | `idle` | `not_running` |
+
+Why this order: the phases go by how soon the owner has to act. A counted Needs you row waits for them now; an error
+stopped the work until they fix it or say Continue; working is moving on its own; done has a result to read but asks
+nothing more (D-A); idle has nothing. Within a phase the reasons keep the order the three clients' lists have today
+(Unread → Awaiting reply → Just finished; Working → Waiting in the background; Seen → Unknown → Not running), and
+muted rows go last in their phase, as each client's Muted section does today. Each phase starts at a multiple of ten,
+so a reason added later takes a place without renumbering the others. Two changes against today's lists, which each
+client takes with its own change and screenshots (P5a–d): errors move up out of Unread and Seen, and Working now sorts
+ahead of Unread and Awaiting reply, since done asks nothing of the owner that Needs you does not already show.
+
+Older hubs send no `view` (no `agent_view` in the features) and a hub's older manager may send rows without one. The
+fallback, inferring a view from `state`, `status` and the fields above, is written once, in the Rust core
+(`native/app-core`, `state.rs`) with its TypeScript output for the web, never per client (the plan's 2.4).
 
 ## Spaces / slots (multi-tab collaboration)
 

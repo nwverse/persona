@@ -181,7 +181,23 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
         else:
             lines += ["    public init() {}", "", "    public init(from decoder: Decoder) throws {}", "",
                       "    public func encode(to encoder: Encoder) throws {}"]
+        if d.keyed:
+            lines += keyed_subscript(d)
         lines += ["}", ""]
+        return lines
+
+    def keyed_subscript(d: Def) -> list[str]:
+        """A struct made from an enum-keyed map, read and written by its key: an unknown key has the zero value, and
+        setting it changes nothing."""
+        key, typ = swift_name(d.keyed), stype(d.fields[0].type)
+        cases = [(swift_case(f.name), swift_ident(lower_camel(f.name))) for f in d.fields]
+        lines = ["", f"    /// The field of one {d.keyed}: an unknown one reads {zero(d.fields[0].type)}, and setting it changes nothing.",
+                 f"    public subscript(_ key: {key}) -> {typ} {{", "        get {", "            switch key {"]
+        lines += [f"            case .{swift_ident(c)}: {n}" for c, n in cases]
+        lines += [f"            case .unknown: {zero(d.fields[0].type)}", "            }", "        }", "        set {",
+                  "            switch key {"]
+        lines += [f"            case .{swift_ident(c)}: {n} = newValue" for c, n in cases]
+        lines += ["            case .unknown: break", "            }", "        }", "    }"]
         return lines
 
     def closed_enum(d: Def) -> list[str]:
@@ -224,6 +240,8 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
         return lines
 
     for d in defs.values():
+        if d.external:
+            continue  # a shared file's ID: PersonaWire's own file declares it
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
         elif d.kind in ("id", "text"):
@@ -278,4 +296,3 @@ def gen_swift(defs: dict[str, Def], header: list[str] | None = None, prefix: str
                     "        var c = encoder.container(keyedBy: TagKey.self)",
                     f"        try c.encode({swift_ident(disc)}, forKey: .tag)", "    }", "}", ""]
     return "\n".join(out)
-

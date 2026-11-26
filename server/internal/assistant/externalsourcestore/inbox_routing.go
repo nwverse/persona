@@ -1,9 +1,11 @@
 package externalsourcestore
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -86,6 +88,46 @@ func (s *Store) SaveExternalInboxItems(ctx context.Context, rows []db.InboxRow, 
 		}
 		return tx.SendBatch(ctx, &batch).Close()
 	})
+}
+
+var errReceiptTaken = errors.New("another route owns the Inbox event")
+
+// ClaimLegacyExternalInbox uses the same receipt key as scoped routing. A legacy
+// receipt is complete from the scoped worker's point of view. Only the original
+// Inbox version and recipient can retry it, through the legacy delivery path.
+func (s *Store) ClaimLegacyExternalInbox(ctx context.Context, events []assistantwire.ExternalInboxEvent, owner string, now time.Time) (bool, error) {
+	ordered := slices.Clone(events)
+	slices.SortFunc(ordered, func(a, b assistantwire.ExternalInboxEvent) int { return cmp.Compare(a.Key, b.Key) })
+	err := s.database.Transaction(ctx, func(tx pgx.Tx) error {
+		for _, event := range ordered {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO assistant_external_inbox_events (id, external_ref, event_id, input, received_at, ready_at, completed)
+				VALUES ($1, $2, $3, jsonb_build_object('legacy_forward_claim', $4::text), $5, $5, TRUE)
+				ON CONFLICT (external_ref, event_id) DO NOTHING`, event.Key, event.Ref, event.EventID, owner, now)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 0 {
+				continue
+			}
+			var owns bool
+			err = tx.QueryRow(ctx, `
+				SELECT COALESCE(input->>'legacy_forward_claim' = $3, FALSE)
+				FROM assistant_external_inbox_events WHERE external_ref = $1 AND event_id = $2`,
+				event.Ref, event.EventID, owner).Scan(&owns)
+			if err != nil {
+				return err
+			}
+			if !owns {
+				return errReceiptTaken
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errReceiptTaken) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // WithExternalInboxSweep serializes planning and delivery across overlapping manager

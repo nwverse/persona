@@ -27,7 +27,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", text)
         self.assertIn("github.event.pull_request.user.login == 'chyroc'", text)
         self.assertIn("github.event.pull_request.merge_commit_sha", text)
-        self.assertEqual(self.pr["permissions"], {"contents": "read", "checks": "write"})
+        self.assertEqual(self.pr["permissions"], {"actions": "read", "contents": "read", "checks": "write"})
 
     def test_all_platforms_feed_the_one_verified_plan(self):
         jobs = self.pr["jobs"]
@@ -135,13 +135,17 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(yaml.load((ROOT / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)["jobs"]["android"]["with"]["commit"], "${{ github.sha }}")
         self.assertIn("ref: ${{ inputs.commit || github.sha }}", workflow)
         self.assertIn("lane: [lint-build-test-0, test-1]", workflow)
-        self.assertIn("android-source-receipt-${{ inputs.commit || github.sha }}-${{ matrix.lane }}", workflow)
+        self.assertIn("android-source-receipt-${{ inputs.commit || github.sha }}-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
         self.assertIn("JOB_STATUS: ${{ job.status }}", workflow)
+        self.assertIn("scripts/ci/android_result.py bind", workflow)
+        self.assertIn("scripts/ci/android_result.py verify", workflow)
         self.assertIn("uses: ./.github/workflows/android-test.yml", release)
         self.assertIn("commit: ${{ needs.plan.outputs.commit }}", release)
-        self.assertIn("pattern: android-source-receipt-${{ needs.plan.outputs.commit }}-*", release)
+        self.assertIn("name: android-source-result-${{ needs.plan.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}", release)
         self.assertIn("--release-only", release)
         self.assertIn("Android test evidence belongs to another commit", release)
+        self.assertIn("Android test evidence belongs to another workflow run", release)
+        self.assertIn("Android test evidence belongs to another workflow attempt", release)
         self.assertEqual(self.pr["jobs"]["android"]["needs"], ["plan", "android-tests"])
 
     def test_apple_export_keychain_is_visible_to_xcode(self):
@@ -398,6 +402,38 @@ class ReleaseWorkflowTests(unittest.TestCase):
                       if step.get('name') == 'Advance only the verified stable Latest pointer')
         self.assertEqual(stable['if'], "needs.authorize.outputs.channel == 'release'")
         self.assertIn('--manifest release/downloads/latest.json', stable['run'])
+
+    def test_schedule_pins_newest_full_green_ci_commit_and_keeps_merge_vs_target_distinct(self):
+        schedule_text = SCHEDULE.read_text()
+        schedule = yaml.load(schedule_text, Loader=yaml.BaseLoader)
+        self.assertEqual(schedule["permissions"]["actions"], "read")
+        select = next(step for step in schedule["jobs"]["plan"]["steps"]
+                      if step.get("id") == "select")
+        self.assertEqual(select["env"]["ACTIONS_TOKEN"], "${{ secrets.GITHUB_TOKEN }}")
+        self.assertIn("scripts/operations/select_green_commit.py", select["run"])
+        self.assertIn('GH_TOKEN="$ACTIONS_TOKEN" python3 scripts/operations/select_green_commit.py', select["run"])
+        self.assertIn('git switch --detach "$green_commit"', select["run"])
+        self.assertLess(select["run"].index("select_green_commit.py"), select["run"].index('git switch --detach "$green_commit"'))
+        self.assertLess(select["run"].index('git switch --detach "$green_commit"'), select["run"].index('\ncommit="$(git rev-parse HEAD)"'))
+        self.assertIn("No newer full green CI commit found on main", select["run"])
+        self.assertIn("'ci_run_id':int(os.environ['CI_RUN_ID'])", schedule_text)
+
+        pr_text = PR.read_text()
+        self.assertEqual(self.pr["jobs"]["plan"]["outputs"]["merge_commit"], "${{ steps.plan.outputs.merge_commit }}")
+        self.assertIn("resolve-target --dir .github/release-prs", pr_text)
+        merge_check = next(step for step in self.pr["jobs"]["plan"]["steps"]
+                           if step.get("id") == "merge-check")
+        self.assertEqual(merge_check["env"]["COMMIT"], "${{ steps.plan.outputs.merge_commit }}")
+        self.assertIn('--merge-commit "$MERGE_COMMIT"', pr_text)
+        self.assertIn("--merge-commit '${{ needs.plan.outputs.merge_commit }}'", pr_text)
+
+        publish_text = PUBLISH.read_text()
+        self.assertEqual(self.publish["jobs"]["authorize"]["outputs"]["merge_commit"], "${{ steps.source.outputs.merge_commit }}")
+        self.assertIn("resolve-target --dir .github/release-prs", publish_text)
+        self.assertIn('verify-merged-pr --pr-json release/merged-pr.json --commit "$MERGE_COMMIT"', publish_text)
+        self.assertIn('git merge-base --is-ancestor "$MERGE_COMMIT" FETCH_HEAD', publish_text)
+        self.assertIn('git merge-base --is-ancestor "$COMMIT" "$MERGE_COMMIT"', publish_text)
+        self.assertIn('verify-artifacts --plan release/plan.json --commit "$COMMIT" --merge-commit "$MERGE_COMMIT"', publish_text)
 
     def test_workflows_lint(self):
         result = subprocess.run(["actionlint", str(PR), str(PUBLISH), str(SCHEDULE)], capture_output=True, text=True)

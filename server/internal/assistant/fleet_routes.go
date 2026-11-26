@@ -59,6 +59,10 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 		}
 		if err := s.resolveApproved(db.WithEndedBy(r.Context(), by), id, res, approver); err != nil {
 			switch {
+			case errors.Is(err, errOutboundSettingsChanged):
+				apierr.WriteCode(w, http.StatusConflict, "outbound_settings_changed", err)
+			case errors.Is(err, errOutboundOwnerAnswer):
+				apierr.Write(w, http.StatusForbidden, err)
 			case errors.Is(err, errHandoffElsewhere):
 				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere, err)
 			case errors.Is(err, errSecretRunEnv):
@@ -235,7 +239,13 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 				sess.Assistant = m.isAssistant(sess)
 			}
 			if sess.Assistant && sess.Space == "" {
-				sess.Space = identity.SpaceOf(sess.Cwd)
+				if sess.LogicalPlaceholder {
+					if sp, known := s.logicalRowSpace(ctx, sess); known {
+						sess.Space = sp
+					}
+				} else {
+					sess.Space = identity.SpaceOf(sess.Cwd)
+				}
 			}
 			s.nameAgentRow(m.ID, &sess)
 			// The node fills in no unified state: the callers that ask whether it works or waits for the user

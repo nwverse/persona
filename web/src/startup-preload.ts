@@ -12,6 +12,7 @@ import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 import { startupMatcher } from "./i18n/startup-keys";
 import { MODULE_SWITCH_KEY } from "./core/module-switch";
+import { MODULE_HUB_KEY_PREFIX } from "./core/module-hub-storage";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -82,7 +83,38 @@ export function preloadScript(files: PreloadFiles): string {
       if (Array.isArray(off) && off.indexOf(own.module) >= 0) own = null;
     } catch (e) {}
   }
+  if (own) {
+    try {
+      var kept = JSON.parse(localStorage.getItem(${JSON.stringify(MODULE_HUB_KEY_PREFIX)} + location.origin + base.replace(/\\/+$/, "")) || "null");
+      var valid = Array.isArray(kept) && kept.every(function (x) { return typeof x === "string" && x.indexOf("module.") === 0; });
+      if (valid && kept.indexOf("module." + own.module) < 0) own = null;
+    } catch (e) {}
+  }
   [files.catalogs[lang]].concat(files.shared, own ? own.files : files.app).forEach(add);
+})();`;
+}
+
+/** Font registration and the Hub read are deferred until after the app commits and the browser has painted it. */
+export function fontStartupScript(module: string): string {
+  return `(function () {
+  var root = document.getElementById("root");
+  if (/^screen\\/[^/]/.test(location.pathname.slice(new URL(document.baseURI).pathname.length))) return;
+  function start() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        import(new URL(${JSON.stringify(`./${module}`)}, document.baseURI).href).then(function () { dispatchEvent(new Event("persona-font-startup")); }).catch(function () {});
+      });
+    });
+  }
+  if (root.childElementCount) start();
+  else {
+    var observer = new MutationObserver(function () {
+      if (!root.childElementCount) return;
+      observer.disconnect();
+      start();
+    });
+    observer.observe(root, { childList: true });
+  }
 })();`;
 }
 
