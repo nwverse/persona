@@ -1139,6 +1139,11 @@ permissions and questions go to its supervising conversation (the main conversat
   holds (any kind but a question) is not the owner's: the apps count no session that waits only on such cards in Needs
   you (the hub's `supervisor_held` count) and offer no buttons to answer it (2026-11-23, D11 of
   `docs/plans/plan-derived-counts.md`).
+- **Permissions without an open to-do** (#16093): An ordinary tool permission from an Agent gives the main
+  conversation a turn when it is available. After a hold of up to five minutes, the next routing tick makes a still
+  pending card answerable in the Agent's chat without a push, bot card or Persona Link notification. The hold ends
+  earlier for a short-lived permission so there is time to answer. A private permission or one with very little time
+  left goes straight to the app. Only a still-pending card can start a turn.
 - **Who gets it**: the task’s assigned supervisor as an `ask` entry in its "📋 督办" message (the planning lead or main;
   legacy background assignments retain their compatibility route). An unavailable current lead keeps its queue, with the card's `interaction_id`, what it asks and the
   task's decisions in effect. Concurrent cards of one task are one entry. The agent's `needs_you` signal is not sent
@@ -1168,7 +1173,7 @@ permissions and questions go to its supervising conversation (the main conversat
 - **Answers**: the user's answers go to the agents as any card's; a question's is kept as every card's is
   (`source: card`), and an escalated permission or plan becomes a `card` decision too ("Allow …" → "Allowed"), so a
   later card cannot quietly go the other way.
-- **Nothing hangs, nothing climbs to the user**: a card not handled within 5 minutes (`askHoldFor`) goes up a rung:
+- **Timeouts on supervised tasks**: a card still waiting after 5 minutes (`askHoldFor`) goes up a rung:
   from a leader to the main chat (its entry marked as raised). The 5 minutes do not count while the conversation
   holding the card is on a turn: a supervisor working through a long round is not neglecting it, and its time starts
   when the turn ends. A conversation still on a turn an hour (`askBusyMax`) after the card came is counted as stuck

@@ -2594,7 +2594,8 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   pager and a tray show one at a time, the pager stepping aside while a tray is open. The iOS pager is capped as a lone
   question card (#6277), owns the grabber (#12306), and in a voice call stays open at half the page. The Web pager scrolls inside the composer's existing height limit. The three numbers
   are To Decide (the pager's cards), Needs you (its rows) and, in an Agent's chat, "N pending". An Agent's chat keeps the
-  stack; the wrap-up chips stay chips after the entries.
+  stack; the wrap-up chips stay chips after the entries. The two paragraphs below describe older stacks on Android, Web and iOS
+  before #12831.
   In an Agent's chat on the web, the stack holds the conversation's own cards alone, as one slot: its first card with
   "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one
   line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).

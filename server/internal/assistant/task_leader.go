@@ -838,7 +838,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			return findingErr == nil
 		}
 	}
-	v, _, err := s.updateSupervisionWithClose(ctx, t.ID, func(v *Supervision) bool {
+	v, _, err := s.updateSupervisionGuardedWithClose(ctx, t.ID, guard, func(v *Supervision) bool {
 		if verdict == reviewAccepted {
 			if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
 				return false
@@ -863,20 +863,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			v.Reviews = v.Reviews[len(v.Reviews)-20:]
 		}
 		return true
-	})
-	if guard != nil && closing == nil {
-		t, ok := s.todoNow(t.ID)
-		if !ok {
-			return "", db.ErrTodoNotFound
-		}
-		if !guard(t) {
-			return "", findingErr
-		}
-		v, _, err = s.updateSupervision(ctx, t.ID, func(current *Supervision) bool {
-			*current = v
-			return true
-		})
-	}
+	}, closing)
 	if err != nil {
 		return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
 	}

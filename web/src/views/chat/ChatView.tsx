@@ -54,7 +54,6 @@ import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey,
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
 import { Icon } from "../../ui/icons";
-import { CodexReadOnlyLine } from "./CodexReadOnlyLine";
 const ArchivedNotice = lazy(() => import("../../ui/ArchivedNotice"));
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 const ClosedTaskNotice = lazy(() => import("./ClosedTaskNotice"));

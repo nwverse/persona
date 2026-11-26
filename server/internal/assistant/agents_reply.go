@@ -228,7 +228,7 @@ func (s *Service) remindReply(machine string, sess proto.Session) error {
 	s.logf("reply reminder %s/%s: %s", machine, short(sess.SessionID), body)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if to, ok := s.nonOwnerCardTarget(ctx, machine, sess.SessionID); ok {
+	if to, _ := s.nonOwnerCardTarget(ctx, machine, sess.SessionID); to != "" {
 		text := fmt.Sprintf("Agent waiting for a reply (machine=%s session_id=%s): %s\n%s", machine, sess.SessionID, head, body)
 		if _, kept := s.keepRelayLater(to, relayMsg{
 			From:      cardAgentReply,

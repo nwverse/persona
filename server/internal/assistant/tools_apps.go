@@ -408,6 +408,9 @@ func (s *Service) answerApprovalCard(ctx context.Context, self string, ix proto.
 	case !*allow:
 		verb = "Denied"
 	}
+	if todo == "" {
+		return fmt.Sprintf("%s for the agent. The agent sees that the assistant answered.", verb), nil
+	}
 	return fmt.Sprintf("%s for the agent, as its supervisor: kept as task %s's decision (yours, not the user's), and the agent sees it was not the user's answer.", verb, todo), nil
 }
 

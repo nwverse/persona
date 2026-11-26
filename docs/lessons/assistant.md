@@ -584,6 +584,10 @@ delegating, check that the conversation it goes to is woken for it, can answer o
 waiting on it. A new route also keeps the exceptions of the existing ones: `askLadder` already left the supervising
 conversations' cards with the user, and the new route had to share that rule (`supervisorConversation`).
 
+For an Agent's permission without an open to-do (#16093), use the active relay queue and keep the card available
+in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
+or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
+
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
 Every `{"type":"todos"}` makes every app read the whole `GET /api/v1/todos` (about 1 MB at ~500 to-dos), and one step of

@@ -55,7 +55,7 @@ func (msg relayMsg) decisionWaiting() bool {
 	case noticeTool:
 		return msg.State == "needs" || msg.State == "interrupted" || msg.State == "failed"
 	}
-	return false
+	return msg.standalonePermission()
 }
 
 // rank is msg's rank in the queue of a conversation that is no direction's lead.
@@ -412,12 +412,32 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 		return
 	}
 	var due []string
+	pruned := false
 	for id, q := range b.st.Queue {
-		if _, spoke := b.st.Spoke[id]; spoke || b.holds[id] != nil || b.draining[id] {
+		if b.draining[id] {
+			continue // the in-flight attempt owns the head and its outcome
+		}
+		kept := slices.DeleteFunc(q, func(m relayMsg) bool {
+			if !m.standalonePermission() {
+				return false
+			}
+			_, pending := s.pendingStandalonePermission(id, m, now)
+			return !pending
+		})
+		if len(kept) != len(q) {
+			pruned = true
+			if len(kept) == 0 {
+				delete(b.st.Queue, id)
+				continue
+			}
+			b.st.Queue[id] = kept
+		}
+		if _, spoke := b.st.Spoke[id]; spoke || b.holds[id] != nil {
 			continue
 		}
-		if slices.ContainsFunc(q, func(m relayMsg) bool {
-			return !m.Due.IsZero() || !m.TriedAt.IsZero() || m.unresolvedSupervision() || (m.Tool == extensionEventTool && !b.failedAt[id].IsZero())
+		if slices.ContainsFunc(kept, func(m relayMsg) bool {
+			return !m.Due.IsZero() || !m.TriedAt.IsZero() || m.unresolvedSupervision() || m.standalonePermission() ||
+				(m.Tool == extensionEventTool && !b.failedAt[id].IsZero())
 		}) {
 			if i, _ := b.pickLocked(id, leads[id], now); i >= 0 {
 				due = append(due, id)
@@ -438,7 +458,13 @@ func (s *Service) drainHeldRelays(ctx context.Context, now time.Time) {
 			due = append(due, id)
 		}
 	}
+	if pruned {
+		s.saveRelayLocked()
+	}
 	b.mu.Unlock()
+	if pruned {
+		s.publish(ctx)
+	}
 	if len(due) == 0 {
 		return
 	}

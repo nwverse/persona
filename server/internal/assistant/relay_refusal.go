@@ -181,6 +181,9 @@ func (s *Service) relayRefused(machine, to string, msg relayMsg, err error) (sta
 	defer func() { s.logf("relay %s to %s: refused for good (%s): %s", msg.Tool, short(to), code, what) }()
 	push := func(ctx context.Context) { s.reportRelayRefused(ctx, machine, to, msg.Tool, code) }
 	switch {
+	case msg.standalonePermission():
+		what = "the card can return to the app when its hold ends"
+		return false, nil
 	case msg.Tool == superviseTool:
 		// One try and the owner's push; the task stays open for review. Whether it should move to the main
 		// conversation's supervision route instead waits on #11393's decision 2.

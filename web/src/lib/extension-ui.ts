@@ -651,18 +651,21 @@ export function blocks(items: UIItem[]): UIBlock[] {
  * open the inbox item's own source page (an inbox_item's open_url persona://inbox/<item>/source, for the item it is
  * drawn for); `settings`: the in-app path of an extension's own settings (open_url persona://settings/extensions/<id>);
  * `ask`: the text for the assistant's main conversation (open_url persona://ask?text=…), taken only from the manager's
- * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages").
+ * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages"); `compose`: the text
+ * of one of this extension's own quick prompts, to put in the main conversation's composer without sending it
+ * (open_url persona://compose?prompt=<id>&text=<text>, docs/extensions/extensions.md "Declarative UI").
  */
 export function outcome(
   r: UIActionResult,
   item?: string,
   extension?: string,
-): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; track?: Route; push?: UIPush; pop?: true } {
+): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; compose?: string; track?: Route; push?: UIPush; pop?: true } {
   const url = r.open_url && isHttps(r.open_url) ? r.open_url : undefined;
   const track = r.open_url ? extensionTrackRoute(r.open_url) : undefined;
   const source = !!item && !!r.open_url && inboxSourceItem(r.open_url) === item;
   const settings = r.open_url ? extensionSettingsHref(r.open_url) : undefined;
   const ask = extension === SUBSCRIPTIONS_UI && r.open_url ? askText(r.open_url) : undefined;
+  const compose = r.open_url ? composeText(r.open_url) : undefined;
   const push = readPush(r.push);
   const pop = r.pop === true && !push;
   return {
@@ -675,6 +678,7 @@ export function outcome(
     ...(source ? { source: true as const } : {}),
     ...(settings ? { settings } : {}),
     ...(ask ? { ask } : {}),
+    ...(compose ? { compose } : {}),
     ...(track ? { track } : {}),
     ...(push ? { push } : {}),
     ...(pop ? { pop: true as const } : {}),
@@ -699,6 +703,24 @@ export function askText(link: string): string | undefined {
   if (!c.startsWith("persona://ask?")) return undefined;
   const text = new URLSearchParams(c.slice("persona://ask?".length)).get("text") ?? "";
   return text.trim() && text.length <= 8000 ? text : undefined;
+}
+
+/** The text of a persona://compose?prompt=<id>&text=<text> link (an older name's scheme too), or undefined. The hub
+ *  has already checked that both match one of this extension's own quick prompts; the page only reads the text. */
+export function composeText(link: string): string | undefined {
+  const c = canonicalAppURL(link);
+  let u: URL;
+  try {
+    u = new URL(c);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== "persona:" || u.username || u.password || u.host.toLowerCase() !== "compose" || (u.pathname !== "" && u.pathname !== "/") || u.hash) return undefined;
+  const params = u.searchParams;
+  if ([...params.keys()].sort().join(",") !== "prompt,text") return undefined;
+  const id = params.get("prompt") ?? "", text = params.get("text") ?? "";
+  if (!id.trim() || id.length > 64 || /\s/.test(id)) return undefined;
+  return text.trim() && [...text].length <= 8000 ? text : undefined;
 }
 
 /** How deep the pages pushed on one another go (docs/extensions/extensions.md "Page navigation"): a push past it replaces the top one. */

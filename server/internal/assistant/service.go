@@ -1207,6 +1207,8 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 // the send's client_msg_id ("" from an older hub or a client that names none), which its session.assistant_sent
 // carries too.
 func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clientMsgID string) {
+	s.rememberTaskCloseExcerpt(r, text)
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake

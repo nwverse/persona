@@ -2336,6 +2336,10 @@ manifest can ask for four things. A hub from before them refuses the manifest, s
   - Deleting a secret is never checked.
 - **`open_url: "persona://settings/extensions/<its own id>"`** from an action: the apps open 设置 › 扩展 › that extension
   (the web `/settings?tab=extensions&extension=<id>`). Another extension's id is refused like any non-https link.
+- **`open_url: "persona://compose?prompt=<quick prompt id>&text=<url-encoded prompt text>"`** from an action: the web
+  puts that prompt's `text` in the assistant's main composer without sending it. The id and text must be exactly one of
+  this extension's own `quick` prompts; another extension's prompt, an arbitrary text, extra query parameters, a path or
+  a fragment are refused. iOS and Android do not yet handle this link.
 
 Code: `extension/configured.go`, `extension/egress` (`Target`, `dialConfigured`, `Proxy.Check`), `extmgr/extension_settings_check.go`,
 `sdk/go/ext/settings_check.go`;
