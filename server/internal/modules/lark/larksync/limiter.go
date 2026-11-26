@@ -9,28 +9,31 @@ import (
 
 // API families: each has its own token bucket, as the platform limits each API on its own.
 const (
-	famIM      = "im"
-	famSearch  = "search"
-	famDrive   = "drive"
-	famDocx    = "docx"
-	famSheets  = "sheets"
-	famBitable = "bitable"
-	famWiki    = "wiki"
-	famMinutes = "minutes"
+	famIM            = "im"
+	famSearch        = "search"
+	famDrive         = "drive"
+	famDriveDownload = "drive_download"
+	famDocx          = "docx"
+	famSheets        = "sheets"
+	famBitable       = "bitable"
+	famWiki          = "wiki"
+	famMinutes       = "minutes"
 )
 
 // familyRates are the requests per second a binding makes to each family: about half of what the platform documents
-// for a user token (most read APIs allow 10 to 20 a second per app and user; message search far less), since every
-// binding of one app shares the app's quota and the owner's other tools (lark-cli, the gateway) use it too.
+// for a user token (most read APIs allow 10 to 20 a second per app and user; drive file downloads allow 5; message
+// search far less), since every binding of one app shares the app's quota and the owner's other tools (lark-cli, the
+// gateway) use it too.
 var familyRates = map[string]float64{
-	famIM:      5,
-	famSearch:  1,
-	famDrive:   5,
-	famDocx:    5,
-	famSheets:  5,
-	famBitable: 5,
-	famWiki:    5,
-	famMinutes: 2,
+	famIM:            5,
+	famSearch:        1,
+	famDrive:         5,
+	famDriveDownload: 2,
+	famDocx:          5,
+	famSheets:        5,
+	famBitable:       5,
+	famWiki:          5,
+	famMinutes:       2,
 }
 
 // Backoff on a rate limit or a passing failure.

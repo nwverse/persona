@@ -216,7 +216,7 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
 	}
-	if !s.supervises(ctx, self) {
+	if !s.supervises(ctx, self) && !s.liveSideSupervisor(ctx, self) {
 		return "", fmt.Errorf("only the main conversation and a direction's lead supervise agents: from here, send it without a task")
 	}
 	if a.Role != "" && a.Role != roleLeader {
@@ -228,6 +228,9 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	}
 	if c.Assistant {
 		return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
+	}
+	if !s.supervises(ctx, self) && !s.sideOwnsAgent(ctx, self, am.ID, c.SessionID) {
+		return "", fmt.Errorf("only the main conversation and a direction's lead supervise agents other than those this conversation started or supervises: from here, send it without a task")
 	}
 	if err := s.leadTakeAllowed(ctx, self, am, c); err != nil {
 		return "", fmt.Errorf("%w. Nothing changed", err)
@@ -256,9 +259,31 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 		return fmt.Sprintf("%s already works for your task %s (%q): you supervise it, done_when %s.", agentLabel(c), todo.ID, todo.Title,
 			criteriaWords(nil, todo.Supervision)), nil
 	}
+	sup := self
+	if todo.Supervision != nil && todo.Supervision.Supervisor != "" {
+		sup = todo.Supervision.Supervisor
+	}
 	return fmt.Sprintf("%s on %s is now your task %s (%q, its card is in the conversation): %s. done_when %s. The agent was not told: "+
 		"if it should work to these criteria or report to its supervisor (report_to_supervisor), tell it with agent_send.",
-		agentLabel(c), am.Name, todo.ID, todo.Title, s.followUpWords(ctx, self), criteriaWords(nil, todo.Supervision)), nil
+		agentLabel(c), am.Name, todo.ID, todo.Title, s.followUpWords(ctx, self, sup), criteriaWords(nil, todo.Supervision)), nil
+}
+
+// sideOwnsAgent reports whether side conversation self owns agent machineID/sessionID: it currently supervises its open
+// task, dispatched an unsupervised open task for it, or started/supervised its most recent closed task.
+func (s *Service) sideOwnsAgent(ctx context.Context, self, machineID, sessionID string) bool {
+	if self == "" || s.ensureTodosLoaded(ctx) != nil {
+		return false
+	}
+	if t, ok := s.openTodoOfAgent(machineID, sessionID); ok {
+		if t.Supervision != nil && t.Supervision.Supervisor != "" {
+			return t.Supervision.Supervisor == self
+		}
+		return t.Origin == self
+	}
+	if prev, ok := s.closedTodoOfAgent(machineID, sessionID); ok {
+		return prev.Origin == self || prev.Supervision != nil && prev.Supervision.Supervisor == self
+	}
+	return false
 }
 
 // adoptAgent puts agent c of machine am under conversation self's supervision (agent_supervise, agent_send with a
@@ -355,7 +380,7 @@ func (s *Service) adoptAgentFor(ctx context.Context, self, supervisor string, am
 	} else {
 		v, _, err = s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
 			v.Supervisor, v.DoneWhen, v.ExpectMinutes = supervisor, doneWhen, expect
-			if s.isLeader(ctx, supervisor) {
+			if s.isLeader(ctx, supervisor) || s.liveSideSupervisor(ctx, supervisor) {
 				v.SupervisorSource = "plan"
 			}
 			return true
@@ -584,9 +609,10 @@ func (s *Service) adoptedTitle(ctx context.Context, c proto.Session, given, prom
 // todo's notes, and its title when task has none. An agent on a task of self's stays on it, unchanged until the send.
 func (s *Service) handTask(ctx context.Context, self string, am Device, c proto.Session, task sendTask, text string) (*handedTask, error) {
 	// Decided under adoptMu (adoptAgent): another hand-off may have put the agent on a task since sendTaskAllowed.
-	// The calling direction lead owns its hand-off; ordinary side conversations use main.
+	// A direction lead owns its hand-off, and a live side conversation owns agents it started or already supervises;
+	// otherwise the main conversation supervises.
 	supervisor := s.settings(ctx).Main
-	if s.isLeader(ctx, self) {
+	if s.isLeader(ctx, self) || s.liveSideSupervisor(ctx, self) && s.sideOwnsAgent(ctx, self, am.ID, c.SessionID) {
 		supervisor = self
 	}
 	todo, made, err := s.adoptAgentFor(ctx, self, supervisor, am, c, task.Title, text, text, task.DoneWhen, task.ExpectMinutes, adoptionOptions{})
@@ -638,8 +664,12 @@ func (h *handedTask) sent(ctx context.Context, s *Service, text string) string {
 		return fmt.Sprintf(" It already works for your task %s (%q): no new task was made, done_when %s.", h.todo.ID, h.todo.Title,
 			criteriaWords(nil, h.todo.Supervision)) + refused
 	}
+	sup := h.supervisor
+	if h.todo.Supervision != nil && h.todo.Supervision.Supervisor != "" {
+		sup = h.todo.Supervision.Supervisor
+	}
 	return fmt.Sprintf(" It is now your task %s (%q, its card is in the conversation): %s. done_when %s.", h.todo.ID, h.todo.Title,
-		s.followUpWords(ctx, h.self), criteriaWords(nil, h.todo.Supervision))
+		s.followUpWords(ctx, h.self, sup), criteriaWords(nil, h.todo.Supervision))
 }
 
 // sendFailed: the send did not go, so a task made for it is taken back (deleted, its link with it: a closed task's
@@ -919,14 +949,15 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 // false is no signal: it goes into the queue of questions that can wait (later.go) when a briefing will list it.
 func (s *Service) reportToSupervisor(ctx context.Context, machine, session string, args json.RawMessage, now time.Time) (string, error) {
 	var a struct {
-		Kind     string              `json:"kind"`
-		Text     string              `json:"text"`
-		Evidence []string            `json:"evidence"`
-		Step     int                 `json:"step"`
-		Steps    int                 `json:"steps"`
-		Urgent   *bool               `json:"urgent"`
-		Criteria []criterionReport   `json:"criteria"`
-		Handoff  *taskHandoffReceipt `json:"handoff_receipt"`
+		Kind     string                  `json:"kind"`
+		Text     string                  `json:"text"`
+		Evidence []string                `json:"evidence"`
+		Step     int                     `json:"step"`
+		Steps    int                     `json:"steps"`
+		Urgent   *bool                   `json:"urgent"`
+		Criteria []criterionReport       `json:"criteria"`
+		Handoff  *taskHandoffReceipt     `json:"handoff_receipt"`
+		Findings *[]investigationFinding `json:"findings"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -942,6 +973,9 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	}
 	if session == "" {
 		return "Nobody receives this: the call came from outside an agent session.", errNoSupervisor
+	}
+	if a.Findings != nil && (a.Handoff != nil || a.Kind != upReportDone && a.Kind != upReportBlocked) {
+		return "", errors.New("investigation findings are for the task’s done or blocked report")
 	}
 	if a.Handoff != nil {
 		return s.reportTaskHandoff(ctx, machine, session, *a.Handoff, a.Kind, text, a.Evidence, now)
@@ -974,6 +1008,17 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	}
 	if !s.upReports.allow(machine, session, now) {
 		return "", fmt.Errorf("too many reports: at most %d in %d minutes; put what is left into one report later", reportLimit, int(reportWindow.Minutes()))
+	}
+	if a.Findings != nil {
+		findings, err := cleanInvestigationFindings(*a.Findings)
+		if err != nil {
+			return "", err
+		}
+		version, err := s.recordInvestigationFindings(ctx, t, SessionRef{MachineID: machine, SessionID: session}, findings, now)
+		if err != nil {
+			return "", err
+		}
+		text = fmt.Sprintf("Investigation findings version %d; review the list on the to-do before parking or closing.\n%s", version, clip(text, 1850))
 	}
 	if err := s.recordCriterionReports(ctx, t, machine, session, reports, now.UTC()); err != nil {
 		return "", err
@@ -1077,7 +1122,8 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	if !s.deliverReportingReport(ctx, t, g) {
 		s.signal(g)
 	}
-	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC()}
+	progress := TaskProgress{Kind: kind, Step: step, Steps: steps, Text: clip(oneLine(text), 200), At: now.UTC(),
+		machine: machine, session: session}
 	if text != progress.Text {
 		progress.Detail = text
 	}

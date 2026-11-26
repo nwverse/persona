@@ -67,7 +67,7 @@ func ownerBuiltinService(t *testing.T) (*Service, *fakeHub, *downStore, *ownerAc
 	t.Helper()
 	s, f, st := managedProfileService(t)
 	cas := &ownerBuiltinTestStore{downStore: st}
-	s.store = func() Store { return cas }
+	s.setStore(func() Store { return cas })
 	on := true
 	settings := &Settings{MachineID: "server", Main: "main", OwnerReplyApproval: &on, PersistentOwnerActionCards: &on}
 	f.settings = settings

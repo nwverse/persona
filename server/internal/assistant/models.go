@@ -306,6 +306,8 @@ type modelsState struct {
 
 	ownMu sync.Mutex
 	own   map[string]ownSeen // machine + "/" + agent → its own service as the node said (models_launchers_scope.go)
+
+	launcherLists launcherListCache // per-(machine, host) short-TTL launchers.list cache with singleflight (launcher_list_cache.go)
 }
 
 func (s *Service) modelRecord(ctx context.Context, id string) (modelRecord, error) {
@@ -511,6 +513,9 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 			p.Machines = b.Machines // where plain claude is: Settings › Model Providers lists it by machine
 		}
 		out = append(out, p)
+	}
+	if p, ok := s.claudeDesktopProvider(ctx, s.zshrcLaunchers(ctx, false), out); ok {
+		out = append(out, p) // Agents' only (models_desktop.go)
 	}
 	for _, p := range s.voicePlugins(ctx) {
 		models := make([]proto.ProviderModel, len(p.Models))

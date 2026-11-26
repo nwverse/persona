@@ -135,22 +135,22 @@ func TestDispatchStartsOnAnotherComputerAndReadsTheResult(t *testing.T) {
 	}
 }
 
-func TestDispatchStartsWithMatchingTabAndSessionNames(t *testing.T) {
+func TestDispatchStartsWithMatchingLocalTabAndSessionNames(t *testing.T) {
 	s, f, st := newDispatchService(t, true)
-	f.tabReply = "Linux test results"
 	f.startReply = func(_ map[string]any, sess *proto.Session) *proto.StartInstead {
-		sess.SlotID, sess.SpaceKind, sess.SlotName = "w1:t1", "herdr", "linux-test-results-2"
+		sess.SlotID, sess.SpaceKind, sess.SlotName = "w1:t1", "herdr", "run-the-linux-tests-2"
 		return nil
 	}
 	result := dispatchCall(s, "mac", "caller-0001", "dispatch_start", `{"machine":"box","cwd":"/code/app","prompt":"run the Linux tests"}`)
-	if result.IsError || len(f.starts) != 1 || f.starts[0]["tab_name"] != "linux-test-results" || f.starts[0]["title"] != f.starts[0]["tab_name"] {
+	if result.IsError || len(f.starts) != 1 || f.starts[0]["tab_name"] != "run-the-linux-tests" || f.starts[0]["title"] != f.starts[0]["tab_name"] {
 		t.Fatalf("dispatch: %s, starts %v", resultText(result), f.starts)
 	}
+	waitAgentTabNaming(t, s)
 	// A duplicate label gets a suffix from herdr. Inventory uses that actual label even after the manager restarts.
 	other := newServiceOn(t, f, st)
 	session := proto.Session{SessionID: "s1", Title: "Native prompt", TitleSource: proto.TitleSourcePrompt}
 	other.nameAgentRow("box", &session)
-	if session.Title != "linux-test-results-2" {
+	if session.Title != "run-the-linux-tests-2" {
 		t.Fatalf("persisted session title = %q", session.Title)
 	}
 }

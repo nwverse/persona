@@ -180,6 +180,9 @@ type fakeHub struct {
 	delegateAsked []modelCall
 	tabReply      string
 	tabAsked      []string
+	// tabModelEntered / tabModelGate hold one naming-model answer open until the test releases it.
+	tabModelEntered chan struct{}
+	tabModelGate    <-chan struct{}
 	// The todo titles' model (todo.title): its answer, an error instead, and what it was asked.
 	todoTitleReply string
 	todoTitleErr   error
@@ -782,6 +785,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.retired = append(f.retired, a["session_id"].(string))
 		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
+	case deviceSessionRetireGuarded:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
+		return json.RawMessage(`{"closed":true,"guard_verified":true}`), nil
 	case deviceSessionStop:
 		if f.retireErr != nil {
 			return nil, f.retireErr
@@ -837,7 +847,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
 		}
-		if !f.omitSentItems && a[holdPushesParam] == true {
+		source, _ := a["message_source"].(map[string]any)
+		if !f.omitSentItems && source["kind"] == proto.SourceSupervision {
 			if text, _ := a["text"].(string); text != "" {
 				target, _ := out["session_id"].(string)
 				if target == "" {
@@ -910,6 +921,10 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	case AppPlugins + " " + PluginsAssistant:
 		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
 			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		}
+	case assistantwire.AppPhone + " " + assistantwire.PhoneTools:
+		if f.apps[p.AppID+" "+p.Method] == nil {
+			return json.Marshal(map[string]any{"tools": []proto.Tool{}})
 		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
@@ -1702,7 +1717,7 @@ type told struct {
 
 // launcherAgent is the agent a launcher starts in these tests: the one its name starts with, else claude.
 func launcherAgent(name string) string {
-	for _, other := range []string{"codex", "gemini"} {
+	for _, other := range []string{"codex", "gemini", "traex"} {
 		if strings.HasPrefix(name, other) {
 			return other
 		}
@@ -1744,10 +1759,13 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		}
 		f.mu.Lock()
 		reply, fail, down, delay, stop := "", false, false, time.Duration(0), "end_turn"
+		var tabModelGate <-chan struct{}
+		var tabModelEntered chan struct{}
 		switch {
 		case in.System == tabName:
 			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
 			reply = f.tabReply
+			tabModelGate, tabModelEntered = f.tabModelGate, f.tabModelEntered
 		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
 			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
 			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
@@ -1798,6 +1816,16 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 			down = f.modelDown
 		}
 		f.mu.Unlock()
+		if tabModelEntered != nil {
+			close(tabModelEntered)
+		}
+		if tabModelGate != nil {
+			select {
+			case <-tabModelGate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if fail {
 			http.Error(w, `{"error":{"message":"no model"}}`, http.StatusBadRequest)
 			return

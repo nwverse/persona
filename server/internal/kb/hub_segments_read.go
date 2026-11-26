@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
-	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
@@ -66,50 +64,10 @@ func (e *Engine) HubTranscript(rawID string) (HubTranscript, error) {
 	return st.readHubLocked(id)
 }
 
-// TranscriptOfRecord is a recording's text of record: in device mode the upload's segments; in hub mode the hub's
-// sentences, and each upload segment the hub's sentences, taken together (their union), cover no more than half of,
-// in time order (the hub's first at the same start), with Source set (SourceHub, SourceDevice). The phone's text is
-// made on the device in the recording's language only, so in hub mode it fills only where the hub has none. Persona's
-// echo stays in it, marked (Echo: the hub's by the echo rule, the phone's as uploaded); what is built from the meeting
-// reads it through MeetingLines.
+// TranscriptOfRecord is a recording's text of record (recordingwire.TranscriptOfRecord: the rule is the contract's,
+// the recording module's writers apply it too).
 func TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
-	if !hubMode {
-		return slices.Clone(device)
-	}
-	out := make([]RecordingSegment, 0, len(hub)+len(device))
-	spans := make([][2]float64, 0, len(hub))
-	for _, sg := range hub {
-		sg.Source = SourceHub
-		out = append(out, sg)
-		spans = append(spans, [2]float64{sg.Start, sg.End})
-	}
-	union := UnionSpans(spans)
-	for _, sg := range device {
-		if coveredShare(sg.Start, sg.End, union) <= 0.5 {
-			sg.Source = SourceDevice
-			out = append(out, sg)
-		}
-	}
-	slices.SortStableFunc(out, func(a, b RecordingSegment) int {
-		switch {
-		case a.Start < b.Start:
-			return -1
-		case a.Start > b.Start:
-			return 1
-		}
-		return 0
-	})
-	return out
-}
-
-// recordChars is how many characters segs have without Persona's echo, which is not the meeting's text (meta.json's
-// chars: in hub mode the transcript of record's). A meeting of only Persona's echo has none, so it gets no minutes.
-func recordChars(segs []RecordingSegment) int {
-	n := 0
-	for _, sg := range MeetingLines(segs) {
-		n += utf8.RuneCountInString(sg.Text)
-	}
-	return n
+	return recordingwire.TranscriptOfRecord(hubMode, device, hub)
 }
 
 // hubMode: m says the recording is transcribed on the hub.

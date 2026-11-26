@@ -314,15 +314,16 @@ type ListAnswer = { extensions?: HubExtension[]; plugins?: HubExtension[]; can_i
 
 export const listExtensions = () => api<ListAnswer>(extRoot()).then((r) => listOf(r));
 /** The list with what this hub allows: installing at all (a database), and markets (docs/extensions/extensions.md "Extension marketplace"). */
-export const listExtensionsInfo = () =>
-  api<ListAnswer>(extRoot()).then((r) => ({
+export const listExtensionsInfo = (isAuthContextCurrent?: () => boolean) =>
+  api<ListAnswer>(extRoot(), { isAuthContextCurrent }).then((r) => ({
     extensions: listOf(r),
     canInstall: !!r.can_install,
     markets: !!r.markets,
   }));
 /** A detail as either kind of hub sends it, its pages' places read with the new keys. */
 export const detailOf = (d: HubExtensionDetail): HubExtensionDetail => (d.ui ? { ...d, ui: d.ui.map(placeOf) } : d);
-export const extensionDetail = (id: string) => api<HubExtensionDetail>(withEntryLists(`${base(id)}/`)).then(detailOf);
+export const extensionDetail = (id: string, options?: Pick<Parameters<typeof api>[1] & object, "headers" | "signal" | "isAuthContextCurrent">) =>
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/`), options).then(detailOf);
 /** After a change that can start, stop or reconfigure an extension: its entries, cards and sections are asked for again. */
 export const changed = <T>(r: T): T => {
   refreshExtensionPlaces();
@@ -432,6 +433,40 @@ export function extensionTone(p?: HubExtension | null): "red" | "orange" | "gree
 
 export function sourceText(s?: string): string | undefined {
   return s === "builtin" ? t("lib-extensions.source_builtin") : s === "hub.json" ? "manager.json" : s === "installed" ? t("lib-extensions.source_installed") : undefined;
+}
+
+const EXTENSION_KINDS: Record<string, string> = {
+  voice: "lib-extensions.kind_voice",
+  connectors: "lib-extensions.kind_connectors",
+  channel: "lib-extensions.kind_channel",
+  api: "lib-extensions.kind_api",
+  quota: "lib-extensions.kind_quota",
+  usage: "lib-extensions.kind_usage",
+  providers: "lib-extensions.kind_providers",
+  agent_sources: "lib-extensions.kind_agent_sources",
+  assistant: "lib-extensions.kind_assistant",
+  ui: "lib-extensions.kind_ui",
+  events: "lib-extensions.kind_events",
+  extension_pack: "lib-extensions.kind_extension_pack",
+};
+
+/** The extension's contribution category in words, never the hub's internal key. */
+export function extensionTypeText(kind?: string): string | undefined {
+  if (!kind) return undefined;
+  return t(EXTENSION_KINDS[kind] ?? "lib-extensions.kind_other");
+}
+
+/** A permission's heading with technical shortcut keys replaced by what the capability means to a person. */
+export function permissionTitle(p: { key: string; title: string }): string {
+  if (p.key === "network") return t("settings-extensions.permission_network_title");
+  if (p.key === "agent_runtimes") return t("settings-extensions.permission_runtimes_title");
+  return p.title;
+}
+
+/** A permission's explanation: the agent-runtime socket is described by what it reaches, not its internal filename. */
+export function permissionDetail(p: { key: string; detail?: string }): string {
+  if (p.key === "agent_runtimes") return t("settings-extensions.permission_runtimes_detail");
+  return p.detail ?? "";
 }
 
 export function pointText(name: string): string {

@@ -35,6 +35,9 @@ type Runner struct {
 
 	mu   sync.Mutex
 	path string
+
+	clock func() time.Time
+	cache statusCache
 }
 
 // New creates a runner. An empty Bin means lark-cli on PATH (or in the login
@@ -92,19 +95,6 @@ func (r *Runner) now() time.Time {
 	return time.Now()
 }
 
-// Version returns the executable's semantic version as printed by --version.
-func (r *Runner) Version(ctx context.Context) (string, error) {
-	out, err := r.execute(ctx, []string{"--version"}, outputVersion)
-	if err != nil {
-		return "", err
-	}
-	version := parseVersion(string(out))
-	if version == "" {
-		return "", cliError(KindOther, errors.New("invalid version output"))
-	}
-	return version, nil
-}
-
 // CheckVersion rejects versions older than the pinned minimum.
 func (r *Runner) CheckVersion(ctx context.Context) error {
 	got, err := r.Version(ctx)
@@ -115,20 +105,6 @@ func (r *Runner) CheckVersion(ctx context.Context) error {
 		return &Error{Kind: KindUnsupportedVersion, Version: got, Minimum: MinimumVersion}
 	}
 	return nil
-}
-
-// AuthStatus reads the user identity without touching credentials or changing
-// lark-cli configuration.
-func (r *Runner) AuthStatus(ctx context.Context) (AuthStatus, error) {
-	out, err := r.execute(ctx, []string{"auth", "status"}, outputAuth)
-	if err != nil {
-		return AuthStatus{}, err
-	}
-	var raw authStatusWire
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return AuthStatus{}, cliError(KindOther, errors.New("invalid auth status JSON"))
-	}
-	return raw.result(r.now()), nil
 }
 
 // ConfigShow reads the selected profile's app binding. It never returns the
@@ -149,6 +125,7 @@ func (r *Runner) InitProfile(ctx context.Context, name, appID, secret, brand str
 	}
 	args := []string{"config", "init", "--name", name, "--app-id", appID, "--app-secret-stdin", "--brand", brand}
 	_, err := r.executeInput(ctx, args, outputRaw, "", []byte(secret))
+	r.invalidateAuth()
 	return err
 }
 
@@ -156,6 +133,7 @@ func (r *Runner) InitProfile(ctx context.Context, name, appID, secret, brand str
 // store; this method only asks it to remove the login.
 func (r *Runner) AuthLogout(ctx context.Context) error {
 	_, err := r.execute(ctx, []string{"auth", "logout"}, outputRaw)
+	r.invalidateAuth()
 	return err
 }
 
@@ -191,6 +169,7 @@ func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.invalidateAuth()
 	loginCtx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	p := &LoginProcess{ready: make(chan struct{}), done: make(chan struct{}), cancel: cancel}
 	argv := profileArgs(profile, []string{"auth", "login", "--scope", strings.Join(ReadAsMeScopes, " ")})
@@ -253,6 +232,7 @@ func (r *Runner) StartLogin(ctx context.Context) (*LoginProcess, error) {
 		p.mu.Unlock()
 		close(finished)
 		cancel()
+		r.invalidateAuth()
 		close(p.done)
 	}()
 	// The URL is normally printed immediately. A short independent wait keeps
@@ -937,6 +917,13 @@ func (r *Runner) SearchLimit(ctx context.Context, kind, query string, limit int)
 // SendText sends a plain text message as the bot identity. The idempotency key
 // is optional and is passed through to lark-cli when supplied.
 func (r *Runner) SendText(ctx context.Context, chatID, text, idempotencyKey string) (json.RawMessage, error) {
+	return r.SendTextAs(ctx, "bot", chatID, text, idempotencyKey)
+}
+
+func (r *Runner) SendTextAs(ctx context.Context, identity, chatID, text, idempotencyKey string) (json.RawMessage, error) {
+	if identity != "bot" && identity != "user" {
+		return nil, errors.New("unsupported message sender identity")
+	}
 	if strings.TrimSpace(chatID) == "" {
 		return nil, errors.New("chat_id is required")
 	}
@@ -947,12 +934,19 @@ func (r *Runner) SendText(ctx context.Context, chatID, text, idempotencyKey stri
 	if idempotencyKey != "" {
 		args = append(args, "--idempotency-key", idempotencyKey)
 	}
-	return r.RunAs(ctx, "bot", args...)
+	return r.RunAs(ctx, identity, args...)
 }
 
 // ReplyText replies to a known message as the bot identity. The caller may ask
 // for a topic reply; normal Inbox replies keep the source message's topic.
 func (r *Runner) ReplyText(ctx context.Context, messageID, text, idempotencyKey string, inThread bool) (json.RawMessage, error) {
+	return r.ReplyTextAs(ctx, "bot", messageID, text, idempotencyKey, inThread)
+}
+
+func (r *Runner) ReplyTextAs(ctx context.Context, identity, messageID, text, idempotencyKey string, inThread bool) (json.RawMessage, error) {
+	if identity != "bot" && identity != "user" {
+		return nil, errors.New("unsupported message sender identity")
+	}
 	if strings.TrimSpace(messageID) == "" {
 		return nil, errors.New("message_id is required")
 	}
@@ -966,7 +960,7 @@ func (r *Runner) ReplyText(ctx context.Context, messageID, text, idempotencyKey 
 	if inThread {
 		args = append(args, "--reply-in-thread")
 	}
-	return r.RunAs(ctx, "bot", args...)
+	return r.RunAs(ctx, identity, args...)
 }
 
 func (r *Runner) rawSearch(ctx context.Context, args []string) (json.RawMessage, error) {
@@ -1059,6 +1053,9 @@ func (r *Runner) executeInputProfile(ctx context.Context, args []string, mode ou
 	}
 	if err != nil {
 		if classified := classifyFailure(result); classified != nil {
+			if mode != outputAuth && signedOut(classified.Kind) {
+				r.invalidateAuth()
+			}
 			return nil, classified
 		}
 		return nil, cliError(KindOther, err)
@@ -1250,15 +1247,27 @@ func classifyFailure(result commandResult) *Error {
 			continue
 		}
 		var env struct {
+			Code  json.RawMessage `json:"code"`
+			Msg   string          `json:"msg"`
 			Error struct {
-				Type           string   `json:"type"`
-				Subtype        string   `json:"subtype"`
-				Message        string   `json:"message"`
-				MissingScopes  []string `json:"missing_scopes"`
-				MissingScopes2 []string `json:"missingScopes"`
+				Code           json.RawMessage `json:"code"`
+				Type           string          `json:"type"`
+				Subtype        string          `json:"subtype"`
+				Message        string          `json:"message"`
+				MissingScopes  []string        `json:"missing_scopes"`
+				MissingScopes2 []string        `json:"missingScopes"`
 			} `json:"error"`
 		}
-		if json.Unmarshal(raw, &env) != nil || env.Error.Type == "" && env.Error.Subtype == "" {
+		if json.Unmarshal(raw, &env) != nil {
+			continue
+		}
+		words := strings.ToLower(env.Msg + " " + env.Error.Message + " " + env.Error.Subtype)
+		if strings.Trim(string(env.Code), `"`) == "230002" || strings.Trim(string(env.Error.Code), `"`) == "230002" ||
+			strings.Contains(words, "bot not in the chat") || strings.Contains(words, "bot is not in the group") ||
+			strings.Contains(words, "bot_not_in_chat") {
+			return &Error{Kind: KindBotNotInChat}
+		}
+		if env.Error.Type == "" && env.Error.Subtype == "" {
 			continue
 		}
 		sub := strings.ToLower(env.Error.Subtype)

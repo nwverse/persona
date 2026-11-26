@@ -22,7 +22,7 @@ func strengthReportTestID(seed string) string {
 
 func strengthReportTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+	d, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestStrengthWorkoutTaskAssemblesAtExecutionAndFallsBack(t *testing.T) {
 	needsHealthModule(t)
 	d := strengthReportTestDB(t)
 	s, f, _ := healthExecutionService(t)
-	s.store = func() Store { return d }
+	s.setStore(func() Store { return d })
 	ctx := context.Background()
 	if err := d.PutSetting(ctx, "health.items", map[string]any{"items": []string{"strength"}, "revision": 1}); err != nil {
 		t.Fatal(err)

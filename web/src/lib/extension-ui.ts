@@ -35,6 +35,8 @@ export interface UIAction {
   confirm?: string;
   /** Send every field's value along. */
   submit?: boolean;
+  /** A full extension page may open an https URL or a persona session/task target in the app (#14617). */
+  open?: string;
   /** UI version 3: open another page of the extension on top of this one, without asking the extension first. */
   push?: UIPush;
   /** UI version 4: values the action carries, sent with the fields' and the component's (these win on a name). */
@@ -439,7 +441,7 @@ export interface UIPlace {
   placement: "plugin_page" | "launcher_section" | "nav_page" | "overview_card" | "machine_section" | "inbox_item" | string;
   /** compact (a card) or full (a page, a section). */
   size?: "compact" | "full" | string;
-  /** A nav_page's icon, from UI_ICONS. */
+  /** A nav_page's icon, from UI_ICONS (the row icons). */
   icon?: string;
   /** The page (nav_page or plugin_page of the same extension) an overview_card opens. */
   opens?: string;
@@ -486,7 +488,7 @@ export interface UIContext {
 export interface UIContextSent extends UIContext {
   tz?: string;
   locale?: string;
-  platform: "web";
+  platform: "web" | "desktop";
   ui_version: number;
   /** Component types in the current UI version that the web client does not render (scene requires native 3D). */
   unsupported?: string[];
@@ -501,7 +503,8 @@ export function uiContext(context?: UIContext): UIContextSent {
     tz = undefined;
   }
   const locale = typeof navigator !== "undefined" ? navigator.language || undefined : undefined;
-  const out: UIContextSent = { platform: "web", ui_version: UI_VERSION, unsupported: ["scene"] };
+  const platform = typeof window !== "undefined" && window.personaDesktop ? "desktop" : "web";
+  const out: UIContextSent = { platform, ui_version: UI_VERSION, unsupported: ["scene"] };
   if (tz) out.tz = tz;
   if (locale) out.locale = locale;
   if (context?.launcher) out.launcher = context.launcher;
@@ -515,9 +518,12 @@ export function uiContext(context?: UIContext): UIContextSent {
 // ── the hub ─────────────────────────────────────────────
 
 /** The extensions' places of a placement; no placement: every slot's but launcher sections' (nav, overview, machines).
+ *  Asks with `pages_overview=1` when Overview cards are in scope so Dashboards watch cards (`-pages`, `g_<hex>`) are
+ *  listed for Overview (docs/assistant/dashboards.md "Overview (web)").
  *  `manager`: whose extensions (several managers, docs/assistant/managers.md "Clients"); none: the default's. */
 export function uiPlaces(placement: string, launcher?: string, machine?: string, manager?: string): Promise<UIPlace[]> {
   const q = new URLSearchParams(placement ? { placement } : {});
+  if (!placement || placement === "overview_card") q.set("pages_overview", "1");
   if (launcher) q.set("launcher", launcher);
   if (machine) q.set("machine", machine);
   return api<{ ui?: UIPlace[] }>(`${extRoot()}/-/ui${q.size ? `?${q}` : ""}`, { headers: itemHeaders(manager) }).then((r) => (Array.isArray(r.ui) ? r.ui.map(placeOf) : []));
@@ -1173,9 +1179,9 @@ export function refreshDelay(view: UIView | null | undefined): number {
 
 // ── slots ───────────────────────────────────────────────
 
-/** A nav_page's icons (docs/extensions/extensions.md "UI slots"); each app draws its own. `plugin` is `extension` under its name
- *  before #1844 (the hub still sends it). */
-export const UI_ICONS = ["extension", "plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "branch", "code", "pull_request", "merge", "map", ...NEW_ICONS_6] as const;
+/** A nav_page's icons (docs/extensions/extensions.md "UI slots"): a row's whole set, the schema's NavIcon (#16281), and `map`;
+ *  each app draws its own. `plugin` is `extension` under its name before #1844 (the hub still sends it). */
+export const UI_ICONS = [...ROW_ICONS, "map"] as const;
 export type UIIcon = (typeof UI_ICONS)[number];
 
 /** An icon the web knows, else extension. */

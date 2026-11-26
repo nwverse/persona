@@ -240,7 +240,7 @@ func TestInboxReplyPolicyFailedDraftCannotSendAfterStoreRecoveryLegacySchema(t *
 			h.inbox.touched(it.ID)
 			h.inbox.mu.Unlock()
 		}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		text, err := h.draftReply(t.Context(), it.ID, "")
 		if err == nil || text != "" {
 			t.Fatalf("failed publication returned text: text=%q err=%v", text, err)
@@ -310,7 +310,7 @@ func TestInboxReplyPolicyFailedDraftReplacementIsFreshAuthorizationLegacySchema(
 		h.inbox.touched(it.ID)
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	if text, err := h.draftReply(t.Context(), it.ID, ""); err == nil || text != "" {
 		t.Fatalf("failed publication returned text: text=%q err=%v", text, err)
 	}
@@ -602,7 +602,7 @@ func TestInboxReplyPolicyFailedDraftCannotSendAfterStoreRecovery(t *testing.T) {
 			h.inbox.touched(it.ID)
 			h.inbox.mu.Unlock()
 		}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		text, err := h.draftReply(t.Context(), it.ID, "")
 		if err == nil || text != "" {
 			t.Fatalf("failed publication returned text: text=%q err=%v", text, err)
@@ -678,7 +678,7 @@ func TestInboxReplyPolicyFailedDraftReplacementIsFreshAuthorization(t *testing.T
 		h.inbox.touched(it.ID)
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	if text, err := h.draftReply(t.Context(), it.ID, ""); err == nil || text != "" {
 		t.Fatalf("failed publication returned text: text=%q err=%v", text, err)
 	}

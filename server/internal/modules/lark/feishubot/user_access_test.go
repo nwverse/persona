@@ -1,8 +1,12 @@
 package feishubot
 
 import (
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -62,11 +66,11 @@ func TestConfigureUserAccessUnderReviewAwaits(t *testing.T) {
 	}
 }
 
-// Without application:application:patch the config API refuses (230002 / 230003): nothing is published and the
-// report names the missing scope.
+// Without application:application:patch the config API refuses (230002 / 230003, or the gateway's 99991672 / 99991676):
+// nothing is published and the report names the missing scope.
 func TestConfigureUserAccessWithoutPatchScope(t *testing.T) {
-	for _, code := range []int{230002, 230003} {
-		t.Run("", func(t *testing.T) {
+	for _, code := range []int{230002, 230003, 99991672, 99991676} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
 			noBackoff(t)
 			c, _, publishHits := configureSrv(t, func(map[string]any) (int, string) { return code, "no permission" }, ok0)
 
@@ -80,6 +84,40 @@ func TestConfigureUserAccessWithoutPatchScope(t *testing.T) {
 			}
 		})
 	}
+	// Feishu's gateway returns HTTP 400 with code 99991672 when application:application:patch is missing:
+	// the call must not retry and must still map to IssuePatchScope.
+	t.Run("http400_99991672", func(t *testing.T) {
+		noBackoff(t)
+		var configHits, publishHits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/open-apis/auth/v3/tenant_access_token/internal":
+				okJSON(w, map[string]any{"code": 0, "tenant_access_token": "tok", "expire": 7200})
+			case "/open-apis/application/v7/applications/cli_x/config":
+				configHits.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": 99991672,
+					"msg":  "Access denied. One of the following scopes is required: [application:application:patch]",
+				})
+			case "/open-apis/application/v7/applications/cli_x/publish":
+				publishHits.Add(1)
+				okJSON(w, map[string]any{"code": 0})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+		c := New("cli_x", "secret", srv.URL).WithConsole(ConsoleURL("feishu"))
+		rep := c.ConfigureUserAccess(t.Context(), testRedirect, testUserScopes)
+		if rep.Configured || rep.Published || rep.Issue != IssuePatchScope {
+			t.Fatalf("HTTP 400 / 99991672: report = %+v, want IssuePatchScope", rep)
+		}
+		if configHits.Load() != 1 || publishHits.Load() != 0 {
+			t.Fatalf("config %d publish %d calls, want 1 and 0", configHits.Load(), publishHits.Load())
+		}
+	})
 }
 
 func TestConfigureUserAccessSkips(t *testing.T) {

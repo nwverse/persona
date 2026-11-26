@@ -64,6 +64,7 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
             shown = LocalExtensionPageVisible.current && (persona.core.navigation.LocalDetailKey.current == null || persona.core.navigation.LocalDetailKey.current == route),
             onPush = { navigator.navigate(it.copy(manager = it.manager ?: route.manager)) }, manager = route.manager,
             notificationActionToken = route.notificationActionToken,
+            onSettings = { id, owner -> navigator.navigate(ExtensionRoute(id, manager = owner)) },
             onAsk = if (route.extensionId == persona.core.contracts.api.SUBSCRIPTIONS_UI) askPersona?.let { ask -> { text -> ask(navigator, text) } } else null,
             onConversation = { machine, session -> navigator.navigate(persona.core.navigation.ChatRoute(machine, session)) })
     }
@@ -89,7 +90,8 @@ fun EntryProviderScope<NavKey>.settingsDetailEntries(navigator: Navigator, servi
     }
     // One of the current assistant's channels and model providers (its Settings, docs/assistant/managers.md "Clients").
     entry<ChannelRoute> { route ->
-        ChannelPage(services.forCurrentAssistant().channels.takeUnless { demo }, route.channelId, onBack = navigator::back, onOpen = navigator::navigate)
+        ChannelPage(services.forCurrentAssistant().channels.takeUnless { demo }, route.channelId, onBack = navigator::back, onOpen = navigator::navigate,
+            larkBot = rememberLarkBotEntry())
     }
     entry<persona.core.navigation.ModelProviderRoute> { route ->
         val machines by services.sessions.machines.collectAsState()

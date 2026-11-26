@@ -41,19 +41,21 @@ type BotChat struct {
 	Name   string `json:"name,omitempty"` // a label the app may set; the command in the chat leaves it empty
 	// Home marks the home topic group (#6146): where a request from a group that is not opted in opens its topic. At
 	// most one chat has it; with none marked, the first legacy enrollment is the home (homeChat).
-	Home                bool `json:"home,omitempty"`
-	RequireOwnerMention bool `json:"require_owner_mention,omitempty"`
+	Home                bool                        `json:"home,omitempty"`
+	RequireOwnerMention bool                        `json:"require_owner_mention,omitempty"`
+	TodoMode            assistantwire.TopicTodoMode `json:"todo_mode,omitempty"`
 	// Strict enrollments never acquire an implicit home, even after their policy is reversed.
 	ExplicitHomeOnly bool      `json:"explicit_home_only,omitempty"`
 	At               time.Time `json:"at"`
 }
 
 type botChatView struct {
-	ChatID              string `json:"chat_id"`
-	Name                string `json:"name,omitempty"`
-	AddedAt             int64  `json:"added_at"`
-	Home                bool   `json:"home,omitempty"` // the effective home topic group
-	RequireOwnerMention bool   `json:"require_owner_mention"`
+	ChatID              string                      `json:"chat_id"`
+	Name                string                      `json:"name,omitempty"`
+	AddedAt             int64                       `json:"added_at"`
+	Home                bool                        `json:"home,omitempty"` // the effective home topic group
+	RequireOwnerMention bool                        `json:"require_owner_mention"`
+	TodoMode            assistantwire.TopicTodoMode `json:"todo_mode"`
 }
 
 // BotAISource is a message the hub took as the owner's "@bot /ai …" in a group chat that is not opted in (#6146).
@@ -67,6 +69,19 @@ type BotAISource struct {
 	// Kind is what the owner asked with: "" for "/ai" (#6146), botSourceRead for "/read" (#11803, bots_read.go), whose
 	// answer is cards under the message rather than one short line.
 	Kind string `json:"kind,omitempty"`
+	// HandoffID is the hub's id of a proxy reply ("bh_" + 16 hex); the rest of these fields belong to one too.
+	HandoffID string `json:"handoff_id,omitempty"`
+	// Confirm: the owner approves the draft before the bot posts (decided when the handoff was taken).
+	Confirm bool `json:"confirm,omitempty"`
+	// InThread puts an anchored reply into the anchor's thread.
+	InThread bool `json:"in_thread,omitempty"`
+	// By is who handed it over: "extension:<id>" or the device actor.
+	By string `json:"by,omitempty"`
+	// Ref is the caller's idempotency key; RefSum is the sha256 of the caller, the ref and the payload.
+	Ref    string `json:"ref,omitempty"`
+	RefSum string `json:"ref_sum,omitempty"`
+	// Ended is how a proxy reply finished: posted, declined, expired, no_reply or failed.
+	Ended string `json:"ended,omitempty"`
 }
 
 const (
@@ -110,6 +125,9 @@ func (s FeishuBotSettings) aiSource(messageID string, now time.Time) *BotAISourc
 		return nil
 	}
 	for i := range s.AISources {
+		if s.AISources[i].Kind == botSourceProxyReply {
+			continue // a handoff is never an /ai or /read source (handoffSource finds it)
+		}
 		if s.AISources[i].MessageID == messageID && now.Sub(s.AISources[i].At) <= botAISourcesKeepFor {
 			return &s.AISources[i]
 		}
@@ -189,6 +207,9 @@ func (h *Manager) setTopicChats(ctx context.Context, want []BotChat, keepHome bo
 		if i := existing; i >= 0 {
 			c.At = before[i].At
 			c.RequireOwnerMention = before[i].RequireOwnerMention
+			if c.TodoMode == "" {
+				c.TodoMode = before[i].TodoMode
+			}
 			c.ExplicitHomeOnly = before[i].ExplicitHomeOnly
 			if keepHome {
 				c.Home = before[i].Home
@@ -428,7 +449,13 @@ func (h *Manager) takeAISource(chatID, messageID, kind string) {
 		return
 	}
 	now := b.clock().UTC()
-	kept := slices.DeleteFunc(slices.Clone(b.set.AISources), func(s BotAISource) bool { return now.Sub(s.At) > botAISourcesKeepFor })
+	kept := slices.DeleteFunc(slices.Clone(b.set.AISources), func(s BotAISource) bool {
+		keep := botAISourcesKeepFor
+		if s.Kind == botSourceProxyReply {
+			keep = botHandoffKeepFor
+		}
+		return now.Sub(s.At) > keep
+	})
 	kept = append(kept, BotAISource{ChatID: chatID, MessageID: messageID, At: now, Kind: kind})
 	if len(kept) > botAISourcesKeep {
 		kept = kept[len(kept)-botAISourcesKeep:]

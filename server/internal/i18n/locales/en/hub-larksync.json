@@ -10,7 +10,7 @@
   "auth_denied": "The authorization was declined in Lark",
   "register_hint": "Open the page in Lark and confirm: Persona creates an app that reads your chats and documents for your knowledge base. On another device, scan the code with Lark instead.",
   "device_hint": "Open the page in Lark (or scan the code with Lark) and allow Persona to read as you",
-  "device_open": "Open in Lark",
+  "device_open_link": "Open in Lark",
   "reauth_title": "Lark sync needs your OK again",
   "reauth_body_one": "Authorize {label} again within {count} day so the daily sync keeps going",
   "reauth_body_other": "Authorize {label} again within {count} days so the daily sync keeps going",

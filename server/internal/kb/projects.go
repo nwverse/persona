@@ -29,14 +29,57 @@ func normName(s string) string { return strings.ReplaceAll(Slug(s), "-", "") }
 // A name in the form known_projects.md shows a project in (「名字（别名、…）：一句话」, which models copy whole) that
 // matches nothing is looked up again without its one line and trailing bracket groups (#5824).
 func (e *Engine) FindProject(name string) *Project {
-	if p := e.findProject(name); p != nil {
+	return e.ProjectLookup().Find(name)
+}
+
+// ProjectLookup is the projects read once, for many lookups in a row: Store.Projects reads and parses every project's
+// meta.json, and a caller resolving one name per to-do read them all once per to-do (#15539). It does not see writes
+// made after it was taken.
+type ProjectLookup struct {
+	projects []lookupProject
+	byID     map[string]*Project
+}
+
+type lookupProject struct {
+	p       *Project
+	name    string
+	aliases []string
+}
+
+// ProjectLookup reads the projects now.
+func (e *Engine) ProjectLookup() *ProjectLookup {
+	l := &ProjectLookup{byID: map[string]*Project{}}
+	for _, id := range e.Store.IDs(KindProject) {
+		p, ok := e.Store.Project(id)
+		if !ok {
+			continue
+		}
+		l.byID[SafeID(id)] = p
+		lp := lookupProject{p: p, name: normName(p.Name)}
+		for _, a := range p.Aliases {
+			lp.aliases = append(lp.aliases, normName(a))
+		}
+		l.projects = append(l.projects, lp)
+	}
+	return l
+}
+
+// Project is Store.Project as of when the lookup was taken.
+func (l *ProjectLookup) Project(slug string) (*Project, bool) {
+	p, ok := l.byID[SafeID(slug)]
+	return p, ok
+}
+
+// Find is FindProject as of when the lookup was taken.
+func (l *ProjectLookup) Find(name string) *Project {
+	if p := l.find(name); p != nil {
 		return p
 	}
 	for _, base := range displayBases(name) {
 		if tooGenericAlias(normName(base)) { // 「无（某某群）」 is not the project named 无
 			break
 		}
-		if p := e.findProject(base); p != nil {
+		if p := l.find(base); p != nil {
 			return p
 		}
 	}
@@ -98,15 +141,17 @@ func isShownFormOf(name, base string) bool {
 	return false
 }
 
-func (e *Engine) findProject(name string) *Project {
+func (l *ProjectLookup) find(name string) *Project {
 	n := normName(name)
 	if n == "" {
 		return nil
 	}
+	slug := Slug(name)
 	var byName, byAlias, merged *Project
-	for _, p := range e.Store.Projects() {
-		exact := normName(p.Name) == n || p.Slug == Slug(name)
-		if !exact && !hasAlias(p, n) {
+	for _, lp := range l.projects {
+		p := lp.p
+		exact := lp.name == n || p.Slug == slug
+		if !exact && !slices.Contains(lp.aliases, n) {
 			continue
 		}
 		switch {
@@ -125,7 +170,7 @@ func (e *Engine) findProject(name string) *Project {
 		return byAlias
 	}
 	if merged != nil && merged.MergedInto != "" {
-		if p, ok := e.Store.Project(merged.MergedInto); ok && p.Live() {
+		if p, ok := l.Project(merged.MergedInto); ok && p.Live() {
 			return p
 		}
 	}
@@ -287,8 +332,9 @@ func (e *Engine) knownProjects() []prompts.KnownProject {
 	return out
 }
 
-// evolveProject merges a mention into its project (creating it), links the chat and its people, and logs the update.
-func (e *Engine) evolveProject(name, kind string, aliases []string, myRole string, c *Chat, update string, now time.Time) string {
+// evolveProject merges a mention into its project (creating it), links the chat and its people when link says so, and
+// logs the update.
+func (e *Engine) evolveProject(name, kind string, aliases []string, myRole string, c *Chat, link bool, update string, now time.Time) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return ""
@@ -318,7 +364,7 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 		if strings.TrimSpace(update) != "" || myRole != "" {
 			e.logf("project %s: %v: skipped compression detail", p.Slug, ErrReferenceOnly)
 		}
-		if !slices.Contains(p.Chats, c.ID) {
+		if link && !slices.Contains(p.Chats, c.ID) {
 			p.Chats = append(p.Chats, c.ID)
 			if err := e.Store.PutProject(p); err != nil {
 				e.logf("project %s: %v", p.Slug, err)
@@ -335,9 +381,12 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 	if myRole != "" {
 		p.MyRole = oneLine(myRole)
 	}
-	p.Chats = addUnique(p.Chats, c.ID)
-	people := e.externalPeople(c.People)
-	p.People = addUnique(p.People, people...)
+	var people []string
+	if link {
+		p.Chats = addUnique(p.Chats, c.ID)
+		people = e.externalPeople(c.People)
+		p.People = addUnique(p.People, people...)
+	}
 	if strings.TrimSpace(update) != "" {
 		if err := e.Store.AppendLog(p.Slug, now, c.Name, update); err != nil {
 			e.logf("project %s: %v", p.Slug, err)
@@ -360,4 +409,10 @@ func (e *Engine) evolveProject(name, kind string, aliases []string, myRole strin
 		})
 	}
 	return p.Slug
+}
+
+// heldOffProjects reports whether the user holds chat c to no project (Chat.HeldOffProjects, its projects still
+// locked): compression then links it to none of the projects it mentions.
+func heldOffProjects(c *Chat) bool {
+	return c.HeldOffProjects && taggingFieldLocked(&c.Tagging, "projects")
 }

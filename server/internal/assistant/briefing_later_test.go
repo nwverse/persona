@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -55,13 +56,13 @@ func TestBriefListsQuestionsThatCanWait(t *testing.T) {
 		t.Fatalf("later: %d / %+v", f.LaterTotal, f.Later)
 	}
 	for i, want := range []string{"新接口用 snake_case 还是 camelCase？ 两种都行", "发布说明里要不要写内部编号？", "图标要不要换？"} {
-		if f.Later[i].summary != want {
-			t.Errorf("row %d: %q, want %q", i, f.Later[i].summary, want)
+		if f.Later[i].Summary != want {
+			t.Errorf("row %d: %q, want %q", i, f.Later[i].Summary, want)
 		}
 	}
 	first := f.Later[0]
-	if first.waited != 30*time.Hour || first.blocking || !strings.HasPrefix(first.id, "lt_") || !strings.Contains(first.from, "Agent") ||
-		first.link != testWeb+"/s/box/ag1" {
+	if first.Waited != 30*time.Hour || first.Blocking || !strings.HasPrefix(first.ID, "lt_") || !strings.Contains(first.From, "Agent") ||
+		first.Link != testWeb+"/s/box/ag1" {
 		t.Errorf("the first row: %+v", first)
 	}
 }
@@ -73,8 +74,8 @@ func TestBriefCutsTheQueueAtTenRows(t *testing.T) {
 		e.later("todo_a", fmt.Sprintf("问题%02d", i), time.Duration(100-i)*time.Hour)
 	}
 	f := e.s.briefFactsAt(context.Background(), e.clk.Now(), "")
-	if f.LaterTotal != briefRowsMax+2 || len(f.Later) != briefRowsMax || f.Later[0].summary != "问题00" || f.Later[briefRowsMax-1].summary != "问题09" {
-		t.Fatalf("later: %d, %d rows, %q … %q", f.LaterTotal, len(f.Later), f.Later[0].summary, f.Later[len(f.Later)-1].summary)
+	if f.LaterTotal != briefRowsMax+2 || len(f.Later) != briefRowsMax || f.Later[0].Summary != "问题00" || f.Later[briefRowsMax-1].Summary != "问题09" {
+		t.Fatalf("later: %d, %d rows, %q … %q", f.LaterTotal, len(f.Later), f.Later[0].Summary, f.Later[len(f.Later)-1].Summary)
 	}
 }
 
@@ -161,14 +162,14 @@ func TestBriefHandledButtonOfTheCard(t *testing.T) {
 		a.Context.MessageID = "om_brief_1"
 		return e.s.larkModule().Action(ctx, &a, "")
 	}
-	if r := press(first.Later[0].id); r == nil || r.Toast == nil || r.Toast.Type != "success" || !strings.Contains(r.Toast.Content, "已标记为处理过") {
+	if r := press(first.Later[0].ID); r == nil || r.Toast == nil || r.Toast.Type != "success" || !strings.Contains(r.Toast.Content, "已标记为处理过") {
 		t.Fatalf("the press: %+v", r)
 	}
 	next := e.s.briefFactsAt(ctx, time.Now(), "")
-	if next.LaterTotal != 1 || len(next.Later) != 1 || next.Later[0].summary != "图标要不要换？" {
+	if next.LaterTotal != 1 || len(next.Later) != 1 || next.Later[0].Summary != "图标要不要换？" {
 		t.Fatalf("the next briefing: %d / %+v", next.LaterTotal, next.Later)
 	}
-	for _, id := range []string{first.Later[0].id, "lt_unknown"} {
+	for _, id := range []string{first.Later[0].ID, "lt_unknown"} {
 		if r := press(id); r == nil || r.Toast == nil || r.Toast.Type != "info" || !strings.Contains(r.Toast.Content, "已经处理过了") {
 			t.Fatalf("pressed again (%s): %+v", id, r)
 		}
@@ -200,11 +201,11 @@ func TestBriefItemCarriesTheQueue(t *testing.T) {
 
 // The push says how many can wait with the other counts.
 func TestBriefPushCountsQuestionsThatCanWait(t *testing.T) {
-	f := &briefFacts{l: i18n.ZhHans, Accept: make([]boardRow, 2), Later: make([]boardRow, 2), LaterTotal: 4}
-	if got := f.countsIn(i18n.ZhHans); got != "待验收 2 · 可晚点答 4" {
+	f := &briefFacts{Lang: string(i18n.ZhHans), Accept: make([]modapi.BriefBoardRow, 2), Later: make([]modapi.BriefBoardRow, 2), LaterTotal: 4}
+	if got := briefCountsIn(f, i18n.ZhHans); got != "待验收 2 · 可晚点答 4" {
 		t.Fatalf("counts: %q", got)
 	}
-	if got := (&briefFacts{l: i18n.ZhHans, Later: make([]boardRow, 1), LaterTotal: 1}).countsIn(i18n.ZhHans); got != "可晚点答 1" {
+	if got := briefCountsIn(&briefFacts{Lang: string(i18n.ZhHans), Later: make([]modapi.BriefBoardRow, 1), LaterTotal: 1}, i18n.ZhHans); got != "可晚点答 1" {
 		t.Fatalf("only a question that can wait: %q", got)
 	}
 }
@@ -327,7 +328,7 @@ func TestBriefNamesAQuestionsAgentByItsTodoWhenItHasNoTitle(t *testing.T) {
 	e.s.todos.todos["todo_b"] = &Todo{ID: "todo_b", Title: "迁移数据库", Origin: "conv1"}
 	e.s.laterQueue(context.Background(), "todo_b", "box", "ag_gone", "不在了的 Agent 问的", e.clk.Now().Add(-time.Hour))
 	f := e.s.briefFactsAt(context.Background(), e.clk.Now(), "")
-	if len(f.Later) != 2 || f.Later[0].from != "来自 Agent「登录修复」" || f.Later[1].from != "来自 Agent「迁移数据库」" {
+	if len(f.Later) != 2 || f.Later[0].From != "来自 Agent「登录修复」" || f.Later[1].From != "来自 Agent「迁移数据库」" {
 		t.Fatalf("who asked: %+v", f.Later)
 	}
 }

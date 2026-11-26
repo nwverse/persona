@@ -1,6 +1,3 @@
-import { lineItemIds } from "./chat-search";
-import { navRailExcerpt, navRailPreview, navRailTicks, type NavRailTick } from "./nav-rail";
-import { parseUserText, type ChatLine } from "./turns";
 import type { Item } from "./types";
 
 export interface UserInputPosition {
@@ -12,11 +9,17 @@ export interface UserInputPosition {
 }
 export interface UserInputIndex { total: number; inputs: UserInputPosition[]; history: string }
 
-/** This temporary count/position contract is deliberately smaller than #2071; migrate to that API when it ships. */
+export interface UserInputPreviews { inputs: UserInputPosition[]; history: string }
+
+/** Both the compact index and older hubs' index with excerpts use the same positions. */
 export function validUserInputIndex(value: unknown): value is UserInputIndex {
+  return validUserInputPreviews(value) && (value as UserInputIndex).total === value.inputs.length;
+}
+
+export function validUserInputPreviews(value: unknown): value is UserInputPreviews {
   if (!value || typeof value !== "object") return false;
-  const index = value as UserInputIndex;
-  if (!Number.isSafeInteger(index.total) || index.total < 0 || !Array.isArray(index.inputs) || index.total !== index.inputs.length || typeof index.history !== "string") return false;
+  const index = value as UserInputPreviews;
+  if (!Array.isArray(index.inputs) || typeof index.history !== "string") return false;
   const ids = new Set<string>();
   let last = 0;
   return index.inputs.every((input) => {
@@ -30,7 +33,11 @@ export function validUserInputIndex(value: unknown): value is UserInputIndex {
   });
 }
 
-const entry = (id: string) => id.split("#")[0];
+export const inputEntry = (id: string) => id.split("#")[0];
+
+export function hasInputExcerpt(input: UserInputPosition): boolean {
+  return Boolean(input.preview || input.answer || input.attachments);
+}
 
 /** Refresh on raw user-entry arrivals, including queued inputs merged into an existing bubble.
  * The server owns provenance filtering; tool-result frames never trigger a full-history scan. */
@@ -38,42 +45,6 @@ export function userInputRevision(items: Item[]): string | undefined {
   return items.findLast((item) => item.role === "user" && (item.kind === "text" || item.kind === "image") && !item.tool_use_id)?.id;
 }
 
-export const USER_INPUT_PAGE_SIZE = 50;
-
-export function windowUserInputs(index: UserInputIndex, earliestSeq?: number): UserInputIndex {
-  const initial = Math.max(0, index.inputs.length - USER_INPUT_PAGE_SIZE);
-  const loaded = earliestSeq === undefined ? -1 : index.inputs.findIndex((input) => input.seq >= earliestSeq);
-  const start = loaded < 0 ? initial : Math.min(initial, loaded);
-  return { ...index, inputs: index.inputs.slice(start) };
-}
-
-export function indexedNavTicks(index: UserInputIndex, lines: ChatLine[], items: Item[]): NavRailTick[] {
-  const owner = new Map<string, string>();
-  for (const line of lines) for (const id of lineItemIds(line)) owner.set(entry(id), line.id);
-  const loaded = new Map(navRailTicks(lines).map((tick) => [tick.id, tick]));
-  const words = new Map<string, string>();
-  for (const item of items) {
-    if (item.role === "user" && item.kind === "text") {
-      const key = entry(item.id);
-      words.set(key, [words.get(key), parseUserText(item.text ?? "").text].filter(Boolean).join("\n"));
-    }
-  }
-  return index.inputs.map((input, i) => {
-    const key = entry(input.id);
-    const lineId = owner.get(key);
-    const tick = lineId ? loaded.get(lineId) : undefined;
-    const preview = navRailPreview(words.get(key) ?? "") || tick?.preview || navRailPreview(input.preview ?? "");
-    const attachments = preview ? undefined : tick?.attachmentsOnly ?? input.attachments;
-    const answer = tick?.answerExcerpt || navRailExcerpt(input.answer ?? "");
-    return {
-      id: `seg:${input.id}`, seq: input.seq, lineId, ordinal: index.total - index.inputs.length + i + 1,
-      preview,
-      ...(attachments ? { attachmentsOnly: attachments } : {}),
-      ...(answer ? { answerExcerpt: answer } : {}),
-    };
-  });
-}
-
 export function containsInput(items: Item[], input: UserInputPosition): boolean {
-  return items.some((item) => item.seq === input.seq && entry(item.id) === entry(input.id));
+  return items.some((item) => item.seq === input.seq && inputEntry(item.id) === inputEntry(input.id));
 }

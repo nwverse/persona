@@ -171,12 +171,32 @@ describe("UI 版本 2：上下文", () => {
     expect(uiContext()).not.toHaveProperty("launcher");
     expect(uiContext({ launcher: "work" }).launcher).toBe("work");
   });
-  it("lists every slot without a placement", async () => {
+  it("reports platform desktop inside the Electron desktop app (#13020)", async () => {
+    vi.stubGlobal("window", { personaDesktop: {} });
+    expect(uiContext().platform).toBe("desktop");
+    const bodies: string[] = [];
+    vi.stubGlobal("localStorage", { getItem: () => "t", setItem: () => {}, removeItem: () => {} });
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body ?? ""));
+      return new Response(JSON.stringify({ view }));
+    });
+    await renderUI("-pages", "pg_1a2b3c4d5e6f7081");
+    await actUI("-pages", "pg_1a2b3c4d5e6f7081", "persona.overview", { values: { overview: "true" } });
+    expect(JSON.parse(bodies[0]).context.platform).toBe("desktop");
+    expect(JSON.parse(bodies[1]).context.platform).toBe("desktop");
+  });
+  it("lists every slot without a placement, asking with pages_overview=1 for Overview cards (#13020)", async () => {
     const urls: string[] = [];
     vi.stubGlobal("localStorage", { getItem: () => "t", setItem: () => {}, removeItem: () => {} });
     vi.stubGlobal("fetch", async (url: string) => (urls.push(url), new Response(JSON.stringify({ ui: "nope" }))));
     expect(await uiPlaces("")).toEqual([]);
-    expect(urls).toEqual(["/api/v1/extensions/-/ui"]);
+    expect(await uiPlaces("overview_card")).toEqual([]);
+    expect(await uiPlaces("nav_page")).toEqual([]);
+    expect(urls).toEqual([
+      "/api/v1/extensions/-/ui?pages_overview=1",
+      "/api/v1/extensions/-/ui?placement=overview_card&pages_overview=1",
+      "/api/v1/extensions/-/ui?placement=nav_page",
+    ]);
   });
 });
 
