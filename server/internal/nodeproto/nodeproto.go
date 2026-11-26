@@ -41,6 +41,10 @@ const MCPWait = "mcp_wait_v1"
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
 
+// StopIfIdle is an additive automatic-stop RPC. Old peers refuse it before
+// stopping anything; callers must never fall back to unconditional session.stop.
+const StopIfIdle = "session.stop_if_idle"
+
 // ExternalLauncherInventory is optional source-scoped discovery from a trusted node-local adapter registration.
 // It is announced dynamically only while that registration is enabled, never as execution authority.
 const ExternalLauncherInventory = "external_launcher_inventory_v1"

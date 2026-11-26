@@ -142,7 +142,7 @@ describe("splitting and running an agent", () => {
     expect(list.map((i) => [i.label, i.hint])).toEqual([["我的中转 站", "relay-example-com · glm-5"], ["cc_glm", undefined]]);
     await list[0].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "relay-example-com" });
-    expect(d.notify).toHaveBeenCalledWith("已在窗格里启动 我的中转 站", "ok");
+    expect(d.notify).toHaveBeenCalledWith("已在此终端启动 我的中转 站", "ok");
   });
 
   it("stays where it is when the answer names no session", async () => {
@@ -253,7 +253,7 @@ describe("read-only items", () => {
     const d = deps();
     const space: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", label: "proj", workspaceId: "w1", cwd: "/home/me/proj" };
     const labels = (node: MenuNode) => nodeActions(node, d).filter((i) => i.icon === "copy").map((i) => i.label);
-    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制窗格 ID"]);
+    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制终端 ID"]);
     expect(labels(tab)).toEqual(["复制目录路径", "复制标签页 ID"]);
     expect(labels(space)).toEqual(["复制目录路径", "复制空间 ID"]);
     expect(labels({ kind: "machine", mid: "m1" })).toEqual(["复制机器 ID"]);

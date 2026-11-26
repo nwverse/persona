@@ -256,8 +256,13 @@ func (f backfillFile) overlaps(start, end time.Time) bool {
 // backfillScan sums the replies of every transcript and database from start to end by the hour, model, launcher and
 // agent, in time order. Only ctx ending stops it (its error).
 func (n *Node) backfillScan(ctx context.Context, files []backfillFile, queries []usageQuery, start, end time.Time, lim *readLimiter) ([]proto.UsageBucket, error) {
+	return n.usageScan(ctx, files, queries, start, end, lim, 3600)
+}
+
+// usageScan is backfillScan by steps of step seconds (the re-split's ten minutes, usage_resplit.go).
+func (n *Node) usageScan(ctx context.Context, files []backfillFile, queries []usageQuery, start, end time.Time, lim *readLimiter, step int64) ([]proto.UsageBucket, error) {
 	m := newUsageMeter()
-	m.step, m.until, m.seen = 3600, end, map[uint64]struct{}{}
+	m.step, m.until, m.seen = step, end, map[uint64]struct{}{}
 	m.launcherOf = func(session string) string {
 		st, _ := n.state.get(session)
 		return st.Launcher
