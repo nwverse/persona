@@ -501,13 +501,34 @@ test('OpenClawBridge completes real local WebSocket round-trip (auth headers, cl
     const finalStreamEnvelope = await conn1.waitForMessage((m) => {
       if (m.msgType !== 'agent_response' || m.taskId !== 'task-hw-1') return false;
       const detail = JSON.parse(m.msgDetail);
-      return detail.result?.kind === 'status-update' && detail.result?.final === true;
+      return detail.result?.kind === 'artifact-update' && detail.result?.final === true;
     });
     assert.equal(finalStreamEnvelope.sessionId, 'sess-hw-1');
     const finalDetail = JSON.parse(finalStreamEnvelope.msgDetail);
-    assert.equal(finalDetail.result.status.state, 'completed');
-    assert.equal(finalDetail.result.status.message.parts[0].text, 'Here is your Persona reply.');
-    assert.ok(conn1.received.some((m) => m.msgType === 'agent_response' && JSON.parse(m.msgDetail).result?.kind === 'artifact-update'));
+    assert.equal(finalDetail.result.artifact.parts[0].kind, 'text');
+    assert.equal(finalDetail.result.artifact.parts[0].text, 'Here is your Persona reply.');
+    assert.ok(conn1.received.some((m) => m.msgType === 'agent_response' && JSON.parse(m.msgDetail).result?.kind === 'status-update' && JSON.parse(m.msgDetail).result?.status?.state === 'completed'));
+
+    // 2b. Verify live Huawei unwrapped inbound (`{ agentId, jsonrpc: "2.0", ... }`) wraps outbound `agent_response`
+    conn1.sendJson({
+      agentId: 'agent-e2e-1',
+      jsonrpc: '2.0',
+      id: 'rpc-live-1',
+      method: 'message/stream',
+      sessionId: 'sess-live-1',
+      params: {
+        id: 'task-live-1',
+        sessionId: 'sess-live-1',
+        message: { role: 'user', parts: [{ kind: 'text', text: 'Check status' }] }
+      }
+    });
+    const liveFinal = await conn1.waitForMessage((m) => {
+      if (m.msgType !== 'agent_response' || m.taskId !== 'task-live-1') return false;
+      const detail = JSON.parse(m.msgDetail);
+      return detail.result?.kind === 'artifact-update' && detail.result?.final === true;
+    });
+    assert.equal(liveFinal.sessionId, 'sess-live-1');
+    assert.ok(JSON.parse(liveFinal.msgDetail).result.artifact.parts[0].text.includes('1 working, 1 need you'));
 
     // 3. Verify `clearContext` clears the cached session mapping
     assert.ok(bridge.sessionContexts.has('sess-hw-1'));

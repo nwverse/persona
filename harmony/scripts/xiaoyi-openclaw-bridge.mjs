@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Standalone, zero-dependency XiaoYi OpenClaw Outbound WebSocket Bridge for Persona Hub.
+ * Standalone, zero-dependency XiaoYi OpenClaw-transport Outbound WebSocket Bridge for Persona Hub.
  *
- * Allows personal Huawei developer accounts (with XiaoYi Open Platform OpenClaw mode + test whitelist)
- * to connect a Persona Hub to the phone's XiaoYi assistant immediately over outbound WSS.
+ * Persona is an independent personal SuperAgent (`personad` Hub), unrelated to OpenClaw; this adapter
+ * speaks Huawei XiaoYi Open Platform's outbound WebSocket channel protocol ("OpenClaw mode") so personal
+ * Huawei developer accounts can connect a Persona Hub to XiaoYi over outbound WSS.
  *
  * Configuration is supplied strictly via environment variables or a local git-ignored JSON file
  * (--config <path> or XIAOYI_CONFIG_FILE) — never commit credentials, AK/SK, agent IDs, or Hub tokens.
@@ -162,6 +163,10 @@ function extractMessageText(params) {
   for (const part of parts) {
     if (typeof part?.text === 'string' && part.text.trim()) chunks.push(part.text.trim());
     if (typeof part?.url === 'string' && /^https?:\/\//i.test(part.url.trim())) chunks.push(part.url.trim());
+    if (part?.kind === 'file' && part?.file) {
+      if (typeof part.file.uri === 'string' && /^https?:\/\//i.test(part.file.uri.trim())) chunks.push(part.file.uri.trim());
+      else if (typeof part.file.name === 'string' && part.file.name.trim()) chunks.push(`[File: ${part.file.name.trim()}]`);
+    }
   }
   if (chunks.length === 0 && typeof params?.text === 'string') chunks.push(params.text);
   if (chunks.length === 0 && typeof params?.query === 'string') chunks.push(params.query);
@@ -516,9 +521,10 @@ function rememberSessionContext(sessionContexts, sessionKey, binding) {
 }
 
 /**
- * Unwrap an incoming WebSocket message that may be either:
- * 1. Huawei XiaoYi OpenClaw envelope (`{ msgType, agentId, sessionId, taskId, msgDetail }`), or
- * 2. Bare JSON-RPC 2.0 frame (`{ jsonrpc: "2.0", id, method, params }`).
+ * Unwrap an incoming WebSocket message that may be any of:
+ * 1. Huawei XiaoYi OpenClaw envelope (`{ msgType, agentId, sessionId, taskId, msgDetail }`),
+ * 2. Huawei XiaoYi live OpenClaw JSON-RPC frame with top-level `agentId` (`{ agentId, jsonrpc: "2.0", id, method, params }`),
+ * 3. Bare JSON-RPC 2.0 frame (`{ jsonrpc: "2.0", id, method, params }`) without `agentId`.
  */
 export function unwrapOpenClawEnvelope(rawFrame, defaultAgentId = '') {
   if (!rawFrame || typeof rawFrame !== 'object') return { ignore: true };
@@ -537,10 +543,22 @@ export function unwrapOpenClawEnvelope(rawFrame, defaultAgentId = '') {
       enveloped: true,
       envelope: {
         agentId: String(rawFrame.agentId || defaultAgentId || ''),
-        sessionId: String(rawFrame.sessionId || detail?.params?.sessionId || ''),
-        taskId: String(rawFrame.taskId || detail?.params?.id || detail?.params?.taskId || '')
+        sessionId: String(rawFrame.sessionId || detail?.params?.sessionId || detail?.sessionId || ''),
+        taskId: String(rawFrame.taskId || detail?.params?.id || detail?.params?.taskId || detail?.id || '')
       },
       rpcFrame: detail
+    };
+  }
+  if (typeof rawFrame.agentId === 'string' && rawFrame.agentId) {
+    return {
+      ignore: false,
+      enveloped: true,
+      envelope: {
+        agentId: String(rawFrame.agentId || defaultAgentId || ''),
+        sessionId: String(rawFrame?.params?.sessionId || rawFrame.sessionId || ''),
+        taskId: String(rawFrame?.params?.id || rawFrame?.params?.taskId || rawFrame.taskId || rawFrame.id || '')
+      },
+      rpcFrame: rawFrame
     };
   }
   return { ignore: false, enveloped: false, envelope: null, rpcFrame: rawFrame };
@@ -555,9 +573,9 @@ export async function handleOpenClawRpc(
   { enveloped = false, envelope = null, sessionContexts = new Map() } = {}
 ) {
   const id = frame?.id ?? null;
-  const method = String(frame?.method || '');
+  const method = String(frame?.method || frame?.action || '');
   const params = frame?.params || {};
-  const sessionKey = String(envelope?.sessionId || params.sessionId || params.contextId || '');
+  const sessionKey = String(envelope?.sessionId || params.sessionId || frame?.sessionId || params.contextId || '');
 
   const emit = (rpcPayload, explicitTaskId = '') => {
     if (!enveloped) {
@@ -578,14 +596,19 @@ export async function handleOpenClawRpc(
     return;
   }
 
-  if (method === 'clearContext' || method === 'context/clear') {
+  if (method === 'clearContext' || method === 'clear_context' || method === 'clear' || method === 'context/clear') {
     if (sessionKey) sessionContexts.delete(sessionKey);
-    emit({ jsonrpc: '2.0', id, result: { cleared: true, sessionId: sessionKey } });
+    emit({
+      jsonrpc: '2.0',
+      id,
+      result: { cleared: true, sessionId: sessionKey, status: { state: 'cleared' } },
+      error: { code: 0, message: '' }
+    }, sessionKey);
     return;
   }
 
-  if (method === 'CancelTask' || method === 'tasks/cancel') {
-    const taskId = String(params.taskId || params.id || envelope?.taskId || '');
+  if (method === 'CancelTask' || method === 'tasks/cancel' || method === 'tasks_cancel') {
+    const taskId = String(params.taskId || params.id || frame?.taskId || envelope?.taskId || '');
     const active = activeTasks.get(taskId);
     if (active) {
       active.cancelled = true;
@@ -594,7 +617,12 @@ export async function handleOpenClawRpc(
         await hubClient.interrupt(active.machineId, active.sessionId);
       }
     }
-    emit({ jsonrpc: '2.0', id, result: { id: taskId, status: { state: 'canceled' } } }, taskId);
+    emit({
+      jsonrpc: '2.0',
+      id,
+      result: { id: taskId, status: { state: 'canceled' } },
+      error: { code: 0, message: '' }
+    }, taskId);
     return;
   }
 
@@ -627,7 +655,16 @@ export async function handleOpenClawRpc(
       emit({
         jsonrpc: '2.0',
         id,
-        result: { taskId, contextId: sessionKey, kind: 'status-update', final: false, status: { state: 'working' } }
+        result: {
+          taskId,
+          contextId: sessionKey,
+          kind: 'status-update',
+          final: false,
+          status: {
+            state: 'working',
+            message: { role: 'agent', parts: [{ kind: 'text', text: '正在处理中，请稍候…' }] }
+          }
+        }
       }, taskId);
     } else {
       emit({ jsonrpc: '2.0', method: 'TaskStatusUpdate', params: { taskId, status: { state: 'working' } } }, taskId);
@@ -673,21 +710,38 @@ export async function handleOpenClawRpc(
           stateHandle.sessionId = target.sessionId;
         },
         onChunk: (delta, lastChunk) => {
-          if (!streaming || stateHandle.cancelled) return;
-          const artifact = {
-            artifactId: `${taskId}:answer`,
-            parts: [{ text: delta, mediaType: 'text/plain' }],
-            append: chunkIndex > 0,
-            lastChunk
-          };
+          if (!streaming || stateHandle.cancelled || !delta) return;
           if (enveloped) {
             emit({
               jsonrpc: '2.0',
               id,
-              result: { taskId, contextId: sessionKey, kind: 'artifact-update', append: artifact.append, lastChunk, artifact }
+              result: {
+                taskId,
+                contextId: sessionKey,
+                kind: 'artifact-update',
+                append: chunkIndex > 0,
+                lastChunk: true,
+                final: false,
+                artifact: {
+                  artifactId: `${taskId}:answer`,
+                  parts: [{ kind: 'text', text: delta, mediaType: 'text/plain' }]
+                }
+              }
             }, taskId);
           } else {
-            emit({ jsonrpc: '2.0', method: 'TaskArtifactUpdate', params: { taskId, artifact } }, taskId);
+            emit({
+              jsonrpc: '2.0',
+              method: 'TaskArtifactUpdate',
+              params: {
+                taskId,
+                artifact: {
+                  artifactId: `${taskId}:answer`,
+                  parts: [{ kind: 'text', text: delta, mediaType: 'text/plain' }],
+                  append: chunkIndex > 0,
+                  lastChunk
+                }
+              }
+            }, taskId);
           }
           chunkIndex++;
         }
@@ -707,10 +761,26 @@ export async function handleOpenClawRpc(
           taskId,
           contextId: sessionKey,
           kind: 'status-update',
-          final: true,
+          final: false,
           status: {
             state: finalState,
-            message: { role: 'agent', parts: [{ text: replyText, mediaType: 'text/plain' }] }
+            message: { role: 'agent', parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }] }
+          }
+        }
+      }, taskId);
+      emit({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          taskId,
+          contextId: sessionKey,
+          kind: 'artifact-update',
+          append: false,
+          lastChunk: true,
+          final: true,
+          artifact: {
+            artifactId: randomUUID(),
+            parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }]
           }
         }
       }, taskId);
@@ -722,9 +792,9 @@ export async function handleOpenClawRpc(
           id: taskId,
           status: {
             state: finalState,
-            message: { role: 'agent', parts: [{ text: replyText, mediaType: 'text/plain' }] }
+            message: { role: 'agent', parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }] }
           },
-          artifacts: [{ artifactId: `${taskId}:result`, parts: [{ text: replyText, mediaType: 'text/plain' }] }]
+          artifacts: [{ artifactId: `${taskId}:result`, parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }] }]
         }
       }, taskId);
     }
