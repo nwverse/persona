@@ -43,8 +43,10 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	}
 	params := map[string]any{"cwd": cwd}
 	if c.p.agent == traexAgent {
-		mode = proto.ModeDefault
-		params["approvalsReviewer"] = "user"
+		mode = inboxPermissionMode(mode, "", false)
+		if mode != proto.ModeBypass {
+			params["approvalsReviewer"] = "user"
+		}
 	}
 	if mode != "" {
 		approval, sandbox := codexPolicy(mode)
@@ -89,7 +91,10 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 		if resume && res.Thread.ID != id {
 			return errors.New("TRAE CLI returned a different thread on resume")
 		}
-		if string(res.ApprovalPolicy) != `"untrusted"` || res.Sandbox.Type != "workspaceWrite" {
+		wantApproval, _ := codexPolicy(mode)
+		wantSandbox := codexSandboxPolicy(mode, "")["type"]
+		var approval string
+		if err := json.Unmarshal(res.ApprovalPolicy, &approval); err != nil || approval != wantApproval || res.Sandbox.Type != wantSandbox {
 			return errors.New("TRAE CLI did not attest the Inbox approval and sandbox policy")
 		}
 	}
@@ -210,8 +215,10 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 	c.p.mu.Unlock()
 	params := map[string]any{"threadId": thread, "input": input}
 	if c.p.agent == traexAgent {
-		mode = proto.ModeDefault
-		params["approvalsReviewer"] = "user"
+		mode = inboxPermissionMode(mode, "", false)
+		if mode != proto.ModeBypass {
+			params["approvalsReviewer"] = "user"
+		}
 		params["capabilities"] = map[string]any{"mcpServers": c.traexMCPNames(), "skills": nil}
 	}
 	if mode != "" {

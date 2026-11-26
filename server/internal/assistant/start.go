@@ -575,7 +575,7 @@ func (s *Service) inboxPermissionMode(ctx context.Context, machine, used string)
 	}
 	mode := cmp.Or(record.Binding.PermissionMode, proto.ModeDefault)
 	if mode == proto.ModePlan || !slices.Contains(proto.PermissionModes, mode) ||
-		!s.startPermissionModeSupported(ctx, machine, used, mode) {
+		!s.startPurposePermissionModeSupported(ctx, machine, used, purposeAgent, mode) {
 		mode = proto.ModeDefault
 	}
 	return mode, nil
@@ -605,14 +605,18 @@ func (s *Service) putInboxPermissionMode(ctx context.Context, machine, session s
 // startPermissionModeSupported checks an inherited or saved mode against the launcher the start finally runs on.
 // Unknown launchers keep the existing behavior: the node validates the start rather than the manager guessing a type.
 func (s *Service) startPermissionModeSupported(ctx context.Context, machine, used, mode string) bool {
+	return s.startPurposePermissionModeSupported(ctx, machine, used, "", mode)
+}
+
+func (s *Service) startPurposePermissionModeSupported(ctx context.Context, machine, used, purpose, mode string) bool {
 	if used == "" || used == "claude" {
 		return true
 	}
 	if l, ok := s.targetMachineLauncher(ctx, machine, used); ok {
-		return permissionModeSupported(cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
+		return permissionModeSupportedForPurpose(purpose, cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
 	}
 	if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" {
-		return permissionModeSupported(agent, 0, mode)
+		return permissionModeSupportedForPurpose(purpose, agent, 0, mode)
 	}
 	return true
 }

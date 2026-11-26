@@ -862,7 +862,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		if origin != originInbox || !originKnown {
 			return "", errTraexAssistantOrigin
 		}
-		mode = proto.ModeDefault
+		mode = inboxPermissionMode(mode, "", false)
 	}
 	if startTier != "" && agent != "codex" {
 		return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")

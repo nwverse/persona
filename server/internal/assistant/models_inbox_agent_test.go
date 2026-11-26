@@ -48,11 +48,20 @@ func TestTraexIsOfferedForTerminalAgentsAndInboxExecution(t *testing.T) {
 	if p := purposeOf(t, s, purposeAgent); p.Effective.Model != "example-fast" || p.Effective.Effort != "xhigh" {
 		t.Fatalf("Inbox configuration did not keep picker values: %+v", p)
 	}
-	if w := modelRequest(s, http.MethodPatch, purposeAgent, `{"revision":1,"permission_mode":"bypassPermissions"}`); w.Code != http.StatusBadRequest {
-		t.Fatalf("Inbox bypass write: %d %s", w.Code, w.Body.String())
+	for _, unsupported := range []string{proto.ModePlan, "unknown"} {
+		body := fmt.Sprintf(`{"revision":1,"permission_mode":%q}`, unsupported)
+		if w := modelRequest(s, http.MethodPatch, purposeAgent, body); w.Code != http.StatusBadRequest {
+			t.Fatalf("Inbox %s write: %d %s", unsupported, w.Code, w.Body.String())
+		}
 	}
-	if w := modelRequest(s, http.MethodPatch, purposeAgent, `{"revision":1,"permission_mode":"default"}`); w.Code != http.StatusOK {
-		t.Fatalf("Inbox default permission write: %d %s", w.Code, w.Body.String())
+	for revision, mode := range []string{proto.ModeDefault, "acceptEdits", "auto", proto.ModeBypass} {
+		body := fmt.Sprintf(`{"revision":%d,"permission_mode":%q}`, revision+1, mode)
+		if w := modelRequest(s, http.MethodPatch, purposeAgent, body); w.Code != http.StatusOK {
+			t.Fatalf("Inbox %s write: %d %s", mode, w.Code, w.Body.String())
+		}
+		if got := purposeOf(t, s, purposeAgent).Effective.PermissionMode; got != mode {
+			t.Fatalf("Inbox mode = %q, want %q", got, mode)
+		}
 	}
 	if w := modelRequest(s, http.MethodPatch, "agent.new", `{"revision":1,"permission_mode":"default"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("terminal TRAE permission write: %d %s", w.Code, w.Body.String())
@@ -72,7 +81,7 @@ func TestTraexIsOfferedForTerminalAgentsAndInboxExecution(t *testing.T) {
 	}
 	params = f.sends[before]
 	f.mu.Unlock()
-	for key, want := range map[string]any{"launcher": "traex", "model": "example-fast", "effort": "xhigh", "origin": OriginInbox, "origin_known": true, "inbox_permission_mode": proto.ModeDefault} {
+	for key, want := range map[string]any{"launcher": "traex", "model": "example-fast", "effort": "xhigh", "origin": OriginInbox, "origin_known": true, "inbox_permission_mode": proto.ModeBypass} {
 		if params[key] != want {
 			t.Errorf("assistant.send %s = %#v, want %#v", key, params[key], want)
 		}

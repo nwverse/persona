@@ -79,7 +79,7 @@ func (c *codexConn) decide(ctx context.Context, method string, raw json.RawMessa
 	mode, _ := n.modesOf(p.id)
 	traexInbox := p.agent == traexAgent
 	if traexInbox {
-		mode = proto.ModeDefault
+		mode = inboxPermissionMode(mode, "", false)
 	}
 	cwd := firstNonEmpty(r.Cwd, p.cwd) // where the request runs: what the gate and the memory checks go by
 	// The card is the conversation's: placed in its directory, where it started, not a subfolder the request runs in

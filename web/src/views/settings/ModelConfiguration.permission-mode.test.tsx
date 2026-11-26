@@ -311,7 +311,7 @@ describe("Model configuration model and effort", () => {
     expect(writes[0].body).toMatchObject({ model, effort });
   });
 
-  it("saves the Inbox TRAE model and effort with default permissions", async () => {
+  it("saves the Inbox TRAE model, effort, and Full access mode", async () => {
     inbox = { ...makeInbox(), provider_ids: [...(makeInbox().provider_ids ?? []), "launcher.traex"] };
     await render();
     await openPurpose("inbox.agent");
@@ -319,10 +319,10 @@ describe("Model configuration model and effort", () => {
     await pickModel("Example Fast");
     await selectValue(effortSelect(), "xhigh");
     const modes = dialog().querySelector<HTMLSelectElement>("[data-permission-mode-select]")!;
-    expect([...modes.options].map((option) => option.value)).toEqual(["", "default"]);
-    await selectValue(modes, "default");
+    expect([...modes.options].map((option) => option.value)).toEqual(["", "default", "acceptEdits", "auto", "bypassPermissions"]);
+    await selectValue(modes, "bypassPermissions");
     await save();
-    expect(writes[0].body).toMatchObject({ provider: "launcher.traex", model: "example-fast", effort: "xhigh", permission_mode: "default" });
+    expect(writes[0].body).toMatchObject({ provider: "launcher.traex", model: "example-fast", effort: "xhigh", permission_mode: "bypassPermissions" });
   });
 
   it("keeps a legacy Inbox TRAE binding visible as unavailable and allows switching away", async () => {

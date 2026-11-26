@@ -8,75 +8,86 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
 func TestTraexAssistantStartAndResumeWire(t *testing.T) {
-	for _, mode := range []struct {
-		method string
-		resume bool
+	for _, perm := range []struct {
+		mode, wantApproval, wantSandbox string
+		wantReviewer                    any
 	}{
-		{"thread/start", false},
-		{"thread/resume", true},
+		{proto.ModeDefault, "untrusted", "workspaceWrite", "user"},
+		{"acceptEdits", "untrusted", "workspaceWrite", "user"},
+		{"auto", "on-request", "workspaceWrite", "user"},
+		{proto.ModeBypass, "never", "dangerFullAccess", nil},
 	} {
-		t.Run(mode.method, func(t *testing.T) {
-			n := codexTestNode(t)
-			n.dir = t.TempDir()
-			cwd := t.TempDir()
-			p, c, f := newFakeCodex(t, n, cwd)
-			p.agent, p.launcher, p.origin = traexAgent, traexAgent, originInbox
-			p.personaMCPOnly = true
-			p.model = modelExecution{Model: "gpt-6.2-sol", Effort: "xhigh", UseEffort: true, Origin: originInbox, OriginKnown: true}
-			f.results[mode.method] = map[string]any{
-				"thread":         map[string]any{"id": testThread},
-				"approvalPolicy": "untrusted", "sandbox": map[string]any{"type": "workspaceWrite"},
-			}
-			f.results["turn/start"] = map[string]any{"turn": map[string]any{"id": "turn-1"}}
-			id := ""
-			if mode.resume {
-				id = testThread
-			}
-			if err := c.start(t.Context(), id, cwd, mode.resume, proto.ModeBypass); err != nil {
-				t.Fatal(err)
-			}
-			n.noteModes(testThread, proto.ModeBypass, "low")
-			if err := c.deliver(t.Context(), "", "fixture", nil); err != nil {
-				t.Fatal(err)
-			}
-			for _, method := range []string{mode.method, "turn/start"} {
-				sent := f.sent(method)
-				if len(sent) != 1 {
-					t.Fatalf("%s calls: %d", method, len(sent))
+		for _, mode := range []struct {
+			method string
+			resume bool
+		}{
+			{"thread/start", false},
+			{"thread/resume", true},
+		} {
+			t.Run(perm.mode+"_"+mode.method, func(t *testing.T) {
+				n := codexTestNode(t)
+				n.dir = t.TempDir()
+				cwd := t.TempDir()
+				p, c, f := newFakeCodex(t, n, cwd)
+				p.agent, p.launcher, p.origin = traexAgent, traexAgent, originInbox
+				p.personaMCPOnly = true
+				p.model = modelExecution{Model: "gpt-6.2-sol", Effort: "xhigh", UseEffort: true, Origin: originInbox, OriginKnown: true}
+				f.results[mode.method] = map[string]any{
+					"thread":         map[string]any{"id": testThread},
+					"approvalPolicy": perm.wantApproval, "sandbox": map[string]any{"type": perm.wantSandbox},
 				}
-				var got map[string]any
-				if err := json.Unmarshal(sent[0].Params, &got); err != nil {
+				f.results["turn/start"] = map[string]any{"turn": map[string]any{"id": "turn-1"}}
+				id := ""
+				if mode.resume {
+					id = testThread
+				}
+				if err := c.start(t.Context(), id, cwd, mode.resume, perm.mode); err != nil {
 					t.Fatal(err)
 				}
-				if got["approvalPolicy"] != "untrusted" || got["approvalsReviewer"] != "user" || got["model"] != "gpt-6.2-sol" {
-					t.Fatalf("%s policy/model: %+v", method, got)
+				n.noteModes(testThread, perm.mode, "low")
+				if err := c.deliver(t.Context(), "", "fixture", nil); err != nil {
+					t.Fatal(err)
 				}
-				if method == "thread/resume" && (got["threadId"] != testThread || got["excludeTurns"] != true) {
-					t.Fatalf("resume: %+v", got)
-				}
-				if method == "turn/start" {
-					sandbox, _ := got["sandboxPolicy"].(map[string]any)
-					capabilities, _ := got["capabilities"].(map[string]any)
-					names, _ := capabilities["mcpServers"].([]any)
-					if got["effort"] != "xhigh" || sandbox["type"] != "workspaceWrite" || !slices.Equal(names, []any{"persona"}) {
-						t.Fatalf("turn policy, MCP or effort: %+v", got)
+				for _, method := range []string{mode.method, "turn/start"} {
+					sent := f.sent(method)
+					if len(sent) != 1 {
+						t.Fatalf("%s calls: %d", method, len(sent))
+					}
+					var got map[string]any
+					if err := json.Unmarshal(sent[0].Params, &got); err != nil {
+						t.Fatal(err)
+					}
+					if got["approvalPolicy"] != perm.wantApproval || got["approvalsReviewer"] != perm.wantReviewer || got["model"] != "gpt-6.2-sol" {
+						t.Fatalf("%s policy/model: %+v", method, got)
+					}
+					if method == "thread/resume" && (got["threadId"] != testThread || got["excludeTurns"] != true) {
+						t.Fatalf("resume: %+v", got)
+					}
+					if method == "turn/start" {
+						sandbox, _ := got["sandboxPolicy"].(map[string]any)
+						capabilities, _ := got["capabilities"].(map[string]any)
+						names, _ := capabilities["mcpServers"].([]any)
+						if got["effort"] != "xhigh" || sandbox["type"] != perm.wantSandbox || !slices.Equal(names, []any{"persona"}) {
+							t.Fatalf("turn policy, MCP or effort: %+v", got)
+						}
 					}
 				}
-			}
-			args, _ := n.traexAssistantArgs("proc-fixture", "xhigh")
-			command := n.traexAssistantCommand("/bin/bash", traexAgent, args)
-			joined := strings.Join(command.Args, " ")
-			for _, want := range []string{"traex app-server --stdio", "PERSONA_ASSISTANT", "PERSONA_HOME", "proc-fixture", `model_reasoning_effort="xhigh"`} {
-				if !strings.Contains(joined, want) {
-					t.Errorf("start args missing %q", want)
+				args, _ := n.traexAssistantArgs("proc-fixture", "xhigh")
+				command := n.traexAssistantCommand("/bin/bash", traexAgent, args)
+				joined := strings.Join(command.Args, " ")
+				for _, want := range []string{"traex app-server --stdio", "PERSONA_ASSISTANT", "PERSONA_HOME", "proc-fixture", `model_reasoning_effort="xhigh"`} {
+					if !strings.Contains(joined, want) {
+						t.Errorf("start args missing %q", want)
+					}
 				}
-			}
-		})
+			})
+		}
 	}
 }
 
@@ -113,12 +124,16 @@ func TestTraexAssistantRefusesUnattestedStartAndProtocolMismatches(t *testing.T)
 	}
 }
 
-func TestTraexInboxRefusesExternalMCPAndPrivilegeEscalation(t *testing.T) {
+func TestTraexInboxFullAccessKeepsPersonaToolGates(t *testing.T) {
 	n := codexTestNode(t)
 	fh := withFakeHub(t, n)
 	p, _, f := newFakeCodex(t, n, t.TempDir())
 	p.id, p.agent, p.origin, p.personaMCPOnly = testThread, traexAgent, originInbox, true
 	n.noteModes(testThread, proto.ModeBypass, "")
+	n.state.put(testThread, sessionState{Origin: originInbox, Cwd: p.cwd})
+	cfg := olCfg()
+	cfg.CLI = &proto.LarkCLI{Bin: "/nonexistent/lark-cli"}
+	n.larkCfg, n.larkCfgAt = cfg, time.Now().Add(time.Hour)
 	fh.answer = func(proto.Interaction) proto.Resolution {
 		yes := true
 		return proto.Resolution{Allow: &yes}
@@ -142,8 +157,14 @@ func TestTraexInboxRefusesExternalMCPAndPrivilegeEscalation(t *testing.T) {
 		t.Fatalf("permission granted: %+v", reply)
 	}
 	reply = f.request(5, "item/tool/requestUserInput", map[string]any{"questions": []any{}})
-	if answers, _ := reply["answers"].(map[string]any); answers == nil || len(answers) != 0 || len(fh.interactions()) != 0 {
-		t.Fatalf("untrusted tool opened an owner interaction: %+v", reply)
+	if answers, _ := reply["answers"].(map[string]any); answers == nil || len(answers) != 0 {
+		t.Fatalf("native user input request returned answers: %+v", reply)
+	}
+	reply = f.request(6, "item/commandExecution/requestApproval", map[string]any{
+		"command": "lark-cli im +messages-send --as bot --text fixture",
+	})
+	if reply["decision"] != "decline" || len(fh.interactions()) != 0 {
+		t.Fatalf("Inbox outbound command was not refused by the Lark gate: %+v", reply)
 	}
 }
 
