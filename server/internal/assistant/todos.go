@@ -1037,6 +1037,7 @@ func (s *Service) todoRoutes() {
 	s.todoReorganizeRoute()
 	s.todoDecisionsBatchRoute()
 	s.todoBlockersRoutes()
+	s.todoMergeTrainRoutes()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
 	s.todoHandoffRoutes()
