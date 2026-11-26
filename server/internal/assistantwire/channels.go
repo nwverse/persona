@@ -221,8 +221,8 @@ type OwnerApprovalProof struct {
 // FeishuHandoff is feishu.handoff's params: a group question an authorized caller handed to the bot. The
 // question, the context and the names are the caller's, untrusted, and are never stored with the bot's settings.
 type FeishuHandoff struct {
-	ID         string    `json:"id"`
-	ChatID     string    `json:"chat_id"`
+	ID         FeishuHandoffID `json:"id"`
+	ChatID     FeishuChatID    `json:"chat_id"`
 	ChatName   string    `json:"chat_name,omitempty"`
 	SenderName string    `json:"sender_name,omitempty"`
 	Question   string    `json:"question"`
@@ -231,6 +231,26 @@ type FeishuHandoff struct {
 	Launcher   string    `json:"launcher,omitempty"`
 	By         string    `json:"by,omitempty"`
 	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// FeishuHandoffID names one proxy-reply handoff ("bh_" and hex), chosen by the manager.
+type FeishuHandoffID string
+
+// FeishuChatID is a Lark open-platform chat id (oc_…).
+type FeishuChatID string
+
+// FeishuHandoffAccepted is the handoff POST /api/v1/bots/feishu/handoffs took.
+type FeishuHandoffAccepted struct {
+	ID        FeishuHandoffID `json:"id"`
+	State     string          `json:"state"`
+	Delivery  string          `json:"delivery"`
+	ExpiresAt string          `json:"expires_at"`
+}
+
+// FeishuHandoffResponse is the body of POST /api/v1/bots/feishu/handoffs. Replayed: a repeat of an earlier ref.
+type FeishuHandoffResponse struct {
+	Handoff  FeishuHandoffAccepted `json:"handoff"`
+	Replayed bool                  `json:"replayed"`
 }
 
 // FeishuFromElsewhere is FeishuMessage.From of a message the hub took from a group chat that is not opted in: the owner's

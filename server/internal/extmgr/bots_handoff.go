@@ -518,7 +518,7 @@ func (h *Manager) postHandoff(w http.ResponseWriter, r *http.Request) {
 	if in.Ref != "" {
 		sum := handoffRefSum(caller, in.Ref, in)
 		if src := set.handoffByRef(sum, now); src != nil {
-			writeJSON(w, map[string]any{"handoff": handoffAccepted(src.HandoffID, handoffDeliveryOf(src), src.At.Add(botHandoffKeepFor)), "replayed": true})
+			writeJSON(w, assistantwire.FeishuHandoffResponse{Handoff: handoffAccepted(src.HandoffID, handoffDeliveryOf(src), src.At.Add(botHandoffKeepFor)), Replayed: true})
 			return
 		}
 		if set.handoffRefOther(caller, in.Ref, sum, now) {
@@ -549,7 +549,7 @@ func (h *Manager) postHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := now.Add(botHandoffKeepFor)
-	payload := assistantwire.FeishuHandoff{ID: id, ChatID: in.ChatID, ChatName: in.ChatName, SenderName: in.SenderName,
+	payload := assistantwire.FeishuHandoff{ID: assistantwire.FeishuHandoffID(id), ChatID: assistantwire.FeishuChatID(in.ChatID), ChatName: in.ChatName, SenderName: in.SenderName,
 		Question: in.Question, Context: in.Context, Confirm: src.Confirm, Launcher: set.handoffLauncher(), By: caller, ExpiresAt: expires}
 	if err := h.callAssistantWaiting(assistantwire.MethodFeishuHandoff, payload, nil, time.Now().Add(inboundWait), 20*time.Second); err != nil {
 		h.dropHandoffSource(id)
@@ -558,7 +558,7 @@ func (h *Manager) postHandoff(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r.Context(), channel.Feishu, auditBotHandoffTaken, caller, map[string]any{
 		"chat_id": in.ChatID, "handoff_id": id, "delivery": delivery, "anchored": in.MessageID != ""})
-	writeJSON(w, map[string]any{"handoff": handoffAccepted(id, delivery, expires), "replayed": false})
+	writeJSON(w, assistantwire.FeishuHandoffResponse{Handoff: handoffAccepted(id, delivery, expires)})
 }
 
 func (s FeishuBotSettings) handoffLauncher() string {
@@ -575,8 +575,9 @@ func handoffDeliveryOf(src *BotAISource) string {
 	return botHandoffDeliveryDirect
 }
 
-func handoffAccepted(id, delivery string, expires time.Time) map[string]any {
-	return map[string]any{"id": id, "state": botHandoffStateAccepted, "delivery": delivery, "expires_at": expires.UTC().Format(time.RFC3339)}
+func handoffAccepted(id, delivery string, expires time.Time) assistantwire.FeishuHandoffAccepted {
+	return assistantwire.FeishuHandoffAccepted{ID: assistantwire.FeishuHandoffID(id), State: botHandoffStateAccepted, Delivery: delivery,
+		ExpiresAt: expires.UTC().Format(time.RFC3339)}
 }
 
 func handoffWriteErr(w http.ResponseWriter, e *botHandoffError) {

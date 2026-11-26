@@ -59,7 +59,7 @@ func TestHandoffStartsAGuest(t *testing.T) {
 	if err := s.layer.Handoff(ctx, p); err != nil {
 		t.Fatal(err)
 	}
-	waitHandoff(t, s, p.ID)
+	waitHandoff(t, s, string(p.ID))
 	got := s.handoffs().started[0]
 	if got.id != "bh_1" || !strings.Contains(got.text, "bot_group_reply") {
 		t.Fatalf("guest: %+v", got)

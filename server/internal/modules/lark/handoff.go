@@ -87,7 +87,7 @@ func (l *Layer) Handoff(ctx context.Context, p assistantwire.FeishuHandoff) erro
 		return errors.New("feishu: the bot is not ready")
 	}
 	s := l.chat()
-	r := &handoffRecord{ID: p.ID, ChatID: p.ChatID, ChatName: p.ChatName, SenderName: p.SenderName,
+	r := &handoffRecord{ID: string(p.ID), ChatID: string(p.ChatID), ChatName: p.ChatName, SenderName: p.SenderName,
 		Question: clipRunes(p.Question, 120), Confirm: p.Confirm, State: "accepted", At: time.Now().UTC(), ExpiresAt: p.ExpiresAt}
 	if err := s.handoffPut(ctx, r); err != nil {
 		return err
@@ -108,11 +108,12 @@ func (s core) runHandoff(p assistantwire.FeishuHandoff) {
 	max := handoffReplyMax(p.Confirm)
 	text := prompts.RenderBotProxyReply(prompts.BotProxyReply{Owner: strings.TrimSpace(hello.Owner), Language: s.h.AnswerLanguage(hello.Locale),
 		Chat: p.ChatName, Sender: p.SenderName, Question: p.Question, Context: p.Context, Max: max, Confirm: p.Confirm})
-	if machine, session, err := s.h.StartHandoffGuest(ctx, p.ID, text, p.Launcher); err != nil {
-		s.logf("lark: handoff %s: start: %v", p.ID, err)
-		s.handoffFail(p.ID, "failed")
+	id := string(p.ID)
+	if machine, session, err := s.h.StartHandoffGuest(ctx, id, text, p.Launcher); err != nil {
+		s.logf("lark: handoff %s: start: %v", id, err)
+		s.handoffFail(id, "failed")
 	} else {
-		s.handoffBind(p.ID, machine, session)
+		s.handoffBind(id, machine, session)
 	}
 }
 
