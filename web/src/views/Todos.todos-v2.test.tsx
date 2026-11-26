@@ -4,7 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Todo } from "../lib/todos";
+import type { Todo, TodoBoardProjection } from "../lib/todos";
 import type { TodoSummary } from "../lib/todo-view-wire";
 
 vi.hoisted(() => {
@@ -128,6 +128,7 @@ afterEach(async () => {
 const render = async ({
   todos = sampleTodos,
   sharedBlockers = [],
+  todoBoard = null,
   sessions = {},
   todosV2,
   assistantManager,
@@ -138,18 +139,20 @@ const render = async ({
 }: {
   todos?: Todo[];
   sharedBlockers?: unknown[];
+  todoBoard?: TodoBoardProjection | null;
   sessions?: Record<string, unknown[]>;
   todosV2?: boolean;
   assistantManager?: string;
   leaders?: string[];
   conversations?: unknown[];
-  grouping?: "status" | "folder";
+  grouping?: "status" | "folder" | "direction";
   selectedId?: string;
 } = {}) => {
   localStorage.setItem("persona.todos.grouping", grouping);
   seed({
     todos,
     sharedBlockers,
+    todoBoard,
     todosLoaded: true,
     sessions,
     interactions: [],
@@ -1260,5 +1263,394 @@ describe("TodoDetail single-item Change direction control under todos_v2 (#15653
     await flush();
     expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+  });
+});
+
+describe("TodosView server-owned board projection consumption (#15800)", () => {
+  const boardTodos: Todo[] = [
+    {
+      id: "order_second",
+      title: "Second by client timestamp",
+      created_at: iso(20 * HOUR),
+      updated_at: iso(20 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 2),
+    },
+    {
+      id: "order_first",
+      title: "First by client timestamp",
+      created_at: iso(1 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 0),
+    },
+    {
+      id: "goal_parent",
+      title: "Launch Q4 Milestone",
+      direction_id: "dir-platform",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "goal_child_folded",
+      title: "Hidden folded subtask",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "goal_child_surfaced",
+      title: "Blocked child needing approval",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 1),
+    },
+  ];
+
+  // Deliberately order `order_second` before `order_first` and give `counts.needs_you = 9`
+  // so the test proves TodosView renders directly from server `board` instead of re-deriving locally.
+  const serverBoard: TodoBoardProjection = {
+    status_groups: [
+      {
+        key: "needs_you",
+        total_count: 3,
+        visible_count: 3,
+        entries: [
+          { todo_id: "order_second" },
+          { todo_id: "goal_child_surfaced" },
+          { todo_id: "order_first" },
+        ],
+      },
+      {
+        key: "in_progress",
+        total_count: 2,
+        visible_count: 1,
+        entries: [
+          {
+            todo_id: "goal_parent",
+            folded_child_ids: ["goal_child_folded"],
+            surfaced_child_ids: ["goal_child_surfaced"],
+            folded_count: 1,
+          },
+        ],
+      },
+    ],
+    direction_groups: [
+      {
+        direction_id: "dir-platform",
+        label: "Platform Server Label",
+        counts: { needs_you: 1, in_progress: 2, pending_review: 0, waiting: 0, done: 0, total: 3 },
+        todo_ids: ["goal_child_surfaced", "goal_parent", "goal_child_folded"],
+      },
+      {
+        direction_id: "",
+        counts: { needs_you: 2, in_progress: 0, pending_review: 0, waiting: 0, done: 0, total: 2 },
+        todo_ids: ["order_second", "order_first"],
+      },
+    ],
+    sidebar_tree: [],
+    counts: {
+      needs_you: 9,
+      in_progress: 2,
+      pending_review: 0,
+      waiting: 0,
+      someday: 0,
+      done: 0,
+      open_total: 11,
+    },
+  };
+
+  it("strictly renders status sections, goal folding, surfaced blockers, and header count from server board under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("board");
+
+    // Header attention count reads directly from board.counts.needs_you (9)
+    expect(host.querySelector("[data-testid=todos-header-attention]")?.getAttribute("data-count")).toBe("9");
+
+    // Waiting (needs_you) section renders in exact server order: order_second, goal_child_surfaced, order_first
+    const waitingSection = host.querySelector('[data-testid=todo-section][data-section="waiting"]')!;
+    const waitingIds = [...waitingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(waitingIds).toEqual(["order_second", "goal_child_surfaced", "order_first"]);
+
+    // Working (in_progress) section keeps goal_parent visible and folds goal_child_folded
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    const workingIds = [...workingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(workingIds).toEqual(["goal_parent"]);
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
+  });
+
+  it("renders direction grouping directly from server board.direction_groups under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "direction" });
+
+    const groups = [...host.querySelectorAll("[data-testid=todo-group]")];
+    expect(groups.map((el) => el.getAttribute("data-group"))).toEqual([
+      "direction:dir-platform",
+      "direction:secretary",
+    ]);
+    expect(groups[0]!.textContent).toContain("Platform Server Label");
+    const platformIds = [...groups[0]!.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(platformIds).toEqual(["goal_child_surfaced", "goal_parent", "goal_child_folded"]);
+  });
+
+  it("ignores server board completely when todos_v2 is false (100% legacy behavior)", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: false, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).not.toBe("board");
+    expect(host.querySelector("[data-testid=todos-header-attention]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-summary]")).not.toBeNull();
+    // Legacy path keeps folded child unfolded at top level in working
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).toContain("Hidden folded subtask");
+  });
+
+  it("falls back cleanly to client goal folding when todos_v2=true and server omits board (older Hub)", async () => {
+    await render({ todos: boardTodos, todoBoard: null, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("view");
+    // Client fallback still folds goal_child_folded under goal_parent
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
+  });
+});
+
+describe("TodosView detail parent picker, item_type filter & toggle, and undo auto-seen (#16100)", () => {
+  const uxTodos: Todo[] = [
+    {
+      id: "top_goal",
+      title: "Launch v2 architecture",
+      item_type: "task",
+      origin: "conv-main",
+      created_at: iso(6 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "other_goal",
+      title: "Q4 roadmap",
+      item_type: "task",
+      origin: "conv-main",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("todo", "rest", "todo", 1),
+    },
+    {
+      id: "nested_sub",
+      title: "Wire parent picker",
+      item_type: "task",
+      part_of: "top_goal",
+      origin: "conv-main",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "personal_note",
+      title: "Renew passport",
+      item_type: "personal",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("todo", "rest", "todo", 2),
+    },
+    {
+      id: "auto_seen_task",
+      title: "Nightly docs sync",
+      item_type: "task",
+      audience: "autonomous",
+      done_at: iso(2 * HOUR),
+      done_by: "auto",
+      seen_at: iso(2 * HOUR),
+      created_at: iso(8 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("done", "closed", "done", 0),
+    },
+  ];
+
+  it("renders none of the #16100 controls when todos_v2 is false or omitted", async () => {
+    await render({ todos: uxTodos, todosV2: false, selectedId: "auto_seen_task" });
+    expect(host.querySelector("[data-testid=todo-detail-change-parent]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-parent-panel]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-item-type]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+    expect(kindFilterEl()).toBeNull();
+  });
+
+  it("re-parents and promotes a single todo via TodoParentPicker without interrupting running Agents", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") {
+        const body = (init as { json?: { ids: string[]; part_of?: string } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          body?.ids.includes(td.id) ? { ...td, part_of: body.part_of || undefined } : td,
+        );
+        return { updated: currentTodos.filter((td) => body?.ids.includes(td.id)) };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: uxTodos, todosV2: true, selectedId: "top_goal" });
+
+    // Open parent picker on top_goal: excludes self (top_goal), descendant (nested_sub), and done (auto_seen_task)
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-parent]")!;
+    expect(trigger).toBeTruthy();
+    await act(async () => trigger.click());
+    await flush();
+
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-parent-select]")!;
+    const optionValues = [...select.options].map((o) => o.value);
+    expect(optionValues).toEqual(["", "other_goal", "personal_note"]);
+
+    // Re-parent top_goal under other_goal
+    await act(async () => {
+      select.value = "other_goal";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-apply]")!.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["top_goal"],
+          part_of: "other_goal",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=todo-detail-parent-panel]")).toBeNull();
+
+    // Now open parent picker again and promote top_goal back to top-level in one click
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-parent]")!.click());
+    await flush();
+    const promoteBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-promote]")!;
+    expect(promoteBtn).toBeTruthy();
+    await act(async () => promoteBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["top_goal"],
+          part_of: "",
+          include_children: false,
+          transfer_supervision: false,
+        },
+      }),
+    );
+
+    // Turning todos_v2 off removes the parent picker button immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-change-parent]")).toBeNull();
+  });
+
+  it("filters by server item_type under todos_v2 and toggles personal/task in detail via PATCH /todos/{id}", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/personal_note" && (init as { method?: string })?.method === "PATCH") {
+        const body = (init as { json?: { item_type?: "personal" | "task" } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          td.id === "personal_note" ? { ...td, item_type: body?.item_type } : td,
+        );
+        return { todo: currentTodos.find((td) => td.id === "personal_note") };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: uxTodos, todosV2: true, selectedId: "personal_note" });
+
+    // Filter to personal only -> shows only personal_note
+    await clickKind(t("todos.kind_filter_todos"));
+    expect(visibleTodoIds()).toEqual(["personal_note"]);
+
+    // Filter to tasks only -> excludes personal_note
+    await clickKind(t("todos.kind_filter_tasks"));
+    expect(visibleTodoIds()).not.toContain("personal_note");
+    expect(visibleTodoIds()).toContain("top_goal");
+
+    // Back to All
+    await clickKind(t("todos.kind_filter_all"));
+
+    // Detail item_type switcher starts on "personal"
+    const typeGroup = host.querySelector("[data-testid=todo-detail-item-type]")!;
+    expect(typeGroup).toBeTruthy();
+    const personalBtn = typeGroup.querySelector<HTMLButtonElement>('[data-item-type="personal"]')!;
+    const taskBtn = typeGroup.querySelector<HTMLButtonElement>('[data-item-type="task"]')!;
+    expect(personalBtn.getAttribute("aria-checked")).toBe("true");
+    expect(taskBtn.getAttribute("aria-checked")).toBe("false");
+
+    // Toggle to "task" -> calls PATCH /todos/personal_note with { item_type: "task" } and refreshes
+    await act(async () => taskBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/personal_note",
+      expect.objectContaining({
+        method: "PATCH",
+        json: { item_type: "task" },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector('[data-testid=todo-detail-item-type] [data-item-type="task"]')?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("exposes Mark unread button on seen/auto-seen todos under todos_v2 and calls DELETE /todos/{id}/seen", async () => {
+    let currentTodos = uxTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/auto_seen_task/seen" && (init as { method?: string })?.method === "DELETE") {
+        currentTodos = currentTodos.map((td) =>
+          td.id === "auto_seen_task" ? { ...td, seen_at: null } : td,
+        );
+        return { todo: currentTodos.find((td) => td.id === "auto_seen_task") };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    // Unseen open todo does not show Mark unread button
+    await render({ todos: uxTodos, todosV2: true, selectedId: "personal_note" });
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
+
+    // Auto-seen completed autonomous task shows Mark unread button
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: uxTodos, todosV2: true, selectedId: "auto_seen_task" });
+
+    const unseeBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-unsee-btn]")!;
+    expect(unseeBtn).toBeTruthy();
+    expect(unseeBtn.textContent).toContain(t("todos.detail_mark_unread"));
+
+    await act(async () => unseeBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/auto_seen_task/seen",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+
+    // Turning todos_v2 off hides the button immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-unsee-btn]")).toBeNull();
   });
 });

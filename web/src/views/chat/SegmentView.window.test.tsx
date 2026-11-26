@@ -13,7 +13,7 @@ import { SegmentView } from "./SegmentView";
 vi.mock("../../ui/Markdown", () => ({ Markdown: ({ text }: { text: string }) => <div data-markdown>{text}</div> }));
 vi.mock("./MessageActions", () => ({ MessageActions: ({ children }: { children?: ReactNode }) => <>{children}</> }));
 vi.mock("./LazyFileCards", () => ({ LazyFileCards: () => null, LazyReplyFiles: () => null }));
-vi.mock("./PortChips", () => ({ ReplyPorts: () => null }));
+vi.mock("./LazyTurnExtras", () => ({ LazyTurnImages: () => null, LazyReplyPorts: () => null, LazyTurnChanges: () => null }));
 vi.mock("../../lib/message-send", async (importOriginal) => ({ ...await importOriginal<typeof import("../../lib/message-send")>(), useMessageFeedback: () => "" }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

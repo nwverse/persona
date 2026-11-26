@@ -40,10 +40,12 @@ folder** and the number of **Snapshots to keep**. Operators configure external c
 commands on the Hub host.
 
 The recommended folder is `<runtime>/update/development-backups` (where the Hub has always
-kept these snapshots); it is shown as the placeholder and used when no folder is set. **Use
-recommended** and an empty field are an explicit Web choice of it, so they win over a
-`directory` in `hub.json`; leaving the field out of a request keeps whatever is set. A
-custom folder is validated on the Hub with the backup command's rules (`internal/operations/backup`):
+kept these snapshots). It appears as a wrapping placeholder in the full-width folder field.
+**Use recommended** appears for a custom folder and clears the field. **Save** is enabled
+when the folder or retention changes. Saving a change to an empty folder explicitly chooses
+the recommendation over a `directory` in `hub.json`. Omitting the folder from a request
+keeps the saved folder. The Hub validates a custom folder with the backup command's rules
+(`internal/operations/backup`):
 it must be an absolute path (a leading `~` is expanded), may not be inside data a snapshot
 collects (the knowledge base, `managers/assistant`, extensions, skills or
 `hub.machines_kept`), may not be the runtime directory or contain it (or an external

@@ -435,9 +435,9 @@ func TestTodosV2BoardProjectionSidebarTree(t *testing.T) {
 			View:     &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseWaiting, Section: assistantwire.TodoListSectionWaiting, Rank: 0},
 		},
 		{
-			Todo:        Todo{ID: "review_1", DirectionID: "dir_1", CreatedAt: base, Supervision: &Supervision{State: reviewPending}},
-			ItemType:    db.ItemTypeTask,
-			View:        &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseWorking, Section: assistantwire.TodoListSectionWorking, Rank: 1},
+			Todo:     Todo{ID: "review_1", DirectionID: "dir_1", CreatedAt: base, Supervision: &Supervision{State: reviewPending}},
+			ItemType: db.ItemTypeTask,
+			View:     &assistantwire.TodoSummary{Phase: assistantwire.TodoPhaseWorking, Section: assistantwire.TodoListSectionWorking, Rank: 1},
 		},
 		{
 			Todo:     Todo{ID: "goal_ip", DirectionID: "dir_1", CreatedAt: base},

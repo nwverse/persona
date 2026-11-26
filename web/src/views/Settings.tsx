@@ -14,6 +14,8 @@ import { install, useInstall, type InstallState } from "../lib/pwa";
 import { useStore } from "../lib/store";
 import { composing } from "../lib/send-history";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Menu, Spinner, toast, useMenu } from "../ui/atoms";
+import { NoticeDot } from "../ui/NoticeDot";
+import { useHasUnseenLabs } from "../lib/labs-seen";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
@@ -613,6 +615,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
   contentId: string;
 }) {
   const nav = useRef<HTMLElement>(null);
+  const labsUnseen = useHasUnseenLabs();
   // A deep link or a width change can select a category below the sidebar's fold.
   useEffect(() => {
     nav.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
@@ -652,7 +655,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
       <nav ref={nav} aria-label={t("settings.categories")} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
         {query ? (
           <>
-            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+            {tabs.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
             {groups.length > 0 && <div className="px-3 pt-3 pb-1 text-[11px] font-medium text-ink-3">{t("settings.search_in_page")}</div>}
             {groups.map((g) => <GroupResult key={`${g.tab}/${g.anchor}/${g.group}`} g={g} onGroup={onGroup} />)}
             {none && <p className="px-3 py-3 text-[12.5px] leading-relaxed text-ink-3">{t("settings.search_no_results")}</p>}
@@ -667,7 +670,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
                   <span className="min-w-0 flex-1"><GroupTitle group={g.key} compact /></span>
                   <GroupAction group={g.key} />
                 </div>
-                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} contentId={contentId} onPick={onPick} />)}
+                {its.map((k) => <NavRow key={k} k={k} selected={tab === k} notice={k === "labs" && labsUnseen} contentId={contentId} onPick={onPick} />)}
                 {hasFooter(g.key) && <p className="px-3 pt-1 pb-1.5 text-[11px] leading-snug text-ink-3"><GroupFooter group={g.key} /></p>}
               </div>
             );
@@ -678,7 +681,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
   );
 }
 
-function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean; contentId: string; onPick: (k: Tab) => void }) {
+function NavRow({ k, selected, notice, contentId, onPick }: { k: Tab; selected: boolean; notice: boolean; contentId: string; onPick: (k: Tab) => void }) {
   const info = tabInfo(k);
   return (
     <button
@@ -688,6 +691,7 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
       onFocus={() => preloadTab(k)}
       aria-current={selected ? "page" : undefined}
       aria-controls={contentId}
+      aria-label={notice ? `${info.label}, ${t("sidebar.labs_unseen")}` : undefined}
       className={cx(
         "relative flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] transition-colors",
         selected ? "bg-accent-tint font-medium text-accent-ink" : "text-ink-2 hover:bg-hover hover:text-ink",
@@ -696,6 +700,7 @@ function NavRow({ k, selected, contentId, onPick }: { k: Tab; selected: boolean;
       {selected && <span aria-hidden className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-accent" />}
       <Icon name={info.icon} size={15} className="shrink-0" />
       <span className="truncate" title={info.label}>{info.label}</span>
+      {notice && <NoticeDot />}
     </button>
   );
 }
@@ -715,6 +720,7 @@ function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup)
 
 /** The phone's first page of Settings: the categories in grouped cards, each opening its page (as on iOS). */
 function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => boolean; integrationsV2: boolean; onPick: (k: Tab) => void }) {
+  const labsUnseen = useHasUnseenLabs();
   return (
     <nav aria-label={t("settings.categories")}>
       {navGroups(integrationsV2).map((g) => {
@@ -723,7 +729,9 @@ function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => bo
         return (
           <Group key={g.key} anchor={`nav-${g.key}`} title={<GroupTitle group={g.key} />} right={<GroupAction group={g.key} />} footer={hasFooter(g.key) ? <GroupFooter group={g.key} /> : undefined}>
             {tabs.map((k) => (
-              <Row key={k} icon={tabInfo(k).icon} label={tabInfo(k).label} hint={tabInfo(k).hint} onClick={() => onPick(k)} />
+              <Row key={k} icon={tabInfo(k).icon} label={tabInfo(k).label} hint={tabInfo(k).hint} onClick={() => onPick(k)}>
+                {k === "labs" && labsUnseen ? <><NoticeDot /><span className="sr-only">{t("sidebar.labs_unseen")}</span></> : undefined}
+              </Row>
             ))}
           </Group>
         );

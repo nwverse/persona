@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"slices"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -41,7 +43,114 @@ func (s *Service) handOverMainTasks(ctx context.Context, from, to string) int {
 	if moved > 0 {
 		s.logf("assistant: %d open task(s) of the replaced main conversation %s handed to %s", moved, short(from), short(to))
 	}
+	s.handOverMainScheduledTasks(ctx, from, to)
 	return moved
+}
+
+// mainTargetMachine resolves the machine hosting replacement main conversation to: it trusts an explicit
+// MainMachineID binding first, otherwise locates to among connected devices before falling back to mainRouteMachine.
+func (s *Service) mainTargetMachine(ctx context.Context, cfg Settings, to string) string {
+	if cfg.Main == to && cfg.MainMachineID != "" {
+		return cfg.MainMachineID
+	}
+	if m, _, found := s.findSession(ctx, to, cfg.mainRouteMachine()); found {
+		return m
+	}
+	return cfg.mainRouteMachine()
+}
+
+// pendingOneOffRetry reports whether a one-off task whose initial attempt already flipped Enabled=false still has
+// an automatic retry eligible to run (so main handover must migrate it too instead of leaving the retry on the old main).
+func pendingOneOffRetry(t Task, runs []ScheduleRun, now time.Time) bool {
+	if !t.done() {
+		return false
+	}
+	for _, r := range slices.Backward(runs) {
+		if r.RefID != t.ID {
+			continue
+		}
+		if r.Status != runFailed || r.Manual || r.Retried || r.DeliveryUnknown {
+			return false
+		}
+		return retryCancelled(t, true, r, runs, now) == ""
+	}
+	return false
+}
+
+// handOverMainScheduledTasks moves pending scheduled tasks bound to the replaced main conversation from onto
+// the new main conversation to (and its machine). Quiet or repeating tasks are isolated to their own conversation
+// (matching isolateScheduledConversation) so they neither fire into the archived old main conversation nor pollute
+// the new one. Completed one-off follow-ups (with no pending automatic retry), space-scoped tasks, workout tasks
+// and other conversations' tasks stay untouched.
+func (s *Service) handOverMainScheduledTasks(ctx context.Context, from, to string) int {
+	if from == "" || to == "" || from == to || s.isLeaderRef(from) || s.isLeader(ctx, from) {
+		return 0
+	}
+	cfg := s.settings(ctx)
+	toMachine := s.mainTargetMachine(ctx, cfg, to)
+	sc, err := s.lockedSchedule(ctx)
+	if err != nil {
+		return 0
+	}
+	now := time.Now().UTC()
+	tasks := slices.Clone(sc.tasks)
+	moved := 0
+	for i := range tasks {
+		t := &tasks[i]
+		if t.SessionID != from || t.Space != "" || t.WorkoutID != "" {
+			continue
+		}
+		if t.done() && !sc.sending[t.ID] && !pendingOneOffRetry(*t, sc.runs, now) {
+			continue
+		}
+		if t.pushesOnlyAsked() || t.Repeat != repeatOnce {
+			t.SessionID = ""
+		} else {
+			t.SessionID = to
+			if toMachine != "" {
+				t.MachineID = toMachine
+			}
+		}
+		moved++
+	}
+	if moved == 0 {
+		sc.mu.Unlock()
+		return 0
+	}
+	if err := s.saveLocked(sc, tasks); err != nil {
+		sc.mu.Unlock()
+		s.logf("assistant: hand over %d scheduled task(s) from %s to %s: %v", moved, short(from), short(to), err)
+		return 0
+	}
+	sc.mu.Unlock()
+	s.broadcastSchedule()
+	s.logf("assistant: %d scheduled task(s) of the replaced main conversation %s handed to %s", moved, short(from), short(to))
+	return moved
+}
+
+// retargetFormerMainTask prevents a scheduled run from resurrecting an archived former main conversation:
+// if a replacement main conversation already exists, a non-quiet one-off follow-up targets it; otherwise
+// (including the gap after POST /api/v1/assistant/main/new or /clear before the new main starts, or legacy
+// quiet/repeating tasks) the run falls back to its own conversation on the current assistant configuration.
+func (s *Service) retargetFormerMainTask(ctx context.Context, t *Task, run *ScheduleRun) {
+	if t.SessionID == "" || t.Space != "" || t.WorkoutID != "" || s.isLeaderRef(t.SessionID) || s.isLeader(ctx, t.SessionID) {
+		return
+	}
+	cfg := s.settings(ctx)
+	if cfg.Main == t.SessionID || !slices.ContainsFunc(cfg.Former, func(f FormerMain) bool { return f.SessionID == t.SessionID }) {
+		return
+	}
+	if cfg.Main != "" && !t.pushesOnlyAsked() && t.Repeat == repeatOnce {
+		t.SessionID = cfg.Main
+		if m := s.mainTargetMachine(ctx, cfg, cfg.Main); m != "" {
+			t.MachineID = m
+		}
+		return
+	}
+	t.SessionID = ""
+	if cfg.Main == "" && !t.pushesOnlyAsked() && t.Repeat == repeatOnce && run != nil {
+		run.ConversationReason = "source_unavailable"
+	}
 }
 
 // handOverTask moves task t from conversation from to conversation to (handOverMainTasks): its origin when it is

@@ -54,7 +54,7 @@ export function useMachineExtensionControl<T extends { enabled: boolean }>({
 
   const refresh = () =>
     reads.current?.run(() =>
-      readTimeoutMs !== undefined ? api<T>(endpoint, { timeout: readTimeoutMs }) : api<T>(endpoint),
+      api<T>(endpoint, readTimeoutMs !== undefined ? { timeout: readTimeoutMs, dedupe: false } : { dedupe: false }),
     ) ?? Promise.resolve();
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;

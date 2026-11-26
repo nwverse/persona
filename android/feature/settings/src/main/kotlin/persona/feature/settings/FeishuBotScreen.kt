@@ -44,8 +44,13 @@ private fun feishuBotStatus(status: FeishuBotStatus?): Status = when {
  * Pairing, its features and a test message are on its channel's page (Settings › Channels › Lark bot), which links here.
  */
 @Composable
-internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit) {
+internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit, larkBot: LarkBotEntry = LarkBotEntry.Offered) {
     val res = LocalResources.current
+    // The hub's Lark module is off (#15995): nothing here can work, so nothing is asked of the hub and no control shows.
+    if (larkBot == LarkBotEntry.ModuleOff) {
+        LarkBotOffPage(stringResource(R.string.settings_feishu_bot_title), onBack)
+        return
+    }
     if (api == null) {
         JListPage(title = stringResource(R.string.settings_feishu_bot_title), onBack = onBack) {
             item { JNotice(stringResource(R.string.settings_src_channels_demo)) }
@@ -127,7 +132,7 @@ internal fun FeishuBotPage(api: FeishuBotSettings?, onBack: () -> Unit) {
             Column(Modifier.padding(top = Tokens.Space.l), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                 JSectionHeader(stringResource(R.string.settings_feishu_bot_howto))
                 listOf(R.string.settings_feishu_bot_step_create_app, R.string.settings_feishu_bot_step_permissions,
-                    R.string.settings_feishu_bot_step_events, R.string.settings_feishu_bot_step_publish).forEachIndexed { i, step ->
+                    R.string.settings_feishu_bot_step_sync_permissions, R.string.settings_feishu_bot_step_events, R.string.settings_feishu_bot_step_publish).forEachIndexed { i, step ->
                     Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                         Text("${i + 1}", style = PersonaTheme.type.caption, color = PersonaTheme.palette.accent, maxLines = 1)
                         Text(stringResource(step), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)

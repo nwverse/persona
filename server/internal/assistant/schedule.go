@@ -1747,6 +1747,7 @@ func (s *Service) Run(ctx context.Context) {
 	}
 	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
 	s.recoverApprovalJournals(recoverCtx)
+	s.recoverIdleArchiveAudit(recoverCtx)
 	cancel()
 	go s.delayedWaitsRecoveryLoop(ctx)     // usage-limit retries and task receipt rechecks left by the previous manager
 	go s.failedStartBatchRecoveryLoop(ctx) // deferred leader failures, including when every failed to-do is closed
@@ -1781,6 +1782,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.healthTellLoop(ctx)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
+	s.stopIdleArchiveAuditRetry()
 }
 
 // scheduleLoop starts due tasks. It sleeps until the next one is due (at most scheduleIdle, so a time zone change is
@@ -2281,6 +2283,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		t.promptRunID = run.ID
 	}
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
+	s.retargetFormerMainTask(ctx, &t, &run)
 	// A schedule the owner let start some kinds by itself runs each round in a new conversation of its own whose
 	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant. Not a
 	// retry: it goes on in the round's conversation, which has its earlier work, and its plans ask.

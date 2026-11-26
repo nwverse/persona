@@ -398,6 +398,56 @@ func TestAgyCompanionBypassStartReachesCompanion(t *testing.T) {
 	}
 }
 
+func TestAgyRuntimeSessionSendForwardsMode(t *testing.T) {
+	n, f, home := herdrNode(t)
+	n.logger = log.New(io.Discard, "", 0)
+	n.runtimeSock = filepath.Join(filepath.Dir(f.sock), "runtime.sock")
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	if _, err := n.listenRuntimeSocket(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hello := assistantRuntimeHello()
+	hello["runtime"], hello["agent"], hello["launcher"] = agyAgent, agyAgent, agyAgent
+	hello["launchers"] = []map[string]any{{"name": agyAgent, "agent": agyAgent}}
+	companion := dialRuntime(t, n, hello)
+	companion.mu.Lock()
+	companion.answer = func(method string, _ json.RawMessage) (any, error) {
+		if method == "session.start" {
+			return map[string]any{"session": proto.Session{SessionID: "agy-deferred-send", Cwd: home, Status: proto.StatusIdle, Starting: true}}, nil
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	companion.mu.Unlock()
+	if _, err := nodeCall(t, n, "session.start", map[string]any{
+		"cwd": home, "launcher": agyAgent, "host": proto.HostAgy,
+		"permission_mode": proto.ModeBypass, "defer_mcp": true, "prompt": "Start work",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": "agy-deferred-send", "text": "Start work", "permission_mode": proto.ModeBypass,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": "agy-deferred-send", "text": "Follow up",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sends := companion.got("session.send")
+	if len(sends) != 2 {
+		t.Fatalf("companion sends = %d, want 2: %s", len(sends), sends)
+	}
+	var first, second map[string]any
+	if json.Unmarshal(sends[0], &first) != nil || first["mode"] != proto.ModeBypass {
+		t.Fatalf("first send = %s, want mode=%s", sends[0], proto.ModeBypass)
+	}
+	if json.Unmarshal(sends[1], &second) != nil || second["mode"] != nil {
+		t.Fatalf("second send = %s, want omitted mode", sends[1])
+	}
+}
+
 func TestAgyStartRefusesInvalidEffortBeforeCreatingPane(t *testing.T) {
 	n, f, home := herdrNode(t)
 	for _, effort := range []string{"auto", "ultra", "bogus"} {

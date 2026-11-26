@@ -414,5 +414,17 @@
   "repo_gate_reason_missing_pr": "尚未关联 PR",
   "repo_gate_reason_pr_open": "PR 尚未合入",
   "repo_gate_reason_ready": "全部目标仓已就绪",
-  "repo_gate_reason_reference_only": "仅只读参考仓"
+  "repo_gate_reason_reference_only": "仅只读参考仓",
+  "detail_change_parent": "父目标",
+  "detail_change_parent_region": "调整父目标",
+  "detail_change_parent_hint": "仅调整归属层级，不打断运行中的 Agent。",
+  "detail_parent_standalone": "独立顶层（无父目标）",
+  "detail_promote_top_level": "升为顶层",
+  "detail_item_type_label": "条目类型",
+  "item_type_task": "任务",
+  "item_type_personal": "个人",
+  "item_type_updated": "已切换为{type}",
+  "item_type_update_failed": "切换类型失败：{error}",
+  "detail_mark_unread": "标回未读",
+  "detail_marked_unread": "已标回未读"
 }

@@ -7,7 +7,6 @@ import { getSession, getState, useStore } from "../../lib/store";
 import { withChildSessions } from "../../lib/child-cards";
 import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
-import { TurnImages } from "./TurnImages";
 import { turnToolViews } from "../../lib/turn-tool-views";
 import { exchangeSteps, segmentIdentity, isLoopTick, isOwnMessage, toolChip, type Context, type Segment, type UserMessage } from "../../lib/turns";
 import { usageKey } from "../../lib/turn-usage";
@@ -33,7 +32,7 @@ import { ForwardBlock, ForwardCards } from "./ForwardCard";
 import { AttachedPhotos } from "./AttachedPhotos";
 import { useFullText } from "./FullText";
 import { LazyFileCards, LazyReplyFiles } from "./LazyFileCards";
-import { ReplyPorts } from "./PortChips";
+import { LazyReplyPorts, LazyTurnChanges, LazyTurnImages } from "./LazyTurnExtras";
 import { MessageActions } from "./MessageActions";
 import { skillEditText } from "../../lib/skill-mentions";
 import { contextXML } from "../../lib/context-xml";
@@ -47,8 +46,7 @@ import { useChatContext } from "./chat-context";
 import { useFreshWords } from "./fresh-words";
 import { Icon } from "../../ui/icons";
 import { WorkGroup, WorkNodes, type WorkProps } from "./WorkGroup";
-import { TurnChanges, turnChangesHeight } from "./TurnChanges";
-import { turnChanges } from "../../lib/turn-changes";
+import { turnChanges, turnChangesHeight } from "../../lib/turn-changes";
 import type { Step } from "../../lib/turns";
 import { useCallSeeker } from "./jump";
 import { t } from "../../i18n";
@@ -312,7 +310,7 @@ export const Answer = memo(function Answer({ item, streaming, mid, sid, fade, st
       </div>
       {full.more}
       {!live && mid && sid && <LazyReplyFiles text={text} mid={mid} cwd={cwd} />}
-      {!live && mid && sid && <ReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
+      {!live && mid && sid && <LazyReplyPorts text={text} mid={mid} sid={sid} cwd={cwd} />}
     </MessageActions>
   );
 });
@@ -419,7 +417,7 @@ export const SegmentView = memo(function SegmentView({
   // When the dock bar already shows the foreground turn's Working… status and elapsed timer, skip the empty non-expandable
   // stream placeholder unless batched live text is streaming above it (#12380).
   const liveRow = working && (!dockTurnClock || streaming !== undefined) && <WorkGroup g={{ kind: "group", id: `work-live-${seg.id}`, children: [], live: true, startedAt: Date.parse(turnStart ?? "") || undefined }} p={p} />;
-  const imageStrip = images.length > 0 && <TurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
+  const imageStrip = images.length > 0 && <LazyTurnImages images={images} mid={mid} sid={sid} cwd={getSession(mid, sid)?.cwd} />;
   const box = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
     const el = box.current;
@@ -482,7 +480,7 @@ export const SegmentView = memo(function SegmentView({
       {!live && <Fragment key="before-words">{beforeWords}</Fragment>}
       {(latestItem || streaming !== undefined) && <Suspense key="latest-text" fallback={null}><LatestAnswer item={streaming === undefined ? latestItem : undefined} streaming={streaming} mid={mid} sid={sid} noCloseout={noCloseout || undefined} done={(!live && !busy) || undefined} cut={(!live && seg.cut) || undefined} usage={usage} usageMs={usageMs} ttftMs={!live && !trace ? seg.ttftMs : undefined} /></Suspense>}
       {sourced && <Suspense key="turn-sources" fallback={null}><TurnSources steps={own} /></Suspense>}
-      {changes && <TurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
+      {changes && <LazyTurnChanges key="turn-changes" changes={changes} mid={mid} sid={sid} cwd={cwd} />}
       </Fragment> : <div className="whitespace-pre-wrap" style={{ blockSize: "var(--seg-est)" }} data-segment-placeholder>{placeholder}</div>}
     </section>
   );

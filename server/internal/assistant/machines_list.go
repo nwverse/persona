@@ -11,6 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // machineFact makes unknown distinct from a measured zero, with a reason the model can relay.
@@ -122,6 +123,13 @@ type machineResourceSnapshot struct {
 	summary assistantwire.MachineResourceSummary
 }
 
+func (s *Service) machineNowTime() time.Time {
+	if s.machineNow != nil {
+		return s.machineNow()
+	}
+	return time.Now()
+}
+
 func (s *Service) collectMachineSnapshots(ctx context.Context, excludeSpaceSessions bool) ([]machineResourceSnapshot, bool, int, error) {
 	var listed struct {
 		Devices  []Device `json:"devices"`
@@ -134,10 +142,10 @@ func (s *Service) collectMachineSnapshots(ctx context.Context, excludeSpaceSessi
 	if s.devs == nil {
 		return nil, false, 0, fmt.Errorf("machine resource manager unavailable")
 	}
-	now := time.Now()
 	snaps := make([]machineResourceSnapshot, 0, len(listed.Devices))
 	for _, d := range listed.Devices {
 		m, sample, outdated := s.devs.MachineResources(d.ID)
+		now := s.machineNowTime()
 		row := machineFacts{ID: d.ID, Name: d.Name, State: "pending", StateReason: unknown("connection_pending"),
 			OS: unknown("system_not_reported"), Cores: unknown("system_not_reported"),
 			CPUBusyPercent: unknown("sample_not_reported"), Load: unknown("sample_not_reported"),
@@ -145,7 +153,7 @@ func (s *Service) collectMachineSnapshots(ctx context.Context, excludeSpaceSessi
 			SampleAgeSeconds: unknown("sample_not_reported"), WorkingAgents: unknown("connection_not_available"),
 			FailingLaunchers: unknown("health_not_available"), NodeOutdated: unknown("connection_not_available")}
 		sum := assistantwire.MachineResourceSummary{
-			ID:    assistantwire.MachineID(d.ID),
+			ID:    wireids.MachineID(d.ID),
 			Name:  d.Name,
 			State: assistantwire.MachineResourceStatePending,
 			IsHub: s.isHubMachine(ctx, d, m),
@@ -264,8 +272,9 @@ func (s *Service) collectMachineSnapshots(ctx context.Context, excludeSpaceSessi
 			}
 		}
 		if d.Reachable {
-			list, err := s.sessions(ctx, d.ID)
-			if err != nil {
+			if shown, ok := s.devs.Shown(d.ID); ok && !shown.Listed {
+				row.WorkingAgents = unknown("sessions_not_listed")
+			} else if list, err := s.sessions(ctx, d.ID); err != nil {
 				row.WorkingAgents = unknown("sessions_unavailable")
 			} else {
 				count := 0
