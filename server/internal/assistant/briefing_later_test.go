@@ -202,10 +202,10 @@ func TestBriefItemCarriesTheQueue(t *testing.T) {
 // The push says how many can wait with the other counts.
 func TestBriefPushCountsQuestionsThatCanWait(t *testing.T) {
 	f := &briefFacts{Lang: string(i18n.ZhHans), Accept: make([]modapi.BriefBoardRow, 2), Later: make([]modapi.BriefBoardRow, 2), LaterTotal: 4}
-	if got := briefCountsIn(f, i18n.ZhHans); got != "待验收 2 · 可晚点答 4" {
+	if got := briefRunnerForTest(t).CountsIn(f, string(i18n.ZhHans)); got != "待验收 2 · 可晚点答 4" {
 		t.Fatalf("counts: %q", got)
 	}
-	if got := briefCountsIn(&briefFacts{Lang: string(i18n.ZhHans), Later: make([]modapi.BriefBoardRow, 1), LaterTotal: 1}, i18n.ZhHans); got != "可晚点答 1" {
+	if got := briefRunnerForTest(t).CountsIn(&briefFacts{Lang: string(i18n.ZhHans), Later: make([]modapi.BriefBoardRow, 1), LaterTotal: 1}, string(i18n.ZhHans)); got != "可晚点答 1" {
 		t.Fatalf("only a question that can wait: %q", got)
 	}
 }

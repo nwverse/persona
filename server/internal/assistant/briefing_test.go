@@ -251,7 +251,7 @@ func TestBriefDoesNotSayNothingWaitsBeforeTheCardsAreRead(t *testing.T) {
 	if !strings.Contains(js, "还没读到等你处理的卡片") || strings.Contains(js, "等你处理（") {
 		t.Errorf("the card:\n%s", js)
 	}
-	counts := briefCountsIn(f, e.s.botLang(context.Background()))
+	counts := briefRunnerForTest(t).CountsIn(f, string(e.s.botLang(context.Background())))
 	if strings.Contains(counts, "等你") || !strings.Contains(counts, "待验收 1") {
 		t.Errorf("counts: %q", counts)
 	}

@@ -6,21 +6,14 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/modapi"
 )
 
-// Thin core hooks to the daily briefing module (server/internal/modules/briefing via s.modules.ScheduleFacts().Runner).
-// When the briefing module is switched off or left out of the build, every hook degrades cleanly to a no-op / zero value
-// and routines run without briefing facts. The Lark card renderer (briefing_card.go) and briefRoutes (briefing_feed.go)
-// stay here until the neutral Card model and hub_routes slot land (#13845).
+// Scheduled routines use the loaded schedule facts runner, when present.
 
-const (
-	// briefWindow and briefRowsMax are shared with briefing_card.go until the card moves into the module.
-	briefWindow  = 12 * time.Hour
-	briefRowsMax = 10
-	briefKeep    = 3 * time.Hour
-)
+const timeKeyLayout = time.RFC3339Nano
 
 type (
 	briefFacts    = modapi.BriefSnapshot
@@ -144,9 +137,10 @@ func (s *Service) briefingGrace(ctx context.Context, local time.Time, start int)
 // on top, the facts under it. Required owner waits continue onto more cards rather than crossing Feishu's physical
 // budget. mirrorSend's per-index key makes every continuation retry independently and idempotently.
 func (s *Service) briefMirror(ctx context.Context, machine, session, label string, run *briefRun, answer, turn string) {
-	card, fallback, shown := s.briefCard(run.Facts, run.Label, answer)
-	card.Buttons(s.openButton(ctx, machine, session))
-	cards := splitBriefAnswerCards(card, fallback, run.Label)
+	cards, _, shown := s.scheduleCards(run.Facts, run.Label, answer, "", s.openButton(ctx, machine, session))
+	if len(cards) == 0 {
+		return
+	}
 	sum := sha256.Sum256([]byte("brief\x00" + machine + "\x00" + session + "\x00" + turn + "\x00" + answer))
 	m := &mirrorSend{
 		l: i18n.Lang(run.Facts.Lang), cards: cards,
@@ -155,6 +149,20 @@ func (s *Service) briefMirror(ctx context.Context, machine, session, label strin
 		sent: func() { s.briefAsked(run.Facts, shown) },
 	}
 	s.feishuMirrorPost(ctx, m, 0)
+}
+
+// scheduleCards adapts the loaded runner's pages for the existing mirror delivery and retry path.
+func (s *Service) scheduleCards(f *briefFacts, label, answer, header string, open botcard.Button) ([]botAnswerCard, string, []string) {
+	r, ok := s.briefingRunner()
+	if !ok {
+		return nil, "", nil
+	}
+	pages, plain, shown := r.RenderCards(f, label, answer, header, open)
+	cards := make([]botAnswerCard, len(pages))
+	for i, page := range pages {
+		cards[i] = botAnswerCard{card: (*botcard.Card)(page.Card), fallback: page.Fallback}
+	}
+	return cards, plain, shown
 }
 
 // briefAsked notes that the briefing card with the Accept buttons of the tasks shown went out: those tasks are not

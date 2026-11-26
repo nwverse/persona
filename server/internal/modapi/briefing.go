@@ -112,6 +112,8 @@ type PromptPort interface {
 
 // ScheduleFactsRunner is the briefing module's runtime lifecycle for scheduled routines with facts or reports.
 type ScheduleFactsRunner interface {
+	// RenderCards builds the delivery pages, complete plain notification and IDs with visible Accept buttons.
+	RenderCards(f *BriefSnapshot, label, answer, header string, open map[string]any) ([]BriefCardPage, string, []string)
 	Start(ctx context.Context, task BriefTaskInfo, now time.Time) string
 	StartReport(ctx context.Context, task BriefTaskInfo, now time.Time) string
 	Sent(taskID, session string, retried bool)

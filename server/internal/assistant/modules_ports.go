@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -485,10 +486,7 @@ type briefDeliveryPort struct{ s *Service }
 func (p briefDeliveryPort) SendFallback(ctx context.Context, req modapi.BriefFallbackSend) {
 	s := p.s
 	l := i18n.Lang(req.Facts.Lang)
-	card, plain, shown := s.briefCardWithHeader(req.Facts, req.Label, "", req.Header)
-	card.Buttons(s.openButton(ctx, req.Device.ID, req.Run.SessionID))
-	cards := splitBriefAnswerCards(card, plain, req.Header)
-
+	cards, plain, shown := s.scheduleCards(req.Facts, req.Label, "", req.Header, s.openButton(ctx, req.Device.ID, req.Run.SessionID))
 	st, err := s.chat().Status(ctx)
 	ready := err == nil && st.Ready
 	s.larkModule().WorkbenchOn(st.Features, ready)
@@ -546,7 +544,8 @@ func (briefPromptPort) OpenStageBar(lang, stage string) string {
 }
 
 func (briefPromptPort) BoardRowPlain(lang string, n int, row modapi.BriefBoardRow) string {
-	return boardRowPlain(i18n.Lang(lang), n, row)
+	l := i18n.Lang(lang)
+	return fmt.Sprintf("%d. %s · %s · %s", n, row.Summary, i18n.T(l, "assistant-feishu_cards.board_waited", i18n.Args{"wait": boardWait(l, row.Waited)}), row.From)
 }
 
 func (briefPromptPort) Translate(lang, key string, args map[string]any) string {
