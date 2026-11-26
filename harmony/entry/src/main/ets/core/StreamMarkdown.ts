@@ -10,6 +10,85 @@ export interface KeyedMarkdownBlock {
   block: MarkdownBlock;
 }
 
+const CODE_LANGUAGE_BADGES: Record<string, string> = {
+  'ts': 'TYPESCRIPT',
+  'typescript': 'TYPESCRIPT',
+  'tsx': 'TSX',
+  'js': 'JAVASCRIPT',
+  'javascript': 'JAVASCRIPT',
+  'jsx': 'JSX',
+  'py': 'PYTHON',
+  'python': 'PYTHON',
+  'sh': 'BASH',
+  'bash': 'BASH',
+  'zsh': 'BASH',
+  'shell': 'BASH',
+  'swift': 'SWIFT',
+  'ets': 'ARKTS',
+  'arkts': 'ARKTS',
+  'rs': 'RUST',
+  'rust': 'RUST',
+  'go': 'GO',
+  'golang': 'GO',
+  'json': 'JSON',
+  'yml': 'YAML',
+  'yaml': 'YAML',
+  'md': 'MARKDOWN',
+  'markdown': 'MARKDOWN',
+  'sql': 'SQL',
+  'html': 'HTML',
+  'css': 'CSS',
+  'scss': 'SCSS',
+  'cpp': 'C++',
+  'c++': 'C++',
+  'cxx': 'C++',
+  'c': 'C',
+  'h': 'C',
+  'kt': 'KOTLIN',
+  'kotlin': 'KOTLIN',
+  'java': 'JAVA',
+  'rb': 'RUBY',
+  'ruby': 'RUBY',
+  'php': 'PHP',
+  'diff': 'DIFF',
+  'patch': 'DIFF',
+  'xml': 'XML',
+  'toml': 'TOML',
+  'docker': 'DOCKER',
+  'dockerfile': 'DOCKER'
+};
+
+export function formatCodeLanguageBadge(language: string): string {
+  const trimmed = (language || '').trim();
+  if (!trimmed) return 'CODE';
+  const normalized = trimmed.toLowerCase();
+  const mapped = CODE_LANGUAGE_BADGES[normalized];
+  return mapped ? mapped : trimmed.toUpperCase();
+}
+
+export function trimCodeForCopy(text: string): string {
+  let end = (text || '').length;
+  while (end > 0 && (text.charCodeAt(end - 1) === 10 || text.charCodeAt(end - 1) === 13)) {
+    end--;
+  }
+  return end === (text || '').length ? (text || '') : text.slice(0, end);
+}
+
+export function countCodeLines(text: string): number {
+  const cleaned = trimCodeForCopy(text);
+  if (!cleaned) return 0;
+  let count = 1;
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned.charCodeAt(i) === 10) count++;
+  }
+  return count;
+}
+
+export function formatCodeLineCount(lineCount: number): string {
+  if (lineCount <= 0) return '';
+  return lineCount === 1 ? '1 line' : String(lineCount) + ' lines';
+}
+
 class FenceState {
   character: string;
   length: number;

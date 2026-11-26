@@ -106,13 +106,28 @@ struct MessageSurface {
   @Param sourceId: string = '';
   @BuilderParam content: () => void;
   @Local fill: ResourceColor = Color.Transparent;
+  @Local private env: NativeEnvironment = nativeEnvironment;
   onWillApplyTheme(theme: Theme): void { this.fill = theme.colors.compBackgroundPrimary; }
+  private surfaceFill(): ResourceColor {
+    if (this.own) return this.fill;
+    if (this.personaReply) {
+      if (Colors.styleCard) return Colors.styleCard;
+      return this.env.dark ? '#2A2A2E' : '#F0F0F3';
+    }
+    return Color.Transparent;
+  }
   build() {
     Column() { this.content() }.width(this.own ? undefined : '100%').constraintSize({ maxWidth: this.maximum })
       .padding(this.agentPrompt ? { left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.inset } :
-        this.own || this.personaReply ? {left:14,right:14,top:9,bottom:9} : 0)
-      .backgroundColor(this.own ? this.fill : this.personaReply ? Colors.control : Color.Transparent)
-      .borderRadius(this.own || this.personaReply ? Tokens.bubble : 0).id(this.sourceId)
+        this.personaReply ? { left: 16, right: 16, top: 12, bottom: 12 } :
+          this.own ? { left: 14, right: 14, top: 10, bottom: 10 } : 0)
+      .backgroundColor(this.surfaceFill())
+      .borderRadius(this.own || this.personaReply ? Tokens.bubble : 0)
+      .border(this.own || this.personaReply
+        ? { width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.bubble }
+        : { width: 0 })
+      .shadow(this.personaReply ? PhoneStyle.cardElevation(this.env.dark) : { radius: 0, color: Color.Transparent })
+      .id(this.sourceId)
   }
 }
 
@@ -1770,7 +1785,7 @@ export struct Conversation {
           }.constraintSize({ minHeight: 32, maxWidth: '100%' })
         }.padding({ left: 10, right: 10 }).borderRadius(12)
           .backgroundColor(this.model.style==='beautiful' ? this.composerSurface() : Colors.control)
-          .outline({width:this.model.style==='beautiful' ? 1 : 0.5,color:this.model.style==='beautiful' ? this.composerRim() : Colors.divider,radius:12})
+          .outline({width:this.model.style==='beautiful' ? 1 : PhoneStyle.surfaceEdgeWidth(0.5),color:this.model.style==='beautiful' ? this.composerRim() : PhoneStyle.cardBorder(this.environment.dark),radius:12})
           .accessibilityText(tr('work_summary') + ' · ' + tr(this.expanded.includes(entry.item.message!.id) ? 'agent_collapse' : 'agent_expand'))
           .onClick(() => {
             Haptics.tap();
@@ -1951,8 +1966,10 @@ export struct Conversation {
                 .fontWeight(FontWeight.Medium).fontColor([Colors.link])
                 .width(this.latestArrowSize).height(this.latestArrowSize)
             }.width(this.latestDiameter).height(this.latestDiameter).borderRadius(this.latestDiameter/2).clip(true)
-              .backgroundColor(Colors.styleID==='glass' ? Color.Transparent : Colors.surface)
-              .backgroundBlurStyle(Colors.styleID==='glass' ? BlurStyle.COMPONENT_THIN : BlurStyle.NONE)
+              .backgroundColor(Colors.styleID==='glass' ? (this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF') : Colors.surface)
+              .backgroundBlurStyle(Colors.styleID==='glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.environment.dark), radius: this.latestDiameter / 2 })
+              .shadow(PhoneStyle.floatingElevation(this.environment.dark))
           }.width(this.latestDiameter+10).height(this.latestDiameter).padding(0).backgroundColor(Color.Transparent)
             .margin({ right: Tokens.page, bottom: 14 })
             .scale({ x: this.latestPressed ? MotionTokens.pressScale : 1, y: this.latestPressed ? MotionTokens.pressScale : 1 })
@@ -2066,11 +2083,20 @@ export struct Conversation {
   }
   private composerSurface(): ResourceColor {
     if(this.model.style==='beautiful') return this.environment.dark ? '#232427' : '#FFFFFF';
-    return this.legacyInterface ? Colors.surface : this.environment.dark ? '#1F1F21' : '#FFFFFF';
+    if(this.legacyInterface) return Colors.surface;
+    if(Colors.styleID==='glass') return this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF';
+    return Colors.surface;
   }
   private composerRim(): ResourceColor {
     if(this.model.style==='beautiful') return this.environment.dark ? '#21FFFFFF' : '#ECEDEF';
-    return this.legacyInterface ? Colors.divider : this.environment.dark ? '#3A3A3C' : '#E3E3E3';
+    return this.legacyInterface ? Colors.divider : PhoneStyle.floatingBorder(this.environment.dark);
+  }
+  @Builder moreDotsGlyph(tint: ResourceColor) {
+    Row({ space: 3.5 }) {
+      ForEach([0, 1, 2], (_dot: number) => {
+        Circle().width(4).height(4).fill(tint)
+      }, (dot: number) => String(dot))
+    }.accessibilityLevel('no')
   }
   @Builder composerRound(size: number = 44, inline: boolean = false) {
     Stack() {
@@ -2338,8 +2364,10 @@ export struct Conversation {
               .bindMenu(this.nativeChooser('attachments'), this.attachmentNativeMenu, this.attachmentMenuOptions())
               .parallelGesture(LongPressGesture().onAction(() => { if (this.showContextMenu) this.requestComposerActions(false); }))
               .bindContextMenu(this.nativeChooser('actions'), this.attachmentNativeMenu, this.actionContextMenuOptions())
-            if (this.showContextMenu && this.model.demo) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-              .attributeModifier(ButtonStyles.quiet).width(this.composerActionSize()).height(this.composerActionSize()).padding(0).accessibilityText(tr('more')).onClick((event: ClickEvent) => this.openComposerActions(event))
+            if (this.showContextMenu && this.model.demo) Button({ type: ButtonType.Circle }) {
+              SymbolGlyph(Symbols.plus).fontSize(String(this.restingSize.plus) + 'vp').fontWeight(FontWeight.Regular).fontColor([this.toolInk()])
+            }
+              .attributeModifier(ButtonStyles.quiet).width(this.composerActionSize()).height(this.composerActionSize()).padding(0).accessibilityText(tr('more')).onClick((event: ClickEvent) => { Haptics.tap(); this.openComposerActions(event); })
               .parallelGesture(LongPressGesture().onAction(() => this.requestComposerActions(false)))
               .bindContextMenu(this.nativeChooser('actions'), this.attachmentNativeMenu, this.actionContextMenuOptions()).id('chat.more')
             if (this.expandedComposer() && this.inlineKeyboardAction()) this.hideKeyboard(false)
@@ -2390,10 +2418,13 @@ export struct Conversation {
         }
       }.width('100%').onAreaChange((_old: Area, area: Area) => { const width = Number(area.width); if (Number.isFinite(width) && width > 0) this.composerWidth = width; })
     }.padding(this.composerPadding()).backgroundColor(this.composerSurface())
+      .backgroundBlurStyle(Colors.styleID === 'glass' && !this.legacyInterface && this.model.style !== 'beautiful' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
       .border({width:this.restingComposer() ? String(this.restingStrokePx()) + 'px' : this.composerStroke,
         color:this.composerRim(),radius:25}).borderRadius(25).width('100%').id('chat.composer')
       .animation(Motion.layout(this.environment.reduceMotion))
-      .shadow({radius:this.model.style==='beautiful' ? 8 : 14,color:this.environment.dark ? '#40000000' : '#12000000',offsetY:this.model.style==='beautiful' ? 5 : 4})
+      .shadow(this.model.style==='beautiful'
+        ? {radius:8,color:this.environment.dark ? '#40000000' : '#12000000',offsetY:5}
+        : PhoneStyle.floatingElevation(this.environment.dark))
   }
 
   @Builder taskDock(horizontalInset: number = 0) {
@@ -2417,8 +2448,8 @@ export struct Conversation {
       } else {
         this.taskDock()
       }
-      if (this.showContextMenu && !this.composerAvailable()) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
+      if (this.showContextMenu && !this.composerAvailable()) Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.ink) }
+        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => { Haptics.tap(); this.openFallbackActions(); })
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
     }.width('100%').constraintSize({ maxWidth: Tokens.readingMax, maxHeight: this.maxControlsHeight() })
       .padding(this.model.selected.kind === 'session' ? 0 : { left: Tokens.inset, right: Tokens.inset, bottom: Tokens.footer, top: Tokens.gap })
@@ -2434,8 +2465,8 @@ export struct Conversation {
     if (this.model.decision) this.blockingContent()
     else Scroll(this.controlsScroller) {
       Column({ space: Tokens.gap }) {
-      if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
-        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
+      if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.ink) }
+        .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => { Haptics.tap(); this.openFallbackActions(); })
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
       this.taskDock()
       Column({ space: Tokens.gap }) {
