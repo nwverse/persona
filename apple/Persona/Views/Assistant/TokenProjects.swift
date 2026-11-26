@@ -205,6 +205,9 @@ struct UsageProjectsSection: View {
 @Observable final class UsageProjectModel {
     private(set) var detail: UsageProjectDetail?
     private(set) var failed = false
+    /// The launchers' names as Settings › Models shows them (their display names), by launcher; empty before the list
+    /// comes, or from a hub that will not give it: a launcher then shows its name.
+    private(set) var launcherNames: [String: String] = [:]
     @ObservationIgnored private let key: String
     @ObservationIgnored private let api: () -> APIClient?
 
@@ -215,6 +218,9 @@ struct UsageProjectsSection: View {
 
     func load() async {
         guard let api = api() else { return }
+        if launcherNames.isEmpty, let list = try? await api.allLaunchers() {
+            launcherNames = Dictionary(list.map { ($0.name, $0.title) }, uniquingKeysWith: { a, _ in a })
+        }
         do {
             let fresh = try await api.usageProjectDetail(key)
             if fresh != detail { detail = fresh }
@@ -230,6 +236,11 @@ struct UsageProjectPage: View {
     let project: UsageProject
     @Binding var range: Int
     @State private var model: UsageProjectModel
+    /// The chart's column under a finger now, and the last one touched (kept); nil: the largest one shows.
+    @State private var touchedDay: String?
+    @State private var pickedDay: String?
+    @State private var touchedHour: Int?
+    @State private var pickedHour: Int?
 
     init(project: UsageProject, range: Binding<Int>) {
         self.project = project
@@ -274,12 +285,17 @@ struct UsageProjectPage: View {
                     }
                     if !b.models.isEmpty {
                         section(String(localized: "By Model", comment: "Token usage by project: each model's tokens")) {
-                            parts(b.models) { Text($0.key).font(Theme.Font.code) }
+                            // The name the replies use ("Opus 5.5"), the model's id with a pointer over it.
+                            parts(b.models) { Text(replyModelName($0.key)).help($0.key) }
                         }
                     }
                     if !b.launchers.isEmpty {
                         section(String(localized: "By Launcher", comment: "Token usage by project: each launcher's tokens")) {
-                            parts(b.launchers) { Text($0.key.isEmpty ? String(localized: "Other [Launcher]", comment: "Token usage by project: sessions typed in a terminal, with no launcher") : $0.key) }
+                            parts(b.launchers) { part in
+                                Text(part.key.isEmpty ? String(localized: "Opened in a Terminal [Launcher]", comment: "Token usage by project: sessions typed in a terminal, with no launcher")
+                                     : model.launcherNames[part.key] ?? part.key)
+                                    .help(part.key)
+                            }
                         }
                     }
                 } else if model.failed {
@@ -358,26 +374,55 @@ struct UsageProjectPage: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// The last days by day (the range's), or today by the hour.
+    /// The last days by day (the range's), or today by the hour, with a line over them: the largest one's day (or hour)
+    /// and tokens at first, then the one touched (kept until another is).
     @ViewBuilder private func chart(_ d: UsageProjectDetail) -> some View {
         let days = UsageProjects.rangeDays.indices.contains(range) ? UsageProjects.rangeDays[range] : 7
         if days == 1 {
-            Chart(d.hours) { h in
-                BarMark(x: .value("Hour", h.hour), y: .value("Tokens", h.tokens.total)).foregroundStyle(Theme.accent)
+            let largest = d.hours.max { $0.tokens.total < $1.tokens.total }?.hour
+            let shown = touchedHour ?? pickedHour ?? largest
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                chartLine(shown.flatMap { h in d.hours.first { $0.hour == h } }.map {
+                    String(localized: "\(String(localized: "Today")) \(TokenCalendarText.hour($0.hour)) · \(TokenFormat.short($0.tokens.total)) tokens")
+                })
+                Chart(d.hours) { h in
+                    BarMark(x: .value("Hour", h.hour), y: .value("Tokens", h.tokens.total))
+                        .foregroundStyle(h.hour == shown ? Theme.accent : Theme.accent.opacity(Theme.Heat.unpicked))
+                }
+                .chartXSelection(value: $touchedHour)
+                .chartXAxis { AxisMarks(values: [0, 6, 12, 18]) { v in AxisValueLabel { Text(TokenCalendarText.hour(v.as(Int.self) ?? 0)) } } }
+                .chartYAxis(.hidden)
+                .scaledFrame(height: Theme.Size.box120)
+                .onChange(of: touchedHour) { _, h in if let h { pickedHour = h } }
             }
-            .chartXAxis { AxisMarks(values: [0, 6, 12, 18]) { v in AxisValueLabel { Text(TokenCalendarText.hour(v.as(Int.self) ?? 0)) } } }
-            .chartYAxis(.hidden)
-            .scaledFrame(height: Theme.Size.box120)
         } else {
-            Chart(d.days.suffix(days)) { day in
-                BarMark(x: .value("Day", day.date), y: .value("Tokens", day.tokens.total)).foregroundStyle(Theme.accent)
+            let list = Array(d.days.suffix(days))
+            let largest = list.max { $0.tokens.total < $1.tokens.total }?.date
+            let shown = touchedDay ?? pickedDay ?? largest
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                chartLine(shown.flatMap { s in list.first { $0.date == s } }.map {
+                    String(localized: "\(TokenCalendarText.day($0.date)) · \(TokenFormat.short($0.tokens.total)) tokens")
+                })
+                Chart(list) { day in
+                    BarMark(x: .value("Day", day.date), y: .value("Tokens", day.tokens.total))
+                        .foregroundStyle(day.date == shown ? Theme.accent : Theme.accent.opacity(Theme.Heat.unpicked))
+                }
+                .chartXSelection(value: $touchedDay)
+                .chartXAxis {
+                    AxisMarks { v in AxisValueLabel { Text(v.as(String.self).map { TokenCalendarText.day($0) } ?? "") } }
+                }
+                .chartYAxis(.hidden)
+                .scaledFrame(height: Theme.Size.box120)
+                .onChange(of: touchedDay) { _, day in if let day { pickedDay = day } }
             }
-            .chartXAxis {
-                AxisMarks { v in AxisValueLabel { Text(v.as(String.self).map { TokenCalendarText.day($0) } ?? "") } }
-            }
-            .chartYAxis(.hidden)
-            .scaledFrame(height: Theme.Size.box120)
         }
+    }
+
+    /// The line over the chart: one day's (or hour's) tokens; the room kept while there is none.
+    private func chartLine(_ text: String?) -> some View {
+        Text(text ?? " ")
+            .font(Theme.Font.secondary.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+            .accessibilityHidden(text == nil)
     }
 
     private func places(_ list: [UsagePlace]) -> some View {

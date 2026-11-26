@@ -812,25 +812,25 @@
       },
       "extractionState": "manual"
     },
-    "Other [Launcher]": {
+    "Opened in a Terminal [Launcher]": {
       "comment": "Token usage by project: sessions typed in a terminal, with no launcher",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Other"
+            "value": "Opened in a Terminal"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "その他"
+            "value": "ターミナルで開いたもの"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "其他"
+            "value": "终端里打开的"
           }
         }
       },
