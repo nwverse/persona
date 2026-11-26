@@ -965,7 +965,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   - **Lark read when visible** (#433, `lib/lark-read.ts`, following iOS `LarkPager.readReport`): a message counts as seen only when at least half of it is in the list, the page is in the foreground, the first screen has been positioned, and no dialog covers it; 450 ms after the last one is seen, reports are merged and sent
     (`POST /lark/conversations/{id}/read`: position + `badge_count` + ids of others' unread messages); going to the background / leaving reports immediately. Reports only move forward; failures are retried next time; topic groups do not report.
     When opened from the Inbox, what is seen on the first screen is also reported (from this item's first new message), per the 2026-10-31 decision in `docs/assistant/inbox.md` (the iOS code still has the old behavior of not reporting the first screen).
-  - **Compose / reply** (`ComposeDialog.tsx`, `lib/mail.ts`, `POST /mail/send`): **New email** in the top bar, **Reply** in mail details (Re: subject, In-Reply-To / References, quoting the first 40 lines); plain text, no attachments (as on iOS);
+  - **Compose / reply** (`ComposeDialog.tsx`, `modules/mail/mail.ts`, `POST /mail/send`): **New email** in the top bar, **Reply** in mail details (Re: subject, In-Reply-To / References, quoting the first 40 lines); plain text, no attachments (as on iOS);
     To, Cc and Bcc accept the same address lists; at least one parsed recipient is required, and every entered address must be valid. Cancel discards the matching manager/item draft, while Esc / clicking outside or unmounting keeps edits, including Bcc-only edits (in page memory only). A failed send retains them for retry; success clears them. `references` is sent as the hub's string.
   - **Opening mail marks it read**: unhandled, unread mail sends `POST /mail/messages/{aid}/{uid}/flags {seen:true}` on open; failures are ignored (as on iOS).
   - **Translation** (`lib/translate.ts`): with translation on, opening mail that is not in the target language sends `POST /translate/mail`, the body is replaced by the translation, with "Translated to… · Show original" above it; translations the hub prepared in advance (`translations[target]`) are used directly in list rows and titles.
@@ -1044,7 +1044,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 
   Verification image removed; see the associated PR.
 
-- **Settings** (`/settings`, opened from the sidebar or top-left menu, `src/views/Settings.tsx`): categories are shown according to the hub's capabilities, using the same endpoints as the App's settings. Channels is its own category immediately before Connectors (#2196); Settings has no "Meet Persona" entry, and the profile page is still opened from the chat menu.
+- **Settings** (`/settings`, opened from the sidebar or top-left menu, `src/views/Settings.tsx`): categories are shown according to the hub's capabilities, using the same endpoints as the App's settings. With unified integrations off, Channels is its own category immediately before Connectors (#2196); Settings has no "Meet Persona" entry, and the profile page is still opened from the chat menu.
   Categories come in three groups, in this order (`NAV_GROUPS` in `settings/nav.ts`, `settings/SettingsGroups.tsx`; [managers.md](../assistant/managers.md) "The current assistant"):
   **"<name>'s settings"** (the current assistant's avatar with its status, its name, and **Switch**, which opens the sidebar's list of assistants: the same rows from `views/AssistantSwitcher.tsx` `useAssistantList`, shown with one assistant too, not on a hub without a roster): Models, Assistant profile (`?tab=persona`: About me, memory, skills, scheduled tasks, where it runs, then session triage), Channels, Connectors, Extensions, Knowledge selection and Agents (Claude Code / Codex on its computers), under the line "Only <name>'s own settings are shown. To change another assistant's, switch to it first.";
   **This device**: General (the default appearance, text size, language, the start page, sidebar pages, translation, agent preferences, the hubs this browser knows and This browser), Notifications, Shortcuts, and **Advanced** (› Appearance: the non-default looks — theme color, extension theme, interface/code fonts and colored sidebar icons, #13398);
@@ -1154,7 +1154,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   **New and old APIs** (#1845, `lib/extension-api.ts`, [extensions.md](../extensions/extensions.md) ("Naming and compatibility")): when hello features contain `extensions`, request `/api/v1/extensions/…` (fields `extensions` / `extension` / `extension_name`);
   otherwise (old hub, or before hello) request `/api/v1/plugins/…` (`plugins` / `plugin` / `plugin_name`). Read both field sets; market previews send both keys in `{market, extension, plugin}`.
   Listen for `extension_ui`; a hub with the new API also sends the old `plugin_ui` for old Apps, and the web only reads `plugin_ui` on old hubs. Market signature status (#1848's `signature`) appears in the market row ("Signature verified", "Unsigned", and so on).
-  **Channels** (#1466, #2196, `settings/Channels.tsx`, logic in `lib/channels.ts`, [channels.md](../extensions/channels.md); shown only when hub features contain `channels`): its own category in Settings, before Connectors, no longer nested in the extension list.
+  **Channels** (#1466, #2196, `settings/Channels.tsx`, logic in `lib/channels.ts`, [channels.md](../extensions/channels.md); shown only when hub features contain `channels`): its own category in legacy Settings, before Connectors, no longer nested in the extension list.
   Open `?tab=channels`: three groups, Persona (clients), Connected, and Available to install (from markets, opens the market's details). Each row has the channel's mark (Lark uses its own, others an icon by kind), name, account or description, status dot and text.
   A single channel `?tab=channels&channel=<id>` (old links `?tab=extensions&extension=-channels[/<id>]`, `?tab=plugins&plugin=-channels[/<id>]` still open the corresponding channel): status, account, last message; Enabled; when unbound, Binding follows `bind` steps (fields, QR code drawn from the hub with Save QR code, or a large pairing code with polling); when bound, account and Unbind (confirmation first).
   Send messages to (Main chat / New chat / choose an assistant chat), toggles drawn from `features`, counts of answers and questions waiting, recently used chats, What it can do, Send test message (only to yourself), and an extra More settings row when `settings_url` exists (Lark bot opens its original dialog).
@@ -2413,6 +2413,12 @@ Settings search entries for Inbox Sources redirect cleanly into the unified view
 when enabled, and `/settings/integrations/...` links (including `-sources...`) fall back cleanly to the corresponding legacy tab
 (restoring the standalone `Inbox Sources` menu, routes, `manager`, and `state`) when disabled, with zero data migration or data
 loss. Older hubs that do not expose boolean `integrations_v2` degrade gracefully to a read-only row with an update hint.
+Under the trial, Assistant settings shows the state of `inbox_todo_forward` and links to its single editable switch in
+**Data flow** (#16190), preserving the assistant named in the link. GitHub detail opens saved Repositories in Assistant
+settings. Mail, Feishu and sources with history link to the sync scope in Knowledge. Turning off the trial restores the
+original forwarding switch. See the [split layout](../design/DESIGN_SYSTEM.md#integrations--extensions-in-web-settings),
+[channel settings](../extensions/channels.md#7-ui) and [connector overview](../extensions/connectors.md).
+
 Graduation (making the new experience the default for at least one release with rollback kept) or removal is tracked in #14802.
 
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
@@ -2645,24 +2651,18 @@ unavailable (including a 404 from a hub before the list read moved into Core) hi
 flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
 The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
-**Mail with the hub's mail module off** (#15995; mail has no web module of its own, the Inbox reads the hub flag
-`module.mail`). `lib/mail.ts` decides it once (`mailReading`: `full`, or `stored` when the hello names modules and
-leaves mail out) and everything else is handed that: Settings and compose already hide (`loadMailAccounts` asks
-nothing), and an opened mail item is `views/inbox/StoredMailBody.tsx` instead of the live reader. It asks no
-`/api/v1/mail/…` route, which the hub no longer has; it reads the item's own page (`GET /api/v1/inbox/{id}`, Core)
-and shows the mail's words out of the stored `context` (`lib/mail-stored.ts` takes off the heading and header lines
-the hub wrote for the model; at most 3,000 characters of the newest mail, or the list's preview), who it is from and
-when, and after the text one line: mail is off on the hub machine, so the full message and its attachments can't be
-loaded. The line ends by what the hub says about the stored text (`mail_body_truncated` on the item's page, read once
-as the closed `StoredMailClipping` by `storedMailClipping` in `lib/mail.ts`): `clipped`, the text is cut short;
-`whole`, nothing more; `unknown` (a hub from before it sent the flag, an item stored before the hub recorded it, a
-mail whose text it never read, or the list's copy when the page cannot be read), a long message may be cut short. A translation is shown only when the item
-lists one the hub kept (`POST /api/v1/translate/mail` answers from it without the mail server); a failure there is
-silent. Left out, because each needs the mail module: Reply and Reply all, marking the mail read, attachments and the
-HTML view, and sending a reply from the Inbox (AI draft reply, Send on a draft or a reply suggestion:
-`views/inbox/item-write-gate.ts`, beside Lark's gate; a draft already written stays readable). Hand to AI (without
-the line about `mail_read`), Done, mute, folders, rules and to-dos are the Inbox's and stay. With the module on, or a
-hub that names no modules, the reader and its requests are as before.
+**Mail** (#13434, #15995). Inbox readers can open, reply to and compose mail, and manage their connected accounts in
+Settings. The `mailbox` contribution in `web/src/modules/mail/` provides the live client and UI. The host loads its
+code and the current language's `mail.json` catalog on demand. The live reader, composer and account settings each
+load when opened. Settings › General › Optional features controls this browser's switch. Hubs that publish module
+flags must also advertise `module.mail`. Older hubs retain the default live reader.
+
+With mail off on the hub or in the browser, or omitted from the build, Inbox keeps its historical items and account
+filters. `views/inbox/StoredMailBody.tsx` reads the archived item from `GET /api/v1/inbox/{id}`.
+`lib/mail-stored.ts` extracts the saved text, falling back to the list preview, and interprets the hub's
+`mail_body_truncated` flag. The reader can display an already saved translation. Draft text, Hand to AI, Done,
+folders and other Inbox actions remain available. Live account requests, message reads, attachments and sending
+require the enabled provider.
 
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
@@ -3710,6 +3710,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connectors: Lark | Yes | #297 | Read-only status |
 | Connectors: Lark › Show messages on home screen | Yes | #1327 | Only applies to the current browser |
 | Lark anti-recall and edit history (Message display) | Yes | #2900 | The toggles are shared with the Lark gateway web page for the current account; encrypted old versions only show the public display (iOS can show the body after unlocking) |
+| Integrations & Extensions (Labs) | Web first | #14802, #16190 | One detail per service, channel routing and Data flow. Assistant links to its forwarding switch. GitHub and history-capable sources link to Repositories and Knowledge settings respectively. |
 | Connectors: Lark bot (status, credentials, pairing, what it can do) | Yes | #1325 | Settings › Connectors, opens as a dialog; copying the pairing code uses the clipboard (falls back to execCommand over http) |
 | hub version and updates (check, update, update now, auto-update, history, Docker commands) | Yes | #1325, #2897, #15240 | Settings › hub shows second-level local times and a stage and step pipeline during updates. The hub notice row below the filter bar in the Agents sidebar is chosen by `hubNotice` in `lib/hub-update.ts`. The hub hosts the web app itself, so the app and hub version compatibility notices are inapplicable here. |
 | Whole-install Recovery overview, offline bundle inspection, temporary-database verification | Web first | #12553 | Settings › Hub › Recovery, separate from update program backups and Machines. Full-credential, audited reads only; no create, restore, download, key export, or service-starting drill. Missing tools, Compose, unsafe inventory, changed bundles, and unavailable restore history stay explicitly unsupported or unverified. See [server.md](../server/server.md) "Settings → Hub → Recovery" |

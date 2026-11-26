@@ -2,6 +2,7 @@
 // Unit & integration tests for the lazy-loaded unified Integrations & Extensions list view,
 // object deduplication, capability filter chips, Extension Market entry, IntegrationDetail mounting,
 // bidirectional legacy route redirects, and Settings navigation collapse under integrations_v2 (#14874).
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -191,7 +192,7 @@ import type { HubConnector } from "../../lib/connectors";
 import type { HubExtension } from "../../lib/extensions";
 import type { SourcesGraph } from "../../lib/sources-graph";
 import { subscriptionSourceState, type HubSubscription } from "../../lib/subscriptions";
-import { loadPages } from "../../lib/lazy-page";
+import { navigate } from "../../lib/router";
 import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { resetRoster } from "../../lib/managers";
 import { Settings } from "../Settings";
@@ -317,7 +318,6 @@ let root: Root;
 
 beforeAll(async () => {
   await initI18n("zh-Hans");
-  await loadPages();
 });
 
 beforeEach(() => {
@@ -327,6 +327,7 @@ beforeEach(() => {
   state.features = ["channels", "extension_manager", "connectors", "lark"];
   state.loaded = true;
   state.assistant = "assistant";
+  history.replaceState(null, "", "/settings?tab=integrations");
   localStorage.clear();
   resetManagerChoice();
   resetRoster();
@@ -343,6 +344,7 @@ afterEach(() => {
 });
 
 const flush = async () => {
+  await act(async () => vi.dynamicImportSettled());
   for (let i = 0; i < 8; i++) {
     await act(async () => {
       await Promise.resolve();
@@ -509,6 +511,8 @@ function stubFullHubFetch(overrides?: {
     }),
   );
 }
+
+registerTestMailbox();
 
 describe("buildIntegrationCatalog deduplication and capability classification", () => {
   it("deduplicates multi-capability extensions and built-in services into single canonical rows", () => {
@@ -737,7 +741,7 @@ describe("Integrations unified list view", () => {
     expect(compactFilters.classList.contains("flex-nowrap")).toBe(true);
     expect(compactFilters.classList.contains("flex-wrap")).toBe(false);
     expect(compactFilters.classList.contains("overflow-x-auto")).toBe(true);
-    expect(compactFilters.classList.contains("scrollbar-none")).toBe(true);
+    expect(compactFilters.classList.contains("integrations-chip-scroll")).toBe(true);
     for (const btn of compactFilters.querySelectorAll<HTMLButtonElement>("button")) {
       expect(btn.classList.contains("shrink-0")).toBe(true);
       expect(btn.classList.contains("whitespace-nowrap")).toBe(true);
@@ -839,6 +843,26 @@ describe("Integrations unified list view", () => {
     await flush();
     expect(currentSub).toBe("-market");
     expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
+  });
+
+  it("shows extensions while channels are pending and ignores a previous assistant's late response", async () => {
+    stubFullHubFetch();
+    const fetchNow = fetch;
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/channels")) {
+        return new Headers(init?.headers).has("X-Persona-Manager") ? Promise.resolve(json({ channels: [] })) : pending;
+      }
+      return fetchNow(input, init);
+    });
+    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    expect(host.querySelector('[data-integration-id="apps"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="nord-theme"]')).not.toBeNull();
+    expect(host.querySelector('[data-integrations-empty]')).toBeNull();
+    await act(async () => chooseManager("work"));
+    await act(async () => finish(json({ channels: SAMPLE_CHANNELS })));
+    expect(host.querySelector('[data-integration-id="apps"]')).toBeNull();
   });
 
   it("degrades gracefully on older hubs without extension_manager, channels, or connectors", async () => {
@@ -954,11 +978,70 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(region.classList.contains("overflow-y-auto")).toBe(true);
   });
 
+  it("keeps chip selection, reloads and legacy in-app navigation in sync with the URL", async () => {
+    stubFullHubFetch();
+    history.replaceState({ example: true }, "", "/settings?tab=connectors&manager=work");
+    const render = () => act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    const chip = (id: string) => host.querySelector<HTMLButtonElement>(`[data-integration-filter="${id}"]`)!;
+    await render();
+    expect(chip("data").getAttribute("aria-pressed")).toBe("true");
+    const length = history.length;
+    await act(async () => chip("all").click());
+    expect(location.search).toContain("manager=work");
+    expect(location.search).not.toContain("filter=");
+    expect(history.state).toEqual({ example: true });
+    expect(history.length).toBe(length);
+    await act(async () => root.render(null));
+    await render();
+    expect(chip("all").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => chip("tools").click());
+    expect(location.search).toContain("filter=tools");
+    await act(async () => navigate("/settings?tab=connectors"));
+    expect(chip("data").getAttribute("aria-pressed")).toBe("true");
+    await act(async () => navigate("/settings?tab=extensions"));
+    expect(chip("all").getAttribute("aria-pressed")).toBe("true");
+    expect(location.search).toBe("?tab=integrations");
+  });
+
+  it("uses one view picker on phone and returns from a graph source through the Settings header", async () => {
+    state.phone = true;
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(350);
+    state.features.push("source_subscriptions", "inbox_sources", "inbox_sources_graph");
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-sources");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    const byText = (text: string) => [...document.querySelectorAll("button")].find(b => b.textContent?.includes(text))!;
+    expect(host.querySelector("[data-integrations-view-switch]")).toBeNull();
+    expect(host.querySelectorAll(`[role="radiogroup"][aria-label="${t("subscriptions.view")}"]`)).toHaveLength(1);
+    await act(async () => vi.dynamicImportSettled());
+    await act(async () => byText("Team Wiki Updates").click());
+    await act(async () => byText(t("subscriptions.graph_open")).click());
+    expect(host.querySelector("[data-mock-extension-ui]")?.getAttribute("data-state")).toBe(subscriptionSourceState("sub_larkx_rate"));
+    expect(byText(t("subscriptions.view_graph"))).toBeUndefined();
+    await act(async () => {
+      const back = new Promise(resolve => addEventListener("popstate", resolve, { once: true }));
+      host.querySelector<HTMLButtonElement>("header button")!.click();
+      await back;
+    });
+    expect(location.search).toBe("?tab=integrations&integration=-sources");
+    expect(byText("Team Wiki Updates")).toBeDefined();
+  });
+
   it("locks the Settings content host to viewport height only in desktop integrations_v2 split-pane detail state", async () => {
     state.integrationsV2 = true;
     state.twoCol = true;
     state.phone = false;
     stubFullHubFetch();
+
+    let hostWidth = 920;
+    let resized!: () => void;
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(() => hostWidth);
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private notify: () => void) {}
+      observe(el: Element) { if (el.matches('[role="region"]')) resized = this.notify; }
+      disconnect() {}
+    });
 
     // 1. Desktop list-only view: single natural scroll container (not viewport-locked split host).
     history.replaceState(null, "", "/settings?tab=integrations");
@@ -987,6 +1070,15 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(host.querySelector("[data-integrations-list-scroll]")).not.toBeNull();
     expect(host.querySelector("[data-integrations-detail-scroll]")).not.toBeNull();
     expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
+
+    // Both sidebars are outside the measured host. The 1080px, 1200px and 1280px layouts leave 552px, 672px and 752px.
+    for (const width of [552, 672, 739, 740, 752, 912]) {
+      hostWidth = width;
+      await act(async () => resized());
+      expect(splitRegion.hasAttribute("data-integrations-split-host")).toBe(width >= 740);
+      expect(!!host.querySelector("[data-integrations-detail-scroll]")).toBe(width >= 740);
+    }
+    hostWidth = 560;
 
     // 3. Narrow desktop (< 900px, twoCol=false, phone=false): single natural scroller, Back button kept.
     state.twoCol = false;
@@ -1274,6 +1366,7 @@ describe("assistant isolation across integration routes", () => {
   }
 
   async function clickOption(group: string, label: string) {
+    await flush();
     const button = [...host.querySelectorAll<HTMLButtonElement>(`${group} [role="radio"]`)].find((el) => el.textContent === label);
     expect(button).toBeDefined();
     await act(async () => button!.click());
@@ -1306,6 +1399,7 @@ describe("assistant isolation across integration routes", () => {
     await flush();
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
     await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
+    await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());
     expect(onOpen).toHaveBeenCalledWith("ext:demo-ext@work");
   });

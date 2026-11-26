@@ -1,3 +1,4 @@
+import { mailReading } from "../../lib/mail";
 import { getState } from "../../lib/store";
 import { INBOX_SOURCES_FEATURE } from "../../lib/subscriptions";
 import { t } from "../../i18n";
@@ -273,8 +274,9 @@ export function searchSettings(query: string, integrationsV2 = false, hasInboxSo
     if (g.tab === "persona" && g.anchor === "inbox-todo-forward") return !showSources;
     return true;
   }) : SEARCH_INDEX;
+  const showMailbox = mailReading().kind === "full";
   return {
     tabs: searchableTabs.filter(tabMatches),
-    groups: [...indexed, ...featureEntries].filter((g) => has(g.group, g.hint)),
+    groups: [...indexed, ...featureEntries].filter((g) => (g.anchor !== "mail" || showMailbox) && has(g.group, g.hint)),
   };
 }
