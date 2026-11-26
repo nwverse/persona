@@ -4,13 +4,12 @@ import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef } from "reac
 import { t } from "../i18n";
 import { isSpaceMuted } from "../lib/agent-filter";
 import { isQuiet, sessionHost, type AgentMutes, type Space } from "../lib/agent-groups";
+import { useHeldSeenOrder, useSeenRowsMode } from "../lib/seen-rows";
 import { showsWorktreeLevel, type RepoMachine, type RepoTree, type RepoWorktree } from "../lib/agent-repos-core";
 import { paneRoute, tabRowKeys, type ChildStates, type HerdrMachine, type HerdrSpace, type HerdrTab } from "../lib/herdr-tree";
 import { machineWithHub } from "../lib/mesh";
 import { agentLabel } from "../lib/mentions";
-import { baseName } from "../lib/format";
-import { href, navigate, useRoute, type Route } from "../lib/router";
-import { terminalTarget } from "../lib/session-view";
+import { href, navigate, type Route } from "../lib/router";
 import { useStore } from "../lib/store";
 import { treeStateLabel, type LooseGroup, type TodoTree, type TreeProject, type TreeAgent, type TreeState, type TreeTodo } from "../lib/todo-tree";
 import { findTodoForSpace, openTodoFromTag } from "../lib/todos";
@@ -25,19 +24,16 @@ import { contextMenuProps } from "../ui/context-menu";
 import type { MenuAt } from "../ui/menu-model";
 import type { TermSpace } from "../lib/terminals";
 import { useFolded } from "../lib/use-folded";
-import { sameValue } from "../lib/stable-lines";
 import { stateCount, type WaitReason } from "../lib/state-labels";
 import { neverConnected } from "../lib/add-computer";
 import { type GoFn, GroupCount, holdsRow, type NodeMenuFn, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup } from "./SidebarParts";
-import { NavRow, SessionRow } from "./SidebarRows";
+import { SessionRow, ShellRow } from "./SidebarRows";
 import { WindowedRows } from "./WindowedRows";
 import { workspacePinTime, type WorkspaceTarget } from "../lib/workspace-catalog";
 import { selectWorkspace, useWorkspaceSelection } from "../lib/workspace-selection";
 import { DirectionCountsText, DirectionStateText } from "./DirectionMarks";
 
-export type TreeRowProps = { machineLabel: MachineLabel; showHost?: boolean; /** No space · computer at a row's end (the sidebar's 常驻 rows, nested deep, #4352). */ noContext?: boolean; /** Before each agent row's glide key and its children's fold key: a second copy of a row (the sidebar's 常驻 tree) keeps its own, apart from the Agents list's. */ keyPrefix?: string; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu?: RowMenuFn; onNavigate?: () => void };
-/** A computer's name as an agent row shows it ("" with a single computer). */
-export type MachineLabel = (machineId: string) => string;
+type TreeRowProps = { showHost?: boolean; /** Before each agent row's glide key and its children's fold key: a second copy of a row (the sidebar's 常驻 tree) keeps its own, apart from the Agents list's. */ keyPrefix?: string; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onRowMenu?: RowMenuFn; onNavigate?: () => void };
 
 const TREE_TONE: Record<TreeState, string> = { needs_you: "text-attention", working: "text-orange", bg_waiting: "text-status-waiting", waiting: "text-ink-2", done: "text-ink-3" };
 
@@ -51,41 +47,27 @@ const TreeStateText = memo(function TreeStateText({ state, label, wait }: { stat
 
 // The tree's rows are memoized, and a push hands them the nodes it did not change as the same objects (shareTree), so
 // only the branches a push changed render again. The open row's key goes only to the branch that holds it ("" to the
-// others, where holdsRow and `active` come out the same), so opening another agent re-renders two branches, not the
-// whole tree; and the rows get the computers' names as a lookup that stays the same object while the names do, so a
-// machines push (load, memory) re-renders none of them.
+// others, where holdsRow and `active` come out the same), so opening another agent re-renders just two branches.
 
 /** `activeKey` for a branch holding these sessions, else "". */
 const within = (sessions: readonly Session[], activeKey: string) => (activeKey && holdsRow(sessions, activeKey) ? activeKey : "");
 /** `activeKey` for an agent's branch (it and the agents it spawned), else "". */
 const withinAgent = (a: TreeAgent, activeKey: string): string => (activeKey && (rowKey(a.session) === activeKey || a.children.some((c) => withinAgent(c, activeKey))) ? activeKey : "");
 
-/** Each computer's row label, one lookup while the labels are the same. */
-export function useMachineLabel(machines: Machine[]): MachineLabel {
-  const last = useRef<Map<string, string> | null>(null);
-  const names = useMemo(() => {
-    const next = machines.length > 1 ? new Map(machines.map((m) => [m.id, machineWithHub(m.id, machines)])) : null;
-    return sameValue(last.current, next) ? last.current : next;
-  }, [machines]);
-  last.current = names;
-  return useCallback((machineId: string) => (names ? names.get(machineId) ?? machineId : ""), [names]);
-}
-
 /** Agents "By to-do" (#2526, #6458): the open to-dos at the top level, each over its agents (a spawned agent under the
  *  one that spawned it), then "Not on a to-do" (the ones opened in a terminal too, #6591), all rows of one kind; `after`
  *  (the sidebar's "Recent (not running)") last, in the same row. No repository or folder rows: those groupings have tabs
  *  of their own.
  *  "By pinned" (#4352, `sections`): its directions are sections over their tasks, and the groups follow as sections. */
-export function TodoTreeView({ tree, machines, activeKey, sections, after, ...p }: { tree: TodoTree; machines: Machine[]; sections?: boolean; after?: React.ReactNode } & Omit<TreeRowProps, "machineLabel">) {
-  const machineLabel = useMachineLabel(machines);
+export function TodoTreeView({ tree, activeKey, sections, after, ...p }: { tree: TodoTree; sections?: boolean; after?: React.ReactNode } & TreeRowProps) {
   return (
     <>
       {tree.projects.map((pr) => (
-        <TreeProjectSection key={pr.key} k={pr.key} name={pr.name} state={pr.state} folded={pr.folded} sessions={pr.sessions} todos={pr.todos} direction={pr.direction} machineLabel={machineLabel} activeKey={within(pr.sessions, activeKey)} {...p} />
+        <TreeProjectSection key={pr.key} k={pr.key} name={pr.name} state={pr.state} folded={pr.folded} sessions={pr.sessions} todos={pr.todos} direction={pr.direction} activeKey={within(pr.sessions, activeKey)} {...p} />
       ))}
-      {tree.todos.map((td) => <TreeTodoRows key={td.key} td={td} top machineLabel={machineLabel} {...p} activeKey={within(td.sessions, activeKey)} />)}
+      {tree.todos.map((td) => <TreeTodoRows key={td.key} td={td} top {...p} activeKey={within(td.sessions, activeKey)} />)}
       {tree.loose.map((g) => (
-        <LooseBranch key={g.key} g={g} section={sections} machineLabel={machineLabel} {...p} activeKey={within(g.sessions, activeKey)} />
+        <LooseBranch key={g.key} g={g} section={sections} {...p} activeKey={within(g.sessions, activeKey)} />
       ))}
       {after}
     </>
@@ -252,12 +234,11 @@ export const TreeTodoRows = memo(function TreeTodoRows({ td, top, ...p }: { td: 
 });
 
 /** An agent and, folded under it, the agents it spawned for the same todo. */
-const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, showHost, noContext, keyPrefix = "", reg, hover, activeKey, go, onRowMenu }: { a: TreeAgent; depth: number } & TreeRowProps) {
+const TreeAgentRows = memo(function TreeAgentRows({ a, depth, showHost, keyPrefix = "", reg, hover, activeKey, go, onRowMenu }: { a: TreeAgent; depth: number } & TreeRowProps) {
   const subtree = (n: TreeAgent): Session[] => n.children.flatMap((c) => [c.session, ...subtree(c)]);
   const [folded, toggle] = useFolded(keyPrefix + a.key + ":children", a.folded, { follow: true, holds: holdsRow(subtree(a), activeKey) });
   const s = a.session;
   const key = `${keyPrefix}s:${s.machine_id}/${s.session_id}`;
-  const context = noContext ? undefined : [s.space_name || baseName(s.cwd), machineLabel(s.machine_id)].filter(Boolean).join(" · ");
   return (
     <div style={depth ? { paddingLeft: 12 } : undefined}>
       <div className="flex items-center">
@@ -267,13 +248,13 @@ const TreeAgentRows = memo(function TreeAgentRows({ a, depth, machineLabel, show
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <SessionRow s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} hint={context} host={showHost && sessionHost(s) !== "herdr" && sessionHost(s) !== "botmux" ? sessionHost(s) : undefined} onMenu={onRowMenu} />
+          <SessionRow s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" && sessionHost(s) !== "botmux" ? sessionHost(s) : undefined} onMenu={onRowMenu} />
         </div>
       </div>
       {a.children.length > 0 && (
         <Collapse open={!folded} sidebarFold>
           <div className="flex flex-col gap-px border-l border-line ml-2" inert={folded || undefined}>
-            {a.children.map((c) => <SpawnedAgentRows key={c.key} a={c} depth={depth + 1} machineLabel={machineLabel} showHost={showHost} noContext={noContext} keyPrefix={keyPrefix} reg={reg} hover={hover} activeKey={withinAgent(c, activeKey)} go={go} onRowMenu={onRowMenu} />)}
+            {a.children.map((c) => <SpawnedAgentRows key={c.key} a={c} depth={depth + 1} showHost={showHost} keyPrefix={keyPrefix} reg={reg} hover={hover} activeKey={withinAgent(c, activeKey)} go={go} onRowMenu={onRowMenu} />)}
           </div>
         </Collapse>
       )}
@@ -376,7 +357,8 @@ function RepoWorktreeRows({ w, repo, row, activeKey, go, selected, ...actions }:
     row.scrollIntoView?.({ block: "nearest" });
   }, [selected, w.key]);
   const mutes = useStore((st) => st.mutes);
-  const running = w.sessions.filter((s) => !isQuiet(s, mutes)).length;
+  const heldOrder = useHeldSeenOrder(useSeenRowsMode());
+  const running = w.sessions.filter((s) => !isQuiet(s, mutes, heldOrder)).length;
   const title = [w.workspace?.project_name, w.name, w.branch, w.path, w.workspace?.source].filter(Boolean).join(" · ");
   const label = <><span className="min-w-0 truncate">{w.name}</span>{w.workspace?.project_name && w.workspace.project_name !== repo && <span className="min-w-0 max-w-24 truncate text-ink-3">{w.workspace.project_name}</span>}</>;
   const showWorktreeKind = !w.main && (!w.workspace || (w.workspace.is_main === false && w.workspace.workspace_kind !== "folder"));
@@ -464,10 +446,12 @@ function RepoChildToggle({ count, counts, folded, onToggle }: { count: number; c
   );
 }
 
-export function SpaceSection({ sp, machineName, reg, hover, activeKey, go, pinned, muted, onMenu, onRowMenu, onNavigate }: { sp: Space; machineName?: string; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; pinned: boolean; muted: boolean; onMenu: SpaceMenuFn; onRowMenu: RowMenuFn; onNavigate?: () => void }) {
+export function SpaceSection({ sp, machineName, shells, online = true, reg, hover, activeKey, go, pinned, muted, onMenu, onRowMenu, onNodeMenu, onNavigate }: { sp: Space; machineName?: string; shells?: TermSpace[]; online?: boolean; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; pinned: boolean; muted: boolean; onMenu: SpaceMenuFn; onRowMenu: RowMenuFn; onNodeMenu?: NodeMenuFn; onNavigate?: () => void }) {
   const mutes = useStore((st) => st.mutes);
-  const allIdle = sp.sessions.every((s) => isQuiet(s, mutes));
-  const [folded, toggle] = useFolded(`space:${sp.key}`, allIdle && sp.sessions.length > 3, { holds: holdsRow(sp.sessions, activeKey) });
+  const heldOrder = useHeldSeenOrder(useSeenRowsMode());
+  const allIdle = sp.sessions.every((s) => isQuiet(s, mutes, heldOrder));
+  const hasShells = Boolean(shells && shells.length > 0);
+  const [folded, toggle] = useFolded(`space:${sp.key}`, allIdle && !hasShells && sp.sessions.length > 3, { holds: holdsRow(sp.sessions, activeKey) || holdsShell(shells, sp.machineId, activeKey) });
 
   return (
     <Section
@@ -494,6 +478,29 @@ export function SpaceSection({ sp, machineName, reg, hover, activeKey, go, pinne
       <WindowedRows items={sp.sessions} holds={(s) => rowKey(s) === activeKey} render={(s) => (
         <SessionRow key={s.session_id} s={s} k={`s:${s.machine_id}/${s.session_id}`} reg={reg} hover={hover} active={activeKey === `s:${s.machine_id}/${s.session_id}`} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} tab showTodoTag onMenu={onRowMenu} />
       )} />
+      {hasShells && shells && <ShellPaneRows mid={sp.machineId} online={online} spaces={shells} reg={reg} hover={hover} activeKey={activeKey} go={go} onNodeMenu={onNodeMenu} />}
+    </Section>
+  );
+}
+
+/** A workspace group in "By project" that currently holds active shell tabs and no Agent sessions. */
+export function ShellSpaceSection({ mid, online, sp, machineName, reg, hover, activeKey, go, onNodeMenu }: { mid: string; online: boolean; sp: TermSpace; machineName?: string; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onNodeMenu?: NodeMenuFn }) {
+  const count = shellCountOf([sp]);
+  const [folded, toggle] = useFolded(`space:${mid}/${sp.label}`, false, { holds: holdsShell([sp], mid, activeKey) });
+  return (
+    <Section
+      folded={folded}
+      onToggle={toggle}
+      onMenu={onNodeMenu ? (at) => onNodeMenu(termSpaceNode(mid, sp, online, { fold: { folded, toggle } }), at, t("sidebar.space_named", { name: sp.label })) : undefined}
+      title={
+        <span className="flex items-center gap-1.5">
+          <span className="truncate normal-case tracking-normal text-submeta text-ink-2">{sp.label}</span>
+          {machineName && <span className="truncate normal-case tracking-normal text-submeta font-normal text-ink-3">{machineName}</span>}
+        </span>
+      }
+      right={<GroupCount n={count} label={t("sidebar.pane_count", { count })} />}
+    >
+      <ShellPaneRows mid={mid} online={online} spaces={[sp]} reg={reg} hover={hover} activeKey={activeKey} go={go} onNodeMenu={onNodeMenu} />
     </Section>
   );
 }
@@ -569,11 +576,14 @@ function SpaceMenuButton({ sp, onMenu }: { sp: Space; onMenu: (sp: Space, anchor
 export type SpaceMenuFn = (sp: Space, anchor: HTMLElement, at?: MenuAt, fold?: MenuNode["fold"]) => void;
 type TreeProps = { machines: Machine[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; mutes: AgentMutes; onSpaceMenu: SpaceMenuFn; onRowMenu: RowMenuFn; onNodeMenu: NodeMenuFn; onNavigate?: () => void };
 
-// "By machine" (lib/herdr-tree.ts): one machine as herdr lays it out, its workspaces, their tabs, then "Other". A machine that
-// is away starts folded; its agents are under "Recent (not running)".
+// "By machine" (lib/herdr-tree.ts): one machine as herdr lays it out, its workspaces (unifying active non-Agent shell
+// tabs alongside Agent sessions under their owning workspace), then "Other". A machine that is away starts folded;
+// its agents are under "Recent (not running)".
 export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: TermSpace[] } & TreeProps) {
   const online = m.machine.online;
-  const [folded, toggle] = useFolded(m.foldKey, !online, { holds: holdsRow(m.sessions, p.activeKey) });
+  const { matched, unmatched } = useMemo(() => matchShellsToSpaces(m.machine.id, m.spaces, shells ?? []), [m.machine.id, m.spaces, shells]);
+  const hasShells = Boolean(shells && shells.length > 0);
+  const [folded, toggle] = useFolded(m.foldKey, !online, { holds: holdsRow(m.sessions, p.activeKey) || holdsShell(shells, m.machine.id, p.activeKey) });
   const name = machineWithHub(m.machine.id, p.machines);
   return (
     <SidebarGroup className="mt-3" heading={
@@ -597,15 +607,15 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
       }>
       <Collapse open={!folded} sidebarFold unclipped>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
-          <WindowedRows items={m.spaces} holds={(sp) => holdsRow(sp.tree, p.activeKey)} render={(sp) => <WorkspaceBlock key={sp.key} sp={sp} {...p} />} />
-          {shells && shells.length > 0 && <ShellTree mid={m.machine.id} online={online} spaces={shells} {...p} />}
+          <WindowedRows items={m.spaces} holds={(sp) => holdsRow(sp.tree, p.activeKey) || holdsSpaceShells(sp, matched, p.activeKey)} render={(sp) => <WorkspaceBlock key={sp.key} sp={sp} online={online} shellsBySpace={matched} {...p} />} />
+          {unmatched.map((ts) => <ShellWorkspaceBlock key={`${ts.host}/${ts.id}`} mid={m.machine.id} online={online} sp={ts} {...p} />)}
           {m.other.length > 0 && (
             // "Other": the machine's agents outside any workspace (Codex threads, runtimes without spaces)
             <TreeBlock foldKey={m.otherFoldKey} sessions={m.other} activeKey={p.activeKey} title={<span className="min-w-0 truncate font-medium">{t("sidebar.other")}</span>} right={(folded) => <SessionTally sessions={m.other} folded={folded} />}>
               <WindowedRows items={m.other} holds={(s) => rowKey(s) === p.activeKey} render={(s) => <TreeSessionRow key={s.session_id} s={s} {...p} />} />
             </TreeBlock>
           )}
-          {!m.sessions.length && <p className="truncate px-3 py-1 text-[12px] text-ink-3">{online ? t("sidebar.none_running") : t("sidebar.agents_in_recent")}</p>}
+          {!m.sessions.length && !hasShells && <p className="truncate px-3 py-1 text-[12px] text-ink-3">{online ? t("sidebar.none_running") : t("sidebar.agents_in_recent")}</p>}
         </div>
       </Collapse>
     </SidebarGroup>
@@ -613,9 +623,9 @@ export function MachineSection({ m, shells, ...p }: { m: HerdrMachine; shells?: 
 }
 
 // A workspace or "Other" in the tree: its title row folds what is under it, the fold kept by machine/space name.
-function TreeBlock({ foldKey, sessions, activeKey, state, title, right, children, onMenu }: { foldKey: string; sessions: Session[]; activeKey: string; state?: AgentState; title: React.ReactNode; right: (folded: boolean) => React.ReactNode; children: React.ReactNode; onMenu?: (at: MenuAt, el: HTMLElement, fold: { folded: boolean; toggle: () => void }) => void }) {
+function TreeBlock({ foldKey, sessions, activeKey, holdsExtra, state, title, right, children, onMenu }: { foldKey: string; sessions: Session[]; activeKey: string; holdsExtra?: boolean; state?: AgentState; title: React.ReactNode; right: (folded: boolean) => React.ReactNode; children: React.ReactNode; onMenu?: (at: MenuAt, el: HTMLElement, fold: { folded: boolean; toggle: () => void }) => void }) {
   const mutes = useStore((st) => st.mutes);
-  const [folded, toggle] = useFolded(foldKey, sessions.every((s) => isQuiet(s, mutes)) && sessions.length > 3, { holds: holdsRow(sessions, activeKey) });
+  const [folded, toggle] = useFolded(foldKey, sessions.length > 3 && sessions.every((s) => isQuiet(s, mutes)), { holds: holdsRow(sessions, activeKey) || Boolean(holdsExtra) });
   return (
     <div>
       <div className="group/sec relative flex items-center gap-1 pr-2 pl-2 [@media(hover:none)]:pr-11" {...(onMenu ? contextMenuProps((at, el) => onMenu(at, el, { folded, toggle })) : {})}>
@@ -633,13 +643,15 @@ function TreeBlock({ foldKey, sessions, activeKey, state, title, right, children
   );
 }
 
-function WorkspaceBlock({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
+function WorkspaceBlock({ sp, online, shellsBySpace, ...p }: { sp: HerdrSpace; online: boolean; shellsBySpace?: Map<string, TermSpace[]> } & TreeProps) {
   const tabs = sp.tabs.length;
+  const wsShells = shellsBySpace?.get(sp.key);
   return (
     <TreeBlock
       foldKey={sp.foldKey}
       sessions={sp.tree}
       activeKey={p.activeKey}
+      holdsExtra={holdsSpaceShells(sp, shellsBySpace, p.activeKey)}
       state={sp.state}
       onMenu={(at, el, fold) => p.onSpaceMenu(sp, el, at, fold)}
       title={<><span className="min-w-0 truncate font-medium">{sp.name}</span><SpaceMarks pinned={sp.pinned} muted={isSpaceMuted(sp, p.mutes)} /></>}
@@ -651,7 +663,7 @@ function WorkspaceBlock({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
             <span className={MENU_HIDES}>
               {folded ? <SessionTally sessions={sp.tree} folded /> : tabs > 0 && !sp.children.length && (
                 // agents, as the machine and the quick filter count them: a tab with several agents is one row (#2320)
-                <span title={t("sidebar.space_tally", { count: sp.sessions.length, tabs })} className="text-[10.5px] text-ink-3 tabular-nums">{sp.sessions.length}<span className="sr-only"> {t("sidebar.agent_suffix", { count: sp.sessions.length })}</span></span>
+                <span title={t("sidebar.space_tally", { count: sp.sessions.length, tabs })} className="inline-block min-w-4 text-right text-[10.5px] text-ink-3 tabular-nums">{sp.sessions.length}<span className="sr-only"> {t("sidebar.agent_suffix", { count: sp.sessions.length })}</span></span>
               )}
             </span>
           </span>
@@ -665,16 +677,17 @@ function WorkspaceBlock({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
         holds={(x) => ("lead" in x ? holdsRow(x.sessions, p.activeKey) : rowKey(x) === p.activeKey)}
         render={(x) => ("lead" in x ? <TabRow key={x.key} t={x} {...p} /> : <TreeSessionRow key={x.session_id} s={x} {...p} />)}
       />
-      {sp.children.length > 0 && <ChildSpaces sp={sp} {...p} />}
+      {wsShells && wsShells.length > 0 && <ShellPaneRows mid={sp.machineId} online={online} spaces={wsShells} reg={p.reg} hover={p.hover} activeKey={p.activeKey} go={p.go} onNodeMenu={p.onNodeMenu} />}
+      {sp.children.length > 0 && <ChildSpaces sp={sp} online={online} shellsBySpace={shellsBySpace} {...p} />}
     </TreeBlock>
   );
 }
 
 // A space's child spaces (Orca's "N child spaces"), folded at first like Orca's sidebar: the parent's row already sums up
 // what they are doing (ChildSummary), and the fold is kept by machine/space name like the space's own.
-function ChildSpaces({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
+function ChildSpaces({ sp, online, shellsBySpace, ...p }: { sp: HerdrSpace; online: boolean; shellsBySpace?: Map<string, TermSpace[]> } & TreeProps) {
   // i18n-ignore: a stored fold key, not interface text
-  const [folded, toggle] = useFolded(`${sp.foldKey}/子项`, true, { holds: holdsRow(sp.tree.slice(sp.sessions.length), p.activeKey) });
+  const [folded, toggle] = useFolded(`${sp.foldKey}/子项`, true, { holds: holdsRow(sp.tree.slice(sp.sessions.length), p.activeKey) || sp.children.some((c) => holdsSpaceShells(c, shellsBySpace, p.activeKey)) });
   const n = sp.children.length;
   return (
     <div>
@@ -685,7 +698,7 @@ function ChildSpaces({ sp, ...p }: { sp: HerdrSpace } & TreeProps) {
       </button>
       <Collapse open={!folded} sidebarFold>
         <div className="flex flex-col gap-px" inert={folded || undefined}>
-          {sp.children.map((c) => <WorkspaceBlock key={c.key} sp={c} {...p} />)}
+          {sp.children.map((c) => <WorkspaceBlock key={c.key} sp={c} online={online} shellsBySpace={shellsBySpace} {...p} />)}
         </div>
       </Collapse>
     </div>
@@ -831,49 +844,92 @@ function TabRow({ t: tab, ...p }: { t: HerdrTab } & TreeProps) {
   );
 }
 
-// "Terminal" under a machine (Settings › Appearance › Show terminals in sidebar): its terminal host's workspaces and the plain shells in them, each
-// opening the "Terminal" page on that pane. Folds are kept by machine/workspace name like the Agents' above.
-function ShellTree({ mid, online, spaces, reg, hover, go, activeKey, onNodeMenu }: { mid: string; online: boolean; spaces: TermSpace[] } & TreeProps) {
-  const route = useRoute();
-  const shown = route.name === "terminal" && route.mid === mid ? route.id : undefined;
-  const sessions = useStore((s) => s.sessions[mid]);
-  const count = spaces.reduce((n, sp) => n + sp.tabs.reduce((m, t) => m + t.panes.length, 0), 0);
+function shellCountOf(spaces: readonly TermSpace[] | undefined): number {
+  if (!spaces) return 0;
+  return spaces.reduce((n, sp) => n + sp.tabs.reduce((m, tab) => m + tab.panes.length, 0), 0);
+}
+
+function holdsShell(spaces: readonly TermSpace[] | undefined, mid: string, activeKey: string): boolean {
+  if (!spaces || !activeKey.startsWith(`term:${mid}/`)) return false;
+  return spaces.some((sp) => sp.tabs.some((tab) => tab.panes.some((p) => `term:${mid}/${p.id}` === activeKey)));
+}
+
+function holdsSpaceShells(sp: HerdrSpace, shellsBySpace: Map<string, TermSpace[]> | undefined, activeKey: string): boolean {
+  if (!shellsBySpace) return false;
+  return holdsShell(shellsBySpace.get(sp.key), sp.machineId, activeKey) || sp.children.some((c) => holdsSpaceShells(c, shellsBySpace, activeKey));
+}
+
+function matchShellsToSpaces(mid: string, spaces: readonly HerdrSpace[], shells: readonly TermSpace[]): { matched: Map<string, TermSpace[]>; unmatched: TermSpace[] } {
+  const byKey = new Map<string, HerdrSpace>();
+  const byName = new Map<string, HerdrSpace>();
+  const collect = (list: readonly HerdrSpace[]) => {
+    for (const sp of list) {
+      byKey.set(sp.key, sp);
+      if (!byName.has(sp.name)) byName.set(sp.name, sp);
+      if (sp.children.length > 0) collect(sp.children);
+    }
+  };
+  collect(spaces);
+  const matched = new Map<string, TermSpace[]>();
+  const unmatched: TermSpace[] = [];
+  for (const ts of shells) {
+    const owner = byKey.get(`${mid}/${ts.host}:${ts.id}`) ?? byName.get(ts.label);
+    if (owner) {
+      const list = matched.get(owner.key);
+      if (list) list.push(ts);
+      else matched.set(owner.key, [ts]);
+    } else {
+      unmatched.push(ts);
+    }
+  }
+  return { matched, unmatched };
+}
+
+/** Active non-Agent shell rows rendered inside their owning workspace group. */
+function ShellPaneRows({ mid, online, spaces, reg, hover, activeKey, go, onNodeMenu }: { mid: string; online: boolean; spaces: readonly TermSpace[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn; onNodeMenu?: NodeMenuFn }) {
   return (
-    <TreeBlock foldKey={`term:${mid}`} sessions={[]} activeKey={activeKey} title={<span className="min-w-0 truncate font-medium">{t("sidebar.nav_terminal")}</span>} right={() => <GroupCount n={count} label={t("sidebar.pane_count", { count })} />}>
-      {spaces.map((sp) => (
-        <TreeBlock
-          key={`${sp.host}/${sp.id}`}
-          foldKey={`term:${mid}/${sp.host}:${sp.label}`}
-          sessions={[]}
-          activeKey={activeKey}
-          title={<span className="min-w-0 truncate font-medium">{sp.label}</span>}
-          right={() => null}
-          onMenu={(at) => onNodeMenu(termSpaceNode(mid, sp, online), at, t("sidebar.space_named", { name: sp.label }))}
-        >
-          {sp.tabs.flatMap((tab) =>
-            tab.panes.map((p) => {
-              const k = `term:${mid}/${p.id}`;
-              const node = tab.panes.length === 1 ? termTabNode(mid, sp, tab, online) : termPaneNode(mid, sp, tab, p, online);
-              return (
-                <NavRow
-                  key={k}
-                  k={k}
-                  reg={reg}
-                  hover={hover}
-                  active={shown === p.id}
-                  to={terminalTarget(mid, p.id, sessions ?? [])}
-                  go={go}
-                  icon="terminal"
-                  label={tab.panes.length > 1 ? `${tab.label} · ${p.title}` : p.title}
-                  title={p.detail ? `${p.title}\n${p.detail}` : p.title}
-                  menuLabel={t("sidebar.terminal_actions")}
-                  onMenu={(at, _el, button) => onNodeMenu(node, at, tab.label, button)}
-                />
-              );
-            }),
-          )}
-        </TreeBlock>
-      ))}
+    <>
+      {spaces.flatMap((sp) =>
+        sp.tabs.flatMap((tab) =>
+          tab.panes.map((p) => {
+            const k = `term:${mid}/${p.id}`;
+            const node = tab.panes.length === 1 ? termTabNode(mid, sp, tab, online) : termPaneNode(mid, sp, tab, p, online);
+            return (
+              <ShellRow
+                key={k}
+                k={k}
+                reg={reg}
+                hover={hover}
+                active={activeKey === k}
+                to={{ name: "terminal", mid, id: p.id }}
+                go={go}
+                label={tab.panes.length > 1 ? `${tab.label} · ${p.title}` : p.title}
+                title={p.detail ? `${p.title}\n${p.detail}` : p.title}
+                menuLabel={t("sidebar.terminal_actions")}
+                onMenu={onNodeMenu ? (at, _el, button) => onNodeMenu(node, at, tab.label, button) : undefined}
+              />
+            );
+          }),
+        ),
+      )}
+    </>
+  );
+}
+
+/** A workspace under a machine that currently holds active shell tabs and no Agent sessions. */
+function ShellWorkspaceBlock({ mid, online, sp, reg, hover, activeKey, go, onNodeMenu }: { mid: string; online: boolean; sp: TermSpace } & TreeProps) {
+  const count = shellCountOf([sp]);
+  return (
+    <TreeBlock
+      foldKey={`tree:${mid}/${sp.label}`}
+      sessions={[]}
+      activeKey={activeKey}
+      holdsExtra={holdsShell([sp], mid, activeKey)}
+      title={<span className="min-w-0 truncate font-medium">{sp.label}</span>}
+      right={() => <GroupCount n={count} label={t("sidebar.pane_count", { count })} />}
+      onMenu={(at, _el, fold) => onNodeMenu(termSpaceNode(mid, sp, online, { fold }), at, t("sidebar.space_named", { name: sp.label }))}
+    >
+      <ShellPaneRows mid={mid} online={online} spaces={[sp]} reg={reg} hover={hover} activeKey={activeKey} go={go} onNodeMenu={onNodeMenu} />
     </TreeBlock>
   );
 }

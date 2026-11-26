@@ -58,6 +58,7 @@ interface ProjectedFrame {
 interface MapStore {
   selectedRouteId?: string;
   selectedMarkerId?: string;
+  fitSelectedRoute?: boolean;
   camera?: Camera;
   moved: boolean;
 }
@@ -477,6 +478,10 @@ export function MapCanvas({
   const activeRoute = routes.find((r) => r.id === activeRouteId);
   const activeMarkerId = selectedMarkerId && markers.some((m) => m.id === selectedMarkerId) ? selectedMarkerId : undefined;
   const activeMarker = activeMarkerId ? markers.find((m) => m.id === activeMarkerId) : undefined;
+  const [fitSelectedRoute, setFitSelectedRoute] = useState(() =>
+    !still && keyed !== null && storeFor(scoped, keyed).fitSelectedRoute === true,
+  );
+  const fitRouteId = still || fitSelectedRoute ? activeRouteId : undefined;
 
   const [stageSize, setStageSize] = useState<{ w: number; h: number }>({
     w: DEFAULT_STAGE_W,
@@ -500,13 +505,14 @@ export function MapCanvas({
     prevStoreKey.current = storeKey;
     if (still || keyed === null) return;
     const kept = storeFor(scoped, keyed);
+    const route = kept.selectedRouteId && routes.some((r) => r.id === kept.selectedRouteId) ? kept.selectedRouteId : initialRoute;
     setMoved(kept.moved);
-    if (kept.selectedRouteId && routes.some((r) => r.id === kept.selectedRouteId)) setSelectedRouteId(kept.selectedRouteId);
-    else setSelectedRouteId(initialRoute);
+    setSelectedRouteId(route);
+    setFitSelectedRoute(kept.fitSelectedRoute === true);
     if (kept.selectedMarkerId && markers.some((m) => m.id === kept.selectedMarkerId)) setSelectedMarkerId(kept.selectedMarkerId);
     else setSelectedMarkerId(undefined);
     if (kept.moved && kept.camera) setCamera(kept.camera);
-    else if (frame) setCamera(fitCamera(frame, stageSize.w, stageSize.h, 44, undefined));
+    else if (frame) setCamera(fitCamera(frame, stageSize.w, stageSize.h, 44, kept.fitSelectedRoute ? route : undefined));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- resync strictly when (owner, key) changes
   }, [storeKey]);
 
@@ -528,7 +534,7 @@ export function MapCanvas({
       setStageSize((prev) => (prev.w === next.w && prev.h === next.h ? prev : next));
       if (!frame) return;
       if (still || !movedRef.current) {
-        const fitted = fitCamera(frame, next.w, next.h, still ? 24 : 44, still ? activeRouteId : undefined);
+        const fitted = fitCamera(frame, next.w, next.h, still ? 24 : 44, fitRouteId);
         cameraRef.current = fitted;
         setCamera(fitted);
       }
@@ -538,7 +544,7 @@ export function MapCanvas({
     const ro = new ResizeObserver(sync);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [frame, still, full, activeRouteId]);
+  }, [frame, still, full, fitRouteId]);
 
   const applyCamera = useCallback(
     (nextCam: Camera, nextMoved: boolean) => {
@@ -574,8 +580,8 @@ export function MapCanvas({
   );
 
   const baseFit = useMemo(
-    () => (frame ? fitCamera(frame, stageSize.w, stageSize.h, still ? 24 : 44, still ? activeRouteId : undefined) : { cx: 0, cy: 0, scale: 1 }),
-    [frame, stageSize.w, stageSize.h, still, activeRouteId],
+    () => (frame ? fitCamera(frame, stageSize.w, stageSize.h, still ? 24 : 44, fitRouteId) : { cx: 0, cy: 0, scale: 1 }),
+    [frame, stageSize.w, stageSize.h, still, fitRouteId],
   );
   const minScale = Math.max(1e-7, baseFit.scale * 0.25);
   const maxScale = Math.max(0.5, baseFit.scale * 32);
@@ -605,7 +611,12 @@ export function MapCanvas({
   const resetCamera = useCallback(() => {
     if (!frame) return;
     setSelectedMarkerId(undefined);
-    if (!still) readStore().selectedMarkerId = undefined;
+    setFitSelectedRoute(false);
+    if (!still) {
+      const saved = readStore();
+      saved.selectedMarkerId = undefined;
+      saved.fitSelectedRoute = false;
+    }
     const fitted = fitCamera(frame, stageSize.w, stageSize.h, 44, undefined);
     applyCamera(fitted, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- scoped/keyed tracked via storeFor
@@ -614,7 +625,12 @@ export function MapCanvas({
   const selectRoute = useCallback(
     (id: string) => {
       setSelectedRouteId(id);
-      if (!still) readStore().selectedRouteId = id;
+      setFitSelectedRoute(true);
+      if (!still) {
+        const saved = readStore();
+        saved.selectedRouteId = id;
+        saved.fitSelectedRoute = true;
+      }
       if (frame) {
         const fitted = fitCamera(frame, stageSize.w, stageSize.h, 44, id);
         applyCamera(fitted, false);
@@ -931,7 +947,7 @@ export function MapCanvas({
     >
       <IconButton icon="minus" label={t("extensions-viewbody.map_zoom_out")} size={32} onClick={() => zoomAtPoint(1 / STEP)} />
       <IconButton icon="plus" label={t("extensions-viewbody.map_zoom_in")} size={32} onClick={() => zoomAtPoint(STEP)} />
-      <IconButton icon="retry" label={t("extensions-viewbody.map_reset")} size={32} disabled={!moved} onClick={resetCamera} />
+      <IconButton icon="retry" label={t("extensions-viewbody.map_reset")} size={32} disabled={!moved && !fitSelectedRoute} onClick={resetCamera} />
       {!full && <IconButton icon="expand" label={t("extensions-viewbody.map_full_screen")} size={32} buttonRef={opener} onClick={() => setFull(true)} />}
     </div>
   );

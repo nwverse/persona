@@ -17,12 +17,14 @@ import (
 // claimMethods are the calls that ask the connected runtimes about a session nobody claimed yet: what the apps do
 // with a session they show (open it, page it, send to it, stop it).
 var claimMethods = map[string]bool{"session.send": true, "session.items": true, "session.item": true, "session.image": true,
+	proto.MethodSessionInputPreviews: true, proto.MethodSessionItemsWindow: true,
 	"session.visualization": true, "session.fork": true,
 	"session.watch": true, "session.info": true, "session.interrupt": true}
 
 // awayReads are the calls the node answers itself for a session of a runtime that is away whose conversation is a
 // Claude transcript here (runtimeaway.go): its content, its info and the watch of its transcript.
 var awayReads = map[string]bool{"session.items": true, "session.item": true, "session.image": true, "session.visualization": true,
+	proto.MethodSessionInputPreviews: true, proto.MethodSessionItemsWindow: true,
 	"session.watch": true,
 	"session.info":  true}
 
@@ -151,6 +153,7 @@ type runtimeCallParams struct {
 	BeforeSeq      int                  `json:"before_seq"`
 	LazyImages     bool                 `json:"lazy_images"`
 	UserInputs     bool                 `json:"user_inputs"`
+	MetaOnly       bool                 `json:"meta_only"`
 	AfterSeq       *int                 `json:"after_seq"`
 	ThroughSeq     int                  `json:"through_seq"`
 	Title          *string              `json:"title"`
@@ -200,10 +203,14 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			}
 		}
 	}
+	readItems := func(params any) (json.RawMessage, error) { return call("session.items", params) }
 	switch method {
+	case proto.MethodSessionInputPreviews, proto.MethodSessionItemsWindow:
+		res, err := serveSessionNavigation(ctx, runtimeNavigation{node: n, read: readItems}, method, params)
+		return res, err, true
 	case "session.items":
 		if p.UserInputs {
-			index, err := n.runtimeUserInputs(ctx, p.SessionID, func(params any) (json.RawMessage, error) { return call("session.items", params) })
+			index, err := n.runtimeUserInputs(ctx, p.SessionID, p.BeforeSeq, p.MetaOnly, readItems)
 			return index, err, true
 		}
 		out, err := call("session.items", params)
@@ -279,7 +286,47 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			}
 		}
 		var said json.RawMessage // what the runtime answered: it may say the message only queued behind the turn
+		syntheticSegment := isSyntheticSegmentMsgID(opts.ClientMsgID)
 		err := n.sends.onceReplacing(opts.ClientMsgID, previous, func() error {
+			sendFn := func() error {
+				if err := n.a2aSendReady(ctx, p.SessionID); err != nil {
+					return err
+				}
+				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images}
+				if !syntheticSegment {
+					input["client_msg_id"] = opts.ClientMsgID
+				}
+				if p.PermissionMode != "" {
+					input["mode"] = p.PermissionMode
+				} else if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) {
+					if mode := agySendMode(n.runtimePermissionMode(h, p.SessionID), n.agyRuntimeMode(p.SessionID)); mode != "" {
+						input["mode"] = mode
+					}
+				}
+				if p.A2AWakeOnSend {
+					input["a2a_wake_on_send"] = true
+				}
+				sentAt := time.Now()
+				n.ttft.arm(p.SessionID, sentAt, "")
+				finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
+				out, err := call(method, input)
+				finishAgy(err, false)
+				said = out
+				if err == nil && h.agent() == agyAgent && n.clearAgyStopped(p.SessionID, sentAt) {
+					n.publishSessionsSoon()
+				}
+				if (err != nil && !maybeDelivered(err)) || (err == nil && runtimeAnswerFlag(out, "queued")) {
+					n.ttft.disarm(p.SessionID, sentAt)
+				}
+				return err
+			}
+			if syntheticSegment && retry == nil {
+				err := sendFn()
+				if err == nil {
+					n.recordSegmentInput(p.SessionID, opts.ClientMsgID)
+				}
+				return err
+			}
 			var after echoAfter
 			if opts.ClientMsgID != "" {
 				after = echoAfter{seq: n.runtimes.lastPushed(p.SessionID), in: echoInRuntime}
@@ -303,25 +350,7 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				}
 				retry, after = &check.record, check.after
 			}
-			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, p.MessageSource, retry, func() error {
-				if err := n.a2aSendReady(ctx, p.SessionID); err != nil {
-					return err
-				}
-				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images, "client_msg_id": opts.ClientMsgID}
-				if p.A2AWakeOnSend {
-					input["a2a_wake_on_send"] = true
-				}
-				sentAt := time.Now()
-				n.ttft.arm(p.SessionID, sentAt, "")
-				finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
-				out, err := call(method, input)
-				finishAgy(err, false)
-				said = out
-				if (err != nil && !maybeDelivered(err)) || (err == nil && runtimeAnswerFlag(out, "queued")) {
-					n.ttft.disarm(p.SessionID, sentAt)
-				}
-				return err
-			})
+			return n.sendWithEcho(p.SessionID, opts.ClientMsgID, p.Text, len(p.Images), after, p.MessageSource, retry, sendFn)
 		})
 		if rpcCode(err) == runtimeHandover && ctx.Value(handingOver{}) == nil {
 			res, err := n.handOver(ctx, h, p.SessionID, params)
@@ -351,6 +380,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 		_, err := call("session.close", closeParams)
 		finishAgy(err, true)
+		if err == nil {
+			if gp := n.existingGates(); gp != nil {
+				gp.releaseSession(p.SessionID)
+			}
+		}
 		return okResult(err), err, true
 	case "session.archive", "session.unarchive":
 		// Its own archive (archive.go): one that has none keeps the archive Persona's alone.
@@ -388,7 +422,16 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		for _, s := range h.sessionsCopy() {
 			if s.SessionID == p.SessionID {
 				info["cwd"], info["model"], info["agent"], info["last_activity"] = s.Cwd, s.Model, s.Agent, s.UpdatedAt
-				info["permission_mode"], info["effort"] = s.PermissionMode, s.Effort
+				mode := s.PermissionMode
+				if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) {
+					mode = agyShownMode(mode, n.agyRuntimeMode(p.SessionID))
+				}
+				info["permission_mode"], info["effort"] = mode, s.Effort
+				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); h.agent() == agyAgent && ok {
+					if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
+						info["swarm_workers"] = workers
+					}
+				}
 				if h.agent() == agyAgent {
 					if s.ContextTokens > 0 || s.OutputTokens > 0 {
 						info["context_tokens"] = int(s.ContextTokens)
@@ -416,6 +459,15 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 			return nil, err, true
 		}
 		_, err := call("session.modes", map[string]any{"session_id": p.SessionID, "permission_mode": p.PermissionMode, "effort": p.Effort, "model": p.Model})
+		if err == nil && h.agent() == agyAgent && p.PermissionMode != "" && n.state != nil {
+			n.state.update(p.SessionID, func(st *sessionState) bool {
+				if st.AppMode == p.PermissionMode {
+					return false
+				}
+				st.AppMode = p.PermissionMode
+				return true
+			})
+		}
 		return okResult(err), err, true
 	case "session.queue.edit":
 		if !caps.QueueEdit || strings.Contains(p.SessionID, subagentSep) {
@@ -433,15 +485,71 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 		if !caps.QueueSendNow || strings.Contains(p.SessionID, subagentSep) {
 			return nil, errRuntimeUnsupported(label, "这个操作"), true
 		}
+		sentAt := time.Now()
 		finishAgy := n.runtimes.agyWorkBegin(h, method, p.SessionID)
 		_, err := call(method, map[string]any{"session_id": p.SessionID})
 		finishAgy(err, false)
 		if err != nil {
 			return nil, err, true
 		}
+		if h.agent() == agyAgent && n.clearAgyStopped(p.SessionID, sentAt) {
+			n.publishSessionsSoon()
+		}
 		return map[string]any{"sent": true}, nil, true
 	}
 	return nil, nil, false
+}
+
+// agyRuntimeMode returns the persisted permission mode for a Persona-started non-assistant agy companion session, or ""
+// when none was recorded (settings-derived or externally started sessions).
+func (n *Node) agyRuntimeMode(id string) string {
+	if n.state == nil || id == "" {
+		return ""
+	}
+	st, ok := n.state.get(id)
+	if !ok || st.AppMode == "" {
+		return ""
+	}
+	return st.AppMode
+}
+
+// agyLiveAutoFallback reports whether a companion row is currently running under a live auto-to-bypass fallback for a
+// persisted "auto" session.
+func agyLiveAutoFallback(rowMode, savedMode string) bool {
+	return savedMode == "auto" && rowMode == proto.ModeBypass
+}
+
+// agyShownMode overlays a persisted agy permission mode onto a companion row's reported mode while preserving a live
+// auto-to-bypass fallback reported by the companion.
+func agyShownMode(rowMode, savedMode string) string {
+	if savedMode == "" {
+		return rowMode
+	}
+	if agyLiveAutoFallback(rowMode, savedMode) {
+		return rowMode
+	}
+	return savedMode
+}
+
+// agySendMode returns the persisted agy permission mode to replay on session.send, or "" when no mode should be sent
+// (unset/external sessions, or a live auto-to-bypass fallback where replaying "auto" would re-trigger the fallback).
+func agySendMode(rowMode, savedMode string) string {
+	if savedMode == "" || agyLiveAutoFallback(rowMode, savedMode) {
+		return ""
+	}
+	return savedMode
+}
+
+func (n *Node) runtimePermissionMode(h *runtimeConn, id string) string {
+	if h == nil {
+		return ""
+	}
+	for _, s := range h.sessionsCopy() {
+		if s.SessionID == id {
+			return s.PermissionMode
+		}
+	}
+	return ""
 }
 
 func (n *Node) runtimeStatus(h *runtimeConn, id string) string {

@@ -244,43 +244,62 @@ func (s *Service) recordHandoff(ctx context.Context, id string, in handoffReq) (
 // starts the main conversation with it when there is none.
 func (s *Service) sendHandoff(ctx context.Context, text, op string) (SessionRef, error) {
 	cfg := s.settings(ctx)
-	if cfg.Main == "" || cfg.MachineID == "" {
+	if cfg.Main == "" || cfg.mainRouteMachine() == "" {
 		sess, err := s.Start(ctx, StartParams{Text: s.withWorkspaces(ctx, text), Main: true}) // as SendParams does for the next messages
 		if err != nil {
 			return SessionRef{}, err
 		}
 		return SessionRef{MachineID: sess.MachineID, SessionID: sess.SessionID}, nil
 	}
-	to := SessionRef{MachineID: cfg.MachineID, SessionID: cfg.Main}
-	if s.isWorkMachine(to.MachineID) {
-		return SessionRef{}, errWorkAssistant
-	}
-	s.UserSpoke(ctx, to) // unarchived, and its title the user's to keep
-	params, err := s.SendParams(ctx, SendParams{MachineID: to.MachineID, SessionID: to.SessionID,
-		Params: map[string]any{"session_id": to.SessionID, "text": text, "client_msg_id": op}})
-	if err != nil {
-		return SessionRef{}, err
-	}
-	if err := s.sendOnce(ctx, to.MachineID, params); err != nil {
+	to := SessionRef{MachineID: cfg.mainRouteMachine(), SessionID: cfg.Main}
+	if err := s.sendHandoffTo(ctx, to, text, op); err != nil {
 		return SessionRef{}, err
 	}
 	return to, nil
 }
 
-// noteHandoff records that conversation to got the item (op: the request's client id), keeping the latest
+// sendHandoffTo sends text to an existing assistant conversation once per op (session.send_once).
+func (s *Service) sendHandoffTo(ctx context.Context, to SessionRef, text, op string) error {
+	if s.isWorkMachine(to.MachineID) {
+		return errWorkAssistant
+	}
+	s.UserSpoke(ctx, to) // unarchived, and its title the user's to keep
+	params, err := s.SendParams(ctx, SendParams{MachineID: to.MachineID, SessionID: to.SessionID,
+		Params: map[string]any{"session_id": to.SessionID, "text": text, "client_msg_id": op}})
+	if err != nil {
+		return err
+	}
+	return s.sendOnce(ctx, to.MachineID, params)
+}
+
+// noteHandoff records that the main conversation to got the item (op: the request's client id), keeping the latest
 // handoffsMax, and puts it on the chain once per conversation. Under b.mu.
 func (b *inboxBook) noteHandoff(it *InboxItem, to SessionRef, op string, now time.Time) {
-	it.Handoffs = append(it.Handoffs, InboxHandoff{MachineID: to.MachineID, SessionID: to.SessionID, At: now.UTC(), Op: op})
+	b.noteHandoffTarget(it, inboxHandoffTarget{MachineID: to.MachineID, SessionID: to.SessionID, Main: true}, op, now)
+}
+
+// noteHandoffTarget records that conversation target got the item (op: the request's client id), keeping the latest
+// handoffsMax, and puts it on the chain once per conversation. Under b.mu.
+func (b *inboxBook) noteHandoffTarget(it *InboxItem, target inboxHandoffTarget, op string, now time.Time) {
+	it.Handoffs = append(it.Handoffs, InboxHandoff{MachineID: target.MachineID, SessionID: target.SessionID, At: now.UTC(), Op: op})
 	if n := len(it.Handoffs); n > handoffsMax {
 		it.Handoffs = slices.Clone(it.Handoffs[n-handoffsMax:])
 	}
 	for _, e := range it.Chain {
-		if e.Kind == ChainHandling && e.Link != nil && e.Link.SessionID == to.SessionID {
+		if e.Kind == ChainHandling && e.Link != nil && e.Link.SessionID == target.SessionID {
 			return
 		}
 	}
-	b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.handed_main"),
-		Link: &InboxChainLink{Type: LinkSession, MachineID: to.MachineID, SessionID: to.SessionID}})
+	text := i18n.T(b.userLang(), "assistant-inbox_chain.handed_main")
+	if !target.Main {
+		if title := clip(oneLine(target.Title), 40); title != "" {
+			text = i18n.T(b.userLang(), "assistant-inbox_chain.handed_conversation", i18n.Args{"title": title})
+		} else {
+			text = i18n.T(b.userLang(), "assistant-inbox_chain.handed_conversation_generic")
+		}
+	}
+	b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now.UTC(), Text: text,
+		Link: &InboxChainLink{Type: LinkSession, MachineID: target.MachineID, SessionID: target.SessionID}})
 }
 
 // handoffOp is the item's hand-off made by request op; nil for none. Under b.mu.

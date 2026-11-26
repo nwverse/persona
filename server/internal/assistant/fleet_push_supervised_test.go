@@ -137,7 +137,7 @@ func (e *supervisedEnv) finishNow() {
 		gen = tr.gen
 		return true
 	})
-	e.s.notifyFinishedNow("mac", supAgent, gen, e.s.notifyTimings())
+	e.s.notifyFinishedNow("mac", supAgent, gen, e.s.notifyTimings(), supervisionEnd{})
 	// A push and a Feishu card the decision made go out on goroutines of their own (deliver, feishuAgentDone), and
 	// nothing marks one that was never started: give them a moment to land before a check that none did.
 	time.Sleep(100 * time.Millisecond) // sleep-ok: a negative check, no event marks a push or card that was not sent

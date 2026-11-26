@@ -9,11 +9,12 @@ import (
 // Lists is what the rules read besides the code, from archguard/testdata: the contract packages, and the three lists
 // that hold the code that predates the rules (docs/operations/testing.md "Count ratchets").
 type Lists struct {
-	Contracts  []string // contracts.txt: paths under the module, or another module's import paths
-	Undeclared Names    // domain_layers/undeclared.txt: the packages frozen without a layer
-	Edges      Names    // domain_layers/legacy_edges.txt: imports frozen by name, "<pkg> imports <path>"
-	Baseline   Baseline // domain_layers/baseline.txt: shrink-only counts, "<key> <rule> <count> [#PR ...]"
-	Problems   []string // what is wrong with the files themselves
+	Contracts  []string        // contracts.txt: paths under the module, or another module's import paths
+	Undeclared Names           // domain_layers/undeclared.txt: the packages frozen without a layer
+	Edges      Names           // domain_layers/legacy_edges.txt: imports frozen by name, "<pkg> imports <path>"
+	Baseline   Baseline        // domain_layers/baseline.txt: shrink-only counts, "<key> <rule> <count> [#PR ...]"
+	BareIDs    map[string]bool // the wire-types baseline's bare-id names (scripts/ci/wire_types_baseline.json); nil off
+	Problems   []string        // what is wrong with the files themselves
 }
 
 // The lists' files, under archguard/testdata.
@@ -35,7 +36,31 @@ func ReadLists(dir string) (Lists, error) {
 		}
 		text[name] = string(b)
 	}
-	return ParseLists(text[contractsFile], text[undeclaredFile], text[edgesFile], text[baselineFile]), nil
+	l = ParseLists(text[contractsFile], text[undeclaredFile], text[edgesFile], text[baselineFile])
+	// Find the baseline next to this testdata's module, not relative to the package under test.
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return l, err
+	}
+	var baselinePath string
+	for candidate := dir; ; candidate = filepath.Dir(candidate) {
+		path := filepath.Join(candidate, filepath.FromSlash(wireBaselineFile))
+		if _, statErr := os.Stat(path); statErr == nil {
+			baselinePath = path
+			break
+		}
+		if parent := filepath.Dir(candidate); parent == candidate {
+			return l, &os.PathError{Op: "open", Path: wireBaselineFile, Err: os.ErrNotExist}
+		}
+	}
+	b, err := os.ReadFile(baselinePath)
+	if err != nil {
+		return l, err
+	}
+	if l.BareIDs, err = ParseBareIDs(string(b)); err != nil {
+		return l, &os.PathError{Op: "parse", Path: wireBaselineFile, Err: err}
+	}
+	return l, nil
 }
 
 // ParseLists reads the lists from their text.
@@ -170,6 +195,10 @@ var legacyCores = map[string]bool{
 	"internal/sessionhistory":          true,
 	"internal/tokenuse":                true,
 }
+
+// LegacyCore says whether the package at rel (under the server's root) is a core that predates the rules, which the
+// baseline holds: the type-aware rules hold every other core in full.
+func LegacyCore(rel string) bool { return legacyCores[rel] }
 
 // legacyCoreList is legacyCores sorted, for messages.
 func legacyCoreList() []string {

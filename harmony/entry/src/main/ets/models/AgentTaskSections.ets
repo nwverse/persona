@@ -61,7 +61,7 @@ class Member {
     const data = row.data(), work = Wire.object(data,'work');
     this.state = stateOf(data);
     this.todo = Wire.text(Wire.object(data,'todo'),'id');
-    this.manual = Wire.text(data,'space_kind') === 'herdr' && !Wire.bool(data,'started_by_persona',Wire.bool(data,'started_by_jarvis'));
+    this.manual = Wire.text(data,'space_kind') === 'herdr' && !Wire.bool(data,'started_by_persona',Wire.bool(data,Wire.legacyStartedBy));
     const waiting = ['idle','unknown'].includes(this.state) && waitingForWork(data);
     this.wakes = this.state === 'working' ? Wire.bool(data,'background_working') || Wire.bool(data,'background_waiting') :
       !['needs_you','unread'].includes(this.state) && Wire.text(work,'phase') === 'blocked' && ['agent','external','transient'].includes(Wire.text(work,'on'));

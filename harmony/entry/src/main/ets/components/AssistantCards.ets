@@ -23,6 +23,10 @@ import { Decision, ResourceRow, Wire } from '../models/Wire';
 import { MarkdownText } from './MarkdownText';
 import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
+import { PhoneStyle } from '../design/PhoneStyle';
+import { Motion } from '../design/Motion';
+import { MotionTokens } from '../core/MotionTokens';
+import { Haptics } from '../platform/Haptics';
 import { assistantBoardRows, assistantTrayRows, TaskTrayRow, TrayRequest } from '../models/AssistantTrays';
 import { ButtonStyles } from '../design/Controls';
 import { tr } from '../design/Strings';
@@ -80,6 +84,7 @@ export struct AssistantCards {
   private failureRow:ResourceRow|undefined;
   @Local trayContentHeight: number = 0;
   @Local trayBucket: string = '';
+  @Local private pressedTrayChip: string = '';
   private trayOwner: string = '';
   private readonly trayScroller: Scroller = new Scroller();
   private planScrollKey: string = '';
@@ -449,19 +454,33 @@ export struct AssistantCards {
     if (this.active && id && ['plan', 'receipt'].includes(kind)) this.onOpenCard(id, kind);
   }
 
+  @Builder moreDotsGlyph(tint: ResourceColor) {
+    Row({ space: 3.5 }) {
+      ForEach([0, 1, 2], (_dot: number) => {
+        Circle().width(4).height(4).fill(tint)
+      }, (dot: number) => String(dot))
+    }.accessibilityLevel('no')
+  }
+
   @Builder planSummary(item: Record<string, Object>) {
     Button({ type: ButtonType.Normal }) {
       Row({ space: Tokens.inset }) {
-        SymbolGlyph(Symbols.document).fontSize(Tokens.symbolFont).fontColor([Colors.ai])
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(Symbols.document).fontSize('18vp').fontColor([Colors.ai])
+        }
+          .width(34).height(34).borderRadius(10)
+          .backgroundColor(this.environment.dark ? '#26B0A8FF' : '#165B4FD6')
         Column({ space: Tokens.fine }) {
-          Text(tr('assistant_feed_plan')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.ai).width('100%')
+          Text(tr('assistant_feed_plan')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontWeight(FontWeight.Medium).fontColor(Colors.ai).width('100%')
           Text(this.planSummaryTitle(item)).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
           if (this.planTasks(item).length > 1) Text(this.planSummaryMore(item)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.secondary).width('100%')
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         SymbolGlyph(Symbols.expand).fontSize(Tokens.meta).fontColor([Colors.secondary])
       }.width('100%').alignItems(VerticalAlign.Center)
-    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.grouped).borderRadius(Tokens.card)
-      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => this.openDetail(item))
+    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')).borderRadius(Tokens.card)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.card })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => { Haptics.tap(); this.openDetail(item); })
       .id('assistant.detail.plan.' + Wire.text(item, 'id')).accessibilityText(tr('assistant_detail_view_plan') + ' ' + this.planSummaryTitle(item) + (this.planTasks(item).length > 1 ? ' ' + this.planSummaryMore(item) : ''))
   }
 
@@ -503,7 +522,7 @@ export struct AssistantCards {
             Button({ type: ButtonType.Circle }) { SymbolGlyph(Symbols.edit).fontSize(Tokens.symbolFont).fontColor([Colors.link]) }
               .attributeModifier(ButtonStyles.chrome).accessibilityText(tr('edit')).enabled(this.feed.planCanEdit(this.planId(item)))
               .onClick(() => this.feed.editPlan(this.planId(item))).id('assistant.plan.edit')
-            Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.link) }
+            Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.link) }
               .attributeModifier(ButtonStyles.chrome).accessibilityText(tr('more')).enabled(this.feed.planCanDismiss(this.planId(item)))
               .bindMenu(this.planMenu(item)).id('assistant.plan.more')
             Blank().layoutWeight(1)
@@ -616,7 +635,7 @@ export struct AssistantCards {
         }.width('100%').padding({left:12,right:12,top:7,bottom:7}).constraintSize({minHeight:this.rowNote(entry) ? 54 : 40})
       }.width('100%').padding(0).backgroundColor(Color.Transparent)
         .id('chat.tasks.'+entry.kind+'.'+entry.id).accessibilityText([entry.title,this.trayDetail(entry),this.rowNote(entry)].filter((v:string) => !!v).join('、'))
-        .onClick(() => this.activateTray(entry))
+        .onClick(() => { Haptics.tap(); this.activateTray(entry); })
       if (entry.kind==='todo' && entry.status==='failed' && entry.resource) TaskTrayStartActions({model:this.model,feed:this.feed,row:entry.resource!,
         visible:():boolean=>this.trayOpen && this.active && this.trayScope()===this.trayOwner})
       if (this.expandedEntry===entry.key() && entry.kind==='message') this.message(entry.data)
@@ -735,7 +754,13 @@ export struct AssistantCards {
       }.width('100%').height(this.trayHeight()).align(Alignment.TopStart).scrollBar(BarState.Auto).id('action-tray.rows')
       if (this.pinnedTrayPlan) this.pinnedPlanActions(this.pinnedTrayPlan!,this.trayOwner)
     }.width('100%').alignItems(HorizontalAlign.Start).padding({bottom:4}).margin({bottom:16})
-      .backgroundColor(Colors.surface).border({width:0.5,color:Colors.divider,radius:20}).borderRadius(20).id('chat.tasks.tray')
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.glassSurface : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:20})
+      .borderRadius(20)
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+      .transition(Motion.slideFade(this.environment.reduceMotion, 8))
+      .id('chat.tasks.tray')
   }
 
   private metric(points:number):number {
@@ -843,18 +868,50 @@ export struct AssistantCards {
         if (Math.abs(event.offsetX)>66 && Math.abs(event.offsetX)>2*Math.abs(event.offsetY)) this.moveDecision(event.offsetX<0 ? 1 : -1);
       }))
   }
+  private trayDotColor(bucket: string): ResourceColor {
+    if (bucket === 'needs') return Colors.needsMark;
+    if (bucket === 'done') return Colors.positive;
+    return Colors.workingMark;
+  }
+  private trayCount(bucket: string): number {
+    return this.trayRows.filter((r: TaskTrayRow) => r.bucket === bucket).length;
+  }
   @Builder decisionEntry() {
     Button({type:ButtonType.Capsule}) {
       Row({space:6}) {
-        Text(tr('decision_to_decide')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
-        Text(String(this.decisionIds.length)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
+        Circle().width(7.5).height(7.5).fill(this.shownDecisions.length ? Colors.onAction : Colors.needsMark).accessibilityLevel('no')
+        Text(tr('decision_to_decide')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium)
+          .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.ink)
+        Text(String(this.decisionIds.length)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Bold)
+          .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
+          .padding({left:6,right:6,top:1,bottom:1}).borderRadius(10)
+          .backgroundColor(this.shownDecisions.length ? '#26FFFFFF' : Colors.accentWell)
         SymbolGlyph(this.shownDecisions.length ? Symbols.down : Symbols.up).fontSize('11vp').fontColor([this.shownDecisions.length ? Colors.onAction : Colors.needs])
-        if (this.decisionPager!.arrived(this.decisionIds)>0) Text('+'+String(this.decisionPager!.arrived(this.decisionIds))).fontSize(12).fontColor(Colors.needs)
+        if (this.decisionPager!.arrived(this.decisionIds)>0) Text('+'+String(this.decisionPager!.arrived(this.decisionIds))).fontSize(12).fontWeight(FontWeight.Medium).fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs)
       }
-    }.constraintSize({minHeight:28}).padding({left:12,right:12,top:6,bottom:6})
-      .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.needs).backgroundColor(this.shownDecisions.length ? Colors.action : Colors.subtle)
-      .responseRegion({x:0,y:-7,width:'100%',height:44}).accessibilitySelected(this.shownDecisions.length>0)
-      .accessibilityText(tr('decision_to_decide')+' '+String(this.decisionIds.length)).onClick(() => this.toggleDecisions()).id('chat.decisions.toggle')
+    }.constraintSize({minHeight:32}).padding({left:11,right:11,top:5,bottom:5})
+      .fontColor(this.shownDecisions.length ? Colors.onAction : Colors.ink)
+      .backgroundColor(this.shownDecisions.length ? Colors.action : (Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')))
+      .border({
+        width: PhoneStyle.surfaceEdgeWidth(0.5),
+        color: PhoneStyle.cardBorder(this.environment.dark),
+        radius: 16
+      })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .scale({
+        x: this.pressedTrayChip === 'decisions' ? MotionTokens.pressScale : 1,
+        y: this.pressedTrayChip === 'decisions' ? MotionTokens.pressScale : 1
+      })
+      .animation(Motion.release(this.environment.reduceMotion))
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) this.pressedTrayChip = 'decisions';
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          if (this.pressedTrayChip === 'decisions') this.pressedTrayChip = '';
+        }
+      })
+      .responseRegion({x:0,y:-6,width:'100%',height:44}).accessibilitySelected(this.shownDecisions.length>0)
+      .accessibilityText(tr('decision_to_decide')+' '+String(this.decisionIds.length))
+      .onClick(() => { Haptics.tap(); this.toggleDecisions(); }).id('chat.decisions.toggle')
   }
   @Builder taskDock() {
     Column({space:Tokens.fine}) {
@@ -864,22 +921,52 @@ export struct AssistantCards {
         this.questionCard(request,this.supervised(request),this.trayScope())
       },(request:Decision) => JSON.stringify([this.trayScope(),request.id,request.raw]))
       Scroll() {
-        Row({space:6}) {
+        Row({space:8}) {
           if (this.decisionPager && this.decisionIds.length) this.decisionEntry()
           ForEach(['needs','progress','done'],(bucket:string) => {
             if (bucket!=='done' || this.trayBucket==='done' && this.trayOpen || this.trayRows.some((r:TaskTrayRow) => r.bucket===bucket)) Button({type:ButtonType.Capsule}) {
-              Row({space:4}) {
+              Row({space:6}) {
+                Circle()
+                  .width(7.5)
+                  .height(7.5)
+                  .fill(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : this.trayDotColor(bucket))
+                  .opacity(this.trayOpen && this.trayBucket===bucket || this.trayCount(bucket) > 0 ? 1 : 0.45)
+                  .accessibilityLevel('no')
                 Text(this.trayLabel(bucket)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium)
-                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : bucket==='needs' ? Colors.link : Colors.secondary)
-                Text(String(this.trayRows.filter((r:TaskTrayRow) => r.bucket===bucket).length)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
-                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : bucket==='needs' ? Colors.link : Colors.secondary)
+                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : this.trayCount(bucket) > 0 ? Colors.ink : Colors.secondary)
+                Text(String(this.trayCount(bucket))).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(FontWeight.Bold)
+                  .fontColor(this.trayOpen && this.trayBucket===bucket ? Colors.onAction : this.trayCount(bucket) > 0 ? this.trayColor(bucket) : Colors.secondary)
+                  .padding({left:6,right:6,top:1,bottom:1}).borderRadius(10)
+                  .backgroundColor(this.trayOpen && this.trayBucket===bucket
+                    ? '#28FFFFFF'
+                    : this.trayCount(bucket) > 0 && bucket === 'needs'
+                      ? Colors.accentWell
+                      : (this.environment.dark ? '#1CFFFFFF' : '#0E000000'))
               }
-            }.constraintSize({minHeight:28}).padding({left:12,right:12,top:5,bottom:5}).backgroundColor(this.trayOpen && this.trayBucket===bucket ? Colors.action : Colors.subtle)
-              .responseRegion({x:0,y:-7,width:'100%',height:44}).accessibilitySelected(this.trayOpen && this.trayBucket===bucket)
-              .accessibilityText(this.trayLabel(bucket)+'、'+String(this.trayRows.filter((r:TaskTrayRow) => r.bucket===bucket).length))
-              .onClick(() => this.openTray(bucket)).id('chat.tasks.'+bucket)
+            }.constraintSize({minHeight:32}).padding({left:11,right:9,top:5,bottom:5})
+              .backgroundColor(this.trayOpen && this.trayBucket===bucket ? Colors.action : (Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')))
+              .border({
+                width: PhoneStyle.surfaceEdgeWidth(0.5),
+                color: PhoneStyle.cardBorder(this.environment.dark),
+                radius: 16
+              })
+              .shadow(PhoneStyle.cardElevation(this.environment.dark))
+              .scale({
+                x: this.pressedTrayChip === bucket ? MotionTokens.pressScale : 1,
+                y: this.pressedTrayChip === bucket ? MotionTokens.pressScale : 1
+              })
+              .animation(Motion.release(this.environment.reduceMotion))
+              .onTouch((event: TouchEvent) => {
+                if (event.type === TouchType.Down) this.pressedTrayChip = bucket;
+                else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+                  if (this.pressedTrayChip === bucket) this.pressedTrayChip = '';
+                }
+              })
+              .responseRegion({x:0,y:-6,width:'100%',height:44}).accessibilitySelected(this.trayOpen && this.trayBucket===bucket)
+              .accessibilityText(this.trayLabel(bucket)+'、'+String(this.trayCount(bucket)))
+              .onClick(() => { Haptics.tap(); this.openTray(bucket); }).id('chat.tasks.'+bucket)
           },(bucket:string) => bucket)
-        }
+        }.padding({ top: 2, bottom: 3 })
       }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%').align(Alignment.Start)
         .padding({left:4,right:4}).margin({top:this.shownDecisions.length ? Tokens.page : 0})
         .onAreaChange((_before:Area,area:Area):void => {
@@ -920,8 +1007,10 @@ export struct AssistantCards {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         SymbolGlyph(Symbols.expand).fontSize(Tokens.meta).fontColor([Colors.secondary])
       }.width('100%')
-    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.grouped).borderRadius(Tokens.card)
-      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => this.openDetail(item))
+    }.buttonStyle(ButtonStyleMode.NORMAL).backgroundColor(Colors.styleCard || (this.environment.dark ? '#1C1C1E' : '#F2F2F7')).borderRadius(Tokens.card)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: Tokens.card })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .padding(Tokens.page).width('100%').enabled(this.active).onClick(() => { Haptics.tap(); this.openDetail(item); })
       .id('assistant.detail.receipt.' + Wire.text(item, 'id')).accessibilityText(tr('assistant_detail_view_receipt') + ' ' + projection.title + ' ' + tr('assistant_detail_receipt_' + projection.outcome) + ' ' + projection.summary)
   }
 

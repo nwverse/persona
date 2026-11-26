@@ -660,7 +660,7 @@ func TestDomainHookScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx := domainrules.NewIndex(serverModule, pkgs, plantedContracts)
+	idx := domainrules.NewIndex(serverModule, pkgs, plantedContracts).WithBareIDs(plantedBareIDs)
 	for _, c := range []struct {
 		scope string
 		want  []string // the rules of its failures, sorted

@@ -339,7 +339,7 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 
 	eng := e.engine()
 	eng.Model, eng.ModelFor = e.minutes, func(string) kb.Model { return e.minutes }
-	if n := eng.WriteMinutes(context.Background(), 5); n < 1 {
+	if n := eng.RecordingProvider().WriteMinutes(context.Background(), 5); n < 1 {
 		t.Fatal("no minutes")
 	}
 	e.minutes.mu.Lock()

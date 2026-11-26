@@ -433,13 +433,17 @@ fun JTextField(
  * this app's. The keyboard's action key only puts the keyboard away; nothing is sent from the keyboard.
  */
 @Composable
-fun JSecretField(value: String, onValueChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, enabled: Boolean = true) {
+fun JSecretField(
+    value: String, onValueChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, enabled: Boolean = true,
+    masked: Boolean = true, trailing: (@Composable () -> Unit)? = null,
+) {
     val focus = LocalFocusManager.current
     JTextField(
         value, onValueChange, modifier, label = label, singleLine = true, enabled = enabled,
+        trailing = trailing,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-        visualTransformation = PasswordVisualTransformation(), autofill = false,
+        visualTransformation = if (masked) PasswordVisualTransformation() else VisualTransformation.None, autofill = false,
     )
 }
 

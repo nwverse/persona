@@ -64,6 +64,11 @@ func TestCodexRollout(t *testing.T) {
 	if items[11].Text != "已中断" || items[0].Kind != proto.KindText {
 		t.Fatalf("notice: %+v", items[11])
 	}
+	index, err := f.UserInputs(t.Context(), 0)
+	wantInput := proto.UserInputPosition{ID: items[0].ID, Seq: items[0].Seq, Preview: "why is it stuck", Answer: "Tab 1 waits on a prompt."}
+	if err != nil || index.Total != 1 || index.Inputs[0] != wantInput {
+		t.Fatalf("Codex input index: %+v, %v", index, err)
+	}
 }
 
 func TestCodexUserMessageTags(t *testing.T) {

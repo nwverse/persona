@@ -7,49 +7,49 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* The Web shell columns share this gutter with the width budget in lib/layout.ts. */
+/* Desktop shell: flush sidebar on the shell canvas, inset framed cards for main and side panel (#14696). */
 @media (width >= 64rem) {
   [data-app-shell] {
     --panel-gap: 6px;
-    padding: var(--panel-gap);
     background: var(--canvas);
+    padding-right: var(--panel-gap);
+  }
+
+  [data-app-shell][data-sidebar-hidden] {
+    padding-left: var(--panel-gap);
   }
 
   [data-sidebar-column] {
     flex-shrink: 0;
-    margin-right: var(--panel-gap);
     border-right: 0;
+    /* Let the resize handle stack above the adjoining main border. */
+    translate: none;
   }
 
+  [data-app-shell] > main,
   [data-app-shell] > aside {
-    margin-left: var(--panel-gap);
-    border-left: 0;
+    margin-block: var(--panel-gap);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-card);
   }
 
   [data-app-shell] > main,
   [data-app-shell] > aside {
     background: var(--page);
-    border-radius: var(--radius-card);
-    box-shadow: var(--shadow-hairline);
-  }
-
-  /* The sidebar's usage dialog may extend beyond the rounded background. */
-  [data-sidebar-column] > aside {
-    border-radius: var(--radius-card);
-  }
-
-  [data-app-shell] > main,
-  [data-app-shell] > aside > div:not([role="separator"]) {
-    border-radius: var(--radius-card);
     overflow: clip;
   }
 
-  [data-sidebar-column] > [role="separator"] {
-    right: calc(-0.25rem - var(--panel-gap) / 2);
+  [data-app-shell] > aside {
+    margin-left: var(--panel-gap);
+  }
+
+  [data-app-shell] > aside > div:not([role="separator"]) {
+    border-radius: calc(var(--radius-card) - 1px);
+    overflow: clip;
   }
 
   [data-app-shell] > aside > [role="separator"] {
-    left: calc(-0.25rem - var(--panel-gap) / 2);
+    left: calc(-0.25rem - var(--panel-gap) / 2 - 1px);
   }
 }
 
@@ -72,6 +72,9 @@
 }
 [data-sidebar-rows] {
   --sidebar-group-bg: var(--canvas);
+}
+[data-sidebar-rows],
+[data-sidebar-scroller] {
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
 }
 
@@ -107,8 +110,8 @@
 [data-terminal-scheme="light"], :root {
   --assistant-dock-open-max: calc(var(--kb-h) * 0.82);
   --task-count-meter-height: 0.25rem;
-  --page: #f1f1f4;
-  --canvas: #f7f7f9;
+  --page: #f7f7f9;
+  --canvas: #f1f1f4;
   --surface: #ffffff;
   --inset: #f5f5f7;
   --hover: #eaeaee;
@@ -174,8 +177,8 @@
 }
 
 [data-terminal-scheme="dark"], .dark {
-  --page: #0b0b0c;
-  --canvas: #111113;
+  --page: #111113;
+  --canvas: #0b0b0c;
   --surface: #161618;
   --inset: #101012;
   --hover: #1e1e21;
@@ -255,7 +258,7 @@
    an icon and a short word (#4316). */
 @theme { --breakpoint-xs: 340px; }
 /* The task cards' type scale by role (docs/design/task-cards.md §4.1): the card and row title, the meta line, the chip / label, and secondary meta. The sizes the cards already used, now named; iOS Theme.Font bodyStrong / caption / label. */
-@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-label: 12px; --text-submeta: 11.5px; }
+@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-tree-row: 12.5px; --text-label: 12px; --text-submeta: 11.5px; }
 @theme inline {
   --color-page: var(--page);
   --color-canvas: var(--canvas);
@@ -285,7 +288,6 @@
   --color-danger-fill: var(--danger-fill);
   --color-ai: var(--ai);
   --color-ai-tint: var(--ai-tint);
-  --color-source-terminal: var(--source-terminal);
   --color-source-desktop: var(--source-desktop);
   --color-tooltip-bg: var(--tooltip-bg);
   --color-tooltip-fg: var(--tooltip-fg);
@@ -343,7 +345,7 @@ body {
 @keyframes pixel-on{0%,to{opacity:.15}18%,42%{opacity:1}62%{opacity:.15}}
 .card-interactive { transition: box-shadow .15s, background-color .15s, transform .15s var(--ease-out-strong); }
 @media (hover: hover) {
-  .card-interactive:hover:not(:focus-visible,:has(:focus-visible)) { box-shadow: var(--shadow-btn); }
+  .card-interactive:hover:not(:focus-visible,:has(:focus-visible),:has(a:focus-visible)) { box-shadow: var(--shadow-btn); }
   .dark .card-interactive:hover { background-color: var(--hover); }
 }
 .card-interactive:active { transform: scale(.994); }
@@ -355,9 +357,9 @@ body {
 ::highlight(persona-comment-flash) { background-color: color-mix(in srgb, var(--accent) 36%, transparent); }
 /* The chat's trace (aligned with cindy's defaults, #1963): tool rows and their chevrons, the work group's rail, thought
    text, diff counts and the running status bar's accent. */
-:root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --status-accent: var(--accent-ink); --tool-hover: #ececec; }
-.dark { --tool-ink: #a3a3a3; --tool-rail: #404040; --thinking-ink: #737373; --diff-add-fg: #7ee787; --diff-del-fg: #ff7b72; --diff-add-bg: #2ea04326; --diff-del-bg: #f8514926; --diff-add-word: #2ea04366; --diff-del-word: #f8514966; --status-accent: var(--accent-ink); --tool-hover: #333436; }
-@theme inline { --color-tool-ink: var(--tool-ink); --color-tool-rail: var(--tool-rail); --color-thinking-ink: var(--thinking-ink); --color-diff-add-fg: var(--diff-add-fg); --color-diff-del-fg: var(--diff-del-fg); --color-diff-add-bg: var(--diff-add-bg); --color-diff-del-bg: var(--diff-del-bg); --color-diff-add-word: var(--diff-add-word); --color-diff-del-word: var(--diff-del-word); --color-status-accent: var(--status-accent); --color-tool-hover: var(--tool-hover); }
+:root { --tool-ink: #525252; --tool-rail: #ddd6cb; --thinking-ink: #a3a3a3; --diff-add-fg: #22863a; --diff-del-fg: #b31d28; --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9; --diff-add-word: #abf2bc; --diff-del-word: #ffcecb; --tool-hover: #ececec; }
+.dark { --tool-ink: #a3a3a3; --tool-rail: #404040; --thinking-ink: #737373; --diff-add-fg: #7ee787; --diff-del-fg: #ff7b72; --diff-add-bg: #2ea04326; --diff-del-bg: #f8514926; --diff-add-word: #2ea04366; --diff-del-word: #f8514966; --tool-hover: #333436; }
+@theme inline { --color-tool-ink: var(--tool-ink); --color-tool-rail: var(--tool-rail); --color-thinking-ink: var(--thinking-ink); --color-diff-add-fg: var(--diff-add-fg); --color-diff-del-fg: var(--diff-del-fg); --color-diff-add-bg: var(--diff-add-bg); --color-diff-del-bg: var(--diff-del-bg); --color-diff-add-word: var(--diff-add-word); --color-diff-del-word: var(--diff-del-word); --color-tool-hover: var(--tool-hover); }
 /* The least a sidebar agent row's title keeps behind a tab's or an agent's name (Sidebar ROW_TITLE_MIN): about 4.5
    characters of its 13px text, at the page's text size. */
 :root { --row-title-min: calc(13px * 4.5 * var(--text-scale, 1)); }
@@ -383,6 +385,11 @@ body {
    teal is under 3:1 on a light card, so the legend always writes the numbers. Same values as the apps' UsageColor. */
 :root { --usage-input: #2a78d6; --usage-output: #eb6834; --usage-cache-write: #6250d6; --usage-cache-read: #1baf7a; }
 .dark { --usage-input: #3987e5; --usage-output: #d95926; --usage-cache-write: #9085e9; --usage-cache-read: #199e70; }
+/* Token usage by project (#16530): development projects take the accent, non-development ones (folders, the home
+   folder, the assistant) this cyan, apart from the kinds' teal; at least 3:1 on a card in both schemes. Same values as
+   the apps' UsageColor.projectOther. */
+:root { --project-other: #0f7f8f; }
+.dark { --project-other: #4bbfcc; }
 /* The user's own messages: iOS Agents' pale blue (apple/Shared/Design/Styles/Glass.swift, ColorSpec.blue, #2672);
    a message relayed from another conversation and a tool's inline detail keep the neutral gray. */
 @theme inline { --color-user-bubble: var(--user-bubble); --color-neutral-bubble: var(--neutral-bubble); --color-status-waiting: var(--status-waiting); }
@@ -403,24 +410,23 @@ body {
    card keeps the column's, so nothing in it moves while the ring shows */
 [data-answer][data-search-hit] { outline-offset: 6px; } /* text has no padding of its own: the ring sits just outside it */
 [data-answer][data-search-hit]:not(:has(pre, table, .card-ui)) { width: fit-content; max-width: 100%; }
-/* Active working/thinking text shimmer (inspired by Orca tw-shimmer). */
-.chat-shimmer {
-  background-image: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 42%, transparent) 50%, currentColor 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: shimmer-text 2.2s linear infinite;
+/* Active working/thinking text shimmer (inspired by Orca tw-shimmer).
+ * Keep currentColor available to paint the gradient when the glyph fill is transparent. */
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .chat-shimmer {
+    background-image: linear-gradient(90deg, currentColor 0%, color-mix(in srgb, currentColor 42%, var(--ink)) 50%, currentColor 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer-text 2.2s linear infinite;
+  }
 }
 /* Smooth bottom fade on folded long user prompts. */
 .user-bubble-fade {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
 }
-@media (prefers-reduced-motion: reduce) {
-  .chat-shimmer { animation: none; background-image: none; color: inherit; -webkit-background-clip: border-box; background-clip: border-box; }
-}
-
 html, body, #root { height: 100%; }
 /* Pulling down at the top of a scroller must not reload the app. Vertical only: the drawer's sideways drags are unaffected. */
 html, body { overscroll-behavior-y: none; }
@@ -436,7 +442,26 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 /* In the base layer: unlayered, it beat every utility, so `scrollbar-none` rows kept a thin, always-on bar (#1381). */
 @layer base { * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
 /* A row that scrolls sideways without a bar (still by wheel, trackpad and touch); WebKit before 18.2 needs the pseudo. */
+/* Keep the native horizontal scrollbar. Fade the trailing chips only while more can scroll into view. */
+@supports (animation-timeline: scroll(self x)) {
+  .integrations-chip-scroll {
+    animation: integrations-chip-edge auto steps(1, end);
+    animation-timeline: scroll(self x);
+  }
+  @keyframes integrations-chip-edge {
+    from { mask-image: linear-gradient(to right, black calc(100% - 1rem), transparent); }
+    to { mask-image: none; }
+  }
+}
 @utility scrollbar-none { scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
+/* Subtle thin scrollbar for sidebars and directory trees: transparent track, muted thumb. */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  &::-webkit-scrollbar { width: 6px; height: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 9999px; }
+}
 /* Conversation chrome: retain the native hit strip and drag behavior, with no opaque track or layout shift.
    Only enhanced browsers fade the thumb; forced colors and unsupported browsers keep the native bar. */
 :root { --chat-scrollbar-fade: 220ms; }
@@ -446,11 +471,6 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
     transition: scrollbar-color var(--chat-scrollbar-fade) ease-out;
   }
   [data-chat-scroll][data-scrollbar-visible="true"] { scrollbar-color: var(--ink-3) transparent; }
-}
-/* The navigator's measured clearance grows only where the centered column's existing margin is insufficient. */
-[data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 5), var(--chat-nav-clearance, 0px)); }
-@media (min-width: 640px) {
-  [data-chat-scroll] > [data-chat-content] { padding-right: max(calc(var(--spacing) * 8), var(--chat-nav-clearance, 0px)); }
 }
 button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 6px; }
 /* Blue bubbles need stronger muted text in dark mode and a readable focus indicator in both schemes.
@@ -709,6 +729,161 @@ select:not([multiple], [size], .appearance-none) {
 .range::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--accent) var(--fill, 0%), var(--hover-2) var(--fill, 0%)); }
 .range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--hover-2); }
 .range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--accent); }
+
+/* ── macOS unified titlebar + 44 px co-linear Apple G2 control bay (#16607) ────────────────────────────────── */
+@media (width >= 64rem) {
+  [data-app-shell][data-mac-chrome="windowed"] {
+    position: relative;
+  }
+  [data-app-shell] [data-mac-bay-tools],
+  [data-app-shell] [data-mac-bay-tools] * {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root] {
+    position: relative;
+    padding-top: 38px;
+  }
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root]::before {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 0;
+    height: 44px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-sidebar-rail] {
+    padding-top: 50px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-sidebar-rail] > * {
+    -webkit-app-region: no-drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] [data-rail-top-controls] {
+    display: none;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
+    border: 0;
+    border-radius: 0;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14,
+  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 {
+    height: 45px;
+    -webkit-app-region: drag;
+  }
+  [data-app-shell][data-mac-chrome="windowed"] > main > .min-h-0 header.h-14 :is(button, a, input, select, [role="button"]),
+  [data-app-shell][data-mac-chrome="windowed"] > aside header.h-14 :is(button, a, input, select, [role="button"]) {
+    -webkit-app-region: no-drag;
+  }
+  [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header.h-14 {
+    padding-left: 130px;
+  }
+  [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header.h-14 {
+    padding-left: 180px;
+  }
+  [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main > .min-h-0 > * > :not(:first-child) header.h-14 {
+    padding-left: 1rem;
+  }
+}
+
+/* ── Opt-in Liquid Glass surface style (Settings › Advanced › Appearance, #16607) ────────────────────────── */
+:root[data-surface-style="liquid-glass"] {
+  --glass-t: 0.68;
+  --glass-blur: calc(6px + var(--glass-t) * 24px);
+  --glass-sat: calc(115% + var(--glass-t) * 75%);
+  --canvas: rgba(242, 244, 248, calc(0.92 - var(--glass-t) * 0.56));
+  --page: rgba(250, 250, 253, calc(0.96 - var(--glass-t) * 0.24));
+  --surface: rgba(255, 255, 255, calc(0.94 - var(--glass-t) * 0.30));
+  --inset: rgba(241, 243, 247, calc(0.86 - var(--glass-t) * 0.36));
+  --hover: rgba(17, 17, 19, 0.065);
+  --hover-2: rgba(255, 255, 255, 0.82);
+  --line: rgba(17, 17, 19, 0.09);
+  --line-strong: rgba(17, 17, 19, 0.15);
+  --mac-rim-top: rgba(255, 255, 255, 0.90);
+}
+:root.dark[data-surface-style="liquid-glass"] {
+  --canvas: rgba(12, 16, 24, calc(0.90 - var(--glass-t) * 0.62));
+  --page: rgba(18, 20, 26, calc(0.95 - var(--glass-t) * 0.30));
+  --surface: rgba(28, 31, 40, calc(0.92 - var(--glass-t) * 0.36));
+  --inset: rgba(12, 14, 20, calc(0.82 - var(--glass-t) * 0.42));
+  --hover: rgba(255, 255, 255, 0.08);
+  --hover-2: rgba(255, 255, 255, 0.13);
+  --line: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --mac-rim-top: rgba(255, 255, 255, 0.22);
+}
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"],
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body {
+  background: transparent;
+}
+:root[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+  background:
+    radial-gradient(circle at 16% 18%, rgba(56, 189, 248, 0.24), transparent 45%),
+    radial-gradient(circle at 86% 14%, rgba(167, 139, 250, 0.20), transparent 46%),
+    linear-gradient(135deg, #e5eaf4 0%, #edf1f8 55%, #e2e8f4 100%);
+}
+:root.dark[data-surface-style="liquid-glass"]:not([data-desktop-glass="1"]) body {
+  background:
+    radial-gradient(circle at 16% 18%, rgba(56, 189, 248, 0.22), transparent 45%),
+    radial-gradient(circle at 86% 14%, rgba(167, 139, 250, 0.20), transparent 46%),
+    linear-gradient(135deg, #0b1120 0%, #141c2f 55%, #0e1526 100%);
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell] :is([data-sidebar-root], [data-sidebar-rail], [data-sidebar-sticky]) {
+  background: transparent;
+}
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading {
+  position: static;
+  background: transparent;
+}
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading[data-edge]::after {
+  display: none;
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell] {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell] > main,
+:root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  box-shadow: inset 0 1px 0 var(--mac-rim-top);
+}
+:root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
+  box-shadow: none;
+  filter: drop-shadow(0 2px 10px rgba(17, 17, 19, 0.055));
+}
+:root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.34));
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-surface-style="liquid-glass"] {
+    background: #f1f1f4;
+    --canvas: #f1f1f4;
+    --page: #f7f7f9;
+    --surface: #ffffff;
+    --inset: #f5f5f7;
+    --line: #e4e4e9;
+    --mac-rim-top: transparent;
+  }
+  :root.dark[data-surface-style="liquid-glass"] {
+    background: #0b0b0c;
+    --canvas: #0b0b0c;
+    --page: #111113;
+    --surface: #161618;
+    --inset: #101012;
+    --line: #202024;
+    --mac-rim-top: transparent;
+  }
+  :root[data-surface-style="liquid-glass"] body {
+    background: var(--page);
+  }
+  :root[data-surface-style="liquid-glass"] [data-app-shell],
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); transition: transform 150ms var(--ease-out-strong); }
 .range::-moz-range-thumb { width: 18px; height: 18px; border: 0; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); }
 .range:active::-webkit-slider-thumb { transform: scale(1.1); }

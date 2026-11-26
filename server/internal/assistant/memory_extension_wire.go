@@ -59,6 +59,7 @@ var (
 //     each on one line, empty ones and those over 80 characters dropped, at most 16.
 //   - Standing goes through on the entry (memoryExtensionEntry.Standing): only a standing entry is meant for a
 //     standing channel, the others come in by relevance; the order alone does not keep them apart.
+//   - StandingBytes is the largest standing_bytes a page states (the assembler caps it: standingBudget).
 //   - Order: the assembler takes entries oldest first and spends a budget newest first, so the most important go
 //     last: the extension's own order (most important first) is kept among entries alike, standing ones and then
 //     higher ranks put first, and the whole reversed.
@@ -75,6 +76,7 @@ func memoryExtensionBatchOf(pages []wire.MemoryEntriesResult) memoryExtensionBat
 	seen := map[string]bool{}
 	for _, p := range pages {
 		b.Tagged = b.Tagged && p.Tagged
+		b.StandingBytes = max(b.StandingBytes, p.StandingBytes)
 		for _, w := range p.Entries {
 			e, ok := memoryExtensionEntryOf(w)
 			if !ok || seen[e.ID] {

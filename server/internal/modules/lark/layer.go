@@ -124,6 +124,10 @@ type Host interface {
 	ConclusionQuestion(ctx context.Context, ev *botcard.MessageEvent, content *botcard.Content, f assistantwire.FeishuFeatures) bool
 	AcceptReply(ctx context.Context, messageID, text string, media bool, parent, root string) bool
 	ApproveOwnerAction(ctx context.Context, ev botcard.MessageEvent, text, action string) bool
+	// ProjectReviewOwnerInput queues the owner's paired-chat message ref ("feishu:<message id>"), sent to the
+	// conversation machine/session, for a configured project review that takes owner inputs; nil when none takes it.
+	// An error means it could not be committed, and the message is not taken.
+	ProjectReviewOwnerInput(ctx context.Context, ref, machine, session string) error
 
 	// The commands (commands.go, models.go): stopping a conversation's turn (kind is the toast's), the lists to pick
 	// a conversation or an agent from, what a /status card shows, the standing board, and the main conversation's
@@ -170,11 +174,13 @@ type Host interface {
 	// The agents' cards (asks.go, ask_cards.go): what a card says of the core as one value (who asks, the task, the
 	// conversation's page, the core's wording of the interaction), where it goes as the channels' runs say now, whether
 	// its words are sensitive (asked only for a card the chat does not drive, with "all cards" on: it may wait for
-	// the text to be tagged), and the core's live record of it (ended: interaction.ended came; pending: it is up).
+	// the text to be tagged), and the core's live record of it (ended: interaction.ended came; pending: it is up;
+	// AskPending: the interaction up under id now, which a card back after a reconnect must be).
 	AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView
 	AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute
 	AskSensitive(ctx context.Context, ix proto.Interaction) bool
 	AskState(id string) (ended, pending bool)
+	AskPending(id string) (proto.Interaction, bool)
 
 	// The nudges (nudge.go): a card's agent gone, a prepared card's deadline, the standing board told a card was
 	// nudged, the tool a permission asks about.
@@ -205,6 +211,11 @@ type Host interface {
 	// OpenTodo makes the to-do, binds it, records its source, has the main conversation supervise it and shows it
 	// in its feed; anything failing takes it back.
 	OpenTodo(ctx context.Context, t assistantwire.ChatOpenTodo) (todoID string, err error)
+	// What a proxy reply asks of the core (handoff.go): start its guest, and ask the owner before a confirm reply
+	// is posted. The guest is registered before the node starts it.
+	StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (machine, session string, err error)
+	RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (id string, err error)
+	WithdrawHandoffDecision(ctx context.Context, id string)
 }
 
 // Layer is the module's assistant layer, what the core asks of it (internal/larkhost.Layer): the outbound channel port

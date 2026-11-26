@@ -14,18 +14,18 @@ import { openLink } from "../../lib/links";
 import { useLinkManager } from "../../lib/manager-choice";
 import {
   blocks, initials, isHttps, numberProblem, percent, tableRows, toneOf,
-  type RowIcon, type UIAction, type UIItem, type UIMore, type UISection, type UITone, type UIView,
+  type UIAction, type UIItem, type UIMore, type UISection, type UITone, type UIView,
 } from "../../lib/extension-ui";
 import { presenceStyle, usePresence, type Present } from "../../ui/motion";
 import { Rolling } from "../../ui/Rolling";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { t } from "../../i18n";
 import { Button, cx, EASE, Loading, Spinner } from "../../ui/atoms";
-import { Icon, type IconName } from "../../ui/icons";
+import { Icon } from "../../ui/icons";
 import { Switch } from "../settings/SettingsParts";
 import { ChartFrame, LABEL_H, plotHeight } from "./ChartFrame";
 import { ExtensionChart } from "./view-sections-lazy";
-import { NEW_ICON_GLYPH } from "./icon-map";
+import { ROW_ICON } from "./icon-map";
 import { SegmentedTrack } from "../../ui/Segmented";
 import { colorOf, hue, hueTint } from "../../lib/extension-ui-v6";
 import { Badge, Carousel, DateInput, glyphOf, Grid, ImageItem, MultiChoice, MultilineInput, SliderLine, Sparkline, TrailingControl, useImage, useRowMenu, type V6Handlers } from "./ViewBody6";
@@ -330,20 +330,21 @@ function MoreLine({ more, busy, onMore, onObserveMore, divided, preserveObserver
 }
 
 function Metrics({ items, style, className }: { items: UIItem[]; style?: React.CSSProperties; className?: string }) {
+  const alone = items.length === 1;
   return (
-    <div className={cx("grid gap-x-4 gap-y-3 px-4 py-3", items.length === 1 ? "grid-cols-1" : items.length === 2 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3", className)} style={style}>
+    <div className={cx("grid gap-x-4 gap-y-3 px-4 py-3", alone ? "grid-cols-1" : items.length === 2 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3", className)} style={style}>
       {items.map((it, i) => (
         <div key={i} className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-3">
             {/* UI version 6: the metric's icon, in its color */}
             {glyphOf(it.icon, ROW_ICON) && <Icon name={glyphOf(it.icon, ROW_ICON)!} size={13} className="shrink-0" style={it.icon_color ? { color: hue(it.icon_color) } : undefined} />}
-            <span className="min-w-0 truncate">{it.label}</span>
+            <span className={cx("min-w-0", alone ? "line-clamp-2 break-words" : "truncate")}>{it.label}</span>
           </div>
           <div className="mt-0.5 flex min-w-0 items-end gap-2">
             <span className={cx("min-w-0 truncate text-[20px] leading-tight font-semibold tabular-nums", TEXT[toneOf(it.tone)])}>{it.value && <Rolling value={it.value} />}</span>
             {it.spark && <Sparkline spark={it.spark} width={64} height={22} className="mb-0.5" />}
           </div>
-          {it.detail && <div className="mt-0.5 truncate text-[11.5px] text-ink-3">{it.detail}</div>}
+          {it.detail && <div className="mt-0.5 break-words text-[11.5px] text-ink-3">{it.detail}</div>}
         </div>
       ))}
     </div>
@@ -691,14 +692,8 @@ function Field({ item: it, value, locked, onChange }: { item: UIItem; value: str
 
 // ── UI version 3 ─────────────────────────────────────────
 
-/** A row's icon from the fixed vocabulary, as one of the web's icons. */
-export const ROW_ICON: Record<RowIcon, IconName> = {
-  extension: "extension", plugin: "extension", chart: "chart", gauge: "gauge", list: "list", bell: "bell", doc: "read", calendar: "calendar",
-  money: "money", person: "person", chat: "chat", mail: "mail", link: "link", folder: "folder", star: "star", check: "check",
-  warning: "warning", clock: "clock", tag: "tag", search: "search", settings: "gear", branch: "branch", commit: "commit", code: "code",
-  pull_request: "pullRequest", merge: "merge", file: "read",
-  ...NEW_ICON_GLYPH,
-};
+/** A row's icon from the fixed vocabulary, as one of the web's icons (icon-map.ts, shared with a nav_page's, #16281). */
+export { ROW_ICON };
 
 /** What leads a row: its icon (UI version 6: in its color), a picture (its initials until it loads, or when it does not), or a thumbnail. */
 function RowLead({ item, onImageFailed }: { item: UIItem; onImageFailed?: () => void }) {
@@ -751,7 +746,7 @@ function Row({ item: it, busy, onPress, pressable, chosen, h }: { item: UIItem; 
         {it.subtitle && <div className="mt-0.5 line-clamp-2 text-submeta break-words whitespace-normal text-ink-3">{it.subtitle}</div>}
       </div>
       {it.spark && <Sparkline spark={it.spark} />}
-      {it.value && !slider && <span className="shrink-0 truncate text-[12.5px] text-ink-2 tabular-nums"><Rolling value={it.value} /></span>}
+      {it.value && !slider && <span className="min-w-0 max-w-[45%] truncate text-[12.5px] text-ink-2 tabular-nums"><Rolling value={it.value} /></span>}
       {/* a slider's row says the value it is at, as the thumb moves */}
       {slider && <span className="shrink-0 truncate text-[12.5px] text-ink-2 tabular-nums">{sliderText(c, h)}</span>}
       {it.badge?.text && <Badge badge={it.badge} />}

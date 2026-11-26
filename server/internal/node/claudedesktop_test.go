@@ -394,6 +394,103 @@ func TestDesktopSessionsHaveACountOfTheirOwn(t *testing.T) {
 	}
 }
 
+// A session the index gives a parent (a side session, a fork, an earlier run of a scheduled task) is drawn under another
+// row, so it is counted apart from the top-level ones (#15279): the newest maxDesktopFolded of them are listed beside
+// the newest maxDesktopOffline top-level sessions, however much newer the folded ones are. Before, they were one count,
+// and a daily scheduled task's runs pushed the top-level sessions out.
+func TestDesktopFoldedSessionsDoNotTakeTheTopLevelPlaces(t *testing.T) {
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, third := useDesktopDirs(t)
+	top := func(i int) string { return fmt.Sprintf("dddddddd-0000-4000-8000-%012d", i) }
+	side := func(i int) string { return fmt.Sprintf("ffffffff-0000-4000-8000-%012d", i) }
+	for i := 0; i < maxDesktopOffline+5; i++ { // older than every folded one
+		writeEntrypointTranscript(t, dir, top(i), "claude-desktop-3p", time.Duration(1000+i)*time.Minute)
+		writeDesktopEntry(t, third, top(i), top(i), false, nil, "")
+	}
+	from := `,"spawnedFrom":{"sessionId":"local_` + top(0) + `","taskId":"task_1","sideSession":true}`
+	for i := 0; i < maxDesktopFolded+5; i++ {
+		writeEntrypointTranscript(t, dir, side(i), "claude-desktop-3p", time.Duration(i+1)*time.Minute)
+		writeDesktopEntry(t, third, side(i), side(i), false, nil, from)
+	}
+	tops, sides := 0, 0
+	listed := map[string]bool{}
+	for _, s := range n.scanOffline() {
+		listed[s.SessionID] = true
+		switch {
+		case strings.HasPrefix(s.SessionID, "dddddddd"):
+			tops++
+		case strings.HasPrefix(s.SessionID, "ffffffff"):
+			sides++
+		}
+	}
+	if tops != maxDesktopOffline || sides != maxDesktopFolded {
+		t.Fatalf("top-level sessions %d, folded %d; want %d and %d", tops, sides, maxDesktopOffline, maxDesktopFolded)
+	}
+	if !listed[top(0)] || listed[top(maxDesktopOffline)] {
+		t.Fatal("not the newest of the top-level sessions")
+	}
+	if !listed[side(0)] || listed[side(maxDesktopFolded)] {
+		t.Fatal("not the newest of the folded sessions")
+	}
+}
+
+// A sidebar of a couple of hundred sessions, quiet for more than the usual 7 days, is listed whole (#15522): with the old
+// bound of 100 the older ones were cut while the app still showed them.
+func TestDesktopSidebarOfHundredsIsListedWhole(t *testing.T) {
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := useDesktopDirs(t)
+	const sidebar = 250
+	for i := 0; i < sidebar; i++ {
+		id := fmt.Sprintf("dddddddd-0000-4000-8000-%012d", i)
+		writeEntrypointTranscript(t, dir, id, "claude-desktop", offlineWindow+time.Duration(i+1)*time.Hour)
+		writeDesktopEntry(t, first, fmt.Sprintf("d%d", i), id, false, nil, "")
+	}
+	listed := 0
+	for _, s := range n.scanOffline() {
+		if strings.HasPrefix(s.SessionID, "dddddddd") {
+			listed++
+		}
+	}
+	if listed != sidebar {
+		t.Fatalf("listed %d of the sidebar's %d sessions", listed, sidebar)
+	}
+}
+
+// A session New Agent starts in the desktop app is written by `claude -p` and taken over by the app
+// (claudedesktop_new.go): until the app ends a turn in it, its transcript says only sdk-cli. The sidebar lists it, so the
+// offline list does too; the same run that no entry names is still a program's one-shot run and stays out (#15522).
+func TestDesktopListedOneShotTranscriptIsListed(t *testing.T) {
+	t.Setenv("PERSONA_HOME", "")
+	n, home := testNode(t)
+	n.metas, n.bgScans = map[string]quickMeta{}, map[string]*bgScan{}
+	dir := filepath.Join(home, ".claude", "projects", "-src-app")
+	first, _ := useDesktopDirs(t)
+	const (
+		adopted = "5d500000-0000-4000-8000-0000000000a1" // New Agent's session, in the app's sidebar
+		script  = "5d500000-0000-4000-8000-0000000000a2" // a program's `claude -p`, no entry names it
+	)
+	writeClaudeRun(t, dir, adopted, time.Minute, "sdk-cli")
+	writeClaudeRun(t, dir, script, 2*time.Minute, "sdk-cli")
+	writeDesktopEntry(t, first, "adopted", adopted, false, nil, `,"fromCliTranscript":true,"adoptedFromOtherSurface":true`)
+	got := listedIDs(n)
+	if !got[adopted] {
+		t.Fatal("a session the desktop app's sidebar lists is left out as a one-shot run")
+	}
+	if got[script] {
+		t.Fatal("a program's one-shot run no entry names is listed")
+	}
+}
+
 // A session deleted in the app leaves the list at once: Delete writes deleted_<uuid> for the session's own id and for each
 // transcript it ran, so desktopEntryGrace is not waited out, whether or not this node read the entry before. A delete
 // whose markers name no transcript, or an entry removed without any, still waits it out; a transcript an entry names
