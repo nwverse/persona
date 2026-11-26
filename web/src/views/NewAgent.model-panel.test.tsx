@@ -172,6 +172,37 @@ async function slide(k: string) {
 const start = () => act(() => button("启动").click());
 
 describe("New agent's model panel (#5104)", () => {
+  it.each([false, true])("refreshes the open provider's catalog in place (wide: %s)", async (wide) => {
+    wideScreen = wide;
+    await open();
+    await openPanel();
+    if (wide) act(() => q<HTMLButtonElement>('[data-panel-side="agy"]')!.click());
+    const group = q('[data-panel-section][aria-label="agy"]')!;
+    const refresh = () => group.querySelector<HTMLButtonElement>(`[aria-label="${t("ui-modelpanel.refresh_provider_models", { provider: "agy" })}"]`)!;
+    const fetchBefore = vi.mocked(fetch).getMockImplementation()!;
+    let answer!: (response: Response) => void;
+    const reply = new Promise<Response>((resolve) => { answer = resolve; });
+    const forced = vi.fn(() => reply);
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      return url.pathname.endsWith("/launchers/agy/models") && url.searchParams.get("refresh") === "1"
+        ? forced() : fetchBefore(input, init);
+    });
+
+    expect(group.textContent).toContain("Example");
+    expect(asked.some((url) => url.includes("refresh=1"))).toBe(false);
+    await act(async () => refresh().click());
+    expect(forced).toHaveBeenCalledTimes(1);
+    expect(refresh().disabled).toBe(true);
+    expect(group.querySelector('[role="status"]')?.textContent).toBe(t("ui-modelpanel.loading"));
+    expect(group.textContent).toContain("Example");
+
+    await act(async () => answer(json({ agent: "agy", models: [{ id: "fresh", name: "Fresh model" }] })));
+    expect(group.textContent).toContain("Fresh model");
+    expect(group.textContent).not.toContain("Example");
+    expect(refresh().disabled).toBe(false);
+  });
+
   it("left alone, follows Model settings: nothing of the model is sent, the pill names what they run with the engine's mark", async () => {
     await open();
     expect(pill().title).toBe("Claude Code · Opus 5.5 · Claude Code · High");
