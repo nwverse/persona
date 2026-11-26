@@ -309,4 +309,37 @@ class TaskRecordsTest {
             hints(full).flatMap { hint -> hint.tasks.map { it.title } },
         )
     }
+
+    @Test fun duplicateRecordIdPreservesEarliestFeedMatchAcrossReceiptAndTodoRef() {
+        val receiptFirst = persona.core.contracts.FeedItem(
+            id = "dup_rec",
+            at = "2026-11-25T09:00:00Z",
+            kind = "task",
+            ref = "other_todo",
+            body = kotlinx.serialization.json.JsonPrimitive("earliest-receipt-body"),
+        )
+        val todoRefLater = persona.core.contracts.FeedItem(
+            id = "dup_rec",
+            at = "2026-11-25T09:05:00Z",
+            kind = "task",
+            ref = "todo_target",
+            body = kotlinx.serialization.json.JsonPrimitive("later-todo-ref-body"),
+        )
+        val card = persona.core.contracts.AssistantTaskCard(
+            id = "todo:todo_target",
+            todoId = "todo_target",
+            at = "2026-11-25T08:55:00Z",
+            receiptId = "dup_rec",
+        )
+        val merged = AssistantTaskCards.merge(
+            feed = listOf(receiptFirst, todoRefLater),
+            plans = emptyMap(),
+            todos = emptyList(),
+            projected = listOf(card),
+        )
+        val target = merged.single { it.identity.todoId == "todo_target" }
+        org.junit.Assert.assertEquals(1, target.records.size)
+        org.junit.Assert.assertEquals(kotlinx.serialization.json.JsonPrimitive("earliest-receipt-body"), target.records.single().body)
+        org.junit.Assert.assertEquals("2026-11-25T09:00:00Z", target.records.single().at)
+    }
 }

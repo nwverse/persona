@@ -52,7 +52,7 @@ data class TaskNote(
 }
 
 internal fun blockPart(id: String): Int = id.substringAfterLast('#', "").toIntOrNull() ?: 0
-internal fun parseLineInstant(iso: String): Instant {
+internal fun parseLineInstant(iso: String): Instant? {
     if (iso.isNotEmpty()) {
         val last = iso[iso.length - 1]
         if (last == 'Z' || last == 'z') {
@@ -60,7 +60,7 @@ internal fun parseLineInstant(iso: String): Instant {
             if (fast != null) return fast
         }
     }
-    return Instant.parse(iso)
+    return runCatching { Instant.parse(iso) }.getOrNull()
 }
 internal fun positionCompare(seq: Int, part: Int, otherSeq: Int, otherPart: Int): Int =
     if (seq == otherSeq) part.compareTo(otherPart) else seq.compareTo(otherSeq)

@@ -353,6 +353,27 @@ func InPrivateState(path, state string) bool { return within(state, path) }
 // Resolve never reads the clock, filesystem, Git, environment or network. Node
 // supplies its own path context. Paths are lexical, not ownership attestation.
 func Resolve(s Source, n NodeContext) Preview {
+	return ResolveWithPhysicalHome(s, n, n.Home)
+}
+
+// PhysicalHomePath substitutes only the configured home prefix. Any remaining
+// symlinks and non-clean source paths must reach the node's path checks intact.
+func PhysicalHomePath(path, home, physicalHome string) string {
+	if home == physicalHome || !filepath.IsAbs(home) || !filepath.IsAbs(physicalHome) ||
+		!filepath.IsAbs(path) || path != filepath.Clean(path) {
+		return path
+	}
+	rel, err := filepath.Rel(home, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return path
+	}
+	return filepath.Join(physicalHome, rel)
+}
+
+// ResolveWithPhysicalHome uses the node-supplied physical prefix to derive each
+// workspace path before checking its length and freezing the plan. The original
+// context and rules stay in the snapshot, including for previously valid plans.
+func ResolveWithPhysicalHome(s Source, n NodeContext, physicalHome string) Preview {
 	p := Preview{Status: "complete", Diagnostics: []Problem{}}
 	p.Describe(s)
 	rules := s.Rules
@@ -413,6 +434,7 @@ func Resolve(s Source, n NodeContext) Preview {
 		p.add("base_scope_denied", "base_directory", "", "error")
 		return p
 	}
+	base = PhysicalHomePath(base, n.Home, physicalHome)
 	rel, err := expand(s.Rules.TaskDirectoryTemplate, "task_directory_template", values, false)
 	if err != nil {
 		e := err.(Problem)

@@ -267,6 +267,22 @@
     {
       "name": "settings_search_shadow",
       "value": "#0C000000"
+    },
+    {
+      "name": "persona_glass_rim",
+      "value": "#B8FFFFFF"
+    },
+    {
+      "name": "persona_glass_surface",
+      "value": "#EBFFFFFF"
+    },
+    {
+      "name": "persona_hero_glow",
+      "value": "#1C007AFF"
+    },
+    {
+      "name": "persona_hero_glow_alt",
+      "value": "#145B4FD6"
     }
   ]
 }

@@ -7,7 +7,7 @@ import { assistantChatSource, assistantChatState, assistantSidebarChats, sidebar
 import { i18n, intl } from '@kit.LocalizationKit';
 import { nativeMeetingServices, NativeMeetingServices } from '../platform/NativeMeetingServices';
 import { AgentStartPicker } from '../components/AgentStartPicker';
-import { AgentLaunchChoices, providerStartModes, LaunchChoice, RecentAgentSetup, loadAgentSetups, rememberAgentSetup, recentLaunchDirectories } from '../models/AgentLaunchChoices';
+import { AgentLaunchChoices, builtinLauncherTitle, providerStartModes, LaunchChoice, RecentAgentSetup, loadAgentSetups, rememberAgentSetup, recentLaunchDirectories } from '../models/AgentLaunchChoices';
 import { WorktreeSheet } from '../components/WorktreeSheet';
 import { phonePlaceAtRoot, phonePanIntent, finishesPhonePan } from '../models/PhoneNavigation';
 import { relativeActivityDate } from '../core/PhoneDate';
@@ -30,6 +30,7 @@ import { PhoneOutlineIcon } from '../design/PhoneOutlineIcon';
 import { phoneAppearancePage, phoneSettingsLink, pushPhoneSetting } from '../core/PhoneSettingsNavigation';
 import { SettingsDirectory, PhoneSettingsOptions } from '../components/SettingsDirectory';
 import { PhoneAlarmsSettings } from '../components/PhoneAlarmsSettings';
+import { XiaoYiSettingsPage } from '../components/XiaoYiSettingsPage';
 import { PhoneSettingsDevicePages } from '../components/PhoneSettingsDevicePages';
 import { PhoneDefaultPermissionSection } from '../components/PhoneDefaultPermissionSection';
 import { InboxSourcesNavigation } from '../models/InboxSources';
@@ -102,7 +103,15 @@ import { nativeSheetInset } from '../platform/NativeInsets';
 import { mainConversationData } from '../core/DefaultConversation';
 import { AssistantDetailPage } from '../components/AssistantDetailPage';
 import { tr, trError } from '../design/Strings';
+import { KeyCode } from '@kit.InputKit';
+import { Motion } from '../design/Motion';
+import { Haptics } from '../platform/Haptics';
+import { FOLD_DISPLAY_MODE_GLOBAL_FULL, pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
+import type { FoldAdaptiveLayout } from '../core/FoldPosture';
+import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
+import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
 import { isHubStateKey } from '../core/StorageOwnership';
+import { formatSharedDraftText } from '../core/XiaoYiRoutes';
 
 interface ChatActionEntry extends SheetInfo {
   identity?: string;
@@ -152,6 +161,13 @@ struct Index {
   @Local stack: NavPathStack = new NavPathStack();
   @Local breakpoint: WidthBreakpoint = WidthBreakpoint.WIDTH_SM;
   @Local collapsed: boolean = false;
+  @Local foldInspectorOpen: boolean = false;
+  @Local foldInspectorUserToggled: boolean = false;
+  @Local foldWorkbenchTab: number = 0;
+  @Local foldWorkbenchTabSignal: number = 0;
+  private foldInspectorCollapsedRail: boolean = false;
+  @Local foldWindowWidthVp: number = 0;
+  @Local foldWindowHeightVp: number = 0;
   @Local drawerSearch: string = '';
   @Local drawerSearching: boolean = false;
   @Local projectSearching: boolean = false;
@@ -172,6 +188,7 @@ struct Index {
   private gesturePlace: number = -1;
   private drawerFrom: number = 0;
   private drawerAnimation: number = 0;
+  private drawerVelocity: number = 0;
   private drawerTapBlockedUntil: number = 0;
   @Local query: string = '';
   @Local filter: number = 0;
@@ -505,16 +522,18 @@ struct Index {
   private sessionActionSize(): number { return PhoneStyle.formSize(44,57.7,this.environment.fontScale); }
   private peerSegmentHeight(): number { return PhoneStyle.formSize(39.7,47.3,this.environment.fontScale); }
   private peerSegmentWidth(): number {
-    const room = (this.phoneWidth - 2 * this.peerActionSize() - 60) / 2;
-    return Math.max(48, Math.min(PhoneStyle.formSize(79,94.7,this.environment.fontScale), room));
+    const room = (this.phoneWidth - 2 * this.peerActionSize() - 48) / 2;
+    return Math.max(48, Math.min(PhoneStyle.formSize(98,114,this.environment.fontScale), room));
   }
   private drawerWidth(): number { return Math.min(380, Math.max(1,this.phoneWidth * 0.82)); }
   @Monitor('spacesShown') drawerStateChanged(): void {
     if (!this.spacesShown && !this.wide()) this.assistantMenuScope = '';
-    if (this.wide()) { this.drawerFraction = 0; this.drawerMounted = false; return; }
-    this.settlePhoneDrawer(this.spacesShown);
+    if (this.wide()) { this.drawerFraction = 0; this.drawerMounted = false; this.drawerVelocity = 0; return; }
+    const velocity = this.drawerVelocity;
+    this.drawerVelocity = 0;
+    this.settlePhoneDrawer(this.spacesShown, velocity);
   }
-  private settlePhoneDrawer(open:boolean): void {
+  private settlePhoneDrawer(open:boolean, velocity:number = 0): void {
     const revision = ++this.drawerAnimation;
     if (this.environment.reduceMotion) {
       this.drawerFraction = open ? 1 : 0;
@@ -522,9 +541,10 @@ struct Index {
       return;
     }
     if (open) this.drawerMounted = true;
-    this.getUIContext().animateTo({duration:230,curve:Curve.EaseOut,onFinish:() => {
+    const param = Motion.drawer(this.environment.reduceMotion, velocity, this.drawerWidth(), () => {
       if (revision === this.drawerAnimation && !this.spacesShown) this.drawerMounted = false;
-    }},() => this.drawerFraction = open ? 1 : 0);
+    });
+    this.getUIContext().animateTo(param, () => this.drawerFraction = open ? 1 : 0);
   }
   private startPhonePan(event:GestureEvent): void {
     this.gestureKind = '';
@@ -563,9 +583,10 @@ struct Index {
     if (kind === 'close') this.drawerTapBlockedUntil = Date.now() + 200;
     if (kind === 'open' || kind === 'close') {
       const open = done ? kind === 'open' && dx > 0 || kind === 'close' && dx >= 0 : this.spacesShown;
-      if (open !== this.spacesShown) { this.drawerSearching = false; this.spacesShown = open; }
-      else this.settlePhoneDrawer(open);
+      if (open !== this.spacesShown) { Haptics.selection(); this.drawerSearching = false; this.drawerVelocity = vx; this.spacesShown = open; }
+      else this.settlePhoneDrawer(open, vx);
     } else if (done && this.phonePeer() && (kind === 'agents' && dx < 0 || kind === 'persona' && dx > 0)) {
+      Haptics.selection();
       this.browsePeer(kind === 'agents' ? 1 : 0);
     }
   }
@@ -786,8 +807,9 @@ struct Index {
           Stack({alignContent:Alignment.Start}) {
             Row().width(this.peerSegmentWidth()).height(this.peerSegmentHeight()).borderRadius((this.peerSegmentHeight()+8)/2)
               .backgroundColor(Colors.styleID==='beautiful' ? this.environment.dark ? '#232427' : '#FFFFFF' : Colors.control)
-              .shadow({radius:Colors.styleID==='beautiful' ? 2 : 0,color:this.environment.dark ? '#33000000' : '#18000000',offsetY:1})
+              .shadow({radius:Colors.styleID==='beautiful' ? 2 : 4,color:this.environment.dark ? '#33000000' : '#14000000',offsetY:1})
               .translate({x:(this.compactPeerIndex()+this.peerDrag)*this.peerSegmentWidth()})
+              .animation(this.peerDrag === 0 ? Motion.state(this.environment.reduceMotion) : undefined)
               .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
             Row() {
             this.placeButton('phone_assistant_title', 0, 'shell.persona', () => this.browsePeer(0))
@@ -805,7 +827,7 @@ struct Index {
           }.padding(4).borderRadius((this.peerSegmentHeight()+8)/2)
             .backgroundColor(Colors.styleID==='beautiful' ? this.environment.dark ? '#2B2C2F' : '#F2F2F3' : Colors.surface)
             .border({width:PhoneStyle.surfaceEdgeWidth(.5),color:Colors.styleID==='beautiful' ? this.environment.dark ? '#2E3033' : '#ECEDEF' : Colors.styleEdge || Colors.divider,radius:(this.peerSegmentHeight()+8)/2})
-            .shadow(PhoneStyle.surfaceShadow({radius:0,color:Color.Transparent}))
+            .shadow(PhoneStyle.cardElevation(this.environment.dark))
           Blank().layoutWeight(1)
         } else if ((this.phoneTop === 'session' || this.phoneToolParent) && this.activeChild === this.childKey(this.phoneTop,this.phoneParam) && this.targetReady(this.phoneTop,this.phoneParam)) {
           PhoneSessionHeading({model:this.detailModel,space:this.phoneSessionSpace,heading:this.phonePageName(),
@@ -907,8 +929,176 @@ struct Index {
     const data = row.data(); data['assistant_item_id'] = itemId; data['assistant_item_kind'] = kind; row.raw = JSON.stringify(data);
     this.stack.pushPath({ name: 'assistant', param: JSON.stringify(row) }); this.savePath();
   }
-  private wide(): boolean { return this.breakpoint === WidthBreakpoint.WIDTH_LG || this.breakpoint === WidthBreakpoint.WIDTH_XL; }
+  @Computed get foldLayout(): FoldAdaptiveLayout {
+    const widthVp = this.foldWindowWidthVp > 0 ? this.foldWindowWidthVp : this.phoneWidth;
+    const heightVp = this.foldWindowHeightVp > 0 ? this.foldWindowHeightVp : this.phoneHeight;
+    return resolveFoldLayout({
+      widthClass: widthClassFromBreakpoint(Number(this.breakpoint)),
+      windowWidthVp: widthVp,
+      windowHeightVp: heightVp,
+      isFoldable: this.environment.isFoldable,
+      foldStatus: this.environment.foldStatus,
+      foldDisplayMode: this.environment.foldDisplayMode,
+      nativeHoverAvailable: this.environment.nativeHoverAvailable
+    });
+  }
+  private wide(): boolean {
+    return this.breakpoint === WidthBreakpoint.WIDTH_LG || this.breakpoint === WidthBreakpoint.WIDTH_XL || this.foldLayout.navigationMode === 'split';
+  }
   private rail(): boolean { return this.wide() && this.collapsed; }
+  private showFoldInspector(): boolean {
+    if (!this.wide() || !this.foldLayout.supportsInspector || !this.model.profile.id) return false;
+    return this.foldInspectorUserToggled ? this.foldInspectorOpen : this.foldLayout.autoShowInspector;
+  }
+  private setFoldInspectorOpen(next: boolean): void {
+    Motion.run(this.getUIContext(), Motion.layout(this.environment.reduceMotion), () => {
+      this.foldInspectorUserToggled = true;
+      this.foldInspectorOpen = next;
+      if (next && this.foldLayout.collapseRailForInspector && !this.collapsed) {
+        this.foldInspectorCollapsedRail = true;
+        this.collapsed = true;
+      } else if (!next && this.foldInspectorCollapsedRail) {
+        this.foldInspectorCollapsedRail = false;
+        this.collapsed = false;
+      }
+    });
+  }
+  private toggleFoldInspector(): void {
+    Haptics.selection();
+    this.setFoldInspectorOpen(!this.showFoldInspector());
+  }
+  private foldPostureLabel(): string {
+    const p = this.foldLayout.posture;
+    if (p === 'trifold_unfolded') return tr('fold_posture_trifold');
+    if (p === 'trifold_angled') return tr('fold_posture_trifold_angled');
+    if (p === 'dual_unfolded') return tr('fold_posture_dual');
+    if (p === 'hover_tabletop') return tr('fold_posture_hover');
+    return '';
+  }
+  private isTriFoldPosture(): boolean {
+    return this.foldLayout.posture === 'trifold_unfolded' ||
+      this.foldLayout.posture === 'trifold_angled' ||
+      this.environment.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL;
+  }
+  private stepFoldRelay(direction: 1 | -1): void {
+    const rows = (this.model.directoryReady && this.model.directorySessions.length
+      ? this.model.directorySessions
+      : this.model.sessions).filter((row: ResourceRow) => {
+        if (row.kind !== 'session') return false;
+        const data = row.data();
+        return !Wire.bool(data, 'archived') && !Wire.bool(data, 'assistant') && !Wire.bool(data, 'hidden_by_directory');
+      });
+    const states = rows.map((row: ResourceRow) => {
+      const data = row.data();
+      const raw = row.state || Wire.text(data, 'status');
+      if (Wire.bool(data, 'needs_you') || raw === 'needs_you' || raw === 'blocked') return 'needs_you';
+      if (Wire.bool(data, 'working') || raw === 'working' || raw === 'running') return 'working';
+      if (raw === 'done' || raw === 'unread' || Wire.bool(data, 'unread')) return 'unread';
+      return 'idle';
+    });
+    const currentKey = this.detailModel.selected?.key() || this.model.selected?.key() || '';
+    const currentIndex = rows.findIndex((row: ResourceRow) => row.key() === currentKey);
+    const nextIndex = pickRelaySessionIndex(states, currentIndex, direction);
+    if (nextIndex >= 0 && rows[nextIndex]) {
+      Haptics.selection();
+      this.openPickedChat(rows[nextIndex]);
+    }
+  }
+  private expandRail(): void {
+    Haptics.tap();
+    Motion.run(this.getUIContext(), Motion.layout(this.environment.reduceMotion), () => {
+      this.collapsed = false;
+      if (this.foldInspectorCollapsedRail || (this.foldLayout.collapseRailForInspector && this.showFoldInspector())) {
+        this.foldInspectorCollapsedRail = false;
+        this.foldInspectorUserToggled = true;
+        this.foldInspectorOpen = false;
+      }
+    });
+  }
+  private keyNameForShortcut(event: KeyEvent): string {
+    if (event.keyCode === KeyCode.KEYCODE_ESCAPE) return 'escape';
+    if (event.keyCode === KeyCode.KEYCODE_K) return 'k';
+    if (event.keyCode === KeyCode.KEYCODE_N) return 'n';
+    if (event.keyCode === KeyCode.KEYCODE_I) return 'i';
+    if (event.keyCode === KeyCode.KEYCODE_1) return '1';
+    if (event.keyCode === KeyCode.KEYCODE_2) return '2';
+    if (event.keyCode === KeyCode.KEYCODE_3) return '3';
+    if (event.keyCode === KeyCode.KEYCODE_LEFT_BRACKET) return '[';
+    if (event.keyCode === KeyCode.KEYCODE_RIGHT_BRACKET) return ']';
+    return '';
+  }
+  private isCtrlOrMetaPressed(event: KeyEvent): boolean {
+    if (event.metaKey > 0) return true;
+    try {
+      if (event.getModifierKeyState && event.getModifierKeyState(['Ctrl'])) return true;
+    } catch (_) {}
+    return false;
+  }
+  private dismissTopOverlay(): boolean {
+    if (this.directionPermissionsVisible) { this.directionPermissionsVisible = false; return true; }
+    if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true;
+    if (this.chatTitleMenuVisible || this.chatBodyMenuVisible) { this.dismissChatActions(); return true; }
+    if (this.chatSearchShown) { this.chatSearchShown = false; return true; }
+    if (this.readerShown) { this.readerShown = false; return true; }
+    if (this.activityVisible) { this.activityVisible = false; return true; }
+    if (this.showSheet) {
+      if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel();
+      else if (!this.creatingAgent) this.showSheet = false;
+      return true;
+    }
+    if (this.phoneSettingsShown) {
+      if (this.phoneSettingsPage) this.backPhoneSetting();
+      else { this.phoneSettingsQuery = ''; this.phoneSettingsShown = false; }
+      return true;
+    }
+    if (this.spacesShown) { this.spacesShown = false; return true; }
+    if (this.showFoldInspector()) { this.setFoldInspectorOpen(false); return true; }
+    return false;
+  }
+  private switchFoldWorkbenchTab(tab: number): void {
+    Haptics.selection();
+    if (!this.showFoldInspector()) this.setFoldInspectorOpen(true);
+    this.foldWorkbenchTab = tab;
+    this.foldWorkbenchTabSignal++;
+  }
+  private handleFoldKeyEvent(event: KeyEvent): void {
+    if (event.type !== KeyType.Down || !this.model.profile.id) return;
+    const action = resolveFoldShortcut(
+      this.keyNameForShortcut(event),
+      this.isCtrlOrMetaPressed(event),
+      this.wide() && this.foldLayout.supportsInspector
+    );
+    if (action === 'none') return;
+    if (action === 'search') {
+      Haptics.selection();
+      this.showAllChats(this.peer() === 1 || this.projectPlace());
+      event.stopPropagation();
+    } else if (action === 'new_chat') {
+      Haptics.tap();
+      this.startFromPlace();
+      event.stopPropagation();
+    } else if (action === 'toggle_inspector') {
+      this.toggleFoldInspector();
+      event.stopPropagation();
+    } else if (action === 'workbench_pulse') {
+      this.switchFoldWorkbenchTab(0);
+      event.stopPropagation();
+    } else if (action === 'workbench_code') {
+      this.switchFoldWorkbenchTab(1);
+      event.stopPropagation();
+    } else if (action === 'workbench_machines') {
+      this.switchFoldWorkbenchTab(2);
+      event.stopPropagation();
+    } else if (action === 'next_unread') {
+      this.stepFoldRelay(1);
+      event.stopPropagation();
+    } else if (action === 'prev_unread') {
+      this.stepFoldRelay(-1);
+      event.stopPropagation();
+    } else if (action === 'dismiss') {
+      if (this.dismissTopOverlay()) event.stopPropagation();
+    }
+  }
   private filtered(): ResourceRow[] {
     return this.model.sessions.filter((row: ResourceRow) =>
       (!this.query || (row.title + ' ' + row.path + ' ' + row.machine).toLowerCase().includes(this.query.toLowerCase())) &&
@@ -972,9 +1162,30 @@ struct Index {
     } else this.pairingForm()
   }
   private updateBreakpoint(): void {
-    const old = this.breakpoint; this.breakpoint = this.getUIContext().getWindowWidthBreakpoint();
-    hilog.info(0x0000, 'PersonaLayout', 'widthBreakpoint=%{public}s', String(this.breakpoint));
-    if (old !== this.breakpoint && this.wide() && this.model.section === 1 && this.stack.size() === 0 && this.model.sessions.length)
+    const oldWide = this.wide();
+    const ui = this.getUIContext();
+    this.breakpoint = ui.getWindowWidthBreakpoint();
+    if (this.environment.windowWidthPx > 0) this.foldWindowWidthVp = ui.px2vp(this.environment.windowWidthPx);
+    if (this.environment.windowHeightPx > 0) this.foldWindowHeightVp = ui.px2vp(this.environment.windowHeightPx);
+    this.environment.syncPosture(this.foldWindowWidthVp || this.phoneWidth, this.foldWindowHeightVp || this.phoneHeight, Number(this.breakpoint));
+    hilog.info(0x0000, 'PersonaLayout', 'widthBreakpoint=%{public}s posture=%{public}s wide=%{public}s',
+      String(this.breakpoint), this.foldLayout.posture, String(this.wide()));
+    if (!this.foldLayout.supportsInspector) {
+      this.foldInspectorUserToggled = false;
+      this.foldInspectorOpen = false;
+    }
+    if (this.showFoldInspector() && this.foldLayout.collapseRailForInspector && !this.collapsed && !this.foldInspectorUserToggled) {
+      this.collapsed = true;
+      this.foldInspectorCollapsedRail = true;
+    } else if (!this.foldLayout.collapseRailForInspector && this.foldInspectorCollapsedRail) {
+      this.collapsed = false;
+      this.foldInspectorCollapsedRail = false;
+    }
+    if (!this.wide() && (this.collapsed || this.foldInspectorCollapsedRail)) {
+      this.collapsed = false;
+      this.foldInspectorCollapsedRail = false;
+    }
+    if (oldWide !== this.wide() && this.wide() && this.model.section === 1 && this.stack.size() === 0 && this.model.sessions.length)
       this.openRow(this.model.sessions.find((row: ResourceRow) => row.key() === this.model.selected.key()) || this.model.sessions[0]);
   }
   private bindDeviceOwner(model: ClientModel): void {
@@ -1033,6 +1244,7 @@ struct Index {
     this.navigationRestoredScope = scope;
     if (this.meetingServices.pendingOpen && this.model.ready) { this.consumeMeetingReminder(); return; }
     if (this.model.projectsRequested && this.model.ready) { this.consumeProjectLaunch(); return; }
+    if (this.model.pendingXiaoYiRoute && this.model.ready) { this.consumeXiaoYiRoute(); return; }
     if (intent !== this.navigationIntent) this.savePath();
     if (this.model.section === 2 && !this.stack.size()) this.openResources('inbox');
     else if (this.model.section === 3 && !this.stack.size()) this.openSettingsRoot();
@@ -1042,10 +1254,86 @@ struct Index {
   }
   @Monitor('model.pairingLink') pairingChanged(): void { this.consumePairingLink(); }
   @Monitor('model.notificationTarget') notificationChanged(): void { this.consumeNotification(); }
+  @Monitor('model.pendingXiaoYiRoute', 'model.ready') xiaoYiRouteChanged(): void { this.consumeXiaoYiRoute(); }
+  private consumeXiaoYiRoute(): void {
+    if (!this.model.pendingXiaoYiRoute || !this.model.ready) return;
+    const raw = this.model.pendingXiaoYiRoute;
+    const parsed = Wire.parse(raw);
+    const dest = Wire.text(parsed, 'dest');
+    if (!dest) { this.model.pendingXiaoYiRoute = ''; return; }
+    if (dest !== 'settings_xiaoyi' && (!this.model.profile.id || this.navigationRestoredScope !== this.model.scope())) return;
+    this.model.pendingXiaoYiRoute = '';
+    this.spacesShown = false;
+    this.phoneSettingsShown = false;
+    if (dest === 'assistant') {
+      this.openSpace('persona');
+      return;
+    }
+    if (dest === 'agents') {
+      this.openSpace('agents');
+      return;
+    }
+    if (dest === 'session') {
+      const machine = Wire.text(parsed, 'machine'), session = Wire.text(parsed, 'session');
+      const profile = Wire.text(parsed, 'profile') || this.model.profile.id;
+      const manager = Wire.text(parsed, 'manager') || this.model.profile.manager;
+      if (profile && machine && session) {
+        this.model.openNotification(Wire.payload(['profile', 'manager', 'machine', 'session'], [profile, manager, machine, session])).catch(() => {});
+      }
+      return;
+    }
+    if (dest === 'todos') { this.openSpace('todo'); return; }
+    if (dest === 'knowledge') { this.openSpace('knowledge'); return; }
+    if (dest === 'health') { this.openSpace('health'); return; }
+    if (dest === 'inbox') { this.openSpace('inbox'); return; }
+    if (dest === 'recording') {
+      const autoStart = Wire.bool(parsed, 'autoStart');
+      if (!this.model.isRecordingModuleAllowed()) {
+        // Fail closed on recording starts when the Hub's recording module is off (#15985 / #15978);
+        // stored recordings stay readable and an active recording stays stoppable.
+        this.getUIContext().getPromptAction().showToast({ message: tr('xiaoyi_recording_module_off') });
+        this.openSpace('recordings');
+        return;
+      }
+      if (autoStart) {
+        this.openSpace('recordings');
+        return;
+      }
+      this.openSpace('recordings');
+      return;
+    }
+    if (dest === 'dictate') { this.openSpace('persona'); this.newConversation(); return; }
+    if (dest === 'settings_xiaoyi') {
+      if (!this.wide()) {
+        this.phoneSettingsQuery = '';
+        this.phoneSettingsTrail = pushPhoneSetting([], 'phone_xiaoyi');
+        if (this.model.profile.id) this.spacesShown = true;
+        this.phoneSettingsShown = true;
+      } else {
+        this.openSettings('phone_xiaoyi');
+      }
+      return;
+    }
+    if (dest === 'share') {
+      const sharedText = formatSharedDraftText(Wire.text(parsed, 'title'), Wire.text(parsed, 'text'), Wire.text(parsed, 'url'));
+      this.openSpace('persona');
+      if (sharedText) {
+        const owner = this.model, scope = owner.scope(), generation = owner.connectionGeneration();
+        this.openMain().then(() => {
+          if (this.model === owner && owner.owns(generation, scope)) {
+            const current = owner.draft.trim();
+            const next = !current ? sharedText : current.includes(sharedText) ? owner.draft : current + '\n\n' + sharedText;
+            owner.updateDraft(next);
+          }
+        }).catch(() => {});
+      }
+    }
+  }
   private consumeNotification(): void {
     if (!this.model.notificationTarget) return;
     const row = this.routeRow(this.model.notificationTarget); this.model.notificationTarget = '';
     if (!this.model.sessions.concat(this.model.conversations).some((item: ResourceRow) => item.key() === row.key())) return;
+    this.spacesShown = false; this.phoneSettingsShown = false; this.chatSearchShown = false;
     this.changeSection(row.kind === 'conversation' ? 0 : 1); this.openRow(row, false);
   }
   private consumePairingLink(): void {
@@ -1355,12 +1643,21 @@ struct Index {
     ];
   }
   @Builder shellMenu() {
-    Row({ space: Tokens.gap }) {
+    Row({ space: this.foldLayout.supportsInspector ? 4 : Tokens.gap }) {
       if (!this.rail()) ForEach(this.menus(), (item: NavigationMenuItem, index: number) => {
         Button({ type: ButtonType.Circle }) { SymbolGlyph(index === 0 ? Symbols.plus : Symbols.spaces).fontSize(Tokens.symbolFont).fontColor([Colors.ink]) }
-          .attributeModifier(ButtonStyles.chrome).accessibilityText(item.value as string).onClick(() => item.action?.()).id(index === 0 ? 'shell.new' : 'shell.spaces')
+          .attributeModifier(ButtonStyles.chrome).width(36).height(36).accessibilityText(item.value as string).onClick(() => { Haptics.tap(); item.action?.(); }).id(index === 0 ? 'shell.new' : 'shell.spaces')
       })
-    }.height(this.headerHeight()).alignItems(VerticalAlign.Center).padding({ right: Tokens.page })
+      if (!this.rail() && this.wide() && this.foldLayout.supportsInspector) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.info_circle')).fontSize(Tokens.symbolFont).fontColor([this.showFoldInspector() ? Colors.link : Colors.ink])
+        }.attributeModifier(ButtonStyles.chrome).width(36).height(36)
+          .backgroundColor(this.showFoldInspector() ? Colors.selection : Color.Transparent)
+          .accessibilityText(tr('fold_inspector_title'))
+          .onClick(() => this.toggleFoldInspector())
+          .id('shell.fold.inspector')
+      }
+    }.height(this.headerHeight()).alignItems(VerticalAlign.Center).padding({ right: this.foldLayout.supportsInspector ? 10 : Tokens.page })
   }
   @Builder navigationMenus(name: string, param: Object) {
     if (this.wide()) this.destinationMenus(name, param)
@@ -1399,7 +1696,13 @@ struct Index {
       } else ForEach(this.destinationMenuItems(name, param), (item: NavigationMenuItem, index: number) => {
         Button({ type: ButtonType.Circle }) {
           if (item.symbolIcon) SymbolGlyph().attributeModifier(item.symbolIcon).fontSize(Tokens.symbolFont)
-          else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
+          else if (name === 'session' || name === 'conversation' || name === 'tools') {
+            Row({ space: 3 }) {
+              ForEach([0, 1, 2], (_dot: number) => {
+                Circle().width(3.5).height(3.5).fill(Colors.ink)
+              }, (dot: number) => String(dot))
+            }
+          } else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
         }.attributeModifier(ButtonStyles.chrome)
           .width(Tokens.chrome).height(Tokens.chrome).backgroundColor(Color.Transparent)
           .accessibilityText(item.value as string).enabled(item.isEnabled !== false).onClick(() => item.action?.())
@@ -1407,6 +1710,16 @@ struct Index {
           .bindMenu((name === 'session' || name === 'conversation' || name === 'tools') && this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param),
             this.chatActionsMenu, this.chatMenuOptions(this.chatMenuRevision))
       })
+      if (this.rail() && this.foldLayout.supportsInspector && (name === 'session' || name === 'conversation' || name === 'tools')) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph($r('sys.symbol.info_circle')).fontSize(Tokens.symbolFont).fontColor([this.showFoldInspector() ? Colors.link : Colors.ink])
+        }.attributeModifier(ButtonStyles.chrome)
+          .width(Tokens.chrome).height(Tokens.chrome)
+          .backgroundColor(this.showFoldInspector() ? Colors.selection : Color.Transparent)
+          .accessibilityText(tr('fold_inspector_title'))
+          .onClick(() => this.toggleFoldInspector())
+          .id('fold.inspector.toggle')
+      }
     }.height(this.headerHeight()).alignItems(VerticalAlign.Center).padding({ right: this.wide() ? Tokens.page : 0 })
   }
   private openSettingsRoot(): void { this.stack.pushPath({ name: 'settings_root', param: '' }); this.savePath(); }
@@ -1626,28 +1939,28 @@ struct Index {
   @Builder assistantHeading(row: ResourceRow) {
     Row() {
       Button({ type: ButtonType.Normal }) {
-        Row({ space: 10 }) {
+        Row({ space: 8 }) {
           Stack({ alignContent: Alignment.BottomEnd }) {
-            Image(this.look.avatarUri || $r('app.media.phone_persona_face')).width(40).height(40).objectFit(ImageFit.Cover).borderRadius(20)
+            Image(this.look.avatarUri || $r('app.media.phone_persona_face')).width(38).height(38).objectFit(ImageFit.Cover).borderRadius(19)
             if (Wire.has(row.data(), 'online')) Circle().width(10).height(10)
               .fill(Wire.bool(row.data(), 'online') ? Colors.positive : Colors.secondary)
               .stroke(Colors.surface).strokeWidth(2)
           }
           Column({ space: 1 }) {
-            Row({ space: 5 }) {
-              Text(row.title || row.id).fontSize(22).maxFontScale(Tokens.navigationTextMaxScale).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
+            Row({ space: 4 }) {
+              Text(row.title || row.id).fontSize(18).maxFontScale(Tokens.navigationTextMaxScale).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
                 .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).flexShrink(1)
               SymbolGlyph(Symbols.down).fontSize('12vp').fontColor([Colors.secondary])
-            }
+            }.width('100%')
             if (this.managerLine(row)) Text(this.managerLine(row)).fontSize(13).maxFontScale(Tokens.navigationTextMaxScale).fontColor(Colors.secondary)
-              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          }.alignItems(HorizontalAlign.Start).flexShrink(1)
-        }.constraintSize({ minHeight: this.drawerMetric(44), maxWidth:'100%' })
-      }.padding(0).backgroundColor(Color.Transparent).constraintSize({maxWidth:'100%'})
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        }.width('100%').constraintSize({ minHeight: this.drawerMetric(44) })
+      }.width('100%').padding(0).backgroundColor(Color.Transparent)
         .accessibilityText([tr('phone_switch_assistant'), row.title || row.id, this.managerLine(row)].filter((s: string) => !!s).join(' · '))
-        .onClick(() => { if (this.drawerAcceptsTap()) { this.assistantMenuEpoch++; this.assistantMenuScope = this.model.scope(); } })
+        .onClick(() => { if (this.drawerAcceptsTap()) { Haptics.tap(); this.assistantMenuEpoch++; this.assistantMenuScope = this.model.scope(); } })
         .bindPopup(!!this.assistantMenuScope && this.assistantMenuScope === this.model.scope(),this.assistantMenuOptions(this.assistantMenuScope,this.assistantMenuEpoch)).id('spaces.assistant_switcher')
-    }.layoutWeight(1).justifyContent(FlexAlign.Start)
+    }.layoutWeight(1).clip(true).justifyContent(FlexAlign.Start)
   }
   @Computed get drawerAgentRows():ResourceRow[] {
     if (!this.mergedPhone()) return [];
@@ -2159,6 +2472,8 @@ struct Index {
         List() { PhoneDefaultPermissionSection({model:this.model,elevated:true}) }.width('100%').layoutWeight(1).padding(16)
       } else if (this.phoneSettingsPage==='phone_native_alarms') {
         PhoneAlarmsSettings({elevated:true,active:this.phoneSettingsShown}).layoutWeight(1)
+      } else if (this.phoneSettingsPage==='phone_xiaoyi') {
+        XiaoYiSettingsPage({model:this.model,elevated:true}).layoutWeight(1)
       } else if (['phone_hubs','phone_pairing','about','storage','phone_live_screen','phone_health_reports'].includes(this.phoneSettingsPage)) {
         PhoneSettingsDevicePages({model:this.model,elevated:true,page:this.phoneSettingsPage,
           onOpen:(key:string)=>this.openFromPhoneSettings(key),onPair:()=>this.pairFromSettings()}).layoutWeight(1)
@@ -2253,8 +2568,147 @@ struct Index {
       compactRoot:true,retainWorkspace:true,active:this.projectPlace(),selectedRow:this.detailModel.selected,
       onOpen:(row:ResourceRow) => this.openLinkedResource(row),onOpenTodo:(row:ResourceRow) => this.openLinkedResource(row)})
   }
+  @Builder railSpaceButton(kind: string) {
+    ListItem() {
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph(this.spaceSymbol(kind))
+          .fontSize('18vp')
+          .fontColor([this.drawerPlaceSelected(kind) ? Colors.link : Colors.ink])
+      }
+      .width(40)
+      .height(40)
+      .padding(0)
+      .backgroundColor(this.drawerPlaceSelected(kind) ? Colors.selection : Colors.surface)
+      .border({
+        width: this.drawerPlaceSelected(kind) ? 1.5 : PhoneStyle.surfaceEdgeWidth(0.5),
+        color: this.drawerPlaceSelected(kind) ? Colors.link : Colors.divider,
+        radius: 20
+      })
+      .accessibilityText(this.spaceTitle(kind))
+      .accessibilitySelected(this.drawerPlaceSelected(kind))
+      .bindTips(this.spaceTitle(kind))
+      .onClick(() => { Haptics.selection(); this.openSpace(kind); })
+      .id('shell.rail.space.' + kind)
+    }.width('100%').padding({ top: 4, bottom: 4 })
+  }
+  @Builder personaRail() {
+    List() {
+      ListItem() {
+        Button({ type: ButtonType.Circle }) {
+          Image(this.look.avatarUri || $r('app.media.foreground'))
+            .width(34).height(34).objectFit(ImageFit.Cover).borderRadius(17)
+        }
+        .width(40)
+        .height(40)
+        .padding(0)
+        .backgroundColor(Colors.surface)
+        .border({
+          width: this.chatSelectionShown('conversation') && this.detailModel.selected.id === this.model.mainId ? 2 : PhoneStyle.surfaceEdgeWidth(0.5),
+          color: this.chatSelectionShown('conversation') && this.detailModel.selected.id === this.model.mainId ? Colors.link : Colors.divider,
+          radius: 20
+        })
+        .shadow(PhoneStyle.cardElevation(this.environment.dark))
+        .accessibilityText(tr('main_chat'))
+        .bindTips(tr('main_chat'))
+        .onClick(() => { Haptics.selection(); this.openMain(); })
+        .id('shell.rail.main')
+      }.width('100%').padding({ top: 4, bottom: 4 })
+      this.railSpaceButton('inbox')
+      this.railSpaceButton('todo')
+      this.railSpaceButton('knowledge')
+      this.railSpaceButton('health')
+      this.railSpaceButton('devices')
+      this.railSpaceButton('settings')
+    }
+    .width('100%')
+    .height('100%')
+    .alignListItem(ListItemAlign.Center)
+    .scrollBar(BarState.Off)
+    .padding({ top: 6, bottom: 12 })
+    .backgroundColor(Colors.grouped)
+    .id('shell.rail.persona_list')
+  }
+  @Builder railShell() {
+    Column() {
+      Column({ space: 2 }) {
+        Button({ type: ButtonType.Circle }) {
+          SymbolGlyph(Symbols.persona)
+            .fontSize('17vp')
+            .fontColor([this.peer() === 0 && !this.projectPlace() ? Colors.onAction : Colors.secondary])
+        }
+        .width(36)
+        .height(34)
+        .padding(0)
+        .backgroundColor(this.peer() === 0 && !this.projectPlace() ? Colors.action : Color.Transparent)
+        .accessibilityText(tr('persona'))
+        .accessibilitySelected(this.peer() === 0 && !this.projectPlace())
+        .bindTips(tr('persona'))
+        .onClick(() => { Haptics.selection(); this.selectPeer(0); })
+        .id('shell.rail.persona')
+
+        Stack({ alignContent: Alignment.TopEnd }) {
+          Button({ type: ButtonType.Circle }) {
+            SymbolGlyph(Symbols.agents)
+              .fontSize('17vp')
+              .fontColor([this.peer() === 1 && !this.projectPlace() ? Colors.onAction : Colors.secondary])
+          }
+          .width(36)
+          .height(34)
+          .padding(0)
+          .backgroundColor(this.peer() === 1 && !this.projectPlace() ? Colors.action : Color.Transparent)
+          .accessibilityText(tr('agents'))
+          .accessibilitySelected(this.peer() === 1 && !this.projectPlace())
+          .bindTips(tr('agents'))
+          .onClick(() => { Haptics.selection(); this.selectPeer(1); })
+          .id('shell.rail.agents')
+          if (this.waitingAgentCount > 0 && this.peer() !== 1) {
+            Circle().width(8).height(8).fill(Colors.needs).stroke(Colors.surface).strokeWidth(1.5)
+              .offset({ x: -3, y: 3 }).hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+          }
+        }
+      }
+      .padding(4)
+      .margin({ top: 10, bottom: 8 })
+      .backgroundColor(Colors.surface)
+      .borderRadius(22)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: 22 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .id('shell.rail.peer')
+
+      Divider().strokeWidth(0.5).color(Colors.divider).width(32)
+
+      Column() {
+        if (this.peer() === 1 && !this.projectPlace()) this.agentsList()
+        else this.personaRail()
+      }.width('100%').layoutWeight(1)
+
+      Divider().strokeWidth(0.5).color(Colors.divider).width(32)
+
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph(Symbols.expand).fontSize('16vp').fontColor([Colors.ink])
+      }
+      .width(40)
+      .height(40)
+      .padding(0)
+      .margin({ top: 10, bottom: 14 })
+      .backgroundColor(Colors.surface)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: 20 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .accessibilityText(tr('expand'))
+      .bindTips(tr('expand'))
+      .onClick(() => this.expandRail())
+      .id('shell.rail.expand')
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor(Colors.grouped)
+    .id('shell.rail')
+  }
   @Builder primaryContent() {
-    if (this.projectPlace()) {
+    if (this.rail()) {
+      this.railShell()
+    } else if (this.projectPlace()) {
       ForEach([this.projectRootRevision], (_revision: number) => { this.projectPage('projects', '') }, (revision: number) => String(revision))
     }
     else if (this.peer() === 1) this.agentsList()
@@ -2836,12 +3290,12 @@ struct Index {
         .concat(Wire.rows(reply,'unavailable'));
       this.blockedLaunchers = blocked.filter((v:Record<string,Object>) => !!Wire.text(v,'name')).map((v:Record<string,Object>) => {
         const reason = Wire.text(Wire.object(v,'block'),'reason') || Wire.text(v,'reason') || tr('offline');
-        return new LaunchChoice(Wire.text(v,'name'),Wire.text(v,'display_name') || Wire.text(v,'name'),reason,true);
+        return new LaunchChoice(Wire.text(v,'name'),builtinLauncherTitle(Wire.text(v,'name'),Wire.text(v,'display_name')),reason,true);
       });
       this.agentLauncherOptions = allowed.map((item: Record<string,Object>) => Wire.text(item,'name'));
       this.agentTierProfile = Wire.text(Wire.object(reply,'tiers_profile'),'name');
       this.agentPresets = Wire.rows(reply,'tiers').filter((v:Record<string,Object>) => !!Wire.text(v,'name') && this.agentLauncherOptions.includes(Wire.text(v,'launcher')));
-      this.agentLauncherLabels = allowed.map((item: Record<string,Object>) => Wire.text(item,'display_name') || Wire.text(item,'name'));
+      this.agentLauncherLabels = allowed.map((item: Record<string,Object>) => builtinLauncherTitle(Wire.text(item,'name'),Wire.text(item,'display_name')));
       if (!this.agentPanel) this.loadAgentModels();
     } catch (_) { /* Older nodes support entering the existing launcher name directly. */ }
   }
@@ -3184,6 +3638,8 @@ struct Index {
         List() { PhoneDefaultPermissionSection({model:this.settingsModel(param)}) }.width('100%').height('100%').padding(16)
       } else if (name==='settings' && this.settingsKind(param)==='phone_native_alarms') {
         PhoneAlarmsSettings({active:this.activeChild===this.childKey(name,param)})
+      } else if (name==='settings' && this.settingsKind(param)==='phone_xiaoyi') {
+        XiaoYiSettingsPage({model:this.settingsModel(param)})
       } else if (name==='settings' && ['phone_hubs','phone_pairing','about','storage','phone_live_screen','phone_health_reports'].includes(this.settingsKind(param))) {
         PhoneSettingsDevicePages({model:this.settingsModel(param),page:this.settingsKind(param),onOpen:(key:string)=>this.openSettings(key),onPair:()=>this.pairFromSettings()})
       } else if (name === 'settings' && ['phone_agent_options','phone_language_options'].includes(this.settingsKind(param))) {
@@ -3260,6 +3716,7 @@ struct Index {
           .accessibilityLevel(this.spacesShown ? 'auto' : 'no-hide-descendants')
       }
       Stack({alignContent:Alignment.TopStart}) {
+    Row() {
     Column() {
       if (!this.model.profile.id) {
         Stack() {
@@ -3284,22 +3741,46 @@ struct Index {
         Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
           .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
           .backgroundColor(Colors.canvas)
-          .toolbarConfiguration(this.rail() ? [{ value: tr('expand'), icon: $r('sys.media.ohos_ic_public_arrow_right'), action: () => this.collapsed = false }] : [])
+          .toolbarConfiguration([])
           .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
-          .navBarWidth(this.rail() ? Tokens.collapsed : Tokens.master).navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [Tokens.masterMin, Tokens.masterMax])
-          .minContentWidth(Tokens.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
+          .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
+          .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
+          .minContentWidth(this.foldLayout.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
           .onAreaChange(() => this.updateBreakpoint()).width('100%').layoutWeight(1)
 
           .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
       }
-    }.width('100%').height('100%').backgroundColor(Colors.canvas)
+    }.layoutWeight(1).height('100%').backgroundColor(Colors.canvas)
       .accessibilityLevel(this.chatSearchShown || this.spacesShown && !this.wide() ? 'no-hide-descendants' : 'auto')
+    if (this.showFoldInspector()) {
+      FoldInspectorPanel({
+        model: this.model,
+        detailModel: this.detailModel,
+        panelWidth: this.foldLayout.inspectorWidth,
+        postureLabel: this.foldPostureLabel(),
+        isTriFold: this.isTriFoldPosture(),
+        initialTab: this.foldWorkbenchTab,
+        tabSignal: this.foldWorkbenchTabSignal,
+        onClose: () => {
+          this.setFoldInspectorOpen(false);
+        },
+        onOpenTools: () => this.openTools(),
+        onOpenToolsTab: (tab: number) => {
+          if (this.shownName === 'tools') this.detailModel.selectWorkspaceTab(tab);
+          else this.openTools('', tab);
+        },
+        onOpenSession: (row: ResourceRow) => this.openPickedChat(row),
+        onStepRelay: (direction: 1 | -1) => this.stepFoldRelay(direction),
+        onOpenLink: (address: string) => this.openReader(address)
+      })
+    }
+    }.width('100%').height('100%')
       if (this.floatingProjectHeader || this.floatingDraftHeader) Column() { this.phoneHeader() }.width('100%')
         .backgroundBlurStyle(BlurStyle.COMPONENT_THIN).hitTestBehavior(HitTestMode.Transparent)
         .accessibilityLevel(this.spacesShown || this.chatSearchShown ? 'no-hide-descendants' : 'auto')
       if (this.drawerFraction > 0 && !this.wide()) Row().width('100%').height('100%')
         .backgroundColor(this.environment.dark ? '#73000000' : '#33000000')
-        .border({width:0.5,color:Colors.divider,radius:55}).opacity(this.drawerFraction)
+        .opacity(this.drawerFraction)
         .onClick(() => this.spacesShown = false).accessibilityText(tr('close')).id('spaces.dismiss')
       }.width('100%').height('100%').backgroundColor(Colors.canvas)
         .borderRadius(this.drawerFraction > 0 && !this.wide() ? 55 : 0).clip(this.drawerFraction > 0 && !this.wide())
@@ -3329,6 +3810,14 @@ struct Index {
         onAppear: () => { this.spacesLayoutReady = true; this.measureSpaces(); }, onDisappear: () => { this.spacesLayoutReady = false; if (this.wide()) this.spacesShown = false; } })
     }
     }
+    Column().width(0).height(0).bindSheet(!this.model.profile.id && !this.wide() && this.phoneSettingsShown, this.phoneSettings(), {
+      height: this.compactFormHeight(), showClose: false, dragBar: false, backgroundColor: Colors.sheetBackground,
+      onWillDismiss: (dismiss: DismissSheetAction) => {
+        if (dismiss.reason === DismissReason.PRESS_BACK && this.phoneSettingsPage) this.backPhoneSetting();
+        else { this.phoneSettingsShown = false; dismiss.dismiss(); }
+      },
+      onDisappear: () => { this.phoneSettingsShown = false; }
+    })
     Column().width(0).height(0).bindSheet($$this.directionPermissionsVisible,this.directionPermissionsSheet(),{
       title:{title:tr('phone_default_permissions')},height:SheetSize.LARGE,showClose:true,
       onDisappear:()=>{this.directionPermissionsVisible=false;this.directionPermissionsTarget='';}})
@@ -3345,8 +3834,15 @@ struct Index {
         PhoneMessageLiftHostLayer({content:this.messageLift.current!.content})
       }
     }
+    Column() {
+      FloatingToastOverlay({
+        reconnecting: !!this.model.profile.id && !this.model.demo && !this.model.connected,
+        topOffset: this.wide() ? 14 : Math.max(58, this.compactNavigationInset() + 56)
+      })
+    }.width('100%').height('100%').alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Start).hitTestBehavior(HitTestMode.Transparent)
     }.width('100%').height('100%').backgroundColor(Colors.canvas)
       .background(this.compactInsetSurface(), { ignoresLayoutSafeAreaEdges: this.compactInsetEdges() })
+      .onKeyEvent((event: KeyEvent) => this.handleFoldKeyEvent(event))
       .bindSheet($$this.readerShown, this.readerContent(), { title: { title: this.readerTitle }, height: Tokens.readerFull, width: Tokens.readerFull, preferType: SheetType.BOTTOM,
         detents: [Tokens.readerFull, Tokens.readerPartial], enableOutsideInteractive: true, showClose: true })
   }
