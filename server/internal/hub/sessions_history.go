@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/sessionhistory"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // GET /api/v1/sessions?include_inactive=1&since=…: sessions active in a time window, archived, finished and offline
@@ -132,7 +133,7 @@ func (h *Hub) historySessions(w http.ResponseWriter, r *http.Request, named stri
 	states := make([][]sessionhistory.SourceState, len(machines))
 	var wg sync.WaitGroup
 	for i, m := range machines {
-		wg.Go(func() { parts[i], states[i] = h.machineHistory(r.Context(), m, q, after, restrictedAgentData(r)) })
+		wg.Go(func() { parts[i], states[i] = h.machineHistory(r.Context(), m, q, after, h.spacesHidden(r)) })
 	}
 	wg.Wait()
 	resp := historyResponse{Sessions: []sessionhistory.Row{}, History: historyMeta{
@@ -187,6 +188,8 @@ func (h *Hub) machineHistory(ctx context.Context, m *Machine, q sessionhistory.Q
 			}
 			key := sessionhistory.KeyOf(r.At(), id+"\x00"+r.NodeKey())
 			r.Session.MachineID, r.Session.Manager = id, manager
+			// A node from before titles were cut sends its agents' titles whole, an opening prompt among them (#16343).
+			r.Session.Title = transcript.ListTitle(r.Session.Title)
 			page.Items = append(page.Items, sessionhistory.Item[sessionhistory.Row]{Key: key, V: r})
 		}
 		return page, nil

@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -331,7 +333,7 @@ func TestStartDefaultsGoalRefusedStartsWithoutIt(t *testing.T) {
 }
 
 // The facts a start gives say which conversation actually follows the task up, not which one planned it. New work
-// planned by a leader, or carrying the legacy supervisor input, is still main-supervised; read-only and role ride along.
+// planned by a lead, or explicitly assigned to one by main, uses that lead’s class; read-only and role ride along.
 // The explicit manual-Agent and task-leader worker topologies keep their specialized class.
 func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	s, f := newQuietService(t)
@@ -347,7 +349,7 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 		task["machine"], task["cwd"], task["why"] = "box", "/code/app", "the repo is on box"
 		args := map[string]any{"tasks": []map[string]any{task}}
 		if supervisor != "" {
-			args["supervisor"] = supervisor // legacy input; the new task is still supervised by main
+			args["supervisor"] = supervisor // explicit initial assignment by main
 		}
 		raw, _ := json.Marshal(args)
 		res, err := s.toolTaskPlan(ctx, conversation, raw)
@@ -376,14 +378,14 @@ func TestStartDefaultsFactsSayWhoSupervises(t *testing.T) {
 	planWait(3)
 	waitFor(t, "the starts to finish their bookkeeping", func() bool { return s.taskStarting.Load() == 0 })
 	got := seen()
-	if a := got[0]; a.Supervisor != dispatchClassMain || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
+	if a := got[0]; a.Supervisor != dispatchClassLeader || a.Readonly || a.Role != "worker" || a.DoneWhen != 1 || a.Machine != "box" {
 		t.Fatalf("task planned by the leader: %+v", a)
 	}
 	if b := got[1]; b.Supervisor != dispatchClassMain || !b.Readonly {
 		t.Fatalf("main's own task: %+v", b)
 	}
-	if c := got[2]; c.Supervisor != dispatchClassMain {
-		t.Fatalf("task with the legacy supervisor input: %+v", c)
+	if c := got[2]; c.Supervisor != dispatchClassLeader {
+		t.Fatalf("task with an explicit supervisor: %+v", c)
 	}
 }
 
@@ -444,8 +446,8 @@ func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 		return startsOf(f)[before]
 	}
 	led := start("lead1", false)
-	if led["ultracode"] != nil || led["goal"] != nil || led["effort"] == "max" {
-		t.Fatalf("the leader-only rule reached main-supervised work: %v", led)
+	if led["ultracode"] != true || led["goal"] == nil || led["effort"] != "max" {
+		t.Fatalf("the planning lead missed its defaults: %v", led)
 	}
 	own := start("conv1", false)
 	if own["ultracode"] != nil || own["goal"] != nil || own["effort"] == "max" {
@@ -475,8 +477,8 @@ func TestStartDefaultsPolicyOnlyWhereItsRuleMatches(t *testing.T) {
 		t.Fatalf("put main rule: %d %s", code, body)
 	}
 	led = start("lead1", false)
-	if led["ultracode"] != true || led["effort"] != "max" || led["goal"] == nil {
-		t.Fatalf("main-supervised work planned by the leader missed the defaults: %v", led)
+	if led["ultracode"] != nil || led["effort"] == "max" || led["goal"] != nil {
+		t.Fatalf("the planning lead received main-only defaults: %v", led)
 	}
 	own = start("conv1", false)
 	if own["ultracode"] != true || own["effort"] != "max" || own["goal"] == nil {
@@ -1238,5 +1240,253 @@ func TestDefaultGoalRefusedOn(t *testing.T) {
 		if got := defaultGoalRefusedOn(c.m, c.params, c.agent); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestCodexTerminalFallbackPublishedBeforeStart(t *testing.T) {
+	ctx := context.Background()
+	s, f := defaultsHub(t)
+	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "cx", Source: "zshrc", Agent: "codex"})
+	task := defaultsTask()
+	task.Launcher, task.Effort, task.TodoID = "cx", "high", "todo_effort"
+	putTodo(s, Todo{ID: task.TodoID, Origin: "owner", Supervision: &Supervision{Supervisor: "owner"}})
+
+	var checked bool
+	f.onStart = func(f *fakeHub, params map[string]any) {
+		if params["codex_effort_fallback"] == proto.CodexFallbackNotify {
+			f.failStart = &rpc.Error{Code: proto.CodeCodexEffortTerminal}
+			return
+		}
+		f.failStart = nil
+		// The fake node holds its mutex while invoking onStart.
+		if params["codex_effort_fallback"] != proto.CodexFallbackAnnounced || !slices.Contains(f.events, "assistant_feed") {
+			t.Error("missing pre-start feed event")
+		}
+
+		checked = true
+	}
+	if _, _, err := s.startTaskAgent(ctx, &task, false); err != nil {
+		t.Fatal(err)
+	}
+	if !checked || len(startsOf(f)) != 2 {
+		t.Fatal("expected one preflight refusal followed by the announced start")
+	}
+}
+
+func TestAgentStartCodexFallbackKeepsPlacement(t *testing.T) {
+	s, f := launcherFitHub(t)
+	f.zshrc["box"] = append(f.zshrc["box"], proto.Launcher{Name: "cx", Source: "zshrc", Agent: "codex"})
+	f.onStart = func(f *fakeHub, params map[string]any) {
+		f.failStart = nil
+		if params["codex_effort_fallback"] == proto.CodexFallbackNotify {
+			f.failStart = &rpc.Error{Code: proto.CodeCodexEffortTerminal}
+		}
+	}
+	_, err := s.runTool(t.Context(), "server", "owner", "agent_start", json.RawMessage(
+		`{"machine":"box","cwd":"/Users/me/code","launcher":"cx","effort":"high","prompt":"Check the build"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if starts := startsOf(f); len(starts) != 2 || starts[1]["codex_effort_fallback"] != proto.CodexFallbackAnnounced {
+		t.Fatalf("expected the announced retry, got %v", starts)
+	}
+	task := onlyTodo(s)
+	p := onlyStoredPlacement(t, s.store().(settingsPrefixStore))
+	if len(task.Agents) != 1 || p.Mode != "enforce" || p.Choice != "box" || p.TaskID != task.ID || p.SessionID == "" || p.SessionID != task.Agents[0].SessionID {
+		t.Fatalf("placement %+v for task %s, agents %+v", p, task.ID, task.Agents)
+	}
+}
+
+func TestCodexFallbackNoticeKeepsAgentResult(t *testing.T) {
+	ctx := t.Context()
+	s, f := newTaskService(t)
+	at := time.Now().UTC().Add(-time.Minute)
+	todo := Todo{ID: "todo_effort", Origin: "task_owner", CreatedAt: at, UpdatedAt: at,
+		Agents:      []TodoAgent{{MachineID: "box", SessionID: "worker"}},
+		Supervision: &Supervision{Supervisor: "task_supervisor"}}
+	putTodo(s, todo)
+	params := map[string]any{"effort": "high"}
+	calls := 0
+	err := s.startWithCodexRouteNotice(ctx, todo.ID, "codex", params, func() error {
+		calls++
+		if calls == 1 {
+			return &rpc.Error{Code: proto.CodeCodexEffortTerminal}
+		}
+		for _, conversation := range []string{todo.Origin, todo.Supervision.Supervisor} {
+			items, err := s.rawFeed(ctx, conversation, time.Time{})
+			if err != nil {
+				return err
+			}
+			cards, err := s.taskCards(ctx, items, nil)
+			if err != nil {
+				return err
+			}
+			var notice noticeBody
+			if len(items) != 1 || items[0].Kind != feedNotice || items[0].Ref != todo.ID ||
+				json.Unmarshal(items[0].Body, &notice) != nil || !strings.Contains(notice.Text, "Codex") || len(cards) != 0 {
+				t.Errorf("%s: expected a system notice and no report card, got items %+v and cards %+v", conversation, items, cards)
+			}
+		}
+		return nil
+	})
+	if calls != 2 || err != nil {
+		t.Fatalf("starts=%d, err=%v", calls, err)
+	}
+	if got, _ := s.todoNow(todo.ID); got.Supervision.Progress != nil {
+		t.Errorf("startup notice became Agent progress: %+v", got.Supervision.Progress)
+	}
+
+	const result = "The export now includes all rows."
+	replyAt := at.Add(20 * time.Second)
+	f.sessions["box"] = []proto.Session{{MachineID: "box", SessionID: "worker", State: proto.StateUnread, LastText: result, UpdatedAt: replyAt}}
+	assertSnapshot := func(wantReport string) {
+		t.Helper()
+		rows := s.snapshotTasks(ctx, "")
+		if len(rows) != 1 || rows[0].Last != result {
+			t.Fatalf("snapshot did not show the Agent's last reply: %+v", rows)
+		}
+		report := rows[0].Reported
+		if wantReport == "" && report != nil || wantReport != "" && (report == nil || report.Text != wantReport) {
+			t.Errorf("snapshot report %+v, want %q", report, wantReport)
+		}
+	}
+	assertSnapshot("")
+
+	// During work a real progress report is still useful. After an accepted round
+	// reaches the owner's verification, an older progress report yields to the final reply.
+	const progress = "Checking the export."
+	f.sessions["box"][0].State = proto.StateWorking
+	s.noteProgress(ctx, todo.ID, TaskProgress{Kind: upReportProgress, Text: progress, At: at.Add(10 * time.Second)})
+	assertSnapshot(progress)
+	f.sessions["box"][0].State = proto.StateUnread
+	todo, _ = s.todoNow(todo.ID)
+	todo.Supervision.State = reviewUserCheck
+	todo.Supervision.Reviews = []TaskReview{{At: replyAt, Verdict: reviewAccepted, UserCheck: true}}
+	putTodo(s, todo)
+	assertSnapshot("")
+
+	// A real progress report that arrives after the session's last reply is not hidden by the stale text.
+	const laterProgress = "Rechecking the export checksums."
+	s.noteProgress(ctx, todo.ID, TaskProgress{Kind: upReportProgress, Text: laterProgress, At: replyAt.Add(15 * time.Second)})
+	assertSnapshot(laterProgress)
+
+	// Once a newer session reply lands after that progress report, the reply wins again.
+	f.sessions["box"][0].UpdatedAt = replyAt.Add(30 * time.Second)
+	assertSnapshot("")
+
+	const conclusion = "Verified the export against the source."
+	s.noteProgress(ctx, todo.ID, TaskProgress{Kind: upReportDone, Text: conclusion, At: replyAt.Add(40 * time.Second)})
+	assertSnapshot(conclusion)
+}
+
+func TestLegacyCodexFallbackProgressIgnored(t *testing.T) {
+	for _, lang := range i18n.Langs {
+		t.Run(string(lang), func(t *testing.T) {
+			ctx := t.Context()
+			s, f := newTaskService(t)
+			at := time.Now().UTC().Add(-time.Minute)
+			text := i18n.T(lang, "assistant-tasks.codex_effort_terminal")
+			legacy := Todo{
+				ID: "todo_legacy_progress", Origin: "owner", CreatedAt: at, UpdatedAt: at,
+				Agents: []TodoAgent{{MachineID: "box", SessionID: "worker"}},
+				Supervision: &Supervision{
+					Supervisor: "owner",
+					Progress:   &TaskProgress{Kind: upReportProgress, Text: text, At: at.Add(30 * time.Second)},
+				},
+			}
+			// Even while working with empty LastText and a newer progress timestamp, the legacy startup notice
+			// must not surface in todoNow, formatTodo, or snapshotTasks.
+			if got := formatTodo(legacy); got.Supervision != nil && got.Supervision.Progress != nil {
+				t.Fatalf("formatTodo kept legacy startup progress: %+v", got.Supervision.Progress)
+			}
+			putTodo(s, legacy)
+			f.sessions["box"] = []proto.Session{{MachineID: "box", SessionID: "worker", State: proto.StateWorking, UpdatedAt: at}}
+			if got, ok := s.todoNow(legacy.ID); !ok || got.Supervision == nil || got.Supervision.Progress != nil {
+				t.Fatalf("todoNow kept legacy startup progress: ok=%v sup=%+v", ok, got.Supervision)
+			}
+			rows := s.snapshotTasks(ctx, "")
+			if len(rows) != 1 || rows[0].Reported != nil {
+				t.Fatalf("snapshotTasks surfaced legacy startup progress: %+v", rows)
+			}
+			if s.noteProgress(ctx, legacy.ID, TaskProgress{Kind: upReportProgress, Text: text, At: at.Add(40 * time.Second)}) {
+				t.Fatal("noteProgress accepted legacy startup notice")
+			}
+			if got, _ := s.todoNow(legacy.ID); got.Supervision.Progress != nil {
+				t.Fatalf("noteProgress stored legacy startup notice: %+v", got.Supervision.Progress)
+			}
+		})
+	}
+}
+
+func TestLegacyCodexFallbackReportReadsAsNotice(t *testing.T) {
+	for _, lang := range i18n.Langs {
+		t.Run(string(lang), func(t *testing.T) {
+			ctx := t.Context()
+			s, _ := newTaskService(t)
+			todo := Todo{ID: "todo_effort", Origin: "owner"}
+			putTodo(s, todo)
+			text := i18n.T(lang, "assistant-tasks.codex_effort_terminal")
+			legacy, err := s.appendFeed(ctx, todo.Origin, feedReport, todo.ID, reportBody{Kind: upReportProgress, Text: text})
+			if err != nil {
+				t.Fatal(err)
+			}
+			done, err := s.appendFeed(ctx, todo.Origin, feedReport, todo.ID, reportBody{Kind: upReportDone, Text: "Export verified."})
+			if err != nil {
+				t.Fatal(err)
+			}
+			check := func(items []FeedItem, err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(items) != 2 || items[0].ID != legacy.ID || items[0].Kind != feedNotice ||
+					items[1].ID != done.ID || items[1].Kind != feedReport {
+					t.Errorf("expected startup notice and real report, got %+v", items)
+				}
+				cards, err := s.taskCards(ctx, items, nil)
+				if err != nil || len(cards) != 1 || cards[0].ReportID != done.ID {
+					t.Errorf("task cards %+v, err %v", cards, err)
+				}
+			}
+			check(s.feedItems(ctx, todo.Origin, time.Time{}))
+			page, _, err := s.pagedFeed(ctx, todo.Origin, time.Time{}, "")
+			check(page, err)
+			timeline, err := s.todoFeed(ctx, todo.ID, false)
+			if err != nil || len(timeline) != 1 || timeline[0].ID != done.ID {
+				t.Errorf("task timeline %+v, err %v", timeline, err)
+			}
+		})
+	}
+}
+
+type legacyFeedByRefStore struct {
+	*memStore
+	rows []db.FeedRow
+}
+
+func (f *legacyFeedByRefStore) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
+	return slices.Clone(f.rows), nil
+}
+
+func TestLegacyCodexFallbackTimelineStoreFiltersNotice(t *testing.T) {
+	for _, lang := range i18n.Langs {
+		t.Run(string(lang), func(t *testing.T) {
+			ctx := t.Context()
+			at := time.Now().UTC().Add(-time.Minute)
+			legacyBody, _ := json.Marshal(reportBody{Kind: upReportProgress, Text: i18n.T(lang, "assistant-tasks.codex_effort_terminal")})
+			doneBody, _ := json.Marshal(reportBody{Kind: upReportDone, Text: "Export verified."})
+			st := &legacyFeedByRefStore{
+				memStore: &memStore{},
+				rows: []db.FeedRow{
+					{ID: "done", Conversation: "owner", At: at.Add(time.Second), Kind: feedReport, Ref: "todo_effort", Body: doneBody},
+					{ID: "legacy", Conversation: "owner", At: at, Kind: feedReport, Body: legacyBody},
+				},
+			}
+			s, _ := newTaskServiceOn(t, st)
+			timeline, err := s.todoFeed(ctx, "todo_effort", false)
+			if err != nil || len(timeline) != 1 || timeline[0].ID != "done" {
+				t.Fatalf("store-backed task timeline %+v, err %v", timeline, err)
+			}
+		})
 	}
 }

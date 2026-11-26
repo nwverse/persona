@@ -197,13 +197,13 @@ func TestInboxTodoReplyItemIsAnObject(t *testing.T) {
 
 func TestInboxTodoUndoDeleteFailureKeepsRowFiled(t *testing.T) {
 	h := muteHub(t)
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(database.Close)
 	failing := &undoDeleteFailStore{Store: h.st, todoStore: database, fail: true}
-	h.store = func() Store { return failing }
+	h.setStore(func() Store { return failing })
 	mergeItems(h)
 	code, out := inboxCall(t, h.routes(), "POST", "/api/v1/inbox/todo", `{"items":[{"id":"a"}]}`)
 	if code != 200 {
@@ -242,7 +242,7 @@ func TestSuggestTodoValidation(t *testing.T) {
 		{suggestIn{Kind: "todo", Text: "Send the numbers"}, true},
 		{suggestIn{Kind: "todo", Text: "Send the numbers", Due: "Friday"}, false},
 		{suggestIn{Kind: "reply", Text: "ok", Due: "2026-11-15"}, false},
-		{suggestIn{Kind: "todo", Text: "x", Item: "a"}, false},
+		{suggestIn{Kind: "todo", Text: "x", Item: "a"}, true},
 	} {
 		if err := c.in.check(); (err == nil) != c.ok {
 			t.Errorf("%+v: %v", c.in, err)

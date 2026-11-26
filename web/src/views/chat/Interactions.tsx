@@ -1,12 +1,12 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
 import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
-import { answerCard, usePendingLine } from "../../lib/card-answer";
+import { answerCard, usePendingLine, type AnswerFrom } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { lazyPage } from "../../lib/lazy-page";
 import { mergeRefs } from "../../lib/tap-guard";
 import { delegateLines, isDelegating, recommendedLabels, type DelegatedAnswer } from "../../lib/delegate";
+import { supervisorHeld } from "../../lib/supervisor-held";
 import { Choice, DigitHint } from "./Choice";
-import { DelegatedCard } from "./Delegated";
 import { BUSY_MOTION, spinStyle } from "../../lib/busy-motion";
 import { appArchiveDeps, archiveAgent, archiveSession } from "../../lib/agent-archives";
 import { isSessionReview } from "../../lib/types";
@@ -35,16 +35,18 @@ import { cardState } from "../../lib/card-focus";
 import { href, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { StatusMark } from "../../ui/StatusMark";
-import { useVoiceAsking } from "../../lib/voice/calls";
+import { InteractionMarks, ModuleCard, useCardRenderer } from "../../core/ChatSlots";
 import { useComposition } from "../../lib/ime";
 import { ErrorNotice } from "../../ui/ErrorNotice";
 import { reportBoundary } from "../../lib/error-reports";
 import { isChunkError } from "../PageBoundary";
 import { useChatCardTapGuard, useChatTapGuardView } from "./card-tap-guard";
+import { decisionKey } from "../../lib/decision-pager";
+import { DecisionCardContext } from "./decision-card";
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
-export async function resolve(ix: Interaction, body: Record<string, unknown>) {
-  const r = await answerCard(ix, body);
+export async function resolve(ix: Interaction, body: Record<string, unknown>, from: AnswerFrom = {}) {
+  const r = await answerCard(ix, body, from);
   if (!r.ok) toast(r.error, "error");
   else if (r.already) toast(t("chat-interactions.already_answered"), "info");
   return r.ok;
@@ -105,8 +107,8 @@ type CardKeys = ReturnType<typeof useCardKeys>;
  * so the footer's `sticky` follows the dock's scrolling and the buttons stay at its bottom edge while the card is taller
  * than the dock. `-bottom-1` cancels the dock's `p-1` (`bottom-0` would leave 4px of the body under the buttons).
  */
-/** The card the voice is asking about (docs/web/web.md "Voice"): InteractionCard says so, Card marks its kicker row. */
-const AskedByVoice = createContext(false);
+/** What modules mark the card with (core/module-host.ts `interaction.asked`): Card draws it in its kicker row. */
+const CardMarks = createContext<React.ReactNode>(null);
 /** The answer on its way for the card, as a line for its footer ("Sending: Allowed"); empty when none, or for its first
  *  moment online. InteractionCard says so (lib/card-answer.ts usePendingLine, past the card's own state) and disables
  *  every answer meanwhile. */
@@ -125,8 +127,8 @@ const StackCount = createContext(0);
  *  which opens them all; opened, "Show first only" in the same place, which folds them back. */
 const QueueSlot = createContext<{ position: number; total: number; open: boolean; onToggle: () => void } | null>(null);
 
-export function Card({ title, titleContent, kicker, onDismiss, busy, children, footer, looking = false, cardKeys, tapGuard }: { title: string; titleContent?: React.ReactNode; kicker: string; onDismiss?: () => void; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys; tapGuard?: { ref: RefObject<HTMLDivElement | null> } }) {
-  const asked = useContext(AskedByVoice);
+export function Card({ title, titleContent, kicker, onDismiss, skip, busy, children, footer, looking = false, cardKeys, tapGuard }: { title: string; titleContent?: React.ReactNode; kicker: string; onDismiss?: () => void; skip?: { run: () => void; error?: string }; busy?: boolean; children: React.ReactNode; footer: React.ReactNode; looking?: boolean; cardKeys?: CardKeys; tapGuard?: { ref: RefObject<HTMLDivElement | null> } }) {
+  const marks = useContext(CardMarks);
   const sending = useContext(SendingAnswer);
   const from = useContext(AskedFrom);
   // the answer row stuck at the bottom of the box while the card's body is below it: the row says what it answers
@@ -154,6 +156,23 @@ export function Card({ title, titleContent, kicker, onDismiss, busy, children, f
     card?.focus({ preventScroll: true });
   };
   const queue = useContext(QueueSlot);
+  const decision = useContext(DecisionCardContext);
+  const noSkip = decision?.skipHint;
+  // Hand back leaves the request to the computer's terminal.
+  const handBack = onDismiss && (
+    <button
+      type="button"
+      aria-label={t("chat-interactions.hand_back")}
+      onClick={onDismiss}
+      disabled={busy}
+      data-card-answer
+      className="touch-hit -ml-1.5 rounded-[6px] px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40"
+    >
+      {t("chat-interactions.hand_back")}
+    </button>
+  );
+  const bottomHandBack = !decision || (decision.task && decision.interaction.kind === "question");
+  const decisionHandBack = Boolean(decision) && !skip && !bottomHandBack;
   return (
     <div {...(cardKeys?.root ?? { tabIndex: -1 })} ref={tapGuard ? mergeRefs(tapGuard.ref, cardKeys?.root?.ref) : cardKeys?.root?.ref} data-pending-card aria-label={title} className="shrink-0 overflow-clip rounded-card bg-surface shadow-card outline-none focus-visible:ring-2 focus-visible:ring-accent" style={{ animation: `fade-up 350ms ${EASE} both` }}>
       <div className="px-3.5 pt-3 pb-2.5">
@@ -162,13 +181,7 @@ export function Card({ title, titleContent, kicker, onDismiss, busy, children, f
             <div className={cx("mb-0.5 flex items-center gap-1.5 text-[11px] font-medium", looking ? "text-ink-3" : "text-attention")}>
               <StatusMark state={looking ? "working" : "needs_you"} size="sm" label={false} />
               {kicker}
-              {/* the card stays a quiet surface: a neutral chip, the voice's color only on its mark */}
-              {asked && (
-                <span data-testid="voice-asking" className="ml-0.5 inline-flex min-w-0 items-center gap-1 rounded-full bg-inset px-1.5 py-px text-[10.5px] font-medium whitespace-nowrap text-ink-2 shadow-hairline">
-                  <Icon name="voice" size={10} stroke={2.4} className="shrink-0 text-ai" />
-                  <span className="truncate">{t("voice.asking_mark")}</span>
-                </span>
-              )}
+              {marks}
             </div>
             <div ref={head} className="text-[13.5px] font-medium text-ink">{titleContent ?? title}</div>
           </div>
@@ -194,25 +207,22 @@ export function Card({ title, titleContent, kicker, onDismiss, busy, children, f
             </button>
           )}
         </div>
+        {decision && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-label text-ink-2" data-decision-actions>
+            {decision.navigation}
+            {decisionHandBack && handBack}
+            {(skip || noSkip) && <button type="button" data-card-answer={noSkip ? undefined : ""} disabled={busy || Boolean(noSkip)}
+              onClick={skip?.run} className="touch-hit enabled:hover:text-ink disabled:opacity-45">{t(skip?.error ? "assistant-tasks.retry" : "chat-interactions.decision_skip_label")}</button>}
+            {noSkip && <span className="basis-full text-ink-3">{noSkip}</span>}
+            {skip?.error && <span role="alert" className="basis-full text-attention">{skip.error}</span>}
+          </div>
+        )}
         <div className="mt-2">
           {from && <p data-permission-from title={from} className="mb-2 truncate text-[12px] leading-snug text-ink-3">{from}</p>}
           {children}
         </div>
-        {/* Hand back (dismiss) leaves the request to the computer's terminal, and the hub takes no other answer for this card
-            after it: so it says so in words on a row of its own (Android's action row), never a bare × that reads as "close" */}
-        {onDismiss && (
-          <div className="mt-2 flex">
-            <button
-              type="button"
-              aria-label={t("chat-interactions.hand_back")}
-              onClick={onDismiss}
-              disabled={busy}
-              data-card-answer
-              className="touch-hit -ml-1.5 rounded-[6px] px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-ink-3 transition-colors enabled:hover:bg-hover enabled:hover:text-ink disabled:opacity-40"
-            >
-              {t("chat-interactions.hand_back")}
-            </button>
-          </div>
+        {handBack && bottomHandBack && (
+          <div className="mt-2 flex">{handBack}</div>
         )}
         <div ref={end} aria-hidden className="h-0" />
       </div>
@@ -306,15 +316,26 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   const ime = useComposition();
   const qs = ix.questions ?? [];
   const localOnly = ix.tool_name === "persona_triage" && !canApprove;
-  const [qi, setQi] = useState(0);
-  const [picked, setPicked] = useState<Record<number, string[]>>({});
-  const [custom, setCustom] = useState<Record<number, string>>({});
+  const decision = useContext(DecisionCardContext);
+  const draftKey = decision && decisionKey(ix);
+  const version = draftKey ? JSON.stringify(qs) : "";
+  const stored = draftKey ? decision?.drafts.get(draftKey) : undefined;
+  const draft = stored?.version === version ? stored : undefined;
+  const [qi, setQi] = useState(() => draft?.page ?? 0);
+  const [picked, setPicked] = useState<Record<number, string[]>>(() => draft?.picks ?? {});
+  const [custom, setCustom] = useState<Record<number, string>>(() => draft?.custom ?? {});
   const [busy, setBusy] = useState(false);
+  const [skipError, setSkipError] = useState<string>();
   const submitting = useRef(false);
   const q = qs[qi];
   // picking on a single-select slides to the next question by itself, a beat later; going on before that (Enter, the
   // arrow) cancels the slide, or the two would advance a question each and skip one
   const slide = useRef<number | undefined>(undefined);
+  const drafts = decision?.drafts;
+  useLayoutEffect(() => {
+    if (draftKey) drafts?.set(draftKey, { version, page: qi, picks: picked, custom });
+  }, [drafts, draftKey, version, qi, picked, custom]);
+  useEffect(() => () => clearTimeout(slide.current), []);
   const advance = () => {
     clearTimeout(slide.current);
     setQi((i) => Math.min(qs.length - 1, i + 1));
@@ -336,6 +357,25 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
   });
   // paging to another question shows a new option set: its answers restart the guard window
   const tapGuard = useChatCardTapGuard(ix, `:q${qi}`);
+  const toggleRef = useRef<(label: string) => void>(() => {});
+
+  useEffect(() => {
+    if (!q || busy || (!canApprove && !localOnly)) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (e.key >= "1" && e.key <= "9") {
+        const opt = q.options?.[Number(e.key) - 1];
+        if (!opt || (localOnly && opt.action !== "defer")) return;
+        e.preventDefault();
+        toggleRef.current(opt.label);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [q, busy, canApprove, localOnly]);
+
   if (!q) return null;
   const looking = isDelegating(ix);
   const picks = recommendedLabels(qs, ix.delegate?.recommend);
@@ -354,6 +394,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
     if (submitting.current || directLabel === undefined && !all) return;
     submitting.current = true;
     setBusy(true);
+    setSkipError(undefined);
     const answers: Record<string, string> = {};
     if (directLabel === undefined) {
       qs.forEach((x, i) => {
@@ -367,6 +408,21 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
       // The caller owns completion: false keeps the picks for retry, and finally only unlocks the form.
       if (onAnswer) await onAnswer(answers);
       else await resolve(ix, { answers });
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  };
+
+  const canSkip = Boolean(decision && ix.can_cancel && canApprove && !onAnswer);
+  const skip = async () => {
+    if (!canSkip || submitting.current) return;
+    submitting.current = true;
+    clearTimeout(slide.current);
+    setBusy(true);
+    try {
+      const result = await answerCard(ix, { cancel: true });
+      setSkipError(result.ok ? undefined : result.error);
     } finally {
       submitting.current = false;
       setBusy(false);
@@ -387,7 +443,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
     if (singleChoice && !hasCustomAnswer) void send(label);
     else if (!q.multi_select && !last) slide.current = window.setTimeout(() => setQi((i) => Math.min(qs.length - 1, i + 1)), 380);
   };
-
+  toggleRef.current = toggle;
   return (
     <Card
       kicker={q.header || t("chat-interactions.question")}
@@ -396,7 +452,8 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
       looking={looking}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={onAnswer ? undefined : () => resolve(ix, { dismiss: true })}
+      onDismiss={onAnswer || ix.no_hand_back ? undefined : () => resolve(ix, { dismiss: true })}
+      skip={canSkip ? { run: skip, error: skipError } : undefined}
       busy={busy}
       footer={
         <>
@@ -423,7 +480,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
                 </button>
               </>
             )}
-            {q.multi_select && <span className="text-[11.5px] text-ink-3">{t("chat-interactions.multi_select")}</span>}
+            {q.multi_select && <span className="text-submeta text-ink-3">{t("chat-interactions.multi_select")}</span>}
           </span>
           <SendArrow ready={last ? all : answered(qi) && allowed(qi)} busy={busy} kbd={keys.focused} label={last ? t("chat-interactions.send_answer") : t("chat-interactions.next_question")} onClick={() => (last ? void send() : advance())} />
         </>
@@ -513,7 +570,7 @@ function PlanCard({ ix }: { ix: Interaction }) {
       title={t("chat-interactions.plan_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true })}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true })}
       busy={busy}
       footer={
         rejecting ? (
@@ -564,6 +621,9 @@ function PlanCard({ ix }: { ix: Interaction }) {
 // The complete tool-approval card loads with the first permission interaction, keeping its optional clarification UI
 // and permission editor out of the first screen. Its slot stays identifiable while the chunk loads or cannot load.
 const PermissionCard = lazyPage(() => import("./PermissionCard").then((m) => m.PermissionCard));
+// A card the assistant answered for the user (its "Change answer"): drawn only after such an answer, so its chunk is off
+// the first screen and loads with the first one (the idle tier has no room for it).
+const DelegatedCard = lazyPage(() => import("./Delegated").then((m) => m.DelegatedCard));
 
 export function PermissionCardLoading({ ix }: { ix: Interaction }) {
   return (
@@ -575,8 +635,7 @@ export function PermissionCardLoading({ ix }: { ix: Interaction }) {
 
 /** A repeated cached import failure gets one full reload per card and tab session. The marker survives that reload;
  *  if the chunk is still unavailable, the card keeps its local Retry instead of entering a reload loop. */
-function reloadPermissionChunk(id: string) {
-  const key = `permission-chunk-reload:${id}`;
+function reloadCardChunk(key: string) {
   try {
     if (sessionStorage.getItem(key)) return;
     sessionStorage.setItem(key, "1");
@@ -599,7 +658,7 @@ export class PermissionCardFrame extends Component<{ ix: Interaction; children?:
   componentDidCatch(error: unknown, info: ErrorInfo) {
     const chunk = isChunkError(error);
     reportBoundary(error, "permission_card", chunk, info.componentStack);
-    if (chunk && this.failures++) reloadPermissionChunk(this.props.ix.id);
+    if (chunk && this.failures++) reloadCardChunk(`permission-chunk-reload:${this.props.ix.id}`);
   }
 
   render() {
@@ -614,6 +673,34 @@ export class PermissionCardFrame extends Component<{ ix: Interaction; children?:
       );
     }
     return <Suspense fallback={<PermissionCardLoading ix={ix} />}>{children ?? <PermissionCard ix={ix} />}</Suspense>;
+  }
+}
+
+/** The same for a card the assistant answered for the user: its chunk loads with the first such answer, and a failed
+ *  load keeps a Retry in its slot instead of taking the chat (and the cards beside it) down to the page boundary. */
+export class DelegatedCardFrame extends Component<{ d: DelegatedAnswer; children?: ReactNode }, { error: unknown }> {
+  state = { error: null as unknown };
+  failures = 0;
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    const chunk = isChunkError(error);
+    reportBoundary(error, "delegated_card", chunk, info.componentStack);
+    if (chunk && this.failures++) reloadCardChunk(`delegated-chunk-reload:${this.props.d.ix.id}`);
+  }
+
+  render() {
+    const { d, children } = this.props;
+    if (this.state.error) {
+      return (
+        <ErrorNotice role="alert" message={t("chat-fulltext.failed")}
+          actions={<Button size="sm" onClick={() => this.setState({ error: null })}>{t("app.retry")}</Button>} />
+      );
+    }
+    return <Suspense fallback={null}>{children ?? <DelegatedCard d={d} />}</Suspense>;
   }
 }
 
@@ -643,7 +730,21 @@ export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" |
  * nothing Enter submits: the commands run on a click on Run, never on a key pressed while typing. The card's own keys
  * are only Esc back to the composer — no digits (they are the password), no Enter (never a key runs these commands).
  */
+const ownerCardsSeenSent = new Set<string>();
+
+/** Report once when an unseen owner-only timed card is displayed so the server can start its post-view countdown. */
+function useOwnerCardSeen(ix: Interaction) {
+  useEffect(() => {
+    if (!ix.seen_ttl_seconds || ix.seen_at || ownerCardsSeenSent.has(ix.id)) return;
+    ownerCardsSeenSent.add(ix.id);
+    void fetch(`/api/v1/interactions/${encodeURIComponent(ix.id)}/seen`, { method: "POST" }).catch(() => {
+      ownerCardsSeenSent.delete(ix.id);
+    });
+  }, [ix.id, ix.seen_at, ix.seen_ttl_seconds]);
+}
+
 function SecretRunCard({ ix }: { ix: Interaction }) {
+  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"run" | "decline" | null>(null);
   const [password, setPassword] = useState("");
   const input = useRef<HTMLInputElement>(null);
@@ -657,7 +758,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
       if (el) el.value = "";
     };
   }, []);
-  const { machine, purpose, commands } = secretRunInput(ix.tool_input);
+  const { machine, purpose, delivery, commands } = secretRunInput(ix.tool_input);
   // without commands in tool_input the hub's summary (the computer, the purpose and every command) stands in for them;
   // with neither, nothing says what would run and Run stays off
   const summary = commands.length ? "" : (ix.summary?.trim() ?? "");
@@ -667,7 +768,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
   const send = async (body: Record<string, unknown>, key: "run" | "decline") => {
     setPassword("");
     setBusy(key);
-    await resolve(ix, body);
+    await resolve(ix, body, { handoffCard: true });
     setBusy(null);
   };
   return (
@@ -699,6 +800,12 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
           </div>
         ) : (
           summary && <pre data-secret-run-summary className={CODE_BOX}>{summary}</pre>
+        )}
+        {delivery === "env" && (
+          <p role="alert" className="flex items-start gap-1.5 text-xs leading-snug font-medium text-orange">
+            <Icon name="warning" size={13} className="mt-px shrink-0" />
+            {t("chat-interactions.secret_run_env_warning")}
+          </p>
         )}
         <div className="flex flex-col gap-1">
           {/* The user's computer password, not this site's: "one-time-code" keeps Chrome from offering to save it (its
@@ -739,6 +846,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
  * each variable with the item it comes from, the Agent and its computer, where it runs and what it is asked.
  */
 function SecretHandoffCard({ ix }: { ix: Interaction }) {
+  useOwnerCardSeen(ix);
   const [busy, setBusy] = useState<"allow" | "always" | "deny" | null>(null);
   const keys = useCardKeys();
   const tapGuard = useChatCardTapGuard(ix);
@@ -830,6 +938,33 @@ export function CloseBlockedAgent({ ix, disabled }: { ix: Interaction; disabled:
  *  appears, since most chats never show one. Until it is in, the card is the terminal's question as before. */
 const CommandScreenCard = lazyPage(() => import("./CommandScreenCard").then((m) => m.CommandScreenCard));
 
+/** A card a task's supervisor holds (lib/supervisor-held.ts): what it asks, read-only, and that the supervisor decides
+ *  it and passes it to the user when it needs them. No answer, no hand back: it is not the user's card yet. */
+function SupervisorHeldCard({ ix }: { ix: Interaction }) {
+  const about = useContext(CardAbout);
+  const title = ix.kind === "screen" ? ix.dialog?.question || t("chat-interactions.screen_title")
+    : ix.kind === "plan" ? t("chat-interactions.plan_title")
+    : ix.kind === "permission" ? t("chat-interactions.permission_title", { tool: cardToolName(ix) || ix.tool_name || "" })
+    : ix.kind === "elicitation" ? t("chat-interactions.form_title")
+    : about || t("chat-interactions.screen_title");
+  const detail = ix.kind === "screen" ? [ix.dialog?.detail, ix.dialog?.command].filter(Boolean).join(" · ") : about;
+  return (
+    <Card
+      looking
+      kicker={t("chat-delegate.supervisor_held")}
+      title={title}
+      footer={
+        <p data-supervisor-held className="flex min-w-0 items-start gap-1.5 text-label leading-snug text-ink-2">
+          <Icon name="eye" size={13} stroke={2.2} className="mt-px shrink-0 text-ink-3" />
+          <span className="min-w-0">{t("chat-delegate.supervisor_held_hint")}</span>
+        </p>
+      }
+    >
+      {detail && detail !== title && <p className="text-meta leading-snug break-words whitespace-pre-wrap text-ink-2">{detail}</p>}
+    </Card>
+  );
+}
+
 function ScreenCard({ ix }: { ix: Interaction }) {
   // The hub sets `command` only on a shell command's permission prompt (one choice, no free-text field).
   const plain = <PlainScreenCard ix={ix} />;
@@ -877,7 +1012,7 @@ function PlainScreenCard({ ix }: { ix: Interaction }) {
       title={d?.question || t("chat-interactions.screen_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true }, "dismiss")}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
       footer={<div className="flex w-full min-w-0 flex-col gap-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -949,7 +1084,7 @@ function PlainScreenCard({ ix }: { ix: Interaction }) {
           )}
         </div>
       ) : (
-        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[#1b1c1f] px-3 py-2 font-mono text-[11.5px] leading-[1.5] whitespace-pre text-[#e6e7e9]">{ix.screen}</pre>
+        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[var(--term-bg,#1b1c1f)] px-3 py-2 font-mono text-[11.5px] leading-[1.5] whitespace-pre text-[var(--term-fg,#e6e7e9)]">{ix.screen}</pre>
       )}
     </Card>
   );
@@ -997,7 +1132,7 @@ function MultiScreenCard({ ix }: { ix: Interaction }) {
       title={d.question || t("chat-interactions.multi_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true }, "dismiss")}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
       footer={
         <>
@@ -1103,7 +1238,7 @@ function ElicitationCard({ ix }: { ix: Interaction }) {
       title={url ? t("chat-interactions.url_title") : t("chat-interactions.form_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true }, "dismiss")}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
       footer={
         <>
@@ -1397,38 +1532,50 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
   const managerWork = ix.kind === "question" && (ix.tool_name === "persona_triage" || isSessionReview(ix));
   // an answer still on its way (the hub away, apiOp retrying) holds the card, also after leaving the chat and coming back
   const { pending, line } = usePendingLine(ix);
-  const card = isSessionReview(ix) ? <SessionReviewCard key={ix.id} ix={ix} />
+  // a card a task's supervisor holds is not the user's yet: what it asks, read-only, never its answers
+  const held = supervisorHeld(ix);
+  const renderer = useCardRenderer(ix.kind);
+  const decision = useContext(DecisionCardContext);
+  const card = held ? <SupervisorHeldCard key={ix.id} ix={ix} />
+    : isSessionReview(ix) ? <SessionReviewCard key={ix.id} ix={ix} />
     : ix.kind === "question" && ix.tool_name === "persona_tool_loop" ? <ToolLoopCard key={ix.id} ix={ix} />
-    : ix.kind === "question" ? <QuestionCard ix={ix} canApprove={canApprove} />
+    : ix.kind === "question" ? <QuestionCard key={decision ? JSON.stringify(ix.questions ?? []) : undefined} ix={ix} canApprove={canApprove} />
     : ix.kind === "plan" ? <PlanCard ix={ix} />
     : isSecretRun(ix) ? <SecretRunCard key={ix.id} ix={ix} />
     : isSecretHandoff(ix) ? <SecretHandoffCard key={ix.id} ix={ix} />
     : ix.kind === "permission" ? <PermissionCardFrame key={ix.id} ix={ix} />
-    : ix.kind === "elicitation" ? <ElicitationCard ix={ix} /> : <ScreenCard ix={ix} />;
-  const asked = useVoiceAsking(ix);
+    : ix.kind === "elicitation" ? <ElicitationCard ix={ix} />
+    // a kind the core has no card for, drawn by the module that names it (core/module-host.ts `cardRenderers`)
+    : renderer ? <ModuleCard key={ix.id} module={renderer} interaction={ix} /> : <ScreenCard ix={ix} />;
+  const marks = <InteractionMarks interaction={ix} />;
   // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
   const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix)) ? permissionFrom(ix) : "";
   // what it asks in one line, as the folded cards' line says it (the command of a tool approval, a question)
   const about = plainMarkdown(cardLine(ix)).replace(/\s+/g, " ").trim();
+  const disabled = pending || (!canApprove && !managerWork);
+  const separateNavigation = decision && (disabled || Boolean(renderer && ix.kind === "screen"));
   // data-card: which card this is, for the sync scenarios (spec/fixtures/sync); `contents` keeps the layout as it was.
   // The fieldset is always there (switching it in would remount the card): disabled, it stops every answer and the
   // card's keys (lib/card-keys.ts) while the session can't be approved here or an answer is on its way. A manager work
   // card stays mounted for its local defer/dismiss actions; QuestionCard disables every message-sending control instead.
   return (
     <div data-card={ix.id} className="contents">
-      <AskedByVoice.Provider value={asked}>
+      <CardMarks.Provider value={marks}>
         <SendingAnswer.Provider value={line}>
           <AskedFrom.Provider value={from}>
             <CardAbout.Provider value={about}>
             {/* a question a supervisor passed up may carry a suggested rule: its line goes under the card (#5802) */}
-            <fieldset disabled={pending || (!canApprove && !managerWork)} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+            {separateNavigation && <div className="mb-1 flex items-center gap-3 px-1 text-label text-ink-2">{decision.navigation}</div>}
+            <DecisionCardContext.Provider value={separateNavigation ? { ...decision, navigation: undefined } : decision}>
+              <fieldset disabled={disabled} className={canApprove ? "contents" : undefined}>{card}</fieldset>
+            </DecisionCardContext.Provider>
             {/* a manager work card still takes its local defer and dismiss here: no "can't answer here" line */}
-            {block && !managerWork && <Suspense fallback={null}><CardBlockedLine ix={ix} block={block} /></Suspense>}
-            {underCard.line?.(canApprove ? ix : { ...ix, disabled: true })}
+            {block && !managerWork && !held && <Suspense fallback={null}><CardBlockedLine ix={ix} block={block} /></Suspense>}
+            {!held && underCard.line?.(canApprove ? ix : { ...ix, disabled: true })}
             </CardAbout.Provider>
           </AskedFrom.Provider>
         </SendingAnswer.Provider>
-      </AskedByVoice.Provider>
+      </CardMarks.Provider>
     </div>
   );
 }
@@ -1448,7 +1595,7 @@ export function TurnCards({ asks }: { asks: readonly TurnAsk[] }) {
  * screen (#1996) they sit in a box that scrolls on its own; while the keyboard is up, one line for all of them (tapping
  * it puts the keyboard away), and on a phone on its side one line until tapped.
  */
-export function PendingCards({ interactions, answered, delegated = [], offerNext, narrow, short = false, keyboard, onDismissKeyboard }: {
+export function PendingCards({ interactions, answered, delegated = [], offerNext, narrow, short = false, keyboard, onDismissKeyboard, reveal }: {
   interactions: Interaction[];
   answered: Answered[];
   /** The questions the assistant answered for the user (#544): shown with the answered ones, until put away. */
@@ -1460,6 +1607,8 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   short?: boolean;
   keyboard: boolean;
   onDismissKeyboard: () => void;
+  /** Open the short-screen fold when the composer points to an existing card. */
+  reveal?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const count = interactions.length;
@@ -1469,6 +1618,7 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   useEffect(() => {
     if (!count) setOpen(false);
   }, [count]);
+  useEffect(() => { if (short && reveal) setOpen(true); }, [short, reveal]);
   // the cards cut off below the box (each Card says): while any is, a stack of two or more says how many it holds
   const [cutCards, setCutCards] = useState<ReadonlySet<string>>(() => new Set());
   const report = useCallback((key: string, cut: boolean) => setCutCards((had) => {
@@ -1481,11 +1631,11 @@ export function PendingCards({ interactions, answered, delegated = [], offerNext
   const ids = interactions.map((ix) => ix.id).join("\n");
   const run = useRun(ids);
   const slot = useSlotFocus(interactions[0]?.id);
-  const { full, summary } = cardFold(count, { narrow, keyboard, open, short });
+  const { full, summary } = cardFold(count, { narrow, keyboard, open: open || (short && reveal === true), short });
   if (!count && !answered.length && !delegated.length) return null;
   const shown = showsAnswered({ narrow, keyboard, open, short });
   const done = shown
-    ? [...delegated.map((d) => <DelegatedCard key={d.ix.id} d={d} />), ...(answered.length ? [<AnsweredSummary key="answered" answered={answered} />] : [])]
+    ? [...delegated.map((d) => <DelegatedCardFrame key={d.ix.id} d={d} />), ...(answered.length ? [<AnsweredSummary key="answered" answered={answered} />] : [])]
     : [];
   // the cut-off count only while all the cards are opened: a stack folded to its first says where it stands instead (the
   // position chip). Each card has its own keyed provider, so a card moving up to first as the one above it goes keeps

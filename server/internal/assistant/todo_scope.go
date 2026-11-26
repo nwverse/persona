@@ -121,6 +121,19 @@ func (s *Service) todoVerdicts(ctx context.Context, ids []string, gone map[strin
 // history (todoFeedConversations): a store-wide failure, which leaves every to-do it would have read on todoUntold
 // rather than one to-do's (#12216).
 func (s *Service) todoVerdictsRead(ctx context.Context, ids []string, gone map[string]Todo, read map[[2]string]proto.Session) (map[string]todoVerdict, error) {
+	return s.todoVerdictsFor(ctx, ids, gone, read, func(p TrackPolicy) bool { return p.HideFromExtensions })
+}
+
+// todoVerdictsFor is todoVerdicts parameterized by the track-policy predicate blocked (HideFromExtensions for extension
+// visibility; HideFromExtensions || NoKBWrite for shared knowledge-base writes).
+func (s *Service) todoVerdictsFor(ctx context.Context, ids []string, gone map[string]Todo, read map[[2]string]proto.Session, blocked func(TrackPolicy) bool) map[string]todoVerdict {
+	v, _ := s.todoVerdictsReadFor(ctx, ids, gone, read, blocked)
+	return v
+}
+
+// todoVerdictsReadFor is todoVerdictsFor, and the error when the store could not tell the conversations of the
+// to-dos' history (todoVerdictsRead).
+func (s *Service) todoVerdictsReadFor(ctx context.Context, ids []string, gone map[string]Todo, read map[[2]string]proto.Session, blocked func(TrackPolicy) bool) (map[string]todoVerdict, error) {
 	briefs := s.briefLinksNow()
 	asked := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -176,8 +189,8 @@ func (s *Service) todoVerdictsRead(ctx context.Context, ids []string, gone map[s
 		// Where a run started, as its link keeps it, is its space for good.
 		if slices.ContainsFunc(e.links, func(a TodoAgent) bool {
 			c, seen := read[[2]string{a.MachineID, a.SessionID}]
-			return s.trackPolicy(ctx, identity.SpaceAt(a.Cwd)).HideFromExtensions ||
-				seen && s.trackPolicy(ctx, runSpace(c)).HideFromExtensions
+			return blocked(s.trackPolicy(ctx, identity.SpaceAt(a.Cwd))) ||
+				seen && blocked(s.trackPolicy(ctx, runSpace(c)))
 		}) {
 			own[id] = todoHidden
 		}
@@ -199,7 +212,7 @@ func (s *Service) todoVerdictsRead(ctx context.Context, ids []string, gone map[s
 			conversations = append(conversations, ev[id].conversations...)
 			conversations = append(conversations, feed[id]...)
 		}
-		bad := s.unshownConversations(ctx, conversations)
+		bad := s.unshownConversationsFor(ctx, conversations, blocked)
 		var untold []string
 		for c, hidden := range bad {
 			if !hidden {
@@ -254,7 +267,7 @@ func (s *Service) todoVerdictsRead(ctx context.Context, ids []string, gone map[s
 				continue // told above
 			}
 			switch c, ok := listed[run]; {
-			case ok && s.trackPolicy(ctx, runSpace(c)).HideFromExtensions:
+			case ok && blocked(s.trackPolicy(ctx, runSpace(c))):
 				raise(id, todoHidden)
 			case !ok && a.Cwd == "":
 				raise(id, todoUntold)
@@ -289,9 +302,13 @@ func (s *Service) todoVerdictsRead(ctx context.Context, ids []string, gone map[s
 // that are of a space hidden from extensions (true) or whose space cannot be told (false), as conversationSpaces tells
 // them all at once; those of the assistant's own space are left out.
 func (s *Service) unshownConversations(ctx context.Context, conversations []string) map[string]bool {
+	return s.unshownConversationsFor(ctx, conversations, func(p TrackPolicy) bool { return p.HideFromExtensions })
+}
+
+func (s *Service) unshownConversationsFor(ctx context.Context, conversations []string, blocked func(TrackPolicy) bool) map[string]bool {
 	out := map[string]bool{}
 	for c, t := range s.conversationSpaces(ctx, conversations) {
-		if !t.known || s.trackPolicy(ctx, t.space).HideFromExtensions {
+		if !t.known || blocked(s.trackPolicy(ctx, t.space)) {
 			out[c] = t.known
 		}
 	}
@@ -342,7 +359,7 @@ func (s *Service) extensionRows(ctx context.Context, list []listedTodo, p todoPr
 	for i := range list {
 		ids[i] = list[i].ID
 	}
-	verdicts, storeErr := s.todoVerdictsRead(ctx, ids, nil, read)
+	verdicts, storeErr := s.todoVerdictsReadFor(ctx, ids, nil, read, func(p TrackPolicy) bool { return p.HideFromExtensions })
 	out := make([]listedTodo, 0, len(list))
 	for _, t := range list {
 		switch v, decided := verdicts[t.ID]; {
@@ -376,7 +393,7 @@ func (s *Service) todoScoped(fn http.HandlerFunc) http.HandlerFunc {
 			_, kept := s.todos.todos[id]
 			s.todos.mu.RUnlock()
 			if kept {
-				verdicts, storeErr := s.todoVerdictsRead(ctx, []string{id}, nil, nil)
+				verdicts, storeErr := s.todoVerdictsReadFor(ctx, []string{id}, nil, nil, func(p TrackPolicy) bool { return p.HideFromExtensions })
 				switch v, decided := verdicts[id]; {
 				case !decided || v == todoHidden:
 					apierr.WriteCode(w, http.StatusNotFound, "todo_not_found", i18n.Err("assistant-todos.not_found"))

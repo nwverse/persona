@@ -23,6 +23,7 @@ import persona.core.contracts.api.*
 import persona.core.navigation.Navigator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.inbox.*
 
 /**
  * Heard after a mail was handed to Persona ("Hand to AI"): the host may show the assistant with it. The message is already
@@ -42,7 +43,11 @@ fun MailScreen(
     onAskAi: ((MailAiContext) -> Unit)? = null,
     onOpenLink: ((String) -> Unit)? = null,
 ) {
-    key(transport?.scope, route) { MailDetail(repository, transport, route, navigator, onAskAi, onOpenLink) }
+    // Decided by the shell from the hub's mail module (#15995): the whole message, or the text the hub stored for it.
+    when (LocalMailAccess.current) {
+        MailAccess.Live -> key(transport?.scope, route) { MailDetail(repository, transport, route, navigator, onAskAi, onOpenLink) }
+        MailAccess.StoredOnly -> key(route.itemId) { MailStoredScreen(repository, route, navigator) }
+    }
 }
 
 @Composable
@@ -319,7 +324,7 @@ private fun MailDetail(
                 when {
                     shownTranslation != null -> SelectionContainer {
                         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                            Text(shownTranslation.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                            ReadingContent { Text(shownTranslation.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
                             if (shownTranslation.clipped) Text(stringResource(R.string.inbox_mail_translation_clipped), style = PersonaTheme.type.caption,
                                 color = PersonaTheme.palette.ink3)
                         }
@@ -348,7 +353,9 @@ private fun MailDetail(
                             handleLink(url)
                         }
                     }
-                    mail.text.isNotBlank() -> SelectionContainer { Text(mail.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    mail.text.isNotBlank() -> SelectionContainer {
+                        ReadingContent { Text(mail.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    }
                     else -> Text(stringResource(R.string.inbox_mail_no_body), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
                 }
             }
@@ -442,7 +449,7 @@ internal fun mailContextText(mail: MailMessage): String = buildString {
 }.trim()
 
 @Composable
-private fun MailHeaderRow(label: String, value: String) {
+internal fun MailHeaderRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         Text(label, Modifier.width(56.dp), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink3)
         Text(value, Modifier.weight(1f), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)

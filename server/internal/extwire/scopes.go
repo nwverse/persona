@@ -27,6 +27,8 @@ var RouteScopes = map[string]string{
 	"GET /api/v1/kb-search":                                      ScopeKBRead,
 	"PUT /api/v1/kb/{kind}/{id}":                                 ScopeKBWrite,
 	"GET /api/v1/assistant/leaders":                              ScopeLeadersRead,
+	"POST /api/v1/assistant/directions":                          ScopeLeadersWrite,
+	"POST /api/v1/assistant/directions/{id}/progress":            ScopeLeadersWrite,
 	"GET /api/v1/assistant/dispatch-policy":                      ScopeAssistantDispatchPolicy,
 	"PUT /api/v1/assistant/dispatch-policy":                      ScopeAssistantDispatchPolicy,
 	"GET /api/v1/assistant/dispatch-guard":                       ScopeDispatchGuard,

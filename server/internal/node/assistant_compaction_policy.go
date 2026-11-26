@@ -16,9 +16,9 @@ import (
 )
 
 // assistantCompaction is what a conversation's launcher declares about compaction (#3066). Persona sets no target of
-// its own but one: the main conversation on a managed launcher is held to the manager's assistant.main_compact_window
-// (#7314) when the launcher declares a larger window. What is not declared is left to the agent, Claude Code by the
-// model's own window, Codex by its model's default.
+// its own but one: the main conversation and each leader conversation on a managed launcher are held to the window the
+// manager sends with them (assistant.main_compact_window, #7314, #15318) when the launcher declares a larger one. What
+// is not declared is left to the agent, Claude Code by the model's own window, Codex by its model's default.
 type assistantCompaction struct {
 	cacheProxyBase string
 	// window: the declared automatic compaction window (CLAUDE_CODE_AUTO_COMPACT_WINDOW, a managed launcher's
@@ -41,8 +41,9 @@ type assistantCompaction struct {
 	toolSearchOff                bool
 }
 
-// codexLimit is the model_auto_compact_token_limit a Codex start passes: a managed launcher's declared window (the main
-// conversation's capped, capMain), else none (the launcher's own -c and config.toml reach Codex as they are).
+// codexLimit is the model_auto_compact_token_limit a Codex start passes: a managed launcher's declared window (capped
+// by the window the manager sent, capWindow), else none (the launcher's own -c and config.toml reach Codex as they
+// are).
 func (c assistantCompaction) codexLimit() int {
 	if !c.pin {
 		return 0
@@ -135,9 +136,9 @@ func settingsCompaction(arg, cwd, home string) (window, capacity int) {
 }
 
 // assistantCompactionPolicy is what launcher declares about compaction for a conversation in cwd (settings: Persona's
-// own settings file for the start), the same for the main conversation and every other (#3066), but for the main
-// conversation's cap (capMain). Several declarations of one value: the smallest counts (the conservative reading where
-// a profile, the environment and settings disagree).
+// own settings file for the start), the same for the main conversation and every other (#3066), but for the window the
+// manager sent with it (capWindow). Several declarations of one value: the smallest counts (the conservative reading
+// where a profile, the environment and settings disagree).
 func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, execution modelExecution) assistantCompaction {
 	var c assistantCompaction
 	declare := func(window, capacity int) {
@@ -215,7 +216,7 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 	if c.window > 0 && c.capacity > 0 && c.capacity < c.window {
 		c.window = c.capacity // no compaction window past the context window
 	}
-	c.capMain(execution)
+	c.capWindow(execution)
 	return c
 }
 
@@ -228,6 +229,26 @@ func (n *Node) assistantCompactionPolicy(launcher, cwd, settings string, executi
 // (Anthropic's own API). A value the shell has only because the node has it is not the launcher's own; a managed one
 // counts as the launcher's (nothing Persona writes would win over it).
 func claudeEndpoint(p Probe, own, configDir, cwd, home string) (endpoint string, ownToolSearch bool) {
+	layers, shell := claudeEnvLayers(p, own, configDir, cwd, home)
+	base, set := "", false
+	for _, layer := range layers {
+		if v, ok := layer["ANTHROPIC_BASE_URL"]; ok && !set {
+			base, set = v, true
+		}
+		if _, ok := layer[toolSearchEnv]; ok {
+			ownToolSearch = true
+		}
+	}
+	if !set {
+		base = shell["ANTHROPIC_BASE_URL"]
+	}
+	if v, ok := shell[toolSearchEnv]; ok && p.Shell != nil && os.Getenv(toolSearchEnv) != v {
+		ownToolSearch = true
+	}
+	return base, ownToolSearch
+}
+
+func claudeEnvLayers(p Probe, own, configDir, cwd, home string) ([]map[string]string, map[string]string) {
 	read := func(arg string) map[string]string {
 		if arg == "" {
 			return nil
@@ -263,41 +284,29 @@ func claudeEndpoint(p Probe, own, configDir, cwd, home string) (endpoint string,
 			}
 		}
 	}
-	base, set := "", false
-	for _, layer := range layers {
-		if v, ok := layer["ANTHROPIC_BASE_URL"]; ok && !set {
-			base, set = v, true
-		}
-		if _, ok := layer[toolSearchEnv]; ok {
-			ownToolSearch = true
-		}
-	}
-	if !set {
-		base = shell["ANTHROPIC_BASE_URL"]
-	}
-	if v, ok := shell[toolSearchEnv]; ok && p.Shell != nil && os.Getenv(toolSearchEnv) != v {
-		ownToolSearch = true // the user's startup files export it
-	}
-	return base, ownToolSearch
+	return layers, shell
 }
 
-// capMain holds the main conversation on a managed launcher (pin: Persona writes its values) to the window the manager
-// sent with it (execution.MainCompactWindow, #7314) when the launcher declares a larger one: its compaction window, or
-// its context window when it declares only that. The context window stays as declared; Claude Code compacts by the
-// smaller of the two, Codex by codexLimit, and the idle threshold is 75% of it (idle). Nothing declared invents
-// nothing, and 0 (another conversation, an older manager, the setting at 0) changes nothing.
-func (c *assistantCompaction) capMain(execution modelExecution) {
-	if limit := execution.MainCompactWindow; execution.IsMain && c.pin && limit > 0 && c.declared() > limit {
+// capWindow holds a conversation on a managed launcher (pin: Persona writes its values) to the window the manager sent
+// with it (execution.MainCompactWindow: the main conversation's, #7314, and a leader conversation's, #15318) when the
+// launcher declares a larger one: its compaction window, or its context window when it declares only that. The context
+// window stays as declared; Claude Code compacts by the smaller of the two, Codex by codexLimit, and the idle threshold
+// is 75% of it (idle). Nothing declared invents nothing, and 0 (any other conversation, a guest, an older manager, the
+// setting at 0) changes nothing. Which conversations get a window is the manager's call: a node before #15318 applied
+// one only with is_main, so with a newer manager a leader conversation there keeps its launcher's window.
+func (c *assistantCompaction) capWindow(execution modelExecution) {
+	if limit := execution.MainCompactWindow; c.pin && limit > 0 && c.declared() > limit {
 		c.window = limit
 	}
 }
 
-// mainWindowOn is the window the manager sent with a main conversation's start (window) as that start on launcher
-// carries it (modelExecution.MainCompactWindow): only a managed launcher applies it (capMain), so anywhere else it is
-// 0, or it would change the fingerprint and restart the conversation, or miss the spare warmed for it, for nothing.
-// assistantSend and assistantWarm both read it, so the main chat's spare matches its next start.
-func (n *Node) mainWindowOn(launcher string, isMain bool, window int) int {
-	if _, managed := n.managedLauncher(launcher); isMain && window > 0 && managed {
+// mainWindowOn is the window the manager sent with a conversation's start (window: the main conversation's or a leader
+// conversation's) as that start on launcher carries it (modelExecution.MainCompactWindow): only a managed launcher
+// applies it (capWindow), so anywhere else it is 0, or it would change the fingerprint and restart the conversation,
+// or miss the spare warmed for it, for nothing. assistantSend and assistantWarm both read it, so the main chat's spare
+// matches its next start.
+func (n *Node) mainWindowOn(launcher string, window int) int {
+	if _, managed := n.managedLauncher(launcher); window > 0 && managed {
 		return window
 	}
 	return 0
@@ -410,6 +419,10 @@ func (n *Node) assistantCompactionSettings(id, cwd, settings string, c assistant
 	}
 	if c.cacheProxyBase != "" {
 		env["ANTHROPIC_BASE_URL"] = c.cacheProxyBase
+		// The refresh replays only requests that declare a one-hour cache (cachewarm.Replay). Claude Code declares
+		// one only for a subscriber or with this switch; on an API key or a gateway it sends a bare five-minute
+		// ephemeral marker, so nothing was ever retained to refresh.
+		env[promptCaching1hEnv] = "1"
 	}
 	s["env"] = env
 

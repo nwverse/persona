@@ -27,10 +27,12 @@
   "session_choices_one": "{count} session has an id starting with {sid}. Choose one to open",
   "session_choices_other": "{count} sessions have an id starting with {sid}. Choose one to open",
   "title_health": "Health",
-  "title_agent_archives": "Archived agents",
+  "title_agent_archives": "Archived sessions",
   "title_subscriptions": "Subscriptions",
   "new_version": "A new version is available",
   "new_version_reload": "Reload",
   "title_request": "Request",
-  "title_compare_runs": "Compare runs"
+  "title_compare_runs": "Compare runs",
+  "title_space": "Space",
+  "title_new_space": "New space"
 }

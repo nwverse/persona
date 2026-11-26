@@ -12,13 +12,14 @@ SOURCES = ("instructions", "tool_schemas", "snapshot_or_events", "history", "cur
            "tool_results", "attachments", "other_content")
 CONTEXT = re.compile(r"<persona-context\b[^>]*>.*?</persona-context>", re.S)
 ATTACHMENTS = {"image", "input_image", "image_url", "document", "input_file", "file", "local_image"}
-TOOL_OUTPUTS = {"tool_result", "function_call_output", "custom_tool_call_output"}
+TOOL_OUTPUTS = ("tool_result", "function_call_output", "custom_tool_call_output")
 
 
 def size(value):
     """UTF-8 text bytes; structured values use deterministic compact JSON, not wire bytes."""
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return len(text.encode("utf-8"))
+    # JSON exports can contain escaped lone surrogates. Count their escaped spelling.
+    return len(text.encode("utf-8", errors="backslashreplace"))
 
 
 def counter(value):
@@ -74,7 +75,7 @@ class Inventory:
         n = result.bytes["tool_results"]
         self.bytes.update(result.bytes)
         self.counts.update(result.counts)
-        if self.largest is None or n > self.largest["bytes"]:
+        if result.counts["tool_results"] and (self.largest is None or n > self.largest["bytes"]):
             self.largest = {"category": "tool_results", "bytes": n}
 
     def row(self, known):
@@ -97,6 +98,12 @@ def usage_row(usage, runtime):
             "output_tokens": counter(usage.get("output_tokens"))}
 
 
+def is_tool_result_only(msg):
+    content = msg.get("content")
+    return isinstance(content, list) and bool(content) and all(
+        isinstance(b, dict) and b.get("type") in TOOL_OUTPUTS for b in content)
+
+
 def request_row(entry):
     """Explicit local exports: an Anthropic Messages or OpenAI Responses request object."""
     runtime, request = entry.get("runtime"), entry.get("request")
@@ -112,7 +119,8 @@ def request_row(entry):
     if isinstance(messages, str):
         inv.content(messages, "current_message")
     elif isinstance(messages, list):
-        last_user = max((i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"), default=-1)
+        last_user = max((i for i, m in enumerate(messages)
+                         if isinstance(m, dict) and m.get("role") == "user" and not is_tool_result_only(m)), default=-1)
         for i, msg in enumerate(messages):
             if not isinstance(msg, dict):
                 inv.add("other_content", msg)
@@ -199,7 +207,7 @@ class Breakdown:
                     identity = (msg.get("id") or entry.get("uuid")) if kind == "assistant" else None
                     for block in blocks:
                         if isinstance(identity, str) and identity:
-                            digest = hashlib.sha256(json.dumps(block, sort_keys=True, ensure_ascii=False).encode()).digest()
+                            digest = hashlib.sha256(json.dumps(block, sort_keys=True).encode()).digest()
                             key = (identity, digest)
                             if key in seen:
                                 continue
