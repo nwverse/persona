@@ -9,6 +9,8 @@ import { t as tr } from "../i18n";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
 import { api, enc, errorText } from "../lib/api";
 import { readinessChanged } from "../lib/readiness";
+import "./machines/machine-views.css";
+import { stateCount } from "../lib/state-labels";
 import { stateOf } from "../lib/format";
 import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
@@ -83,6 +85,8 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const saved = storedValue(VIEW_KEY);
     return saved === "capabilities" || saved === "toolchain" || saved === "files" || saved === "services" || saved === "storage" ? saved : "cards";
   });
+  const [selectedMid, setSelectedMid] = useState("");
+  const fleetView = view === "cards" || view === "capabilities";
   const chooseView = (v: MachinesView) => {
     if (v === "cards" || v === "capabilities" || v === "toolchain" || v === "services" || v === "files" || v === "storage") storeValue(VIEW_KEY, v);
     setView(v);
@@ -92,8 +96,14 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const [sheet, setSheet] = useState<{ mid: string; kind: AlertKind } | null>(null);
   // The disk map in reclaim mode (#14576): from a disk alert here, or a computer's disk figure on its page (history state)
   const [storageFocus, setStorageFocus] = useState<{ mid: string; mode: "reclaim"; seq: number } | undefined>(undefined);
+  const selectMachine = useCallback((mid: string) => {
+    setSelectedMid(mid);
+    setStorageFocus(undefined);
+  }, []);
+  const toolProps = { machines, selectedMid, onSelectMachine: selectMachine };
   const openUsageMap = useCallback((mid: string) => {
     setSheet(null);
+    setSelectedMid(mid);
     storeValue(VIEW_KEY, "storage");
     setView("storage");
     setStorageFocus((f) => ({ mid, mode: "reclaim", seq: (f?.seq ?? 0) + 1 }));
@@ -124,7 +134,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // the cards with something wrong first, as the apps order them (MachineConcern)
   const ordered = useMemo(() => orderMachines(machines, (m) => {
     const mm = metrics?.find((x) => x.machine_id === m.id);
-    return concernOf(m, machineAlerts({ machine: m, metrics: mm, launchers: issues.get(m.id) ?? 0, managerOffline: !!offlineManagerOf(roster, m) }), agents.get(m.id)?.[2] ?? 0);
+    return concernOf(m, machineAlerts({ machine: m, metrics: mm, launchers: issues.get(m.id) ?? 0, managerOffline: !!offlineManagerOf(roster, m) }), agents.get(m.id)?.needsYou ?? 0);
   }), [machines, metrics, issues, roster, agents]);
 
   // Stable callbacks, so the memoized cards keep their props when the page renders again.
@@ -164,24 +174,35 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         <IconButton icon="sidebar" label={t("machines.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <h1 className="text-[14px] font-semibold text-ink">{t("machines.title")}</h1>
         <div className="flex-1" />
-        {<Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "resources", label: t("resources.title") }, { v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "services", label: t("machines.view_services") }, { v: "files", label: t("machines.view_files") }, { v: "toolchain", label: t("machines.view_toolchain") }, { v: "network", label: t("machines-network.tab_label") }, { v: "storage", label: t("machines.view_storage") }]} />}
-        <span className="text-[11.5px] text-ink-3 max-sm:hidden">{t("machines.refresh_interval", { seconds: 10 })}</span>
         {machines.length > 0 && canAdd && add}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="machine-views mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
+          <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
+            { v: "cards", label: t("machines.view_cards") },
+            { v: "capabilities", label: t("machines.view_capabilities") },
+            { v: "procs", label: t("machines.view_procs") },
+            { v: "services", label: t("machines.view_services") },
+            { v: "files", label: t("machines.view_files") },
+            { v: "toolchain", label: t("machines.view_toolchain") },
+            { v: "network", label: t("machines-network.tab_label") },
+            { v: "storage", label: t("machines.view_storage") },
+            { v: "resources", label: t("resources.assistant_resources") },
+          ]} />
+        </div>
         {/* two columns, three on a wide screen: the cards used to stop at 1000px and leave half a wide window empty; a full-row item takes col-span-full, since md:col-span-2 alone leaves a third of the row to the next card */}
         <div className="mx-auto grid max-w-[1560px] grid-cols-1 gap-3 px-5 py-6 sm:px-8 md:grid-cols-2 2xl:grid-cols-3">
-          {view !== "resources" && <TodayTokens machines={machines} metrics={metrics} />}
+          {fleetView && <TodayTokens machines={machines} metrics={metrics} />}
           {view === "resources" && <div className="col-span-full"><Suspense fallback={<Loading />}><ResourcesPanel /></Suspense></div>}
-          {!metrics && !error && <Loading />}
+          {fleetView && !metrics && !error && <Loading />}
           {/* a failed refresh says so even with the last numbers on screen (iOS / Android keep their notice up) */}
-          {error && (
+          {fleetView && error && (
             <p role="alert" className="flex items-start gap-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12.5px] text-red col-span-full">
               <Icon name="warning" size={14} className="mt-px shrink-0" />
               <span className="min-w-0 break-words">{metrics ? t("machines.refresh_failed_stale", { error, seconds: 10 }) : t("machines.load_failed", { error })}</span>
             </p>
           )}
-          {loaded && machines.length === 0 && (metrics || error) && (
+          {view !== "resources" && loaded && machines.length === 0 && (!fleetView || metrics || error) && (
             <div className="col-span-full">
               <Empty icon="machine" title={error && !metrics ? t("machines.empty_unavailable") : t("machines.empty_title")} action={add}>
                 {t("machines.empty_body_add")}
@@ -196,44 +217,47 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           {view === "procs" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <PortsProcessesPanel machines={machines} />
+                <PortsProcessesPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "toolchain" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <ToolchainPanel machines={machines} />
+                <ToolchainPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "services" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <ServicesPanel machines={machines} />
+                <ServicesPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "files" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <FileBrowserPanel machines={machines} />
+                <FileBrowserPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "network" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <NetworkPanel machines={ordered} />
+                <NetworkPanel {...toolProps} />
               </Suspense>
             </div>
           )}
           {view === "storage" && machines.length > 0 && (
             <div className="col-span-full">
               <Suspense fallback={<Loading />}>
-                <StoragePanel machines={machines} focus={storageFocus} />
+                <StoragePanel {...toolProps} focus={storageFocus} />
               </Suspense>
             </div>
+          )}
+          {view === "cards" && machines.length > 0 && (
+            <p className="col-span-full text-submeta text-ink-3">{t("machines.refresh_interval", { seconds: 10 })}</p>
           )}
           {view === "cards" && ordered.map((m, index) => (
               <MachineCard
@@ -250,8 +274,10 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 onAddAgain={addAgain}
                 managerOffline={offlineManagerOf(roster, m)?.name}
                 hostedManagers={hostedByMachine.get(m.id) ?? NO_MANAGERS}
-                agents={agents.get(m.id)?.[0] ?? 0}
-                working={agents.get(m.id)?.[1] ?? 0}
+                agents={agents.get(m.id)?.total ?? 0}
+                working={agents.get(m.id)?.working ?? 0}
+                needsYou={known === "yes" ? agents.get(m.id)?.needsYou ?? 0 : undefined}
+                waitingSid={agents.get(m.id)?.waitingSid}
                 known={known}
                 launcherIssues={issues.get(m.id) ?? 0}
                 onAlert={openAlert}
@@ -288,6 +314,8 @@ type CardProps = {
   /** Its agents that are not offline, and how many of them work; `known`: whether the list they come from is in. */
   agents: number;
   working: number;
+  needsYou?: number;
+  waitingSid?: string;
   known: AgentsKnown;
   /** Launchers failing or blocked on it (docs/server/launcher-health.md). */
   launcherIssues: number;
@@ -300,8 +328,9 @@ type AgentsKnown = "yes" | "loading" | "failed";
 // One computer's card. It is memoized and gets its own computer's agents as numbers: a change to another computer's
 // agents leaves its props as they were, so it (and its Stat, Spark, MachineDeploy) does not render again. Nor does a
 // machines push that only moved last_seen on (sameCard).
-const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline, hostedManagers, agents, working, known, launcherIssues, onAlert }: CardProps) {
+const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline, hostedManagers, agents, working, needsYou, waitingSid, known, launcherIssues, onAlert }: CardProps) {
   const detail = { name: "machine" as const, mid: m.id };
+  const waiting: Route = waitingSid ? { name: "session", mid: m.id, sid: waitingSid } : detail;
   const deployment = machineDeployment(m);
   const { expectedDisconnect } = deployment;
   const pending = isPending(m);
@@ -317,22 +346,32 @@ const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, rout
         <span className={cx("flex size-9 shrink-0 items-center justify-center rounded-[9px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
           <Icon name="machine" size={16} />
         </span>
-        <a href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="group/title min-w-0 flex-1 rounded-[6px]">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate text-[14px] font-semibold text-ink group-hover/title:underline">{m.name}</h2>
-            {hub && (
-              <span title={route ? `${hub} · ${route}` : hub} className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-field px-1.5 text-[11px] font-medium text-ink-2">
-                <Icon name="hub" size={11} />
-                {hub}
+        <div className="flex min-w-0 flex-1 flex-wrap items-start gap-x-2">
+          <a href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="group/title min-w-0 grow basis-48 rounded-control">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-[14px] font-semibold text-ink group-hover/title:underline">{m.name}</h2>
+              {hub && (
+                <span title={route ? `${hub} · ${route}` : hub} className="inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-field px-1.5 text-[11px] font-medium text-ink-2">
+                  <Icon name="hub" size={11} />
+                  {hub}
+                </span>
+              )}
+              <span className={cx("inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium", m.online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
+                <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} />
+                {m.online ? t("machines.online") : neverConnected(m) ? t("machines.not_connected_yet") : t("machines.offline")}
               </span>
-            )}
-            <span className={cx("inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium", m.online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
-              <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} />
-              {m.online ? t("machines.online") : neverConnected(m) ? t("machines.not_connected_yet") : t("machines.offline")}
-            </span>
-          </div>
-          <p className="truncate text-[11.5px] text-ink-3">{[m.system?.name || m.os, m.system?.model, m.system?.cpu].filter(Boolean).join(" · ") || m.hostname}</p>
-        </a>
+            </div>
+            <p className="truncate text-[11.5px] text-ink-3">{[m.system?.name || m.os, m.system?.model, m.system?.cpu].filter(Boolean).join(" · ") || m.hostname}</p>
+          </a>
+          {needsYou !== undefined && needsYou > 0 && (
+            <a href={href(waiting)} onClick={(e) => onLinkClick(e, waiting)}
+              className="inline-flex min-h-11 shrink-0 items-center rounded-control focus-visible:outline-accent">
+              <span className="whitespace-nowrap rounded-full bg-field px-2 py-1 text-submeta font-medium text-attention">
+                {stateCount("needs_you", needsYou)}
+              </span>
+            </a>
+          )}
+        </div>
         {!m.online && !expectedDisconnect && !pending && !managerOffline && (
           <Button tone="secondary" icon="retry" onClick={() => onReconnect(m.id)}>
             {t("machines.reconnect")}
@@ -462,19 +501,21 @@ function sameHostedManagers(a: readonly Manager[], b: readonly Manager[]): boole
 
 const cardKey = (m: Machine) => JSON.stringify({ ...m, last_seen: !!m.last_seen });
 
-/** By computer: its agents that are not offline (the assistant's conversations are not agents), and how many of them
- *  work. */
-function agentCounts(list: readonly Session[]): Map<string, readonly [number, number, number]> {
-  const by = new Map<string, [number, number, number]>();
+/** Counts use the same folded session list as the Agents page. */
+function agentCounts(list: readonly Session[]) {
+  const by = new Map<string, { total: number; working: number; needsYou: number; waitingSid?: string }>();
   for (const s of list) {
     if (s.assistant) continue;
-    const st = stateOf(s);
-    if (st === "offline") continue;
-    const n = by.get(s.machine_id) ?? [0, 0, 0];
-    n[0]++;
-    if (st === "working") n[1]++;
-    if (st === "needs_you") n[2]++;
-    by.set(s.machine_id, n);
+    const state = stateOf(s);
+    if (state === "offline") continue;
+    const counts = by.get(s.machine_id) ?? { total: 0, working: 0, needsYou: 0 };
+    counts.total++;
+    if (state === "working") counts.working++;
+    if (state === "needs_you") {
+      counts.needsYou++;
+      counts.waitingSid ??= s.session_id;
+    }
+    by.set(s.machine_id, counts);
   }
   return by;
 }
