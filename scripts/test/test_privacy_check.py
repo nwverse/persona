@@ -227,7 +227,7 @@ class LoopbackTests(unittest.TestCase):
             alias = home / "build.json"
             alias.symlink_to(config)
             overrides = {"XDG_CONFIG_HOME": str(home / ".config"), "PERSONA_CONFIG": str(config),
-                         "JARVIS_CONFIG": str(alias)}
+                         pc.CONFIG_ENV[1]: str(alias)}
             with patch.dict(os.environ, overrides), patch.object(pc, "HOME", str(home)):
                 with patch.object(pc, "open", wraps=open, create=True) as opened:
                     pc.config_values()

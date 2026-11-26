@@ -11,12 +11,14 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/botport"
+
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/feishubot"
 )
 
 func TestBotSourceReportDelaySetting(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	const key = "source_report_delay_minutes"
 	const path = "/api/v1/bots/feishu"
@@ -61,6 +63,7 @@ func TestBotSourceReportDelaySetting(t *testing.T) {
 }
 
 func TestBotSourceReportFullReplySetting(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	const path = "/api/v1/bots/feishu"
 	const setting = "source_report_full_reply"
@@ -93,6 +96,7 @@ func ignoreProbe(rw http.ResponseWriter, req *http.Request) bool {
 }
 
 func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	if code, _ := w.do(t, "PUT", "/api/v1/bots/feishu", `{"source_report_full_reply":true}`); code != http.StatusOK {
@@ -143,7 +147,7 @@ func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
 	defer api.Close()
 
 	w.h.bots.mu.Lock()
-	w.h.bots.api = feishubot.New("cli_test", "test_secret", api.URL)
+	w.h.bots.api = botport.New("cli_test", "test_secret", api.URL)
 	w.h.bots.mu.Unlock()
 	raw, err := json.Marshal(map[string]any{
 		"chat_id": askChat, "reply_to": source, "uuid": "sr:long", "full_answer": true,
@@ -161,7 +165,7 @@ func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
 	loseResponse.Store(false)
 	restarted := newTestManager(t)
 	restarted.store = w.h.store
-	restarted.bots.api = feishubot.New("cli_test", "test_secret", api.URL)
+	restarted.bots.api = botport.New("cli_test", "test_secret", api.URL)
 	if out, handled, err := restarted.AppCall(t.Context(), req); !handled || err != nil || string(out) != `{"message_id":"om_answer"}` {
 		t.Fatalf("retry after restart: %s, handled %v, error %v", out, handled, err)
 	}
@@ -180,6 +184,7 @@ func TestBotSourceReportLongReplyRetriesSameAttachment(t *testing.T) {
 }
 
 func TestBotSourceReportLongReplyRetriesAfterBotRestart(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	if code, _ := w.do(t, "PUT", "/api/v1/bots/feishu", `{"source_report_full_reply":true}`); code != http.StatusOK {
@@ -200,7 +205,7 @@ func TestBotSourceReportLongReplyRetriesAfterBotRestart(t *testing.T) {
 		case "/open-apis/im/v1/files":
 			// The bot restarts with another client while the answer uploads.
 			w.h.bots.mu.Lock()
-			w.h.bots.api = feishubot.New("cli_test", "test_secret", "http://"+req.Host)
+			w.h.bots.api = botport.New("cli_test", "test_secret", "http://"+req.Host)
 			w.h.bots.mu.Unlock()
 			reply(map[string]any{"code": 0, "data": map[string]string{"file_key": "file_1"}})
 		case "/open-apis/im/v1/messages/" + source + "/reply":
@@ -214,7 +219,7 @@ func TestBotSourceReportLongReplyRetriesAfterBotRestart(t *testing.T) {
 	defer api.Close()
 
 	w.h.bots.mu.Lock()
-	w.h.bots.api = feishubot.New("cli_test", "test_secret", api.URL)
+	w.h.bots.api = botport.New("cli_test", "test_secret", api.URL)
 	w.h.bots.mu.Unlock()
 	raw, err := json.Marshal(map[string]any{
 		"chat_id": askChat, "reply_to": source, "uuid": "sr:restart", "full_answer": true,

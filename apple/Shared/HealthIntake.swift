@@ -69,6 +69,21 @@ nonisolated struct HealthIntake: Decodable, Sendable, Equatable {
     var protein: Portion
     var days: [Day]
     var zone: String
+    var waterExtension: String?
+    /// Missing on older hubs means both intake items remain available.
+    var items: [String]?
+
+    func contains(_ kind: Kind) -> Bool { items?.contains(kind.rawValue) ?? true }
+
+    private nonisolated enum CodingKeys: String, CodingKey {
+        case water, protein, days, zone, items
+        case waterExtension = "water_extension"
+    }
+
+    /// Only the import count is needed here; settings are read back with today's authoritative totals.
+    nonisolated struct WaterImport: Decodable, Sendable {
+        var imported: Int
+    }
 
     mutating func align(_ change: Change) {
         water.today = change.today.water
@@ -85,6 +100,12 @@ extension APIClient {
 
     func healthIntake() async throws -> HealthIntake {
         try await manager(nil).get("/api/v1/assistant/health/intake", query: ["space": Session.healthSpace])
+    }
+
+    func importWaterExtension() async throws -> HealthIntake.WaterImport {
+        let data = try await manager(nil).request("POST", "/api/v1/assistant/health/intake/import",
+                                                query: ["space": Session.healthSpace])
+        return try JSON.decoder.decode(HealthIntake.WaterImport.self, from: data)
     }
 
     func recordHealthIntake(_ draft: HealthIntake.Draft) async throws -> HealthIntake.Change {

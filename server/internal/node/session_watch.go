@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,7 @@ type watch struct {
 	// reading: new lines are being read and pushed in a goroutine of their own; the pump skips the watch meanwhile.
 	reading atomic.Bool
 	live    liveWatch
+	tools   toolWatch
 	// A TRAE or Codex transcript that may need a fresh database projection on a follow tick.
 	dbHistory bool
 	agy       *agyWatch
@@ -66,6 +68,10 @@ func (n *Node) watch(id string, since int) error {
 // watchFor is watch for the hub connection that owns parent: the transcript loop ends with that connection, so a
 // resident node that opens a new Node per reconnect is not left with a reader per watch from the one before.
 func (n *Node) watchFor(parent context.Context, id string, since int) error {
+	_, dbHistory := n.codexSource(id)
+	if !dbHistory {
+		_, dbHistory = n.traexThread(id)
+	}
 	f, err := n.file(id)
 	if err != nil {
 		if !n.knownSession(id) {
@@ -80,7 +86,7 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 			return nil
 		}
 		wctx, cancel := context.WithCancel(parent)
-		pw := &watch{cancel: cancel}
+		pw := &watch{cancel: cancel, ctx: wctx, id: id, dbHistory: dbHistory}
 		if n.waiting == nil {
 			n.waiting = map[string]*watch{}
 		}
@@ -94,11 +100,14 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 				}
 				n.mu.Unlock()
 			}()
-			for i := 0; i < 120; i++ {
+			for i := 0; i < 120 || pw.dbHistory; i++ {
 				select {
 				case <-wctx.Done(): // unwatched, or the connection ended, before the transcript appeared
 					return
 				case <-time.After(500 * time.Millisecond):
+				}
+				if i%2 == 0 {
+					n.pumpTools(pw)
 				}
 				f, err := n.file(id)
 				if err != nil {
@@ -117,10 +126,6 @@ func (n *Node) watchFor(parent context.Context, id string, since int) error {
 			cancel()
 		}()
 		return nil
-	}
-	_, dbHistory := n.codexSource(id)
-	if !dbHistory {
-		_, dbHistory = n.traexThread(id)
 	}
 	n.mu.Lock()
 	if _, ok := n.watches[id]; ok {
@@ -205,15 +210,19 @@ func (n *Node) pushItems(id string, items []proto.Item, span transcript.Span) {
 	}
 	n.mu.Lock()
 	f := n.files[id]
+	w := n.watches[id]
 	n.mu.Unlock()
+	items = n.applyBotmuxTurnsCached(id, f, items)
 	agentUsage(f, items) // finished subagents' results carry what they used (agent_usage.go)
 	items = n.echoed(id, f, items)
+	n.toolViews.attach(id, items, true, f)
 	n.ttft.annotate(id, items, true)
 	// On the bulk lane with credit: a push of a page with images otherwise went to the transport at once, and the
 	// pong behind it waited for all of it (rpc.Peer.NotifyBulk). Never called from the hub connection's read loop.
 	for _, part := range pushParts(pushImages(items), span) {
 		_ = n.peer.NotifyBulk(context.Background(), "session.items", withSpan(map[string]any{"session_id": id, "items": nonNil(part.items)}, part.span, true))
 	}
+	n.refreshWatchedBotmux(w)
 	n.liveRecheck(id) // the words these items brought replace their live copy, right after them (livereply.go)
 }
 
@@ -257,7 +266,7 @@ func pushParts(items []proto.Item, span transcript.Span) []pushPart {
 	for i := range items {
 		size += itemSize(items[i])
 		lineEnds := i+1 == len(items) || items[i+1].Seq != items[i].Seq
-		if size >= pushBytesMax && lineEnds && i+1 < len(items) {
+		if size >= pushBytesMax && lineEnds && i+1 < len(items) && items[i].Seq > from {
 			sp := span
 			sp.From, sp.To = from, items[i].Seq
 			parts = append(parts, pushPart{items: items[start : i+1], span: sp})
@@ -275,6 +284,11 @@ func itemSize(it proto.Item) int {
 	n := 256 + len(it.Text) + len(it.ToolInput)
 	if it.Image != nil {
 		n += len(it.Image.Data)
+	}
+	if len(it.ToolViews) > 0 {
+		if b, err := json.Marshal(it.ToolViews); err == nil {
+			n += len(b)
+		}
 	}
 	return n
 }
@@ -405,6 +419,9 @@ func (n *Node) pumpWatch(w *watch, live int) {
 		return
 	}
 	w.ticks++
+	if w.ticks == 1 || w.ticks%followEvery == 0 {
+		n.pumpTools(w)
+	}
 	if w.ticks%live == 0 {
 		n.pumpLive(w) // claudestatus.go
 	}
@@ -414,6 +431,9 @@ func (n *Node) pumpWatch(w *watch, live int) {
 	// The path is cached: a lookup and a stat, a search at most every 30 s. A file being read (Changed says true without
 	// waiting for it) is followed in the goroutine that reads it, so the pump never waits for another's parse.
 	follow := w.ticks%followEvery == 0
+	if follow {
+		n.refreshWatchedBotmux(w)
+	}
 	// TRAE database changes and a Codex rollout disappearing can both require a new projection.
 	refreshHistory := follow && w.dbHistory
 	if !w.f.Changed() && !refreshHistory {

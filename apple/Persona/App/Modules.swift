@@ -1,17 +1,100 @@
 import Foundation
 import Observation
 import PersonaModuleAPI
+import SwiftUI
 import UIKit
 
 // The app's feature modules (#13432, part of #13430; docs/apple/ios.md, "Modules"). This file is the seed of the
 // `PersonaHostApp` layer (#13430 decision 4) and the only core file that names a module's type: everything else reads
 // `Modules.registry`. scripts/test/test_apple_module_refs.py keeps it that way.
 
-/// The host the modules plug into: what their entries hand back to the app.
+/// The host the modules plug into: what their entries hand back to the app, and where they may draw.
 enum PersonaHostApp: ModuleHost {
     /// A composer action's sheet hands the composer a picture.
     typealias Attachment = UIImage
+    /// A Settings entry of a module is listed, searched and drawn as the core's own (`SettingsCatalog`).
+    typealias SettingsInfo = SettingsEntry
+
+    /// What a module's shell page shares with the assistant's own pages (`ModuleSlot.shellPlaces`): a new conversation's
+    /// launcher, model, mode and effort as picked in the shell composer, whether a start is under way, and how to start one.
+    struct ShellContext {
+        /// A conversation is being started.
+        var disabled: Bool
+        @Binding var launcher: String?
+        @Binding var launcherModel: String?
+        @Binding var mode: String
+        @Binding var effort: String
+        /// Starts a conversation in the page's space with the message.
+        var send: (String, [ImagePayload]) -> Void
+    }
+
+    /// Where a module's views go, each in one slot.
+    nonisolated enum Place: Hashable {
+        /// A chat's ··· menu and the assistant's top-bar menu (`ModuleSlot.toolbarItems`).
+        case chatMenu
+        /// A chat's footer above the composer, and the assistant's task dock (`ModuleSlot.chatAccessories`).
+        case chatFooter
+        /// Under a tool call (`ModuleSlot.chatCardKinds`).
+        case toolCall
+    }
+
+    /// What the core hands a view at a place: whichever of these the place has.
+    struct PlaceContext {
+        /// A chat's own machine (an agent's), or the machine a page is about.
+        var machine: MachineRef? = nil
+        /// The machine the chat's agent operated last (the assistant's).
+        var recent: MachineRef? = nil
+        /// The chat the place is in.
+        var from: SessionKey? = nil
+        /// The chat's latest computer step (`ComputerActivity.latest`).
+        var activity: ComputerActivity? = nil
+        /// The tool call the place is under.
+        var call: ToolCall? = nil
+    }
+
+    nonisolated static func slot(for place: Place) -> ModuleSlot {
+        switch place {
+        case .chatMenu: .toolbarItems
+        case .chatFooter: .chatAccessories
+        case .toolCall: .chatCardKinds
+        }
+    }
 }
+
+/// A view of an active module at one of the app's places.
+typealias ModulePlaceView = ModuleView<PersonaHostApp>
+
+/// A page of an active module in the app's shell (`ModuleSlot.shellPlaces`).
+typealias ModuleShellPlace = ModuleShellPage<PersonaHostApp>
+
+/// The active modules' views at `place` for `context`, those with something to draw (`ModuleView.shows`).
+struct ModuleViews: View {
+    let place: PersonaHostApp.Place
+    var context = PersonaHostApp.PlaceContext()
+
+    var body: some View {
+        ForEach(Modules.registry.views(at: place).filter { $0.shows(context) }) { $0.view(context) }
+    }
+
+    /// Whether any active module draws at `place` for `context`: a layout that spaces around them asks first.
+    @MainActor static func any(_ place: PersonaHostApp.Place, _ context: PersonaHostApp.PlaceContext = .init()) -> Bool {
+        Modules.registry.views(at: place).contains { $0.shows(context) }
+    }
+}
+
+#if DEBUG
+/// The DEBUG sample sheets of the modules compiled into this build, for screenshots (`-showHealthTrends`). The one place
+/// the core names a module's DEBUG modifier; a build without the module has none.
+struct ModuleDebugSamples: ViewModifier {
+    func body(content: Content) -> some View {
+        #if PERSONA_MODULE_HEALTH && os(iOS)
+        content.healthTrendsSample()
+        #else
+        content
+        #endif
+    }
+}
+#endif
 
 /// A composer action of an active module (`ModuleSlot.composerActions`).
 typealias ModuleComposerAction = ComposerAction<PersonaHostApp>
@@ -20,7 +103,19 @@ enum Modules {
     /// The built-in modules, in the order their entries appear. A module is active only when it is listed here,
     /// enabled (`isEnabled`) and allowed by the hub (`HubModules`).
     static var builtIn: [any PersonaModule<PersonaHostApp>] {
-        [GlassesModule()]
+        var list: [any PersonaModule<PersonaHostApp>] = [GlassesModule()]
+        // A module in a directory of its own (apple/Modules/<Name>) is compiled in by apple/modules.yml, which sets its
+        // condition; apple/modules-core-only.yml (PERSONA_CORE_ONLY=YES) leaves every one of them out.
+        #if PERSONA_MODULE_SCREEN_SHARE
+        list.append(ScreenShareModule())
+        #endif
+        #if PERSONA_MODULE_HEALTH
+        list.append(HealthModule())
+        #endif
+        #if PERSONA_MODULE_VOICE
+        list.append(VoiceModule())
+        #endif
+        return list
     }
 
     /// The registry the core reads. Observed: a view that reads it draws again when a hello turns a module on or off.
@@ -68,20 +163,26 @@ enum HubModuleMemory {
 /// when that hub's hello, or the pick of hub, changes the answer (#13849). Nothing else is observed.
 @MainActor @Observable
 final class ModuleState {
-    static let shared = ModuleState(group: UserDefaults.standard.string(forKey: AppModel.hubGroupKey) ?? "")
+    static let shared = ModuleState(group: UserDefaults.standard.string(forKey: AppModel.hubGroupKey) ?? "",
+                                    audioBroker: .shared)
 
     private(set) var registry: ModuleRegistry<PersonaHostApp>
     /// The hub group whose answer the registry follows.
     @ObservationIgnored private(set) var group: String
     /// The modules whose launch hooks ran; nil before launch.
     @ObservationIgnored private var launched: Set<ModuleID>?
+    /// Optional audio broker kept in sync with the active modules' `audio_leases` declarations.
+    @ObservationIgnored private let audioBroker: AudioSessionBroker?
 
     init(group: String, defaults: UserDefaults = .standard,
          modules: [any PersonaModule<PersonaHostApp>] = Modules.builtIn,
-         isEnabled: @escaping @MainActor (any PersonaModule<PersonaHostApp>) -> Bool = Modules.isEnabled) {
+         isEnabled: @escaping @MainActor (any PersonaModule<PersonaHostApp>) -> Bool = Modules.isEnabled,
+         audioBroker: AudioSessionBroker? = nil) {
         self.group = group
+        self.audioBroker = audioBroker
         registry = ModuleRegistry(modules: modules, isEnabled: isEnabled, hub: HubModuleMemory.remembered(group, in: defaults))
         assert(registry.problems.isEmpty, "module registrations refused: \(registry.problems)")
+        audioBroker?.syncDeclaredLeases(from: registry)
     }
 
     /// Runs the active modules' launch hooks, once, at launch.
@@ -108,6 +209,32 @@ final class ModuleState {
         guard hub != registry.hub else { return }
         registry = registry.rebuilt(hub: hub)
         assert(registry.problems.isEmpty, "module registrations refused: \(registry.problems)")
+        audioBroker?.syncDeclaredLeases(from: registry)
         if let done = launched { launched = registry.launch(after: done) }
+    }
+}
+
+extension AudioSessionBroker.LeaseKind {
+    nonisolated init(_ kind: AudioLeaseKind) {
+        switch kind {
+        case .call: self = .call
+        case .voiceConversation: self = .voiceConversation
+        case .meetingRecording: self = .meetingRecording
+        case .playback: self = .playback
+        }
+    }
+}
+
+extension AudioSessionBroker {
+    /// Acquires a lease declared by an active module in `ModuleRegistry.audioLeases` (#13849).
+    nonisolated func acquire(_ declared: ModuleAudioLease) -> Lease {
+        acquire(id: declared.id, module: declared.module.rawValue, kind: LeaseKind(declared.kind))
+    }
+
+    /// Syncs the active modules' declared `audio_leases` into the broker for inspection.
+    @MainActor func syncDeclaredLeases(from registry: ModuleRegistry<PersonaHostApp>) {
+        setDeclaredLeases(registry.audioLeases.map {
+            DeclaredLease(id: $0.id, module: $0.module.rawValue, kind: LeaseKind($0.kind))
+        })
     }
 }

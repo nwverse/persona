@@ -6,12 +6,14 @@
 internal/apierr
 internal/botcard
 internal/channel
+internal/clitext
 internal/compat
 internal/i18n
 internal/identity
 internal/lazyre
 internal/modelretry
 internal/netproxy
+internal/node/nodekit
 internal/osproc
 internal/procinfo
 internal/prompts
@@ -20,3 +22,8 @@ internal/textfmt
 internal/tokenuse
 internal/transcript
 github.com/nwverse/persona/sdk/go/ext
+internal/apierr
+internal/deeplink
+internal/screen
+internal/textfmt
+internal/transcribejob

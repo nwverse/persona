@@ -7,26 +7,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/nwverse/persona/server/internal/connectorwire"
 )
 
 // The ledger of what was written as the user (migrations/0420_sent_as_user.sql, docs/extensions/connectors.md "Sent as the user").
 
-// SentAsUser is one write that went out through a connector's gate.
-type SentAsUser struct {
-	ID        int64     `json:"id"`
-	At        time.Time `json:"at"`
-	Connector string    `json:"connector"`
-	Action    string    `json:"action"`
-	// Target is where it went, by connector; Origin the conversation that asked; LetThrough how the gate let it
-	// through (all JSON objects).
-	Target     json.RawMessage `json:"target"`
-	Text       string          `json:"text"`
-	Summary    string          `json:"summary"`
-	Origin     json.RawMessage `json:"origin"`
-	LetThrough json.RawMessage `json:"let_through"`
-	MessageRef string          `json:"message_ref,omitempty"`
-	RecalledAt *time.Time      `json:"recalled_at,omitempty"`
-}
+// SentAsUser is one write that went out through a connector's gate (connectorwire.SentAsUser, which the knowledge-ui
+// module reads too).
+type SentAsUser = connectorwire.SentAsUser
 
 // How many rows one read of the ledger gives: by default, and at most.
 const (
@@ -45,6 +34,13 @@ func (d *DB) RecordSentAsUser(ctx context.Context, s SentAsUser) (int64, error) 
 		s.At, s.Connector, s.Action, objectOrEmpty(s.Target), s.Text, s.Summary, objectOrEmpty(s.Origin), objectOrEmpty(s.LetThrough),
 		s.MessageRef).Scan(&id)
 	return id, err
+}
+
+// SetSentAsUserOutcome completes a durable, pre-send audit attempt. A pending
+// attempt after a crash deliberately says nothing about whether delivery occurred.
+func (d *DB) SetSentAsUserOutcome(ctx context.Context, id int64, outcome string) error {
+	_, err := d.pool.Exec(ctx, `UPDATE sent_as_user SET let_through = let_through || jsonb_build_object('outcome', $2::text) WHERE id = $1`, id, outcome)
+	return err
 }
 
 func objectOrEmpty(raw json.RawMessage) []byte {

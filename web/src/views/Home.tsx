@@ -1,8 +1,8 @@
 // Overview: what needs you, what is running, what just finished — Beautiful UI's Task Rows — and the computers.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { SESSIONS_HIERARCHY_FEATURE } from "../lib/child-sessions";
 import { homeKey } from "../lib/folded-rows";
-import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, stateOf, tabLabel } from "../lib/format";
+import { ago, backgroundWaiting, interactionCanAnswer, sessionCan, sessionPreview, shortDuration, sourceSubtitle, sessionTitle, activityOf, tabLabel } from "../lib/format";
 import { usePendingLine } from "../lib/card-answer";
 import { cardState, requestRoute } from "../lib/card-focus";
 import { interactionAsk } from "../lib/inbox";
@@ -19,7 +19,7 @@ import { heldAsWorking, userCards } from "../lib/supervisor-held";
 import { agentLabel } from "../lib/mentions";
 import { hubLabel, machineWithHub } from "../lib/mesh";
 import { isPending, machineErrorText } from "../lib/add-computer";
-import { machineDeployment } from "../lib/machine-deploy";
+import { disconnectExpected } from "../lib/machine-connection-state";
 import { classifyConnection } from "../lib/connection-failure";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
@@ -28,6 +28,7 @@ import { getSession, useStore, withTaskRows } from "../lib/store";
 import { retryAgentList } from "../lib/sessions";
 import { checkOutbox, discardOutbox, entryReason, heldOnComputer, outboxEntry, queueToSession, retryOutbox, retryOutboxEntry } from "../lib/outbox";
 import { homeTasks, type HomeTask } from "../lib/home-tasks";
+import { lazyPage } from "../lib/lazy-page";
 import { overviewActions, type ActionableComputer, type ActionableOutbox } from "../lib/overview-actions";
 import { useRoster } from "../lib/managers";
 import { sessionLauncher } from "../lib/model-switch";
@@ -48,9 +49,12 @@ import { resolve } from "./chat/Interactions";
 import { deleteFailed } from "./chat/OutboxBubbles";
 import { OverviewArrangeButton } from "./extensions/ExtensionSlots";
 import { OverviewBody, type OverviewSections } from "./OverviewBody";
+import { OverviewSummaryBoundary } from "./OverviewSummaryBoundary";
 import { TodoStageBar } from "./TodoStageBar";
 import { t } from "../i18n";
 import { markAllSeenLabel, STATE_LABEL, stateCount, stateName } from "../lib/state-labels";
+
+const OverviewMachineSection = lazyPage(() => import("./OverviewMachineSection").then((m) => m.OverviewMachineSection));
 
 function greeting() {
   const h = new Date().getHours();
@@ -91,7 +95,7 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
     if (!whole) return hubAgentCounts && new Map(Object.entries(hubAgentCounts));
     const byMachine = new Map<string, number>();
     for (const s of agentSessions) {
-      if (stateOf(s) !== "offline") byMachine.set(s.machine_id, (byMachine.get(s.machine_id) ?? 0) + 1);
+      if (activityOf(s) !== "offline") byMachine.set(s.machine_id, (byMachine.get(s.machine_id) ?? 0) + 1);
     }
     return byMachine;
   }, [list, whole, hubAgentCounts, agentSessions]);
@@ -131,8 +135,43 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
   // Overview being arranged (#9745, #10905): the order of its cards and sections, which are hidden, how wide a card is
   const [arranging, setArranging] = useState(false);
 
+  const [machineSectionReady, setMachineSectionReady] = useState(() => OverviewMachineSection.ready());
+  useEffect(() => {
+    if (!loaded || machines.length === 0 || machineSectionReady) return;
+    let alive = true;
+    void OverviewMachineSection.preload().then(() => { if (alive) setMachineSectionReady(true); }, () => {});
+    return () => { alive = false; };
+  }, [loaded, machines.length, machineSectionReady]);
+
   // Overview's own sections, above the cards by default (#11147), each what it draws (nothing while it has no rows): the user may move them,
   // and hide the ones whose rows don't need them (#10905, views/OverviewBody.tsx)
+  const computerRows = loaded && machines.length > 0 && (
+    <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
+        {machines.map((m) => {
+          const count = agentCounts && (agentCounts.get(m.id) ?? 0);
+          const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
+          const hub = hubLabel(m, machines);
+          const detail = { name: "machine" as const, mid: m.id };
+          return (
+            <a key={m.id} href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card card-interactive">
+              <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-[8px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
+                <Icon name="machine" size={15} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-[13px] font-medium text-ink">{m.name}</span>
+                  {hub && <span className="shrink-0 truncate text-[11.5px] text-ink-3">{hub}</span>}
+                </span>
+                <span className="block truncate text-[11.5px] text-ink-3" title={!m.online && m.error && offlineLine(m) !== m.error ? m.error : undefined} data-machine-line>{line}</span>
+              </span>
+              <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
+            </a>
+          );
+        })}
+      </div>
+    </Group>
+  );
   const sections: OverviewSections = {
     // the headline counts agents; this counts each visible request, failed send or unavailable computer once
     needs_you: loaded && (needsCount > 0 || held.length > 0) && (
@@ -229,31 +268,13 @@ export function Home({ onNewAgent, onToggleSidebar }: { onNewAgent: () => void; 
       </Group>
     ),
     computers: loaded && machines.length > 0 && (
-      <Group title={t("home.computers")} count={machines.length} right={<a href={href({ name: "machines" })} onClick={(e) => onLinkClick(e, { name: "machines" })} className="touch-hit text-[12px] text-ink-3 hover:text-ink-2">{t("home.monitor")}</a>}>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 @min-[60rem]:grid-cols-3 @min-[84rem]:grid-cols-4 @min-[110rem]:grid-cols-5">
-          {machines.map((m) => {
-            const count = agentCounts && (agentCounts.get(m.id) ?? 0);
-            const line = m.online ? [count !== undefined && t("home.machine_agents", { count }), m.system?.name].filter(Boolean).join(" · ") || t("home.online") : offlineLine(m);
-            const hub = hubLabel(m, machines);
-            const detail = { name: "machine" as const, mid: m.id };
-            return (
-              <a key={m.id} href={href(detail)} onClick={(e) => onLinkClick(e, detail)} className="flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card transition-colors hover:bg-hover">
-                <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-[8px]", m.online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
-                  <Icon name="machine" size={15} />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-[13px] font-medium text-ink">{m.name}</span>
-                    {hub && <span className="shrink-0 truncate text-[11.5px] text-ink-3">{hub}</span>}
-                  </span>
-                  <span className="block truncate text-[11.5px] text-ink-3" title={!m.online && m.error && offlineLine(m) !== m.error ? m.error : undefined} data-machine-line>{line}</span>
-                </span>
-                <span className={cx("size-2 shrink-0 rounded-full", m.online ? "bg-green" : "bg-line-strong")} title={m.online ? t("home.online") : t("home.offline")} />
-              </a>
-            );
-          })}
-        </div>
-      </Group>
+      machineSectionReady ? (
+        <OverviewSummaryBoundary fallback={computerRows}>
+          <Suspense fallback={computerRows}>
+            <OverviewMachineSection Section={Group} machines={machines} agentCounts={agentCounts} offlineText={offlineLine} />
+          </Suspense>
+        </OverviewSummaryBoundary>
+      ) : computerRows
     ),
   };
   // with nothing to do, after Unread's place whether it is drawn or not: all is quiet, or how to add a computer
@@ -336,12 +357,13 @@ function MarkAllSeen({ count, onClick }: { count: number; onClick: () => void })
 }
 
 // `grid`: its rows go two, then three to a line as the page gets wider; "cards" (rows with buttons, read before
-// answering) only once each still has room for its question and buttons.
+// answering) only once each still has room for its question and buttons. A section's only card fills a two-column
+// row, but stops at two columns' width when the row has three.
 const GRID = {
-  rows: "grid grid-cols-1 items-start gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
+  rows: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
   // task cards differ in height (a stage bar or not): a row stretches them to one height, the agent line at the bottom
-  tasks: "grid grid-cols-1 items-stretch gap-1.5 @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3",
-  cards: "grid grid-cols-1 items-start gap-1.5 @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3",
+  tasks: "grid grid-cols-1 items-stretch gap-1.5 [&>:only-child]:col-span-full @min-[60rem]:grid-cols-2 @min-[100rem]:grid-cols-3 @min-[100rem]:[&>:only-child]:col-span-2",
+  cards: "grid grid-cols-1 items-start gap-1.5 [&>:only-child]:col-span-full @min-[84rem]:grid-cols-2 @min-[120rem]:grid-cols-3 @min-[120rem]:[&>:only-child]:col-span-2",
 };
 
 function Group({ title, count, children, right, hint, grid }: { title: string; count: number; children: React.ReactNode; right?: React.ReactNode; hint?: string; grid?: true | "cards" | "tasks" }) {
@@ -461,7 +483,7 @@ function SessionTask({ s, i, machine, pill, footer }: { s: Session; i: number; m
   const title = sessionTitle(s);
   // the source is a tag once, not again in front of the latest words
   // the latest words are Markdown: one line of them reads without its marks, as the sidebar's row line does (#10939)
-  return <TaskRow i={i} state={stateOf(s)} waiting={backgroundWaiting(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={plainMarkdown(sessionPreview(s))} pill={pill} footer={footer} />;
+  return <TaskRow i={i} state={activityOf(s)} waiting={backgroundWaiting(s)} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} title={title} tags={rowTags(title, [sourceSubtitle(s), machine, s.space_name, tabLabel(s)])} detail={plainMarkdown(sessionPreview(s))} pill={pill} footer={footer} />;
 }
 
 // One tab's agents as one row (#2320): the "Lead"'s title (the first pane's when the panes are peers), the most urgent
@@ -482,9 +504,9 @@ function GroupTask({ g, i, machine, pill, footer }: { g: TabGroup; i: number; ma
       detail={s === head ? preview : agentLabel(s) && preview ? t("home.agent_preview", { agent: agentLabel(s), preview }) : agentLabel(s) || preview}
       pill={
         <>
-          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${backgroundWaiting(x) ? stateName("bg_waiting") : STATE_LABEL[stateOf(x)]}`).join("\n")}>
+          <span className="flex shrink-0 items-center gap-1 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums" title={g.sessions.map((x) => `${agentLabel(x)} · ${sessionTitle(x)} · ${backgroundWaiting(x) ? stateName("bg_waiting") : STATE_LABEL[activityOf(x)]}`).join("\n")}>
             <span aria-hidden className="flex items-center gap-0.5">
-              {g.sessions.map((x) => <StatusMark key={x.session_id} state={stateOf(x)} size="sm" waiting={backgroundWaiting(x)} />)}
+              {g.sessions.map((x) => <StatusMark key={x.session_id} state={activityOf(x)} size="sm" waiting={backgroundWaiting(x)} />)}
             </span>
             <span className="max-sm:sr-only">{t("home.machine_agents", { count: g.sessions.length })}</span>
           </span>
@@ -712,7 +734,7 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
       href={href(to)}
       onClick={(e) => onLinkClick(e, to, entry)}
       title={[title, ...tags].join(" · ")}
-      className={cx("group flex min-w-0 items-center gap-2.5 rounded-card px-3 py-2 transition-[background-color,transform] duration-150", !below && "bg-surface shadow-card hover:bg-inset active:scale-[0.995]")}
+      className={cx("group flex min-w-0 items-center gap-2.5 rounded-card px-3 py-2", !below && "bg-surface shadow-card card-interactive")}
       style={below ? undefined : enter}
     >
       {done ? (
@@ -727,13 +749,13 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
         {(detail || tags.length > 0) && (
           <span className={cx("mt-0.5 flex min-w-0 gap-1.5 text-[12.5px] leading-[18px] text-ink-2", actions ? "flex-col items-start gap-0.5" : "items-center")}>
             {tags.length > 0 && (
-              <span className="hidden shrink-0 items-center gap-1 sm:flex" data-row-tags>
+              <span className="hidden min-w-0 max-w-full items-center gap-1 sm:flex" data-row-tags>
                 {tags.map((x) => (
                   <span key={x} className="max-w-[12em] truncate rounded-chip bg-field px-1.5 text-[11px] leading-[17px] text-ink-3">{x}</span>
                 ))}
               </span>
             )}
-            {detail && <span className={cx("min-w-0", actions ? "line-clamp-3 w-full [overflow-wrap:anywhere]" : "flex-1 truncate")} title={actions ? detail : undefined}>{detail}</span>}
+            {detail && <span className={actions ? "line-clamp-3 w-full min-w-0 [overflow-wrap:anywhere]" : "min-w-1/2 flex-1 truncate"} title={actions ? detail : undefined}>{detail}</span>}
           </span>
         )}
       </span>
@@ -744,7 +766,7 @@ function TaskRow({ i, state, waiting, done, to, title, tags, detail, pill, entry
   if (!below) return link;
   return (
     // the capsule shades while the link part is hovered, not while a button is
-    <div className="rounded-card bg-surface shadow-card transition-colors duration-150 has-[>a:hover]:bg-inset" style={enter}>
+    <div className="rounded-card bg-surface shadow-card transition-shadow duration-150 has-[>a:hover]:shadow-btn" style={enter}>
       {link}
       {below}
     </div>
@@ -792,6 +814,6 @@ export function offlineLine(m: Machine): string {
   if (isPending(m)) return t("machines.never_connected");
   const coded = machineErrorText(m.error_code);
   if (coded) return coded;
-  if (machineDeployment(m).expectedDisconnect) return t("machines.waiting_node");
+  if (disconnectExpected(m)) return t("machines.waiting_node");
   return classifyConnection(m)?.title ?? (m.error || t("home.offline"));
 }
