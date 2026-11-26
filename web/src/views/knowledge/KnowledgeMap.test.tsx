@@ -212,6 +212,47 @@ describe("zooming and panning the map", () => {
     expect(panel()).toContain("Lines alone could not be found again");
   });
 
+  it("keeps the node it opens or closes where it was on screen, by toggle, double click and arrow keys", async () => {
+    // two topics, one a side; opening a subtopic of long points widens the left side, which moves the whole map in its box
+    const facts = (path: string, n: number, text: string) => Array.from({ length: n }, (_, i) => ({ id: `${path}${i}`, path: [path], kind: "fact", text: `${text} ${i + 1}` }));
+    const search: KBDetailResponse = { detail: { kind: "topics", id: "search", path: "", meta: { name: "Search" }, points: [...facts("Cache", 12, "Cache fact"), ...facts("Index", 12, "Index fact")] } };
+    const sync: KBDetailResponse = { detail: { kind: "topics", id: "sync", path: "", meta: { name: "Sync" }, points: facts("Conflicts", 8, "A conflict between two devices is settled by the newest write, kept short") } };
+    act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
+    await answer("/api/v1/kb/topics", { items: [{ kind: "topics", id: "search", name: "Search", relevance: 0 }, { kind: "topics", id: "sync", name: "Sync", relevance: 0 }] });
+    await answer("/api/v1/assistant", {});
+    await answer("/api/v1/kb/topics/search", search);
+    await answer("/api/v1/kb/topics/sync", sync);
+    const svg = host.querySelector<SVGSVGElement>("svg[data-map]")!;
+    const view = svg.parentElement!.parentElement as HTMLDivElement;
+    view.scrollLeft = 3000;
+    view.scrollTop = 3000;
+    const node = (label: string) => [...svg.querySelectorAll<SVGGElement>("g[role=button][tabindex]")].find((g) => g.getAttribute("aria-label")!.startsWith(label))!;
+    const toggle = (name: string) => [...svg.querySelectorAll("g[role=button]")].find((g) => g.getAttribute("aria-label") === name)!;
+    // where a node is in the map's box (its place in the drawing less the viewBox's start), and on screen up to where the
+    // view itself sits (through the zoom, less the scroll)
+    const inBox = (label: string) => {
+      const [, x, y] = /translate\(\s*([-\d.e]+)px,\s*([-\d.e]+)px\)/.exec(node(label).style.transform)!.map(Number);
+      const [vx, vy] = svg.getAttribute("viewBox")!.split(" ").map(Number);
+      return [x - vx, y - vy];
+    };
+    const onScreen = (label: string) => {
+      const [x, y] = inBox(label), z = Number(svg.getAttribute("width")) / Number(svg.getAttribute("viewBox")!.split(" ")[2]);
+      return [x * z - view.scrollLeft, y * z - view.scrollTop];
+    };
+    const apart = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const check = (label: string, act_: () => void) => {
+      const screen = onScreen(label), laid = inBox(label);
+      act(act_);
+      expect(apart(inBox(label), laid)).toBeGreaterThan(20); // the new layout moved it in the map…
+      expect(apart(onScreen(label), screen)).toBeLessThan(0.5); // …and it stayed put on screen
+    };
+    check("Cache", () => toggle("Expand Cache").dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    check("Cache", () => node("Cache").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
+    check("Conflicts", () => node("Conflicts").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    check("Conflicts", () => node("Conflicts").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    expect(toggle("Expand Conflicts")).toBeTruthy();
+  });
+
   it("brings what the side panel opens to the middle, straight there under reduced motion", async () => {
     await draw();
     const scrollTo = vi.mocked(Element.prototype.scrollTo);
