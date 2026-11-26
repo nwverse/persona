@@ -1412,6 +1412,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 				}
 			}
 		}
+		if todosV2 {
+			s.refreshTodoRuntimeChangedFiles(ctx, t, agents)
+		}
 		if todosV2 && ((t.Check != nil && t.Check.Verdict == verdictDone) || (t.Supervision != nil && t.Supervision.Progress != nil && t.Supervision.Progress.Kind == "done")) {
 			if err := s.ResetSupervisedTaskRecovery(ctx, t.ID); err != nil {
 				s.logf("todos_v2 restart recovery reset %s: %v", t.ID, err)
