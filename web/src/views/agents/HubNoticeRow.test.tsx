@@ -9,7 +9,7 @@ vi.hoisted(() => {
   g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
 });
 
-import { HubNoticeView } from "./HubNoticeRow";
+import HubNoticeView from "./HubNoticeView";
 import type { HubNotice } from "../../lib/hub-update";
 
 const noop = () => {};
