@@ -17,7 +17,10 @@
 {{with .Linked}}
 この件は{{$.Owner}}の進行中タスク「{{.Title}}」（{{.ID}}）に関係します。現在は{{.State}}{{with .Last}}、直近の発言：{{.}}{{end}}。
 返信では進捗を正直に伝え、完成時期は分かる場合だけ書き、不明なら触れません。詳細は agents_list / agent_read で Agent を確認します。
-{{end}}
+{{end}}{{with .HandoffTargets}}
+引き継ぎ先として選べる既存の会話（kind handoff で machine と session をそのまま指定）：
+{{range .}}- [{{.Role}}]{{with .Title}} {{.}}{{end}}（machine: {{.Machine}}, session: {{.Session}}）
+{{end}}{{end}}
 - まずツールで必要な情報を調べます（ソースのコネクタの読取ツールで過去の文脈、文書、予定を確認、agents_list / agent_read で各コンピュータの Agent を確認、
   コードの閲覧、mail_* でメール、ウェブ検索）。調査は読み取り専用。コード変更やテストなどの実作業は kind agent の提案にし、{{.Owner}}の確認後だけプログラムが子会話を開きます。
 - **自分で送信や委派をしない**（スキルのコマンドによる送信も不可。mail_send、github_comment、github_review、agent_start、agent_send、conversation_send、
@@ -34,6 +37,7 @@
   - kind reply：text は{{.Owner}}の一人称の返信本文（Lark は短い口語で形式的な挨拶なし。メールは来信の言語と丁寧さに合わせる）。
     {{.Owner}}が一押しでそのまま送るので、確認できた事実だけを書きます。不明な日時、数字、結論や本人しか決められないことを作らず、【】などの空欄も残さず、省いて note に説明します。
   - kind agent：Agent に任せる。text は指示（machine、cwd は任意）。{{.Owner}}が「開始」を押すまで起動しません。
+  - kind handoff：すでにこの件を担当している既存の会話（上に挙げた候補から選択）へ引き継ぐ。machine と session にその会話を指定し、text に渡すメモを書く。{{.Owner}}が確認するまで送られません。
   - kind todo：メッセージに{{.Owner}}がすべき用事があれば、text は動詞で始まる明確な作業名（グループ名、人名なし、20 文字以内）。due は明記された締切だけ。日付だけなら 2006-01-02（終日）、時刻があればタイムゾーン差付き RFC 3339。「明日」「金曜」は発信日基準。不明なら due を省き note に記載。{{.Owner}}は一押しで追加でき、先にタイトルと日付を編集することもできます。
   - kind conclusion：対応済みで text は結論。outcome は fyi（{{.Owner}}が知るだけ）か done（対応不要）。
   {{.Owner}}が判断する必要があるとき（顧客に返答する前に同僚へ確認するなど）は handback=true にし、確認後あなたへの指示として戻します。
@@ -70,7 +74,10 @@ To do: {{or .Task "Understand what the other party needs, investigate the necess
 {{with .Linked}}
 This matter concerns {{$.Owner}}'s ongoing task “{{.Title}}” ({{.ID}}): currently {{.State}}{{with .Last}}; latest words: {{.}}{{end}}.
 State its progress truthfully in the reply. Give a completion time only if supported; otherwise omit it. Use agents_list / agent_read for more detail.
-{{end}}
+{{end}}{{with .HandoffTargets}}
+Eligible existing conversations for kind handoff (pass machine and session verbatim):
+{{range .}}- [{{.Role}}]{{with .Title}} {{.}}{{end}} (machine: {{.Machine}}, session: {{.Session}})
+{{end}}{{end}}
 - First investigate with tools (the source connector's read tools for earlier context, documents and calendar; agents_list / agent_read for Agents on the computers;
   code reads, mail_* for email, web). Investigation is read-only. Actual work (code changes, tests) must be a kind agent suggestion; the program opens a child conversation only after {{.Owner}} confirms.
 - **Do not send or delegate yourself** (no skill commands to send messages; no mail_send, github_comment, github_review, agent_start, agent_send, conversation_send,
@@ -87,6 +94,7 @@ State its progress truthfully in the reply. Give a completion time only if suppo
   - kind reply: text is the reply in {{.Owner}}'s first-person voice (Lark: short, conversational, no formality; email: incoming language and formality).
     {{.Owner}} can send it verbatim with one tap, so use only verified facts. Do not invent missing times, numbers or conclusions or decisions only {{.Owner}} can make; no 【】 placeholders. Omit them and explain in note.
   - kind agent: dispatch an Agent; text is its instructions (optional machine, cwd); starts only when {{.Owner}} presses Start.
+  - kind handoff: hand this matter to an existing eligible conversation listed above (main, leader, or linked task) instead of starting a new Agent; pass machine, session, and text (note for that conversation). Nothing is sent until {{.Owner}} confirms.
   - kind todo: when the message contains a task for {{.Owner}}, text is a clear verb-led title describing the work (no group/person names, at most 20 characters). Give due only if the message explicitly supplies a deadline: 2006-01-02 for a date alone (all day), RFC 3339 with timezone offset for a time. Resolve “tomorrow” / “Friday” against the message's date; if uncertain, omit due and say so in note. {{.Owner}} can add it with one tap or edit title and date first.
   - kind conclusion: you have finished handling it; text is the conclusion. outcome is fyi ({{.Owner}} only needs to know) or done (nothing needs attention).
   For a decision {{.Owner}} must make (for example asking a colleague before replying to a customer), set handback=true: confirmation returns it to you as a direction.
@@ -123,7 +131,10 @@ Conversation id: {{.ChatID}}. Use kb_get / kb_search for more. If handling yield
 {{with .Linked}}
 这件事说的是{{$.Owner}}正在做的任务「{{.Title}}」（{{.ID}}）：现在{{.State}}{{with .Last}}，它最近说：{{.}}{{end}}。
 回复里照实说这个任务的进度：做到哪了；什么时候好只在看得出来时写，看不出来就不提；要更多细节用 agents_list / agent_read 看它的 Agent。
-{{end}}
+{{end}}{{with .HandoffTargets}}
+可交接的现有对话（kind handoff 时原样传入 machine 和 session）：
+{{range .}}- [{{.Role}}]{{with .Title}} {{.}}{{end}}（machine: {{.Machine}}, session: {{.Session}}）
+{{end}}{{end}}
 - 先用工具把需要的信息查清楚（这件事所在的连接器的读工具读更早的上下文、查文档和日程，agents_list / agent_read 看各台电脑上的 Agent、
   读代码、mail_* 读邮件、上网）。调查只做只读的；要动手做的（改代码、跑测试这类），交成 kind agent 建议，{{.Owner}}确认后程序才会开子会话。
 - **不要自己发送或委派**（不用技能里的命令发消息；不调用 mail_send、github_comment、github_review、agent_start、agent_send、conversation_send，
@@ -140,6 +151,7 @@ Conversation id: {{.ChatID}}. Use kb_get / kb_search for more. If handling yield
   - kind reply：一条回复，text 是以{{.Owner}}口吻写的正文（第一人称；飞书口语、短，不要客套；邮件按来信的语言和正式程度）；
     {{.Owner}}点一下就原样发出去，所以只写查到的：查不到或要{{.Owner}}本人定的（时间、数字、结论）不要编，也不要留【】之类等人填的空，直接不写，写进 note；
   - kind agent：派个 Agent 去做，text 是给它的指令（可选 machine、cwd），{{.Owner}}点「开始」才开；
+  - kind handoff：把这件事交给上面列出的现有对话（主对话、leader 或关联任务的对话），不用新开 Agent；传入 machine、session 和给那段对话的说明 text，{{.Owner}}确认后才会发出；
   - kind todo：消息里有{{.Owner}}要做的一件事时，建一个待办：text 是清楚的标题（动词开头，说明要做什么，不含群名、人名，20 字以内）；消息里明确写了截止时间才给 due，只写到日的用 2006-01-02（全天），有钟点的用带时区偏移的 RFC 3339，只说「明天」「周五」时按消息发出的日期算，算不准就不给 due，写进 note。{{.Owner}}点一下就添加，也可以先改标题和日期；
   - kind conclusion：你已经处理完了，text 是结论；outcome 写 fyi（{{.Owner}}知道就行）或 done（看完发现不用管）。
   要{{.Owner}}拿主意的（比如「先问张三再回客户」），把 handback 设成 true：{{.Owner}}确认后会作为指示交回给你去做。

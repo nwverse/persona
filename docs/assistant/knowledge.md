@@ -94,12 +94,16 @@ What it wrote earlier stays the user's: stored recordings are still listed, open
 `kb_get`: transcript, minutes, day recap, photo texts) and found by search, and their files are not touched. Their
 tags, pinned facts and projects can still be edited, they can still be deleted (`DELETE /api/v1/kb/recordings/{id}`,
 "App API" below), and retention (`recording_days`, `minutes_days`) keeps its schedule. What stops is everything that
-makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries.
+makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries. The writers of a
+recording's minutes, recap, title, photos, audio and hub transcript are the module's code
+(`server/internal/modules/recording/writers`); the knowledge base keeps the readers, delete, retention with the trim
+and the recovery.
 
-A stored photo's image is read through the same route with or without the module, `GET /api/v1/recordings/{id}/photos/{n}`:
-the knowledge base's own read-only route (`assistant/kb_recording_media.go`, full credentials only), answering as the
-module's did before it moved. Photo upload, list and delete are the module's. No route serves stored audio, with the
-module or without: the chunks of a recording in flight are the module's input and stay on disk untouched.
+Stored photos are read through the same routes with or without the module: `GET /api/v1/recordings/{id}/photos` lists
+them and `GET …/photos/{n}` serves an image. These are the knowledge base's own read-only routes
+(`assistant/kb_recording_media.go`, full credentials only), answering as the module's did before they moved. Photo
+upload and delete are the module's. No route serves stored audio, with the module or without: the chunks of a
+recording in flight are the module's input and stay on disk untouched.
 
 A recording that was in flight when the module went (an upload not complete, minutes or a recap `pending`, a hub
 transcription `live` or `finishing`) is shown as stored, with `paused: "module_off"` on its list entry and its detail.
@@ -272,7 +276,7 @@ assistant is not connected, the knowledge base closes once no lane runs; a lane 
    Aliases collected before these rules are pruned when the knowledge base opens (`PruneProjectAliases`): another unmerged project's name or slug, the project's own name, repeats, generic ones,
    and everything past the first 12 go; names of projects merged into it (directly or through another merged project) stay and do not count. An alias two unmerged projects share stays on both (whose it is cannot be told),
    and projects whose aliases are locked (set by hand) are not touched.
-   Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + bounded `memory.jsonl` records + summaries of up to 8 related chats; a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
+   Rewrite dirty project summaries, at most 3 calls per round with failed ones counted (#4246), each from the old summary + latest 40 timeline entries + bounded `memory.jsonl` records + summaries of up to 8 related chats, the most recently summarized (`compressed_at`; before #15308 the first 8 linked, so a project with dozens of chats read where it started); a failed one waits like a chat whose compression failed. Person / chat / project associations are written into each
    `meta.json` bidirectionally. Long-term projects (`long`) never revert to short-term.
    The memory input has at most 5 outcomes, 5 effective decisions and 3 pitfalls, newest first by kind. Each decision keeps its reason, the outcome matched by its durable record ID (never the legacy turn/item tuple), source time and verification; distinct conflicting IDs stay separate, and missing fields stay unrecorded. `summary.md` has a fixed **Decisions and reasons** section. The exact memory records join the frozen-input commit guard and freshness evidence, so a change during the model call cannot commit a stale summary. For freshness, each bounded record's ID and content hash are compared with the summary's recorded cutoff; new or changed records contribute to the existing uncovered-evidence review count. A `memory.jsonl` with no usable records (missing, empty, malformed or unreadable) adds no memory block, creates no file and needs no migration; the old summary/timeline/chat input is unchanged.
 3b. **Topics** (#3783, `kb/topic_distill.go`, `kb/topic_merge.go`; "Topics" below): in the topics lane, at most 2 distill calls (new timeline lines or a changed chat summary → candidate
@@ -1360,3 +1364,30 @@ the one repeated line the benchmarks used before, the 4M index is 22 MB and buil
 - Names allow two lines (documents and meetings differ in the second half of their titles).
 - Document / meeting / event details show time and **Open document** (in-app), with source chat among associations; project associations include documents, meetings and events (up to 30 each, newest first).
 - If a profile is empty after removing content already in the page header, do not show an empty card.
+
+### Equivalent Lark archive representations
+
+Gateway alignment also recognizes Markdown links versus `label (URL)` (including self-labeled and empty-label links),
+escaped text entities, bold rich-text titles, card prefixes, emoji codes, `@all` versus `@所有人`, named file
+wrappers, standalone card/sticker placeholders, and Chinese/English inline or explicit media placeholders backed by
+media references. This additional path requires exact receipt timestamps on both sides (within the existing
+two-second bucket window), equal attachment counts, a non-empty equivalent body (or matching explicit media-kind
+placeholders on both sides) and exactly one matching gateway line. Unpaired same-name chats also require the same
+known sender and exactly one matching chat before a crosswalk is written; chats already paired in `.crosswalk.json`
+allow an unknown sender (`?`) to match a non-owner gateway line so bot/app and pre-backfill external-member lines
+still deduplicate. URL destinations and case, file names and code stay literal. Minute-only, attachment-only,
+changed-content and ambiguous matches are retained. Repair version 3 rechecks archived sync lines even when earlier
+repair versions completed, preserving all receipt IDs and connector ownership. Regression cases live in
+`server/internal/kb/align_gateway_test.go`.
+
+A loose tier (`server/internal/kb/align_loose.go`) then catches four kinds of difference the format tier refuses, inside
+the same frame (same chat, same known sender or the paired-chat unknown-sender rule, exact receipt times in neighbouring
+two-second buckets, exactly one candidate line): a media placeholder on one side only, whatever the attachment counts;
+a leading @mention written otherwise, spaced otherwise or left out (at most 40 characters, followed by the same text of
+at least four characters); a card or rich post one side gives only as its title (the shorter text is the longer one's
+first lines); and long texts at least 98 % alike (both at least 40 characters, at most one differing character per 50,
+the same numbers and links, so template alerts that differ by a host index or build number stay apart). The fuller copy
+stays: when the gateway's line holds less (a card title only), the sync message is written and the gateway line is
+dropped, keeping its receipt ID so a replay never writes it again; a gateway line that cannot be told from an identical
+line of its day is never dropped, and both copies stay. Repair version 4 applies the same tier to archived lines.
+No model-based match is used. Regression cases live in `server/internal/kb/align_loose_test.go`.

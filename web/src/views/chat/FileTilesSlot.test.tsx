@@ -52,9 +52,9 @@ describe("the composer's file tiles slot", () => {
     expect(host.innerHTML).toBe("");
 
     await act(async () => root.render(<FileTiles draftKey="k" files={[file("uploading"), file("failed")]} />));
-    await settle(() => host.querySelector('[data-testid="composer-files"]') !== null);
+    await settle(() => host.children.length === 2);
     expect(body.loads).toBe(1);
-    expect(host.querySelectorAll("[data-remove]")).toHaveLength(2);
+    expect(Array.from(host.children, (tile) => tile.getAttribute("data-state"))).toEqual(["uploading", "failed"]);
 
     // the last one removed: nothing drawn, and the chunk is not asked for again
     await act(async () => root.render(<FileTiles draftKey="k" files={[]} />));

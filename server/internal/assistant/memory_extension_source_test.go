@@ -197,7 +197,7 @@ func TestMemoryExtensionCacheNoWaitAndGeneration(t *testing.T) {
 func TestDecisionsQueryMemoryTags(t *testing.T) {
 	s, _, st, _ := memoryAssembleService(t)
 	s.memoryEntries = &memEntrySource{}
-	s.store = func() Store { return &entriesMemStore{infoCategoryMemStore: st} }
+	s.setStore(func() Store { return &entriesMemStore{infoCategoryMemStore: st} })
 	page := wire.MemoryEntriesResult{Tagged: true, Entries: []wire.MemoryEntry{
 		{ID: "qa-workflow", Text: "qa: release checks include a rollback rehearsal", Facet: "workflow", Subjects: []string{"project-alpha"}, Status: "active"},
 		{ID: "qa-unrelated", Text: "qa: prepare a weekly note", Facet: "judgement", Status: "active"},
@@ -276,7 +276,7 @@ func TestDecisionsQueryMemoryField(t *testing.T) {
 	main := entryQAMain
 	main.Type = "decision"
 	ledger := &entriesMemStore{infoCategoryMemStore: st, entries: []proto.AssistantEntry{main}}
-	s.store = func() Store { return ledger }
+	s.setStore(func() Store { return ledger })
 	memory := func(args string) string {
 		t.Helper()
 		raw, err := s.toolEntries(ctx, "qa-machine", "qa-main", "decisions_query", json.RawMessage(args))
@@ -477,7 +477,7 @@ func TestMostImportantWithin(t *testing.T) {
 func TestDecisionsQueryMemoryBeyondFirstThousand(t *testing.T) {
 	s, _, st, _ := memoryAssembleService(t)
 	s.memoryEntries = &memEntrySource{}
-	s.store = func() Store { return &entriesMemStore{infoCategoryMemStore: st} }
+	s.setStore(func() Store { return &entriesMemStore{infoCategoryMemStore: st} })
 	var pages []wire.MemoryEntriesResult
 	for start := 0; start < 24001; start += 200 {
 		page := wire.MemoryEntriesResult{Tagged: true}

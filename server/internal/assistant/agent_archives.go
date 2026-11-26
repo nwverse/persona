@@ -209,6 +209,7 @@ func archiveSnapshot(s proto.Session) proto.Session {
 	return proto.Session{
 		MachineID: s.MachineID, SessionID: s.SessionID, Title: s.Title,
 		Cwd: s.Cwd, WorkspaceCwd: s.WorkspaceCwd, RepoRoot: s.RepoRoot, Worktree: s.Worktree, Branch: s.Branch,
+		Space: s.Space,
 		Agent: s.Agent, AgentLabel: s.AgentLabel, AgentName: s.AgentName,
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
@@ -515,9 +516,6 @@ type archivedPart struct {
 }
 
 func (svc *Service) archiveStore() Store {
-	if svc.store == nil {
-		return nil
-	}
 	return svc.store()
 }
 

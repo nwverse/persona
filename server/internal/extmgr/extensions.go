@@ -240,6 +240,8 @@ type extensions struct {
 	sandboxes extensionSandboxes
 	// sentLimit is the rate limit of the extensions' sent.record calls (sent_ledger.go).
 	sentLimit sentLimiter
+	// eventLimit is the rate limit of the extensions' assistant.event calls (extension_assistant_event.go).
+	eventLimit eventLimiter
 	// voice is the hub.json entry the built-in voice extension took over (nil without one); voiceID the built-in's id
 	// once registered, "" when there is none (voice_extension.go).
 	voice            *ExtensionConfig
@@ -707,34 +709,48 @@ func (ps *extensions) changed(c extension.Change) {
 // automatic upgrade goes back with the old version (extension_upgrade_backup.go).
 func (ps *extensions) watchUpgrade(ctx context.Context, id string) (rolledBack bool, why string) {
 	key := ps.reg.StorageKeyOf(id)
-	defer ps.upgradeBackups.drop(key) // kept on disk; only the hold on it for a rollback ends
+	p := ps.reg.Get(id)
+	to := ""
+	checks := false
+	if p != nil {
+		to = p.Record.Version
+		checks = p.Manifest.UpgradeHealthCheck()
+	}
+	defer ps.upgradeBackups.drop(key, to) // kept on disk; only the hold on this version's backup ends
 	hp := ps.get(id)
 	if hp == nil || hp.proc == nil {
 		return false, ""
 	}
 	wctx, cancel := context.WithTimeout(ctx, host.ReadyWithin+5*time.Second)
 	defer cancel()
-	checks := ps.reg.Get(id) != nil && ps.reg.Get(id).Manifest.UpgradeHealthCheck()
+	onCall := hp.proc.Spec().OnCall
 	for wctx.Err() == nil {
+		if ps.get(id) != hp {
+			return false, ""
+		}
+		ch := hp.proc.Changes()
 		state, why := hp.proc.Status()
 		switch {
-		case state == host.StateRunning, state == host.StateStopped && checks:
+		case state == host.StateRunning, state == host.StateStopped && checks && onCall:
 			if !checks {
 				return false, ""
 			}
 			why := ps.upgradeHealth(wctx, id, hp)
-			if why == "" {
+			if why == "" || ps.get(id) != hp || ctx.Err() != nil {
 				return false, ""
 			}
 			ps.logf("plugin %s: the new version fails its health check (%s): back to the one before", id, why)
 			return ps.rollBackUpgrade(ctx, id, hp, why)
 		case state == host.StateError:
+			if ps.get(id) != hp || ctx.Err() != nil {
+				return false, ""
+			}
 			ps.logf("plugin %s: the new version does not come up (%s): back to the one before", id, why)
 			return ps.rollBackUpgrade(ctx, id, hp, why)
 		}
 		select {
 		case <-wctx.Done():
-		case <-hp.proc.Changes():
+		case <-ch:
 		}
 	}
 	return false, ""
@@ -1210,6 +1226,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.extensionMachinesCall(ctx, id, method, params)
 		case "browser.machines", "browser.run": // browser.run (extension_browser.go)
 			return ps.extensionBrowserCall(ctx, id, method, params)
+		case assistantwire.MethodAssistantEvent: // assistant.events (extension_assistant_event.go)
+			return ps.extensionAssistantEvent(ctx, id, params)
 		case "model.complete": // assistantwire.MethodModelComplete (extension_model_calls.go)
 			return ps.extensionModelCall(ctx, id, params)
 		case assistantwire.MethodTranscriptionStart, assistantwire.MethodTranscriptionAudio, assistantwire.MethodTranscriptionFinish,

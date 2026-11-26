@@ -100,6 +100,9 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	if p.OpenElsewhere {
 		params["open_elsewhere"] = true
 	}
+	if p.DeferMCP {
+		params["defer_mcp"] = true
+	}
 	var res struct {
 		Session json.RawMessage     `json:"session"`
 		Instead *proto.StartInstead `json:"instead"`
