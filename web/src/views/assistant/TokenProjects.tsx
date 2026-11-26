@@ -240,7 +240,7 @@ export function ProjectsSection({ data, range, onRange, onOpen }: { data: UsageP
   const phone = useMedia(SHEET_QUERY);
   const r = data.ranges[range] ?? data.ranges[data.ranges.length - 1];
   return (
-    <section className="mt-5">
+    <section className="mt-5" data-token-projects>
       <div className="mb-1.5 flex items-center justify-between gap-3 px-1">
         <h2 className="text-label font-medium text-ink-3">{t("tokencalendar.by_project")}</h2>
         {!phone && <RangePicker value={range} onChange={onRange} />}
