@@ -678,7 +678,9 @@ func (s *Service) advanceLogicalConversation(ctx context.Context, st logicalSwit
 		if targetSession == "" {
 			raw, err := s.logicalPhysical(ctx, p.MachineID, method, params)
 			if err != nil {
-				if logicalNotTaken(err) {
+				// A failed receipt lookup leaves the earlier prepare unconfirmed. Only
+				// a definite failure of the initial prepare can reject it here.
+				if method == "assistant.segment.prepare" && logicalNotTaken(err) {
 					return st.ResolveConversationPreparation(ctx, c.MachineID, c.SessionID, op.OperationID, "rejected", "preparation refused")
 				}
 				_ = st.ResolveConversationPreparation(ctx, c.MachineID, c.SessionID, op.OperationID, "in_doubt", "preparation receipt pending")
