@@ -23,6 +23,49 @@ func writeFakeClaudeTranscript(t *testing.T, n *Node, id string) {
 	}
 }
 
+func TestAssistantCrossEngineResumeKeepsCompatibleSettingFollowingModel(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	f := cliTest(t)
+	f.fakeLaunch(t)
+	probedLaunchers(t, map[string]string{codexKindLauncher: "codex"})
+	const launcher = "gateway_claude"
+	const savedModel = "vendor/alternate-model"
+	f.n.setManaged([]proto.ManagedLauncher{{
+		Name:    launcher,
+		BaseURL: "http://127.0.0.1:1",
+		APIKey:  "test-key",
+		Model:   "vendor/default-model",
+		Models:  []proto.ProviderModel{{ID: savedModel}},
+	}})
+	writeFakeClaudeTranscript(t, f.n, claudeConversation)
+	f.n.state.put(claudeConversation, sessionState{
+		Launcher:         launcher,
+		Cwd:              t.TempDir(),
+		Model:            savedModel,
+		ModelEffort:      "high",
+		ModelFingerprint: "fp-saved",
+		FollowsSetting:   true,
+	})
+
+	id, err := f.n.assistantSend(context.Background(), claudeConversation, "", codexKindLauncher, "follow up", nil, "", "",
+		modelExecution{Model: "gpt-model", Effort: "xhigh", UseEffort: true, Fingerprint: "codex-fp", FollowsSetting: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.idle(t, id)
+
+	argv := f.file("cli-argv")
+	if !strings.Contains(argv, "--resume "+claudeConversation) ||
+		!strings.Contains(argv, "--model "+savedModel) || strings.Contains(argv, "gpt-model") {
+		t.Fatalf("expected resume with the original launcher's saved model, got: %q", argv)
+	}
+	st, ok := f.n.state.get(claudeConversation)
+	if !ok || st.Launcher != launcher || st.Model != savedModel || st.ModelEffort != "high" ||
+		st.ModelFingerprint != "fp-saved" || !st.FollowsSetting {
+		t.Fatalf("resume changed the saved launcher or model execution: %+v (ok=%v)", st, ok)
+	}
+}
+
 // Cross-engine launcher fallback clears the hub's options for the other engine and resumes on the conversation's own
 // launcher. A stale or unlisted persisted st.Model (for example a residual small/haiku model) must fall back to the
 // launcher default instead of trapping subsequent turns in model_not_found (#15622).
@@ -50,10 +93,11 @@ func TestAssistantCrossEngineResumeDropsStaleManagedLauncherModel(t *testing.T) 
 			Cwd:              t.TempDir(),
 			Model:            "claude-haiku-5-5",
 			ModelFingerprint: "fp-old",
+			FollowsSetting:   true,
 		})
 
 		id, err := f.n.assistantSend(context.Background(), claudeConversation, "", codexKindLauncher, "hello", nil, "", "",
-			modelExecution{Model: "gpt-model", Fingerprint: "codex-fp"})
+			modelExecution{Model: "gpt-model", Fingerprint: "codex-fp", FollowsSetting: true})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -70,6 +70,9 @@ it("shows waiting work once, links its to-do, and prefills machine and workspace
     const waiting = [...host.querySelectorAll("section")].find(s => s.querySelector("h2")?.textContent === "Needs you")!;
     const todo = waiting.querySelector<HTMLAnchorElement>('a[href="/todos?id=todo-a"]')!;
     expect(waiting.textContent).toContain("Review changes");
+    const management = host.querySelector('a[href="/machines/b/management"]')!;
+    expect(management.compareDocumentPosition(waiting) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(management.compareDocumentPosition(quiet()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(host.querySelectorAll('a[href="/s/b/session"]')).toHaveLength(1);
     await click(find(host, t("space-page.new_agent")));
     expect(preset).toHaveBeenLastCalledWith({ machineId: "b" });
@@ -138,4 +141,11 @@ it("retries a failed pane read before offering creation, and uses the folder-cap
   await click(find(host, t("terminal-terminalpage.retry")));
   await click(find(host, t("terminal-terminalpage.new_terminal")));
   expect(posts).toEqual([["/api/v1/machines/b/panes", { kind: "herdr", cwd: "/projects/quiet" }]]);
+});
+
+
+it("opens the quiet workspace folder on its own computer", async () => {
+  await detail();
+  await click(find(quiet().parentElement!, t("machines-machinedetail.files")));
+  expect(parse(location.pathname, location.search)).toEqual({ name: "machine", mid: "b", subview: "files", path: "/projects/quiet" });
 });
