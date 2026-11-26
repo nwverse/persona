@@ -734,6 +734,10 @@ func (u *updater) set(state, progress, errText string) {
 	u.mu.Lock()
 	u.setLocked(state, progress, errText)
 	u.mu.Unlock()
+	u.broadcastStatus()
+}
+
+func (u *updater) broadcastStatus() {
 	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
 }
 
@@ -747,6 +751,7 @@ func (u *updater) setLocked(state, progress, errText string) {
 
 // updateView is GET /api/v1/hub/update.
 type updateView struct {
+	SupportsPreview bool                      `json:"supports_preview"`
 	Source          string                    `json:"source"`
 	Development     *developmentView          `json:"development,omitempty"`
 	Backup          *update.DevelopmentBackup `json:"backup,omitempty"`
@@ -804,7 +809,7 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	selfUpdates, source := u.h.selfUpdates(), u.h.updateSource()
-	v := updateView{Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: selfUpdates,
+	v := updateView{SupportsPreview: true, Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: selfUpdates,
 		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && selfUpdates,
 		AutoNotice: selfUpdates && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed,
 		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}

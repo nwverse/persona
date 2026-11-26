@@ -549,7 +549,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		if items, read = s.lastTurnItems(ctx, last.MachineID, last.SessionID); !read {
 			return settleLater
 		}
-		if _, closed := turnEndOf(items); !closed {
+		if _, closed := turnEndForSession(last, items); !closed {
 			return settleLater // it went on since the sweep read it
 		}
 		_, stopped := s.stopFor(last.MachineID, last.SessionID, s.taskStretch(t))
@@ -619,7 +619,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 			return settleLater
 		}
 	}
-	end, named := turnEndOf(items)
+	end, named := turnEndForSession(last, items)
 	quiet := "" // the turn had no output: proto.TurnErrorNoOutput, or proto.TurnErrorStopped (silent_turns.go)
 	// The Stop that interrupted this turn, if one did: read once, it classifies the turn and is the one its receipt
 	// spends, never a newer one (stopFor, forgetStop).

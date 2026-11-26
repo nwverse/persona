@@ -2,15 +2,18 @@
 // Composes Account & Connection, Chat & Delivery (with thread_mode & thread_idle_hours),
 // Inbox & Sync, section-grouped Extension Settings, and Plugin Management on a single page
 // for both built-in services and installed extensions. Strictly gated by integrations_v2.
+import { useMailboxEnabled } from "../../lib/mail";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatList, t } from "../../i18n";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
-import { enc, errorText } from "../../lib/api";
+import { api, enc, errorText } from "../../lib/api";
+import { canBind, isBound, settingsTarget, type ChannelDetail } from "../../lib/channels";
 import {
   connectorBrand, connectorState, connectorTone, listConnectors,
   type ConnectorTone, type HubConnector,
 } from "../../lib/connectors";
-import { getAuth, onAuthChange, shownPages, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
+import { getAuth, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
+import { operations, operationsListed, opOf, watchOperations } from "../../lib/extension-operations";
 import { marketOf } from "../../lib/extension-market";
 import { dependencyText, dependentError, type Contribution, type Dependent } from "../../lib/extension-model";
 import {
@@ -21,17 +24,18 @@ import {
   setExtensionEnabled, setupSecret, stateLine, valueAt,
   type ExtensionField, type ExtensionSecret, type HubExtensionDetail, type Json, type JsonObject,
 } from "../../lib/extensions";
-import { defaultManager, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, ownerHeaders, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
+import { navigate } from "../../lib/router";
 import { onHubEvent, useStore } from "../../lib/store";
 import { Button, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { ChannelMark } from "../../ui/ChannelMark";
 import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { Icon } from "../../ui/icons";
-import { countsOf, useSubscriptionSummary } from "../../lib/subscriptions";
-import { SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
+import { countsOf, subscriptionsHref, useSubscriptionSummary, type SubscriptionCounts, type SubscriptionsScope } from "../../lib/subscriptions";
+import { countsText, SubscriptionsEntry } from "../subscriptions/SubscriptionsEntry";
 import { Feishu, Mail, MailInboxSwitch } from "./Connectors";
 import { AuthGroup } from "./ExtensionAuth";
 import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
@@ -46,7 +50,10 @@ import {
 } from "./ExtensionSettingsPage";
 import { OwnerMark } from "./OwnerMark";
 import { Disclosure } from "./ProviderFields";
+import { settingsHref } from "./href";
 import { Group, Pill, Row, SettingsHint, Switch } from "./SettingsParts";
+import { integrationDraft, keepIntegrationDraft } from "./integrations/extensionDrafts";
+import { useDetailConnectors } from "./integrations/useDetailConnectors";
 import { ChannelBindingBlock, ChannelDeliveryBlock, ChannelStateInline, useChannelController } from "./integrations/ChannelSection";
 import { ConnectorConnectionBlock, connectorHasInbox, ConnectorInboxBlock } from "./integrations/ConnectorSection";
 import { FeishuBotConnectionPanel, FeishuBotDeliveryPanel, useFeishuBotController } from "./integrations/FeishuBotSection";
@@ -104,12 +111,96 @@ const CONN_DOT: Record<ConnectorTone, string> = {
   idle: "bg-line-strong",
 };
 
+function hasBinding(d: ChannelDetail | null) {
+  return !!d && !d.read_only && d.source !== "market" && (canBind(d) || isBound(d));
+}
+
 function SectionBlock({ id, title, children }: { id: IntegrationSectionId; title: string; children: ReactNode }) {
   return (
     <section data-integration-section={id} aria-label={title} className="mb-6">
       <h2 className="mb-2 px-1 text-label font-semibold text-ink-3">{title}</h2>
       {children}
     </section>
+  );
+}
+
+// Use the same summary for the row and its section so a subscription-only section needs one read.
+function IntegrationSubscriptions({ counts, scope, onOpen }: {
+  counts: SubscriptionCounts;
+  scope: NonNullable<SubscriptionsScope>;
+  onOpen?: (state: string) => void;
+}) {
+  return (
+    <Group>
+      <Row icon="loop" label={t("subscriptions.row")} hint={countsText(counts)}
+        onClick={() => onOpen ? onOpen(JSON.stringify(scope)) : navigate(subscriptionsHref(scope))} />
+    </Group>
+  );
+}
+
+function openSettingsTarget(url: string, manager: string | undefined, onSettings?: (url: string) => void) {
+  chooseManager(manager ?? null);
+  if (onSettings) {
+    onSettings(url);
+    return;
+  }
+  const parsed = settingsTarget(url);
+  if (!parsed) return;
+  navigate(settingsHref(parsed.tab, parsed.sub, false));
+}
+
+function isGitHubIntegration(id: string, connectorIds: readonly string[] = [], repoProviders?: readonly string[]): boolean {
+  return id === "github" || connectorIds.includes("github") || (repoProviders?.includes("github") ?? false);
+}
+
+function SavedRepositoriesShortcut({ manager, onSettings }: { manager?: string; onSettings?: (url: string) => void }) {
+  const [count, setCount] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api<{ repositories?: unknown[] }>("/assistant/repositories", { headers: ownerHeaders(manager) })
+      .then((res) => {
+        if (alive && Array.isArray(res?.repositories)) setCount(res.repositories.length);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [manager]);
+
+  return (
+    <Group anchor="integration-saved-repositories">
+      <Row
+        anchor="saved-repositories-shortcut"
+        icon="git"
+        label={t("settings-integrations.saved_repositories_title")}
+        hint={t("settings-integrations.saved_repositories_hint")}
+        wrapHint
+        onClick={() => openSettingsTarget("settings/persona#repositories", manager, onSettings)}
+      >
+        {count !== null ? (
+          <span className="tabular-nums">
+            {count === 0
+              ? t("settings-integrations.saved_repositories_empty")
+              : t("settings-integrations.saved_repositories_count", { count })}
+          </span>
+        ) : undefined}
+      </Row>
+    </Group>
+  );
+}
+
+function KnowledgeScopeShortcut({ manager, onSettings }: { manager?: string; onSettings?: (url: string) => void }) {
+  return (
+    <Group anchor="integration-knowledge-scope">
+      <Row
+        anchor="knowledge-scope-shortcut"
+        icon="filter"
+        label={t("settings-integrations.knowledge_scope_title")}
+        hint={t("settings-integrations.knowledge_scope_hint")}
+        wrapHint
+        onClick={() => openSettingsTarget("settings/knowledge#knowledge-items", manager, onSettings)}
+      />
+    </Group>
   );
 }
 
@@ -156,9 +247,12 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
   const picked = useChosenManager();
   const effectiveManager = props.target.manager ?? otherManager(picked ?? undefined);
   const storeEnabled = useStore((s) => isIntegrationsV2Active(s.assistant, effectiveManager, picked));
+  const mailEnabled = useMailboxEnabled();
   const enabled = props.integrationsV2 ?? storeEnabled;
 
   if (!enabled) return <>{props.fallback ?? null}</>;
+
+  if (props.target.kind === "builtin" && props.target.id === "mail" && !mailEnabled) return null;
 
   if (props.target.kind === "extension") {
     return (
@@ -262,7 +356,7 @@ function FeishuBotBuiltinDetail({
     void loadLarkcli();
   }, [loadLarkcli]);
 
-  const feishuCtl = useFeishuBotController(true, loadLarkcli);
+  const feishuCtl = useFeishuBotController(true, loadLarkcli, channelCtl.load);
 
   const refreshAll = () => {
     void loadLarkcli();
@@ -327,24 +421,27 @@ function FeishuBotBuiltinDetail({
 
       {/* 2. Chat & Delivery */}
       <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
-        <ChannelDeliveryBlock ctl={channelCtl} onSettings={onSettings} />
+        <ChannelDeliveryBlock ctl={channelCtl} target={target} targetOnly onSettings={onSettings} />
         <FeishuBotDeliveryPanel ctl={feishuCtl} />
       </SectionBlock>
       <ConnectorExternalSourceSettings ids={[channelId]} manager={manager} />
 
       {/* 3. Inbox & Sync */}
-      {showInboxSection && larkcli && (
-        <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
-          <ConnectorInboxBlock connector={larkcli} reload={loadLarkcli} onSaved={setLarkcli} />
-          {!manager && (
-            <SubscriptionsEntry
-              pick={(l) => l.connector === "larkcli"}
-              scope={{ c: "larkcli" }}
-              onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
-            />
-          )}
-        </SectionBlock>
-      )}
+      <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
+        {showInboxSection && larkcli && (
+          <>
+            <ConnectorInboxBlock connector={larkcli} reload={loadLarkcli} onSaved={setLarkcli} />
+            {!manager && (
+              <SubscriptionsEntry
+                pick={(l) => l.connector === "larkcli"}
+                scope={{ c: "larkcli" }}
+                onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
+              />
+            )}
+          </>
+        )}
+        <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />
+      </SectionBlock>
     </div>
   );
 }
@@ -381,30 +478,14 @@ function BuiltinIntegrationDetail({
 
   const channelCtl = useChannelController(channelId, manager);
 
-  const [connector, setConnector] = useState<HubConnector | null>(null);
-  const [connectorError, setConnectorError] = useState("");
-  const [connectorLoading, setConnectorLoading] = useState(false);
-
-  const loadConnector = useCallback(async () => {
-    if (!connectorId) return;
-    setConnectorLoading(true);
-    try {
-      const list = await listConnectors();
-      const found = list.find((x) => x.id === connectorId && sameManager(x.manager, manager)) ?? null;
-      setConnector(found);
-      setConnectorError(found ? "" : t("settings-hubconnector.not_on_hub"));
-    } catch (e) {
-      setConnectorError(errorText(e));
-    } finally {
-      setConnectorLoading(false);
-    }
-  }, [connectorId, manager]);
-
-  useEffect(() => {
-    void loadConnector();
-  }, [loadConnector]);
+  const { connectors, load: loadConnector, loading: connectorLoading, error: connectorError, onSaved } =
+    useDetailConnectors(connectorId ? [connectorId] : [], manager);
+  const connector = connectors[0];
+  const [reloadKey, setReloadKey] = useState(0);
+  const [mailHasAccounts, setMailHasAccounts] = useState(false);
 
   const refreshAll = () => {
+    if (isMail || isLarkGateway) setReloadKey((key) => key + 1);
     void loadConnector();
     if (channelId) void channelCtl.load();
   };
@@ -426,12 +507,16 @@ function BuiltinIntegrationDetail({
         : channelCtl.detail?.description);
 
   const subscriptionConnectorId = connectorId ?? (isMail ? "mail" : isLarkGateway ? "lark" : null);
-  const larkSubCounts = countsOf(useSubscriptionSummary(), (l) => isLarkGateway && l.connector === "lark");
-  const showInboxSection =
+  const subscriptions = countsOf(useSubscriptionSummary(), (l) => l.connector === subscriptionConnectorId);
+  const isGitHub = isGitHubIntegration(target.id, connectorId ? [connectorId] : []);
+  const showKnowledgeScope =
     isMail ||
-    (isLarkGateway && !manager && larkSubCounts !== null) ||
-    (!!connector && connectorHasInbox(connector)) ||
-    (!!connectorId && !manager);
+    isLarkGateway ||
+    connectorId === "larkcli" ||
+    (connector?.capabilities?.includes("history") ?? false);
+  const showInboxSection = showKnowledgeScope || (!!connector && connectorHasInbox(connector)) || (!manager && !!subscriptions);
+  const showConnection = isMail || isLarkGateway || connectorId || isGitHub || hasBinding(channelCtl.detail);
+  const sourceChannel = channelCtl.detail?.installed && channelCtl.detail.kind !== "app" ? channelId : null;
 
   return (
     <div data-integration-detail={target.id} data-integration-kind="builtin">
@@ -486,53 +571,53 @@ function BuiltinIntegrationDetail({
       </section>
 
       {/* 1. Account & Connection */}
-      <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-        {isMail && <Mail hideInboxSwitch manager={manager} />}
-        {isLarkGateway && <Feishu manager={manager} />}
-        {connectorId && (
-          <>
-            {connector ? (
-              <ConnectorConnectionBlock connector={connector} reload={loadConnector} loading={connectorLoading} />
-            ) : connectorError ? (
-              <Group>
-                <SettingsHint alert>{t("settings-integrations.connector_unavailable", { error: connectorError })}</SettingsHint>
-              </Group>
-            ) : (
-              <Group><div className="px-4 py-3"><Loading /></div></Group>
-            )}
-          </>
-        )}
-        {channelId && <ChannelBindingBlock ctl={channelCtl} />}
-      </SectionBlock>
+      {showConnection && (
+        <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
+          {isMail && <Mail hideInboxSwitch manager={manager} reloadKey={reloadKey} onHasAccounts={setMailHasAccounts} />}
+          {isLarkGateway && <Feishu reloadKey={reloadKey} manager={manager} />}
+          {connectorId && (
+            <>
+              {connector ? (
+                <ConnectorConnectionBlock connector={connector} reload={loadConnector} loading={connectorLoading} />
+              ) : connectorError ? (
+                <Group>
+                  <SettingsHint alert>{t("settings-integrations.connector_unavailable", { error: connectorError })}</SettingsHint>
+                </Group>
+              ) : (
+                <Group><div className="px-4 py-3"><Loading /></div></Group>
+              )}
+            </>
+          )}
+          {channelId && <ChannelBindingBlock ctl={channelCtl} />}
+          {isGitHub && <SavedRepositoriesShortcut manager={manager} onSettings={onSettings} />}
+        </SectionBlock>
+      )}
 
       {/* 2. Chat & Delivery */}
       {channelId && (
         <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
-          <ChannelDeliveryBlock ctl={channelCtl} onSettings={onSettings} />
+          <ChannelDeliveryBlock ctl={channelCtl} target={target} onSettings={onSettings} />
         </SectionBlock>
       )}
 
       {/* 3. Inbox & Sync */}
       {showInboxSection && (
         <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
-          {isMail && (
-            <Group>
-              <MailInboxSwitch />
-            </Group>
-          )}
+          {isMail && mailHasAccounts && <MailInboxSwitch key={reloadKey} manager={manager} grouped />}
           {connector && connectorHasInbox(connector) && (
-            <ConnectorInboxBlock connector={connector} reload={loadConnector} onSaved={setConnector} />
+            <ConnectorInboxBlock connector={connector} reload={loadConnector} onSaved={onSaved} />
           )}
-          {subscriptionConnectorId && !manager && (
-            <SubscriptionsEntry
-              pick={(l) => l.connector === subscriptionConnectorId}
+          {subscriptionConnectorId && !manager && subscriptions && (
+            <IntegrationSubscriptions
+              counts={subscriptions}
               scope={{ c: subscriptionConnectorId }}
               onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
             />
           )}
+          {showKnowledgeScope && <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />}
         </SectionBlock>
       )}
-      {!isMail && !isLarkGateway && <ConnectorExternalSourceSettings ids={[connectorId ?? "", channelId ?? ""]} manager={manager} />}
+      {!isMail && !isLarkGateway && (connectorId || sourceChannel) && <ConnectorExternalSourceSettings ids={[connectorId ?? "", sourceChannel ?? ""]} manager={manager} />}
     </div>
   );
 }
@@ -559,7 +644,6 @@ function ExtensionIntegrationDetail({
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const id = target.id;
-  useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
 
   const roster = useRoster();
   const offline = roster?.managers.find((m) => m.id === (manager || defaultManager()))?.online === false;
@@ -579,8 +663,9 @@ function ExtensionIntegrationDetail({
   const [packOff, setPackOff] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const [connectors, setConnectors] = useState<HubConnector[]>([]);
-  const [connectorsLoading, setConnectorsLoading] = useState(false);
+  const [startSignIn] = useState(() => signInAsked(id));
+  useEffect(() => void takeSignIn(id), [id]);
+  const draftKey = JSON.stringify([manager || defaultManager(), id]);
 
   const order = useRef({ asked: 0, shown: 0 });
   const editRevision = useRef(0);
@@ -589,11 +674,16 @@ function ExtensionIntegrationDetail({
   draftNow.current = draft;
   typedNow.current = typed;
 
-  const apply = useCallback((d: HubExtensionDetail) => {
+  const apply = useCallback((d: HubExtensionDetail, preserveEdits = true) => {
+    const kept = preserveEdits && integrationDraft(draftKey);
+    const config = d.config ?? {};
+    const required = new Set(d.form?.fields?.filter((f) => isEntryList(f) && f.required).map((f) => f.name));
+    const next = kept ? rebaseDraft(kept, config, required) : { draft: config, typed: {} };
     setDetail(d);
-    setDraft(d.config ?? {});
+    setDraft(next.draft);
+    setTyped(next.typed);
     setError("");
-  }, []);
+  }, [draftKey]);
 
   const readDetail = useCallback((then: (d: HubExtensionDetail) => void, failed?: (e: unknown) => void) => {
     const n = ++order.current.asked;
@@ -608,10 +698,10 @@ function ExtensionIntegrationDetail({
   }, [id]);
 
   const writing = () => ++order.current.asked;
-  const wrote = (n: number, d: HubExtensionDetail) => {
+  const wrote = (n: number, d: HubExtensionDetail, preserveEdits = true) => {
     if (n <= order.current.shown) return false;
     order.current.shown = n;
-    setDetail(d);
+    apply(d, preserveEdits);
     return true;
   };
 
@@ -619,7 +709,6 @@ function ExtensionIntegrationDetail({
     setLoading(true);
     void readDetail((d) => {
       apply(d);
-      setTyped({});
       setFieldErrors({});
     }, (e) => setError(errorText(e))).finally(() => setLoading(false));
   }, [apply, readDetail]);
@@ -653,28 +742,14 @@ function ExtensionIntegrationDetail({
     }
     return [...ids];
   }, [target.connectorId, detail?.contributes?.connectors]);
-  const connectorKey = connectorIds.join(",");
-
-  const loadConnectors = useCallback(async () => {
-    if (!connectorKey) {
-      setConnectors([]);
-      return;
-    }
-    setConnectorsLoading(true);
-    try {
-      const all = await listConnectors();
-      const wanted = connectorKey.split(",");
-      setConnectors(wanted.flatMap((cid) => all.find((c) => c.id === cid && sameManager(c.manager, manager)) ?? []));
-    } catch {
-      setConnectors([]);
-    } finally {
-      setConnectorsLoading(false);
-    }
-  }, [connectorKey, manager]);
-
-  useEffect(() => {
-    void loadConnectors();
-  }, [loadConnectors]);
+  const { connectors, loading: connectorsLoading, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
+  useLayoutEffect(() => {
+    const ids = new Set([...connectorIds, ...connectors.map((c) => c.id)]);
+    const prefixes = [`/extensions/${enc(id)}`, `/plugins/${enc(id)}`];
+    for (const cid of ids) prefixes.push(`/connectors/${enc(cid)}`);
+    if (ids.has("imessage")) prefixes.push("/imessage");
+    return pinManagerAt(prefixes, manager);
+  }, [id, manager, connectorIds, connectors]);
 
   const problems = useMemo(() => numberProblems(typed), [typed]);
   const allFields = useMemo(() => detail?.form?.fields ?? [], [detail?.form?.fields]);
@@ -684,8 +759,42 @@ function ExtensionIntegrationDetail({
     [allFields],
   );
   const dirty = !!detail && (isDirty(draft, detail.config, requiredEntryLists) || Object.keys(problems).length > 0);
-  const dirtyNow = useRef(dirty);
-  dirtyNow.current = dirty;
+  useLayoutEffect(() => {
+    if (detail) keepIntegrationDraft(draftKey, dirty ? { base: detail.config ?? {}, draft, typed } : undefined);
+  }, [detail, draftKey, dirty, draft, typed]);
+
+  const saveBar = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const field = document.activeElement;
+    const bar = saveBar.current;
+    if (!bar || !(field instanceof HTMLElement) || !bar.parentElement?.contains(field)) return;
+    const bounds = field.getBoundingClientRect();
+    const footer = bar.getBoundingClientRect();
+    if (bounds.bottom > footer.top && bounds.top < footer.bottom) field.scrollIntoView({ block: "center" });
+  }, [dirty]);
+
+  const exit = () => {
+    keepIntegrationDraft(draftKey);
+    (onUninstalled ?? back)?.();
+  };
+  const exitNow = useRef(exit);
+  exitNow.current = exit;
+  useEffect(() => {
+    const ended = () => operations().filter((o) => o.extension === id && opOf(o, manager) && o.state === "succeeded");
+    const seen = new Set(ended().map((o) => o.id));
+    let listed = operationsListed();
+    return watchOperations(() => {
+      const fresh = ended().filter((o) => !seen.has(o.id));
+      fresh.forEach((o) => seen.add(o.id));
+      // The first list can include operations completed before the detail opened.
+      if (!listed && operationsListed()) {
+        listed = true;
+        return;
+      }
+      if (fresh[0]?.kind === "uninstall") exitNow.current();
+      else if (fresh.length) load();
+    });
+  }, [id, manager, load]);
   const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
   const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
 
@@ -733,17 +842,14 @@ function ExtensionIntegrationDetail({
     try {
       const d = await setExtensionConfig(id, compact(draft, requiredEntryLists));
       const unchanged = editRevision.current === revision;
-      if (wrote(n, d)) {
-        if (unchanged) apply(d);
-        else {
-          const fresh = d.config ?? {};
-          const next = rebaseDraft({ base: submitted, draft: draftNow.current, typed: typedNow.current }, fresh, requiredEntryLists);
-          setDraft(next.draft);
-          setTyped(next.typed);
-          setError("");
-        }
+      // A save can finish after the user has left the pane. Retire only the draft it submitted.
+      if (integrationDraft(draftKey)?.draft === submitted) keepIntegrationDraft(draftKey);
+      if (wrote(n, d, false) && !unchanged) {
+        const fresh = d.config ?? {};
+        const next = rebaseDraft({ base: submitted, draft: draftNow.current, typed: typedNow.current }, fresh, requiredEntryLists);
+        setDraft(next.draft);
+        setTyped(next.typed);
       }
-      if (unchanged) setTyped({});
       toast(t("settings-extensions.saved_restart"), "ok");
     } catch (e) {
       const ce = configError(e);
@@ -753,7 +859,7 @@ function ExtensionIntegrationDetail({
       else toast(t("settings-extensions.not_saved", { error: errorText(e) }), "error");
       if (clearedSecrets(e).length) {
         changed(null);
-        void readDetail(setDetail);
+        void readDetail(apply);
       }
     } finally {
       setSaving(false);
@@ -845,19 +951,26 @@ function ExtensionIntegrationDetail({
   const topSecrets = (p?.secrets ?? []).filter((s) => !s.list);
   const uiPages = p ? shownPages(p.ui, p.auth) : [];
 
+  const isGitHub = isGitHubIntegration(id, connectorIds, p?.contributes?.repository_providers);
+  const showKnowledgeScope = connectors.some((c) => c.capabilities?.includes("history")) || id === "larkx";
+
   const hasConnectionSection =
     !!p && (
       !!p.auth ||
       connectors.length > 0 ||
-      !!channelId ||
+      hasBinding(channelCtl.detail) ||
+      isGitHub ||
       (editable && sections.connection.length > 0)
     );
   const hasChannelSection = !!p && (!!channelId || (editable && sections.channel.length > 0));
   const inboxConnectors = connectors.filter(connectorHasInbox);
+  const subscriptions = countsOf(useSubscriptionSummary(), (l) => l.extension === id);
+  const showSubscriptions = !manager && (p?.enabled ?? true) && !!p?.contributes?.connectors?.length && !!subscriptions;
   const hasInboxSection =
     !!p && (
       inboxConnectors.length > 0 ||
-      (!manager && (p.enabled ?? true) && !!p.contributes?.connectors?.length) ||
+      showKnowledgeScope ||
+      showSubscriptions ||
       (editable && sections.inbox.length > 0)
     );
   const hasAnyConfigElsewhere =
@@ -970,7 +1083,7 @@ function ExtensionIntegrationDetail({
           {/* 1. Account & Connection */}
           {hasConnectionSection && (
             <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-              {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} onChange={authChanged} />}
+              {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
               {connectors.map((c) => (
                 <ConnectorConnectionBlock
                   key={`${c.manager ?? ""}:${c.id}`}
@@ -988,13 +1101,14 @@ function ExtensionIntegrationDetail({
                   fieldProps={sharedFieldProps}
                 />
               )}
+              {isGitHub && <SavedRepositoriesShortcut manager={manager} onSettings={onSettings} />}
             </SectionBlock>
           )}
 
           {/* 2. Chat & Delivery */}
           {hasChannelSection && (
             <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
-              {channelId && <ChannelDeliveryBlock ctl={channelCtl} onSettings={onSettings} />}
+              {channelId && <ChannelDeliveryBlock ctl={channelCtl} target={target} onSettings={onSettings} />}
               {editable && sections.channel.length > 0 && (
                 <SectionFieldGroups
                   fields={sections.channel}
@@ -1014,12 +1128,12 @@ function ExtensionIntegrationDetail({
                   key={`${c.manager ?? ""}:${c.id}`}
                   connector={c}
                   reload={loadConnectors}
-                  onSaved={(next) => setConnectors((cur) => cur.map((x) => (x.id === next.id && sameManager(x.manager, next.manager) ? next : x)))}
+                  onSaved={onSaved}
                 />
               ))}
-              {(p.enabled ?? true) && !manager && !!p.contributes?.connectors?.length && (
-                <SubscriptionsEntry
-                  pick={(l) => l.extension === p.id}
+              {showSubscriptions && (
+                <IntegrationSubscriptions
+                  counts={subscriptions}
                   scope={{ ext: p.id }}
                   onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
                 />
@@ -1032,9 +1146,10 @@ function ExtensionIntegrationDetail({
                   fieldProps={sharedFieldProps}
                 />
               )}
+              {showKnowledgeScope && <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />}
             </SectionBlock>
           )}
-          <ConnectorExternalSourceSettings ids={[...connectorIds, channelId ?? ""]} manager={manager} />
+          <ConnectorExternalSourceSettings ids={[...connectorIds, ...(p.contributes?.channel ?? []), channelId ?? ""]} manager={manager} />
 
           {/* 4. Extension Settings (unsectioned legacy fields + folded advanced fields + secrets + UI pages) */}
           <SectionBlock id="extension-settings" title={t("settings-integrations.section_extension_settings")}>
@@ -1107,15 +1222,6 @@ function ExtensionIntegrationDetail({
                 ))}
               </Group>
             )}
-            {dirty && (
-              <Group anchor="integration-save-bar">
-                {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
-                <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
-                  <Button tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
-                  <Button tone="accent" busy={saving} disabled={!canSave} onClick={() => void save()}>{t("common.save")}</Button>
-                </Row>
-              </Group>
-            )}
           </SectionBlock>
 
           {/* 5. Plugin Management */}
@@ -1142,7 +1248,7 @@ function ExtensionIntegrationDetail({
               onToggle={(on) => void toggleAutoUpgrade(on)}
               onUpgrade={(m, extId) => onUpgrade?.(m, extId, manager)}
               onChecked={async () => {
-                await readDetail((d) => (dirtyNow.current ? setDetail(d) : apply(d)), (err) => { throw err; });
+                await readDetail(apply, (err) => { throw err; });
               }}
             />
 
@@ -1220,6 +1326,17 @@ function ExtensionIntegrationDetail({
               </Row>
             </Group>
           </SectionBlock>
+          {dirty && (
+            <div ref={saveBar} className="sticky bottom-0 z-10 flow-root bg-canvas [&>section]:mb-0">
+              <Group anchor="integration-save-bar">
+                {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
+                <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
+                  <Button className="min-h-11" tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
+                  <Button className="min-h-11" tone="accent" busy={saving} disabled={!canSave} onClick={() => void save()}>{t("common.save")}</Button>
+                </Row>
+              </Group>
+            </div>
+          )}
         </>
       )}
 
@@ -1230,7 +1347,7 @@ function ExtensionIntegrationDetail({
           version={p.version}
           pack={p.extension_pack}
           onClose={() => setRemoving(false)}
-          onDone={() => (onUninstalled ?? back)?.()}
+          onDone={exit}
         />
       )}
       {packOff && p && !dependents && (
