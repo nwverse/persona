@@ -218,6 +218,7 @@ assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/auth/readonly-sessions
 -                    GET /api/v1/auth/tokens
 -                    GET /api/v1/bots/feishu
+bots.feishu.identity GET /api/v1/bots/feishu/identity
 -                    GET /api/v1/channels
 -                    GET /api/v1/channels/{id}
 -                    GET /api/v1/connectors
@@ -565,6 +566,7 @@ todos.write          POST /api/v1/assistant/workspace-naming/preview
 -                    POST /api/v1/auth/password/start
 -                    POST /api/v1/auth/readonly-sessions
 -                    POST /api/v1/auth/tokens
+bots.feishu.handoff  POST /api/v1/bots/feishu/handoffs
 -                    POST /api/v1/bots/feishu/pair
 -                    POST /api/v1/bots/feishu/test
 -                    POST /api/v1/channels/{id}/bind
@@ -603,6 +605,7 @@ market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/hub/recovery/bundles/{id}/verify
 -                    POST /api/v1/hub/update
 -                    POST /api/v1/hub/update/backups/{id}/apply
+-                    POST /api/v1/hub/update/cancel
 -                    POST /api/v1/hub/update/check
 inbox.write          POST /api/v1/inbox/bulk
 inbox.write          POST /api/v1/inbox/done
