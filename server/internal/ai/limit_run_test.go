@@ -4,420 +4,313 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
-func resetRunGate(t *testing.T, cfg Config) {
-	t.Helper()
-	k := runGateKey(cfg)
-	gates.Delete(k)
-	t.Cleanup(func() { gates.Delete(k) })
+func runConfig(t *testing.T) Config {
+	cfg := Config{ViaMachine: "node", RunLauncher: "cli", Model: t.Name()}
+	t.Cleanup(func() { gates.Delete(runKey(cfg)) })
+	return cfg
 }
 
-func TestRunGateHoldsAfterConsecutiveTimeoutsAndRecovers(t *testing.T) {
-	clk := fakeClock(t)
-	cfg := Config{ViaMachine: "n37-test", RunLauncher: "claude", Model: "kimi-test"}
-	resetRunGate(t, cfg)
+// Each call resolves a fresh client, as independent purposes on one launcher do.
+func runResult(ctx context.Context, cfg Config, result error) error {
+	c := NewRun(cfg, func(context.Context, Request) (Reply, error) { return Reply{}, result })
+	_, err := c.Chat(ctx, Request{})
+	return err
+}
 
-	var calls atomic.Int32
-	fail := true
-	cl := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		calls.Add(1)
-		if fail {
-			return Reply{}, fmt.Errorf("n37-test 上的 claude 没有及时回答: %w", context.DeadlineExceeded)
+func TestRunTimeoutBudgetAndConsecutiveFailures(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := runConfig(t)
+		c := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
+			<-ctx.Done()
+			return Reply{}, fmt.Errorf("model.run: %w", ctx.Err())
+		})
+		timeout := func(budget time.Duration) error {
+			ctx, cancel := context.WithTimeout(t.Context(), budget)
+			defer cancel()
+			_, err := c.Chat(ctx, Request{})
+			return err
 		}
-		return Reply{Text: "ok", Model: "kimi-test"}, nil
+		firstTimeout := func(budget time.Duration) {
+			t.Helper()
+			err := timeout(budget)
+			if !errors.Is(err, context.DeadlineExceeded) || Held(cfg) != nil {
+				t.Fatalf("budget %s: error = %v, pause = %v", budget, err, Held(cfg))
+			}
+		}
+		firstTimeout(3 * time.Second)
+		firstTimeout(3 * time.Second)
+		firstTimeout(30 * time.Second)
+		for _, result := range []error{nil, errors.New("offline"), errors.New("logged_out")} {
+			if err := runResult(t.Context(), cfg, result); err != result {
+				t.Fatalf("run returned %v, want %v", err, result)
+			}
+			firstTimeout(30 * time.Second) // the intervening outcome broke the streak
+		}
+		firstTimeout(3 * time.Second) // neither trips nor erases the normal timeout
+		if err := runResult(t.Context(), cfg, context.Canceled); err != context.Canceled {
+			t.Fatalf("canceled run = %v", err)
+		}
+		if err := timeout(180 * time.Second); !IsPaused(err) {
+			t.Fatalf("second normal timeout = %v", err)
+		}
+		for _, wait := range []time.Duration{busyFirst, 2 * busyFirst, 4 * busyFirst} {
+			p := Held(cfg)
+			if p == nil || p.Reason != ReasonBusy || time.Until(p.Until) != wait {
+				t.Fatalf("pause = %v, want busy for %v", p, wait)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if err := runResult(ctx, cfg, nil); err != context.Canceled {
+				t.Fatalf("canceled caller during pause = %v", err)
+			}
+			<-time.After(wait)
+			err := timeout(30 * time.Second)
+			if !IsPaused(err) {
+				t.Fatalf("probe timeout = %v", err)
+			}
+		}
+		<-time.After(time.Until(Held(cfg).Until))
+		firstPause := *Held(cfg)
+		if err := timeout(3 * time.Second); !errors.Is(err, context.DeadlineExceeded) || *Held(cfg) != firstPause {
+			t.Fatalf("best-effort probe = %v, pause = %v", err, Held(cfg))
+		}
+		for _, result := range []error{context.Canceled, errors.New("offline"), errors.New("logged_out")} {
+			if err := runResult(t.Context(), cfg, result); err != result {
+				t.Fatalf("probe returned %v, want %v", err, result)
+			}
+		}
+		if err := runResult(t.Context(), cfg, nil); err != nil || Held(cfg) != nil {
+			t.Fatalf("success after failed probes = %v, held = %v", err, Held(cfg))
+		}
+		firstTimeout(30 * time.Second)
+		if err := timeout(30 * time.Second); !IsPaused(err) || time.Until(Held(cfg).Until) != busyFirst {
+			t.Fatalf("first hold after recovery = %v, pause = %v", err, Held(cfg))
+		}
 	})
+}
 
-	// First sporadic timeout returns the original timeout error and does not hold the gate.
-	ctx30, cancel30 := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel30()
-	if _, err := cl.Complete(ctx30, "", "hi", 16); !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-		t.Fatalf("first timeout = %v; want raw DeadlineExceeded without pause", err)
+func TestRunGateIdentity(t *testing.T) {
+	cfg := Config{ViaMachine: "a/b", RunLauncher: "c", Model: t.Name()}
+	t.Cleanup(func() { gates.Delete(runKey(cfg)) })
+	other := cfg
+	other.ReasoningEffort = "high"
+	if err := runResult(t.Context(), cfg, context.DeadlineExceeded); err != context.DeadlineExceeded {
+		t.Fatal(err)
 	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("Held after single timeout = %+v; want nil", p)
+	if err := runResult(t.Context(), other, context.DeadlineExceeded); !IsPaused(err) {
+		t.Fatalf("same CLI tuple in a different client: %v", err)
 	}
-
-	// Second consecutive full-budget timeout trips the shared gate into ReasonBusy.
-	if _, err := cl.Complete(ctx30, "", "hi", 16); !IsPaused(err) {
-		t.Fatalf("second timeout = %v; want PausedError", err)
+	if p := Held(cfg); p == nil || p.Reason != ReasonBusy {
+		t.Fatalf("held = %v", p)
 	}
-	p := Held(cfg)
-	if p == nil || p.Reason != ReasonBusy || !p.Until.Equal(clk.t.Add(busyFirst)) {
-		t.Fatalf("Held after 2nd timeout = %+v; want busy until %v", p, clk.t.Add(busyFirst))
+	for _, mutate := range []func(*Config){
+		func(c *Config) { c.ViaMachine = "another" },
+		func(c *Config) { c.RunLauncher = "another" },
+		func(c *Config) { c.Model = "" },
+		func(c *Config) { c.ViaMachine, c.RunLauncher = "a", "b/c" },
+	} {
+		separate := cfg
+		mutate(&separate)
+		t.Cleanup(func() { gates.Delete(runKey(separate)) })
+		if err := runResult(t.Context(), separate, nil); err != nil || Held(separate) != nil {
+			t.Fatalf("separate tuple %+v: %v, pause = %v", runKey(separate), err, Held(separate))
+		}
 	}
-
-	// While held, another client sharing the same (machine, launcher, model) is put off without invoking run.
-	cl2 := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		t.Fatal("second client should not run while gate is held")
-		return Reply{}, nil
-	})
-	if _, err := cl2.Complete(ctx30, "", "blocked", 16); !IsPaused(err) {
-		t.Fatalf("while held = %v; want PausedError", err)
+	c := newUpstream(t, ok).client("key")
+	if err := call(c); err != nil || Held(c.Config()) != nil {
+		t.Fatalf("HTTP connection: %v, pause = %v", err, Held(c.Config()))
 	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("calls while held = %d; want 2", got)
-	}
-
-	// Advance past first pause: one probe runs and fails -> pause doubles to 2*busyFirst.
-	clk.add(busyFirst)
-	if _, err := cl.Complete(ctx30, "", "probe-fail", 16); !IsPaused(err) {
-		t.Fatalf("failed probe = %v; want PausedError", err)
-	}
-	p = Held(cfg)
-	if p == nil || !p.Until.Equal(clk.t.Add(2*busyFirst)) {
-		t.Fatalf("Held after failed probe = %+v; want until %v", p, clk.t.Add(2*busyFirst))
-	}
-
-	// Advance past doubled pause: probe succeeds -> gate opens cleanly and resets timeout counter.
-	fail = false
-	clk.add(2 * busyFirst)
-	got, err := cl.Complete(ctx30, "", "probe-ok", 16)
-	if err != nil || got != "ok" {
-		t.Fatalf("probe recovery = %q, %v; want ok, nil", got, err)
-	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("Held after recovery = %+v; want nil", p)
-	}
-
-	// A single timeout after recovery must again need 2 consecutive timeouts before holding.
-	fail = true
-	if _, err := cl.Complete(ctx30, "", "post-recovery-1", 16); !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-		t.Fatalf("post-recovery first timeout = %v; want raw DeadlineExceeded", err)
-	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("Held after post-recovery single timeout = %+v; want nil", p)
-	}
-
-	// Verify log lines were emitted on hold and recovery.
-	joined := strings.Join(clk.lines(), "\n")
-	if !strings.Contains(joined, "n37-test/claude:kimi-test is busy (timeout)") || !strings.Contains(joined, "answers again") {
-		t.Fatalf("unexpected gate logs:\n%s", joined)
+	ungated := cfg
+	ungated.RunLauncher = ""
+	for range 3 {
+		if err := runResult(t.Context(), ungated, context.DeadlineExceeded); err != context.DeadlineExceeded {
+			t.Fatalf("callback without a launcher = %v", err)
+		}
 	}
 }
 
-func TestRunGateIgnoresShortBudgetsCanceledAndResetsOnNonTimeout(t *testing.T) {
-	fakeClock(t)
-	cfg := Config{ViaMachine: "n37-short", RunLauncher: "agy"}
-	resetRunGate(t, cfg)
-
-	// Tight best-effort deadlines (< runBusyMinBudget, e.g. 3s info.tag) must not trip the shared gate.
-	clTimeout := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		return Reply{}, context.DeadlineExceeded
-	})
-	for i := 0; i < 4; i++ {
-		shortCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		_, err := clTimeout.Complete(shortCtx, "", "tag", 16)
+func TestRunGateCapsConcurrencyAndRecoversAfterOneProbe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := runConfig(t)
+		if err := runResult(t.Context(), cfg, context.DeadlineExceeded); err != context.DeadlineExceeded {
+			t.Fatal(err)
+		}
+		started := make(chan struct{}, 8)
+		release := make(chan error)
+		done := make(chan error, 8)
+		call := func(ctx context.Context) {
+			go func() {
+				c := NewRun(cfg, func(context.Context, Request) (Reply, error) {
+					started <- struct{}{}
+					return Reply{}, <-release
+				})
+				_, err := c.Chat(ctx, Request{})
+				done <- err
+			}()
+		}
+		checkStarts := func(want int) {
+			t.Helper()
+			synctest.Wait()
+			if n := len(started); n != want {
+				t.Fatalf("%d new launcher calls, want %d", n, want)
+			}
+			for range want {
+				<-started
+			}
+		}
+		for range 6 {
+			call(t.Context())
+		}
+		checkStarts(6)
+		release <- context.DeadlineExceeded
+		if err := <-done; !IsPaused(err) {
+			t.Fatalf("second timeout = %v", err)
+		}
+		for range 5 {
+			release <- nil
+			<-done
+		}
+		call(t.Context())
+		if err := <-done; !IsPaused(err) {
+			t.Fatalf("call during hold = %v", err)
+		}
+		checkStarts(0)
+		<-time.After(busyFirst)
+		for range 5 {
+			call(t.Context())
+		}
+		checkStarts(1) // the cap is three, but only one caller may probe
+		ctx, cancel := context.WithCancel(t.Context())
+		call(ctx)
+		synctest.Wait()
 		cancel()
-		if !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-			t.Fatalf("short-budget call %d = %v; want raw DeadlineExceeded", i, err)
+		if err := <-done; err != context.Canceled {
+			t.Fatalf("canceled while queued = %v", err)
 		}
-	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("short best-effort timeouts held gate: %+v", p)
-	}
-
-	// Explicit caller cancellations must not trip the gate.
-	for i := 0; i < 3; i++ {
-		cctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		_, err := clTimeout.Complete(cctx, "", "cancel", 16)
-		if IsPaused(err) {
-			t.Fatalf("canceled call %d produced PausedError: %v", i, err)
+		release <- nil
+		if err := <-done; err != nil || Held(cfg) != nil {
+			t.Fatalf("probe success = %v, pause = %v", err, Held(cfg))
 		}
-	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("canceled calls held gate: %+v", p)
-	}
-
-	// A non-timeout error (e.g. offline/logged_out) between two timeouts resets the consecutive timeout streak.
-	offlineErr := errors.New("machine offline")
-	clOffline := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		return Reply{}, offlineErr
+		checkStarts(3)
+		release <- nil
+		<-done
+		checkStarts(1)
+		for range 3 {
+			release <- nil
+			<-done
+		}
+		g := gateForRun(cfg)
+		for successes := 4; ; successes++ {
+			_, _, inflight, out, cap := gateState(g)
+			want := 3 + successes/growAfter
+			if want > capLift {
+				want = 0
+			}
+			if inflight != 0 || out != 0 || cap != want {
+				t.Fatalf("after %d successes: inflight = %d, out = %d, cap = %d, want %d", successes, inflight, out, cap, want)
+			}
+			if want == 0 {
+				break
+			}
+			if err := runResult(t.Context(), cfg, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
 	})
-	if _, err := clTimeout.Complete(context.Background(), "", "timeout-1", 16); !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-		t.Fatalf("timeout-1 = %v; want raw DeadlineExceeded", err)
-	}
-	if _, err := clOffline.Complete(context.Background(), "", "offline", 16); !errors.Is(err, offlineErr) || IsPaused(err) {
-		t.Fatalf("offline = %v; want offlineErr", err)
-	}
-	if _, err := clTimeout.Complete(context.Background(), "", "timeout-2-after-offline", 16); !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-		t.Fatalf("timeout after offline = %v; want raw DeadlineExceeded (streak reset)", err)
-	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("non-consecutive timeout held gate: %+v", p)
-	}
 }
 
-func TestRunGateProbeNonTimeoutAndShortBudgetLeaveHoldForNextProbe(t *testing.T) {
-	clk := fakeClock(t)
-	cfg := Config{ViaMachine: "n37-probe", RunLauncher: "claude", Model: "m"}
-	resetRunGate(t, cfg)
-
-	mode := "timeout"
-	offlineErr := errors.New("offline")
-	cl := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		switch mode {
-		case "timeout":
-			return Reply{}, context.DeadlineExceeded
-		case "offline":
-			return Reply{}, offlineErr
-		default:
-			return Reply{Text: "recovered"}, nil
+func TestRunGateInFlightTimeoutsShareTheHold(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := runConfig(t)
+		if err := runResult(t.Context(), cfg, context.DeadlineExceeded); err != context.DeadlineExceeded {
+			t.Fatal(err)
+		}
+		started := make(chan struct{}, 2)
+		release := make(chan struct{})
+		done := make(chan error, 2)
+		for range 2 {
+			go func() {
+				c := NewRun(cfg, func(context.Context, Request) (Reply, error) {
+					started <- struct{}{}
+					<-release
+					return Reply{}, context.DeadlineExceeded
+				})
+				_, err := c.Chat(t.Context(), Request{})
+				done <- err
+			}()
+		}
+		synctest.Wait()
+		if len(started) != 2 {
+			t.Fatalf("%d calls started, want 2", len(started))
+		}
+		close(release)
+		for range 2 {
+			if err := <-done; !IsPaused(err) {
+				t.Fatalf("concurrent timeout = %v, want PausedError", err)
+			}
+		}
+		p := Held(cfg)
+		if p == nil || p.Reason != ReasonBusy || time.Until(p.Until) != busyFirst {
+			t.Fatalf("pause = %v, want one busy strike for %v", p, busyFirst)
+		}
+		if _, _, inflight, out, cap := gateState(gateForRun(cfg)); inflight != 0 || out != 0 || cap != 1 {
+			t.Fatalf("after hold: inflight = %d, out = %d, cap = %d", inflight, out, cap)
 		}
 	})
+}
 
-	_, _ = cl.Complete(context.Background(), "", "1", 16)
-	if _, err := cl.Complete(context.Background(), "", "2", 16); !IsPaused(err) {
-		t.Fatalf("expected hold: %v", err)
-	}
-	firstUntil := clk.t.Add(busyFirst)
+func TestLauncherProbePanicReturnsSlot(t *testing.T) {
+	clk := fakeClock(t)
+	cfg := runConfig(t)
+	_ = runResult(t.Context(), cfg, context.DeadlineExceeded)
+	_ = runResult(t.Context(), cfg, context.DeadlineExceeded)
 	clk.add(busyFirst)
-
-	// Probe fails with a non-timeout error: gate stays held with expired pause (not doubled), next call probes.
-	mode = "offline"
-	if _, err := cl.Complete(context.Background(), "", "probe-offline", 16); !errors.Is(err, offlineErr) || IsPaused(err) {
-		t.Fatalf("probe offline = %v; want offlineErr", err)
+	c := NewRun(cfg, func(context.Context, Request) (Reply, error) { panic("run failed") })
+	if !recovering(func() { _, _ = c.Chat(t.Context(), Request{}) }) {
+		t.Fatal("expected callback panic")
 	}
-	if p := Held(cfg); p == nil || !p.Until.Equal(firstUntil) {
-		t.Fatalf("Held after non-timeout probe = %+v; want unchanged until %v", p, firstUntil)
+	if held, probing, inflight, out, _ := gateState(gateForRun(cfg)); !held || probing || inflight != 0 || out != 0 {
+		t.Fatalf("after panic: held = %v, probing = %v, inflight = %d, out = %d", held, probing, inflight, out)
 	}
-
-	// Probe fails with a short-budget timeout: gate stays held with expired pause, next normal call probes.
-	mode = "timeout"
-	shortCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	_, err := cl.Complete(shortCtx, "", "probe-short", 16)
-	cancel()
-	if !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-		t.Fatalf("probe short = %v; want raw DeadlineExceeded", err)
-	}
-	if p := Held(cfg); p == nil || !p.Until.Equal(firstUntil) {
-		t.Fatalf("Held after short-budget probe = %+v; want unchanged until %v", p, firstUntil)
-	}
-
-	// Next normal call becomes the probe and recovers the gate cleanly.
-	mode = "ok"
-	if got, err := cl.Complete(context.Background(), "", "probe-ok", 16); err != nil || got != "recovered" {
-		t.Fatalf("probe recovery = %q, %v; want recovered, nil", got, err)
-	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("Held after recovery = %+v; want nil", p)
+	if err := runResult(t.Context(), cfg, nil); err != nil || Held(cfg) != nil {
+		t.Fatalf("next probe = %v, pause = %v", err, Held(cfg))
 	}
 }
 
-func TestRunGateCapEnforcementBackgroundWaitPostWaitBudgetAndGrowth(t *testing.T) {
-	clk := fakeClock(t)
-	cfg := Config{ViaMachine: "n37-cap", RunLauncher: "claude", Model: "capped"}
-	resetRunGate(t, cfg)
-
-	// Trip hold (sets cap=1), then recover via probe so gate is open with cap=1.
-	shouldFail := true
-	clInit := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		if shouldFail {
-			return Reply{}, context.DeadlineExceeded
+func TestRunBudgetAfterWaitingForSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := runConfig(t)
+		gateForRun(cfg).cap = 1
+		c := NewRun(cfg, func(ctx context.Context, _ Request) (Reply, error) {
+			<-ctx.Done()
+			return Reply{}, ctx.Err()
+		})
+		start := func(budget time.Duration) <-chan error {
+			done := make(chan error, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(t.Context(), budget)
+				defer cancel()
+				_, err := c.Chat(ctx, Request{})
+				done <- err
+			}()
+			synctest.Wait()
+			return done
 		}
-		return Reply{Text: "ok"}, nil
-	})
-	_, _ = clInit.Complete(context.Background(), "", "1", 16)
-	_, _ = clInit.Complete(context.Background(), "", "2", 16)
-	clk.add(busyFirst)
-	shouldFail = false
-	if _, err := clInit.Complete(context.Background(), "", "probe", 16); err != nil {
-		t.Fatalf("probe recovery: %v", err)
-	}
-
-	g := gateForRun(cfg)
-	g.mu.Lock()
-	gotCap := g.cap
-	g.mu.Unlock()
-	if gotCap != 1 {
-		t.Fatalf("cap after recovery = %d; want 1", gotCap)
-	}
-
-	// Occupy the single cap slot.
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	clHold := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		close(entered)
-		<-release
-		return Reply{Text: "holder"}, nil
-	})
-	holderDone := make(chan error, 1)
-	go func() {
-		_, err := clHold.Complete(context.Background(), "", "hold", 16)
-		holderDone <- err
-	}()
-	<-entered
-
-	// Background caller waiting under cap gives up with PausedError without calling run.
-	bgCtx := withSlotWait(context.Background(), 20*time.Millisecond)
-	clBG := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		t.Fatal("background caller should not run while cap is full")
-		return Reply{}, nil
-	})
-	if _, err := clBG.Complete(bgCtx, "", "bg", 16); !IsPaused(err) {
-		t.Fatalf("background wait under cap = %v; want PausedError", err)
-	}
-
-	// Regression (#16420): a caller whose initial budget exceeds runBusyMinBudget, but waits in admit under cap until
-	// less than runBusyMinBudget remains when c.run starts, must NOT trip the gate even when runTimeouts is already 1.
-	oldMin := runBusyMinBudget
-	runBusyMinBudget = 500 * time.Millisecond
-	t.Cleanup(func() { runBusyMinBudget = oldMin })
-
-	// Release holder1 first, then arm runTimeouts = 1 with an unbounded timeout.
-	close(release)
-	if err := <-holderDone; err != nil {
-		t.Fatalf("holder = %v", err)
-	}
-	clQueued := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		return Reply{}, context.DeadlineExceeded
-	})
-	if _, err := clQueued.Complete(context.Background(), "", "arm-1", 16); !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-		t.Fatalf("arm-1 = %v; want raw DeadlineExceeded", err)
-	}
-
-	// Re-occupy the single cap slot with a cancelable holder so ending it via context.Canceled preserves runTimeouts == 1.
-	entered2 := make(chan struct{})
-	release2 := make(chan struct{})
-	h2Ctx, cancelH2 := context.WithCancel(context.Background())
-	defer cancelH2()
-	clHold2 := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		close(entered2)
-		<-release2
-		return Reply{}, ctx.Err()
-	})
-	h2Done := make(chan error, 1)
-	go func() {
-		_, err := clHold2.Complete(h2Ctx, "", "h2", 16)
-		h2Done <- err
-	}()
-	<-entered2
-
-	// Start with budget > runBusyMinBudget (650ms > 500ms) before admit, wait on a timer until remaining budget is
-	// < runBusyMinBudget (~350ms < 500ms), then cancel and release the slot so c.run runs and times out while
-	// runTimeouts is still 1. Measuring budget before admit would trip the gate (PausedError); measuring after admit
-	// keeps runTimeouts == 1 and leaves the gate open.
-	borderCtx, cancelBorder := context.WithTimeout(context.Background(), runBusyMinBudget+150*time.Millisecond)
-	defer cancelBorder()
-	borderDone := make(chan error, 1)
-	go func() {
-		_, err := clQueued.Complete(borderCtx, "", "border", 16)
-		borderDone <- err
-	}()
-	<-time.After(300 * time.Millisecond)
-	cancelH2()
-	close(release2)
-	if err := <-h2Done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("h2 = %v; want context.Canceled", err)
-	}
-	if err := <-borderDone; !errors.Is(err, context.DeadlineExceeded) || IsPaused(err) {
-		t.Fatalf("post-admit short-remaining timeout = %v; want raw DeadlineExceeded without hold", err)
-	}
-	g.mu.Lock()
-	gotTimeouts := g.runTimeouts
-	g.mu.Unlock()
-	if gotTimeouts != 1 {
-		t.Fatalf("runTimeouts after post-admit short-remaining timeout = %d; want 1 (unchanged)", gotTimeouts)
-	}
-	if p := Held(cfg); p != nil {
-		t.Fatalf("post-admit short-remaining timeout tripped gate: %+v", p)
-	}
-
-	// Repeated successes grow cap until it lifts back to 0 (uncapped).
-	totalToLift := capLift * growAfter
-	for i := 0; i < totalToLift; i++ {
-		if _, err := clInit.Complete(context.Background(), "", "grow", 16); err != nil {
-			t.Fatalf("grow call %d: %v", i, err)
+		holder := start(27 * time.Second)
+		waiter := start(30 * time.Second)
+		if err := <-holder; err != context.DeadlineExceeded {
+			t.Fatalf("holder = %v", err)
 		}
-	}
-	g.mu.Lock()
-	finalCap := g.cap
-	g.mu.Unlock()
-	if finalCap != 0 {
-		t.Fatalf("cap after %d successes = %d; want 0 (lifted)", totalToLift, finalCap)
-	}
-}
-
-func TestRunGateIsolatesTargetsAndSkipsEmptyLauncher(t *testing.T) {
-	fakeClock(t)
-	cfgA := Config{ViaMachine: "n37-iso", RunLauncher: "claude", Model: "kimi"}
-	cfgB := Config{ViaMachine: "n37-iso", RunLauncher: "claude", Model: "haiku"}
-	resetRunGate(t, cfgA)
-	resetRunGate(t, cfgB)
-
-	clA := NewRun(cfgA, func(ctx context.Context, r Request) (Reply, error) {
-		return Reply{}, context.DeadlineExceeded
-	})
-	clB := NewRun(cfgB, func(ctx context.Context, r Request) (Reply, error) {
-		return Reply{Text: "fast"}, nil
-	})
-	_, _ = clA.Complete(context.Background(), "", "1", 16)
-	_, err := clA.Complete(context.Background(), "", "2", 16)
-	if !IsPaused(err) || Held(cfgA) == nil {
-		t.Fatalf("cfgA did not hold: err=%v held=%+v", err, Held(cfgA))
-	}
-	if Held(cfgB) != nil {
-		t.Fatalf("cfgB should remain independent: held=%+v", Held(cfgB))
-	}
-	if got, err := clB.Complete(context.Background(), "", "ok", 16); err != nil || got != "fast" {
-		t.Fatalf("cfgB = %q, %v; want fast, nil", got, err)
-	}
-
-	// Empty RunLauncher stays ungated (backward-compatible with unit test stubs).
-	clEmpty := NewRun(Config{}, func(ctx context.Context, r Request) (Reply, error) {
-		return Reply{}, context.DeadlineExceeded
-	})
-	for i := 0; i < 3; i++ {
-		if _, err := clEmpty.Complete(context.Background(), "", "x", 16); IsPaused(err) {
-			t.Fatalf("empty RunLauncher unexpectedly paused on call %d: %v", i, err)
+		if err := <-waiter; err != context.DeadlineExceeded || Held(cfg) != nil {
+			t.Fatalf("three seconds left for execution: error = %v, pause = %v", err, Held(cfg))
 		}
-	}
-}
-
-func TestRunGateInFlightTimeoutsDoNotDoubleStrike(t *testing.T) {
-	clk := fakeClock(t)
-	cfg := Config{ViaMachine: "n37-conc", RunLauncher: "claude", Model: "slow"}
-	resetRunGate(t, cfg)
-
-	// First timeout arms the counter (runTimeouts = 1).
-	clArm := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		return Reply{}, context.DeadlineExceeded
-	})
-	if _, err := clArm.Complete(context.Background(), "", "arm", 16); IsPaused(err) {
-		t.Fatalf("first timeout unexpectedly paused: %v", err)
-	}
-
-	// Launch two concurrent calls while the gate is still open; both time out.
-	entered := make(chan struct{}, 2)
-	release := make(chan struct{})
-	cl := NewRun(cfg, func(ctx context.Context, r Request) (Reply, error) {
-		entered <- struct{}{}
-		<-release
-		return Reply{}, context.DeadlineExceeded
-	})
-	errs := make(chan error, 2)
-	for i := 0; i < 2; i++ {
-		go func() {
-			_, err := cl.Complete(context.Background(), "", "c", 16)
-			errs <- err
-		}()
-	}
-	<-entered
-	<-entered
-	close(release)
-	for i := 0; i < 2; i++ {
-		if err := <-errs; !IsPaused(err) {
-			t.Fatalf("concurrent timeout %d = %v; want PausedError", i, err)
+		if err := runResult(t.Context(), cfg, context.DeadlineExceeded); !IsPaused(err) {
+			t.Fatalf("second normal-budget timeout = %v", err)
 		}
-	}
-	// Only the first completing timeout should strike; backoff stays at busyFirst, not 2*busyFirst.
-	p := Held(cfg)
-	if p == nil || !p.Until.Equal(clk.t.Add(busyFirst)) {
-		t.Fatalf("Held after concurrent timeouts = %+v; want single strike until %v", p, clk.t.Add(busyFirst))
-	}
+	})
 }
