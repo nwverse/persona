@@ -13,7 +13,6 @@ const state = vi.hoisted(() => ({
   features: ["channels", "extension_manager", "connectors", "lark"] as string[],
   loaded: true,
   assistant: "assistant",
-  realSourcePages: false,
 }));
 
 vi.hoisted(() => {
@@ -149,9 +148,12 @@ vi.mock("./ExtensionView", async (original) => {
   return {
     ExtensionUI: (props: Parameters<typeof ExtensionUI>[0]) => {
       const { extension, ui, state: uiState, onWide } = props;
-      if (state.realSourcePages && extension === "-subscriptions") return <ExtensionUI {...props} />;
       extViewMock.onWide = onWide;
-      return <div data-mock-extension-ui data-extension={extension} data-ui={ui} data-state={uiState ?? ""} />;
+      return (
+        <div data-mock-extension-ui data-extension={extension} data-ui={ui} data-state={uiState ?? ""}>
+          {extension === "-subscriptions" && <ExtensionUI {...props} />}
+        </div>
+      );
     },
     askAssistant: vi.fn(),
     LauncherExtensionSections: () => null,
@@ -325,7 +327,6 @@ beforeEach(() => {
   state.features = ["channels", "extension_manager", "connectors", "lark"];
   state.loaded = true;
   state.assistant = "assistant";
-  state.realSourcePages = false;
   localStorage.clear();
   resetManagerChoice();
   resetRoster();
@@ -476,7 +477,10 @@ function stubFullHubFetch(overrides?: {
       if (path === "/api/v1/subscriptions/-/graph") {
         return Promise.resolve(json(overrides?.graph ?? SAMPLE_GRAPH));
       }
-      if (path === "/api/v1/subscriptions/-/ui") return Promise.resolve(json({ view: { title: "Sources", blocks: [] } }));
+      if (path === "/api/v1/subscriptions/-/ui") {
+        const owner = new Headers(init?.headers).get("X-Persona-Manager") ?? "default";
+        return Promise.resolve(json({ view: { sections: [{ items: [{ type: "text", text: `Sources for ${owner}` }] }] } }));
+      }
       if (path === "/api/v1/assistant") {
         const manager = new Headers(init?.headers).get("X-Persona-Manager");
         if (init?.method === "PUT" && init.body) {
@@ -1278,7 +1282,6 @@ describe("assistant isolation across integration routes", () => {
 
   beforeEach(() => {
     state.features.push("source_subscriptions", "inbox_sources", "inbox_sources_graph");
-    state.realSourcePages = true;
     stubFullHubFetch();
   });
 
@@ -1319,6 +1322,7 @@ describe("assistant isolation across integration routes", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     if (v2) await clickOption('[data-settings-group="inbox-sources"]', t("subscriptions.view_list"));
     expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work"]);
+    expect(host.textContent).toContain("Sources for work");
     if (!v2) await clickOption('[data-settings-group="inbox-sources"]', t("subscriptions.view_graph"));
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
     expect(chosenManager()).toBeNull();
