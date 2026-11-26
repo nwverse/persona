@@ -671,6 +671,27 @@ describe("Feishu bot dialog", () => {
     expect(calls.update[0].body).toEqual({ features: { read_group: true } });
   });
 
+  it("hides answering /read in the group directly for a hub from before it", async () => {
+    await open(saved({ features: { ...saved().features, read_group: true } }));
+    expect(document.body.querySelector(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_direct_title")}"]`)).toBeNull();
+  });
+
+  it("dims answering /read in the group directly while /read is off", async () => {
+    const direct = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_direct_title")}"]`)!;
+    await open(saved({ features: { ...saved().features, read_group: false, read_group_direct: false } }));
+    expect(direct().getAttribute("aria-checked")).toBe("false");
+    expect(direct().disabled).toBe(true);
+  });
+
+  it("switches answering /read in the group directly on its own, off by default", async () => {
+    const direct = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_read_group_direct_title")}"]`)!;
+    await open(saved({ features: { ...saved().features, read_group: true, read_group_direct: false } }));
+    expect(direct().getAttribute("aria-checked")).toBe("false");
+    expect(direct().disabled).toBe(false);
+    await act(async () => direct().click());
+    expect(calls.update[0].body).toEqual({ features: { read_group_direct: true } });
+  });
+
   it("switches the workbench on its own, off by default", async () => {
     const workbench = () => document.body.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.feature_workbench_title")}"]`)!;
     await open(saved({ features: { ...saved().features, workbench: false } }));
