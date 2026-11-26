@@ -155,7 +155,9 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		}
 		tools := s.mcpTools(ctx, assistant)
 		if assistant {
-			tools = s.guardTools(ctx, machine, session, append(tools, s.healthTools(ctx, machine, session)...))
+			tools = append(tools, s.healthTools(ctx, machine, session)...)
+			tools = append(tools, s.externalSourceTools(ctx, machine, session)...)
+			tools = s.guardTools(ctx, machine, session, tools)
 			tools = append(tools, s.spaceTools(ctx, machine, session)...) // space_state_update (track_space_md.go)
 		}
 		if !assistant {
@@ -223,6 +225,12 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	}
 	if res, refused := s.inboxVisibilityToolRefusal(ctx, machine, session, origin, name, args); refused {
 		return res
+	}
+	if isExternalSourceTool(name) {
+		if !assistant {
+			return proto.TextResult("unknown tool "+name, true)
+		}
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
 	}
 	if slices.Contains(resourceToolNames, name) {
 		return s.resourceTool(ctx, machine, session, name, args)

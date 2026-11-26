@@ -272,7 +272,7 @@ func (t probeTarget) runModelProbeSample(ctx context.Context, sample modelProbeS
 			break
 		}
 		out.HTTPStatus = res.StatusCode
-		out.RetryAfter = res.Header.Get("Retry-After")
+		out.RetryAfter = t.redact(res.Header.Get("Retry-After"))
 		if t.api != "chat" || (res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusUnprocessableEntity) {
 			break
 		}
@@ -320,9 +320,9 @@ func (t probeTarget) runModelProbeSample(ctx context.Context, sample modelProbeS
 
 	var text strings.Builder
 	if t.api == "messages" {
-		err = readModelProbeMessages(res.Body, &out, &text)
+		err = readModelProbeMessages(res.Body, &out, &text, t.redact)
 	} else {
-		err = readModelProbeChat(res.Body, &out, &text)
+		err = readModelProbeChat(res.Body, &out, &text, t.redact)
 	}
 	if ctx.Err() != nil {
 		err = ctx.Err()
@@ -358,7 +358,7 @@ func readModelProbeResponse(body io.Reader) ([]byte, error) {
 	return raw, nil
 }
 
-func modelProbeUsage(raw json.RawMessage) map[string]int {
+func modelProbeUsage(raw json.RawMessage, redact func(string) string) map[string]int {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil
 	}
@@ -369,6 +369,10 @@ func modelProbeUsage(raw json.RawMessage) map[string]int {
 	usage := make(map[string]int)
 	for name, raw := range fields {
 		var value int
+		// Field names are provider-controlled too. Omit a sensitive entry rather than risk a collision between redacted keys.
+		if redact(name) != name {
+			continue
+		}
 		if json.Unmarshal(raw, &value) == nil {
 			usage[name] = value
 		}
@@ -391,7 +395,7 @@ func modelProbeBlockType(out *modelProbeResult, typ string) {
 	out.BlockTypes = append(out.BlockTypes, typ)
 }
 
-func readModelProbeMessages(body io.Reader, out *modelProbeResult, text *strings.Builder) error {
+func readModelProbeMessages(body io.Reader, out *modelProbeResult, text *strings.Builder, redact func(string) string) error {
 	raw, err := readModelProbeResponse(body)
 	if err != nil {
 		return err
@@ -418,18 +422,21 @@ func readModelProbeMessages(body io.Reader, out *modelProbeResult, text *strings
 	if response.StopReason == "refusal" {
 		return errors.New("Messages response stopped at refusal")
 	}
+	if response.Content == nil {
+		return errors.New("Messages response missing content")
+	}
 	out.GenerationTruncated = response.StopReason == "max_tokens"
 	for _, block := range response.Content {
-		modelProbeBlockType(out, block.Type)
+		modelProbeBlockType(out, redact(block.Type))
 		if block.Type == "text" {
 			text.WriteString(block.Text)
 		}
 	}
-	out.Usage = modelProbeUsage(response.Usage)
+	out.Usage = modelProbeUsage(response.Usage, redact)
 	return nil
 }
 
-func readModelProbeChat(body io.Reader, out *modelProbeResult, text *strings.Builder) error {
+func readModelProbeChat(body io.Reader, out *modelProbeResult, text *strings.Builder, redact func(string) string) error {
 	limited := &io.LimitedReader{R: body, N: modelProbeMaxResponseBytes + 1}
 	finished, done := false, false
 	var eventErr error
@@ -461,7 +468,7 @@ func readModelProbeChat(body io.Reader, out *modelProbeResult, text *strings.Bui
 			eventErr = fmt.Errorf("Chat stream error: %s", gatewayMessage([]byte(data)))
 			return true
 		}
-		if usage := modelProbeUsage(event.Usage); usage != nil {
+		if usage := modelProbeUsage(event.Usage, redact); usage != nil {
 			out.Usage = usage
 		}
 		for _, choice := range event.Choices {

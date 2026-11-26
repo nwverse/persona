@@ -110,7 +110,7 @@ missing quietly.
 | `settings` | Yes | `Host.AddSetting(modapi.Setting)`: the module says what a value means (`Value`, `Check`, `Describe`); the core keeps it stored, lists it in `persona_settings` and asks the owner to approve a change |
 | `feature` | Yes | The manifest value is `module.<id>`. While the module is loaded it joins the manager hello's `features`; the hub forwards it while that default manager is connected. Every built-in module declares it, and the manager announces the client-only modules' flags itself (below) |
 | `hub_routes` | Yes | `Host.AddHubRoute(pattern, handler)`: the assistant serves the declared `METHOD /api/v1/…` route only while the module is loaded |
-| `mcp_tools` | Yes | `Host.AddMCPTool(...)`: the assistant lists and dispatches the declared tool only while the module is loaded |
+| `mcp_tools` | Yes | `Host.AddMCPTool(modapi.MCPTool)`: the assistant lists and dispatches the declared tool only while the module is loaded ("Assistant tools" below) |
 | `background_jobs` | Yes | `Host.AddBackgroundJob(name, run)`: `Service.Run` starts the declared loop under its context; an absent module starts none |
 | `schedules`: `facts` | Yes | `Host.AddScheduleFacts(modapi.ScheduleFacts)`: the wait rules and `ScheduleFactsRunner` for scheduled routines with facts or reports, using narrow `Host` ports (`Tasks`, `Todos`, `Inbox`, `Later`, `Schedule`, `Feed`, `Delivery`, `DayRecap`, `Prompts`) |
 | `schedules` (others), `prompt_sections`, `db_migrations`, `i18n_namespaces`, `node_programs`, `channel_kinds`, `frame_handlers`, `push_categories`, `shell_places`, `chat_card_kinds`, `composer_actions`, `chat_accessories` | Not yet | Declared but not served: each gets a `Host` method when its first module moves (#13408 remaining work, #13400 to #13403) |
@@ -118,6 +118,35 @@ missing quietly.
 Route validation uses the real `http.ServeMux` conflict rules, including equivalent wildcard patterns, against the core
 and previously accepted modules. The reserved tool names include conditional core tools and compatibility aliases. A
 conflict rejects the module's complete contribution before the live mux changes; core tool dispatch remains authoritative.
+
+**Assistant tools.** A module's tool is a `modapi.MCPTool` (`server/internal/modapi/tool.go`): the name its manifest
+lists in `mcp_tools`, the description and input schema the model is shown, and a handler. Build it with `modapi.Tool`
+and an argument struct, so the contract decodes the model's arguments once and strictly before the handler runs:
+
+```go
+type remindArgs struct {
+	Text string `json:"text"`
+}
+
+err := h.AddMCPTool(modapi.Tool("module_remind", "Remind the owner of something.", modapi.ToolSchema(remindSchema),
+	func(ctx context.Context, call modapi.ToolCall, a remindArgs) (modapi.ToolResult, error) {
+		return modapi.ToolText("Reminder saved for " + call.Machine.String() + "."), nil
+	}))
+```
+
+- `ToolCall` says who called: `Machine` (`wireids.MachineID`) and `Session` (`wireids.SessionID`, the calling Agent
+  session on that machine: an assistant conversation's session or another Agent's that was offered the tool; empty
+  when the core calls the tool with no session behind it), and `Args`, the model's arguments as sent.
+- An argument the struct does not declare, a value of the wrong type or anything after the object fails the call with
+  `invalid arguments: …` before the handler runs; a call with no arguments decodes an empty object. Keep the struct's
+  `json` tags and the schema's properties the same. Never decode into a map.
+- `ToolResult.Text` reaches the model as it is; a failure is the handler's error, whose text the model sees as the
+  tool's error. `TestModuleToolWireIsPinned` (`server/internal/assistant/modules_tool_wire_test.go`) pins the
+  definition, the output and the error as the model receives them.
+- Raw JSON crosses this slot in two named types only: `ToolSchema` (the JSON Schema text shown to the model, which the
+  core never reads) and `ToolArgs` (the model's arguments on their way to the tool's decoder). A tool that must read
+  its arguments itself fills `MCPTool.Run` and reads `call.Args`.
+- `AddMCPTool` refuses a tool the manifest does not name, a tool without a handler and a tool added twice.
 
 A manager that publishes module flags also announces the reserved `modules` marker, including when every module is off
 or built out. Clients treat a module with a `feature` as off only when the hello has `modules` and lacks that feature;
@@ -241,7 +270,9 @@ Persona Core is a product on its own: a hub built without any module starts, ser
 - **End-to-end gate**: `python3 scripts/ci/module-e2e.py --modules <ids>` switches the modules off and on at run time
   (the `modules` row) on a test hub started the same way, with a default build and the real web app in headless
   Chrome: flags, the manager's list, the module's routes, extensions and connectors, its web entry and chunks, and the
-  core's pages in every phase, plus the mock hub as an older hub. A module move merges only after it passes on its
+  core's pages in every phase, plus the mock hub as an older hub. Off, a module's entry points are gone, and data the
+  user already has is asserted the other way: a stored recording is still listed and opens read-only in the web app,
+  with none of the module's controls and none of its chunks. A module move merges only after it passes on its
   branch (docs/operations/testing.md "Module e2e gate", #14417).
 - **Tests**: `GOFLAGS="-trimpath -tags=persona_core_only" python3 scripts/ci/server-shards.py <node|managers|other>
   --database-file <file with database_url>` runs a shard's every package without modules; a test of a module's own
@@ -396,6 +427,21 @@ The modules of this kind:
 
 ### Guards
 
+**Controlling changes to the core (#14916).** Persona Core has no UI: it is the hub API and data model for Agents, sessions,
+tasks and to-dos, with the clients' headless code and the foundation interfaces. The clients' interface code is the default
+panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict: label + reason, owner review, no module
+references) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
+more pieces control changes to tier core itself, in this order of strength. The merge check: `scripts/hooks/core-change-check.py`, run by
+`scripts/hooks/merge-pr.sh`, refuses a PR that changes a tier-core path of `schema/core-paths.txt` (read by `scripts/test/core_paths.py`:
+the server units this file's classification calls `core`, the clients' headless directories and the foundation interfaces
+and guards named one by one; panel files and tests-only changes do not count) unless it has the label `core-change` and a `## Why this must change the core` section. CODEOWNERS:
+the core block of `.github/CODEOWNERS` is generated from tier core of the same list (`scripts/hooks/codeowners.py --write`) and requests
+the owners' review; whether the review is required is a branch ruleset the administrator sets. The reference guard:
+`scripts/test/test_core_references_no_module.py` needs no toolchain and checks on every platform that the four guards'
+baselines stay empty and that no core or panel Go, web or Kotlin file imports a module (the Apple ratchet is called as it is). A PR
+that edits the list, the check or the guards is itself a core change. The contributor steps are in `CONTRIBUTING.md`,
+"Changing Persona Core".
+
 `server/internal/archguard` keeps the boundary. Both module guards read the import lines of every `.go` file under
 `server/` (testdata left out), whatever its build constraint or GOOS, so a file only a `persona_core_only` build or one
 platform compiles cannot hide a violation (`TestModuleGuardsSeeEveryBuild` proves it on a fixture).
@@ -470,8 +516,8 @@ chosen extension or on the phone. The apps' composer dictation is core; the exte
 (docs/assistant/voice.md 4.18) goes with the module, and apps use it only while the extension advertises its
 `dictation` feature. Still in the core and named by string, to move as the host serves their slots: the channel kind
 (`channel.KindVoice`), `assistantwire.PluginsVoice`, the `voice` and `speech` extension points, the extension host's
-glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings; `internal/transcribelive`, a
-measuring tool that also reads the knowledge base, stays where it is.
+glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings. The developer tool
+`server/scripts/transcribelive` measures live transcription and reads the knowledge base.
 
 ### Recording
 
@@ -626,7 +672,9 @@ which the kernel announces while it is loaded (it left `modapi.ClientModules` wi
 - **With the module absent** (`persona_without_health`, `persona_core_only`, or switched off in the `modules` row) the
   nine routes (including health items GET/PUT) answer 404, the hello names neither `health_items` nor `health_intake`
   (so the hub announces neither feature), the `health_intake` tool is not listed and refuses, and no
-  water reminder runs (`TestHealthFollowsItsModule`). The entries already stored stay in the database.
+  water reminder runs (`TestHealthFollowsItsModule`). The entries already stored stay in the database. The Web keeps
+  the core Health space's stored conversations, reports and memory on its existing `/health…` and
+  `/tracks/health…` addresses through a read-only default-panel archive; it does not call the absent intake routes.
   Health chat retains phone-data guidance but omits intake-item instructions. The `Items` seam reads the ordered
   `health.items` setting (or computed defaults); item saves, tool logging and reminder planning share the module lock.
   Strength training (#14713) adds `StrengthStore`, `CardShown`, `CardChanged` and `PageLink` to Host. Its contract types
@@ -745,12 +793,14 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
   edited (the settle timer and its lock), how it is sent and replaced, the workbench's pin, its loop and the button
   every card carries, and the notices a notifications companion long-polls. The core tells them through
   `larkhost.Board` (`BoardChanged`, `WorkbenchOn`, `WorkbenchStamp`, `DivertNotices`: nothing, the card unchanged and
-  `false` without the module). The rows (what waits and for how long, `board_rows.go`) and the waiting list as a card
-  stay the core's, since the briefing and the acceptance rounds read them too; the module asks for the card as of a
-  time (`Host.BoardCard`) and for whether the pending cards are read (`Host.FleetReady`). The four routes the companions
-  use (`PUT …/feishu/companions`, `GET …/feishu/notices`, `POST …/feishu/notices/action`, `POST …/feishu/workbench`)
-  are the module's `hub_routes`, served through the kernel only while it is on: with the module off or built out they
-  answer 404 (before, an off bot answered from the core). The request tells the module which manager's layer it is for
+  `false` without the module). `DivertNotices` takes `assistantwire.NoticeKind`, with `report`, `push` and `task` as
+  its JSON values. An unknown kind raises a defect even when no companion is available.
+  The rows (what waits and for how long, `board_rows.go`) and the waiting list as a card stay the core's, since the
+  briefing and the acceptance rounds read them too. The module asks for the card as of a time (`Host.BoardCard`) and
+  for whether the pending cards are read (`Host.FleetReady`). The four routes the companions use (`PUT
+  …/feishu/companions`, `GET …/feishu/notices`, `POST …/feishu/notices/action`, `POST …/feishu/workbench`) are the
+  module's `hub_routes`, served through the kernel only while it is on. With the module off or built out they answer
+  404 (before, an off bot answered from the core). The request tells the module which manager's layer it is for
   (`larkhost.WithLayer`, put on it where the core registers a module's routes). The stored chat state
   (`bots.feishu.state`: the board's message, the companions) is only ever written by the module's code; switching it
   off neither rewrites nor deletes it, and it is read again when the module comes back. Locks, the same before and after the move: the board's `run` (one send or edit at a time) is the outermost; under it
@@ -777,6 +827,11 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
 
 ### How to add a module
 
+These steps move a feature of this repository into an in-tree module, and step 3 changes Core paths (the
+registration in `server/internal/modules/all`, a `module <id>` line in `schema/module-classification.txt`). To add a
+feature to a core-only install without changing Core code, write an extension instead:
+`docs/extensions/core-only-features.md`, with the sample `sdk/examples/quicknotes`.
+
 1. Pick the id from #13430 section 2 and check its manifest needs only slots the kernel serves; if it needs another,
    add the `Host` method and the kernel's support first, in their own PR, and update "Slots" above.
 2. Create `server/internal/modules/<id>/` with `module.json` (validated by `schema/module.schema.json`), a `Module` whose
@@ -791,7 +846,8 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
 
 ## Clients
 
-Each client documents its side in its own platform doc; these are pointers only.
+Each client documents its side in its own platform doc; these are pointers only. Across both Core and feature
+modules, shared domain logic lives in the Go server while clients stay thin (`docs/architecture/server-first-logic.md`).
 
 - **Apple** (#13432): `PersonaHostApp` with `PersonaModuleAPI` and `PersonaModule<Name>` packages. See `docs/apple/` (written with #13432).
   A module the hub may turn off declares `feature` = `module.<id>`; the app follows the rule agreed on #13844 (off only

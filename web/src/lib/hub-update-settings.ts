@@ -51,21 +51,30 @@ export function recordTone(result: string): "green" | "orange" | "red" {
   return result === "updated" ? "green" : result === "rolled_back" || result === "held" ? "orange" : "red";
 }
 
-/** What the "Update" group shows: a Docker hub's instructions, why it doesn't update itself, a newer release, an update
- *  under way, or "Up to date". */
+/** What the "Update" group shows for the running build and the selected source. */
 export type UpdateView =
   | { kind: "docker" }
   | { kind: "cannot"; why: string }
   | { kind: "newer"; working: boolean }
   | { kind: "working" }
+  | { kind: "source_behind"; warning: string }
+  | { kind: "ahead" }
+  | { kind: "unchecked" }
   | { kind: "current" };
 
 export function updateView(s: HubUpdateStatus): UpdateView {
   if (s.channel === "docker") return { kind: "docker" };
-  if (!s.can_update) return { kind: "cannot", why: s.why_not ? t("lib-hub-update.cannot_update_why", { why: s.why_not }) : t("lib-hub-update.cannot_update") };
   const working = updateWorking(s);
-  if (s.latest?.newer) return { kind: "newer", working };
-  return working ? { kind: "working" } : { kind: "current" };
+  if (s.can_update && s.latest?.newer) return { kind: "newer", working };
+  if (working) return { kind: "working" };
+  if (s.source !== "web-dev") {
+    const warning = sourceBehindWarning(s);
+    if (warning) return { kind: "source_behind", warning };
+    if (s.latest && s.latest.build > 0 && s.build > s.latest.build) return { kind: "ahead" };
+  }
+  if (!s.can_update) return { kind: "cannot", why: s.why_not ? t("lib-hub-update.cannot_update_why", { why: s.why_not }) : t("lib-hub-update.cannot_update") };
+  if (!s.last_check && !s.latest) return { kind: "unchecked" };
+  return { kind: "current" };
 }
 
 /** The warning under a newer release: it went back before, or auto-update holds it back. */

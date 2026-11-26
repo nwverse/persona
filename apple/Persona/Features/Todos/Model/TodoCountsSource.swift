@@ -25,7 +25,7 @@ import PersonaWire
 /// filed here once for the list and the numbers alike (`filed`), so the list's sections and the numbers cannot disagree.
 @MainActor @Observable
 final class TodoCountsSource {
-    private(set) var counts = TodoCounts(sections: Dictionary(uniqueKeysWithValues: TodoListSection.all.map { ($0, 0) }))
+    private(set) var counts = TodoCounts()
     /// All To-dos, Today, Upcoming, then the projects; All only from a hub without places.
     private(set) var places: [TodoPlace] = [TodoPlace(id: TodoPlaceKind.allValue, kind: TodoPlaceKind.allValue)]
     /// The current assistant's rows as filed, in the list's order (`TodoFiling.ordered`): the V1 list draws its sections
@@ -196,7 +196,7 @@ final class TodoCountsSource {
         var awayByProject: [String: Int] = [:]
         for row in rows where row.section == TodoListSection.needsYou && !carried.contains(row.id) && !row.asks.isEmpty
             && Set(row.asks).isSubset(of: given[row.id] ?? []) {
-            counts.sections[TodoListSection.needsYou] = max(0, (counts.sections[TodoListSection.needsYou] ?? 0) - 1)
+            counts.sections.needsYou = max(0, counts.sections.needsYou - 1)
             guard !row.quiet else { continue }
             counts.needsYou = max(0, counts.needsYou - 1)
             if let project = row.project { awayByProject[project, default: 0] += 1 }
@@ -263,10 +263,10 @@ final class TodoCountsSource {
         out.open = max(0, out.open + after.open - before.open)
         out.needsYou = max(0, out.needsYou + after.needsYou - before.needsYou)
         out.inProgress = max(0, out.inProgress + after.inProgress - before.inProgress)
-        for section in Set(before.sections.keys).union(after.sections.keys) {
-            let moved = (after.sections[section] ?? 0) - (before.sections[section] ?? 0)
+        for section in TodoListSection.all {
+            let moved = after.sections[section] - before.sections[section]
             guard moved != 0 else { continue }
-            out.sections[section] = max(0, (out.sections[section] ?? 0) + moved)
+            out.sections[section] = max(0, out.sections[section] + moved)
         }
         return out
     }

@@ -5,6 +5,7 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { hubServes, moduleFeature } from "../../core/module-host";
 import { t } from "../../i18n";
+import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import type { MailAccount } from "../../lib/agent-settings";
 import { api, enc, errorText } from "../../lib/api";
 import { listChannels, type Channel } from "../../lib/channels";
@@ -18,7 +19,7 @@ import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, 
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
 import { lazyPage } from "../../lib/lazy-page";
-import { defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useLarkOn, useStore } from "../../lib/store";
 import {
@@ -74,6 +75,8 @@ export interface IntegrationsProps {
   initialFilter?: IntegrationFilter;
   /** Navigate to a Settings URL linked from a channel override notice. */
   onSettings?: (url: string) => void;
+  /** Report whether an open extension plugin_page needs the wide page container. */
+  onPageWide?: (wide: boolean) => void;
 }
 
 const DOT_CLASS: Record<IntegrationTone, string> = {
@@ -177,7 +180,6 @@ function PushSourceDetailPane({
   reloadKey: number;
   onReload: () => void;
 }) {
-  useLayoutEffect(() => pinManagerAt(["/subscriptions"], otherManager(manager)), [manager]);
   const title = item?.name ?? t("subscriptions.title_sources");
   return (
     <div data-integration-detail={item?.id ?? "source"} data-integration-kind="source">
@@ -216,8 +218,9 @@ function PushSourceDetailPane({
       )}
 
       <Suspense fallback={<Loading />}>
-        <LazySourcesUI key={`${state}:${reloadKey}`} title={title} state={state} />
+        <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
       </Suspense>
+      {item?.kind === "source" && <ExternalSourceSettingsEntry provider="subscription" channel="" manager={manager} />}
     </div>
   );
 }
@@ -230,7 +233,6 @@ function SourcesFlowPane({
   manager?: string;
   reloadKey: number;
 }) {
-  useLayoutEffect(() => (manager ? pinManagerAt(["/subscriptions"], otherManager(manager)) : undefined), [manager]);
   return (
     <>
       {manager && (
@@ -243,6 +245,7 @@ function SourcesFlowPane({
           key={`${manager ?? ""}:${reloadKey}`}
           title={t("subscriptions.title_sources")}
           initialView="graph"
+          manager={manager}
         />
       </Suspense>
     </>
@@ -255,11 +258,13 @@ function IntegrationExtensionPage({
   ui,
   manager,
   onBack,
+  onWide,
 }: {
   id: string;
   ui: string;
   manager?: string;
   onBack?: () => void;
+  onWide?: (wide: boolean) => void;
 }) {
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
   const [detail, setDetail] = useState<HubExtensionDetail | null>(null);
@@ -267,6 +272,7 @@ function IntegrationExtensionPage({
   useEffect(() => {
     extensionDetail(id).then(setDetail, () => {});
   }, [id]);
+  useEffect(() => () => onWide?.(false), [onWide]);
   const title = detail?.ui?.find((u) => u.id === ui)?.title;
   return (
     <>
@@ -280,7 +286,7 @@ function IntegrationExtensionPage({
         <IconButton icon="retry" label={t("settings-extensions.redraw")} onClick={() => setReloadCount((x) => x + 1)} />
       </div>
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} />
+        <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
       </ExtensionOwnerScope>
     </>
   );
@@ -293,12 +299,14 @@ export function Integrations({
   headerBack = false,
   initialFilter = "all",
   onSettings,
+  onPageWide,
 }: IntegrationsProps) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
   const go = useCallback((next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next)), [onOpen]);
 
   const picked = useChosenManager();
   const owner = otherManager(picked ?? undefined);
+  const effectiveManager = ("manager" in route ? route.manager : undefined) ?? owner;
   const scope = useScope();
   const offline = useShownOffline();
 
@@ -512,13 +520,13 @@ export function Integrations({
         key={open ?? ""}
         market={route.market}
         id={route.id}
-        manager={route.manager ?? owner}
+        manager={effectiveManager}
         onBack={
           headerBack
             ? undefined
             : () => go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" })
         }
-        onInstalled={(id) => go({ kind: "extension", id, manager: route.manager })}
+        onInstalled={(id) => go({ kind: "extension", id, manager: effectiveManager })}
       />
     );
   }
@@ -531,8 +539,9 @@ export function Integrations({
         key={`${open ?? ""}@${route.manager ?? ""}`}
         id={route.id}
         ui={route.ui}
-        manager={route.manager ?? owner}
+        manager={effectiveManager}
         onBack={headerBack ? undefined : () => go({ kind: "extension", id: route.id, manager: route.manager })}
+        onWide={onPageWide}
       />
     );
   }
@@ -651,19 +660,25 @@ export function Integrations({
           { v: "list", label: t("settings-integrations.view_list") },
           { v: "sources", label: t("settings-integrations.view_sources") },
         ]}
-        onChange={(v) => go(v === "sources" ? { kind: "sources" } : { kind: "list" })}
+        onChange={(v) => {
+          if (v === "sources") go({ kind: "sources", manager: otherManager(effectiveManager) });
+          else {
+            chooseManager(effectiveManager ?? null);
+            go({ kind: "list" });
+          }
+        }}
       />
     </div>
   ) : null;
 
   // Full-width global Data Flow view (`route.kind === "sources"` without `state`):
-  // natural single-scroll container so SourcesGraph can use the full wide canvas, with untouched InboxForwardSetting.
+  // natural single-scroll container so SourcesGraph can use the full wide canvas, with the forwarding setting.
   if (isSourcesView) {
     return (
       <div data-integrations-sources-view>
         {listHeader}
         {viewSwitch}
-        <SourcesFlowPane manager={route.manager} reloadKey={sourcesReload} />
+        <SourcesFlowPane manager={effectiveManager} reloadKey={sourcesReload} />
       </div>
     );
   }
@@ -807,7 +822,7 @@ export function Integrations({
     <PushSourceDetailPane
       state={sourceDetailState}
       item={resolvedSourceItem}
-      manager={route.kind === "sources" ? (route.manager ?? owner) : owner}
+      manager={effectiveManager}
       onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
       reloadKey={sourcesReload}
       onReload={() => setSourcesReload((n) => n + 1)}

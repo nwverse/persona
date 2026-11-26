@@ -105,5 +105,7 @@
   "start_goal_skipped": "启动时没能设开始目标：{reason}",
   "side_handover_title": "「{title}」已转由主对话跟进",
   "side_handover_archived": "任务「{title}」已转由主对话跟进：原对话「{origin}」已归档。",
-  "side_handover_gone": "任务「{title}」已转由主对话跟进：原对话「{origin}」已不可用。"
+  "side_handover_gone": "任务「{title}」已转由主对话跟进：原对话「{origin}」已不可用。",
+  "placement_waiting": "正在等待自动选机。",
+  "placement_no_match": "当前没有在线电脑满足该任务的选机约束和容量闸线。"
 }
