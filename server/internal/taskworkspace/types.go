@@ -41,7 +41,7 @@ func Failure(code, stage, operation, repo, path string) *Problem {
 	if code == "operation_conflict" || code == "resource_conflict" {
 		actions = []string{"inspect", "cancel", "cleanup", "prepare_new"}
 	}
-	if code == "ref_not_found" || code == "ref_invalid" || code == "invalid_path" || code == "path_conflict" || code == "naming_incomplete" {
+	if code == "ref_not_found" || code == "ref_invalid" || code == "invalid_path" || code == "path_symlink" || code == "base_scope_denied" || code == "path_conflict" || code == "naming_incomplete" {
 		actions = []string{"inspect", "cancel", "edit_inputs", "prepare_new"}
 	}
 	if stage == "start" && (code == "unsupported" || code == "engine_start_failed") {

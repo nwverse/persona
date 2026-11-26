@@ -34,6 +34,8 @@ type workspaceExecutor struct {
 	mirrorTTLSeconds int
 }
 
+var errWorkspaceSymlink = errors.New("symbolic link")
+
 func workspaceNoLinks(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return errors.New("invalid path")
@@ -52,7 +54,7 @@ func workspaceNoLinks(path string) error {
 			return err
 		}
 		if st.Mode()&os.ModeSymlink != 0 {
-			return errors.New("symbolic link")
+			return errWorkspaceSymlink
 		}
 	}
 	return nil
@@ -231,8 +233,11 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 	// A digest detects accidental changes; re-resolve on the target to validate
 	// paths and templates rather than trusting a caller-computed digest.
 	preview := workspacenaming.Resolve(req.Plan.Source, workspacenaming.NodeContext{Home: n.home, PersonaHome: n.dir})
-	if preview.Plan == nil || preview.Plan.Digest != req.Plan.Digest || n.offLimits(req.Plan.RootPath) != nil || workspaceNoLinks(req.Plan.RootPath) != nil {
+	if preview.Plan == nil || preview.Plan.Digest != req.Plan.Digest {
 		return taskworkspace.Record{Error: taskworkspace.Failure("invalid_path", "validation", req.OperationID, "", req.Plan.RootPath)}, nil
+	}
+	if problem := n.workspacePlanPathProblem(preview.Plan); problem != nil {
+		return taskworkspace.Record{Error: taskworkspace.Failure(problem.Code, "validation", req.OperationID, problem.RepoID, req.Plan.RootPath)}, nil
 	}
 	for _, source := range req.Plan.Source.Repositories.Repositories {
 		if !n.workspaceSourceAllowed(source) {

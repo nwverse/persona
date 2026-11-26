@@ -273,7 +273,7 @@ func TestBackendWorkspacePathOwnershipAndCleanupSemantics(t *testing.T) {
 			t.Skip(err)
 		}
 		r := workspaceCall(t, n, "prepare", req)
-		if r.Error == nil || r.Error.Code != "invalid_path" {
+		if r.Error == nil || r.Error.Code != "path_symlink" {
 			t.Fatal(r)
 		}
 		entries, err := os.ReadDir(external)
