@@ -515,18 +515,41 @@ func (n *Node) runtimeAssistantCommandGate(ctx context.Context, ix proto.Interac
 	if gateIx.SessionTitle == "" {
 		gateIx.SessionTitle = n.assistantTitle(session, gateCwd)
 	}
-	decision, reason, err := n.larkCheck(ctx, session, gateCwd, bashIn.Command, gateIx)
+	cfg := n.assistantLark(ctx)
+	call, _, original, editable := n.editableLarkCall(cfg, bashIn.Command, gateCwd)
+	if editable {
+		gateIx.EditableText = original
+	}
+	out, err := n.larkCheckOutcome(ctx, session, gateCwd, bashIn.Command, gateIx)
 	if errors.Is(err, errNodeGone) {
 		return nil, true, &rpc.Error{Message: "node going away", Code: "node_gone"}
 	}
 	if err != nil {
 		return nil, true, err
 	}
-	switch decision {
+	switch out.decision {
 	case "allow":
-		return proto.Resolution{Allow: proto.Bool(true), Message: reason}, true, nil
+		if editable && out.editedText != "" && out.editedText != original {
+			card := out.card
+			if card.InteractionID == "" {
+				card.InteractionID = gateIx.ID
+			}
+			if err := n.applyLarkProxyEdit(ctx, cfg, session, card, call, out.editedText); err != nil {
+				return proto.Resolution{Allow: proto.Bool(false), Message: err.Error(), Reason: "gate_rule"}, true, nil
+			}
+		}
+		return proto.Resolution{Allow: proto.Bool(true), Message: out.reason}, true, nil
 	case "deny":
-		return proto.Resolution{Allow: proto.Bool(false), Message: reason}, true, nil
+		if out.pending {
+			return proto.Resolution{Dismiss: true, Pending: true, ApprovalID: out.approvalID, Message: out.reason}, true, nil
+		}
+		if out.dismiss {
+			return proto.Resolution{Dismiss: true, ApprovalID: out.approvalID, Message: out.reason}, true, nil
+		}
+		if out.userDenied {
+			return proto.Resolution{Allow: proto.Bool(false), Message: out.userNote}, true, nil
+		}
+		return proto.Resolution{Allow: proto.Bool(false), Message: out.reason, Reason: "gate_rule"}, true, nil
 	}
 	mode, _ := n.modesOf(session)
 	rowMode := ""

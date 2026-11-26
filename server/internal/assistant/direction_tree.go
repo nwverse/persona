@@ -412,6 +412,9 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 	if err := s.listDecisionReviews(ctx, all); err != nil {
 		s.logf("direction tree decision reviews: %v", err)
 	}
+	if cfg.todosV2On() {
+		s.populateTodoActiveBlockers(ctx, all)
+	}
 	asks := s.todoAsks(ctx) // once the to-dos are let go: it reads them itself
 	var undone []Todo
 	wantCards := map[string]map[string]bool{}
@@ -537,7 +540,6 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 		c, ok := tb.sessions[[2]string{machine, id}]
 		return c, ok
 	}
-	tb.placed = triagePlace(all, look, now, loc)
 	facts := make([]projection.Facts, len(all))
 	for i := range all {
 		f := projectionFacts(all[i], tb.sessions, loc)
@@ -555,13 +557,29 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 		facts[i] = f
 	}
 	projViews := projection.Views(facts, now)
-	for i := range all {
-		tb.views[all[i].ID] = projViews[i]
-	}
-	for _, t := range all {
-		tb.index(t)
-		if triageCountsAsOpen(t.Todo, tb.placed[t.ID]) {
-			tb.open = append(tb.open, t.ID)
+	if cfg.todosV2On() {
+		applyActiveBlockersToViews(all, projViews, nil)
+		tb.placed = make(map[string]todoTriage, len(all))
+		for i := range all {
+			tb.views[all[i].ID] = projViews[i]
+			tb.placed[all[i].ID] = todoTriageFromProjectionView(all[i], projViews[i], look)
+		}
+		for i, t := range all {
+			tb.index(t)
+			if projectionViewCountsAsOpen(projViews[i]) {
+				tb.open = append(tb.open, t.ID)
+			}
+		}
+	} else {
+		tb.placed = triagePlace(all, look, now, loc)
+		for i := range all {
+			tb.views[all[i].ID] = projViews[i]
+		}
+		for _, t := range all {
+			tb.index(t)
+			if triageCountsAsOpen(t.Todo, tb.placed[t.ID]) {
+				tb.open = append(tb.open, t.ID)
+			}
 		}
 	}
 	for _, id := range tb.open {
