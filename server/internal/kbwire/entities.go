@@ -2,6 +2,8 @@ package kbwire
 
 import (
 	"encoding/json"
+	"errors"
+	"slices"
 	"time"
 )
 
@@ -170,7 +172,7 @@ type RecordingSegment struct {
 	// "The transcript of record"): "hub" or "device"; absent means device. Only the hub sets it, never an upload.
 	Source string `json:"source,omitempty"`
 	// Echo: the line is Persona's own answer as the meeting's microphone heard it (#5905,
-	// docs/assistant/meeting-minutes.md "Persona's echo"), marked by the phone or by the hub's rule (kb/echo.go). Kept,
+	// docs/assistant/meeting-minutes.md "Persona's echo"), marked by the phone or by the hub's rule (modules/recording/writers/echo.go). Kept,
 	// never fed to the minutes, the summary or the follow-up; absent (false) for every other line.
 	Echo bool `json:"echo,omitempty"`
 }
@@ -206,4 +208,20 @@ type Entry struct {
 	MeetingID string `json:"meeting_id,omitempty"`
 	// Paused: as Detail.Paused, on a recording's list entry.
 	Paused string `json:"paused,omitempty"`
+}
+
+// ErrNotFound: the knowledge base has no such entry. ErrReadOnly: it was opened read-only. The knowledge base returns
+// these values (kb.ErrNotFound and kb.ErrReadOnly are the same errors), so a module that writes through a port can
+// return and test them without importing the knowledge base.
+var (
+	ErrNotFound = errors.New("not found")
+	ErrReadOnly = errors.New("the knowledge base is read-only")
+)
+
+// TaggingFieldLocked: the user set field of t by hand, so no automatic writer changes it.
+func TaggingFieldLocked(t *Tagging, field string) bool {
+	if slices.Contains(t.LockedFields, field) {
+		return true
+	}
+	return t.Locked && (field == "importance" || field == "relevance" || field == "tags")
 }

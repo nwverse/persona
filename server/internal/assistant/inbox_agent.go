@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -404,8 +405,9 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 	b.sortQueued(queued)
 	type job struct {
 		it      *InboxItem
+		todoID  string
 		chat    string
-		prompt  func(*prompts.KBContext, bool) string
+		prompt  func(*prompts.KBContext, bool, []prompts.InboxHandoffTarget) string
 		carried int // the agent's told count when the first message was made: it carries the notes queued up to it
 		// Reservation fields let a per-start policy veto return this item to queued without consuming an outward start.
 		turn, previousTurn, previousState string
@@ -437,16 +439,18 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		previousRetry, previousTurn := it.Agent.RetryAfter, it.Agent.ProcessingTurn
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
-		a := b.inboxAgentForIn(it, owner, linked[it.Agent.TodoID], larkDefault, loc, language)
+		todoID := it.Agent.TodoID
+		a := b.inboxAgentForIn(it, owner, linked[todoID], larkDefault, loc, language)
 		a.ReplyPolicy = replyPolicyItemApplies(replyPolicy, it)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
 		turn := rand.Text()
 		it.Agent.ProcessingTurn = turn
-		jobs = append(jobs, job{it: it, chat: b.kbChatOf(it), prompt: func(kbc *prompts.KBContext, allowKBContext bool) string {
+		jobs = append(jobs, job{it: it, todoID: todoID, chat: b.kbChatOf(it), prompt: func(kbc *prompts.KBContext, allowKBContext bool, targets []prompts.InboxHandoffTarget) string {
 			if allowKBContext {
 				a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
 			}
 			a.KB = kbc
+			a.HandoffTargets = targets
 			return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(a))
 		}, carried: it.Agent.told, turn: turn, previousTurn: previousTurn, previousState: previousState,
 			previousStarted: previousStarted, previousRetry: previousRetry, previousAttempts: previousAttempts})
@@ -513,14 +517,16 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 					promptAgent.KnowledgeDir = s.kb.dir
 				}
 				turn := j.turn
+				j.todoID = a.TodoID
 				j.chat = b.kbChatOf(j.it)
 				j.carried = a.told
 				j.contentVersion = replyPolicyContentVersion(j.it)
-				j.prompt = func(kbc *prompts.KBContext, allowKBContext bool) string {
+				j.prompt = func(kbc *prompts.KBContext, allowKBContext bool, targets []prompts.InboxHandoffTarget) string {
 					if allowKBContext {
 						promptAgent.KnowledgeDir = s.kb.dir
 					}
 					promptAgent.KB = kbc
+					promptAgent.HandoffTargets = targets
 					return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(promptAgent))
 				}
 				ready = true
@@ -543,10 +549,11 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		if allowKBContext && j.chat != "" {
 			kbc = s.kbChatContext(ctx, j.chat)
 		}
+		targets := s.inboxPromptHandoffTargets(ctx, j.todoID)
 		cctx, cancel := context.WithTimeout(ctx, inboxAgentStartWait)
 		promptCfg := cfg
 		promptCfg.ReadProfile = jobCfg.Agent.ReadProfile // the profile that actually governed this rebuilt prompt
-		machineID, sessionID, err := s.startInboxAgentAuthorized(cctx, promptCfg, j.it, j.prompt(kbc, allowKBContext), j.contentVersion, j.turn)
+		machineID, sessionID, err := s.startInboxAgentAuthorized(cctx, promptCfg, j.it, j.prompt(kbc, allowKBContext, targets), j.contentVersion, j.turn)
 		cancel()
 		if errors.Is(err, errInboxStartAuthorization) {
 			// No outward session was created. Return the reservation to queued without consuming its attempt budget.
@@ -918,37 +925,58 @@ func messageCardOf(it *InboxItem) *MessageCard {
 		Text: clip(strings.TrimSpace(it.Preview), 400), Draft: it.Agent.Draft, MessageVersion: it.Last}
 }
 
-// inboxRepliedAt is when those of the inbox items ids the user replied to were replied to (the message cards say
-// sent by it).
-func (s *Service) inboxRepliedAt(ctx context.Context, ids []string) map[string]time.Time {
-	b := &s.inbox
-	out := map[string]time.Time{}
-	if s.inboxReady(ctx) != nil {
-		return out
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, id := range ids {
-		if it := b.items[id]; it != nil && it.DoneBy == "replied" && it.DoneAt != nil {
-			out[id] = *it.DoneAt
-		}
-	}
-	return out
+// inboxSentAt finds completed replies Persona recorded as sent. The filing reason alone also covers replies made in the source.
+func (s *Service) inboxSentAt(ctx context.Context, ids []string) map[string]time.Time {
+	return s.inboxCardDoneAt(ctx, ids, true)
 }
 
-// inboxFiledAt is when those of the inbox items ids that were filed were filed. An unfinished merged member has no
-// filing time of its own, although open is false for it.
+// inboxFiledAt finds each item's own filing time. An unfinished merged member has none, even when it is not open.
 func (s *Service) inboxFiledAt(ctx context.Context, ids []string) map[string]time.Time {
+	return s.inboxCardDoneAt(ctx, ids, false)
+}
+
+// inboxCardDoneAt keeps closed drafts filed for as long as their history is stored, including after memory eviction.
+func (s *Service) inboxCardDoneAt(ctx context.Context, ids []string, sentOnly bool) map[string]time.Time {
 	b := &s.inbox
-	out := map[string]time.Time{}
+	out := make(map[string]time.Time, len(ids))
 	if s.inboxReady(ctx) != nil {
 		return out
 	}
+	record := func(it *InboxItem) {
+		if it.DoneAt != nil && (!sentOnly || it.DoneBy == "replied" && it.hasChainEventAt(ChainSent, *it.DoneAt)) {
+			out[it.ID] = *it.DoneAt
+		}
+	}
+	var missing []string
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	for _, id := range ids {
-		if it := b.items[id]; it != nil && it.DoneAt != nil {
-			out[id] = *it.DoneAt
+		if it := b.items[id]; it != nil {
+			record(it)
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	b.mu.Unlock()
+
+	if st := s.inboxDB(); len(missing) > 0 && st != nil {
+		rows, err := st.DoneInboxItemsByID(ctx, missing)
+		if err != nil {
+			s.logf("inbox: read card history: %v", err)
+			return out
+		}
+		for _, raw := range rows {
+			var it InboxItem
+			if json.Unmarshal(raw, &it) != nil || it.ID == "" {
+				continue
+			}
+			b.mu.Lock()
+			// A reopen or a new message may have brought the item back during the query.
+			if live := b.items[it.ID]; live != nil {
+				record(live)
+			} else {
+				record(&it)
+			}
+			b.mu.Unlock()
 		}
 	}
 	return out

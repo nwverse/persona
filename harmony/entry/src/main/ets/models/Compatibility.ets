@@ -1,5 +1,24 @@
-import { wireContextAttribute, wireContextBody, wireForwardBlock } from '../core/ChatForwardWire';
 import { Wire } from './Wire';
+
+export const legacyProduct: string = 'jarvis';
+export const legacyContextTag: string = 'jarvis-context';
+export const legacyFileTag: string = 'jarvis-file';
+
+export function wireContextAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+export function wireContextBody(value: string): string {
+  const closer = new RegExp('<(\\s*\\/\\s*(?:persona|' + legacyProduct + ')-context\\s*>)', 'gi');
+  return value.replace(closer, '').replace(closer, '&lt;$1');
+}
+
+export function wireForwardBlock(source: Record<string, Object>, tag: string): string {
+  const value = (key: string): string => Wire.text(source, key);
+  const keys = ['kind', 'title', 'url', 'msg', 'role', 'author', 'chat', 'project', 'machine', 'time'];
+  const attrs = keys.filter(k => k === 'kind' || k === 'title' || !!value(k)).map(k => k + '="' + wireContextAttribute(value(k)) + '"').join(' ');
+  return '<' + tag + ' ' + attrs + '>\n' + wireContextBody(value('text')) + '\n</' + tag + '>';
+}
 
 export function hasExtensionSlots(features: string[]): boolean {
   return features.includes('extension_ui_slots') || features.includes('plugin_ui_slots');

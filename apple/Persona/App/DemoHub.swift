@@ -41,6 +41,7 @@ final class DemoHub {
     /// Settings › Knowledge Selection: what was saved in the demo (nil: the hub's defaults).
     private var kbSelection: JSONValue?
     private var memory: [JSONValue] = []
+    private var healthItems: JSONValue = .object([:])
     private var intakeEntries: [String: JSONValue] = [:]
     private var prefs: JSONValue = .object([:])
     private var pins: JSONValue = .object([:])
@@ -94,6 +95,7 @@ final class DemoHub {
         lark = (all["lark"]?.object ?? [:]).compactMapValues(\.array)
         tasks = all["tasks"]?.array ?? []
         memory = all["memory"]?.array ?? []
+        healthItems = all["health_items"] ?? .object([:])
         let intake = all["health_intake"]
         let entries = (intake?["water"]?["entries"]?.array ?? []) + (intake?["protein"]?["entries"]?.array ?? [])
         intakeEntries = Dictionary(uniqueKeysWithValues: entries.compactMap { e in e["id"]?.string.map { ($0, e) } })
@@ -181,6 +183,26 @@ final class DemoHub {
         let p = req.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard p.count >= 3, p[0] == "api", p[1] == "v1" else { throw notFound() }
         let rest = Array(p.dropFirst(2))
+        if rest == ["assistant", "health", "items"] {
+            if req.method == "GET" { return healthItems }
+            if req.method == "PUT" {
+                let request = body(req)
+                guard request["revision"]?.int == healthItems["revision"]?.int else {
+                    throw APIError(status: 409, message: "Conflict", details: healthItems)
+                }
+                guard let ids = request["items"]?.array?.compactMap(\.string),
+                      ids.count == request["items"]?.array?.count, Set(ids).count == ids.count,
+                      ids.allSatisfy({ ["water", "protein", "activity", "trends"].contains($0) }),
+                      case .object(var value) = healthItems else { throw APIError(status: 400, message: "Invalid health items") }
+                value["items"] = .array(ids.map(JSONValue.string))
+                value["revision"] = .number(Double((value["revision"]?.int ?? 0) + 1))
+                value["saved"] = .bool(true)
+                healthItems = .object(value)
+                broadcast(["type": "health_items", "revision": value["revision"] ?? 0])
+                return healthItems
+            }
+            throw notFound()
+        }
         if rest.starts(with: ["assistant", "health", "intake"]) { return try intakeAnswer(req, rest) }
         do {
             return req.method == "GET" ? try get(rest, req.query) : try change(req.method, rest, body(req))
@@ -227,7 +249,7 @@ final class DemoHub {
                 return ["date": .string(day), "water": .number(total("water", day)), "protein": .number(total("protein", day))]
             }
             return ["water": portion("water", goal: 2000), "protein": portion("protein", goal: 60),
-                    "days": .array(history), "zone": "UTC"]
+                    "days": .array(history), "zone": "UTC", "items": healthItems["items"] ?? .array([])]
         }
         if req.method == "GET", path.count == 3 { return snapshot() }
         var entry: JSONValue?
@@ -282,6 +304,8 @@ final class DemoHub {
         case ["usage", "windows"]: return Self.usageWindows()
         case ["usage", "days"]: return Self.usageDays(min(max(Int(q["days"] ?? "") ?? 140, 1), 371))
         case ["usage", "hours"]: return usageHours(min(max(Int(q["days"] ?? "") ?? 7, 1), 7))
+        case ["usage", "projects"]: return ["usage": .object(Self.usageProjects())]
+        case ["usage", "projects", "detail"]: return usageProjectDetail(q["key"] ?? "")
         case ["interactions"]: return ["interactions": .array(interactions)]
         case ["interactions", "history"]: return ["interactions": .array([])]
         case ["auth", "tokens"]: return ["tokens": .array(tokens), "current": "dev_phone"]
@@ -753,7 +777,7 @@ final class DemoHub {
         sockets.removeAll { $0.socket == nil }
         sockets.append(WeakSocket(socket: s))
         s.send(["type": "hello", "server_version": "demo", "client_id": "demo",
-                "features": ["file_upload", "terminal_stream", "task_push", "task_inbox", "health_intake", .string(ProviderScopeForm.feature)]])
+                "features": ["file_upload", "terminal_stream", "task_push", "task_inbox", "health_intake", "health_items", .string(ProviderScopeForm.feature)]])
         s.send(["type": "machines", "machines": .array(machines)])
         for m in Set(sessions.compactMap { $0["machine_id"]?.string }).sorted() {
             s.send(["type": "sessions", "machine_id": .string(m), "sessions": .array(sessions.filter { $0["machine_id"]?.string == m })])
@@ -912,7 +936,7 @@ final class DemoHub {
         }
     }
 
-    private static func json(_ t: UsageTokens) -> [String: JSONValue] {
+    nonisolated private static func json(_ t: UsageTokens) -> [String: JSONValue] {
         ["in": .number(Double(t.input)), "cache_write": .number(Double(t.cacheWrite)), "cache_read": .number(Double(t.cacheRead)),
          "out": .number(Double(t.output)), "req": .number(Double(t.requests))]
     }
@@ -933,6 +957,142 @@ final class DemoHub {
         let total = weekend * (0.45 + 0.55 * max(0, 1 - ago / 150)) * pow(h, 1.7) * 6e9 * part
         return UsageTokens(input: Int64(total * 0.0006), cacheWrite: Int64(total * 0.031), cacheRead: Int64(total * 0.9642),
                            output: Int64(total * 0.0042), requests: Int(total / 2.5e6))
+    }
+
+    // MARK: Token usage by project (#16530)
+
+    /// The made-up projects: key, kind, group, name, host, share of a day's tokens, the computers it ran on.
+    private static let usageProjectMix: [(key: String, kind: String, group: String, name: String, host: String, share: Double, machines: [String])] = [
+        ("git:github.com/acme/storefront", "repo", "development", "acme/storefront", "github.com", 0.36, ["macbook", "server", "studio"]),
+        ("git:github.com/acme/payments-api", "repo", "development", "acme/payments-api", "github.com", 0.20, ["macbook", "server"]),
+        ("git:gitlab.example.com/nimbus/infra", "repo", "development", "nimbus/infra", "gitlab.example.com", 0.12, ["server"]),
+        ("git:github.com/lumen/docs-site", "repo", "development", "lumen/docs-site", "github.com", 0.07, ["macbook"]),
+        ("git:github.com/acme/mobile-app", "repo", "development", "acme/mobile-app", "github.com", 0.05, ["macbook", "studio"]),
+        ("local:" + String(repeating: "1f", count: 20), "local", "development", "scratch-ml", "", 0.025, ["studio"]),
+        ("assistant", "assistant", "other", "", "", 0.09, ["server", "macbook"]),
+        ("folder:trip planning", "folder", "other", "Trip planning", "", 0.03, ["macbook"]),
+        ("folder:taxes 2026", "folder", "other", "Taxes 2026", "", 0.015, ["macbook"]),
+        ("home", "home", "other", "", "", 0.01, ["macbook", "server"]),
+        ("temp", "temp", "other", "", "", 0.005, ["server"]),
+    ]
+
+    nonisolated private static func scaled(_ t: UsageTokens, _ f: Double) -> UsageTokens {
+        UsageTokens(input: Int64(Double(t.input) * f), cacheWrite: Int64(Double(t.cacheWrite) * f), cacheRead: Int64(Double(t.cacheRead) * f),
+                    output: Int64(Double(t.output) * f), requests: Int(Double(t.requests) * f))
+    }
+
+    /// The last 7 days, oldest first, today so far.
+    private static func usageWeek() -> [(day: Date, tokens: UsageTokens)] {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        let part = Date.now.timeIntervalSince(today) / 86400
+        return (0..<7).reversed().compactMap { i in
+            cal.date(byAdding: .day, value: -i, to: today).map { ($0, usageDay($0, part: i == 0 ? part : 1)) }
+        }
+    }
+
+    /// The week's days split into the made-up projects (the 5 days before were stored before folders were kept: not
+    /// split) for today, the last 3 and the last 7 days: each range's total (the calendar's), not split, each project's.
+    private static func usageProjectRanges() -> [(days: Int, total: UsageTokens, notSplit: UsageTokens, per: [String: UsageTokens])] {
+        let week = usageWeek()
+        let shares = usageProjectMix.reduce(0) { $0 + $1.share }
+        return [1, 3, 7].map { n in
+            var total = UsageTokens(), notSplit = UsageTokens()
+            var per: [String: UsageTokens] = [:]
+            for (i, d) in week.suffix(n).enumerated() {
+                let split = n - 1 - i >= 5 ? 0.0 : 1.0
+                total = total + d.tokens
+                notSplit = notSplit + scaled(d.tokens, 1 - split)
+                for p in usageProjectMix { per[p.key] = (per[p.key] ?? UsageTokens()) + scaled(d.tokens, p.share * split / shares) }
+            }
+            return (n, total, notSplit, per)
+        }
+    }
+
+    private static func usageProjectJSON(_ p: (key: String, kind: String, group: String, name: String, host: String, share: Double, machines: [String]),
+                                         _ t: UsageTokens, days: Int, all: Int64) -> JSONValue {
+        .object(["key": .string(p.key), "kind": .string(p.kind), "group": .string(p.group), "name": .string(p.name), "host": .string(p.host),
+                 "machines": .number(Double(days > 1 ? p.machines.count : min(2, p.machines.count))),
+                 "share": .number(Double(t.total) / Double(max(all, 1))), "tokens": .object(json(t))])
+    }
+
+    /// GET /api/v1/usage/projects.
+    private static func usageProjects() -> [String: JSONValue] {
+        let ranges: [JSONValue] = usageProjectRanges().map { r in
+            let projects: [JSONValue] = usageProjectMix.compactMap { p in
+                guard let t = r.per[p.key], t.total > 0 else { return nil }
+                return usageProjectJSON(p, t, days: r.days, all: r.total.total)
+            }
+            return .object(["days": .number(Double(r.days)), "total": .object(json(r.total)), "projects": .array(projects),
+                            "not_split": .object(json(r.notSplit))])
+        }
+        return ["zone": .string(TimeZone.current.identifier), "ranges": .array(ranges), "stored": true]
+    }
+
+    /// GET /api/v1/usage/projects/detail: one made-up project's breakdown, consistent with the list.
+    private func usageProjectDetail(_ key: String) -> JSONValue {
+        guard let mix = Self.usageProjectMix.first(where: { $0.key == key }) else { return ["error": "no such project"] }
+        var names: [String: String] = [:]
+        for m in machines { if let id = m["id"]?.string { names[id] = m["name"]?.string ?? id } }
+        let weights = Array([0.52, 0.34, 0.14].prefix(mix.machines.count))
+        let wsum = weights.reduce(0, +)
+        let leaf = mix.name.split(separator: "/").last.map(String.init) ?? "~"
+        var project: JSONValue = .null
+        let breakdowns: [JSONValue] = Self.usageProjectRanges().map { r in
+            let t = r.per[key] ?? UsageTokens()
+            if r.days == 7 { project = Self.usageProjectJSON(mix, t, days: 7, all: r.total.total) }
+            func parts(_ items: [(String, Double)], named: Bool) -> JSONValue {
+                .array(items.map { k, f in
+                    var e: [String: JSONValue] = ["key": .string(k), "tokens": .object(Self.json(Self.scaled(t, f)))]
+                    if named { e["name"] = .string(names[k] ?? "") }
+                    return .object(e)
+                })
+            }
+            var places: [JSONValue] = []
+            if ["repo", "local", "folder", "home"].contains(mix.kind) {
+                for (mid, w) in zip(mix.machines, weights) {
+                    var base = ["macbook": "~/code/\(leaf)", "server": "~/src/\(leaf)", "studio": "~/work/\(leaf)"][mid] ?? "~/\(leaf)"
+                    if mix.kind == "folder" { base = "~/Documents/\(mix.name)" }
+                    if mix.kind == "home" { base = "~" }
+                    var share = w / wsum
+                    if mid == mix.machines.first, mix.kind == "repo" {
+                        places.append(["machine": .string(mid), "machine_name": .string(names[mid] ?? ""), "place": .string(base + "-wt/checkout-v2"),
+                                       "worktree": true, "tokens": .object(Self.json(Self.scaled(t, share * 0.35)))])
+                        share *= 0.65
+                    }
+                    places.append(["machine": .string(mid), "machine_name": .string(names[mid] ?? ""), "place": .string(base),
+                                   "tokens": .object(Self.json(Self.scaled(t, share)))])
+                }
+            }
+            places.sort { ($0["tokens"]?["cache_read"]?.double ?? 0) > ($1["tokens"]?["cache_read"]?.double ?? 0) } // largest first, as the hub's
+            let prompt = Double(t.input + t.cacheWrite + t.cacheRead)
+            return .object(["days": .number(Double(r.days)), "total": .object(Self.json(t)),
+                            "share": .number(Double(t.total) / Double(max(r.total.total, 1))),
+                            "cache_hit": .number(prompt > 0 ? Double(t.cacheRead) / prompt : 0),
+                            "machines": parts(zip(mix.machines, weights).map { ($0, $1 / wsum) }, named: true),
+                            "agents": parts(mix.group == "development" ? [("claude", 0.77), ("codex", 0.2), ("pi", 0.03)] : [("claude", 1)], named: false),
+                            "models": parts([("claude-opus-5-5", 0.68), ("gpt-5.5-codex", 0.2), ("claude-sonnet-5-5", 0.09), ("claude-haiku-5-5", 0.03)], named: false),
+                            "launchers": parts([("claude", 0.77), ("codex", 0.2), ("", 0.03)], named: false),
+                            "places": .array(places)])
+        }
+        let shares = Self.usageProjectMix.reduce(0) { $0 + $1.share }
+        let cal = Calendar.current
+        let week = Self.usageWeek()
+        let days: [JSONValue] = week.enumerated().map { i, d in
+            .object(["date": .string(TokenCalendarLayout.key(d.day, cal)),
+                     "tokens": .object(Self.json(Self.scaled(d.tokens, 6 - i < 5 ? mix.share / shares : 0)))])
+        }
+        let today = Self.scaled(week.last?.tokens ?? UsageTokens(), mix.share / shares)
+        var hours: [JSONValue] = []
+        var t = cal.startOfDay(for: .now)
+        while t <= .now {
+            let hour = cal.component(.hour, from: t)
+            let shape = (8...23).contains(hour) ? max(0, sin(Double.pi * Double(hour - 8) / 16)) : 0.03
+            hours.append(["t": .number(t.timeIntervalSince1970), "hour": .number(Double(hour)), "tokens": .object(Self.json(Self.scaled(today, shape / 10)))])
+            t = t.addingTimeInterval(3600)
+        }
+        return ["usage": ["zone": .string(TimeZone.current.identifier), "project": project, "ranges": .array(breakdowns),
+                          "days": .array(days), "hours": .array(hours), "stored": true]]
     }
 
     /// GET /api/v1/usage/days: the last n days in the phone's zone, the last today so far.

@@ -11,9 +11,9 @@ const root = new URL("../../", import.meta.url);
 const pages: Record<string, string[]> = {
   Extensions: ["views/settings/IntegrationDetail.tsx"],
   Connectors: ["views/settings/IntegrationDetail.tsx"],
-  IntegrationDetail: ["views/settings/Integrations.tsx"],
+  IntegrationDetail: [],
   Integrations: [],
-  ExtensionMarket: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx", "views/settings/Integrations.tsx", "admin/pages/Extensions.tsx"],
+  ExtensionMarket: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx", "admin/pages/Extensions.tsx"],
   ExtensionAuth: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx"],
   ExtensionSettingsPage: ["views/settings/Extensions.tsx", "views/settings/IntegrationDetail.tsx"],
   ExtensionOperation: ["views/settings/ExtensionMarket.tsx"],
@@ -56,5 +56,26 @@ describe("the Extensions and Connectors pages boundary", () => {
     expect(settings).toMatch(/const Connectors = lazyPage\(\(\) => import\("\.\/settings\/Connectors"\)\.then\(\(m\) => m\.Connectors\)\)/);
     expect(settings).toMatch(/const Integrations = lazyPage\(\(\) => import\("\.\/settings\/Integrations"\)\.then\(\(m\) => m\.Integrations\)\)/);
     // the pages render through these in Settings.navigation / Settings.groups tests (loadPages)
+  });
+
+  it("lazily loads SourcesUI in Settings and Integrations without statically importing SourcesUI or SourcesGraph", () => {
+    const settings = readFileSync(new URL("../Settings.tsx", import.meta.url), "utf8");
+    const integrations = readFileSync(new URL("./Integrations.tsx", import.meta.url), "utf8");
+    const detail = readFileSync(new URL("./IntegrationDetail.tsx", import.meta.url), "utf8");
+    const staticSources = /^import\s+(?!type\b)[^;]*from\s+["'][^"']*subscriptions\/Sources(?:UI|Graph)["']/m;
+    expect(settings).not.toMatch(staticSources);
+    expect(integrations).not.toMatch(staticSources);
+    expect(detail).not.toMatch(staticSources);
+    expect(settings).toMatch(/lazyPage\(\(\) => import\("\.\/subscriptions\/SourcesUI"\)\.then\(\(m\) => m\.SourcesUI\)\)/);
+    expect(integrations).toMatch(/lazyPage\(\(\) => import\("\.\.\/subscriptions\/SourcesUI"\)\.then\(\(m\) => m\.SourcesUI\)\)/);
+  });
+
+  it("keeps Labs and its forms off the sidebar's import path", () => {
+    const settings = readFileSync(new URL("../Settings.tsx", import.meta.url), "utf8");
+    expect(settings).toMatch(/const LabsSettings = lazyPage\(\(\) => import\("\.\/settings\/Labs"\)/);
+    for (const path of ["views/SidebarParts.tsx", "lib/labs-catalog.ts", "lib/labs-seen.ts"]) {
+      const source = readFileSync(new URL(path, root), "utf8");
+      expect(source, path).not.toMatch(/^import\s+(?!type\b)[^;]*from\s+["'][^"']*\/(?:Labs|ConfigurationForm|labs-seen-write|labs-(?:work-guide|terminal|todos-v2|integrations-v2))["']/m);
+    }
   });
 });

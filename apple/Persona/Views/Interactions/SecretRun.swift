@@ -22,6 +22,8 @@ nonisolated struct SecretRunRequest: Sendable {
     var purpose: String
     /// The commands verbatim, in the order they run.
     var commands: [String]
+    /// Only an exact env opt-in changes the original stdin behavior; missing and unknown values stay stdin.
+    var delivery: String
 
     /// What the chat's tool row names the call by: why, else where.
     var subject: String { purpose.isEmpty ? machine : purpose }
@@ -34,6 +36,7 @@ nonisolated struct SecretRunRequest: Sendable {
             input[key]?.string.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         }
         self.commands = commands
+        delivery = input["delivery"]?.string == "env" ? "env" : "stdin"
         machine = text("machine_name") ?? text("machine") ?? ""
         purpose = text("purpose") ?? ""
     }

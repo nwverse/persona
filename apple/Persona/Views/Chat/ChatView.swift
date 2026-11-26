@@ -721,6 +721,7 @@ struct ChatView: View {
     @inline(never) private func applyChatLifecycleTop(_ base: AnyView) -> AnyView {
         base
         .environment(\.openFile, actions.openFile)
+        .environment(\.openTurnReview, actions.openTurnReview)
         .environment(\.fileScope, FileScope(machine: key.machineRef, cwd: session?.cwd ?? ""))
         .environment(\.chatImages, store.images)
         .environment(\.viewImages, actions.viewImages)
@@ -892,7 +893,8 @@ struct ChatView: View {
                                        day: style == .assistant ? Calendar.current.startOfDay(for: .now) : nil,
                                        supervision: openSupervision, active: shownRoundActive, background: foldsBackground,
                                        foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
-                                       closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" })
+                                       closeout: shownCloseout != nil, children: childStamp, modes: modes.map { "\($0.kind)@\($0.at.timeIntervalSince1970)" },
+                                       turnChanges: showsTurnChanges, cwd: showsTurnChanges ? (session?.cwd ?? "") : "")
         if scratch.linesKey == key { return scratch.lines }
         var blocks = store.blocks
         if frozen != nil {
@@ -968,11 +970,25 @@ struct ChatView: View {
     /// A later turn must not make a frozen historical question look like a live one.
     private var shownRoundActive: Bool { frozen.map { $0.live != nil } ?? status.isActive }
 
+    /// Completed Agent exchanges show the Changed Files card (never Assistant conversations or subagent views).
+    private var showsTurnChanges: Bool { style == .dev && session?.assistant == false && viewing == nil }
+
+    /// Whether the Changed Files card can open branch review for this session.
+    private var canReviewTurnChanges: Bool {
+        #if os(iOS)
+        showsTurnChanges && model.features(key.group).contains("git_review") && !(session?.cwd ?? "").isEmpty
+        #else
+        false
+        #endif
+    }
+
     /// What builds the lines from the blocks, with what is open now.
     private var lineBuilder: ChatLines {
         ChatLines(openWork: openWork, openAll: Self.debugOpenAll, openRuns: openRuns,
                   openAllRuns: Self.debugOpenRuns, chipRuns: AppStyle.current.usesBeautifulUI,
-                  foldsIntoRun: foldsIntoRun, foldSupervision: style == .assistant, foldBackground: foldsBackground,
+                  foldsIntoRun: foldsIntoRun, includeTurnChanges: showsTurnChanges,
+                  turnChangesCwd: showsTurnChanges ? session?.cwd : nil,
+                  foldSupervision: style == .assistant, foldBackground: foldsBackground,
                   main: shownKey.sessionID == model.assistantMain?.sessionID,
                   foldRoutineRelayReplies: foldRoutineRelayReplies, latestReplyNeedsAttention: latestReplyNeedsAttention,
                   openSupervision: openSupervision, openAllSupervision: Self.debugOpenSupervision, active: shownRoundActive)
@@ -1146,6 +1162,9 @@ struct ChatView: View {
         switch page {
         case .todo(let id):
             guard TodosLogic.isOnTodosHub(sessionGroup: group, hubGroup: model.hub?.group) else { return false }
+            #if os(iOS)
+            if model.returnToStartIfHidden(.todos) { return true }
+            #endif
             Haptics.tap()
             linkedTodo = TodoDetailRoute(id: id)
             return true
@@ -1242,7 +1261,30 @@ struct ChatView: View {
             openFold: openFold,
             jumpToCall: { jumpToCall($0) },
             openQuote: { jumpToQuoted($0) },
-            openAppLink: { openHubPage($0) })
+            openAppLink: { openHubPage($0) },
+            openTurnBranchReview: {
+                #if os(iOS)
+                if TurnReviewRouting.route(targetFile: nil, canReview: canReviewTurnChanges, cwd: session?.cwd) == .review(targetFile: nil) {
+                    actions.pendingReviewFallback = nil
+                    reviewRequest = ReviewRequest(scope: .branch)
+                }
+                #endif
+            },
+            openTurnChangedFile: { [key, session] changed in
+                switch TurnReviewRouting.route(targetFile: changed.path, canReview: canReviewTurnChanges, cwd: session?.cwd) {
+                case .review(let target):
+                    #if os(iOS)
+                    actions.pendingReviewFallback = nil
+                    reviewRequest = ReviewRequest(scope: .branch, targetFile: target)
+                    #else
+                    file = FileRef(group: key.group, machineID: key.machineID, path: target ?? changed.path, cwd: session?.cwd)
+                    #endif
+                case .file(let path):
+                    file = FileRef(group: key.group, machineID: key.machineID, path: path, cwd: session?.cwd)
+                case .none:
+                    break
+                }
+            })
     }
 
     /// Folds or opens a work line without moving what you were reading. In the upside-down list the newest end holds
@@ -1548,6 +1590,8 @@ struct ChatView: View {
             RecapCard(items: items).chatPinned("recap-" + line.id) // where the open recap folds to (`dismissRecap`)
         case .viewed(_, let images):
             ViewedImagesRow(images: images).equatable()
+        case .turnChanges(let id, let changes):
+            TurnChangesCard(pinKey: id, changes: changes, canReview: canReviewTurnChanges).equatable()
         case .toolViews(_, let views):
             ToolViewAttachmentsRow(views: views, link: $link).equatable()
         }
@@ -2790,11 +2834,11 @@ struct ChatView: View {
         }
         // Out of the way of a voice call (docs/assistant/voice.md 6.2「通话期间」), back when it ends.
         HiddenDuringCall(key: key) {
-            // Needs You / In Progress in the dock's capsules, each opening its tray (#3393), on every device.
+            // Needs You (always visible), In Progress and neutral Wrap Up in one row (#3393, #16165); Finished opens
+            // from the tray header instead of staying persistent on the collapsed bar.
             AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
-            RouteChip(conversation: conversation)
-            // Items handed to the main conversation that are still open: "Wrap up" asks it for the final write-back (#5932).
-            if model.assistantMain == key { WrapUpChips(key: key) }
+            // When using `ShellComposerBar`, task routing lives in `ComposerTopSlot` fused to the composer's top edge.
+            if !usesShellComposer { RouteChip(conversation: conversation) }
         }
     }
 
@@ -2905,14 +2949,17 @@ struct ChatView: View {
                         openNext(next)
                     }
                 }
-                let queued = session?.queued ?? []
-                let sending = pendingPlacement.strip
-                if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
-                    QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
-                               photoMarks: model.chat(key).queuePhotoMarks,
-                               steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
-                               persona: session?.assistant == true ? model.assistantShownName : nil,
-                               agentName: session?.agentLabel ?? "Claude")
+                let assistantTopSlot = style == .assistant && viewing == nil && usesShellComposer && session?.isStopped != true
+                if !assistantTopSlot {
+                    let queued = session?.queued ?? []
+                    let sending = pendingPlacement.strip
+                    if !queued.isEmpty || !sending.isEmpty, style == .dev || session?.assistant == true {
+                        QueueStrip(key: key, queued: queued, own: session?.ownQueuedCount ?? queued.count, sending: sending,
+                                   photoMarks: model.chat(key).queuePhotoMarks,
+                                   steers: session?.steersQueue == true || (session?.assistant == true && session?.canSend == true),
+                                   persona: session?.assistant == true ? model.assistantShownName : nil,
+                                   agentName: session?.agentLabel ?? "Claude")
+                    }
                 }
                 // The newest plan while its line is out of view (#5602): which step of how many; tap, the whole plan.
                 // Folded while a card asks something (#2970): it sat over the card's buttons.
@@ -2967,7 +3014,8 @@ struct ChatView: View {
                 }
                 if session?.isStopped != true { // a stopped Agent takes no messages: its line above says so (#4754)
                     AnyView(Composer(key: key, status: status, placeholder: style == .assistant ? String(localized: "Ask \(model.assistantShownName)…") : String(localized: "Message \(session?.agentLabel ?? "Claude") [Chat View c6f021]"),
-                             covered: link != nil, onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) },
+                             covered: link != nil, assistantChrome: style == .assistant && viewing == nil,
+                             onCleared: { switchTo($0) }, onFocus: { composerTyping = $0 }, pickMode: { requestMode($0) },
                              openAssistantModel: openAssistantModel)
                         // The shell's expanding field stays in the page's layout graph; so does BeautifulUI's prompt bar,
                         // whose menus hang above it: an island's hosting view takes no touches outside its bounds.
@@ -3656,7 +3704,10 @@ struct ChatView: View {
     private var openReview: ((GitReviewScope?) -> Void)? {
         #if os(iOS)
         guard style == .dev, model.features(key.group).contains("git_review"), let cwd = session?.cwd, !cwd.isEmpty else { return nil }
-        return { scope in reviewRequest = ReviewRequest(scope: scope) }
+        return { scope in
+            actions.pendingReviewFallback = nil
+            reviewRequest = ReviewRequest(scope: scope)
+        }
         #else
         return nil
         #endif
@@ -3664,9 +3715,25 @@ struct ChatView: View {
 
     #if os(iOS)
     private func reviewPage(_ r: ReviewRequest) -> some View {
-        ReviewPage(key: key, cwd: session?.cwd ?? "", scope: r.scope, api: { [model, key] in model.api(key.group) })
+        let sessionKey = key
+        let cwd = session?.cwd ?? ""
+        return ReviewPage(key: sessionKey, cwd: cwd, scope: r.scope, targetFile: r.targetFile,
+                          onFallbackFile: { path in
+                              actions.pendingReviewFallback = (
+                                  sessionKey: sessionKey,
+                                  ref: FileRef(group: sessionKey.group, machineID: sessionKey.machineID, path: path, cwd: cwd)
+                              )
+                          },
+                          api: { [model, sessionKey] in model.api(sessionKey.group) })
             .environment(model)
             .presentationSizing(.page) // the iPad's too: room for the diffs, not the small form
+    }
+
+    private func handleReviewDismiss() {
+        guard let pending = actions.pendingReviewFallback else { return }
+        actions.pendingReviewFallback = nil
+        guard pending.sessionKey == key else { return }
+        file = pending.ref
     }
     #endif
 
@@ -4110,7 +4177,7 @@ struct ChatView: View {
             compactChrome
         }
         #if os(iOS)
-        .sheet(item: $reviewRequest) { r in reviewPage(r) }
+        .sheet(item: $reviewRequest, onDismiss: handleReviewDismiss) { r in reviewPage(r) }
         #endif
         // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
         // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
@@ -4246,7 +4313,7 @@ struct ChatView: View {
         .animation(Theme.Motion.layout, value: composerTyping)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sideHeaderHeight = $0 }
         #if os(iOS)
-        .sheet(item: $reviewRequest) { r in reviewPage(r) }
+        .sheet(item: $reviewRequest, onDismiss: handleReviewDismiss) { r in reviewPage(r) }
         #endif
         // Its side sessions' sheet, a side's page over it, and a landing that names a side (#7944). On the chain behind
         // AnyView: one more modifier on it would hold a second copy of the whole header on the page's stack, which an
@@ -5264,6 +5331,7 @@ struct ChatView: View {
         rememberReadPosition()
         if viewing != nil { model.unsubscribe(shownKey, by: owner); viewing = nil }
         model.unsubscribe(key, by: owner)
+        actions.pendingReviewFallback = nil
         key = next
         entry = nil // a saved place not reached in the last chat is not looked for in this one
         scratch.entryPages = 0
@@ -5653,6 +5721,7 @@ struct Composer: View, Equatable {
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.status == b.status && a.placeholder == b.placeholder && (a.onCleared == nil) == (b.onCleared == nil)
             && a.covered == b.covered
+            && a.assistantChrome == b.assistantChrome
             && (a.pickMode == nil) == (b.pickMode == nil)
             && (a.openAssistantModel == nil) == (b.openAssistantModel == nil)
     }
@@ -5674,6 +5743,10 @@ struct Composer: View, Equatable {
     /// The link card covers the chat (ChatView's `link`): a picture handed in (a preview's screenshot, #150) lands without
     /// raising the keyboard, which would close the card.
     var covered = false
+    /// Unified Assistant conversation chrome (#16165): fuses queued messages and task routing into `ShellComposerBar`'s
+    /// top edge and arbitrates secondary advisory banners through `ComposerBannerCoordinator` while keeping all critical
+    /// prompts visible.
+    var assistantChrome = false
     /// Glow While Replying (Settings › Appearance, off by default): the assistant's composer glows while its reply is
     /// being written (`working`), not while it waits on the user (`blocked`) and not in an Agent's chat.
     @StoredValue(ComposerGlowPrefs.enabledKey) private var glowEnabled = false
@@ -5761,10 +5834,10 @@ struct Composer: View, Equatable {
         }
     }
 
-    /// /clear only for Claude in a herdr pane (the headless assistant and Codex / TRAE CLI have no such command here).
+    /// The terminal /clear command belongs to Claude Code panes.
     private var canClear: Bool {
         guard let s = model.session(key) else { return false }
-        return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex
+        return SessionModes.paneClaude(s)
     }
 
     private var allowsSend: Bool {
@@ -5810,13 +5883,12 @@ struct Composer: View, Equatable {
     /// The launcher's list behind this session's model menus once read (#3754); nil: the fixed aliases.
     private var runningModels: [AgentModel]? { RunningModelLists.shared.models(key, model.session(key)) }
 
-    /// The model menus offer models: Claude in a herdr pane (picks go as `/model`; Codex and TRAE CLI pick theirs in a
-    /// full-screen menu the phone cannot drive), and a session whose node takes the model (#6294, `capabilities.model`)
-    /// from its launcher's list once read. The "/" list's `/model` is narrower (`Session.takesModelCommand`).
+    /// An explicit model capability governs the picker (#6294). A node that takes picks offers its launcher's list once
+    /// read. Without that capability, only Claude Code panes get the terminal picker. The "/" list uses `takesModelCommand`.
     private var canPickModel: Bool {
         guard let s = model.session(key) else { return false }
         if s.capabilities?.model != nil { return SessionModes.offersModels(s, list: runningModels) }
-        return s.canSend && s.canTerminal && s.paneID != nil && !s.isCodex && !s.isTraex && !s.assistant
+        return SessionModes.paneClaude(s)
     }
 
     /// The main Persona conversation is named by the hub's assistant snapshot; leaders and other Assistant chats
@@ -6071,9 +6143,45 @@ struct Composer: View, Equatable {
     private var composerNotes: some View {
         let voice = model.voice
         let inCall = voice?.isLive(on: key) ?? false
+        let session = model.session(key)
+        let showsUltracodeLost = session.map { Ultracode.lostShown($0, features: model.features(key.group)) } == true
+        let showsModelFallback = session.flatMap { ModelFallbackText.card($0, headless: $0.assistant == true) } != nil
+        let showsVoiceEnded = voice != nil && !inCall && voice?.showsEnded(on: key) == true
+        let activeSuggestion = inCall ? nil : suggestion
+        let advisory: ComposerAdvisoryBanner? = assistantChrome ? ComposerBannerCoordinator.advisory(for: .init(
+            critical: .init(
+                stoppedAgent: session?.isStopped == true,
+                terminalOnly: session?.isTerminalOnly == true,
+                readOnlySource: session.map { !$0.canSend && $0.sourceSubtitle != nil } == true,
+                missingSession: session == nil && model.missingSessionReason(key) != nil,
+                liveRetry: model.liveRetry(key) != nil,
+                offlineAgent: offlineManager == nil && session.flatMap { model.offlineAgent($0) } != nil,
+                managerOffline: offlineManager != nil,
+                startingOrError: session.map { $0.starting == true || $0.startError != nil } == true,
+                attention: session.map { !($0.attentionReason ?? "").isEmpty && $0.state == .needsYou } == true,
+                failure: session.map { !($0.failureReason ?? "").isEmpty && !status.isActive && retried != $0.failureReason } == true,
+                readinessOrFailure: isMain
+                    ? (model.readiness.failure != nil || model.readiness.homeCardStep != nil
+                       || model.readiness.probeError != nil || model.readiness.probe != nil)
+                    : (session?.assistant == true && model.readiness.failure != nil),
+                pendingConfirmation: !model.interactions(for: key).isEmpty
+            ),
+            advisories: .init(
+                modelFallback: showsModelFallback,
+                ultracodeLost: showsUltracodeLost,
+                compaction: model.compactionNote(key) != nil,
+                pushHealth: isMain && PushHealthStore.shared.notice(group: key.group) != nil,
+                voiceEnded: showsVoiceEnded,
+                suggestion: activeSuggestion != nil
+            )
+        )) : nil
+        let allowAdvisory: (ComposerAdvisoryBanner) -> Bool = { banner in
+            !assistantChrome || advisory == banner
+        }
         return VStack(spacing: Theme.Space.s) {
+            // Critical prompts below are never gated or suppressed by advisory arbitration.
             SessionLiveRetryNote(key: key)
-            if offlineManager == nil, let session = model.session(key), let away = model.offlineAgent(session) {
+            if offlineManager == nil, let session, let away = model.offlineAgent(session) {
                 Text(verbatim: away.line)
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -6082,15 +6190,15 @@ struct Composer: View, Equatable {
             if let m = offlineManager {
                 ManagerOfflineNote(manager: m)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), s.starting == true || s.startError != nil {
+            } else if let s = session, s.starting == true || s.startError != nil {
                 StartingNote(error: s.startError, agent: s.agentLabel, coded: s.startErrorCode?.isEmpty == false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 SessionShellQuestion(session: s)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
+            } else if let s = session, let reason = s.attentionReason, !reason.isEmpty, s.state == .needsYou {
                 AttentionNote(reason: reason, link: s.externalLink, key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let s = model.session(key), let reason = s.failureReason, !reason.isEmpty, !status.isActive,
+            } else if let s = session, let reason = s.failureReason, !reason.isEmpty, !status.isActive,
                       retried != reason {
                 // Continue alone (not what is in the box); the note goes at once and stays gone for this notice, while the
                 // host takes the message and the list catches up.
@@ -6100,37 +6208,42 @@ struct Composer: View, Equatable {
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            if isMain {
+                // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
+                ReadinessHomeCard(key: key, pickModel: openAssistantModel, route: $failureRoute)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if session?.assistant == true, let f = model.readiness.failure {
+                CodedFailureCard(failure: f, route: $failureRoute)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            // Secondary advisory banners share a single slot in Assistant conversations (`ComposerBannerCoordinator`).
             // A resume turned ultracode off (#1307): one line to turn it back on, or dismiss.
-            if let s = model.session(key), Ultracode.lostShown(s, features: model.features(key.group)) {
+            if allowAdvisory(.ultracodeLost), let s = session, showsUltracodeLost {
                 UltracodeLostNote(key: key, session: s)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             // After an upstream refusal the session runs on a fallback model (#4489): which, and the way back.
-            if let s = model.session(key), s.modelFallback != nil {
+            if allowAdvisory(.modelFallback), let s = session, s.modelFallback != nil {
                 ModelFallbackCard(key: key, session: s, working: status.isActive)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if isMain {
+            if isMain, allowAdvisory(.pushHealth) {
                 PushHealthNotice(group: key.group)
-                // The main conversation: what it still needs, or a refused send (docs/assistant/onboarding.md 4.4, 5.2).
-                ReadinessHomeCard(key: key, pickModel: openAssistantModel, route: $failureRoute)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if model.session(key)?.assistant == true, let f = model.readiness.failure {
-                CodedFailureCard(failure: f, route: $failureRoute)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            CompactionSlot(key: key) // an assistant conversation's Compact context (#1762)
+            if allowAdvisory(.compaction) {
+                CompactionSlot(key: key) // an assistant conversation's Compact context (#1762)
+            }
             if canLoop, let hint = LoopCommand.hint(text) {
                 LoopDraftNote(hint: hint)
                     .transition(.opacity)
             }
-            if let suggestion, !inCall {
-                SuggestionPill(text: suggestion, risky: model.session(key)?.suggestionRisky == true) {
-                    text = suggestion
-                    selection = TextSelection(insertionPoint: suggestion.endIndex) // keep typing after it
+            if allowAdvisory(.suggestion), let activeSuggestion {
+                SuggestionPill(text: activeSuggestion, risky: session?.suggestionRisky == true) {
+                    text = activeSuggestion
+                    selection = TextSelection(insertionPoint: activeSuggestion.endIndex) // keep typing after it
                     focused = true
                 } send: {
-                    Task { await sendText(suggestion) }
+                    Task { await sendText(activeSuggestion) }
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -6160,7 +6273,7 @@ struct Composer: View, Equatable {
                 }
             }
             // A call that ended by itself: 「语音已结束 · 继续」 over the box, until the page goes (docs/assistant/voice.md 1.2 L).
-            if let voice, !inCall, voice.showsEnded(on: key) {
+            if allowAdvisory(.voiceEnded), let voice, showsVoiceEnded {
                 voice.endedLine(key: key)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -6173,7 +6286,7 @@ struct Composer: View, Equatable {
                                      : (suggestion ?? (shellChat ? String(localized: "Ask \(model.assistantShownName)") : placeholder ?? String(localized: "Message Claude"))),
                                  text: textBinding, selection: $selection, focused: $focused, canSend: canSend,
                                  hasAttachments: hasAttachments,
-                                 stop: status.isActive && model.session(key)?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
+                                 stop: status.isActive && session?.canInterrupt == true ? { Task { await model.interrupt(key) } } : nil,
                                  voice: voiceEntry,
                                  voiceLabel: model.voice?.iconLabel(key),
                                  modesTitle: modesTitle,
@@ -6207,11 +6320,13 @@ struct Composer: View, Equatable {
                     if !shellChat || offersMainClear { quickCommands } // an agent's, as its composer offered them before the shell's; the main chat adds /clear (#5100)
                     #endif
                 } modes: {
-                    SessionModesMenu(key: key, session: model.session(key), picksModel: canPickModel, setsModes: setsModes,
+                    SessionModesMenu(key: key, session: session, picksModel: canPickModel, setsModes: setsModes,
                                      setsEffortOnly: setsEffortOnly, mainConversation: isMainAssistantChat,
                                      otherModel: canPickModel ? { typingModel = true } : nil,
                                      assistantPick: openAssistantModel,
                                      assistantModelName: assistantEffectiveName, pick: pickMode)
+                } top: {
+                    if assistantChrome { ComposerTopSlot(key: key) }
                 }
             } else if AppStyle.current.usesBeautifulUI {
                 // The BeautifulUI style's prompt bar; every other style keeps the original input line. Its direct
@@ -6489,7 +6604,9 @@ struct Composer: View, Equatable {
                                                 scan: DocumentScanner.isAvailable ? { showScan = true } : nil,
                                                 modules: Modules.registry.composerActions, open: { moduleSheet = $0 },
                                                 // As the sidebar's (#3723): records the meeting with Recordings open, or opens the one running.
-                                                meeting: isMain ? { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } } : nil,
+                                                // Not with the hub's recording module off (#15214).
+                                                meeting: isMain && RecordingModule.allowance.offersWrites
+                                                    ? { Task { await MeetingRecorder.shared.startMeeting(inForeground: true) } } : nil,
                                                 mention: { typeMention() }, context: { contextPick = $0 })
         if !shellChat || offersMainClear {
             var rows = SlashCommand.commands(loop: canLoop).map { cmd in
@@ -7512,6 +7629,8 @@ struct ChatLine: Identifiable {
         case day(Date)
         /// The images an exchange's work looked at, between it and the answer (`ViewedImages`, docs/protocol/protocol.md「Images viewed this turn」).
         case viewed(id: String, images: [ViewedImage])
+        /// The files a completed Agent exchange changed, shown after its final answer (`TurnChanges`, #12016).
+        case turnChanges(id: String, changes: TurnChangeSet)
         /// Declarative extension views emitted out-of-band by a turn's tool calls (`ToolViews`).
         case toolViews(id: String, views: [ExtensionView])
         /// A part of a long finished answer, a row of its own (#4970, `AnswerParts`): the first has the answer's id.
@@ -7541,6 +7660,7 @@ struct ChatLine: Identifiable {
             case .placeMap(let m): "map-" + m.callID
             case .day(let d): "day-\(Int(d.timeIntervalSince1970))"
             case .viewed(let id, _): id
+            case .turnChanges(let id, _): id
             case .toolViews(let id, _): id
             case .answerPart(let item, _, let index, _): index == 0 ? item.id : item.id + "/part-\(index)"
             case .modeChange(let id, _): id
@@ -7594,6 +7714,7 @@ struct ChatLine: Identifiable {
         return line
     }
     static func viewed(id: String, images: [ViewedImage]) -> Self { Self(.viewed(id: id, images: images)) }
+    static func turnChanges(id: String, changes: TurnChangeSet) -> Self { Self(.turnChanges(id: id, changes: changes)) }
     static func toolViews(id: String, views: [ExtensionView]) -> Self { Self(.toolViews(id: id, views: views)) }
     static func answerPart(item: Item, part: AnswerParts.Part, index: Int, count: Int) -> Self {
         Self(.answerPart(item: item, part: part, index: index, count: count))
@@ -7717,13 +7838,21 @@ struct WorkStepView: View, Equatable {
         /// An app link to one of Persona's pages (`persona://open<path>`, an older `persona://` form, #9926): true when it
         /// opened.
         var openAppLink: (URL) -> Bool = { _ in false }
+        var openTurnBranchReview: () -> Void = {}
+        var openTurnChangedFile: (TurnChangedFile) -> Void = { _ in }
     }
 
     private var handlers = Handlers()
 
     func set(_ h: Handlers) { handlers = h }
 
+    /// A changed file queued to open in `FileViewer` after `ReviewPage` dismisses (avoids simultaneous sheet drop).
+    var pendingReviewFallback: (sessionKey: SessionKey, ref: FileRef)?
     private(set) lazy var openFile = FileOpener { [weak self] in self?.handlers.openFile($0) }
+    private(set) lazy var openTurnReview = TurnReviewOpener(
+        openBranchReview: { [weak self] in self?.handlers.openTurnBranchReview() },
+        openChangedFile: { [weak self] in self?.handlers.openTurnChangedFile($0) }
+    )
     private(set) lazy var openLink: (URL) -> Void = { [weak self] in self?.handlers.openLink($0) }
     private(set) lazy var openPort: (PortLink) -> Void = { [weak self] in self?.handlers.openPort($0) }
     private(set) lazy var viewImages: (ImageViewing) -> Void = { [weak self] in self?.handlers.viewImages($0) }
@@ -8432,6 +8561,9 @@ final class ChatScratch {
         var children = ""
         /// The permission mode changes merged in (#10297): one more is a new line.
         var modes: [String] = []
+        /// Whether completed Agent exchanges emit Changed Files cards (#12016), and the folder used for display paths.
+        var turnChanges = false
+        var cwd = ""
     }
     /// What was sent from this chat lately: its transcript copy arriving brings you to the newest, others do not.
     var sentHere: [(id: UUID, text: String)] = []

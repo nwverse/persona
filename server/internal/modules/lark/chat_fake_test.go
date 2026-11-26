@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,7 @@ type chatData struct {
 	route       func(ix proto.Interaction) assistantwire.AskRoute
 	sensitive   func(ix proto.Interaction) bool
 	state       func(id string) (ended, pending bool)
+	pendingIx   func(id string) (proto.Interaction, bool)
 	deadline    func(ix proto.Interaction) (time.Time, bool)
 	gone        func(ix proto.Interaction) bool
 	todoOf      func(chat, thread string) (assistantwire.ChatTodo, bool)
@@ -235,6 +237,8 @@ func (s *Service) ApproveOwnerAction(context.Context, botcard.MessageEvent, stri
 	return false
 }
 
+func (s *Service) ProjectReviewOwnerInput(context.Context, string, string, string) error { return nil }
+
 func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.ChatResolved) (string, string) {
 	d := s.ch()
 	s.tmu.Lock()
@@ -368,6 +372,14 @@ func (s *Service) AskState(id string) (ended, pending bool) {
 	return false, true
 }
 
+// AskPending is the interaction up under id: the test's (pendingIx), else none.
+func (s *Service) AskPending(id string) (proto.Interaction, bool) {
+	if f := s.ch().pendingIx; f != nil {
+		return f(id)
+	}
+	return proto.Interaction{}, false
+}
+
 func (s *Service) ResolveInteraction(_ context.Context, id string, r proto.Resolution, action string) (bool, error) {
 	d := s.ch()
 	s.tmu.Lock()
@@ -473,4 +485,58 @@ func (s *Service) OpenTodo(_ context.Context, t assistantwire.ChatOpenTodo) (str
 		return open(t)
 	}
 	return "todo_1", nil
+}
+
+// startedHandoff is a proxy reply the module asked the core to run as a guest (Host.StartHandoffGuest).
+type startedHandoff struct {
+	id, text, launcher string
+}
+
+func (s *Service) handoffs() *handoffFake {
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	if s.hod == nil {
+		s.hod = &handoffFake{}
+	}
+	return s.hod
+}
+
+// handoffFake is what the module asked of the core for a proxy reply, and what the core answers.
+type handoffFake struct {
+	started   []startedHandoff
+	raised    []assistantwire.OutsideDecisionRequest
+	withdrawn []string
+	startErr  error
+	raiseErr  error
+	nextID    int
+}
+
+func (s *Service) StartHandoffGuest(_ context.Context, handoff, text, launcher string) (string, string, error) {
+	d := s.handoffs()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.started = append(d.started, startedHandoff{handoff, text, launcher})
+	if d.startErr != nil {
+		return "", "", d.startErr
+	}
+	return "mac", "sess-" + handoff, nil
+}
+
+func (s *Service) RaiseHandoffDecision(_ context.Context, _ string, req assistantwire.OutsideDecisionRequest) (string, error) {
+	d := s.handoffs()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.raised = append(d.raised, req)
+	if d.raiseErr != nil {
+		return "", d.raiseErr
+	}
+	d.nextID++
+	return "odc_" + strconv.Itoa(d.nextID), nil
+}
+
+func (s *Service) WithdrawHandoffDecision(_ context.Context, id string) {
+	d := s.handoffs()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	d.withdrawn = append(d.withdrawn, id)
 }

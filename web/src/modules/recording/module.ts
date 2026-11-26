@@ -4,7 +4,8 @@
 //
 // Its hub flag is `module.recording` (the rule on #13844, core/module-host.ts): off only on a hub that publishes module
 // flags without it, so an older hub keeps it on as before. Settings › General › Optional features can turn it off
-// per browser. While off, recordings are absent from Knowledge (the Meetings list, searches, their addresses).
+// per browser. While off, existing recordings stay listed, searchable and readable through the default Knowledge
+// panel's Core read-only detail; this module's code, strings, write controls and live views stay absent.
 import { byLanguage, t, type CatalogModule } from "../../i18n";
 import { moduleFeature } from "../../core/module-flags";
 import type { ModuleDescriptor } from "../../core/module-host";

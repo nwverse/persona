@@ -35,6 +35,8 @@ export interface UIAction {
   confirm?: string;
   /** Send every field's value along. */
   submit?: boolean;
+  /** A full extension page may open an https URL or a persona session/task target in the app (#14617). */
+  open?: string;
   /** UI version 3: open another page of the extension on top of this one, without asking the extension first. */
   push?: UIPush;
   /** UI version 4: values the action carries, sent with the fields' and the component's (these win on a name). */
@@ -439,7 +441,7 @@ export interface UIPlace {
   placement: "plugin_page" | "launcher_section" | "nav_page" | "overview_card" | "machine_section" | "inbox_item" | string;
   /** compact (a card) or full (a page, a section). */
   size?: "compact" | "full" | string;
-  /** A nav_page's icon, from UI_ICONS. */
+  /** A nav_page's icon, from UI_ICONS (the row icons). */
   icon?: string;
   /** The page (nav_page or plugin_page of the same extension) an overview_card opens. */
   opens?: string;
@@ -486,7 +488,7 @@ export interface UIContext {
 export interface UIContextSent extends UIContext {
   tz?: string;
   locale?: string;
-  platform: "web";
+  platform: "web" | "desktop";
   ui_version: number;
   /** Component types in the current UI version that the web client does not render (scene requires native 3D). */
   unsupported?: string[];
@@ -501,7 +503,8 @@ export function uiContext(context?: UIContext): UIContextSent {
     tz = undefined;
   }
   const locale = typeof navigator !== "undefined" ? navigator.language || undefined : undefined;
-  const out: UIContextSent = { platform: "web", ui_version: UI_VERSION, unsupported: ["scene"] };
+  const platform = typeof window !== "undefined" && window.personaDesktop ? "desktop" : "web";
+  const out: UIContextSent = { platform, ui_version: UI_VERSION, unsupported: ["scene"] };
   if (tz) out.tz = tz;
   if (locale) out.locale = locale;
   if (context?.launcher) out.launcher = context.launcher;
@@ -515,9 +518,12 @@ export function uiContext(context?: UIContext): UIContextSent {
 // ── the hub ─────────────────────────────────────────────
 
 /** The extensions' places of a placement; no placement: every slot's but launcher sections' (nav, overview, machines).
+ *  Asks with `pages_overview=1` when Overview cards are in scope so Dashboards watch cards (`-pages`, `g_<hex>`) are
+ *  listed for Overview (docs/assistant/dashboards.md "Overview (web)").
  *  `manager`: whose extensions (several managers, docs/assistant/managers.md "Clients"); none: the default's. */
 export function uiPlaces(placement: string, launcher?: string, machine?: string, manager?: string): Promise<UIPlace[]> {
   const q = new URLSearchParams(placement ? { placement } : {});
+  if (!placement || placement === "overview_card") q.set("pages_overview", "1");
   if (launcher) q.set("launcher", launcher);
   if (machine) q.set("machine", machine);
   return api<{ ui?: UIPlace[] }>(`${extRoot()}/-/ui${q.size ? `?${q}` : ""}`, { headers: itemHeaders(manager) }).then((r) => (Array.isArray(r.ui) ? r.ui.map(placeOf) : []));
@@ -645,18 +651,21 @@ export function blocks(items: UIItem[]): UIBlock[] {
  * open the inbox item's own source page (an inbox_item's open_url persona://inbox/<item>/source, for the item it is
  * drawn for); `settings`: the in-app path of an extension's own settings (open_url persona://settings/extensions/<id>);
  * `ask`: the text for the assistant's main conversation (open_url persona://ask?text=…), taken only from the manager's
- * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages").
+ * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages"); `compose`: the text
+ * of one of this extension's own quick prompts, to put in the main conversation's composer without sending it
+ * (open_url persona://compose?prompt=<id>&text=<text>, docs/extensions/extensions.md "Declarative UI").
  */
 export function outcome(
   r: UIActionResult,
   item?: string,
   extension?: string,
-): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; track?: Route; push?: UIPush; pop?: true } {
+): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; compose?: string; track?: Route; push?: UIPush; pop?: true } {
   const url = r.open_url && isHttps(r.open_url) ? r.open_url : undefined;
   const track = r.open_url ? extensionTrackRoute(r.open_url) : undefined;
   const source = !!item && !!r.open_url && inboxSourceItem(r.open_url) === item;
   const settings = r.open_url ? extensionSettingsHref(r.open_url) : undefined;
   const ask = extension === SUBSCRIPTIONS_UI && r.open_url ? askText(r.open_url) : undefined;
+  const compose = r.open_url ? composeText(r.open_url) : undefined;
   const push = readPush(r.push);
   const pop = r.pop === true && !push;
   return {
@@ -669,6 +678,7 @@ export function outcome(
     ...(source ? { source: true as const } : {}),
     ...(settings ? { settings } : {}),
     ...(ask ? { ask } : {}),
+    ...(compose ? { compose } : {}),
     ...(track ? { track } : {}),
     ...(push ? { push } : {}),
     ...(pop ? { pop: true as const } : {}),
@@ -693,6 +703,24 @@ export function askText(link: string): string | undefined {
   if (!c.startsWith("persona://ask?")) return undefined;
   const text = new URLSearchParams(c.slice("persona://ask?".length)).get("text") ?? "";
   return text.trim() && text.length <= 8000 ? text : undefined;
+}
+
+/** The text of a persona://compose?prompt=<id>&text=<text> link (an older name's scheme too), or undefined. The hub
+ *  has already checked that both match one of this extension's own quick prompts; the page only reads the text. */
+export function composeText(link: string): string | undefined {
+  const c = canonicalAppURL(link);
+  let u: URL;
+  try {
+    u = new URL(c);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== "persona:" || u.username || u.password || u.host.toLowerCase() !== "compose" || (u.pathname !== "" && u.pathname !== "/") || u.hash) return undefined;
+  const params = u.searchParams;
+  if ([...params.keys()].sort().join(",") !== "prompt,text") return undefined;
+  const id = params.get("prompt") ?? "", text = params.get("text") ?? "";
+  if (!id.trim() || id.length > 64 || /\s/.test(id)) return undefined;
+  return text.trim() && [...text].length <= 8000 ? text : undefined;
 }
 
 /** How deep the pages pushed on one another go (docs/extensions/extensions.md "Page navigation"): a push past it replaces the top one. */
@@ -1173,9 +1201,9 @@ export function refreshDelay(view: UIView | null | undefined): number {
 
 // ── slots ───────────────────────────────────────────────
 
-/** A nav_page's icons (docs/extensions/extensions.md "UI slots"); each app draws its own. `plugin` is `extension` under its name
- *  before #1844 (the hub still sends it). */
-export const UI_ICONS = ["extension", "plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "branch", "code", "pull_request", "merge", "map", ...NEW_ICONS_6] as const;
+/** A nav_page's icons (docs/extensions/extensions.md "UI slots"): a row's whole set, the schema's NavIcon (#16281), and `map`;
+ *  each app draws its own. `plugin` is `extension` under its name before #1844 (the hub still sends it). */
+export const UI_ICONS = [...ROW_ICONS, "map"] as const;
 export type UIIcon = (typeof UI_ICONS)[number];
 
 /** An icon the web knows, else extension. */
