@@ -56,6 +56,8 @@ final class TasksStore {
     @ObservationIgnored private var feedCursors: [String: String] = [:]
     @ObservationIgnored private var feedAPIs: [String: APIClient] = [:]
     @ObservationIgnored private var messageWrites: [String: UInt] = [:]
+    /// Plan id → how often an event or a write receipt changed it: a read in flight never undoes a newer one.
+    @ObservationIgnored private var planWrites: [String: UInt] = [:]
     @ObservationIgnored private let showToast: (Toast) -> Void
     @ObservationIgnored private let todoStore: TodoStore
     @ObservationIgnored private let viewStore: AssistantViewsStore
@@ -97,6 +99,7 @@ final class TasksStore {
         feedCursors = [:]
         feedRecoveryPending = []
         messageWrites = [:]
+        planWrites = [:]
     }
 
     /// Full Screen in the detail sheet: the sheet goes down and the agent's page is pushed onto the assistant page, the
@@ -141,8 +144,10 @@ final class TasksStore {
             var since = first
             var cursor = feedCursors[conversation]
             var seenCursors: Set<String> = []
+            var pendingChecked = false
             for _ in 0..<FeedPaging.maxPages {
                 let writes = messageWrites
+                let planMarks = planWrites
                 guard let res = try? await api.feed(conversation: conversation, since: since, cursor: cursor),
                       !Task.isCancelled, generation == ticket else { return }
                 // A legacy hub ignores cursor; restart its timestamp request rather than applying that unrelated page.
@@ -161,6 +166,11 @@ final class TasksStore {
                 for item in items { viewStore.receive(item, group: api.group) }
                 for (id, plan) in res.plans ?? [:] where plan.conversation == conversation && plans[id] != plan { plans[id] = plan }
                 merge(items, into: conversation)
+                if !pendingChecked, let pending = res.pendingPlanIDs {
+                    pendingChecked = true
+                    await settleStalePlans(conversation, pending: Set(pending), marks: planMarks, api: api)
+                    guard !Task.isCancelled, generation == ticket else { return }
+                }
                 if let next = res.nextCursor {
                     guard !next.isEmpty else {
                         feedCursors[conversation] = nil
@@ -210,7 +220,48 @@ final class TasksStore {
     }
 
     func received(_ plan: TaskPlan) {
+        planWrites[plan.id, default: 0] &+= 1
         if plans[plan.id] != plan { plans[plan.id] = plan }
+    }
+
+    /// Plans of `conversation` held as open that the hub no longer lists as waiting for Start (`pending`): started or
+    /// dismissed while no event reached the app, say over a hub restart. Each is read again; one gone from the hub goes
+    /// here too. Without this the card stayed in Needs You and its buttons answered 409 until the app was restarted.
+    /// One an event or a receipt changed after `marks` were taken is left as that newer word has it.
+    private func settleStalePlans(_ conversation: String, pending: Set<String>, marks: [String: UInt], api: APIClient) async {
+        let stale = plans.values.filter { $0.conversation == conversation && $0.state == .open && !pending.contains($0.id) }
+            .map(\.id).sorted()
+        for id in stale where planWrites[id] == marks[id] {
+            let before = planWrites[id]
+            let current = await refreshPlan(id, api: api)
+            if planWrites[id] == before { settle(id, current) }
+        }
+    }
+
+    /// What the hub has for plan `id` now: `.some(nil)` when it has no such plan, nil when it could not be read.
+    private func refreshPlan(_ id: String, api: APIClient) async -> TaskPlan?? {
+        do { return .some(try await api.plan(id)) } catch let e as APIError where e.status == 404 { return .some(nil) } catch { return nil }
+    }
+
+    private func settle(_ id: String, _ current: TaskPlan??) {
+        guard let current else { return }
+        if let plan = current {
+            received(plan)
+        } else if plans[id] != nil {
+            planWrites[id, default: 0] &+= 1
+            plans[id] = nil
+        }
+    }
+
+    /// A Start or Don't Start the hub refused because the plan is no longer open (409) or gone (404): the card was held
+    /// from an old read. The plan is read again so the card shows what happened to it; true when it no longer waits for
+    /// Start, so the refusal is not the user's error to see.
+    func planRefused(_ plan: TaskPlan, error: Error, api: APIClient) async -> Bool {
+        guard let e = error as? APIError, e.status == 409 || e.status == 404 else { return false }
+        let current = await refreshPlan(plan.id, api: api)
+        settle(plan.id, current)
+        guard let current else { return false }
+        return current?.state != .open
     }
 
     /// A suggested rule was answered, or is no longer offered (#5802): the plans held here drop it. The hub sends no
@@ -647,6 +698,11 @@ final class TasksStore {
             reloadTodos()
             Haptics.success()
         } catch {
+            // started meanwhile (another device, or the conversation itself): nothing failed
+            if await planRefused(plan, error: error, api: api), plans[plan.id]?.state == .started {
+                reloadTodos()
+                return
+            }
             self.error = error.localizedDescription
             AppModel.shared.toast = Toast(String(localized: "Didn't start: \(error.localizedDescription) [Tasks Store 38bbb7]"), style: .error)
         }
@@ -673,6 +729,8 @@ final class TasksStore {
         do {
             received(try await api.dismissPlan(plan.id))
         } catch {
+            // already started, dismissed or withdrawn elsewhere: the card now says so; that is no error of the user's
+            if await planRefused(plan, error: error, api: api) { return }
             AppModel.shared.toast = Toast(error.localizedDescription, style: .error)
         }
     }

@@ -1212,10 +1212,14 @@ nonisolated extension APIClient {
         var viewBlocks: [String]?
         /// nil: legacy hub; empty: the frozen recovery window is complete.
         var nextCursor: String?
+        /// The main conversation's read only: every plan of this manager still waiting for Start. A plan held as open
+        /// and missing here was started or dismissed while no event reached the app (the web's `pending_plan_ids`).
+        var pendingPlanIDs: [String]?
 
         enum CodingKeys: String, CodingKey {
             case items, plans, views
             case nextCursor = "next_cursor"
+            case pendingPlanIDs = "pending_plan_ids"
             case viewActions = "view_actions"
             case viewBlocks = "view_blocks"
         }
@@ -1314,6 +1318,11 @@ nonisolated extension APIClient {
 
     func dismissPlan(_ id: String) async throws -> TaskPlan {
         try await post("/api/v1/task-plans/\(id)/dismiss", as: PlanResponse.self).plan
+    }
+
+    /// One plan as the hub has it now: what a card held from an old read is checked against.
+    func plan(_ id: String) async throws -> TaskPlan {
+        try await get("/api/v1/task-plans/\(id)", as: PlanResponse.self).plan
     }
 
     /// The Accept button of a `brief` item's to-do to verify (#2320; the to-do rows' one too, #2056): `askedAt` is the round's
