@@ -22,6 +22,7 @@
   "attachments": "Attachments {count}",
   "attachment": "Attachment",
   "mail_frame": "Mail body",
+  "mail_off_stored": "Mail is turned off on the hub machine, so the full message and its attachments can't be loaded. This is the text saved earlier; a long message may be cut short.",
   "open_doc": "Open {kind}",
   "reply_goes": "Reply: {how}",
   "doc_error": "Couldn't read the document: {error}",
