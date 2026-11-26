@@ -50,6 +50,15 @@ enum TokenProjectText {
         return s.formatted(.percent.precision(.fractionLength(0...(s >= 0.1 ? 0 : 1))))
     }
 
+    /// A launcher as Settings › Models names it: its display name, else its own name; none (a session typed in a
+    /// terminal) said so.
+    nonisolated static func launcher(_ key: String, names: [String: String]) -> String {
+        if key.isEmpty {
+            return String(localized: "Opened in a Terminal [Launcher]", comment: "Token usage by project: sessions typed in a terminal, with no launcher")
+        }
+        return names[key].flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 } ?? key
+    }
+
     nonisolated static func range(_ i: Int) -> String {
         switch i {
         case 0: String(localized: "Today")
@@ -160,12 +169,15 @@ struct UsageProjectsSection: View {
         }
     }
 
+    /// A row's tokens and share: never cut (the name gives way first).
     private func numbers(_ tokens: Int64, share: Double) -> some View {
         HStack(spacing: Theme.Space.s) {
             Text(TokenFormat.short(tokens))
             Text(TokenProjectText.share(share))
         }
         .font(Theme.Font.secondary.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+        .fixedSize()
+        .layoutPriority(1)
     }
 
     private func row(_ p: UsageProject, top: Double) -> some View {
@@ -176,7 +188,6 @@ struct UsageProjectsSection: View {
                 HStack(spacing: Theme.Space.s) {
                     ThemedIcon(TokenProjectText.icon(p.kind)).foregroundStyle(TokenProjectText.color(p.group)).font(Theme.Font.secondary)
                     Text(TokenProjectText.name(p)).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(1)
-                        .layoutPriority(1)
                     if p.machines > 1 {
                         HStack(spacing: Theme.Space.xxs) {
                             ThemedIcon(Theme.Icon.laptop)
@@ -292,9 +303,7 @@ struct UsageProjectPage: View {
                     if !b.launchers.isEmpty {
                         section(String(localized: "By Launcher", comment: "Token usage by project: each launcher's tokens")) {
                             parts(b.launchers) { part in
-                                Text(part.key.isEmpty ? String(localized: "Opened in a Terminal [Launcher]", comment: "Token usage by project: sessions typed in a terminal, with no launcher")
-                                     : model.launcherNames[part.key] ?? part.key)
-                                    .help(part.key)
+                                Text(TokenProjectText.launcher(part.key, names: model.launcherNames)).help(part.key)
                             }
                         }
                     }
@@ -409,7 +418,12 @@ struct UsageProjectPage: View {
                 }
                 .chartXSelection(value: $touchedDay)
                 .chartXAxis {
-                    AxisMarks { v in AxisValueLabel { Text(v.as(String.self).map { TokenCalendarText.day($0) } ?? "") } }
+                    AxisMarks { v in
+                        AxisValueLabel {
+                            let date = v.as(String.self) ?? ""
+                            Text(date == list.last?.date ? String(localized: "Today") : TokenCalendarText.shortDay(date))
+                        }
+                    }
                 }
                 .chartYAxis(.hidden)
                 .scaledFrame(height: Theme.Size.box120)

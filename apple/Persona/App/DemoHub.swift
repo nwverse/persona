@@ -1064,6 +1064,7 @@ final class DemoHub {
                                    "tokens": .object(Self.json(Self.scaled(t, share)))])
                 }
             }
+            places.sort { ($0["tokens"]?["cache_read"]?.double ?? 0) > ($1["tokens"]?["cache_read"]?.double ?? 0) } // largest first, as the hub's
             let prompt = Double(t.input + t.cacheWrite + t.cacheRead)
             return .object(["days": .number(Double(r.days)), "total": .object(Self.json(t)),
                             "share": .number(Double(t.total) / Double(max(r.total.total, 1))),

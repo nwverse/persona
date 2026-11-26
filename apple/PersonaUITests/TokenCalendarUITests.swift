@@ -137,7 +137,9 @@ final class TokenCalendarUITests: XCTestCase {
         for _ in 0..<4 where !heading.isHittable { app.swipeUp() }
         XCTAssertTrue(heading.waitForExistence(timeout: 5), "no agents")
         let window = app.windows.firstMatch.frame
-        let name = app.staticTexts["未区分（更新前）"]
+        // By Project (#16530) has a not-split row too, above: By Agent's is the last one.
+        let notSplit = app.staticTexts.matching(NSPredicate(format: "label == %@", "未区分（更新前）"))
+        let name = notSplit.element(boundBy: max(0, notSplit.count - 1))
         XCTAssertTrue(name.exists && name.frame.maxX <= window.maxX, "the not-split row runs off the screen: \(name.frame)")
         shot("page agents xxxLarge")
     }

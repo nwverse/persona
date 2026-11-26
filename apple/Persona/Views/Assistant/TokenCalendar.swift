@@ -179,6 +179,13 @@ nonisolated enum TokenCalendarText {
         return d.formatted(Date.FormatStyle(locale: locale, calendar: cal, timeZone: .gmt).month(.abbreviated).day().weekday(.abbreviated))
     }
 
+    /// A day said briefly, for a chart's axis: its month and day in numbers ("11/23"; "11月23日" in Chinese).
+    static func shortDay(_ date: String, locale: Locale = .autoupdatingCurrent) -> String {
+        let cal = TokenCalendarLayout.calendar(locale: locale)
+        guard let d = TokenCalendarLayout.date(date, cal) else { return date }
+        return d.formatted(Date.FormatStyle(locale: locale, calendar: cal, timeZone: .gmt).month(.defaultDigits).day())
+    }
+
     /// An hour on the clock in the language's way (12 AM in English; the hour and its sign in Chinese and Japanese).
     static func hour(_ h: Int, locale: Locale = .autoupdatingCurrent) -> String {
         let cal = TokenCalendarLayout.calendar(locale: locale)

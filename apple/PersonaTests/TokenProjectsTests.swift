@@ -68,6 +68,14 @@ struct TokenProjectsTests {
         #expect(name(.unknown) == "未知目录")
     }
 
+    @Test func namesLaunchersAsSettingsDoes() {
+        let names = ["claude-max": "Anthropic 订阅", "blank": "  "]
+        #expect(TokenProjectText.launcher("claude-max", names: names) == "Anthropic 订阅")
+        #expect(TokenProjectText.launcher("kimi", names: names) == "kimi", "no display name: its own name")
+        #expect(TokenProjectText.launcher("blank", names: names) == "blank", "a blank display name is none")
+        #expect(TokenProjectText.launcher("", names: names) == "终端里打开的")
+    }
+
     @Test func writesShares() {
         #expect(TokenProjectText.share(0.361) == 0.36.formatted(.percent.precision(.fractionLength(0))))
         #expect(TokenProjectText.share(0.024) == 0.024.formatted(.percent.precision(.fractionLength(0...1))))
