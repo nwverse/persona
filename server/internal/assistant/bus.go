@@ -726,6 +726,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return s.FeishuAction(ctx, p)
+	case assistantwire.MethodFeishuHandoff:
+		var p assistantwire.FeishuHandoff
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.larkModule().Handoff(ctx, p)
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
 	case assistantwire.MethodFleetAsk:
@@ -960,6 +966,9 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		var p assistantwire.UserSpokeParams
 		if err := decode(&p); err != nil {
 			return err
+		}
+		if p.Source != "" {
+			s.noteOwnerInstruction(ctx, p.SessionRef, p.Text, p.Source, p.ClientMsgID.String(), p.At)
 		}
 		s.userSpokeText(ctx, p.SessionRef, p.Text)
 	case assistantwire.EventUserStopped:

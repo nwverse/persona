@@ -291,9 +291,9 @@ describe("a launcher of the other engine", () => {
     // reopened, the panel stands on what runs now
     expect(state.current).toEqual({ provider: "claude", model: "opus", effort: "high" });
     const withEffort: Record<string, ModelList> = { ...read, cx: { list: { agent: "codex", models: [{ id: "gpt-5.5", name: "GPT-5.5", default: true, default_effort: "medium" }] } } };
-    expect(pendingView(waiting, (n) => withEffort[n] ?? {})).toEqual({ engine: "codex", provider: "cx", model: "5.5", effort: "medium" });
+    expect(pendingView(waiting, (n) => withEffort[n] ?? {})).toEqual({ engine: "codex", provider: "cx", model: "GPT-5.5", effort: "medium" });
     // no effort of Claude Code's carried over when the model has none to say
-    expect(pendingView(waiting, listOf)).toEqual({ engine: "codex", provider: "cx", model: "5.5" });
+    expect(pendingView(waiting, listOf)).toEqual({ engine: "codex", provider: "cx", model: "GPT-5.5" });
     expect(pendingView(session({ pending_switch: { launcher: "cx", agent: "codex", effort: "low" } }), listOf)!.effort).toBe("low");
   });
 

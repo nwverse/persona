@@ -68,7 +68,6 @@
   "screen": "画面を見る",
   "screen_hint": "この Mac の画面をリアルタイムで開く（画面共有）",
   "files": "ファイル",
-  "files_hint": "ホームフォルダからこのコンピュータのファイルを見る",
   "machine_switch_link_intro": "SSHで接続しています。Persona Linkにすると、このコンピューターはほかのネットワークからでも自分でハブに接続します。",
   "machine_switch_link_action": "Persona Linkに切り替え…",
   "machine_switch_link_title": "「{name}」をPersona Linkに切り替えますか？",

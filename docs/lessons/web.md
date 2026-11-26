@@ -1,5 +1,21 @@
 # Lessons: web UI and interactions
 
+## A TypeError is not a network failure (#16182)
+
+fetch rejects a failed connection with a TypeError, and JavaScript throws one for a bug in the page's own code.
+`errorText` mapped every TypeError to "Can't reach the hub". The Agents lists run their answer's processing, and the
+store subscribers each publish reaches, inside the read's `try`, so a row the page tripped over showed as a network gap
+that Retry could never close, while the hub logged the read as a 200. `lib/api.ts` now turns fetch's own rejection,
+and a body that breaks off, into `HubUnreachableError`. Only that, or a TypeError carrying the browser's fetch-failure
+message, is a gap (`isNetworkFailure`). Any other TypeError says what broke ("Something went wrong on this page: …") and
+is not retried. When code needs to know whether a request reached the hub, use `isNetworkFailure`, not `instanceof TypeError`.
+
+## Reopening a model picker can reuse the computer's catalog (#15481)
+
+The browser's repeat read and the computer's forced discovery are separate. Use the opening read for fast results
+and send `refresh=1` for an explicit refresh or Retry. Keep the previous list visible while the request runs, and
+verify that a changed catalog replaces its rows in the same opening.
+
 ## A text shimmer needs an opaque source color (#15367)
 
 Setting `color: transparent` also clears any gradient stop that reads `currentColor`.

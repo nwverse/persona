@@ -516,8 +516,8 @@ chosen extension or on the phone. The apps' composer dictation is core; the exte
 (docs/assistant/voice.md 4.18) goes with the module, and apps use it only while the extension advertises its
 `dictation` feature. Still in the core and named by string, to move as the host serves their slots: the channel kind
 (`channel.KindVoice`), `assistantwire.PluginsVoice`, the `voice` and `speech` extension points, the extension host's
-glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings; `internal/transcribelive`, a
-measuring tool that also reads the knowledge base, stays where it is.
+glue (`internal/extmgr/voice_extension.go`) and the `hub-voice_extension.*` strings. The developer tool
+`server/scripts/transcribelive` measures live transcription and reads the knowledge base.
 
 ### Recording
 
