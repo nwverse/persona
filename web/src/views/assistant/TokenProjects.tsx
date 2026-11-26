@@ -460,13 +460,30 @@ export function ProjectDetail({ project, range, onRange }: { project: UsageProje
       <Card title={t(range === 0 ? "tokencalendar.by_hour_plain" : "tokencalendar.each_day")}>
         <Columns detail={detail} days={PROJECT_RANGES[range] ?? 7} />
       </Card>
-      {b.places.length > 0 && (
+      {b.places.length > 0 && phone && (
+        <Card title={t("tokencalendar.project_places")}>
+          {b.places.map((pl) => (
+            <div key={`${pl.machine}\u0000${pl.place}`} className="py-1.5">
+              <span className="flex items-center gap-2 text-meta">
+                <span className="flex shrink-0" style={{ color: "var(--accent)" }} title={pl.worktree ? t("tokencalendar.project_worktree") : undefined}>
+                  <Icon name={pl.worktree ? "branch" : "folder"} size={14} />
+                </span>
+                <span className="min-w-0 flex-1 break-all text-ink">{pl.place}</span>
+                <span className="shrink-0 text-label text-ink-3 tabular-nums">{short(projectTotal(pl.tokens))}</span>
+              </span>
+              <span className="block text-submeta text-ink-3" style={{ marginLeft: 22 }}>{pl.machine_name || t("tokencalendar.removed_computer")}</span>
+              <span className="mt-1 block" style={{ marginLeft: 22 }}><Bar share={projectTotal(pl.tokens) / placeTop} color="var(--accent)" /></span>
+            </div>
+          ))}
+        </Card>
+      )}
+      {b.places.length > 0 && !phone && (
         <Card title={t("tokencalendar.project_places")}>
           <div className="grid items-center gap-x-3 gap-y-2" style={{ gridTemplateColumns: "auto minmax(0, 1.6fr) minmax(48px, 1fr) auto" }}>
             {b.places.map((pl) => (
               <div key={`${pl.machine}\u0000${pl.place}`} className="contents">
                 <span className="flex" style={{ color: "var(--accent)" }} title={pl.worktree ? t("tokencalendar.project_worktree") : undefined}>
-                  <Icon name={pl.worktree ? "branch" : p.group === "development" ? "git" : "folder"} size={14} />
+                  <Icon name={pl.worktree ? "branch" : "folder"} size={14} />
                 </span>
                 <span className="flex min-w-0 items-center gap-1.5 text-meta">
                   <span className="truncate text-ink">{pl.place}</span>
