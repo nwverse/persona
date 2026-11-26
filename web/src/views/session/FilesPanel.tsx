@@ -57,6 +57,7 @@ export function FilesPanel({
   highlight: marked,
   onShowInFolder,
   onClose,
+  onBrowse,
 }: {
   mid: string;
   sid: string;
@@ -68,13 +69,14 @@ export function FilesPanel({
   highlight?: string;
   onShowInFolder?: (path: string) => void;
   onClose: () => void;
+  onBrowse?: (path: string) => void;
 }) {
   // Where it starts: `path` (a folder to open at) or the session's folder; Back / Forward walk what was shown since.
   const startDir = path || cwd;
   const [history, setHistory] = useState<FilesHistory>({ current: startDir, back: [], forward: [] });
   useEffect(() => setHistory({ current: startDir, back: [], forward: [] }), [startDir]);
   const dir = history.current;
-  const go = useCallback((p: string) => setHistory((h) => historyGo(h, p)), []);
+  const go = useCallback((p: string) => onBrowse ? onBrowse(p) : setHistory((h) => historyGo(h, p)), [onBrowse]);
   const machine = useStore((s) => s.machines.find((m) => m.id === mid));
   const home = machine?.home;
   const [highlight, setHighlight] = useState(marked);
