@@ -291,6 +291,8 @@ type BriefBoardRow struct {
 	Machine  string
 	Session  string
 	Asked    time.Time
+
+	Detail, EvidenceLink string
 }
 
 // BriefAsk is the briefing's read-only view of an acceptance ask for a to-do.
@@ -609,6 +611,8 @@ type BriefBodyRow struct {
 	Recommend string    `json:"recommend,omitempty"`
 	MachineID string    `json:"machine_id,omitempty"`
 	SessionID string    `json:"session_id,omitempty"`
+
+	EvidenceLink string `json:"evidence_link,omitempty"`
 }
 
 // BriefBodyDone is a task closed in the window in a `brief` item.
