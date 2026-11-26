@@ -461,6 +461,7 @@ func TestLarkFiltersRejectWritingAndExecutionFlags(t *testing.T) {
 	}
 
 	t.Run("sort --compress-program with lark-cli is opaque", func(t *testing.T) {
+		needsLarkGate(t)
 		v := classifyLark(`lark-cli im +chat-messages-list --chat-id oc_a | sort --compress-program=/tmp/helper`, nil, dir, nil)
 		if !v.other || !v.unknown {
 			t.Fatalf("verdict = %+v, want other=true and unknown=true", v)

@@ -29,6 +29,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/node/clipshare"
+	"github.com/nwverse/persona/server/internal/node/larkgateport"
 	"github.com/nwverse/persona/server/internal/node/machdiag"
 	"github.com/nwverse/persona/server/internal/node/screenport"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -397,10 +398,10 @@ type Node struct {
 	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
 	gp *gateProxy
-	// lark-cli (larkcligate.go): each command's risk level as lark-cli reported it, where the binary is, and the login
+	// lark-cli (larkgate_bridge.go / larkgateport): per-node module session cache, test risk overrides, and the login
 	// shell's PATH directories (larkLoginPATH, trustedPATH).
+	larkGateSess larkgateport.Session
 	larkRisks    map[string]string
-	larkCLIPaths map[string]string
 	larkPATH     []string
 	larkPATHAt   time.Time
 

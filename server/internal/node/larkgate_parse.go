@@ -198,7 +198,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		if child.deny != "" {
 			v.deny = child.deny
 		}
-		v.unknown = v.unknown || child.unknown || child.unparsed && larkCLIRe.MatchString(cmd)
+		v.unknown = v.unknown || child.unknown || child.unparsed && larkMentionsCLI(cmd)
 		v.dynamic = v.dynamic || child.dynamic
 		v.cliWrite = v.cliWrite || child.cliWrite
 		v.unread = append(v.unread, child.unread...)
@@ -215,12 +215,8 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		v.deny = "不要读取进程的环境变量（/proc/*/environ）：里面有凭据。"
 		return v
 	}
-	if larkProfileEnv.MatchString(larkProfileRead.ReplaceAllString(cmd, "")) && larkCLIRe.MatchString(cmd) {
-		v.deny = "lark-cli 的配置档由管理者定（manager.json 的 lark.cli.profile），不要自己设或清 LARKSUITE_CLI_PROFILE。"
-		return v
-	}
-	if strings.Contains(cmd, ".lark-cli/") || strings.HasSuffix(cmd, ".lark-cli") {
-		v.deny = "不要读或改 lark-cli 的配置和凭据（~/.lark-cli）：飞书用 lark-cli 命令，它自己带登录。"
+	if deny := larkCommandDeny(cmd); deny != "" {
+		v.deny = deny
 		return v
 	}
 	if commands, ok := literalLarkLoopCommands(cmd, gates); ok {
@@ -308,11 +304,11 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				// Splitting statements also loses larkTextRuns's cross-statement data flow (a heredoc written now and
 				// executed later). Keep every compound fallback that names the CLI opaque; the per-call results above
 				// are sufficient only when no such indirect execution text is present.
-				v.unknown = v.unknown || larkCLIRe.MatchString(cmd)
+				v.unknown = v.unknown || larkMentionsCLI(cmd)
 				return v
 			}
 		}
-		v.other, v.unparsed, v.unknown = true, true, v.unknown || gateNamed(gates, cmd) || larkCLIRe.MatchString(cmd) || shellCommandUnknown(cmd, true, depth)
+		v.other, v.unparsed, v.unknown = true, true, v.unknown || gateNamed(gates, cmd) || larkMentionsCLI(cmd) || shellCommandUnknown(cmd, true, depth)
 		return v
 	}
 	vars := map[string]string{}
@@ -420,7 +416,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		words, parsed = unwrapCommand(words)
 		if !parsed {
 			v.other = true
-			v.unknown = v.unknown || gateNamed(gates, s.Text) || gateNamedFields(gates, words) || larkCLIRe.MatchString(s.Text)
+			v.unknown = v.unknown || gateNamed(gates, s.Text) || gateNamedFields(gates, words) || larkMentionsCLI(s.Text)
 			for _, word := range words {
 				v.unknown = v.unknown || strings.ContainsAny(word, "$`*?[]{}")
 			}
@@ -515,7 +511,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			remote, ok := sshRemoteCommand(words[1:])
 			if !ok || remote == "" {
 				seg.opaque = true // a login shell there runs whatever comes in
-				v.unknown = v.unknown || larkCLIRe.MatchString(s.Text)
+				v.unknown = v.unknown || larkMentionsCLI(s.Text)
 				continue
 			}
 			// lark-cli there acts as the user too: only what the gate can read as reads stays out of the way.
@@ -525,7 +521,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			}
 			merge(child)
 			v.unsure = v.unsure || child.unsure
-			v.unknown = v.unknown || child.unparsed && larkCLIRe.MatchString(remote)
+			v.unknown = v.unknown || child.unparsed && larkMentionsCLI(remote)
 			seg.call = true // the remote command, read above, is what its words do
 		case filepath.Base(name) == "perl" && perlSubstitution(words[1:]):
 			v.other = true // it edits text and runs none of it, whatever its pattern names
@@ -540,11 +536,11 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			// Inline Python that can start nothing holds lark-cli's name as data (#8148); it may write it to a file.
 			inert := inertPythonCode(words)
 			dynamicName := dynamicCommandName(name)
-			if larkCLIRe.MatchString(s.Text) && !inert || dynamicName {
+			if larkMentionsCLI(s.Text) && !inert || dynamicName {
 				v.unknown = true // an interpreter, wrapper or script may invoke the CLI
 			}
 			v.dynamic = v.dynamic || dynamicName
-			if inert && larkCLIRe.MatchString(s.Text) {
+			if inert && larkMentionsCLI(s.Text) {
 				if files, ok := pythonWrites(words); ok {
 					seg.notes = append(seg.notes, files...)
 				} else {
@@ -560,7 +556,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	if larkTextRuns(cmd, flow, sequential) {
 		v.other, v.unknown = true, true
 	}
-	if executableEnv && (len(v.calls) > 0 || larkCLIRe.MatchString(cmd)) {
+	if executableEnv && (len(v.calls) > 0 || larkMentionsCLI(cmd)) {
 		v.other, v.unknown = true, true
 	}
 	if len(v.calls) == 0 {
