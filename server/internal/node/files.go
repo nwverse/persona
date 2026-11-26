@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // maxFileBytes caps what the phone can pull in one request: a bigger text file comes in pages (`offset`, `next`).
@@ -53,12 +55,10 @@ type FileContent struct {
 // resolvePath turns a path as the conversation wrote it into one on this machine: ~ is the home, a relative path is
 // in cwd. "" when there is nothing to resolve it against.
 func (n *Node) resolvePath(path, cwd string) string {
-	path = strings.TrimSpace(path)
+	path = proto.ExpandHome(strings.TrimSpace(path), n.home)
 	switch {
 	case path == "":
 		return ""
-	case path == "~" || strings.HasPrefix(path, "~/"):
-		path = filepath.Join(n.home, strings.TrimPrefix(path, "~"))
 	case !filepath.IsAbs(path):
 		if cwd == "" {
 			return ""

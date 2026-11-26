@@ -9,6 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/node/transcripttail"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
@@ -41,10 +42,12 @@ type quickMeta struct {
 	cwd string
 	// start: the first directory the transcript's head names, where the session started ("" when the head has none:
 	// a first prompt bigger than the head read).
-	start    string
-	model    string
-	surface  string // the client it runs in (transcript.Meta.Surface)
-	lastText string
+	start         string
+	model         string
+	serviceTier   string
+	serviceTierAt time.Time
+	surface       string // the client it runs in (transcript.Meta.Surface)
+	lastText      string
 	// answer is the latest turn's answer from its first words on (transcript.Meta.TurnAnswer); "" when the tail read
 	// held none of its words.
 	answer string
@@ -70,6 +73,7 @@ type quickMeta struct {
 	versionAt   time.Time // when the line that said version was written: a resumed process has written none yet
 	ultracode   *bool
 	ultracodeAt time.Time
+	speed       transcript.SpeedObservation
 	sandbox     string // Codex: the turn's sandbox, which with mode (its approval policy) gives the app's mode back
 	// contextTokens / contextWindow: the latest reply's input tokens and, for Codex, the window its rollout records
 	// (transcript.Meta; Session.ContextTokens / ContextWindow, #2430). Carried over from the last read when the tail
@@ -80,7 +84,8 @@ type quickMeta struct {
 	contextRestartRecommended    bool
 	// turnClosed: the tail ends with a turn finished (transcript.Meta.TurnClosed): a Codex rollout's, a Claude
 	// transcript's (turn_duration, an interrupt)
-	turnClosed bool
+	turnClosed        bool
+	codexClosedTurnID string
 	// claudeTurn: a Claude transcript with a turn started and not finished (transcript.Meta.TurnOpen). A tail that
 	// starts and ends no turn leaves both as they stood before it (readQuickMetaSince): a long turn's prompt is soon
 	// out of the tail, and a recap written after a finished turn starts none.
@@ -108,6 +113,8 @@ type quickMeta struct {
 // limit's reset (zero: not known), whether the CLI goes on by itself after it and whether the turn did work first.
 type turnFailure struct {
 	text, kind, code   string
+	line               string
+	streak             int
 	resetsAt           time.Time
 	resumes, afterWork bool
 }
@@ -133,6 +140,9 @@ func reported(text, kind string, rollout turnFailure) turnFailure {
 		if rollout.text == text {
 			f.code = rollout.code
 		}
+	}
+	if f.code == "" && modelretry.AccountExhausted(text) {
+		f.code = proto.TurnErrorUpstreamUnavailable
 	}
 	return f
 }
@@ -185,7 +195,7 @@ func (n *Node) meta(path string, st os.FileInfo) quickMeta {
 			// and a stale one would have it continued again. None for a few seconds is the safe side (#2185). The CLI's word
 			// that it resumes by itself stays: it keeps anything from typing into the session, the safe side too, and the
 			// writes that make the read stale are its own continuation at the reset or the wakes of the wait (#1710).
-			m.turnErr = turnFailure{resumes: m.turnErr.resumes}
+			m.turnErr = turnFailure{resumes: m.turnErr.resumes, line: m.turnErr.line, streak: m.turnErr.streak}
 		}
 		return m
 	}
@@ -235,7 +245,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	// What the tail may not repeat: a rollout names its directory, version and client on its first line only, its model
 	// and effort once a turn. Nothing of the head's exchange, turn or mode.
 	tm := transcript.Meta{Codex: head.Codex, Cwd: head.Cwd, Version: head.Version, VersionAt: head.VersionAt, Surface: head.Surface,
-		Model: head.Model, Effort: head.Effort, EffortAt: head.EffortAt}
+		Model: head.Model, ModelAt: head.ModelAt, ServiceTier: head.ServiceTier, ServiceTierAt: head.ServiceTierAt, Effort: head.Effort, EffortAt: head.EffortAt}
 	if prev.titleManual && prev.size <= st.Size() {
 		tm.Title, tm.TitleManual, tm.TitleSource = prev.title, true, "manual"
 	}
@@ -246,6 +256,13 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	if covered {
 		// All newly appended rows are in the tail, so it can invalidate the previous fallback itself.
 		tm.ModelFallback = prev.modelFallback
+		tm.Speed = prev.speed
+		if tm.Codex && prev.modelAt.After(tm.ModelAt) {
+			tm.Model, tm.ModelAt = prev.model, prev.modelAt
+		}
+		if tm.Codex && prev.serviceTierAt.After(tm.ServiceTierAt) {
+			tm.ServiceTier, tm.ServiceTierAt = prev.serviceTier, prev.serviceTierAt
+		}
 	}
 	// The tail's lines in the transcript's tree: a turn the user went back over (a rewind in the terminal, then a recap
 	// beside it) is not where the agent's last words come from (transcript/branch.go).
@@ -255,12 +272,13 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	m.rewound = prev.rewound
 	whole := off // where the tail's whole lines begin: after the line off cuts
 	buf := make([]byte, st.Size()-off)
-	if _, err := f.ReadAt(buf, off); err == nil || len(buf) > 0 {
-		lines := bytes.Split(buf, []byte("\n"))
-		if off > 0 && len(lines) > 0 {
-			whole += int64(len(lines[0]))
-			lines = lines[1:] // first line is partial
-		}
+	_, _ = f.ReadAt(buf, off)
+	lines := bytes.Split(buf, []byte("\n"))
+	if off > 0 && len(lines) > 0 {
+		whole += int64(len(lines[0]))
+		lines = lines[1:] // first line is partial
+	}
+	readTail := func() {
 		var codexTurnAt time.Time
 		for _, line := range lines {
 			if len(line) == 0 {
@@ -272,6 +290,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			}
 			prevOpen, prevClosed := tm.TurnOpen, tm.TurnClosed
 			quickLine(line, &tm, &tail)
+			tm.ObserveSpeed(line)
 			if tm.Codex {
 				switch {
 				case tm.TurnClosed && !prevClosed:
@@ -289,6 +308,8 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			m.turnActivityAt = codexTurnAt
 		}
 	}
+	base := tm
+	readTail()
 	if rest, ok := tail.Revoked(); ok { // Claude went on from a turn the node took for rewound (transcript.File.RewoundAt)
 		m.rewound = rest
 	}
@@ -304,14 +325,24 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	} else if off > 0 {
 		// words: the tail has no words of the agent's (none, or only the rewound turn's).
 		words := tm.LastText == ""
-		exchange := tm.LastActivity.IsZero()
-		turn := !tm.Codex && !tm.TurnOpen && !tm.TurnClosed
+		turn := !tm.TurnOpen && !tm.TurnClosed
+		// An unscoped Codex command may turn out to belong to a closed turn.
+		exchange := tm.LastActivity.IsZero() || tm.Codex && turn
 		// Claude Code names the mode on every prompt, so it is at most a turn back. A rollout names it once a turn and
 		// its turns outgrow the reach: its mode is taken when the lines read on the way say it, not looked for.
 		mode := !tm.Codex && tm.PermissionMode == ""
 		if words || exchange || turn || mode {
 			before = lookBack(f, whole, tm.Codex, words, exchange, turn, mode)
 		}
+	}
+	if tm.Codex && !tm.TurnOpen && !tm.TurnClosed && before.turnClosed {
+		// Only a command completion or metadata may be left in this window.
+		// Decode from the known closed turn so cold and warm reads both keep
+		// that turn's activity time rather than the later command's time.
+		tm, tail = base, transcript.Tail{}
+		tm.TurnClosed, tm.CodexClosedTurnID = true, before.codexClosedTurnID
+		m.turnActivityAt = time.Time{}
+		readTail()
 	}
 	words := off > 0 && tm.LastText == "" && (!covered || rewound) // the words that stand come from before the tail
 	m.title, m.cwd, m.model, m.lastText, m.first, m.activity, m.queue = tm.Title, tm.Cwd, tm.Model, tm.LastText, head.FirstUser, tm.LastActivity, tm.Queue
@@ -324,6 +355,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.answer = tm.TurnAnswer()
 	}
 	m.codex = tm.Codex
+	m.serviceTier, m.serviceTierAt = tm.ServiceTier, tm.ServiceTierAt
 	m.titleManual, m.titleSource = tm.TitleManual, tm.TitleSource
 	if off == 0 {
 		m.outputTokens = tm.OutputTokens // a whole-file tail; the incremental scan supplies larger files' totals
@@ -346,6 +378,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 	if m.surface == "" {
 		m.surface = prev.surface // Claude writes it on every line, a rollout on its first: the head read above has it
 	}
+	m.codexClosedTurnID = tm.CodexClosedTurnID
 	m.wake, m.turnClosed, m.lastTextAt, m.lastPromptAt = tm.LastTurnWake, tm.TurnClosed, tm.LastTextAt, tm.LastPromptAt
 	if m.lastText == "" {
 		// An agent that said a line and then ran tools for a while: their results and hook lines push its words out of
@@ -394,8 +427,20 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 		m.claudeTurn, m.turnClosed = before.claudeTurn, before.turnClosed
 	}
 	m.modelFallback = tm.ModelFallback
-	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, code: tm.TurnErrorCode, resetsAt: tm.TurnErrorResetsAt,
-		resumes: tm.TurnErrorResumes, afterWork: tm.TurnErrorAfterWork}
+	streak := tm.UpstreamErrorStreak
+	if prev.size > 0 && prev.size <= st.Size() && !rewound {
+		streak = tm.ResolveUpstreamStreak(off, prev.turnErr.streak, prev.turnErr.line)
+	}
+	upstreamLine := ""
+	if streak > 0 {
+		upstreamLine = tm.LastUpstreamLine()
+	}
+	errCode := tm.TurnErrorCode
+	if errCode == "" && tm.TurnError != "" && (streak >= 2 || modelretry.AccountExhausted(tm.TurnError)) {
+		errCode = proto.TurnErrorUpstreamUnavailable
+	}
+	m.turnErr = turnFailure{text: tm.TurnError, kind: tm.TurnErrorKind, code: errCode, line: upstreamLine,
+		streak: streak, resetsAt: tm.TurnErrorResetsAt, resumes: tm.TurnErrorResumes, afterWork: tm.TurnErrorAfterWork}
 	if tm.TurnErrorKind == proto.TurnErrorUsageLimit && !tm.TurnErrorResumesSaid() && prev.size > 0 && prev.size <= st.Size() {
 		// Claude Code's notice that it goes on by itself is written once, at the first refused turn; the wait's wakes
 		// write request lines of hundreds of KB each, and soon the tail starts after it. Nothing in the tail took it
@@ -409,6 +454,7 @@ func readQuickMetaSince(path string, st os.FileInfo, prev quickMeta) quickMeta {
 			m.mode, m.modeAt, m.sandbox = head.PermissionMode, head.ModeAt, head.CodexSandbox
 		}
 	}
+	m.speed = tm.Speed
 	m.version, m.versionAt, m.ultracode, m.ultracodeAt = tm.Version, tm.VersionAt, tm.Ultracode, tm.UltracodeAt
 	m.contextTokens, m.contextWindow = tm.ContextTokens, tm.ContextWindow
 	m.contextStats = tm.ContextStats
@@ -440,11 +486,17 @@ func (n *Node) mergeNamingMetadata(path string, m *quickMeta) {
 		}
 		return
 	}
+	if sc.meta.Speed.Supersedes(m.speed) {
+		m.speed = sc.meta.Speed
+	}
 	m.outputTokens = sc.meta.OutputTokens
 	m.contextRestartRecommended = sc.meta.ContextRestartRecommended()
 	if m.codex && sc.meta.ModelAt.After(m.modelAt) {
 		// A long tool result can push the latest turn_context out of the quick tail.
 		m.model, m.modelAt = sc.meta.Model, sc.meta.ModelAt
+	}
+	if m.codex && sc.meta.ServiceTierAt.After(m.serviceTierAt) {
+		m.serviceTier, m.serviceTierAt = sc.meta.ServiceTier, sc.meta.ServiceTierAt
 	}
 	if m.codex && sc.meta.EffortAt.After(m.effortAt) {
 		// A long tool result can push the latest turn_context out of the quick tail.
@@ -532,7 +584,7 @@ const lookBackReach = transcripttail.Reach
 // start cuts is read whole here (a tool result or a prompt bigger than the tail is the last exchange). It reads one
 // stretch of lines ending at end into one Meta, a longer one each time (twice the last, re-reading the newer lines, as
 // transcripttail.LastWordsBefore does) up to lookBackReach, until that has what is asked for: the agent's last words,
-// the last exchange, how a Claude turn stands, the mode. Every field is then that Meta's, where the transcript stood at
+// the last exchange, how the turn stands, the mode. Every field is then that Meta's, where the transcript stood at
 // end: one window's turn, words or prompt is not kept beside another's, and a line read on its own does not stand for
 // what the lines before it say (a local command ends the turn it starts only where the state before it is known).
 // Only those fields and the last prompt's time are set; what is not found stays zero.
@@ -555,7 +607,8 @@ func lookBack(f *os.File, end int64, codex, words, exchange, turn, mode bool) qu
 			}
 		}
 		b = quickMeta{lastText: tm.LastText, lastTextAt: tm.LastTextAt, activity: tm.LastActivity, lastPromptAt: tm.LastPromptAt,
-			claudeTurn: tm.TurnOpen, turnClosed: tm.TurnClosed, mode: tm.PermissionMode, modeAt: tm.ModeAt, sandbox: tm.CodexSandbox}
+			claudeTurn: tm.TurnOpen, turnClosed: tm.TurnClosed, codexClosedTurnID: tm.CodexClosedTurnID,
+			mode: tm.PermissionMode, modeAt: tm.ModeAt, sandbox: tm.CodexSandbox}
 		if (!words || b.lastText != "") && (!exchange || !b.activity.IsZero()) && (!turn || b.claudeTurn || b.turnClosed) &&
 			(!mode || b.mode != "") || start == 0 || chunk == lookBackReach {
 			break
@@ -572,13 +625,17 @@ const codexStaleWorking = 30 * time.Second
 // turn complete and nothing has been written for a while. herdr has said so for hours-old turns (2026-10-30: a turn
 // finished two days earlier showed "working for 45 hours" for eight minutes, the rollout untouched).
 func (n *Node) codexTurnOver(id string, now time.Time) bool {
+	return n.codexTurnOverIn(id, now, nil)
+}
+
+func (n *Node) codexTurnOverIn(id string, now time.Time, pass *codexListPass) bool {
 	// Paginated history can contain only older completed turns while a continuation runs. The live owner's
 	// cached observation wins even when this node joined after turn/started and has not observed a turn ID.
 	if _, thread, err := n.codexOwner(id); err == nil &&
 		(thread.status == proto.StatusWorking || thread.status == proto.StatusBlocked) {
 		return false
 	}
-	p := n.transcriptPath(id)
+	p := n.transcriptPathIn(id, pass)
 	if p == "" {
 		return false
 	}
@@ -632,18 +689,30 @@ func lastUsed(m quickMeta, st os.FileInfo) time.Time {
 	return st.ModTime().UTC()
 }
 
-// untitled gives sessions without an AI title (headless ones) their first message as title: what the user wrote,
-// not the context blocks it starts with (the main conversation's, a Feishu /agent request's), or the title of the
-// block it is made of only ("continue the old main chat"). Stripped first, clipped after.
+// untitled gives sessions without an AI title (headless ones) their first message as title (promptTitle).
 func untitled(s *proto.Session, m quickMeta) {
-	if first := transcript.Title(m.first); s.Title == "" && first != "" {
-		r := []rune(snippet(first))
-		if len(r) > 40 {
-			r = append(r[:40], '…')
-		}
-		s.Title = string(r)
+	if s.Title != "" {
+		return
+	}
+	if title := promptTitle(m.first); title != "" {
+		s.Title = title
 		if m.titleSource == "prompt" {
 			s.TitleSource = proto.TitleSourcePrompt
 		}
 	}
+}
+
+// promptTitle is a first message as a row's title: what the user wrote, not the context blocks it starts with (the
+// main conversation's, a Feishu /agent request's), or the title of the block it is made of only ("continue the old main
+// chat"). Stripped first, clipped after. An agy pane's row falls back to it too (agytitle.go).
+func promptTitle(first string) string {
+	first = transcript.Title(first)
+	if first == "" {
+		return ""
+	}
+	r := []rune(snippet(first))
+	if len(r) > 40 {
+		r = append(r[:40], '…')
+	}
+	return string(r)
 }

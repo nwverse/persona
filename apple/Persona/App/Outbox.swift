@@ -54,11 +54,14 @@ extension AppModel {
         if wait.gaveUp, session(key) == nil {
             // No row for its chat after a minute on a link that is up (deleted, or its computer removed, on another
             // device): the chat's other waiting messages have nowhere to go either, and fail with it under one notice.
+            let reason = String(localized: "Waiting messages weren't sent: their chat wasn't found on the hub.")
+            store.pending[i].failure = reason
             for j in store.pending.indices where store.pending[j].state == .waiting {
                 store.pending[j].state = .failed
+                store.pending[j].failure = reason
                 store.pending[j].stalledSince = nil
             }
-            toast = Toast(String(localized: "Waiting messages weren't sent: their chat wasn't found on the hub."), style: .error)
+            toast = Toast(reason, style: .error)
         }
         if wait.outcome == .sent { _ = completeInboxHandOff(key, store.pending[i]) }
         saveOutbox()
@@ -86,6 +89,8 @@ extension AppModel {
     /// initiated; InboxStore still rolls it back if that write fails. Returns whether this message carried a filing intent.
     func completeInboxHandOff(_ key: SessionKey, _ msg: PendingMessage) -> Bool {
         guard var handOff = msg.inboxHandOff else { return false }
+        // A delivery callback can run while another hub is on screen, or after the app restarts.
+        guard let group = handOff.filingGroup(in: registry, destination: key.group), let client = api(group) else { return true }
         if let i = chat(key).pending.firstIndex(where: { $0.id == msg.id }) {
             if chat(key).pending[i].inboxHandOff?.filed == true { return true }
             handOff.filed = true
@@ -97,7 +102,16 @@ extension AppModel {
             return true
         }
         #endif
-        InboxStore.shared.setDone(id: handOff.itemID, manager: handOff.manager, done: true)
+        if group == hub?.group {
+            InboxStore.shared.setDone(id: handOff.itemID, manager: handOff.manager, done: true, api: client.manager(handOff.manager))
+        } else {
+            let owner = client.manager(handOff.manager)
+            let id = handOff.itemID
+            Task {
+                do { try await owner.setInboxDone(id, true) }
+                catch { if hub?.group == group { show(error) } }
+            }
+        }
         return true
     }
 
@@ -253,12 +267,11 @@ extension AppModel {
         for e in StateCache.load(Self.outboxName, as: [OutboxEntry].self, in: stateFolder) ?? [] {
             var msg = e.message
             switch msg.state {
-            case .failed: // a failed one stays failed, the user decides; not forever
-                if let at = msg.createdAt, at < Date().addingTimeInterval(-86400) { continue }
+            case .failed: // a failed one stays failed, the user decides
+                break
             case .sent:
                 if let at = msg.createdAt, at < Date().addingTimeInterval(-Self.sentWait) { continue }
-            case .sending, .waiting: // a week on, its chat may be long gone
-                if let at = msg.createdAt, at < Date().addingTimeInterval(-OutboxWait.restoreLimit) { continue }
+            case .sending, .waiting:
                 msg.state = .waiting
             }
             let store = chat(e.key)
@@ -293,8 +306,6 @@ nonisolated enum OutboxFlush {
 nonisolated enum OutboxWait {
     /// How long sends may keep coming back waiting on a link that is up: about six tries, 10 seconds apart.
     static let connectedLimit: TimeInterval = 60
-    /// How old a waiting message may be and still come back at launch.
-    static let restoreLimit: TimeInterval = 7 * 86400
 
     struct Next: Equatable {
         /// The outcome to record.
@@ -310,5 +321,14 @@ nonisolated enum OutboxWait {
         let start = since ?? now
         if now.timeIntervalSince(start) >= connectedLimit { return Next(outcome: .failed, since: nil, gaveUp: true) }
         return Next(outcome: .waiting, since: start)
+    }
+}
+
+extension PendingMessage.InboxHandOff {
+    func filingGroup(in registry: HubRegistry, destination: String) -> String? {
+        if let sourcePairing { return registry.hubs.first { $0.id == sourcePairing }?.group }
+        if let sourceGroup { return sourceGroup }
+        // Receipts from before the source was stored can identify it only in a single-hub installation.
+        return registry.groups == [destination] ? destination : nil
     }
 }

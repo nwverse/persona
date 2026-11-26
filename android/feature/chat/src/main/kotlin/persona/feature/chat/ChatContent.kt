@@ -96,6 +96,24 @@ internal fun ChatMarkdown(text: String, id: String = text,
     else ChatMarkdownBody(text, id, bodyStyle, color, viewKeys, streaming)
 }
 
+/** Public streaming Markdown renderer shared with overlays (e.g. Digital Assistant quick sheet). */
+@Composable
+fun StreamingReplyMarkdown(
+    text: String,
+    id: String = text,
+    streaming: Boolean = false,
+    bodyStyle: TextStyle = PersonaTheme.type.body,
+    color: Color = PersonaTheme.palette.ink,
+    selectable: Boolean = false,
+) = ChatMarkdown(
+    text = text,
+    id = id,
+    bodyStyle = bodyStyle,
+    color = color,
+    selectable = selectable,
+    streaming = streaming,
+)
+
 /**
  * [text] with its card blocks (docs/assistant/assistant-views.md "Card identity", the hub's fence rules): the Markdown around them as
  * Markdown, each ```persona-view as a card under its key ([viewKeys] maps its number in the text to `<item id>/<n>`;
@@ -115,12 +133,12 @@ private fun ChatMarkdownCards(text: String, id: String, fences: List<persona.cor
             when {
                 blocks == null -> CodeText(fence.raw.trimEnd('\n', '\r'), fence.language, syntax = true)
                 // Share's picture: the card as it looks, with nothing that answers, never its JSON (#7261).
-                inPicture -> key(fence.start) { blocks.picture(fence.language, fence.raw, fence.complete, fence.index) }
+                inPicture -> key(fence.start) { InterfaceContent { blocks.picture(fence.language, fence.raw, fence.complete, fence.index) } }
                 // A card is not words: a selection of the message goes round it.
-                fence.isView -> key(fence.index) { DisableSelection { blocks.block(viewKeys?.invoke(fence.index) ?: "$id/local/${fence.index}", fence.raw, fence.complete) } }
+                fence.isView -> key(fence.index) { DisableSelection { InterfaceContent { blocks.block(viewKeys?.invoke(fence.index) ?: "$id/local/${fence.index}", fence.raw, fence.complete) } } }
                 else -> {
                     val card = remember(blocks, fence.raw, fence.complete) { if (fence.complete) blocks.parse(fence.language, fence.raw) else null }
-                    if (card != null) DisableSelection { blocks.draw(card) } else CodeText(fence.raw.trimEnd('\n', '\r'), fence.language, syntax = true)
+                    if (card != null) DisableSelection { InterfaceContent { blocks.draw(card) } } else CodeText(fence.raw.trimEnd('\n', '\r'), fence.language, syntax = true)
                 }
             }
         }
@@ -291,9 +309,11 @@ internal fun CodeText(text: String, language: String = "", syntax: Boolean = fal
         if (bar) CodeBody(preview, language, colour) { CodeBar(language) { copy(text, null) } }
         else {
             DisableSelection {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(language, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                    JTextButton(stringResource(R.string.chat_content_copy), { copy(text, null) }, icon = PhIcons.Copy)
+                InterfaceContent {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(language, Modifier.weight(1f), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                        JTextButton(stringResource(R.string.chat_content_copy), { copy(text, null) }, icon = PhIcons.Copy)
+                    }
                 }
             }
             CodeBody(preview, language, colour)
@@ -301,7 +321,7 @@ internal fun CodeText(text: String, language: String = "", syntax: Boolean = fal
         // buttons, not words
         DisableSelection {
             Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                if (preview.length < text.length) JTextButton(stringResource(R.string.chat_content_show_all), { expanded = true })
+                if (preview.length < text.length) InterfaceContent { JTextButton(stringResource(R.string.chat_content_show_all), { expanded = true }) }
                 ReaderEntry(text, language.ifBlank { stringResource(R.string.chat_content_full_text) })
             }
         }
@@ -317,7 +337,7 @@ private fun CodeBody(preview: String, language: String, colour: Boolean, header:
     val palette = PersonaTheme.palette
     if (remember(preview) { ChatLinks.matches(preview).isNotEmpty() }) {
         Column(Modifier.fillMaxWidth().clip(PersonaTheme.shapes.controlShape).background(PersonaTheme.palette.sunken)) {
-            if (header != null) DisableSelection { header() }
+            if (header != null) DisableSelection { InterfaceContent { header() } }
             SelectableOnItsOwn {
                 val linked = chatLinkAnnotations(preview)
                 Text(if (colour) remember(linked, language, palette) { CodeSyntax.highlight(linked, language, palette) } else linked, style = PersonaTheme.type.code, color = PersonaTheme.palette.ink,
@@ -423,6 +443,8 @@ internal fun ChatLineContent(
     turnLauncher: String? = null,
     /** Opens the session's terminal: the live work line's mark on Glass ([ChatTerminalPlaces.onWorkLine]). */
     onTerminal: (() -> Unit)? = null,
+    /** A work group's attached views are already shown above its expanded steps. */
+    showToolViews: Boolean = true,
 ) {
     val res = LocalResources.current
     if (turnFix != null) {
@@ -431,9 +453,12 @@ internal fun ChatLineContent(
             line is ChatLine.Row && (line.row.type == "reply" || line.row.type == "notice") -> line.row.item?.item?.text
             else -> null
         }
-        if (raw != null || line is ChatLine.ApiError) return TurnErrorFixCard(turnFix, raw, turnLauncher)
+        if (raw != null || line is ChatLine.ApiError) {
+            val retry = LocalChatRowActions.current?.takeIf { it.retryLineId == line.id }?.onRetry
+            return TurnErrorFixCard(turnFix, raw, turnLauncher, retry)
+        }
     }
-    when (line) {
+    val content: @Composable () -> Unit = { when (line) {
         is ChatLine.Row -> when (line.row.type) {
             "user" -> line.row.item?.item?.let { item ->
                 val source = persona.core.domain.sourceOf(item)
@@ -496,7 +521,7 @@ internal fun ChatLineContent(
         is ChatLine.Work -> Column(Modifier.fillMaxWidth()) {
             // No live preview: ordinary tools, thoughts and intermediate text stay inside the expandable summary. On Glass
             // Persona's work line is the Agent chat's, ticking while it runs (iOS has one `WorkLine`, #4339 C13).
-            if (style.compactToolSummary && PersonaTheme.style != AppStyle.Glass) AssistantWorkSummary(line, onToggle)
+            if (style.compactToolSummary && PersonaTheme.style != AppStyle.Glass) AssistantWorkSummary(line, style.hidesThoughts(), onToggle)
             else {
                 // Waiting on you, the turn stays the live one (it folds and opens as while it runs), but its line says it
                 // waits: no "Working", no clock, no spinner, as the header says "Waiting for you".
@@ -516,6 +541,13 @@ internal fun ChatLineContent(
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp.row).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
+    } }
+    val blocks = LocalViewBlocks.current
+    val views = remember(line, showToolViews) { if (showToolViews) line.toolViews() else emptyList() }
+    if (blocks == null || views.isEmpty()) content()
+    else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        content()
+        for (view in views) DisableSelection { InterfaceContent { blocks.toolView(view) } }
     }
 }
 
@@ -523,9 +555,30 @@ internal fun ChatLineContent(
 @Composable
 private fun ChatRenderStyle.hidesThoughts(): Boolean = hideThoughts && PersonaTheme.style != AppStyle.Glass
 
+/**
+ * Whether a compact assistant work fold (Brief/Board) has any step that would actually render when expanded.
+ * Thoughts are hidden on Brief/Board, so a live turn that has only started thinking has zero inspectable steps.
+ */
+internal fun ChatLine.Work.hasVisibleCompactSteps(hidesThoughts: Boolean): Boolean = steps.any { step ->
+    when (step) {
+        is WorkItem.Tool, is WorkItem.Narration, is WorkItem.Folded -> true
+        is WorkItem.Thought -> !hidesThoughts || step.item.kind != "thinking"
+    }
+}
+
 @Composable
-private fun AssistantWorkSummary(line: ChatLine.Work, onToggle: (String) -> Unit) {
-    AssistantFoldLine(pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools), line.open) { onToggle(line.id) }
+private fun AssistantWorkSummary(line: ChatLine.Work, hidesThoughts: Boolean, onToggle: (String) -> Unit) {
+    val label = when {
+        line.tools > 0 -> pluralStringResource(R.plurals.chat_assistant_checked, line.tools, line.tools)
+        !line.hasVisibleCompactSteps(hidesThoughts) -> return
+        line.live -> stringResource(R.string.chat_work_working)
+        else -> {
+            val replies = line.steps.count { it is WorkItem.Narration }
+            if (replies > 0) stringResource(R.string.chat_work_replies, replies)
+            else stringResource(R.string.chat_work_done)
+        }
+    }
+    AssistantFoldLine(label, line.open) { onToggle(line.id) }
 }
 
 /** One muted line that opens and closes what it stands for: the work summary, a folded background round (#4314). */

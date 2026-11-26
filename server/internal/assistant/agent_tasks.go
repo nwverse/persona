@@ -7,14 +7,14 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Assistant-dispatched Agents belong to main-supervised tasks (#5732). The older assistant.agent_tasks switch still
+// Assistant-dispatched Agents belong to tasks supervised by their planning lead, or by main for other conversations. The older assistant.agent_tasks switch still
 // covers manually linked user to-dos and reporting agents. agent_start from any assistant conversation makes its to-do
 // at once (prepareAgentTask) independently of this switch; a session opened manually on the Agents page is not adopted.
 //
 //   - a todo the user made by hand gets a supervisor when an agent is linked to it (superviseLinkedTodo), and any open
 //     todo's agent that reports gets one then (superviseOpenTodoOf), so report_to_supervisor has a receiver.
 //
-// The supervisor is the main conversation except for the explicit manual-leader and task-leader-worker topologies.
+// Task-leader workers and explicitly transferred work retain their assigned supervisor.
 // Agents the user starts by hand in a terminal are not Persona's and are left alone.
 
 // agentTasks: assistant.agent_tasks is on (off by default).
@@ -23,14 +23,44 @@ func (s *Service) agentTasks(ctx context.Context) bool {
 	return v != nil && *v
 }
 
+// liveSideSupervisor reports whether id is a live, unarchived main-space assistant side conversation that can
+// supervise the work it dispatches (not main, a leader, the background supervisor, a task-leader agent ref, a
+// reporting conversation, a guest, or a runtime without supervision_policy).
+func (s *Service) liveSideSupervisor(ctx context.Context, id string) bool {
+	if id == "" || s.isMain(ctx, id) || s.isLeader(ctx, id) || s.isBackground(ctx, id) || s.isLeaderRef(id) {
+		return false
+	}
+	if _, reports := s.reporterOf(ctx, id); reports {
+		return false
+	}
+	if s.isArchived(id) {
+		return false
+	}
+	cfg := s.settings(ctx)
+	if cfg.MachineID == "" {
+		return false
+	}
+	c, ok := s.session(ctx, cfg.MachineID, id)
+	if !ok || !c.Assistant || c.IsDeleted() || c.Archived || c.Space != "" {
+		return false
+	}
+	if runtimeSessionLacksSupervisionPolicy(c) {
+		return false
+	}
+	if _, guest, err := s.guestOf(ctx, cfg.MachineID, id); err != nil || guest {
+		return false
+	}
+	return true
+}
+
 // agentTaskSupervisor is the conversation that supervises the task of an agent conversation started ("" for an app's
-// start or the user's own todo): conversation itself when it supervises, else the main conversation. false while
-// assistant.agent_tasks is off or there is no main conversation to fall back to.
+// start or the user's own todo): conversation itself when it supervises or is a live assistant side conversation, else
+// the main conversation. false while assistant.agent_tasks is off or there is no main conversation to fall back to.
 func (s *Service) agentTaskSupervisor(ctx context.Context, conversation string) (string, bool) {
 	if !s.agentTasks(ctx) {
 		return "", false
 	}
-	if s.supervises(ctx, conversation) {
+	if s.supervises(ctx, conversation) || s.liveSideSupervisor(ctx, conversation) {
 		return conversation, true
 	}
 	main := s.settings(ctx).Main

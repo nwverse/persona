@@ -1,0 +1,22 @@
+{
+  "title": "名前付き herdr セッション",
+  "footer": "選んだコンピューターで、Personaから隠す名前付きherdrセッション（herdr --session <name>）を選びます。ブロックするとタブ、ワークスペース、フック、承認カード、実行中のプロセス、保存済みの会話履歴がPersonaに表示されなくなります。herdrは動き続けます。ブロックを解除すると再び表示されます。既定のサーバーとpersona-*データディレクトリのセッションは自動で管理されます。",
+  "machine": "コンピュータ",
+  "session": "セッション名",
+  "placeholder": "agent",
+  "block": "ブロック",
+  "unblock": "解除",
+  "remove": "削除",
+  "running_visible": "実行中 · 表示中",
+  "stopped_visible": "停止中 · 表示中",
+  "running_blocked": "実行中 · ブロック中",
+  "stopped_blocked": "停止中 · ブロック中",
+  "not_detected_blocked": "ブロック中 · 未検出",
+  "empty": "このコンピュータに検出済みまたはブロック中の名前付き herdr セッションはありません。",
+  "offline_note": "オフラインまたは古いノードのため、保存済みのブロック一覧のみ表示しています。",
+  "failed": "herdr セッションを読み込みまたは保存できません：{error}",
+  "retry": "再試行",
+  "name_invalid": "英数字・-・_・. のみ使えます",
+  "name_reserved": "デフォルトサーバーと persona-* セッションはここでは設定できません",
+  "name_exists": "すでにブロック済みです"
+}

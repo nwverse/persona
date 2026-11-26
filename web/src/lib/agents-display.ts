@@ -2,11 +2,13 @@
 // and to-do attribution stay unchanged. The old local key is migration input only.
 import { useSyncExternalStore } from "react";
 import { api, credentialOwner, onCredentialChange } from "./api";
+import { BOTMUX_MODE_KEY, LEGACY_BOTMUX_HIDDEN_KEY } from "./botmux-mode";
 
-const LEGACY = "persona.agentHideBotmux";
 const PATH = "/agents/display-settings";
-export interface AgentsDisplay { show_botmux: boolean; configured: boolean; use_herdr_tab_name?: boolean }
-type DisplayChange = { show_botmux: boolean } | { use_herdr_tab_name: boolean };
+/** `sort_by_activity` and `show_filter` are the effective values (saved choice, else the hub's initial default, else off);
+ *  absent from a hub that has not got them, where the Settings switches stay hidden and the list keeps its stable order. */
+export interface AgentsDisplay { show_botmux: boolean; configured: boolean; use_herdr_tab_name?: boolean; sort_by_activity?: boolean; show_filter?: boolean }
+export type DisplayChange = { show_botmux: boolean } | { use_herdr_tab_name: boolean } | { sort_by_activity: boolean } | { show_filter: boolean };
 interface State { value: AgentsDisplay | null; saving: boolean; error?: unknown; change?: DisplayChange }
 let state: State = { value: null, saving: false };
 let revision = 0;
@@ -17,11 +19,24 @@ const subscribe = (f: () => void) => { listeners.add(f); return () => { listener
 const set = (next: State) => { state = next; listeners.forEach((f) => f()); };
 function checked(value: AgentsDisplay): AgentsDisplay {
   if (typeof value.show_botmux !== "boolean" || typeof value.configured !== "boolean" ||
-    (value.use_herdr_tab_name !== undefined && typeof value.use_herdr_tab_name !== "boolean")) throw new Error("Invalid Agents display settings");
+    (value.use_herdr_tab_name !== undefined && typeof value.use_herdr_tab_name !== "boolean") ||
+    (value.sort_by_activity !== undefined && typeof value.sort_by_activity !== "boolean") ||
+    (value.show_filter !== undefined && typeof value.show_filter !== "boolean")) throw new Error("Invalid Agents display settings");
   return value;
 }
-function legacyHidden() { try { return localStorage.getItem(LEGACY) === "1"; } catch { return false; } }
-function forgetLegacy() { try { localStorage.removeItem(LEGACY); } catch { /* a later read may retry */ } }
+function legacyHidden() {
+  try {
+    return localStorage.getItem(LEGACY_BOTMUX_HIDDEN_KEY) === "1" || localStorage.getItem(BOTMUX_MODE_KEY) === "hide";
+  } catch {
+    return false;
+  }
+}
+function forgetLegacy() {
+  try {
+    localStorage.removeItem(LEGACY_BOTMUX_HIDDEN_KEY);
+    if (localStorage.getItem(BOTMUX_MODE_KEY) === "hide") localStorage.removeItem(BOTMUX_MODE_KEY);
+  } catch { /* a later read may retry */ }
+}
 
 /** Called on hello and each Agents list refresh. Stale reads cannot undo a save or a new credential. */
 export function refreshAgentsDisplay(): Promise<void> {
@@ -83,12 +98,44 @@ export function retryAgentsDisplay(): Promise<void> {
 // redraw them.
 const botmuxHidden = () => state.value?.show_botmux !== true;
 const herdrTabName = () => state.value?.use_herdr_tab_name === true;
+const botmuxShown = () => state.value?.show_botmux;
+const displayEditable = () => state.value !== null && !state.saving;
 
 export function useBotmuxHidden(): boolean {
   // An unavailable preference might hide these sessions. Keep the last acknowledged choice.
   return useSyncExternalStore(subscribe, botmuxHidden, botmuxHidden);
 }
 
+/** The acknowledged BotMux choice, undefined until the hub answers. */
+export function useBotmuxShown(): boolean | undefined {
+  return useSyncExternalStore(subscribe, botmuxShown, botmuxShown);
+}
+
+/** Whether the display choice is loaded and not being saved. */
+export function useAgentsDisplayEditable(): boolean {
+  return useSyncExternalStore(subscribe, displayEditable, displayEditable);
+}
+
 export function useHerdrTabName(): boolean {
   return useSyncExternalStore(subscribe, herdrTabName, herdrTabName);
+}
+
+const sortByActivity = () => state.value?.sort_by_activity === true;
+const showFilter = () => state.value?.show_filter === true;
+export const showFilterNow = showFilter;
+
+/** Settings › Agents › "Sort Agents by recent activity": off until the hub says on (older hubs never do). */
+export function useSortByActivity(): boolean {
+  return useSyncExternalStore(subscribe, sortByActivity, sortByActivity);
+}
+
+/** Settings › Agents › "Show the Filter on the Agents list": off until the hub says on. */
+export function useShowFilter(): boolean {
+  return useSyncExternalStore(subscribe, showFilter, showFilter);
+}
+
+/** Tests: the hub's answer as already read (no request). */
+export function seedAgentsDisplay(value: AgentsDisplay) {
+  revision++;
+  set({ value, saving: false });
 }

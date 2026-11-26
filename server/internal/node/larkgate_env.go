@@ -47,6 +47,20 @@ func (n *Node) assistantLarkEnv(cwd, session string) (env []string, release func
 // conversation gets it from its thread): name tells the id once it is known, and the addresses opened so far stand for it
 // (nameAddr).
 func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release func(), name func(session string)) {
+	return n.assistantLarkEnvWithLease(cwd, session, false)
+}
+
+// assistantRuntimeEnv builds the generated command and environment snapshot for a local runtime's dedicated Assistant
+// worker using session-scoped gate proxy leases. For an existing session (session != ""), each proxied or relayed gate
+// idempotently reuses its (session, command) proxy address across turns, mode changes, forks, interrupt-only assistant
+// closes, and same-instance reconnects until explicit runtime close, instance replacement, or disconnect past grace.
+// For a new start (session == ""), fresh unnamed proxy addresses are opened; the caller must either bind them with
+// bind(sessionID) once session.start succeeds or call release() if starting fails.
+func (n *Node) assistantRuntimeEnv(cwd, session string) (env []string, release func(), bind func(session string)) {
+	return n.assistantLarkEnvWithLease(cwd, session, true)
+}
+
+func (n *Node) assistantLarkEnvWithLease(cwd, session string, sessionScoped bool) (env []string, release func(), name func(session string)) {
 	var released []func()
 	release = func() {
 		for _, f := range released {
@@ -61,13 +75,23 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 	_ = os.MkdirAll(bin, 0o755)
 	space := assistantSpace(cwd)
 	inSpace := identity.SpaceOf(cwd) != ""
+	remote := n.isRemoteRuntimeSession(session)
 	gp := n.gates()
 	if inSpace {
 		gp.markSpace(session) // larkCheck decides the conversation's space by this, not by the directory a hook runs in
 	}
-	var bases []string // the addresses opened for this process
+	if remote {
+		gp.markRemote(session)
+	}
+	var bases []string // the addresses opened for this process or pending start
 	env = []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "PERSONA_ASSISTANT_BIN=" + bin,
 		"PERSONA_SPACE=" + space}
+	if kind := n.trackKind(cwd); kind != "" {
+		env = append(env, trackKindEnv+"="+kind) // track_kind_env.go
+	}
+	if cats, known := n.processCategories(cwd, session); known {
+		env = append(env, categoriesEnv+"="+cats) // categories_env.go
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cfg := n.assistantLark(ctx)
@@ -95,8 +119,15 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 			if g.Relay && g.SocketEnv != "" {
 				held[g.SocketEnv] = true // the manager's machine's socket: the proxy relays there (#12904)
 			}
-			b, done, err := gp.openIn(g.Command, session, inSpace) // the proxy holds a space process's writes to the phone
-			if err != nil {
+			if sessionScoped && session != "" {
+				if b, err := gp.openSession(g.Command, session, inSpace, remote); err != nil {
+					// Its credentials stay out all the same: without the base too, the command fails plainly.
+					n.logger.Printf("assistant: %s: gate proxy: %v", g.Command, err)
+					held[g.BaseEnv] = true
+				} else {
+					base = b
+				}
+			} else if b, done, err := gp.openIn(g.Command, session, inSpace, remote); err != nil {
 				// Its credentials stay out all the same: without the base too, the command fails plainly.
 				n.logger.Printf("assistant: %s: gate proxy: %v", g.Command, err)
 				held[g.BaseEnv] = true
@@ -109,15 +140,21 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
+		wroteBase := false
 		for _, k := range keys {
 			if held[k] || !envName.MatchString(k) || compat.ReservedEnv(k) || k == "PATH" {
 				continue
 			}
 			v := g.Env[k]
 			if k == g.BaseEnv && base != "" {
-				v = base
+				v, wroteBase = base, true
 			}
 			env = append(env, k+"="+v)
+		}
+		// The address is the process's way to the proxy even when the gate names no other environment of its own: it
+		// must not stay out just because g.Env is empty or lacks g.BaseEnv (#13540).
+		if base != "" && !wroteBase && !held[g.BaseEnv] && envName.MatchString(g.BaseEnv) && !compat.ReservedEnv(g.BaseEnv) && g.BaseEnv != "PATH" {
+			env = append(env, g.BaseEnv+"="+base)
 		}
 	}
 	// A gate gone (the plugin switched off, the skill removed): its command goes too.
@@ -140,11 +177,22 @@ func (n *Node) assistantLarkEnvNamed(cwd, session string) (env []string, release
 		env = append(env, larkProfileEnvName+"="+cfg.CLI.Profile)
 	}
 	name = func(id string) {
+		if id == "" {
+			return
+		}
+		isRemote := remote || n.isRemoteRuntimeSession(id)
 		for _, b := range bases {
-			gp.nameAddr(b, id)
+			if sessionScoped {
+				gp.bindSessionAddr(b, id, inSpace, isRemote)
+			} else {
+				gp.nameAddr(b, id, isRemote)
+			}
 		}
 		if inSpace {
 			gp.markSpace(id)
+		}
+		if isRemote {
+			gp.markRemote(id)
 		}
 	}
 	return env, release, name

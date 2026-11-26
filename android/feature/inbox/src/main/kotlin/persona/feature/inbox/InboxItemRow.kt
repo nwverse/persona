@@ -11,6 +11,7 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.inbox.*
 import persona.core.navigation.LocalDetailKey
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 @Composable
 internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navigator: Navigator,
@@ -57,7 +58,7 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
                 MessageItemTokens.avatarSize(rowStatus == Status.NeedsYou)),
             avatarIcon = when {
                 record.isAssistantRow -> PersonaIcons.persona
-                record.doc != null -> docIcon(record.doc.type)
+                record.doc != null -> docIcon(record.doc!!.type)
                 else -> null
             },
             // The assistant wears Persona's own mark with no source badge; other connectors keep a neutral mark and the hub's name.
@@ -86,7 +87,7 @@ internal fun InboxItemRow(record: InboxRecord, repository: InboxRepository, navi
                     ?: record.localStatus?.let { InboxLocalStatus(it) }
                 // Meta carries a recognized shared state; without one, the old mark still has its own place below it.
                 if (nowText == null) oldMark?.let { EventRowMark(it) }
-                if (!done) AgentDraftCard(record, composers, navigator, repository = repository)
+                if (!done && LocalMailAccess.current.offersReply(record)) AgentDraftCard(record, composers, navigator, repository = repository)
             })
     }
 }

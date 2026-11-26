@@ -1,4 +1,6 @@
 import { ButtonStyles, SelectStyles } from '../design/Controls';
+import { ScreenWheel, ScreenTwoFingers, screenScrollFactor } from '../core/ScreenWheel';
+import { screenScrollPreference } from '../platform/ScreenScrollPreference';
 import { Colors } from '../design/Colors';
 import { image } from '@kit.ImageKit';
 import { ScreenPresenter } from '../platform/ScreenPresenter';
@@ -50,8 +52,20 @@ export struct ComputerScreenPage {
   private displayedRowKey: string = '';
   private pointerDown: boolean = false;
   private keyboard: ScreenKeyboard | undefined;
+  private wheel:ScreenWheel=new ScreenWheel();
+  private fingerMotion:ScreenTwoFingers=new ScreenTwoFingers();
+  private wheelTimer:number=-1;
+  private frameTime:number=0;
+  private multiTouch:boolean=false;
+  private twoFingerScroll:boolean=false;
+  private wheelX:number=0;
+  private wheelY:number=0;
+  private previousY:number=0;
+  private previousTime:number=0;
+  private velocity:number=0;
+  private perPoint:number=1;
 
-  aboutToAppear(): void { this.mounted = true; this.updateVisibility(); }
+  aboutToAppear(): void { this.mounted = true; screenScrollPreference.load(this.getUIContext().getHostContext());this.updateVisibility(); }
 
   aboutToDisappear(): void {
     this.mounted = false;
@@ -71,6 +85,7 @@ export struct ComputerScreenPage {
   private deactivate(): void {
     this.displayedRowKey = '';
     this.viewingGesture = false;
+    this.stopWheel();
     this.pointerDown = false;
     this.viewport.reset();
     this.clearFields();
@@ -103,6 +118,7 @@ export struct ComputerScreenPage {
   @Monitor('screen.controlling') controlChanged(): void {
     this.viewport.cancel();
     this.setViewingGesture(false);
+    this.stopWheel();
     if (!this.screen.controlAllowed()) { this.closeKeyboard(); this.pointerDown = false; }
   }
 
@@ -114,6 +130,7 @@ export struct ComputerScreenPage {
     this.clearFields();
     this.clearFrame();
     this.frameRatio = 1;
+    this.stopWheel();
     this.pointerDown = false;
     this.screen.open(this.model, this.row).catch((): void => {});
   }
@@ -250,6 +267,7 @@ export struct ComputerScreenPage {
 
   private switchDisplay(index: number): void {
     if (this.screen.displays[index]?.key === this.screen.selectedDisplay) return;
+    this.stopWheel();
     this.pointerDown = false;
     this.viewport.reset();
     this.clearFrame();
@@ -267,29 +285,97 @@ export struct ComputerScreenPage {
     }
   }
 
+  private stopWheel():void {
+    if (this.wheelTimer!==-1) clearTimeout(this.wheelTimer);
+    this.wheelTimer=-1;this.wheel.stop();this.multiTouch=false;this.twoFingerScroll=false;
+  }
+
+  private paceWheel():void {
+    if (this.wheelTimer!==-1 || !this.wheel.busy) return;
+    const attempt=this.screen.connectionRevision();
+    this.frameTime=Date.now();
+    const frame=():void=>{
+      this.wheelTimer=-1;
+      if (!this.isVisible() || !this.screen.controlAllowed() || attempt!==this.screen.connectionRevision()) {this.stopWheel();return;}
+      const now=Date.now(),dt=Math.min(.1,Math.max(0,(now-this.frameTime)/1000));
+      this.frameTime=now;
+      const amount=this.wheel.frame(dt);
+      if (amount && !this.screen.scrollFromView(this.wheelX,this.wheelY,this.frameAreaWidth,this.frameAreaHeight,amount)) {this.stopWheel();return;}
+      if (this.wheel.busy) this.wheelTimer=setTimeout(frame,16);
+    };
+    this.wheelTimer=setTimeout(frame,16);
+  }
+
+  private moveViewport(kind:string,touch:TouchObject,fingers:ScreenPoint[]):void {
+    this.viewport.touch(kind,new ScreenPoint(touch.x,touch.y),fingers,this.screen.controlAllowed(),
+      (x:number,y:number,buttons:number):void=>{this.pointerDown=this.screen.pointerAt(x,y,buttons)&&buttons!==0;},
+      ():void=>{if(this.pointerDown)this.screen.releasePointer();this.pointerDown=false;});
+    this.viewport.publish();
+    this.setViewingGesture(this.viewport.movingPicture());
+  }
+
+  private beginTwoTouches(a:TouchObject,b:TouchObject,kind:string,touch:TouchObject):void {
+    const x=(a.x+b.x)/2,y=(a.y+b.y)/2,spread=Math.hypot(a.x-b.x,a.y-b.y),now=Date.now();
+    this.stopWheel();
+    if(this.pointerDown)this.screen.releasePointer();
+    this.pointerDown=false;this.multiTouch=true;this.twoFingerScroll=false;
+    this.fingerMotion.begin(x,y,spread);this.wheel.begin();this.previousY=y;this.previousTime=now;this.velocity=0;
+    this.wheelX=x;this.wheelY=y;
+    this.perPoint=this.screen.scrollPointsInView(this.frameAreaWidth,this.frameAreaHeight)*screenScrollFactor(screenScrollPreference.choice);
+    this.moveViewport(kind,touch,[new ScreenPoint(a.x,a.y),new ScreenPoint(b.x,b.y)]);
+    this.setViewingGesture(false);
+  }
+
+  private continueTwoTouches(a:TouchObject,b:TouchObject,kind:string,touch:TouchObject):void {
+    const x=(a.x+b.x)/2,y=(a.y+b.y)/2,spread=Math.hypot(a.x-b.x,a.y-b.y),now=Date.now();
+    const meaning=this.fingerMotion.moved(x,y,spread);
+    if(meaning==='scroll') {
+      this.twoFingerScroll=true;this.setViewingGesture(false);
+      const dy=y-this.previousY,dt=Math.max(.001,(now-this.previousTime)/1000);
+      this.velocity=dy/dt;this.wheelX=x;this.wheelY=y;
+      this.wheel.move(dy,this.velocity,this.perPoint);this.previousY=y;this.previousTime=now;this.paceWheel();
+      return;
+    }
+    if(meaning==='pinch')this.moveViewport(kind,touch,[new ScreenPoint(a.x,a.y),new ScreenPoint(b.x,b.y)]);
+  }
+
+  private endTwoTouches(kind:string,touch:TouchObject,fingers:ScreenPoint[]):void {
+    const scrolling=this.twoFingerScroll;
+    this.multiTouch=false;this.twoFingerScroll=false;
+    if(scrolling&&Date.now()-this.previousTime<100)this.wheel.release(this.velocity,this.perPoint);
+    this.paceWheel();
+    this.moveViewport(kind,touch,fingers);
+    if(scrolling&&this.viewport.zoom===1)this.setViewingGesture(false);
+  }
+
   private touchFrame(event: TouchEvent): void {
-    if (event.type === TouchType.Cancel) {
+    if (event.type === TouchType.Cancel || event.touches.length>2) {
       if (this.pointerDown) this.screen.releasePointer();
       this.pointerDown = false;
+      this.stopWheel();
       this.viewport.cancel();
       this.setViewingGesture(false);
       return;
     }
     if (!this.screen.hasFrame || !this.framePixels || !event.changedTouches.length) return;
     const touch = event.changedTouches[0];
-    const kind = event.type === TouchType.Down ? 'down' : event.type === TouchType.Up ? 'up' : event.type === TouchType.Move ? 'move' : 'cancel';
-    const fingers: ScreenPoint[] = [];
-    for (const finger of event.touches) {
-      if (kind === 'up' && (finger.type === TouchType.Up || event.changedTouches.some((ended: TouchObject) => ended.id === finger.id))) continue;
-      fingers.push(new ScreenPoint(finger.x, finger.y));
-      if (fingers.length === 2) break;
+    const kind = event.type === TouchType.Down ? 'down' : event.type === TouchType.Up ? 'up' : 'move';
+    const active:TouchObject[]=[];
+    for(const finger of event.touches) {
+      if(kind==='up'&&(finger.type===TouchType.Up||event.changedTouches.some((ended:TouchObject)=>ended.id===finger.id)))continue;
+      active.push(finger);
+      if(active.length===2)break;
     }
-    this.viewport.touch(kind, new ScreenPoint(touch.x, touch.y), fingers, this.screen.controlAllowed(),
-      (x: number, y: number, buttons: number): void => { this.pointerDown = this.screen.pointerAt(x, y, buttons) && buttons !== 0; },
-      (): void => { if (this.pointerDown) this.screen.releasePointer(); this.pointerDown = false; });
-    this.viewport.publish();
-    this.setViewingGesture(this.viewport.movingPicture());
+    const fingers:ScreenPoint[]=active.map((finger:TouchObject):ScreenPoint=>new ScreenPoint(finger.x,finger.y));
+    if(this.screen.controlAllowed()&&active.length===2&&(this.multiTouch||this.viewport.zoom===1)) {
+      if(!this.multiTouch)this.beginTwoTouches(active[0],active[1],kind,touch);
+      else this.continueTwoTouches(active[0],active[1],kind,touch);
+      return;
+    }
+    if(this.multiTouch) {this.endTwoTouches(kind,touch,fingers);return;}
+    this.moveViewport(kind,touch,fingers);
   }
+
 
   @Builder machineHeading(signIn: boolean) {
     Row({ space: Tokens.inset }) {

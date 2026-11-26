@@ -12,8 +12,8 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/mail"
 )
 
 // ---- the routes: the manager's ----
@@ -117,6 +117,8 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 		if err = json.Unmarshal(p.Params, &ask); err == nil {
 			out, err = h.inboxMailFlags(ctx, ask)
 		}
+	case assistantwire.AppInbox + " " + assistantwire.InboxMessagePolicy:
+		out = map[string]bool{"sender_identity": true}
 	case assistantwire.AppInbox + " " + assistantwire.InboxReplyMail:
 		var a struct {
 			assistantwire.InboxMailRef
@@ -130,9 +132,10 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 		}
 	case assistantwire.AppInbox + " " + assistantwire.InboxReply:
 		var a struct {
-			Source string               `json:"source"`
-			Reply  connector.InboxReply `json:"reply"`
-			SendID string               `json:"send_id"`
+			Source         string               `json:"source"`
+			Reply          connector.InboxReply `json:"reply"`
+			SendID         string               `json:"send_id"`
+			SenderIdentity string               `json:"sender_identity"`
 		}
 		if err = json.Unmarshal(p.Params, &a); err == nil {
 			in, ok := connector.As[connector.Inbox](h.connectorOf(a.Source))
@@ -152,7 +155,12 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 				return nil, true, inboxSendRefusal(errCannotReply) // its connector is not here (the plugin switched off)
 			}
 			var sent assistantwire.InboxSent
-			sent.Already, err = h.sendInboxOnce(ctx, a.SendID, a.Source, func(ctx context.Context) error { return in.Reply(ctx, a.Reply) })
+			if a.SenderIdentity != "" && (a.Source != "larkcli" || a.SenderIdentity != "bot" && a.SenderIdentity != "user") {
+				return nil, true, errors.New("this source does not support the selected sender identity")
+			}
+			sent.Already, err = h.sendInboxOnce(ctx, a.SendID, a.Source, func(ctx context.Context) error {
+				return in.Reply(connectorwire.WithSendIdentity(ctx, a.SenderIdentity), a.Reply)
+			})
 			out = sent
 		}
 	case assistantwire.AppInbox + " " + assistantwire.InboxSettle:
@@ -287,12 +295,35 @@ func (h *Manager) inboxConfigView(ctx context.Context) assistantwire.InboxConfig
 	slices.Sort(out.Extensions)
 	if h.cfg != nil {
 		out.Agent = h.cfg.Inbox.Agent
+		out.ReplyPolicy = cloneReplyPolicyConfig(h.cfg.Inbox.ReplyPolicy)
+		out.Visibility = h.cfg.Inbox.Visibility
 	}
 	out.LarkAccount = h.inboxLarkAccount(ctx)
 	if h.mail != nil {
 		out.Translate = h.mailTargets(ctx)
 	}
 	return out
+}
+
+func cloneReplyPolicyConfig(in *assistantwire.InboxReplyPolicyConfig) *assistantwire.InboxReplyPolicyConfig {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Sources = slices.Clone(in.Sources)
+	if len(in.Categories) > 0 {
+		out.Categories = make(map[string]string, len(in.Categories))
+		for k, v := range in.Categories {
+			out.Categories[k] = v
+		}
+	}
+	if len(in.Routes) > 0 {
+		out.Routes = make(map[string]string, len(in.Routes))
+		for k, v := range in.Routes {
+			out.Routes[k] = v
+		}
+	}
+	return &out
 }
 
 // inboxMailFlags is which of the asked mails are still in their mailbox, read or not (at most
@@ -336,9 +367,9 @@ func (h *Manager) inboxMailBody(ctx context.Context, ref assistantwire.InboxMail
 	switch {
 	case text != "":
 	case ref.Readable:
-		text = strings.TrimSpace(mail.ReadableText(m.HTML))
+		text = strings.TrimSpace(h.mail.ReadableText(m.HTML))
 	default:
-		text = strings.TrimSpace(mail.PlainText(m.HTML))
+		text = strings.TrimSpace(h.mail.PlainText(m.HTML))
 	}
 	return assistantwire.InboxMailMessage{From: mailAddress(m.From), To: mailAddresses(m.To), Cc: mailAddresses(m.Cc), Date: m.Date,
 		Subject: m.Subject, Text: text}, nil

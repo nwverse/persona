@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fakeHub, *db.DB, *db.LogicalConversation) {
@@ -40,7 +42,7 @@ func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fake
 	if err := d.PutConversationHandoff(ctx, "server", "side-chat", "operation", json.RawMessage(`{"summary":"fake source summary","recent":[{"role":"user","text":"same conversation"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "operation", conversationlog.Segment{ID: "two", MachineID: "server", SessionID: "target-chat", Engine: engine, SourceHistory: "h2", Launcher: engine, Model: "target-model", Effort: "medium"}, 6); err != nil {
+	if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "operation", logicalFixtureTarget(engine), 6); err != nil {
 		t.Fatal(err)
 	}
 	c, err := d.LogicalConversation(ctx, "server", "side-chat")
@@ -49,6 +51,11 @@ func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fake
 	}
 	return s, f, d, c
 }
+
+func logicalFixtureTarget(engine string) conversationlog.Segment {
+	return conversationlog.Segment{ID: "two", MachineID: "server", SessionID: "target-chat", Engine: engine, SourceHistory: "h2", Launcher: engine, Model: "target-model", Effort: "medium"}
+}
+
 func activatePair(t *testing.T, d *db.DB) *db.LogicalConversation {
 	t.Helper()
 	ctx := t.Context()
@@ -60,6 +67,53 @@ func activatePair(t *testing.T, d *db.DB) *db.LogicalConversation {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func TestLogicalUserInputsKeepsExcerptsWithinVisibleSegments(t *testing.T) {
+	s, f, d, _ := logicalPair(t, "pi")
+	c := activatePair(t, d)
+	f.answerNode(DeviceSessionItems, func(_ string, raw json.RawMessage) (any, error) {
+		var p historyParams
+		if err := json.Unmarshal(raw, &p); err != nil || !p.UserInputs {
+			t.Fatalf("not an input index request: %s, %v", raw, err)
+		}
+		if p.SessionID == "target-chat" {
+			if p.Before != nil {
+				t.Fatalf("active source was bounded: %s", raw)
+			}
+			return proto.UserInputIndex{Total: 2, History: "h2", Inputs: []proto.UserInputPosition{
+				{ID: "input#0", Seq: 1, Attachments: 2, Answer: "I see the files."},
+				{ID: "legacy#0", Seq: 4},
+			}}, nil
+		}
+		if p.SessionID != "side-chat" || p.Before == nil || *p.Before != 7 {
+			t.Fatalf("retired source must stop at its frozen boundary: %s", raw)
+		}
+		items := []proto.Item{
+			{ID: "input#0", Seq: 1, Role: "user", Kind: proto.KindText, Text: "First question"},
+			{ID: "reply#0", Seq: 6, Role: "assistant", Kind: proto.KindText, Text: "**Visible** reply"},
+			{ID: "late#0", Seq: 7, Role: "assistant", Kind: proto.KindText, Text: "Private retired reply"},
+		}
+		items = slices.DeleteFunc(items, func(it proto.Item) bool { return it.Seq >= *p.Before })
+		inputs := transcript.UserInputPositions(items)
+		return proto.UserInputIndex{Total: len(inputs), History: "h1", Inputs: inputs}, nil
+	})
+	raw, err := s.logicalHistoryCall(t.Context(), d, c, DeviceSessionItems, json.RawMessage(`{"user_inputs":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var index proto.UserInputIndex
+	if err := json.Unmarshal(raw, &index); err != nil {
+		t.Fatal(err)
+	}
+	want := []proto.UserInputPosition{
+		{ID: "input#0", Seq: 1, Preview: "First question", Answer: "Visible reply"},
+		{ID: "segment:two:input#0", Seq: 7, Attachments: 2, Answer: "I see the files."},
+		{ID: "segment:two:legacy#0", Seq: 10},
+	}
+	if index.Total != len(want) || !slices.Equal(index.Inputs, want) || index.History != c.History {
+		t.Fatalf("user input index %+v, want %+v", index, want)
+	}
 }
 
 func TestLogicalHistoryProjectsDatabaseAcrossSegmentsAndFrozenTail(t *testing.T) {
@@ -290,6 +344,65 @@ func TestLogicalSummaryWaitsOnPausedFakeModel(t *testing.T) {
 	}
 }
 
+func TestLogicalHandoffSummaryEndsOnUnavailableModel(t *testing.T) {
+	h := mainHandoff{}
+	h.Recent = append(h.Recent, struct {
+		Role string `json:"role"`
+		Text string `json:"text"`
+	}{Role: "user", Text: "fake recent turn"})
+	calls := 0
+	out, fellBack, err := summarizeLogicalHandoff(t.Context(), h, "fake earlier summary", func() (assistantwire.ModelCompleteResult, error) {
+		calls++
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "fake: nothing to call"}
+	})
+	if err != nil || !fellBack || calls != 1 {
+		t.Fatalf("unavailable model must end the wait after one call: calls=%d fellBack=%v err=%v", calls, fellBack, err)
+	}
+	if out.Summary != "fake earlier summary" || !out.Partial || len(out.Recent) != 1 || out.Recent[0].Text != "fake recent turn" {
+		t.Fatalf("fallback handoff lost the recent turns or earlier summary: %+v", out)
+	}
+	if text := renderLogicalHandoff("en", out, "next message"); !strings.Contains(text, "fake recent turn") || !strings.Contains(text, "Some history is unavailable.") {
+		t.Fatalf("fallback handoff renders without the recent turns or the partial note: %q", text)
+	}
+	// Other failures still go back to the sweep for a retry.
+	_, fellBack, err = summarizeLogicalHandoff(t.Context(), h, "", func() (assistantwire.ModelCompleteResult, error) {
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "fake upstream failure"}
+	})
+	var re *rpc.Error
+	if fellBack || !errors.As(err, &re) || re.Code != assistantwire.CodeModelFailed {
+		t.Fatalf("a failed call must be retried, not skipped: fellBack=%v err=%v", fellBack, err)
+	}
+}
+
+func TestLogicalHandoffSummaryKeepsWaitingOnPausedModel(t *testing.T) {
+	calls := 0
+	out, fellBack, err := summarizeLogicalHandoff(t.Context(), mainHandoff{}, "fake earlier summary", func() (assistantwire.ModelCompleteResult, error) {
+		calls++
+		if calls == 1 {
+			// Paused until now: the wait is the one-second floor, then the call is made again.
+			until := time.Now().UTC().Format(time.RFC3339)
+			return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelPaused, Message: "fake quota pause", Data: json.RawMessage(`{"until":"` + until + `"}`)}
+		}
+		return assistantwire.ModelCompleteResult{Text: "fake new summary"}, nil
+	})
+	if err != nil || fellBack || calls != 2 {
+		t.Fatalf("paused model must be waited out and asked again: calls=%d fellBack=%v err=%v", calls, fellBack, err)
+	}
+	if out.Summary != "fake new summary" || out.Partial {
+		t.Fatalf("summary after the pause: %+v", out)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	calls = 0
+	_, fellBack, err = summarizeLogicalHandoff(ctx, mainHandoff{}, "", func() (assistantwire.ModelCompleteResult, error) {
+		calls++
+		cancel()
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelPaused, Message: "fake quota pause", Data: json.RawMessage(`{"until":"2099-01-01T00:00:00Z"}`)}
+	})
+	if fellBack || !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("paused model must keep the switch waiting, not fall back: calls=%d fellBack=%v err=%v", calls, fellBack, err)
+	}
+}
+
 func TestLogicalRuntimeEngineTransitionsPreserveRoleAndMessageIdentity(t *testing.T) {
 	engines := []string{"claude", "codex", "agy", "pi", "opencode"}
 	for i, source := range engines {
@@ -336,6 +449,55 @@ func TestLogicalOperationReceiptIsScopedToConversation(t *testing.T) {
 	}
 	if logicalNodeOperation(first, "same-id") != logicalNodeOperation(first, "same-id") {
 		t.Fatal("receipt changed after restart")
+	}
+}
+
+func TestLogicalQueuedInputKeepsModeProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		engine      string
+		wantMode    any
+		wantDefault any
+	}{
+		{engine: "claude", wantDefault: proto.ModePlan},
+		{engine: "codex", wantMode: proto.ModeBypass},
+	} {
+		t.Run(tc.engine, func(t *testing.T) {
+			s, f, d, _ := logicalPair(t, tc.engine)
+			ctx := t.Context()
+			c := activatePair(t, d)
+			if err := d.ResolveConversationSwitch(ctx, "server", "side-chat", "operation", "accepted", ""); err != nil {
+				t.Fatal(err)
+			}
+			f.setSessions("server",
+				proto.Session{SessionID: "side-chat", Assistant: true, Agent: "claude", Status: proto.StatusIdle},
+				proto.Session{SessionID: "target-chat", Assistant: true, Agent: tc.engine, Status: proto.StatusIdle})
+			f.answerNode("session.modes", func(string, json.RawMessage) (any, error) { return map[string]bool{"ok": true}, nil })
+			_, handled, err := s.logicalCall(ctx, "server", "session.modes", json.RawMessage(`{"session_id":"side-chat","permission_mode":"bypassPermissions"}`))
+			if err != nil || !handled {
+				t.Fatalf("seed the inherited segment mode: handled=%v err=%v", handled, err)
+			}
+			c, err = d.LogicalConversation(ctx, "server", "side-chat")
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.answerNode(DeviceAssistantSend, func(_ string, raw json.RawMessage) (any, error) {
+				var got map[string]any
+				_ = json.Unmarshal(raw, &got)
+				if got["permission_mode"] != tc.wantMode || got["default_permission_mode"] != tc.wantDefault || got["permission_mode_explicit"] != nil {
+					t.Fatalf("queued mode provenance changed: %v", got)
+				}
+				return map[string]bool{"ok": true}, nil
+			})
+			payload, _ := json.Marshal(logicalInput{Method: DeviceAssistantSend, Params: map[string]any{
+				"text": "continue", "client_msg_id": "queued", "default_permission_mode": proto.ModePlan,
+			}})
+			if err := d.EnqueueConversationInput(ctx, c.MachineID, c.SessionID, "queued", c.Epoch, payload); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.drainLogicalInput(ctx, d, c); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

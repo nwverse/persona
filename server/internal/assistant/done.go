@@ -923,7 +923,8 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []prompts.TaskDo
 		if !ok {
 			continue
 		}
-		earlier, items, read := s.lastTwoTurns(ctx, m.ID, a.SessionID)
+		resolved, sid, listed := s.resolveTaskSession(ctx, m.ID, a.SessionID)
+		earlier, items, read := s.lastTwoTurns(ctx, m.ID, sid)
 		if read && taskTurnAwaitingAnswer(items) {
 			return nil, false // one unfinished agent invalidates the whole task's completion evidence
 		}
@@ -940,10 +941,8 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []prompts.TaskDo
 				sideTurnBlocked = true
 			}
 		}
-		if text == "" {
-			if c, ok := s.session(ctx, m.ID, a.SessionID); ok {
-				text = strings.TrimSpace(c.LastText)
-			}
+		if text == "" && listed {
+			text = strings.TrimSpace(resolved.LastText)
 		}
 		if text == "" {
 			continue
@@ -1283,6 +1282,7 @@ func (s *Service) autoFinishTaskMode(t Todo, work time.Time, worked bool, immedi
 	}
 	s.taskJudging(t.ID, 1) // the sweep leaves a turn alone while it is judged (resumeTurn)
 	defer s.taskJudging(t.ID, -1)
+	defer s.judgingTurn(t.ID)() // another look at the same turn waits for this judgment (turnAgain)
 	if !worked {
 		work = t.CreatedAt
 	}
@@ -1340,6 +1340,13 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 		s.turnJudged(ctx, t.ID, taskDoneCheck{}, nil, "done") // nothing to judge: the sweep does not ask again
 		return
 	}
+	if err == nil && c.Verdict == verdictDone {
+		if active := s.taskCloseActivityError(ctx, t, time.Now()); active != nil {
+			s.deferTurnJudgment(ctx, t.ID)
+			s.logf("task %s: judgment deferred: %v", t.ID, active)
+			return
+		}
+	}
 	if ai.IsNotConfigured(err) && c.Verdict != verdictNeedsUser {
 		// A missing provider is not a transient judge failure: keep the same localized explanation the settings row shows.
 		// A deterministic owner-only action remains actionable without a judge and must reach the visible wait (#5732).
@@ -1378,6 +1385,10 @@ func (s *Service) applyTaskDone(ctx context.Context, t Todo, work time.Time, wor
 			ok, err := s.finishCurrentTask(ctx, t.ID, reason, work)
 			switch {
 			case err != nil:
+				var hold *taskCloseHoldError
+				if errors.As(err, &hold) {
+					s.deferTurnJudgment(ctx, t.ID)
+				}
 				s.logf("task %s: auto done: %v", t.ID, err)
 			case ok:
 				s.logf("task %s: done (auto): %s", t.ID, reason)
@@ -1518,13 +1529,12 @@ func (s *Service) advanceFromLastReplies(ctx context.Context, t Todo) {
 			continue
 		}
 		text := ""
-		if items, read := s.lastTurnItems(ctx, m.ID, a.SessionID); read {
+		resolved, sid, listed := s.resolveTaskSession(ctx, m.ID, a.SessionID)
+		if items, read := s.lastTurnItems(ctx, m.ID, sid); read {
 			_, text = turnExchange(items)
 		}
-		if text == "" {
-			if c, ok := s.session(ctx, m.ID, a.SessionID); ok && !strings.HasSuffix(c.LastText, "…") {
-				text = strings.TrimSpace(c.LastText)
-			}
+		if text == "" && listed && !strings.HasSuffix(resolved.LastText, "…") {
+			text = strings.TrimSpace(resolved.LastText)
 		}
 		if text == "" {
 			continue

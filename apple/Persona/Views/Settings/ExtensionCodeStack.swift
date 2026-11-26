@@ -879,11 +879,7 @@ struct CodeFileBlock: View {
     /// One line's height in the lines view (its own rule: the font's line height and a quarter).
     var lineHeight: CGFloat {
         let f = CodeMetrics.font
-        #if os(macOS)
-        return ceil((f.ascender - f.descender + f.leading) * 1.25) // NSFont has no lineHeight
-        #else
         return ceil(f.lineHeight * 1.25)
-        #endif
     }
 
     func line(_ i: Int) -> NSAttributedString {

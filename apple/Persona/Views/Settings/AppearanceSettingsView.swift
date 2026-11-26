@@ -12,7 +12,6 @@ import SwiftUI
 /// The Appearance section of Settings: one row per scene with what it is set to now.
 struct AppearanceSection: View {
     @Environment(AppModel.self) private var model
-    var settingsHome = true
     #if os(iOS)
     private let layoutDisplay = AgentListDisplayChoice()
     @StoredValue(NavigationLayout.key) private var navigation = ""
@@ -26,13 +25,6 @@ struct AppearanceSection: View {
     var body: some View {
         Section {
             Group {
-                if settingsHome {
-                    NavigationLink(value: SettingsPage.persona) {
-                        SettingsRow(title: String(localized: "Avatar"), symbol: Theme.Icon.avatar, tint: Theme.persona, value: model.persona.cardTitle, look: .oneLine)
-                    }
-                    .settingsListRow(SettingsPage.persona)
-                    .accessibilityIdentifier("settings-persona")
-                }
                 NavigationLink(value: SettingsPage.themeColor) {
                     SettingsRow(title: String(localized: "Theme Color"), symbol: Theme.Icon.themeColor, tint: Theme.accent, value: model.themeColor.title, look: .oneLine)
                 }
@@ -43,13 +35,6 @@ struct AppearanceSection: View {
                 }
                 .settingsListRow(SettingsPage.style)
                 .accessibilityIdentifier("settings-style")
-                if settingsHome {
-                    NavigationLink(value: SettingsPage.language) {
-                        SettingsRow(title: String(localized: "Language"), symbol: Theme.Icon.language, tint: Theme.Hue.green,
-                                    value: AppLanguage.settingsSummary, look: .oneLine)
-                    }
-                    .accessibilityIdentifier("settings-language")
-                }
                 #if os(iOS)
                 // Merged or Separate (#6332, #4206): where the sidebar layout is built (`NavigationLayout.offered`).
                 if NavigationLayout.offered {
@@ -68,14 +53,12 @@ struct AppearanceSection: View {
                 .settingsListRow(SettingsPage.layout)
                 .accessibilityIdentifier("settings-layout-page")
                 #endif
-                #if os(iOS) || os(visionOS)
                 NavigationLink(value: SettingsPage.colorScheme) {
                     SettingsRow(title: String(localized: "Light & Dark"), symbol: Theme.Icon.colorScheme, tint: Theme.Hue.indigo,
                                 value: model.colorScheme.title, look: .oneLine)
                 }
                 .settingsListRow(SettingsPage.colorScheme)
                 .accessibilityIdentifier("settings-scheme")
-                #endif
                 if ComposerGlowPrefs.isAvailable {
                     SettingsSwitchRow(title: String(localized: "Glow While Replying"),
                                       detail: String(localized: "Light up the input box while Persona writes a reply"),
@@ -123,10 +106,14 @@ struct PersonaSettingsPage: View {
                     Text(model.isDemo ? String(localized: "Demo mode only has the default avatar.") :
                         String(localized: "Avatars other than Mochi download from the hub when selected. To use an avatar’s colors, choose Match Avatar under Theme Color."))
                     if !model.isDemo, model.hubFeatures.contains(AvatarUploadsModel.feature) {
-                        // The hub makes avatars from images (#2405): how to make one, and how to delete one made that way.
-                        Text("New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.")
+                        // The hub makes avatars from images (#2405): how to make one, and how to delete one made that way;
+                        // with one that edits them too (#15449), how to edit one.
+                        if model.hubFeatures.contains(AvatarUploadsModel.statesFeature) {
+                            Text("New from Photo makes an avatar from an image of your own. To change or delete one you made, use the buttons in its corners.")
+                        } else {
+                            Text("New from Photo makes an avatar from an image of your own. To delete one you made, use the delete button in its corner.")
+                        }
                     }
-                    #if !os(macOS)
                     if let failure = model.appIcon.failure {
                         Text(failure).foregroundStyle(Theme.danger)
                     }
@@ -134,7 +121,6 @@ struct PersonaSettingsPage: View {
                         // The icon on now, or that the system cannot switch it here (AppIconTests).
                         .accessibilityValue(model.appIcon.available ? model.appIcon.current.rawValue : "unavailable")
                         .accessibilityIdentifier("persona-icon-note")
-                    #endif
                 }
             }
         }
@@ -189,9 +175,6 @@ struct StyleSettingsPage: View {
                                 ForEach(TextSize.allCases) { Text($0.title).tag($0) }
                             }
                             .pickerStyle(.segmented)
-                            #if os(macOS)
-                            .labelsHidden() // the row says Text Size; a Mac form drew it again after the control (#1221)
-                            #endif
                             .fixedSize()
                         }
                     }
@@ -210,7 +193,6 @@ struct StyleSettingsPage: View {
     }
 }
 
-#if os(iOS) || os(visionOS)
 #if DEBUG
 /// `probe.scheme` (`-probes YES`): the choice and the look the page is actually drawn in (ColorSchemeIconTests).
 private struct SchemeProbe: ViewModifier {
@@ -256,4 +238,3 @@ struct ColorSchemeSettingsPage: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 }
-#endif
