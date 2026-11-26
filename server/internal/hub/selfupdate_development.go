@@ -277,10 +277,14 @@ func developmentPhaseError(operation, step string) error {
 
 func (u *updater) startDevelopmentPhase(p update.DevelopmentProgress, legacyProgress string) {
 	u.mu.Lock()
-	u.setLocked(p.Phase, legacyProgress, "")
-	u.developmentProgress, u.developmentStarted = &p, time.Now()
+	u.startDevelopmentPhaseLocked(p, legacyProgress)
 	u.mu.Unlock()
 	u.broadcastStatus()
+}
+
+func (u *updater) startDevelopmentPhaseLocked(p update.DevelopmentProgress, legacyProgress string) {
+	u.setLocked(p.Phase, legacyProgress, "")
+	u.developmentProgress, u.developmentStarted = &p, time.Now()
 }
 
 // quiesceDevelopmentWriters pauses the writers a snapshot must not see moving.
@@ -455,6 +459,9 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 		return err
 	}
 	r.Source = (&url.URL{Scheme: "file", Path: built.Artifacts}).String()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var ancestors string
 	if operation == "build" {
 		ancestors, err = update.EncodeAncestors(built.Ancestors)
@@ -493,8 +500,13 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 	u.mu.Lock()
 	updatedAt := u.currentUpdatedAtLocked()
 	cfg := u.developmentBackupConfigLocked()
+	if u.attempt != nil && u.attempt.cancelling {
+		u.mu.Unlock()
+		return nil, context.Canceled
+	}
+	u.startDevelopmentPhaseLocked(update.DevelopmentStep("backup", "quiesce", cfg.Builtin), "")
 	u.mu.Unlock()
-	u.startDevelopmentPhase(update.DevelopmentStep("backup", "quiesce", cfg.Builtin), "")
+	u.broadcastStatus()
 	programs := map[string]string{"personad": target}
 	for _, name := range update.ProgramNames {
 		path := filepath.Join(filepath.Dir(target), name)
@@ -520,6 +532,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 	if err != nil {
 		return nil, err
 	}
+	resume()
 	u.mu.Lock()
 	u.settings.DevelopmentBackup = &saved
 	err = u.saveLocked(ctx)

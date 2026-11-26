@@ -1,4 +1,6 @@
 {
+  "err_cannot_cancel": "現在、この更新はキャンセルできません。",
+  "err_cancel_history": "更新をキャンセルしましたが、履歴を保存できませんでした。",
   "err_development_step": "開発版の更新は「{step}」で停止しました。ハブの update/development/{phase}.log を確認してください。",
   "development_step_fetch": "コミットを取得",
   "development_step_npm_install": "Web の依存関係をインストール",
