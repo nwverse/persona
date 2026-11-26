@@ -13,7 +13,7 @@ import nativeAlarmsTests from '../test/NativeAlarms.test';
 import nativeMeetingServicesTests from '../test/NativeMeetingServices.test';
 import nativePhoneTests from '../test/NativePhone.test';
 import nativeCoreTests from '../test/NativeCore.test';
-import nativeXiaoYiTests, { nativeXiaoYiPreviewHold } from '../test/NativeXiaoYi.test';
+import nativeXiaoYiTests, { nativeXiaoYiHubE2ETests, nativeXiaoYiPreviewHold } from '../test/NativeXiaoYi.test';
 import { bindNativeTestContext } from '../test/NativeContext';
 
 export default class TestAbility extends UIAbility {
@@ -51,6 +51,7 @@ export default class TestAbility extends UIAbility {
     if (fixtureArgument('sshRecheck') === '1') testArguments.parameters['-s timeout'] = '175000';
     if (fixtureArgument('recordingFixtureId')) testArguments.parameters['-s timeout'] = '120000';
     if (fixtureArgument('phoneCheck')) testArguments.parameters['-s timeout'] = '90000';
+    if (fixtureArgument('xiaoYiHubUrl')) testArguments.parameters['-s timeout'] = '90000';
     Hypium.hypiumTest(abilityDelegatorRegistry.getAbilityDelegator(), testArguments, (): void => {
       if (fixtureArgument('coreReplay')) nativeCoreTests();
       else if (fixtureArgument('ipv6FixturePort')) nativeIPv6TransportTests();
@@ -61,6 +62,7 @@ export default class TestAbility extends UIAbility {
       else if (fixtureArgument('meetingReminderFixture')==='synthetic') nativeMeetingServicesTests();
       else if (fixtureArgument('recordingFixtureId')) nativeRecordingTests();
       else if (fixtureArgument('phoneCheck')) nativePhoneTests();
+      else if (fixtureArgument('xiaoYiHubUrl')) nativeXiaoYiHubE2ETests();
       else if (fixtureArgument('xiaoYiCheck') === '1') nativeXiaoYiTests();
       else { nativeStorageTests(); nativeXiaoYiTests(); nativeRFBTests(); if (fixtureArgument('fixtureAddress')) nativeTransportTests(); if (fixtureArgument('previewCheck')) nativePreviewTests(); }
     });

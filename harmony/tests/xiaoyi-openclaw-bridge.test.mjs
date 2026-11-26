@@ -152,16 +152,23 @@ function createMockWsServer() {
   };
 }
 
-function createMockHubServer({ recordingEnabled = true, rejectAuth = false } = {}) {
+function createMockHubServer({ recordingEnabled = true, rejectAuth = false, waterEnabled = true } = {}) {
   const requests = [];
   let messageSent = false;
   let holdWorking = false;
+  let waterToday = 500;
 
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (chunk) => { body += chunk; });
     req.on('end', () => {
-      requests.push({ method: req.method, url: req.url, auth: req.headers.authorization, body });
+      requests.push({
+        method: req.method,
+        url: req.url,
+        auth: req.headers.authorization,
+        manager: req.headers['x-persona-manager'] || '',
+        body
+      });
       res.setHeader('Content-Type', 'application/json');
       if (rejectAuth && req.url !== '/api/v1/health') {
         res.statusCode = 401;
@@ -187,7 +194,8 @@ function createMockHubServer({ recordingEnabled = true, rejectAuth = false } = {
         res.end(JSON.stringify({
           sessions: [
             { id: 'main-1', machine_id: 'm1', assistant: true, state: holdWorking ? 'working' : 'idle', status: holdWorking ? 'working' : 'idle' },
-            { id: 's1', machine_id: 'm1', assistant: false, state: 'working', status: 'working' }
+            { id: 's-ro', machine_id: 'm1', title: 'ReadOnly', assistant: false, read_only: true, state: 'idle', status: 'idle', updated_at: '2026-11-27T09:00:00Z' },
+            { id: 's1', machine_id: 'm1', title: 'RepoWorker', assistant: false, state: 'working', status: 'working', updated_at: '2026-11-27T08:00:00Z' }
           ]
         }));
       } else if (req.url === '/api/v1/interactions') {
@@ -199,6 +207,20 @@ function createMockHubServer({ recordingEnabled = true, rejectAuth = false } = {
       } else if (req.url === '/api/v1/todos' && req.method === 'POST') {
         const parsed = JSON.parse(body);
         res.end(JSON.stringify({ todo: { id: 'todo-9', title: parsed.title } }));
+      } else if (req.url === '/api/v1/assistant/health/intake?space=health' && req.method === 'GET') {
+        res.end(JSON.stringify({
+          items: waterEnabled ? ['water', 'protein'] : ['protein'],
+          water: { today: waterToday, goal: 2000 }
+        }));
+      } else if (req.url === '/api/v1/assistant/health/intake?space=health' && req.method === 'POST') {
+        const parsed = JSON.parse(body);
+        const amt = Number(parsed.amount || 250);
+        waterToday += amt;
+        res.end(JSON.stringify({
+          entry: { id: parsed.id, kind: 'water', amount: amt },
+          today: { water: waterToday, protein: 0 },
+          zone: 'Asia/Shanghai'
+        }));
       } else if (req.url.startsWith('/api/v1/kb-search')) {
         res.end(JSON.stringify({ hits: [{ path: 'docs/xiaoyi.md', line: 'OpenClaw setup' }] }));
       } else if (req.url === '/api/v1/assistant') {
@@ -206,8 +228,10 @@ function createMockHubServer({ recordingEnabled = true, rejectAuth = false } = {
       } else if (req.url.includes('/interrupt') && req.method === 'POST') {
         holdWorking = false;
         res.end(JSON.stringify({ ok: true }));
-      } else if (req.url.includes('/messages') && req.method === 'POST') {
+      } else if (req.url.includes('/main-1/messages') && req.method === 'POST') {
         messageSent = true;
+        res.end(JSON.stringify({ ok: true }));
+      } else if (req.url.includes('/messages') && req.method === 'POST') {
         res.end(JSON.stringify({ ok: true }));
       } else if (req.url.includes('/items')) {
         res.end(JSON.stringify({
@@ -308,10 +332,10 @@ test('computeReconnectDelayMs, parseCliArgs, isHubRecordingAllowed, and loadBrid
   assert.equal(ignored.ignore, true);
 });
 
-test('handleOpenClawRpc handles bare JSON-RPC status, todos, kb search, streaming ask, approval refusal, and recording module off', async () => {
+test('handleOpenClawRpc handles bare JSON-RPC status, todos, water, agent task, kb search, streaming ask, approval refusal, and recording module off', async () => {
   const hub = createMockHubServer({ recordingEnabled: false });
   const hubUrl = await hub.listen();
-  const hubClient = new PersonaHubClient({ hubUrl, hubToken: 'synthetic-token', askTimeoutMs: 4000 });
+  const hubClient = new PersonaHubClient({ hubUrl, hubToken: 'synthetic-token', manager: 'work', askTimeoutMs: 4000 });
 
   try {
     const pingOut = [];
@@ -357,6 +381,30 @@ test('handleOpenClawRpc handles bare JSON-RPC status, todos, kb search, streamin
     }, hubClient, (f) => todoOut.push(f));
     assert.ok(todoOut[0].result.status.message.parts[0].text.includes('验证小艺通道'));
 
+    // Log water (always omits X-Persona-Manager, targeting default manager)
+    const waterOut = [];
+    await handleOpenClawRpc({
+      jsonrpc: '2.0',
+      id: 'w1',
+      method: 'SendMessage',
+      params: { message: { parts: [{ text: 'Log water 350 ml' }] } }
+    }, hubClient, (f) => waterOut.push(f));
+    assert.equal(waterOut[0].result.status.message.parts[0].text, 'Logged 350 ml. Today: 850 / 2000 ml.');
+    const waterPost = hub.requests.find((r) => r.url.includes('/health/intake') && r.method === 'POST');
+    assert.equal(waterPost.manager, '');
+
+    // Send agent task (skips read-only session `s-ro` and dispatches to live `s1`)
+    const agentOut = [];
+    await handleOpenClawRpc({
+      jsonrpc: '2.0',
+      id: 'ag1',
+      method: 'SendMessage',
+      params: { message: { parts: [{ text: 'Send to agent: on Studio: run all tests' }] } }
+    }, hubClient, (f) => agentOut.push(f));
+    assert.equal(agentOut[0].result.status.message.parts[0].text, 'Sent to RepoWorker (Studio).');
+    assert.ok(hub.requests.some((r) => r.url === '/api/v1/sessions/m1/s1/messages' && r.method === 'POST'));
+    assert.ok(!hub.requests.some((r) => r.url.includes('/s-ro/')));
+
     const kbOut = [];
     await handleOpenClawRpc({
       jsonrpc: '2.0',
@@ -380,6 +428,23 @@ test('handleOpenClawRpc handles bare JSON-RPC status, todos, kb search, streamin
     assert.equal(finalFrame.result.status.message.parts[0].text, 'Here is your Persona reply.');
   } finally {
     await hub.close();
+  }
+
+  // Verify water-not-enabled refusal cleanly surfaces guidance error
+  const noWaterHub = createMockHubServer({ waterEnabled: false });
+  const noWaterUrl = await noWaterHub.listen();
+  try {
+    const noWaterClient = new PersonaHubClient({ hubUrl: noWaterUrl, hubToken: 'tok', askTimeoutMs: 2000 });
+    const errOut = [];
+    await handleOpenClawRpc({
+      jsonrpc: '2.0',
+      id: 'w-off',
+      method: 'SendMessage',
+      params: { message: { parts: [{ text: '喝水' }] } }
+    }, noWaterClient, (f) => errOut.push(f));
+    assert.ok(errOut[0].error.message.includes('Water tracking'));
+  } finally {
+    await noWaterHub.close();
   }
 });
 

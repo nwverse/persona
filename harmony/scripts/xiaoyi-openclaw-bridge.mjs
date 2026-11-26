@@ -37,6 +37,7 @@ export const DEFAULT_ASK_TIMEOUT_MS = 24000;
 export const MAX_PROMPT_CHARS = 8000;
 const MAX_SESSION_CONTEXTS = 64;
 const RECORDING_OFF_MESSAGE = 'Meeting recording is off on this hub.';
+const HEALTH_INTAKE_ROUTE = '/api/v1/assistant/health/intake?space=health';
 
 export function parseCliArgs(argv = process.argv.slice(2)) {
   const opts = { check: false, checkWs: false, help: false, configFile: '' };
@@ -176,6 +177,21 @@ function classifyRelayCommand(text) {
   if (/^(?:start\s+(?:a\s+)?(?:meeting\s+)?recording|record\s+(?:a\s+)?meeting|开始(?:会议)?录音|用\s*persona\s*录音|会議を録音|録音を開始)/i.test(text)) {
     return { kind: 'start_recording', arg: '' };
   }
+  if (/^(?:log\s+water|drink\s+water|记喝水|喝了一杯水|喝水|记录喝水|水分を記録)/i.test(text)) {
+    const mlMatch = /(\d{1,4})\s*(?:ml|毫升|ミリリットル)?/i.exec(text);
+    const parsedMl = mlMatch ? Number(mlMatch[1]) : undefined;
+    const validMl = parsedMl !== undefined && parsedMl >= 1 && parsedMl <= 3000 ? parsedMl : undefined;
+    return { kind: 'log_water', arg: '', amountMl: validMl };
+  }
+  const agentMatch = /^(?:send\s+to\s+agent|ask\s+claude|have\s+(?:an\s+)?agent|让\s*agent\s*(?:去做)?|交给\s*agent|エージェントに依頼)\s*[:：]?\s*(.+)$/i.exec(text);
+  if (agentMatch && agentMatch[1].trim()) {
+    const rawArg = agentMatch[1].trim();
+    const scoped = /^on\s+([^:：\n]+?)\s*[:：]\s*(.+)$/i.exec(rawArg);
+    if (scoped && scoped[1].trim() && scoped[2].trim()) {
+      return { kind: 'send_agent', arg: scoped[2].trim(), machineName: scoped[1].trim() };
+    }
+    return { kind: 'send_agent', arg: rawArg, machineName: '' };
+  }
   const todoMatch = /^(?:add\s+(?:a\s+)?to-?do|new\s+to-?do|新建待办|记个待办|待办|ToDoを追加)\s*[:：]?\s*(.+)$/i.exec(text);
   if (todoMatch && todoMatch[1].trim()) {
     return { kind: 'add_todo', arg: todoMatch[1].trim() };
@@ -199,13 +215,13 @@ export class PersonaHubClient {
     this.fetch = fetchImpl;
   }
 
-  async request(path, method = 'GET', body = undefined, opId = '') {
+  async request(path, method = 'GET', body = undefined, opId = '', { includeManager = true } = {}) {
     const headers = {
       Authorization: `Bearer ${this.hubToken}`,
       'X-Persona-Client': 'harmony-xiaoyi-openclaw/1.0.0',
       'X-Persona-Source': 'xiaoyi-openclaw'
     };
-    if (this.manager) headers['X-Persona-Manager'] = this.manager;
+    if (includeManager && this.manager) headers['X-Persona-Manager'] = this.manager;
     if (opId) headers['X-Persona-Op-Id'] = opId;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
@@ -273,6 +289,94 @@ export class PersonaHubClient {
     const res = await this.request('/api/v1/todos', 'POST', { title }, opId);
     const savedTitle = res?.todo?.title || title;
     return `To-do saved: ${savedTitle}`;
+  }
+
+  async logWater(amountMl) {
+    if (amountMl !== undefined && (!Number.isFinite(amountMl) || amountMl < 1 || amountMl > 3000)) {
+      throw new Error('Water amount must be between 1 and 3000 ml.');
+    }
+    const state = await this.request(HEALTH_INTAKE_ROUTE, 'GET', undefined, '', { includeManager: false });
+    if (Array.isArray(state.items) && state.items.length > 0 && !state.items.includes('water')) {
+      throw new Error('First add Water tracking in Health inside Persona.');
+    }
+    const goalMl = Number(state?.water?.goal || 0);
+    const entryId = randomUUID();
+    const body = { id: entryId, kind: 'water', at: new Date().toISOString() };
+    if (amountMl !== undefined) body.amount = amountMl;
+    const posted = await this.request(HEALTH_INTAKE_ROUTE, 'POST', body, entryId, { includeManager: false });
+    const recordedMl = Number(posted?.entry?.amount ?? amountMl ?? 0);
+    const todayMl = Number(posted?.today?.water ?? 0);
+    return `Logged ${recordedMl} ml. Today: ${todayMl} / ${goalMl} ml.`;
+  }
+
+  async sendAgentTask(prompt, machineName = '', sessionName = '') {
+    const [machinesRes, sessionsRes] = await Promise.all([
+      this.request('/api/v1/machines'),
+      this.request('/api/v1/sessions')
+    ]);
+    const machines = (Array.isArray(machinesRes.machines) ? machinesRes.machines : []).filter(
+      (m) => m && m.id && m.trust !== 'pending' && !m.pending_confirm && !m.pending
+    );
+    const query = String(machineName || '').trim();
+    let pickedMachine;
+    if (query) {
+      const lowered = query.toLowerCase();
+      pickedMachine = machines.find((m) => m.id === query) ||
+        machines.find((m) => String(m.name || '').toLowerCase() === lowered) ||
+        machines.find((m) => String(m.name || '').toLowerCase().includes(lowered) || String(m.id).toLowerCase().includes(lowered));
+      if (!pickedMachine) throw new Error(`Could not find a computer named ${query}.`);
+      if (pickedMachine.online === false) throw new Error(`${pickedMachine.name || pickedMachine.id} is offline.`);
+    } else {
+      pickedMachine = machines.find((m) => m.online !== false);
+      if (!pickedMachine) throw new Error('No computer is online right now.');
+    }
+
+    const sessions = (Array.isArray(sessionsRes.sessions) ? sessionsRes.sessions : []).filter((s) => {
+      if (!s) return false;
+      const mId = s.machine_id || s.machine || '';
+      if (mId !== pickedMachine.id || s.assistant) return false;
+      const status = String(s.status || '').toLowerCase();
+      const state = String(s.state || '').toLowerCase();
+      if (status === 'offline' || state === 'offline') return false;
+      const readOnly = Boolean(s.read_only) || s.source_kind === 'identity_conflict';
+      const canSend = !readOnly && (!s.source_kind || Boolean(s.capabilities?.send));
+      return canSend;
+    }).sort((a, b) => {
+      const ta = Date.parse(a.updated_at || '');
+      const tb = Date.parse(b.updated_at || '');
+      const va = Number.isFinite(ta) ? ta : 0;
+      const vb = Number.isFinite(tb) ? tb : 0;
+      if (va !== vb) return vb - va;
+      const ia = String(a.session_id || a.id || '');
+      const ib = String(b.session_id || b.id || '');
+      return ia < ib ? -1 : ia > ib ? 1 : 0;
+    });
+
+    const sQuery = String(sessionName || '').trim();
+    let pickedSession;
+    if (sQuery) {
+      const sLower = sQuery.toLowerCase();
+      pickedSession = sessions.find((s) => (s.session_id || s.id) === sQuery) ||
+        sessions.find((s) => String(s.title || s.name || '').toLowerCase() === sLower) ||
+        sessions.find((s) => String(s.title || s.name || '').toLowerCase().includes(sLower));
+    } else {
+      pickedSession = sessions[0];
+    }
+    if (!pickedSession) {
+      throw new Error(`No active session found on ${pickedMachine.name || pickedMachine.id}. Open Persona to start one.`);
+    }
+
+    const sessionId = pickedSession.session_id || pickedSession.id;
+    const sessionTitle = pickedSession.title || pickedSession.name || sessionId;
+    const machineLabel = pickedMachine.name || pickedMachine.id;
+    const opId = randomUUID();
+    await this.request(
+      `/api/v1/sessions/${encodeURIComponent(pickedMachine.id)}/${encodeURIComponent(sessionId)}/messages`,
+      'POST',
+      { text: prompt, client_msg_id: opId },
+      opId
+    );
+    return `Sent to ${sessionTitle} (${machineLabel}).`;
   }
 
   async searchKnowledge(query) {
@@ -551,6 +655,10 @@ export async function handleOpenClawRpc(
       replyText = await hubClient.checkStatus();
     } else if (cmd.kind === 'add_todo') {
       replyText = await hubClient.addTodo(cmd.arg);
+    } else if (cmd.kind === 'log_water') {
+      replyText = await hubClient.logWater(cmd.amountMl);
+    } else if (cmd.kind === 'send_agent') {
+      replyText = await hubClient.sendAgentTask(cmd.arg, cmd.machineName || '');
     } else if (cmd.kind === 'search_kb') {
       replyText = await hubClient.searchKnowledge(cmd.arg);
     } else {

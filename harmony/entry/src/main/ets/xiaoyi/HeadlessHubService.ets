@@ -287,12 +287,13 @@ function sessionRouteUri(profileId: string, managerId: string, machineId: string
  */
 export class HeadlessHubService {
   private readonly context: common.Context;
-  private readonly local: LocalStore = new LocalStore();
+  private readonly local: LocalStore;
   private readonly vault: CredentialVault;
   private opened: boolean = false;
 
-  constructor(context: common.Context) {
+  constructor(context: common.Context, dbName: string = 'persona.db') {
     this.context = context;
+    this.local = new LocalStore(dbName);
     this.vault = new CredentialVault(context);
   }
 
