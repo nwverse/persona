@@ -133,6 +133,7 @@
   "thread_post_needs_dm": "{who} があなたを待っています。カードは個人チャットにあります",
   "thread_post_finished_anon": "ある Agent がターンを終えました",
   "thread_open_done": "ToDo「{title}」を作り、メイン会話に渡しました。",
+  "thread_decided": "このトピックに ToDo「{title}」を作りました。",
   "thread_open_needs_text": "やりたいことを一行の文章で送ってください。ToDo を作ります。画像や転送だけでは ToDo の名前を付けられません。",
   "thread_open_failed": "このトピックの ToDo を作れませんでした：{error}",
   "thread_open_no_main": "このトピックの ToDo を作れませんでした：メイン会話がまだありません。先にアプリでメイン会話を一度開いてください。",
@@ -180,5 +181,15 @@
   "read_held_gone": "グループの /read メッセージが取り消されたか削除されました",
   "read_held_unreachable": "Lark に接続できませんでした",
   "read_held_expired": "この回答は古いため、もうグループに送れません",
-  "read_held_read_off": "ボットの設定で /read がオフのため、グループには送っていません"
+  "read_held_read_off": "ボットの設定で /read がオフのため、グループには送っていません",
+  "handoff_decision_source": "Lark ボット",
+  "handoff_decision_title": "{chat} の {sender}",
+  "handoff_decision_background": "質問: {question} — 下書き: {draft}",
+  "handoff_decision_post": "返信を投稿",
+  "handoff_decision_post_leads": "ボットがこの返信をグループに投稿します。全員が読めます。",
+  "handoff_decision_drop": "投稿しない",
+  "handoff_decision_drop_leads": "何も投稿せず、質問は取り下げます。",
+  "handoff_decision_cost": "{sender} は返事を待っています。",
+  "handoff_reply_header": "{sender} の質問: {question}",
+  "handoff_reply_footer": "{owner} の AI アシスタントが参考として回答しました。"
 }

@@ -3,9 +3,10 @@
 // bind step, #5818); the status and the on / off switch, pairing with a code sent to the bot, what the bot may do and the
 // agents driven there; and, folded under Advanced, the app's credentials and how to make one by hand.
 // Each change goes to the hub at once and the page shows what the hub answered; a failed one leaves it as it was.
+import { sameManager } from "../../lib/manager-choice";
 import { BindSteps, ChannelLink } from "./Channels";
 import { Disclosure } from "./ProviderFields";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, larkcliOptions, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
@@ -13,13 +14,14 @@ import { ago } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import {
   botStateText, botStatus, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, DEFAULT_NUDGE_AFTER, livePairing, nudgeChoices, nudgeLabel, pairBot, pairingLeft,
-  featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus, type BotTopicChat,
+  featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus, type BotTopicChat, type TopicTodoMode,
 } from "../../lib/feishu-bot";
 import { Button, copyText, cx, Dialog, IconButton, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { Group, Pill, Row, Switch, settingsInputClass } from "./SettingsParts";
 import { SignInSteps } from "./HubConnector";
+import { LarkSyncSection } from "./LarkSyncSection";
 
 export const SOURCE_REPORT_DELAYS = [0, 1, 2, 5, 10, 15, 30, 60];
 
@@ -78,6 +80,7 @@ export const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; 
 export const STEPS = [
   t("settings-feishubot.step_create_app"),
   t("settings-feishubot.step_permissions"),
+  t("settings-feishubot.step_sync_permissions"),
   t("settings-feishubot.step_events"),
   t("settings-feishubot.step_publish"),
 ];
@@ -127,9 +130,9 @@ export function useBot() {
   return { status, accept, readStatus, loading, error, setError, load };
 }
 
-export function FeishuBot({ onChannel, larkcli, onOpen }: { onChannel?: (id: string) => void; larkcli?: HubConnector | null; onOpen?: (id: string) => void } = {}) {
+export function FeishuBot({ onChannel, larkcli, onOpen, manager, onRouteClose }: { manager?: string; onRouteClose?: () => void; onChannel?: (id: string, manager?: string) => void; larkcli?: HubConnector | null; onOpen?: (id: string) => void } = {}) {
   const bot = useBot();
-  const [open, setOpen] = useState(() => new URLSearchParams(location.search).get("connector") === "feishu-bot");
+  const [open, setOpen] = useState(false);
   const tone = botTone(bot.status);
   return (
     <>
@@ -155,8 +158,8 @@ export function FeishuBot({ onChannel, larkcli, onOpen }: { onChannel?: (id: str
           </button>
         </Group>
       )}
-      {onChannel && <ChannelLink id="feishu" onOpen={onChannel} />}
-      {open && <FeishuBotDialog bot={bot} larkcli={larkcli} onClose={() => setOpen(false)} onOpen={onOpen} />}
+      {onChannel && <ChannelLink id="feishu" manager={manager} onOpen={onChannel} />}
+      {(open || onRouteClose) && <FeishuBotDialog bot={bot} manager={manager} larkcli={larkcli} onClose={onRouteClose ?? (() => setOpen(false))} onOpen={onOpen} />}
     </>
   );
 }
@@ -179,7 +182,7 @@ function CombinedLarkRow({ bot, connector, onOpen }: { bot: ReturnType<typeof us
   );
 }
 
-function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<typeof useBot>; larkcli?: HubConnector | null; onClose: () => void; onOpen?: (id: string) => void }) {
+function FeishuBotDialog({ bot, manager, larkcli, onClose, onOpen }: { manager?: string; bot: ReturnType<typeof useBot>; larkcli?: HubConnector | null; onClose: () => void; onOpen?: (id: string) => void }) {
   const { status, accept, readStatus, loading, error, setError, load } = bot;
   const [dialogLarkcli, setDialogLarkcli] = useState<HubConnector | null | undefined>(larkcli);
   const [form, setForm] = useState<BotCredentials>(() => (status ? credentialsOf(status) : { appID: "", appSecret: "", domain: "feishu" }));
@@ -210,10 +213,10 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
 
   const fetchLarkcli = useCallback(async () => {
     const all = await listConnectors();
-    const found = all.find((connector) => connector.id === "larkcli");
+    const found = all.find((connector) => connector.id === "larkcli" && sameManager(connector.manager, manager));
     // A re-read that no longer lists it keeps what the page showed; only a first read may conclude "none".
     setDialogLarkcli((prev) => found ?? (prev === undefined ? null : prev));
-  }, []);
+  }, [manager]);
 
   useEffect(() => {
     if (larkcli !== undefined) {
@@ -327,6 +330,9 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
           }}
         />
       )}
+
+      {/* reading Feishu as you every day, into the knowledge base: absent on a hub without it */}
+      <LarkSyncSection appID={status?.app_id} />
 
       <Group title={dialogLarkcli ? t("settings-feishubot.bot_section") : undefined} footer={t("settings-feishubot.footer")}>
         <div className="flex items-center gap-3 px-4 py-3">
@@ -717,12 +723,34 @@ export function TopicGroups({ status, saving, save }: { status: FeishuBotStatus;
           {groups.map((g) => <option key={g.chat_id} value={g.chat_id}>{g.name || g.chat_id}</option>)}
         </select>
       </Row>
-      {groups.map((g) => (
-        <Row key={g.chat_id} label={g.name || g.chat_id} hint={t("settings-feishubot.topic_owner_mention")} wrapHint>
-          <Switch on={g.require_owner_mention ?? false} disabled={saving} label={t("settings-feishubot.topic_mention_for", { name: g.name || g.chat_id })}
-            onChange={(required) => void save(groups.map((item) => item.chat_id === g.chat_id ? { ...item, require_owner_mention: required } : item))} />
-        </Row>
-      ))}
+      {groups.map((g) => {
+        const group = g.name || g.chat_id;
+        return (
+          <Fragment key={g.chat_id}>
+            <Row label={group} hint={t("settings-feishubot.topic_owner_mention")} wrapHint>
+              <Switch on={g.require_owner_mention ?? false} disabled={saving} label={t("settings-feishubot.topic_mention_for", { name: group })}
+                onChange={(required) => void save(groups.map((item) => item.chat_id === g.chat_id ? { ...item, require_owner_mention: required } : item))} />
+            </Row>
+            {g.todo_mode !== undefined && (
+              <Row label={t("settings-feishubot.topic_todo_for", { name: group })} wrapHint stackOnNarrow>
+                <select aria-label={t("settings-feishubot.topic_todo_for", { name: group })} className={`${settingsInputClass} min-h-11`} disabled={saving} value={g.todo_mode}
+                  onChange={(e) => {
+                    const mode = e.target.value as TopicTodoMode;
+                    void save(groups.map((item) => ({
+                      ...item,
+                      home: undefined,
+                      todo_mode: item.chat_id === g.chat_id ? mode : undefined,
+                    })));
+                  }}>
+                  <option value="answer_only">{t("settings-feishubot.topic_todo_answer_only")}</option>
+                  <option value="main_decides">{t("settings-feishubot.topic_todo_main_decides")}</option>
+                  <option value="always_todo">{t("settings-feishubot.topic_todo_always")}</option>
+                </select>
+              </Row>
+            )}
+          </Fragment>
+        );
+      })}
       {adding ? (
         <div className="space-y-3 px-4 py-3">
           <label className="block text-label text-ink">{t("settings-feishubot.topic_group_id")}<input className={settingsInputClass} value={chatID} disabled={saving} onChange={(e) => setChatID(e.target.value)} /></label>

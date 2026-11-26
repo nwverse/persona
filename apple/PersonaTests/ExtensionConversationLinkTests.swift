@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import Persona
 
+/// `ExtensionViewModel.opens(_:item:owner:)` belongs to the `Persona` target (`MainActor` default isolation).
+@MainActor
 struct ExtensionConversationLinkTests {
     @Test func onlyASpaceConversationOpens() throws {
         let url = try #require(URL(string: "persona://tracks/computer-example/reading/session-example"))

@@ -36,11 +36,12 @@ PACKAGES = {
     "PersonaModuleAPI": {"path": "Packages/PersonaModuleAPI"},
     "MarqueeGlow": {"url": "https://github.com/szupzj18/MarqueeGlow", "exactVersion": "0.1.0"},
 }
-MODULE_CONDITIONS = "$(inherited) PERSONA_MODULE_SCREEN_SHARE PERSONA_MODULE_HEALTH"
+MODULE_CONDITIONS = "$(inherited) PERSONA_MODULE_SCREEN_SHARE PERSONA_MODULE_HEALTH PERSONA_MODULE_VOICE"
 SOURCES = {
     "Persona": [
         {"path": "Modules/ScreenShare", "excludes": ["**/*.md"]},
         {"path": "Modules/Health", "excludes": ["**/*.md"]},
+        {"path": "Modules/Voice", "excludes": ["**/*.md"]},
         {"path": "Persona", "excludes": ["**/*.md"]},
         {"path": "Shared"},
         {"path": "LiveActivity"},
@@ -59,6 +60,8 @@ SOURCES = {
             "Shared/RequestClientMetadata.swift", "Shared/ExtensionSurfaceEntities.swift",
             "Shared/ExtensionSurfaceView.swift", "Shared/ExtensionSystemWidget.swift",
             "Shared/Design/ExtensionSurfaceTokens.swift", "Shared/Design/PersonaFace.swift", "Shared/HomeWidgets",
+            # The Home Screen and Live Activity recording allowance is part of the real widget target (#15214).
+            "Shared/Recording/PhoneRecordingAllowance.swift",
             "Shared/Design/HomeWidgetTokens.swift", "Shared/Design/HealthIntakePalette.swift",
             "Shared/Localization",
         )),

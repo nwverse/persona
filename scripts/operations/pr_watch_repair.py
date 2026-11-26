@@ -468,7 +468,9 @@ def repair_merge_conflict(repo, pr, worktree, base, config):
                 raise WatchError("conflict resolution changed the file mode unexpectedly")
         if checked(["git", "write-tree"], cwd=isolated).strip() != checked(["git", "write-tree"], cwd=worktree).strip():
             raise WatchError("the original merge and isolated conflict resolution have different trees")
-        if checked(["git", "diff", "--cached", "--check"], cwd=worktree).strip():
+        # Only the resolved paths are this worker's work: the index also holds everything main brought in, and a blank
+        # line at the end of a file main carries would otherwise fail every conflict repair (#16701).
+        if checked(["git", "diff", "--cached", "--check", "--", *paths], cwd=worktree).strip():
             raise WatchError("conflict resolution has whitespace errors")
         identity = ["-c", "user.name=" + checked(["git", "config", "user.name"], cwd=worktree).strip(),
                     "-c", "user.email=" + checked(["git", "config", "user.email"], cwd=worktree).strip()]

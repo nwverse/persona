@@ -98,6 +98,28 @@ Use a new path in an existing local folder that supports hard links. The documen
 read and the file write succeed, and an existing file is never replaced. On platforms with Unix file permissions the
 file is created with owner-only access. The credential is sent only to the supplied hub and never added to the export.
 
+## Find and export a recording from the terminal
+
+Search for a meeting by its title or a phrase you remember hearing, then use the recording ID from the results to
+save its notes or a subtitle track. Use the same hub address and paired-device token as for conversation export.
+
+```sh
+personad recordings list --hub '<hub URL>' --token-file '<private token file>' --query 'design review'
+personad recordings export --hub '<hub URL>' --token-file '<private token file>' \
+  --output meeting.md '<recording ID>'
+personad recordings export --hub '<hub URL>' --token-file '<private token file>' \
+  --format vtt --output meeting.vtt '<recording ID>'
+```
+
+Omit `--query` to browse all recordings. Add `--json` for a script. The command can also read the paired-device
+token from `PERSONA_RECORDINGS_TOKEN`. Markdown includes the available notes and the timestamped transcript.
+WebVTT uses elapsed time from the beginning of the recording so captions line up with playback.
+
+Omit `--output` to print the document. For a file, choose a new name in an existing directory that supports hard
+links. The command publishes the completed export with owner-only file permissions on Unix. It can read stored
+recordings while the recording module is off. If the transcript has expired and the minutes are still available,
+export them as Markdown. A subtitle export requires retained transcript lines.
+
 ## Held Agent messages from the terminal
 
 Use `personad outbox` to check and recover messages waiting for one computer, even when the computer is offline or
@@ -140,6 +162,33 @@ umask 077
 ./persona-projects grant checkout engineering reader > engineering.token
 ~~~
 
+### Publish and review with the member CLI
+
+On each member's computer, set `TEAM_PROJECT_URL` to the project service URL and `TEAM_PROJECT_TOKEN_FILE` to the file containing that member's token. Use HTTPS for a remote service. For a single-host trial use `http://127.0.0.1:18082`. Each command also accepts `-url` and `-token-file`.
+
+1. The writer publishes the chosen UTF-8 file. Use expected version zero to create the document. To edit it, supply the current published version. The receipt identifies the new revision and its SHA-256.
+
+   ~~~sh
+   persona-projects publish -expected 0 -file refund.md checkout refund
+   ~~~
+
+2. The reviewer saves the numbered revision, then inspects the file. Reading succeeds only after the client verifies the identifier, revision and SHA-256. Standard output contains the exact bytes, including any final newline.
+
+   ~~~sh
+   persona-projects read -revision 1 checkout refund > review.md
+   ~~~
+
+3. After reviewing the text, calculate its digest and approve that version. The command checks the pinned revision against the supplied digest before submitting approval. If the author has already published a new head, review that version separately.
+
+   ~~~sh
+   digest=$(python3 -c 'import hashlib; print(hashlib.sha256(open("review.md", "rb").read()).hexdigest())')
+   persona-projects approve -revision 1 -sha256 "$digest" checkout refund
+   ~~~
+
+The project service returns the approved revision and approver in the receipt. Keep those details with the work that uses the document.
+
+### HTTP API
+
 Each member can use curl with their own token. In the examples below, each member saves their token as `member.token` on their own machine, runs the shared setup and performs their role's step. Use the local URL below for a single-host trial, or the team's HTTPS URL from another machine.
 
 ~~~sh
@@ -170,6 +219,10 @@ awk '{print "Authorization: Bearer " $0}' member.token > member.header
    curl --fail-with-body -H @member.header "$API/approved"
    curl --fail-with-body -H @member.header "$API/revisions/1"
    ~~~
+
+Members can also discover documents before requesting their text. `GET /v1/projects/{project}/documents` lists one entry per document with an approval, ordered by document identifier in ASCII order. Each entry describes the latest approved revision. `GET /v1/projects/{project}/documents/{document}/approvals` lists that document's approved revisions, newest first. Both return an `items` array containing the project, document, revision, SHA-256 digest, author, approver and approval time. Fetch the numbered revision for the text.
+
+Both lists accept `limit` from 1 to 100 (default 25). When more rows are available, pass the response's `next` string as `after` for documents or `before` for revisions. Each request reads the current approvals. Restart the list to see a document or a new revision that sorts before your cursor.
 
 Publishing and approving are separate actions. A reader may retrieve a published, pending revision by number. Members can distinguish approval from authorship using `approved_by`, `approved_at` and `author`. A later draft leaves the previous approved revision current until an approver accepts the new head. Writers editing the same head receive one success and one conflict. A document holds up to 256 KiB of UTF-8 text per revision. The [team project proposal](../design/proposals/team-project-spaces.md) covers the planned Web experience, attachments and opening a revision in a personal agent.
 
@@ -592,6 +645,42 @@ python3 scripts/test/backup_restore_drill.py --execute --binary /tmp/personad-dr
   restored services and their first start's recovery are outside it. A later Settings page belongs under Settings →
   Hub (Backup & Recovery), apart from the program backups of hub updates, not under Machines.
 
+### Settings → Hub → Recovery (#12553)
+
+The Web Recovery page is a read-only overview for ordinary users. It explains the bundle's scope (the hub and built-in
+manager databases, knowledge base, runtime files and configuration, encryption keys, and TLS identity), and keeps
+independently hosted managers and update program backups outside that scope. Its three full-credential routes are
+`GET /api/v1/hub/recovery`, `POST /api/v1/hub/recovery/bundles/{id}/inspect`, and
+`POST /api/v1/hub/recovery/bundles/{id}/verify`; answer-only, scoped, and extension credentials are refused. Every
+request writes an audit log line with the action, credential ID, and result, never a path, bundle name, archive content,
+database URL, key, fingerprint, or raw operational error.
+
+- **Inventory is deliberately narrow.** Only direct, non-hidden regular files in the owner-only `~/.persona/backups/`
+  directory are listed, newest first, at most 50. A missing directory is an empty inventory. A symbolic-link,
+  non-private, or unreadable directory is unsupported rather than an empty or healthy one; nested directories and
+  symbolic-link files are skipped. Bundle IDs are SHA-256 digests of file names, not paths, and a separate revision
+  binds a displayed result to the listed name, size, modification time, and mode. A changed revision discards the
+  result. The API accepts no file name, arbitrary path, or alternate directory.
+- **Inspection is explicit and offline.** Opening or refreshing the page does not read archive contents. **Check
+  integrity** uses the same `backup inspect` implementation and returns its aggregate redacted report: no member paths,
+  configuration, database names, keys, hashes, or fingerprints. A malformed or replaced bundle fails closed. The result
+  belongs only to the current page and revision; it is not presented as durable verification history.
+- **Verification is explicit and not a restore drill.** **Verify databases** preflights configuration and the required
+  PostgreSQL clients without opening a database, then runs the existing `backup verify`: both dumps restore into
+  temporary databases, schema and key identity are checked, and the temporary databases are removed. It does not
+  quiesce writes, restore runtime files, replace a live database, or start services. Missing tools and the shipped
+  Docker Compose deployment are unsupported states. Raw errors stay out of the API; the terminal command supplies the
+  redacted diagnostic. There is no authoritative per-install restore/drill history source, so the page says that
+  history is unavailable instead of inventing success from an inspection.
+- **One check at a time.** A verification extracts the whole bundle into temporary space and restores two temporary
+  databases on the live PostgreSQL server, so the hub runs one inspection or verification at a time across all requests
+  and credentials. Another one is refused with `409` until the running check finishes; nothing is queued.
+- **No unsafe create, restore, or export.** There is no server-managed full-install quiescence that can stop both the
+  hub and built-in manager while their Web request is running. Creation therefore remains the guided terminal workflow
+  above with both writers stopped and `--writes-quiesced`; no create endpoint exists. Restore and service-starting
+  drills remain terminal operations too. No bundle download or private-key export route exists: the current Web
+  boundary has no separate reauthentication ceremony appropriate for releasing a bundle full of private keys.
+
 ### Logs
 
 ```sh
@@ -791,7 +880,7 @@ A hub-side switch (`hub_settings` key `hub.ln_mode`, default off; `GET`/`PUT /ap
 - Every held push is recorded with its reason (`ln_p1_held`, `ln_p2_silent`, `ln_dedup_12h`), in memory and under `hub_settings` key `hub.ln_intercepts` (bounded to 500 entries and 14 days), and read through `GET /api/v1/push/intercepts`. A record also persists the source already present on the push as optional `todo_id`, `machine_id`, and `session_id` fields (the session pair only when both IDs are present); old records without those fields load unchanged. Two guards protect the content: the **body is stored as a summary only** — the title plus at most 140 runes (`pushInterceptBodyMaxRunes`, one line with an ellipsis when cut), never the full text, since a body can carry the owner's decision questions, agent replies or `notify_user` content; and reads are **allow-listed by extension ID** — full credentials read every manager, while an extension token needs the `notify` scope *and* its extension ID in `hub.json` `intercept_readers` (docs/operations/config.md), then sees its own manager's entries only (the manager filter runs before the 200-entry limit). Any other extension token gets 403. Rows written before the summary limit are sanitized again at load. The hub's own pairing / join alerts are P0 and always pass.
 - Every alert push allowed through to delivery is also recorded (one entry per logical push however many devices were targeted, with the switch off as well as on, including pairing / joining receipts under manager `""`; silent background and Live Activity pushes are not counted) in memory and as one appended row in the hub's `hub_push_sent` table (migration 0522, #8257; a burst is one insert, and the whole record is never rewritten). The table is swept to the 2000 entries and 14 days the counts read at start and at most hourly after; the hub reads them back at start. The first start after the upgrade adds the entries of the old `hub_settings` key `hub.push_sent` (one jsonb list every push used to rewrite) to the table, in one transaction, and keeps the key: a build from before the table reads only that key. So that a switch back to one (`personad hub switch`, a self-update going back, the old binary put back) starts with the same history and daily counts, the hub writes the whole list back to the key whenever it stops (its cleanup, before the database closes; the updater going back, before it runs the old binary) and, while it runs, at most once an hour when pushes went out since: never per push, so at most 24 rewrites a day. A hub that was killed leaves the key short of at most the last hour's pushes; they stay in the table. Every start adds the key's entries the table lacks, which are the ones an older build delivered meanwhile: an entry and a row are the same push by time (to the microsecond), level, related key and manager, two equal entries are two pushes, and entries the sweep would take are left out. Going forward again therefore keeps both builds' pushes and counts none twice. A hub that could not read the key into the table at start leaves the key alone, since its own list may be the shorter one. The key and its write-back can go in a later release, once no build from before the table is switched back to. `GET /api/v1/push/stats/daily` (`?days=1..14`, default today, or `?since=<RFC3339>`; `notify` scope reads its own manager only) answers per UTC day and manager with `sent`, `intercepted` and `by_reason`, counted from the full records rather than the 200-entry intercepts view, so a busy day stays exact. `sent` means "allowed through to delivery", not APNs-confirmed reception — the hub cannot know the latter. No "opened / handled" number exists: the app has no push-open callback, and `interaction_resolved` is a card-lifecycle event that is not stored per push (withdrawal state is in-memory for 30 minutes only). A failed write (the held-push setting or the delivered-push rows) is retried with a backoff instead of being dropped; each delivered push carries a `push_id` chosen before its first write (UNIQUE, inserted with `ON CONFLICT DO NOTHING`), so a write that committed but reported an error is not counted twice; a failed startup read logs and starts empty without deleting the stored rows.
 
-- **Extension push grading layers and read-only preview (`hub/push_grading_layer.go`, #14380).** An extension explicitly granted the named-only `push.grading` scope (excluded from `extension.EveryScope` and legacy `hub_api`) may persist one grading layer for its manager under `hub_settings` key `hub.push_grading.layers` via `GET`/`PUT`/`DELETE /api/v1/push/grading/layer`. A layer may enable grading while the owner's `hub.ln_mode` switch is off (`grading_enabled`), adjust the non-P0 repeat-suppression window (`dedup_window_seconds`, 60–86400 s), and declare up to 32 ordered `rules` matching push fields (`kinds`, `levels`, `related_key_prefix`, `machine_id`, `session_id`, `track`, `depth`, `extension`) to re-grade (`level`) or decide (`allow`/`hold`/`silent`, with an optional snake_case `reason`). Owner controls and defaults stay intact: when no extension layer exists, grading is unchanged; extension layers never write `hub.ln_mode`, never hold system alerts (`system: true`), never turn off owner-enabled grading, and never weaken an active owner attention mode (`fragment`, `immersive`, `quiet`). Multiple active layers on the same manager compose deterministically with the stricter rule winning (`silent` > `hold` > `P2` > `P1` > `allow`/`P0`), and each layer applies only to its own manager's pushes. Extensions can read, update and delete only their own layer (foreign `?extension=`/`?manager=` or body identity gets 403 `layer_ownership_denied`); full credentials may inspect all layers and delete one or all of them. Each manager's `extwire.Report` declares its currently enabled, compatible `push.grading` extensions (`PushGradingDeclared` / `PushGradingExtensions`), and the hub prunes any layer whose extension is disabled, uninstalled or no longer holds `push.grading` — immediately in memory and durably in `hub_settings` — restoring the owner's settings. `POST /api/v1/push/grading/preview` (full credentials or `push.grading` scope) evaluates a sample notification against current owner settings and active layers (or an optional unsaved draft `layer`) using the same pure evaluator (`evaluatePushGradingLocked`) without sending any notification or mutating intercepts, delivered counts, dedup state or stored layers.
+- **Extension push grading layers and read-only preview (`hub/push_grading_layer_lifecycle.go`, `hub/push_grading_layer.go`, `hub/push_grading_effective.go`, `hub/push_grading_effective_cache.go`, #14380).** An extension explicitly granted the named-only `push.grading` scope (excluded from `extension.EveryScope` and legacy `hub_api`) may claim or renew the singleton versioned (`version: 1`) grading layer in `hub_settings` under `hub.push_grading_layer` via `GET`/`PUT`/`DELETE /api/v1/push/grading/layer` (with per-manager/per-extension ownership, monotonic `revision` on same-owner renewal, `409 layer_taken` on competing claims, optional `?revision=` CAS delete, and full-credential inspect/clear). Extension layer writes and deletes never read or write the owner's `hub.ln_mode` switch (`hub.push_grading` base writes mirror only explicit non-null `enabled`), never allow extension-supplied `enabled`, and never allow holding or silencing `P0`. Both live delivery (`applyPushGrading`) and read-only preview (`POST /api/v1/push/grading/preview`, full credentials or `push.grading` scope) evaluate through the same per-manager cached effective configuration (`pushGradingEffectiveCache`, invalidated immediately on switch, layer, and lifecycle writes) and pure decision function (`evaluatePushGradingDecision`), applying the singleton layer only to its owning manager, preserving active owner attention modes and hub system alerts, emitting neutral `held` / `silenced` / `deduped` outcomes mapped at the live intercept boundary via `legacyPushGradingReason`, and never mutating intercepts, delivered counts, dedup state or stored layers during preview. Each manager's `extwire.Report` declares its currently enabled, compatible `push.grading` extensions (`PushGradingDeclared` / `PushGradingExtensions`), and the hub asynchronously reconciles and prunes `hub.push_grading_layer` for that manager (invalidating the cache on prune) when the owning extension is disabled, uninstalled, incompatible, or loses `push.grading`.
 
 ### Attention modes (`assistantwire/attention.go`, `hub/push_attention.go`, #13503)
 
@@ -863,6 +952,6 @@ Foreground app keeps WebSocket to hub, receiving change broadcasts. A 19-minute 
 - Public auth failures including WS handshake log auth source=… path=… status=… code=… failures=… suppressed=…. Mask sources IPv4 /24, IPv6 /64; fixed API paths only, no tokens. Rate limit 429 / `Retry-After`; `security.auth_log_interval_seconds` controls log throttling.
 - Network issues: read-only personad hub doctor on hub machine, [Network troubleshooting](../operations/network.md#网络排查).
 - Admin failed login: admin: wrong password from <masked source>. Password set / change, scope changes, computer add / remove, device revocation, pairing-code generation each `admin: …` log, no passwords / codes. Admin 401 / 404 uses request IDs too.
-- Request IDs: `X-Request-Id` on every response, reusing app `X-Client-Request-Id` if present. Hub logs only ≥400 failures / >2-second slow requests, `[<id>] method path -> status (duration)`, no query / body / token. A 5xx line also names the hub's JSON error: `code=<code>`, then `detail="…"` (the technical words a localized failure keeps apart from its generic `error`) or else `error="…"`, one line, quoted, clipped at 300 characters (#13468); no other response body is logged. App 5xx adds “(Request <id>)”; find corresponding `journalctl --user -u personad` line.
+- Request IDs: `X-Request-Id` on every response, reusing app `X-Client-Request-Id` if present. Hub logs only ≥400 failures / >2-second slow requests, `[<id>] method path -> status (duration)`, no query / body / token. A 5xx line also names the error the hub wrote itself (`apierr.WriteBody`, which notes it on the request's writer: `apierr.NoteError`): `code=<code>`, then `detail="…"` (the technical words a localized failure keeps apart from its generic `error`) or else `error="…"`, one line, quoted, clipped at 300 characters (#13468); no other response body is logged, nor is an answer the hub passes on as it is from a manager, an extension or a linked hub, whatever its status and shape (#14490). App 5xx adds “(Request <id>)”; find corresponding `journalctl --user -u personad` line.
 - Compression (#2149, `gzip.go`): `Accept-Encoding: gzip` gets gzip for >1 KB JSON / JS / CSS / HTML / SVG / plain text (Lark chat 2.9 MB → 70 KB). App, web, Go clients decompress automatically. WebSocket upgrade, persistent connections, Range, HEAD, event-stream, images / binaries, already encoded / cookie-setting responses unchanged. Admin `/admin` and `/api/v1/admin/` uncompressed to avoid cookie / CSRF size leakage (BREACH). Layer outside `logRequests`; handlers still receive logging statusWriter. Debug `curl --compressed` or `-H 'Accept-Encoding: gzip'` and inspect Content-Encoding. The web client built into personad keeps its hashed assets gzipped already and sends them as stored, and its first-screen files' brotli copies to a client that names `br` (`web.go`, `docs/web/web.md` "Precompressed assets"); `<hub data dir>/web` is still compressed as it is sent. The compressible types and the 1 KB minimum live in `server/internal/webasset`, shared with the build's precompress step.
 - Unreachable herdr socket / restart: node logs `herdr: … failed` at most once per 30 seconds, with failure count, then reachable again; SSH stderr enters hub log.

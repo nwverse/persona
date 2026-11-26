@@ -29,11 +29,14 @@ export interface BotFeatures {
   read_group_direct?: boolean;
 }
 
+export type TopicTodoMode = "answer_only" | "main_decides" | "always_todo";
+
 export interface BotTopicChat {
   chat_id: string;
   name?: string;
   home?: boolean;
   require_owner_mention?: boolean;
+  todo_mode?: TopicTodoMode;
   added_at?: number;
 }
 

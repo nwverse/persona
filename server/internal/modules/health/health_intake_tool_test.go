@@ -15,10 +15,13 @@ import (
 func TestHealthIntakeToolLogListDelete(t *testing.T) {
 	ctx := context.Background()
 	st := &intakeTestStore{}
+	if err := st.PutSetting(ctx, healthIntakeKey, defaultHealthIntakeSettings()); err != nil {
+		t.Fatal(err)
+	}
 	s := newServiceOn(t, newFakeHub(), st)
 	call := func(args string) string {
 		t.Helper()
-		out, err := s.Tool(ctx, json.RawMessage(args))
+		out, err := s.intakeTool(ctx, json.RawMessage(args))
 		if err != nil {
 			t.Fatalf("%s: %v", args, err)
 		}

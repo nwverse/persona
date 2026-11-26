@@ -202,4 +202,6 @@ func (s *Service) mainMachine(ctx context.Context) string { return s.settings(ct
 func (s *Service) userTZ() string { return s.settings(context.Background()).Timezone }
 
 // toolsNow are the assistant's tools (a connector's may not shadow one).
-func (s *Service) toolsNow() []proto.Tool { return s.Tools(context.Background()) }
+func (s *Service) toolsNow() []proto.Tool {
+	return append(s.Tools(context.Background()), toolsNamed(healthToolNames)...)
+}

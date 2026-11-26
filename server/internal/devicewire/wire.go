@@ -77,6 +77,9 @@ const (
 	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
 	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
 	MethodFileCall = "devices.file_call"
+	// MethodRetireCall forwards only session.stop_if_idle and propagates cancellation.
+	// An old manager refuses it; unlike a file call, it has no unconditional fallback.
+	MethodRetireCall = "devices.retire_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -208,6 +211,7 @@ type Config struct {
 	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
 	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
 	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	PublishedTarget   *DevelopmentTarget `json:"published_target,omitempty"`
 	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
@@ -472,6 +476,9 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/herdr",
 	"PUT /api/v1/machines/{mid}/herdr",
 	"POST /api/v1/machines/{mid}/herdr/start",
+	// Named herdr sessions kept out of Persona (#14898, internal/devices herdrsessions.go).
+	"GET /api/v1/machines/{mid}/herdr/sessions",
+	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
 	"GET /api/v1/machines/{mid}/health/reports",
@@ -483,6 +490,11 @@ var Routes = []string{
 	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
 	"GET /api/v1/machines/{mid}/diagnosis",
 	"POST /api/v1/machines/{mid}/cleanup",
+	// A computer's disk usage map and its guarded trash (#14576, internal/devices usagemap.go).
+	"GET /api/v1/machines/{mid}/storage/usage",
+	"POST /api/v1/machines/{mid}/storage/trash",
+	"POST /api/v1/machines/{mid}/storage/trash/undo",
+	"POST /api/v1/machines/{mid}/storage/trash/purge",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	// Hidden Agent folders, beside the blocked Claude config folders (internal/devices agentdirs.go).
@@ -514,8 +526,8 @@ var TransferRoutes = []string{
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, and
-// the history: the days, the last days by the hour).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, the
+// history: the days, the last days by the hour, and by project: usage_projects.go).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
@@ -523,6 +535,8 @@ var MetricsRoutes = []string{
 	"GET /api/v1/usage",
 	"GET /api/v1/usage/days",
 	"GET /api/v1/usage/hours",
+	"GET /api/v1/usage/projects",
+	"GET /api/v1/usage/projects/detail",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),

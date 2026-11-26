@@ -433,6 +433,9 @@ class LiveLog:
                 self.process.wait(timeout=2)
         self.thread.join(timeout=2)
         self.stderr_thread.join(timeout=2)
+        # A leader can exit on TERM and close both pipes while a nested child ignores it. Reap the dedicated group
+        # after every stop, not only after a reader timeout; close_owned_group never signals the watcher group.
+        self.close_owned_group()
         if self.thread.is_alive() or self.stderr_thread.is_alive():
             self.fail("read-timeout")
             raise TimeoutError("live log reader did not finish")

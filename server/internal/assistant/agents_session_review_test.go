@@ -622,13 +622,16 @@ func TestSessionReviewResumeStartsWithoutPromptThenSendsOnce(t *testing.T) {
 }
 
 func TestSessionReviewReadFailureKeepsPendingCard(t *testing.T) {
-	fx := newSessionReviewFixture(t)
+	store := &settingFailing{fleetMem: newFleetMem()}
+	fx := newSessionReviewFixtureOn(t, store)
+	fx.ft.s.fleet.started.Do(func() {})
 	_, reviewer := fx.start(t)
 	finished := fx.finish(t, reviewer, sessionReviewRawReport, sessionReviewDisplayReport)
+	store.setFail(sessionReviewSetting)
 	fx.ft.s.sessionReviews.mu.Lock()
 	fx.ft.s.sessionReviews.loaded = false
 	fx.ft.s.sessionReviews.mu.Unlock()
-	fx.ft.st.failKey(sessionReviewSetting, errors.New("database hiccup"))
+	fx.ft.s.FleetUp(t.Context())
 	still := sessionReviewOneCard(t, fx.ft.s)
 	if still.ID != finished.ID || still.ReviewReport != sessionReviewDisplayReport {
 		t.Fatalf("a store read failure withdrew the pending card: %+v", still)

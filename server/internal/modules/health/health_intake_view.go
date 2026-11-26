@@ -10,7 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
-func drawIntakePage(p intakePageState, c healthIntakeSettings, v healthIntakeView, reminder waterReminderState, now time.Time, loc *time.Location, l i18n.Lang, version int, quiet bool) wire.View {
+func drawIntakePage(p intakePageState, c healthIntakeSettings, v healthIntakeView, reminder waterReminderState, now time.Time, loc *time.Location, l i18n.Lang, version int, quiet bool, waterAdded bool) wire.View {
 	t := func(key string, args ...i18n.Args) string { return intakeText(l, key, args...) }
 	text := func(s string) wire.Component { return wire.Component{Type: "text", Text: s} }
 	button := func(title, action string, submit bool) wire.Component {
@@ -59,7 +59,11 @@ func drawIntakePage(p intakePageState, c healthIntakeSettings, v healthIntakeVie
 		}}},
 			text(t("zone."+p.Kind, i18n.Args{"zone": v.Zone}))}
 		if p.Kind == "water" {
-			today = append(today, text(intakeReminderStatus(l, c.Water, reminder, kind.Entries, now, loc)))
+			status := t("status.add_water")
+			if waterAdded {
+				status = intakeReminderStatus(l, c.Water, reminder, kind.Entries, now, loc)
+			}
+			today = append(today, text(status))
 			if quiet {
 				today = append(today, wire.Component{Type: "metric", Label: t("reminders"), Value: t("status.quiet"), Tone: "caution"})
 			}

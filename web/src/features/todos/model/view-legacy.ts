@@ -6,7 +6,7 @@
 import { TODO_LIST_SECTIONS, TODO_REASONS, type TodoSummary } from "../../../lib/todo-view-wire";
 import type { Triage, TriageRule, TriageSection } from "../../../lib/todo-triage";
 import type { SessionLookup, Todo } from "../../../lib/todos";
-import { stateOf } from "../../../lib/format";
+import { activityOf } from "../../../lib/format";
 import { usageLimitAgent } from "../../../lib/usage-limit";
 
 /** lib/todo-view-wire.ts TODO_PHASES, kept local so the shared first-screen todo-view-wire chunk stays unchanged
@@ -100,7 +100,7 @@ export function rowFacts(todo: Todo, lookup: SessionLookup | undefined, now: num
       continue;
     }
     if (usageLimitAgent(s, now)) out.usageLimit = true;
-    const st = stateOf(s);
+    const st = activityOf(s);
     if (s.awaits_reply && (st === "unread" || st === "idle")) out.awaitsReply = true;
     // the hub's blockedOn: what a turn that is over and not on a card ended blocked on
     const w = s.work;
@@ -170,12 +170,13 @@ export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: T
   {
     why: "run_waits",
     holds: (l, v, f) =>
-      (l.rule === "agent_running" && f.waits && (v.section === "waiting" || v.section === "just_finished")) ||
+      (l.rule === "agent_running" && f.waits && v.reason !== "usage_limit" && (v.section === "waiting" || v.section === "just_finished")) ||
       (l.rule === "agent_asks" && f.transient && v.reason === "background"),
   },
   // row 10: a usage limit waits for its reset; the web's one status for it hides every other run, so it files the to-do
-  // at rest where the hub places it by its runs (one that works, waits or finished unseen first)
-  { why: "usage_limit", holds: (l, v, f) => f.usageLimit && AT_REST.has(l.rule) && RUN_PLACED.has(v.reason) },
+  // at rest where the hub places it by its runs (one that works, waits or finished unseen first). When another run's
+  // external wait keeps the web in Working, the hub's usage-limit view still takes precedence over that wait.
+  { why: "usage_limit", holds: (l, v, f) => f.usageLimit && ((AT_REST.has(l.rule) && RUN_PLACED.has(v.reason)) || (l.rule === "agent_running" && v.reason === "usage_limit")) },
   // row 4: a run that ended on a plain-text question is Can wait, ahead of everything below row 3 but closed work
   { why: "awaits_reply", holds: (l, v, f) => v.reason === "awaits_reply" && f.awaitsReply && !ABOVE_CAN_WAIT.has(l.rule) },
   // row 9: accepted work nobody has seen stays in Just finished however long (the web: Done after 24 h)

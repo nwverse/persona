@@ -2,8 +2,8 @@
 import { t } from "../../../i18n";
 import { ApiError } from "../../../lib/api";
 import {
-  MAX_THREAD_IDLE_HOURS, normalizeThreadMode, supportsThreadRouting, updateChannel,
-  type ChannelDetail, type ChannelThreadMode,
+  MAX_THREAD_IDLE_HOURS, normalizeThreadMode, supportsThreadRouting,
+  type ChannelDetail, type ChannelThreadMode, type ChannelUpdateBody,
 } from "../../../lib/channels";
 import {
   checkUpdate, CONFIGURATION_VERSION, ConfigurationError,
@@ -21,7 +21,7 @@ export type IntegrationTarget =
       name?: string;
       description?: string;
       channelId?: string;
-      connectorId?: string;
+      connectorId?: string | null;
       manager?: string;
     }
   | {
@@ -121,6 +121,7 @@ export function resolveBuiltinChannelId(target: Extract<IntegrationTarget, { kin
 
 /** Default hub connector id associated with a built-in integration when not explicitly overridden. */
 export function resolveBuiltinConnectorId(target: Extract<IntegrationTarget, { kind: "builtin" }>): string | null {
+  if (target.connectorId === null) return null;
   if (target.connectorId) return target.connectorId;
   if (target.id === "mail" || target.id === "feishu-bot" || target.id === "lark") return null;
   return target.id;
@@ -226,7 +227,7 @@ export function channelRoutingSource(
   channelId: string,
   reloadKey: number,
   getDetail: () => ChannelDetail,
-  onUpdated: (next: ChannelDetail) => void,
+  updateRouting: (body: Pick<ChannelUpdateBody, "thread_mode" | "thread_idle_hours">) => Promise<ChannelDetail | null>,
 ): ConfigurationSource {
   return {
     key: `integration:channel-routing:${channelId}:${reloadKey}`,
@@ -248,8 +249,8 @@ export function channelRoutingSource(
         body.thread_idle_hours = Math.trunc(update.changes.thread_idle_hours);
       }
       try {
-        const next = await updateChannel(channelId, body);
-        onUpdated(next);
+        const next = await updateRouting(body);
+        if (!next) throw new ConfigurationError("configuration_conflict");
         return channelRoutingDocument(next, true);
       } catch (e) {
         if (e instanceof ApiError) throw ConfigurationError.fromBody(e.body, e.status);

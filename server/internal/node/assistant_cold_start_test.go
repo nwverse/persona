@@ -82,7 +82,8 @@ if [ ! -e "$CLI_FAKE_DIR/retried" ]; then
 fi
 fi
 `
-	writeFile(t, filepath.Join(os.Getenv("HOME"), "bin", "claude"), "#!/bin/sh\n"+prefix+fakeCLI)
+	// The new profile's sign-in check runs claude auth status as an assistant (#14458): answer it before counting starts.
+	writeFile(t, filepath.Join(os.Getenv("HOME"), "bin", "claude"), "#!/bin/sh\n"+fakeCLIAuthStatus+prefix+fakeCLI)
 	id, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", text, nil, "acceptEdits", "high", cliExec())
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +125,8 @@ func TestAssistantColdStartTimeoutStages(t *testing.T) {
 			if stage == "control_response_timeout" {
 				script = "echo '{\"type\":\"system\",\"subtype\":\"init\"}'\n" + script
 			}
-			writeFile(t, filepath.Join(os.Getenv("HOME"), "bin", "claude"), "#!/bin/sh\n"+script)
+			// As in testAssistantColdStartControlTimeoutRetries: the sign-in check is no start.
+			writeFile(t, filepath.Join(os.Getenv("HOME"), "bin", "claude"), "#!/bin/sh\n"+fakeCLIAuthStatus+script)
 			_, err := f.n.assistantSend(context.Background(), "", t.TempDir(), "claude", "hello", nil, "acceptEdits", "high", cliExec())
 			var re *rpc.Error
 			if !errors.As(err, &re) || re.Code != "assistant_control_failed" {

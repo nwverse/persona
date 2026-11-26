@@ -112,6 +112,9 @@ enum Modules {
         #if PERSONA_MODULE_HEALTH
         list.append(HealthModule())
         #endif
+        #if PERSONA_MODULE_VOICE
+        list.append(VoiceModule())
+        #endif
         return list
     }
 

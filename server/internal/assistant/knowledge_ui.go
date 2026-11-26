@@ -39,7 +39,9 @@ func (s *Service) loadKnowledgeUI() {
 func withKnowledgeUI(names []string, svc *Service) []string {
 	on := knowledgeuihost.InBuild(moduleswitch.Set{}) // no service yet: as the build has it
 	if svc != nil {
-		on = svc.ui != nil
+		// A connected assistant can answer tool discovery before New has built the layer. Its switch, not that transient
+		// nil field, decides whether the tools exist; core-only has no module to discover them through either.
+		on = knowledgeuihost.InBuild(svc.moduleSwitch)
 	}
 	if on {
 		return names

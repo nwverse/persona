@@ -248,6 +248,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
 		params := mcpToolsParams(req.Input, session, assistant, guest)
+		n.putMCPCallerCwd(c, params, session)
 		// A supervision round's process asks for its narrower set (assistant_round.go); a manager that does not know
 		// it gives the whole list.
 		if req.ToolSet != "" {
@@ -292,6 +293,10 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 				break
 			}
 		}
+		viewSession := sid
+		if viewSession == "" && !assistant && req.Pane != "" {
+			viewSession = n.paneCaller(req.Pane)
+		}
 		guest := req.Guest || n.guestOf(sid) != nil
 		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
 			resp = n.saveMailAttachment(ctx, req.Args, sid, assistant, guest)
@@ -307,6 +312,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": assistant, "guest": guest}
+		n.putMCPCallerCwd(c, params, sid)
 		n.putSourcePermission(c, params, sid, req.Name, req.Args)
 		if origin := n.assistantOrigin(sid); origin != "" {
 			params["origin"] = origin
@@ -320,6 +326,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		if err := n.peer.Call(ctx, "mcp.call", params, &res); err != nil {
 			res = proto.TextResult("Persona hub error: "+err.Error(), true)
 		}
+		n.toolViews.stripResult(viewSession, req.Name, &res)
 		resp = res
 	default:
 		resp = map[string]any{"error": "unknown kind"}
@@ -433,6 +440,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ctx = withHookCall(ctx, req)
 	}
 	defer n.hookFlights.enter(in.SessionID)() // its process waits on this call: not idle (model_restore.go)
+	if sess := n.paneHerdrSession(req.Pane); n.herdrSessionBlocked(sess) && !n.isAssistantSession(in.SessionID) && !n.keptSessions()[in.SessionID] {
+		n.noteHerdrSessionID(in.SessionID, sess)
+		return nil, nil // a blocked named herdr session (herdrsessions.go): nothing reported, no card; Claude Code asks itself
+	}
 	if n.sessionBlocked(in.SessionID, in.Cwd) {
 		return nil, nil // a blocked Agent folder (agentdirs.go): nothing reported, no card; Claude Code asks itself
 	}
@@ -675,7 +686,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 			return permissionDecision(map[string]any{"behavior": "allow", "updatedInput": input}), nil
 		}
 		rule := map[string]any{"toolName": in.ToolName}
-		if assistant {
+		// Inbox handling conversations process untrusted external input, so never offer a whole-tool
+		// Bash session grant that would auto-approve arbitrary later shell mutations (#15267).
+		if assistant && !(in.ToolName == "Bash" && n.assistantOrigin(in.SessionID) == originInbox) {
 			alwaysKey := "tool:" + in.ToolName
 			if scope := fileRuleScope(in.ToolName, in.ToolInput); scope != "" {
 				// Claude Code matches path rules on Read and Edit only; Edit(path) covers every file-editing tool,
@@ -814,13 +827,17 @@ func hookEventParams(in hookInput, stopSig string, reportOnly bool) map[string]a
 
 // promptSource says who a UserPromptSubmit's prompt is from, for the manager (a meeting's batch is not the user's own
 // message: docs/assistant/meeting-minutes.md "Feeding the attending session"): the kind of message source it carries
-// (meeting, conversation, task…), "notification" for a background task reporting back, else "user".
+// (meeting, conversation, task…), "notification" for a background task reporting back, "side_conversation" for an
+// unrelated agent_send wrapped by RenderSideConversation, else "user".
 func promptSource(prompt string) string {
 	if src := prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: prompt}); src != nil && src.Kind != "" {
 		return src.Kind
 	}
 	if strings.Contains(prompt, "<task-notification>") {
 		return "notification"
+	}
+	if prompts.IsSideConversation(prompt) {
+		return proto.SourceSideConversation
 	}
 	return "user"
 }
@@ -940,7 +957,13 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	ctx, cancel := context.WithDeadline(ctx, ix.ExpiresAt)
 	defer cancel()
 	var res proto.Resolution
-	err := n.peer.Call(ctx, "interaction.create", map[string]any{"interaction": ix}, &res)
+	params := map[string]any{"interaction": ix}
+	if ix.SessionID != "" {
+		if origin := n.assistantOrigin(ix.SessionID); origin != "" {
+			params["origin"] = origin
+		}
+	}
+	err := n.peer.Call(ctx, "interaction.create", params, &res)
 	if err != nil {
 		select {
 		case <-n.peer.Done():
@@ -965,9 +988,6 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	}
 	if res.Dismiss {
 		return res, false, nil
-	}
-	if ix.EditableText != "" && res.EditedText != "" {
-		n.editedAnswers.Store(ix.ID, res.EditedText)
 	}
 	return res, true, nil
 }

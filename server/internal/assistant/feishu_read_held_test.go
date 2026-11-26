@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// A /read's answer held for the owner (feishu_read_held.go, #14437): it goes to the owner's private chat with the bot,
+// A /read's answer held for the owner (the lark module's read_held.go, #14437): it goes to the owner's private chat with the bot,
 // says which /read it answers, and has Post to group and Don't post; the group gets the same cards under the request
 // only on Post to group, once, and never otherwise. All ids are placeholders.
 
@@ -117,11 +117,29 @@ func heldID(card string) string {
 
 // press presses a held answer's button (do: post or skip) on private message mid, as Lark delivers it.
 func (e *heldEnv) press(id, do, mid string) *botcard.CardResponse {
+	e.t.Helper()
+	return pressHeld(e.t, e.s, id, do, mid)
+}
+
+// pressHeld is press on service s (the hub checked the owner pressed it, and hands the event over as it came).
+func pressHeld(t testing.TB, s *Service, id, do, mid string) *botcard.CardResponse {
+	t.Helper()
 	var a botcard.CardAction
 	a.Operator.OpenID = "ou_owner"
 	a.Action.Value = map[string]any{"a": "rd", "id": id, "do": do}
 	a.Context.MessageID = mid
-	return e.s.botCardAction(context.Background(), &a, "")
+	raw, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := s.FeishuAction(context.Background(), FeishuAction{Event: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil {
+		t.Fatal("the press was not answered")
+	}
+	return resp
 }
 
 func cardJSON(t *testing.T, r *botcard.CardResponse) string {
@@ -214,15 +232,12 @@ func TestFeishuReadHeldPostsOnce(t *testing.T) {
 	if !strings.Contains(card, "同一次发布") {
 		t.Fatalf("the group's card: %s", card)
 	}
-	// Pressed again, and pressed after a restart: nothing more goes.
+	// Pressed again, and pressed after a restart (another service on the same store): nothing more goes.
 	if r := e.press(id, "post", "om_dm1"); r.Toast == nil || r.Toast.Content != heldText("read_held_posted") || r.Card != nil {
 		t.Fatalf("second press %+v", r)
 	}
-	b := &e.s.fbot.read
-	b.mu.Lock()
-	b.loaded, b.list = false, nil
-	b.mu.Unlock()
-	if r := e.press(id, "post", "om_dm1"); r.Toast == nil || r.Toast.Content != heldText("read_held_posted") {
+	restarted := newServiceOn(t, e.f, e.st)
+	if r := pressHeld(t, restarted, id, "post", "om_dm1"); r.Toast == nil || r.Toast.Content != heldText("read_held_posted") {
 		t.Fatalf("press after a restart %+v", r.Toast)
 	}
 	if e.tries() != 1 {
@@ -372,9 +387,7 @@ func TestFeishuReadHeldSlowPost(t *testing.T) {
 		<-release
 		return map[string]any{"message_id": "om_group"}, nil
 	}
-	old := cardAnswerWait
-	cardAnswerWait = 20 * time.Millisecond
-	t.Cleanup(func() { cardAnswerWait = old })
+	e.s.setLarkTiming("card_answer_wait", 20*time.Millisecond)
 	dm, _ := e.posts()
 	id := heldID(dm[0]["card"].(string))
 	if r := e.press(id, "post", "om_dm1"); r.Toast == nil || r.Toast.Content != heldText("read_held_posting") || r.Card != nil {
@@ -384,22 +397,16 @@ func TestFeishuReadHeldSlowPost(t *testing.T) {
 		t.Fatalf("a press meanwhile %+v", r.Toast)
 	}
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	posted := func() bool {
 		var updated string
 		for _, u := range e.f.appParams(AppFeishu, FeishuUpdateCard) {
 			if u["message_id"] == "om_dm1" {
 				updated, _ = u["card"].(string)
 			}
 		}
-		if strings.Contains(updated, heldText("read_held_posted")) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the card was not updated: %v", e.f.appParams(AppFeishu, FeishuUpdateCard))
-		}
-		time.Sleep(10 * time.Millisecond)
+		return strings.Contains(updated, heldText("read_held_posted"))
 	}
+	waitFor(t, "the card to say it was posted", posted)
 	if _, group := e.posts(); len(group) != 1 || e.tries() != 1 {
 		t.Fatalf("%d tries, group %v", e.tries(), group)
 	}

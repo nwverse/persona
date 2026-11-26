@@ -1,4 +1,7 @@
 {
+  "to_decide": "To Decide",
+  "previous_decision": "Previous card",
+  "next_decision": "Next card",
   "workspace": "Workspace",
   "workspace_new": "New",
   "workspace_existing": "Use existing",
@@ -16,6 +19,9 @@
   "tray_empty_parked": "No tasks parked",
   "tray_review": "Persona reviewing",
   "tray_empty_review": "Nothing waiting for Persona to review",
+  "tray_verify": "To verify",
+  "tray_empty_verify": "Nothing waiting for your verification",
+  "verify_pass": "Pass",
   "tray_finished": "Finished",
   "pr_blocker_review_required": "Review required",
   "pr_blocker_changes_requested": "Changes requested",
@@ -198,5 +204,16 @@
   "start_cause_not_allowed": "This computer didn't allow it",
   "start_cause_needs_update": "Persona on this computer needs an update",
   "start_failed_short": "Didn't start.",
-  "start_failed_details": "Didn't start. Open it for details."
+  "start_failed_details": "Didn't start. Open it for details.",
+  "dispatch_reason_first": "Preset {tier}: candidate {candidate}",
+  "dispatch_reason_score": "Preset {tier}, candidate {candidate}: {minutes} min p50, {first_pass}% first-pass, {headroom}% headroom",
+  "dispatch_reason_score_short": "Preset {tier}: chose candidate {candidate} by efficiency and headroom",
+  "dispatch_reason_quota": "Earlier candidate low on headroom; using candidate {candidate}",
+  "dispatch_reason_quota_detail": "Earlier candidate low on headroom ({detail}); using candidate {candidate}",
+  "dispatch_reason_unavailable": "Earlier candidate unavailable on this machine; using candidate {candidate}",
+  "dispatch_reason_kept": "Kept the previous Agent's candidate",
+  "dispatch_reason_switched": "Switched from the previous candidate to candidate {candidate}",
+  "dispatch_reason_switched_detail": "Switched from the previous candidate ({detail}) to candidate {candidate}",
+  "dispatch_reason_over_pace": "All candidates are over pace; using candidate {candidate} in order",
+  "dispatch_reason_fallback": "Preset {tier}: candidate {candidate} ({reason})"
 }
