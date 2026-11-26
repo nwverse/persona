@@ -41,10 +41,6 @@ func TestClassifyAction(t *testing.T) {
 		{"CLI", "/drive/files/comments/create", "发表评论", boundaryOutbound, true},
 		{"CLI", "/mail/user_mailboxes/messages/send", "发邮件", boundaryOutbound, true},
 		{"CLI", "/mail/+messages-send", "发邮件", boundaryOutbound, true},
-		{"POST", "/open-apis/im/v1/messages", "发消息", boundaryOutbound, true},
-		{"POST", "/im/v1/messages", "发消息", boundaryOutbound, true},
-		{"POST", "/im/messages", "发消息", boundaryOutbound, true},
-		{"POST", "/open-apis/im/v1/batch_messages", "发消息", boundaryOutbound, true},
 		{"CLI", "/im/messages/create", "发消息", boundaryOutbound, true},
 		{"CLI", "/im/+messages-send", "发消息", boundaryOutbound, true},
 		{"CLI", "/im/+messages-reply", "回复消息", boundaryOutbound, true},
@@ -59,9 +55,14 @@ func TestClassifyAction(t *testing.T) {
 		{"CLI", "/docs/+create", "写文档", boundaryOrdinary, true},
 		{"CLI", "/wiki/+move", "写文档", boundaryOrdinary, true},
 		{"CLI", "/mail/folders/patch", "发 / 改邮件", boundaryOrdinary, true},
-		// Generic HTTP routes are left to core.
+		// HTTP routes, including OpenAPI IM, are left to core so they remain guarded without this module.
 		{"DELETE", "/files/1", "", boundaryOrdinary, false},
 		{"POST", "/conversations/1/messages", "", boundaryOrdinary, false},
+		{"POST", "/open-apis/im/v1/messages", "", boundaryOrdinary, false},
+		{"POST", "/im/v1/messages", "", boundaryOrdinary, false},
+		{"POST", "/im/messages", "", boundaryOrdinary, false},
+		{"POST", "/open-apis/im/v1/batch_messages", "", boundaryOrdinary, false},
+		{"PATCH", "/open-apis/im/v1/threads", "", boundaryOrdinary, false},
 		{"POST", "/notes", "", boundaryOrdinary, false},
 	} {
 		what, boundary, matched := g.ClassifyAction(tc.method, tc.path)

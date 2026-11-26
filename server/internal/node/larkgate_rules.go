@@ -142,8 +142,9 @@ func larkPattern(c larkCall) string {
 	return c.Method + " /" + strings.Join(segs, "/")
 }
 
-// genericGateActions holds the generic HTTP deletion and outbound action patterns shared by all proto.CommandGates;
-// Feishu/Lark-specific patterns come from the lark module via larkgateport.
+// genericGateActions holds generic HTTP deletion and outbound action patterns shared by all proto.CommandGates.
+// lark-cli patterns come from the lark module via larkgateport, but the OpenAPI IM route stays in core because
+// non-CLI extension gates must still require confirmation when the lark module is excluded or switched off.
 var genericGateActions = []struct {
 	re       *lazyre.Regexp
 	what     string
@@ -152,6 +153,7 @@ var genericGateActions = []struct {
 	{lazyre.New(`^DELETE `), "删除", larkgateport.BoundaryDeletion},
 	{lazyre.New(`^(?:GET|HEAD|POST|PUT|PATCH|OPTIONS) /.*(?:delete|remove|trash|recall)`), "删除", larkgateport.BoundaryDeletion},
 	{lazyre.New(`^POST /(?:conversations/[^/]+/(?:messages|files|images)|messages/[^/]+/(?:reply|forward|recall|reactions))`), "发消息", larkgateport.BoundaryOutbound},
+	{lazyre.New(`^(POST|PUT|PATCH) /(?:open-apis/)?im/(?:v[0-9]+/)?(?:messages|batch_messages|threads)(?:/|$)`), "发消息", larkgateport.BoundaryOutbound},
 	{lazyre.New(`^(POST|PUT|PATCH) /.*(?:comments|replies)(?:/|$)`), "发表评论", larkgateport.BoundaryOutbound},
 	{lazyre.New(`^POST /.*(?:mail|mailboxes).*/(?:send|reply|forward)$`), "发邮件", larkgateport.BoundaryOutbound},
 }

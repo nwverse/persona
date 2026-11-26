@@ -20,8 +20,9 @@ type actionRule struct {
 	boundary int
 }
 
-// larkActions holds only the Feishu/Lark-specific action patterns (lark-cli subcommands and Feishu OpenAPI IM routes).
-// Generic HTTP deletion, comment, mail and conversation-message patterns stay in internal/node.
+// larkActions holds only the module-specific lark-cli patterns.
+// Generic HTTP deletion, comment, mail and conversation-message patterns, plus the OpenAPI IM route,
+// stay in internal/node so generic CommandGate calls keep their confirmation boundary without the lark module.
 var larkActions = []actionRule{
 	// i18n-ignore: node-side gate card wording matched by original text
 	{lazyre.New(`^CLI /im/messages/delete`), "撤回消息", boundaryDeletion},
@@ -33,8 +34,6 @@ var larkActions = []actionRule{
 	{lazyre.New(`^CLI /mail/.*(?:send|reply|forward)$`), "发邮件", boundaryOutbound},
 	// i18n-ignore: node-side gate card wording matched by original text
 	{lazyre.New(`^CLI /mail/\+.*(?:send|reply|forward)`), "发邮件", boundaryOutbound},
-	// i18n-ignore: node-side gate card wording matched by original text
-	{lazyre.New(`^(POST|PUT|PATCH) /(?:open-apis/)?im/(?:v[0-9]+/)?(?:messages|batch_messages|threads)(?:/|$)`), "发消息", boundaryOutbound},
 	// i18n-ignore: node-side gate card wording matched by original text
 	{lazyre.New(`^CLI /im/(?:messages/(?:create|reply|patch|update|send)|threads/forward)(?:/|$)`), "发消息", boundaryOutbound},
 	// lark-cli commands: "CLI /<domain>/<command>"

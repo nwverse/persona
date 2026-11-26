@@ -1,6 +1,6 @@
-// Package larkgate holds the Feishu/Lark-specific node command gate rules: lark-cli and Feishu OpenAPI action
-// classification, --as bot bypass exemptions, and lark-cli phone-card wording (#13404). Generic proto.CommandGate rule
-// matching and shell parsing stay in internal/node so non-Lark extension gates keep working in core-only builds.
+// Package larkgate holds the module's lark-cli node command gate rules, bypass exemptions, and
+// lark-cli phone-card wording (#13404). Generic proto.CommandGate HTTP rule matching and shell parsing stay in
+// internal/node so non-Lark extension gates keep working in core-only builds.
 //
 //persona:layer library
 package larkgate

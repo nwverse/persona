@@ -39,6 +39,47 @@ func larkCLIActor(args []string) string {
 	return ""
 }
 
+// TestOpenAPIIMHTTPWriteRequiresConfirmationWithoutLark keeps the OpenAPI IM write boundary in core.
+// This test runs in every build tag matrix, so it also covers builds that exclude the lark module entirely.
+func TestOpenAPIIMHTTPWriteRequiresConfirmationWithoutLark(t *testing.T) {
+	calls := []larkCall{
+		{Gate: 0, Method: "POST", Path: "/open-apis/im/v1/messages", Body: `{}`},
+		{Gate: 0, Method: "POST", Path: "/im/v1/messages", Body: `{}`},
+		{Gate: 0, Method: "POST", Path: "/im/messages", Body: `{}`},
+		{Gate: 0, Method: "POST", Path: "/open-apis/im/v1/batch_messages", Body: `{}`},
+		{Gate: 0, Method: "PATCH", Path: "/open-apis/im/v1/threads", Body: `{}`},
+	}
+	assertCoreIMWriteBoundary := func(t *testing.T) {
+		t.Helper()
+		for _, c := range calls {
+			what, boundary := classifyGateAction(c.Method, c.Path)
+			if what != "发消息" || boundary != larkgateport.BoundaryOutbound {
+				t.Fatalf("%s %s classification = (%q, %d), want outbound message boundary", c.Method, c.Path, what, boundary)
+			}
+			if larkBypassSafe(c) {
+				t.Fatalf("larkBypassSafe(%s %s) = true, want false", c.Method, c.Path)
+			}
+		}
+	}
+
+	t.Run("current build", func(t *testing.T) {
+		if larkGateRules() == nil {
+			t.Log("lark module is excluded by build tags")
+		}
+		assertCoreIMWriteBoundary(t)
+	})
+
+	t.Run("lark switched off at runtime", func(t *testing.T) {
+		prev := hubModules.Load()
+		t.Cleanup(func() { hubModules.Store(prev) })
+		setHubModules([]string{moduleswitch.Marker})
+		if got := larkGateRules(); got != nil {
+			t.Fatalf("larkGateRules() = %v with lark switched off, want nil", got)
+		}
+		assertCoreIMWriteBoundary(t)
+	})
+}
+
 // TestLarkGateDisabledDegradesCleanly verifies that with the lark module switched off (or omitted by build tags),
 // generic proto.CommandGate rules and boundaries keep working identically while lark-cli calls fail closed.
 func TestLarkGateDisabledDegradesCleanly(t *testing.T) {
