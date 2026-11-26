@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"runtime"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"time"
 	"weak"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/todo/mergetrain"
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -27,6 +29,16 @@ type mergeTrainOutcome struct {
 	Decision mergetrain.Decision
 	Escalate bool
 	Detail   string
+
+	promotedTodoID   string
+	promotedPRURL    string
+	promotedRepoKey  string
+	previousPRURL    string
+	previousState    string
+	promotedPolicy   mergetrain.MergePolicy
+	promotedApproved bool
+	turnWakeupKey    string
+	emitTurnWakeup   bool
 }
 
 type mergeTrainConflictTrack struct {
@@ -55,12 +67,13 @@ func mergeTrainBlockerID(todoID, normURL string) string {
 }
 
 // mergeTrainCoordinator wraps the pure mergetrain.Train state machine with concurrency-safe
-// conflict-cycle tracking and escalation deduplication for live PR status polling.
+// conflict-cycle tracking, escalation deduplication, and turn-wakeup deduplication for live PR status polling.
 type mergeTrainCoordinator struct {
 	mu               sync.Mutex
 	train            *mergetrain.Train
 	conflicts        map[string]*mergeTrainConflictTrack
 	escalated        map[string]struct{}
+	turnWakeups      map[string]struct{}
 	hydrated         map[string]bool
 	hasActiveBlocker map[string]bool
 }
@@ -70,6 +83,7 @@ func newMergeTrainCoordinator() *mergeTrainCoordinator {
 		train:            mergetrain.New(),
 		conflicts:        make(map[string]*mergeTrainConflictTrack),
 		escalated:        make(map[string]struct{}),
+		turnWakeups:      make(map[string]struct{}),
 		hydrated:         make(map[string]bool),
 		hasActiveBlocker: make(map[string]bool),
 	}
@@ -81,6 +95,7 @@ func (c *mergeTrainCoordinator) reset() {
 	c.train = mergetrain.New()
 	clear(c.conflicts)
 	clear(c.escalated)
+	clear(c.turnWakeups)
 	clear(c.hydrated)
 	clear(c.hasActiveBlocker)
 }
@@ -288,6 +303,50 @@ func (c *mergeTrainCoordinator) snapshot() mergetrain.Snapshot {
 	return c.train.Snapshot()
 }
 
+func (c *mergeTrainCoordinator) headTodoIDLocked(repoKey string) string {
+	if c.train == nil {
+		return ""
+	}
+	for _, rs := range c.train.Snapshot().Repos {
+		if rs.RepoKey == repoKey {
+			if rs.Head != nil {
+				return rs.Head.TodoID
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+func (c *mergeTrainCoordinator) recordPromotedTurnLocked(repoKey, prevTodoID, prevPRURL, prevState, prevHeadID string, dec mergetrain.Decision, out *mergeTrainOutcome) {
+	if out == nil || c.train == nil {
+		return
+	}
+	nextTodoID := strings.TrimSpace(dec.TodoID)
+	if nextTodoID == "" || nextTodoID == prevTodoID || nextTodoID == prevHeadID {
+		return
+	}
+	nextEntry, ok := c.train.Entry(repoKey, nextTodoID)
+	if !ok || nextEntry.State == mergetrain.StateEscalated {
+		return
+	}
+	wakeKey := "mergetrain_turn:" + repoKey + ":" + nextTodoID + ":" + prevPRURL
+	emit := false
+	if _, seen := c.turnWakeups[wakeKey]; !seen {
+		c.turnWakeups[wakeKey] = struct{}{}
+		emit = true
+	}
+	out.promotedTodoID = nextTodoID
+	out.promotedPRURL = nextEntry.PRURL
+	out.promotedRepoKey = repoKey
+	out.previousPRURL = prevPRURL
+	out.previousState = prevState
+	out.promotedPolicy = nextEntry.Policy
+	out.promotedApproved = nextEntry.Approved
+	out.turnWakeupKey = wakeKey
+	out.emitTurnWakeup = emit
+}
+
 func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repoKey string, prNumber int, normURL string) (mergeTrainOutcome, mergeTrainDBAction) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -306,22 +365,32 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 		if c.hasActiveBlocker[trackKey] {
 			dbAct.resolveBlocker = true
 		}
+		prevHeadID := c.headTodoIDLocked(repoKey)
 		dec, err := c.train.RecordMerged(repoKey, todoID)
 		if errors.Is(err, mergetrain.ErrEntryNotFound) {
 			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}, dbAct
 		}
-		return mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}, dbAct
+		out := mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}
+		if err == nil {
+			c.recordPromotedTurnLocked(repoKey, todoID, normURL, state, prevHeadID, dec, &out)
+		}
+		return out, dbAct
 
 	case "closed":
 		delete(c.conflicts, trackKey)
 		if c.hasActiveBlocker[trackKey] {
 			dbAct.resolveBlocker = true
 		}
+		prevHeadID := c.headTodoIDLocked(repoKey)
 		dec, err := c.train.Cancel(repoKey, todoID)
 		if errors.Is(err, mergetrain.ErrEntryNotFound) {
 			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}, dbAct
 		}
-		return mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}, dbAct
+		out := mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}
+		if err == nil {
+			c.recordPromotedTurnLocked(repoKey, todoID, normURL, state, prevHeadID, dec, &out)
+		}
+		return out, dbAct
 
 	case "open":
 		policy := mergeTrainPolicyForStatus(status)
@@ -507,6 +576,23 @@ func formatMergeTrainEscalationDetail(prURL, headOID, reason string) string {
 	return fmt.Sprintf("Merge train circuit breaker tripped (needs_user) for PR %s%s. Automatic conflict retries stopped; manual resolution required.", prURL, headPart)
 }
 
+func formatMergeTrainTurnWakeupDetail(o mergeTrainOutcome) string {
+	verb := "merged"
+	if o.previousState == "closed" {
+		verb = "closed and left the merge queue"
+	}
+	prPart := ""
+	if strings.TrimSpace(o.promotedPRURL) != "" {
+		prPart = " (" + strings.TrimSpace(o.promotedPRURL) + ")"
+	}
+	policyNote := "Ready to rebase, verify checks, and merge according to its review policy."
+	if o.promotedPolicy == mergetrain.PolicyHumanReviewRequired && !o.promotedApproved {
+		policyNote = "Human review approval is still required before merging; ready to rebase and verify checks without auto-merging."
+	}
+	return fmt.Sprintf("Preceding PR %s in %s has %s. Your PR%s is now at the head of the merge queue (position 1). %s",
+		o.previousPRURL, o.promotedRepoKey, verb, prPart, policyNote)
+}
+
 // parseMergeTrainPRURL extracts a canonical RepoKey (e.g. "github.com/owner/repo"),
 // PR number, and normalized URL from a pull/merge request URL.
 func parseMergeTrainPRURL(raw string) (repoKey string, prNumber int, normURL string, ok bool) {
@@ -668,6 +754,17 @@ func (s *Service) onPRStatusMergeTrain(ctx context.Context, t Todo, status TodoP
 			Detail: outcome.Detail,
 		})
 	}
+	if outcome.emitTurnWakeup && outcome.promotedTodoID != "" {
+		if nextTodo, ok := s.todoNow(outcome.promotedTodoID); ok && nextTodo.DoneAt == nil && !nextTodo.Cancelled() {
+			s.signal(superviseSignal{
+				Todo:   outcome.promotedTodoID,
+				Kind:   sigTodoReady,
+				Key:    outcome.turnWakeupKey,
+				To:     s.todoReadySupervisor(ctx, s.settings(ctx), nextTodo),
+				Detail: formatMergeTrainTurnWakeupDetail(outcome),
+			})
+		}
+	}
 	return outcome
 }
 
@@ -716,4 +813,146 @@ func (s *Service) persistMergeTrainConflictBlocker(
 		ResolvedAt:    nil,
 	})
 	return err
+}
+
+type mergeTrainQueueItemView struct {
+	TodoID         string `json:"todo_id"`
+	PRNumber       int    `json:"pr_number,omitempty"`
+	PRURL          string `json:"pr_url,omitempty"`
+	State          string `json:"state"`
+	Policy         string `json:"policy"`
+	Approved       bool   `json:"approved"`
+	Position       int    `json:"position"`
+	RebaseFailures int    `json:"rebase_failures,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+}
+
+type mergeTrainRepoQueueView struct {
+	RepoKey   string                    `json:"repo_key"`
+	Head      *mergeTrainQueueItemView  `json:"head,omitempty"`
+	Queue     []mergeTrainQueueItemView `json:"queue"`
+	Escalated []mergeTrainQueueItemView `json:"escalated,omitempty"`
+}
+
+type mergeTrainTodoBadgeView struct {
+	RepoKey    string `json:"repo_key"`
+	Position   int    `json:"position"`
+	AheadPRURL string `json:"ahead_pr_url,omitempty"`
+	State      string `json:"state"`
+}
+
+type mergeTrainSnapshotResponse struct {
+	Repos  []mergeTrainRepoQueueView          `json:"repos"`
+	ByTodo map[string]mergeTrainTodoBadgeView `json:"by_todo"`
+}
+
+func mergeTrainItemView(e mergetrain.Entry, pos int) mergeTrainQueueItemView {
+	return mergeTrainQueueItemView{
+		TodoID:         e.TodoID,
+		PRNumber:       e.PRNumber,
+		PRURL:          e.PRURL,
+		State:          string(e.State),
+		Policy:         string(e.Policy),
+		Approved:       e.Approved,
+		Position:       pos,
+		RebaseFailures: e.RebaseFailures,
+		LastError:      e.LastError,
+	}
+}
+
+func buildMergeTrainSnapshotResponse(snap mergetrain.Snapshot, hidden map[string]bool) mergeTrainSnapshotResponse {
+	resp := mergeTrainSnapshotResponse{
+		Repos:  make([]mergeTrainRepoQueueView, 0, len(snap.Repos)),
+		ByTodo: make(map[string]mergeTrainTodoBadgeView),
+	}
+	for _, rs := range snap.Repos {
+		rv := mergeTrainRepoQueueView{
+			RepoKey: rs.RepoKey,
+			Queue:   make([]mergeTrainQueueItemView, 0, len(rs.Queue)),
+		}
+		if rs.Head != nil && !hidden[rs.Head.TodoID] {
+			item := mergeTrainItemView(*rs.Head, 1)
+			rv.Head = &item
+			resp.ByTodo[rs.Head.TodoID] = mergeTrainTodoBadgeView{
+				RepoKey:  rs.RepoKey,
+				Position: 1,
+				State:    string(rs.Head.State),
+			}
+		}
+		basePos := 1
+		if rs.Head != nil {
+			basePos = 2
+		}
+		for i, e := range rs.Queue {
+			if hidden[e.TodoID] {
+				continue
+			}
+			pos := basePos + i
+			aheadURL := ""
+			if i == 0 {
+				if rs.Head != nil && !hidden[rs.Head.TodoID] {
+					aheadURL = rs.Head.PRURL
+				}
+			} else if !hidden[rs.Queue[i-1].TodoID] {
+				aheadURL = rs.Queue[i-1].PRURL
+			}
+			rv.Queue = append(rv.Queue, mergeTrainItemView(e, pos))
+			resp.ByTodo[e.TodoID] = mergeTrainTodoBadgeView{
+				RepoKey:    rs.RepoKey,
+				Position:   pos,
+				AheadPRURL: aheadURL,
+				State:      string(e.State),
+			}
+		}
+		for _, e := range rs.Escalated {
+			if hidden[e.TodoID] {
+				continue
+			}
+			rv.Escalated = append(rv.Escalated, mergeTrainItemView(e, 0))
+			resp.ByTodo[e.TodoID] = mergeTrainTodoBadgeView{
+				RepoKey:  rs.RepoKey,
+				Position: 0,
+				State:    string(e.State),
+			}
+		}
+		if rv.Head != nil || len(rv.Queue) > 0 || len(rv.Escalated) > 0 {
+			resp.Repos = append(resp.Repos, rv)
+		}
+	}
+	return resp
+}
+
+// todoMergeTrainRoutes registers read-only merge-train queue visibility endpoints strictly gated under todos_v2=true (#16432).
+func (s *Service) todoMergeTrainRoutes() {
+	s.handle("GET /api/v1/todos/mergetrain", func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		if !s.settings(ctx).todosV2On() {
+			apierr.Write(w, http.StatusConflict, errors.New("merge train queue requires todos_v2 to be enabled"))
+			return
+		}
+		snap := s.mergeTrainSnapshot(ctx)
+		var hidden map[string]bool
+		if r.Header.Get(RoleHeader) == roleExtension {
+			if err := s.ensureTodosLoaded(ctx); err != nil {
+				apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
+				return
+			}
+			var ids []string
+			for _, rs := range snap.Repos {
+				if rs.Head != nil {
+					ids = append(ids, rs.Head.TodoID)
+				}
+				for _, e := range rs.Queue {
+					ids = append(ids, e.TodoID)
+				}
+				for _, e := range rs.Escalated {
+					ids = append(ids, e.TodoID)
+				}
+			}
+			if len(ids) > 0 {
+				hidden = s.todosHidden(ctx, ids, nil)
+			}
+		}
+		apierr.WriteJSON(w, buildMergeTrainSnapshotResponse(snap, hidden))
+	})
 }

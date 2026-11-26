@@ -180,19 +180,38 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "prefer-existing or prefer-new"},
 			get: func(ctx context.Context) (string, error) { return s.taskWorkspacePreference(ctx), nil },
 			set: s.setTaskWorkspacePreference},
-		{Setting: Setting{Key: "assistant.recording_days", Title: "录音在知识库里保留", Actions: getSet,
-			About: "how many days the phone's and watch's recording transcripts stay in the knowledge base (kind recordings); older " +
-				"transcripts are deleted from it, and the phone deletes its local recordings too (audio and text). " +
-				"Meeting minutes follow assistant.minutes_days instead. 14 by default",
-			Value: "a whole number of days, 1–365"},
-			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.recordingDays(ctx)), nil },
-			set: s.setRecordingDays},
-		{Setting: Setting{Key: "assistant.minutes_days", Title: "Keep meeting minutes", Actions: getSet,
-			About: "how many days a meeting recording's minutes stay in the knowledge base. Past assistant.recording_days its " +
-				"transcript, summary and live log are deleted and only the minutes (and the recording's metadata) stay, still " +
-				"searchable and readable with kb_get, until this many days after the meeting; then the rest goes too. Never " +
-				"fewer than assistant.recording_days for finite windows. 0 (or forever) keeps minutes until the user deletes them, " +
+		{Setting: Setting{Key: "assistant.recording_audio_days", Title: "Keep recording audio", Actions: getSet,
+			About: "how many days recording audio is kept: the phone and watch delete their local recordings (audio and their " +
+				"copy of the text) older than this; the hub keeps no meeting audio past its minutes. 14 by default. " +
+				"The text in the knowledge base follows assistant.recording_text_days",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.recordingAudioDays(ctx)), nil
+			},
+			set: s.setRecordingAudioDays},
+		{Setting: Setting{Key: "assistant.recording_text_days", Title: "Keep recording text", Actions: getSet,
+			About: "how many days a recording's text stays in the knowledge base (kind recordings): its transcript, summary and " +
+				"live log, whether a phone, a watch or an extension wrote it (meeting notes, imported transcripts). Past it the " +
+				"text is deleted; minutes follow assistant.minutes_days. 0 (or forever) keeps it until the user deletes it, " +
 				"which is the default",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.recordingTextDays(ctx)), nil
+			},
+			set: s.setRecordingTextDays},
+		{Setting: Setting{Key: "assistant.recording_days", Title: "Keep recording audio (old name)", Actions: getSet,
+			About: "old name of assistant.recording_audio_days, kept for compatibility: reads and sets the same value",
+			Value: "0 or forever, or a whole number of days, 1–3650"},
+			get: func(ctx context.Context) (string, error) {
+				return minutesDaysLabel(s.lang(ctx), s.recordingAudioDays(ctx)), nil
+			},
+			set: s.setRecordingAudioDays},
+		{Setting: Setting{Key: "assistant.minutes_days", Title: "Keep meeting minutes", Actions: getSet,
+			About: "how many days a meeting recording's minutes stay in the knowledge base. Past a finite " +
+				"assistant.recording_text_days its transcript, summary and live log are deleted and only the minutes (and the " +
+				"recording's metadata) stay, still searchable and readable with kb_get, until this many days after the meeting; " +
+				"then the rest goes too. Never fewer than assistant.recording_text_days (forever while the text is kept " +
+				"forever). 0 (or forever) keeps minutes until the user deletes them, which is the default",
 			Value: "0 or forever, or a whole number of days, 1–3650"},
 			get: func(ctx context.Context) (string, error) {
 				return minutesDaysLabel(s.lang(ctx), s.minutesDays(ctx)), nil
@@ -521,6 +540,20 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(s.settings(ctx).todosV2FoldChildrenOn()), nil
 			},
 			set: s.setTodosV2FoldChildren},
+		{Setting: Setting{Key: todosV2QuietHoursSettingKey, Title: "Quiet hours for routine notifications (todos_v2)", Actions: getSet,
+			About: "optional 24-hour local-time quiet window (HH:MM-HH:MM, e.g. 22:00-08:00 or 13:00-15:00) under todos_v2=true during which routine non-card, non-P0, non-notify_user pushes downgrade to LevelP2; empty string disables quiet hours (default); P0, cards, approvals, and notify_user are never muted; no effect when todos_v2 is off",
+			Value: `"" (off) or "HH:MM-HH:MM"`},
+			get: func(ctx context.Context) (string, error) {
+				return s.settings(ctx).todosV2QuietHours(), nil
+			},
+			set: s.setTodosV2QuietHours},
+		{Setting: Setting{Key: todosV2DigestWindowMinutesSettingKey, Title: "Routine notification digest window in minutes (todos_v2)", Actions: getSet,
+			About: "optional burst-coalescing window in minutes under todos_v2=true: 0 (off, default), 30, 60, or 120; follow-up routine non-card, non-P0, non-notify_user pushes for the same session/direction within the window downgrade to LevelP2; P0, cards, approvals, and notify_user are never muted; no effect when todos_v2 is off",
+			Value: "0, 30, 60 or 120"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).todosV2DigestWindowMinutes()), nil
+			},
+			set: s.setTodosV2DigestWindowMinutes},
 		s.trustSetting(),
 		s.urgentRulesSetting(), // urgent_call_rules.go
 	}
@@ -804,7 +837,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
 	"assistant.start_requested_tasks":     "title_start_requested_tasks", "assistant.launcher": "title_launcher", "assistant.limit_fallbacks": "title_limit_fallbacks",
 	"assistant.machine_fallbacks": "title_machine_fallbacks", "assistant.machine_fallback_minutes": "title_machine_fallback_minutes",
-	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
+	"assistant.recording_days": "title_recording_days", "assistant.recording_audio_days": "title_recording_audio_days", "assistant.recording_text_days": "title_recording_text_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
 	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", modelProfileBindingsKey: "title_model_bindings", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
@@ -821,10 +854,12 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 const dashboardsSettingKey = "assistant.dashboards"
 
 const (
-	todosV2AutoSeenSettingKey         = "assistant.todos_v2_auto_seen"
-	todosV2PendingReviewSLASettingKey = "assistant.todos_v2_pending_review_sla_hours"
-	todosV2CanWaitSLASettingKey       = "assistant.todos_v2_can_wait_sla_hours"
-	todosV2FoldChildrenSettingKey     = "assistant.todos_v2_fold_children"
+	todosV2AutoSeenSettingKey            = "assistant.todos_v2_auto_seen"
+	todosV2PendingReviewSLASettingKey    = "assistant.todos_v2_pending_review_sla_hours"
+	todosV2CanWaitSLASettingKey          = "assistant.todos_v2_can_wait_sla_hours"
+	todosV2FoldChildrenSettingKey        = "assistant.todos_v2_fold_children"
+	todosV2QuietHoursSettingKey          = "assistant.todos_v2_quiet_hours"
+	todosV2DigestWindowMinutesSettingKey = "assistant.todos_v2_digest_window_minutes"
 )
 
 // clipped is a value as the card shows it, in l.
@@ -1089,28 +1124,58 @@ func (s *Service) setKBTopics(ctx context.Context, v json.RawMessage) (*ownChang
 		"assistant.kb_topics is %v from the knowledge base's next round on.")
 }
 
-func (s *Service) setRecordingDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
-	var days int
-	if err := json.Unmarshal(v, &days); err != nil || days < minRecordingDays || days > maxRecordingDays {
-		return nil, errors.New("value must be a whole number of days, 1–365")
+// parseRetentionDays reads a retention value of persona_settings: 0 or "forever", or 1–3650 days.
+func parseRetentionDays(v json.RawMessage) (int, bool) {
+	var word string
+	if json.Unmarshal(v, &word) == nil && strings.EqualFold(strings.TrimSpace(word), "forever") {
+		return 0, true
 	}
-	before := s.recordingDays(ctx)
+	var days int
+	if strings.TrimSpace(string(v)) == "null" || json.Unmarshal(v, &days) != nil || !recordingDaysValid(&days, false) {
+		return 0, false
+	}
+	return days, true
+}
+
+// setRecordingAudioDays changes recording_audio_days (also the old recording_days): the phone's window.
+func (s *Service) setRecordingAudioDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setRecordingRetention(ctx, v, s.recordingAudioDays(ctx), "assistant.recording_audio_days",
+		"change_recording_audio_days", func(v *Settings, days *int) { v.RecordingAudioDays = days },
+		"the phone deletes its own recordings older than that")
+}
+
+// setRecordingTextDays changes recording_text_days: how long the knowledge base keeps a recording's text.
+func (s *Service) setRecordingTextDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setRecordingRetention(ctx, v, s.recordingTextDays(ctx), "assistant.recording_text_days",
+		"change_recording_text_days", func(v *Settings, days *int) { v.RecordingTextDays = days },
+		"recording text older than that leaves the knowledge base")
+}
+
+func (s *Service) setRecordingRetention(ctx context.Context, v json.RawMessage, before int, key, card string,
+	save func(*Settings, *int), effect string) (*ownChange, error) {
+	days, ok := parseRetentionDays(v)
+	if !ok {
+		return nil, i18n.Err("assistant-profile.bad_recording_days")
+	}
 	if days == before {
-		return &ownChange{summary: "「录音在知识库里保留」没有变化"}, nil
+		return &ownChange{summary: key + " is unchanged"}, nil
 	}
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
 	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_recording_days", i18n.Args{"before": before, "after": days})
+		return i18n.T(l, "assistant-settings_tool."+card, i18n.Args{"before": minutesDaysLabel(l, before), "after": minutesDaysLabel(l, days)})
 	},
 		apply: func(ctx context.Context) (string, error) {
-			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.RecordingDays = &days; return nil }); err != nil {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { save(v, &days); return nil }); err != nil {
 				return "", err
 			}
 			s.settingsChanged(ctx)
 			s.kbWake() // a shorter retention prunes now
-			return fmt.Sprintf("assistant.recording_days is %d: recordings older than that leave the knowledge base.", days), nil
+			if days == 0 {
+				return key + " is forever: nothing is deleted for its age.", nil
+			}
+			return fmt.Sprintf("%s is %d days: %s.", key, days, effect), nil
 		}}, nil
 }
 
@@ -1122,8 +1187,8 @@ func minutesDaysLabel(l i18n.Lang, days int) string {
 	return i18n.T(l, "assistant-settings_tool.minutes_days_value", i18n.Args{"days": days})
 }
 
-// setMinutesDays compares the saved setting, not its recording_days floor. A finite value below that floor is saved
-// for when recording_days becomes shorter. Unset and 0 both mean forever; the card names the effective before/after.
+// setMinutesDays compares the saved setting, not its recording_text_days floor. A finite value below that floor is
+// saved for when recording_text_days becomes shorter. Unset and 0 both mean forever; the card names the effective before/after.
 func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownChange, error) {
 	var days int
 	var word string
@@ -1132,7 +1197,7 @@ func (s *Service) setMinutesDays(ctx context.Context, v json.RawMessage) (*ownCh
 		return nil, i18n.Err("assistant-profile.bad_minutes_days")
 	}
 	cur := s.settings(ctx)
-	saved, recording := minutesDaysSetting(cur), recordingDaysOf(cur)
+	saved, recording := minutesDaysSetting(cur), recordingTextDaysOf(cur)
 	before, after := kb.MinutesDaysFor(saved, recording), kb.MinutesDaysFor(days, recording)
 	args := func(l i18n.Lang) i18n.Args {
 		return i18n.Args{"before": minutesDaysLabel(l, before), "after": minutesDaysLabel(l, after),
@@ -1496,6 +1561,73 @@ func (s *Service) setTodosV2FoldChildren(ctx context.Context, v json.RawMessage)
 			s.settingsChanged(ctx)
 			s.todosChanged(ctx)
 			return fmt.Sprintf("%s is %v (applies when todos_v2 is enabled).", todosV2FoldChildrenSettingKey, on), nil
+		},
+	}, nil
+}
+
+func (s *Service) setTodosV2QuietHours(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var rawPtr *string
+	if err := json.Unmarshal(v, &rawPtr); err != nil || rawPtr == nil {
+		return nil, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)")
+	}
+	next := strings.TrimSpace(*rawPtr)
+	if next != "" {
+		if _, ok := parseTodosV2QuietHours(next); !ok {
+			return nil, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)")
+		}
+	}
+	before := s.settings(ctx).todosV2QuietHours()
+	if next == before {
+		return &ownChange{summary: todosV2QuietHoursSettingKey + " is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	display := func(val string) string {
+		if val == "" {
+			return "off"
+		}
+		return val
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return fmt.Sprintf("Change %s: %s → %s", todosV2QuietHoursSettingKey, display(before), display(next))
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.TodosV2QuietHours = next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.todosChanged(ctx)
+			return fmt.Sprintf("%s is %s (applies when todos_v2 is enabled).", todosV2QuietHoursSettingKey, display(next)), nil
+		},
+	}, nil
+}
+
+func (s *Service) setTodosV2DigestWindowMinutes(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var mins *int
+	if err := json.Unmarshal(v, &mins); err != nil || mins == nil || !slices.Contains(todosV2DigestWindowOptions, *mins) {
+		return nil, errors.New("todos_v2_digest_window_minutes must be 0, 30, 60 or 120")
+	}
+	next := *mins
+	before := s.settings(ctx).todosV2DigestWindowMinutes()
+	if next == before {
+		return &ownChange{summary: todosV2DigestWindowMinutesSettingKey + " is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return fmt.Sprintf("Change %s: %d → %d", todosV2DigestWindowMinutesSettingKey, before, next)
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.TodosV2DigestWindowMinutes = &next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.todosChanged(ctx)
+			return fmt.Sprintf("%s is %d (applies when todos_v2 is enabled).", todosV2DigestWindowMinutesSettingKey, next), nil
 		},
 	}, nil
 }

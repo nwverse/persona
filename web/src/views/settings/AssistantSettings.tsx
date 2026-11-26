@@ -68,9 +68,16 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   /** The role a meeting recording pre-selects (#2981, docs/assistant/meeting-minutes.md "Attendance fields"); only from a hub
    *  that attends meetings. */
   meeting_attendance_default?: string;
-  /** How many days recordings stay in the knowledge base (#3235), in effect; the phone drops its own older ones too. */
+  /** How many days recordings stay (#3235), in effect; the phone drops its own older ones too. From a hub with
+   *  `recording_audio_days` it is that value's old name. */
   recording_days?: number;
-  /** How many days a meeting's minutes stay once its transcript went (#3780), in effect: 0 means forever; finite windows never below `recording_days`. */
+  /** How many days recording audio is kept (#16412), in effect: 0 means forever; the phone drops its own older recordings. */
+  recording_audio_days?: number;
+  /** How many days a recording's text stays in the knowledge base (#16412), in effect: 0 means forever (the default).
+   *  Unset from a hub before it, whose `recording_days` cuts the text too. */
+  recording_text_days?: number;
+  /** How many days a meeting's minutes stay once its transcript went (#3780), in effect: 0 means forever; finite windows
+   *  never below the text's days (`recording_days` from a hub before #16412). */
   minutes_days?: number;
   /** "Follow up every agent Persona starts" (#3617, docs/assistant/unified-entry.md "Agent tasks"): off by default; unset
    *  from a hub before it. */
@@ -127,8 +134,14 @@ const MEETING_ROLES = ["off", "listener", "participant"] as const;
 /** `delivery_gate`'s values, in the picker's order. */
 const DELIVERY_GATES = ["off", "merged", "live"] as const;
 
-/** Finite day bounds (docs/protocol/protocol.md). Minutes also accept 0, selected as Forever rather than typed. */
-const RETENTION = { recording_days: { min: 1, max: 365 }, minutes_days: { min: 1, max: 3650 } } as const;
+/** Finite day bounds (docs/protocol/protocol.md). All but the old `recording_days` also accept 0, selected as Forever
+ *  rather than typed. */
+const RETENTION = {
+  recording_days: { min: 1, max: 365 },
+  recording_audio_days: { min: 1, max: 3650 },
+  recording_text_days: { min: 1, max: 3650 },
+  minutes_days: { min: 1, max: 3650 },
+} as const;
 type Retention = keyof typeof RETENTION;
 
 export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
@@ -222,9 +235,12 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     setRetentionBusy(true);
     try {
       const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { [field]: days } });
-      const want = field === "minutes_days" && days !== 0 ? Math.max(days, r.recording_days ?? days) : days;
+      // Minutes never go before the text: forever while it is kept forever, else at least its days.
+      const text = r.recording_text_days ?? r.recording_days;
+      const want = field === "minutes_days" && days !== 0 ? (text === 0 ? 0 : Math.max(days, text ?? days)) : days;
       if (r.manager !== manager || r[field] !== want) throw new Error(t("settings-assistantsettings.retention_unconfirmed"));
-      setInfo((i) => i ? { ...i, recording_days: r.recording_days, minutes_days: r.minutes_days } : i);
+      setInfo((i) => i ? { ...i, recording_days: r.recording_days, recording_audio_days: r.recording_audio_days,
+        recording_text_days: r.recording_text_days, minutes_days: r.minutes_days } : i);
     } catch (e) {
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setRetentionBusy(false); setRetentionTries((n) => n + 1); }
@@ -707,7 +723,17 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Group>
       )}
 
-      {typeof info?.recording_days === "number" && (
+      {typeof info?.recording_text_days === "number" && typeof info.recording_audio_days === "number" ? (
+        // A hub with separate audio and text retentions (#16412).
+        <Group anchor="recordings" title={t("settings-assistantsettings.recordings_title")} footer={t("settings-assistantsettings.recordings_footer_split")}>
+          <DaysRow field="recording_audio_days" label={t("settings-assistantsettings.recording_audio_days")} value={info.recording_audio_days} tries={retentionTries}
+            disabled={info.manager !== manager || retentionBusy} onSave={(days) => void setRetention("recording_audio_days", days)} />
+          <DaysRow field="recording_text_days" label={t("settings-assistantsettings.recording_text_days")} value={info.recording_text_days} tries={retentionTries}
+            disabled={info.manager !== manager || retentionBusy} onSave={(days) => void setRetention("recording_text_days", days)} />
+          {typeof info.minutes_days === "number" && <DaysRow field="minutes_days" label={t("settings-assistantsettings.minutes_days")} value={info.minutes_days} tries={retentionTries}
+            disabled={info.manager !== manager || retentionBusy} onSave={(days) => void setRetention("minutes_days", days)} />}
+        </Group>
+      ) : typeof info?.recording_days === "number" && (
         // A manager from before minutes_days (#3780) deletes a recording's minutes with it: only one that says the minutes'
         // days promises they stay longer.
         <Group anchor="recordings" title={t("settings-assistantsettings.recordings_title")}
@@ -959,7 +985,8 @@ function AboutMe({ notesSaves, info, onSaved }: { notesSaves: ReturnType<typeof 
  *  unconfirmed or raised one (minutes never below the recordings' days) shows what is in effect. */
 function DaysRow({ field, label, value, tries, disabled, onSave }: { field: Retention; label: string; value: number; tries: number; disabled: boolean; onSave: (days: number) => void }) {
   const { min, max } = RETENTION[field];
-  const savedForever = field === "minutes_days" && value === 0;
+  const canForever = field !== "recording_days";
+  const savedForever = canForever && value === 0;
   const [forever, setForever] = useState(savedForever);
   const [draft, setDraft] = useState(String(value));
   useEffect(() => { setDraft(String(value)); setForever(savedForever); }, [value, tries, savedForever]);
@@ -973,7 +1000,7 @@ function DaysRow({ field, label, value, tries, disabled, onSave }: { field: Rete
   };
   return (
     <Row label={label} hint={valid ? undefined : t("settings-assistantsettings.days_range", { min, max })}>
-      {field === "minutes_days" && <select aria-label={label} value={forever ? "forever" : "days"} disabled={disabled}
+      {canForever && <select aria-label={label} value={forever ? "forever" : "days"} disabled={disabled}
         className={settingsInputClass} onChange={(e) => {
           if (e.target.value === "forever") {
             if (!savedForever) onSave(0);
