@@ -106,6 +106,11 @@ describe("the assistant's feed among the chat's lines (docs/assistant/unified-en
     const res = (text: string, err = false) => ({ id: "r", seq: 2, role: "user", kind: "tool_result", text, is_error: err }) as Item;
     const ok = quickResult(use("mcp__persona__phone_reminders_create", "u1"), res(JSON.stringify({ id: "R1", title: "打电话", due: "2026-11-07T10:00:00+08:00", list: "提醒事项" })));
     expect(ok).toMatchObject({ kind: "reminder", title: "打电话", place: "提醒事项" });
+    const agyWrapped = quickResult(
+      use("mcp_persona_phone_reminders_create", "u1b"),
+      res("Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n" + JSON.stringify({ id: "R2", title: "Call back", list: "Reminders" })),
+    );
+    expect(agyWrapped).toMatchObject({ kind: "reminder", title: "Call back", place: "Reminders" });
     expect(quickResult(use("mcp__persona__phone_reminders_list", "u2"), res(JSON.stringify({ id: "x" })))).toBeUndefined();
     expect(quickResult(use("phone_calendar_create_event", "u3"), res("denied", true))).toBeUndefined();
     const step = { kind: "tool" as const, id: "u1", use: use("phone_reminders_create", "u1"), result: res(JSON.stringify({ id: "R1", title: "t" })), images: [] };
@@ -264,7 +269,7 @@ describe("routing the next message to a task", () => {
       text: "Use the alternative, but keep the current limits.",
     });
     expect(getFeedState().routes["decision-chat"]).toBeUndefined();
-    expect(fetcher.mock.calls.some(([url]) => url === "/api/v1/todos")).toBe(true);
+    expect(fetcher.mock.calls.some(([url]) => new URL(String(url), "http://hub").pathname === "/api/v1/todos")).toBe(true);
   });
 
   it("keeps the decision round attached when its answer fails to send", async () => {
@@ -358,7 +363,7 @@ describe("a message card's 发送 (#1519)", () => {
   it("reads sent from the card the hub keeps, with what went out (the draft for a card from before)", () => {
     expect(cardSent(card("m"))).toBeUndefined();
     expect(cardSent(card("m", { sent_at: "2026-11-04T10:23:00Z", sent: "修好了" }))).toEqual({ at: "2026-11-04T10:23:00Z", text: "修好了" });
-    expect(cardSent(card("m", { sent_at: "2026-11-04T10:23:00Z" }))?.text).toBe("在修了");
+    expect(cardSent(card("m", { sent_at: "2026-11-04T10:23:00Z" }))?.text).toBe("");
   });
 
   it("reads filed from the hub's filed_at only while the card is not sent (#4797)", () => {

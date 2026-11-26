@@ -171,7 +171,7 @@ var modelPurposes = []ModelPurpose{
 	// Answers to the questions asked in an attended meeting (meeting_ask.go): one call with no tools, from meeting material only.
 	// A use of Information processing even with the In-meeting conversation set apart: it answers when the room cannot.
 	{ID: purposeMeetingAnswer, Group: "group_processing", Kind: "api", Parent: "kb"},
-	// A meeting's minutes (kb/minutes.go, #7980): Information processing's until they are given their own provider,
+	// A meeting's minutes (modules/recording/writers/minutes.go, #7980): Information processing's until they are given their own provider,
 	// model or effort.
 	{ID: purposeMeetingMinutes, Group: "group_processing", Kind: "api", Parent: "kb"},
 	// The next-message suggestion over an empty composer (suggest_next.go, #4644): one short call with no tools after a turn.
@@ -306,6 +306,8 @@ type modelsState struct {
 
 	ownMu sync.Mutex
 	own   map[string]ownSeen // machine + "/" + agent → its own service as the node said (models_launchers_scope.go)
+
+	launcherLists launcherListCache // per-(machine, host) short-TTL launchers.list cache with singleflight (launcher_list_cache.go)
 }
 
 func (s *Service) modelRecord(ctx context.Context, id string) (modelRecord, error) {
@@ -511,6 +513,9 @@ func (s *Service) modelProviders(ctx context.Context) []ModelProvider {
 			p.Machines = b.Machines // where plain claude is: Settings › Model Providers lists it by machine
 		}
 		out = append(out, p)
+	}
+	if p, ok := s.claudeDesktopProvider(ctx, s.zshrcLaunchers(ctx, false), out); ok {
+		out = append(out, p) // Agents' only (models_desktop.go)
 	}
 	for _, p := range s.voicePlugins(ctx) {
 		models := make([]proto.ProviderModel, len(p.Models))

@@ -112,6 +112,9 @@ func (n *Node) waitCodexBox(ctx context.Context, pane string, maxWait time.Durat
 		if err := n.codexStartupFailure(ctx, pane, text, exit); err != nil {
 			return err
 		}
+		if codexSignInScreen(text) { // no input box comes before someone signs in (codex_start.go)
+			return codexNotLoggedIn()
+		}
 		if n.answerCodexStartDialog(ctx, pane, text) {
 			continue
 		}
@@ -173,7 +176,7 @@ func codexSkipUpdateKeys(text string) []string {
 // openCodexWait makes the waiting row of a Codex the start opened with no message and answers with it.
 func (n *Node) openCodexWait(ctx context.Context, pane, cwd, launcher, mode string, execution modelExecution, began time.Time) *proto.Session {
 	w := &codexWait{id: codexWaitID(), pane: pane, cwd: cwd, began: began}
-	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort}
+	st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: began.UTC(), Model: execution.Model, ModelEffort: execution.Effort, CodexStartTier: execution.ServiceTier}
 	if mode == "plan" { // as a start with a message keeps it (codex_start.go), for the thread to take
 		st.AppMode = mode
 	}
@@ -390,16 +393,11 @@ func (n *Node) newCodexThreads(w *codexWait, held codexHeld) []newThread {
 	if r, err := filepath.EvalSymlinks(w.cwd); err == nil {
 		resolved = r
 	}
-	homes := []string{n.codexHome()}
-	for _, h := range n.codexInventory().Homes {
-		if h != homes[0] {
-			homes = append(homes, h)
-		}
-	}
 	var out []newThread
 	seen := map[string]bool{}
-	for _, home := range homes {
-		for _, r := range rollouts(home) {
+	scanBy := time.Now().Add(n.codexHomeListBudget())
+	for _, home := range n.codexRolloutHomes(w.pane) {
+		for _, r := range n.firstMessageRollouts(home, scanBy) {
 			if r.sub || (r.cwd != w.cwd && r.cwd != resolved) || r.mtime.Before(w.began.Add(-time.Second)) {
 				continue
 			}
@@ -453,7 +451,7 @@ func (n *Node) codexWaitThread(w *codexWait, held codexHeld) (string, string) {
 // the pane's Codex home has that whole name: what a /resume in that Codex shows, which on the shared app-server no
 // process of the pane's holds (rule 1) and no new thread begins (rules 3, 4). A name cut short ("…") or shared by two
 // threads names none.
-func (n *Node) codexTitleThread(a host.Agent) string {
+func (n *Node) codexTitleThread(home string, a host.Agent) string {
 	i := strings.LastIndex(a.Title, " | ")
 	if i <= 0 {
 		return ""
@@ -464,7 +462,6 @@ func (n *Node) codexTitleThread(a host.Agent) string {
 	if name == "" || strings.HasSuffix(name, "...") || strings.HasSuffix(name, "…") {
 		return ""
 	}
-	home := n.codexPaneHome(a.PaneID)
 	var found []string
 	for _, id := range threadsNamed(home, func(t string) bool { return t == name }) {
 		if p := rolloutPath(home, id); p != "" && metaOf(home, p).sub {
@@ -699,7 +696,7 @@ func (n *Node) attachCodexWait(ctx context.Context, w *codexWait, thread, how st
 	// would find the pane still bound to the row's id and make the row again (codexWaitOf).
 	if !w.manual {
 		st, _ := n.state.get(w.id)
-		n.state.put(thread, sessionState{Pane: w.pane, Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelEffort: st.ModelEffort,
+		n.state.put(thread, sessionState{Pane: w.pane, Launcher: st.Launcher, Cwd: st.Cwd, Model: st.Model, ModelEffort: st.ModelEffort, CodexStartTier: st.CodexStartTier,
 			StartedAt: st.StartedAt, AppMode: st.AppMode, AppModeExplicit: st.AppModeExplicit, CreationID: st.CreationID, Incarnation: st.Incarnation})
 	}
 	n.mu.Lock()
@@ -939,11 +936,17 @@ func (n *Node) sendFirstCodexCall(ctx context.Context, w *codexWait, params json
 
 // withSessionID is params with session_id replaced: calls that read their own fields from params see the same id.
 func withSessionID(params json.RawMessage, id string) json.RawMessage {
+	return withParam(params, "session_id", id)
+}
+
+// withParam is params with key set to value, for the calls that read their own fields from params (an @-quote's note
+// in a message's text, session_mention.go); params as they are when they are no JSON object.
+func withParam(params json.RawMessage, key string, value any) json.RawMessage {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(params, &m) != nil || m == nil {
 		return params
 	}
-	m["session_id"], _ = json.Marshal(id)
+	m[key], _ = json.Marshal(value)
 	b, err := json.Marshal(m)
 	if err != nil {
 		return params

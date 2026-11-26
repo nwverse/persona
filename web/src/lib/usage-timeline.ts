@@ -1,14 +1,11 @@
 // Popover-only timeline, prefix-stripping, and pause helpers: kept out of usage-windows.ts so the
 // cold first screen (UsageBars) never pays for popover logic (src/startup-preload.ts FIRST_SCREEN_BUDGET).
+import { providerTitle, sortedWindows, timelinePosition, type ProviderGroup } from "./usage-popover";
 import {
   canonicalUsageProvider,
   protectReserve,
-  providerTitle,
   remainingPercent,
-  sortedWindows,
-  timelinePosition,
   windowMinutes,
-  type ProviderGroup,
   type UsageAccount,
   type UsageWindow,
 } from "./usage-windows";
@@ -141,8 +138,14 @@ export function accountTimelineLanes(account: UsageAccount, now: number): Timeli
       }
     }
     if (isWindowPaused(w)) bucket.paused = true;
-    if (w.model) {
-      bucket.models.push({ model: w.model, resetsAt: w.resets_at as string, remainingMs: at - now });
+    const model = w.model?.trim();
+    const group = w.group?.trim();
+    const title = w.title?.trim();
+    if (model) {
+      bucket.models.push({ model, resetsAt: w.resets_at as string, remainingMs: at - now });
+    } else if (group || title) {
+      const label = group && title && group.toLowerCase() !== title.toLowerCase() ? `${group} · ${title}` : (title || group)!;
+      bucket.models.push({ model: label, resetsAt: w.resets_at as string, remainingMs: at - now });
     } else if (bucket.planAt === undefined || at < bucket.planAt) {
       bucket.planAt = at;
       bucket.planResetsAt = w.resets_at as string;

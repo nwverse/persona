@@ -53,6 +53,18 @@ func TestScheduledProviderFailureRetriesAtAdvertisedRecoveryTime(t *testing.T) {
 			},
 		},
 		{
+			name: "503 json exponent",
+			errText: func(turnAt, _ time.Time) (string, time.Time) {
+				return `API Error: 503 {"error":{"retry_after":1.8e3}}`, turnAt.Add(30 * time.Minute)
+			},
+		},
+		{
+			name: "503 duration with a conjunction",
+			errText: func(turnAt, _ time.Time) (string, time.Time) {
+				return "API Error: 503 overloaded. Please try again in 1 hour and 30 minutes.", turnAt.Add(90 * time.Minute)
+			},
+		},
+		{
 			name: "503 json resets_at",
 			errText: func(_, recovery time.Time) (string, time.Time) {
 				r := recovery.UTC().Truncate(time.Second)

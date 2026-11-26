@@ -2,6 +2,8 @@ package node
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -490,7 +492,7 @@ func TestSessionStartPiUsesTheWorkAgent(t *testing.T) {
 
 // The hub decides what to do with a permission mode or effort by proto.WorkAgentTypes and proto.NoModeAgentTypes
 // (assistant/launcher_modes.go, #7559): it drops them for the agents a start goes through without (work agents) and
-// refuses them for the ones the node refuses (traex, omp). Both lists must say what start here does with an effort.
+// refuses unsupported choices. TRAE CLI keeps an effort even though it takes no Persona permission mode.
 func TestStartModeAgentTypesMatchTheNode(t *testing.T) {
 	kinds := []string{piAgent, cursorAgent, agyAgent, traexAgent, ompAgent}
 	for _, k := range append(append([]string{}, proto.WorkAgentTypes...), proto.NoModeAgentTypes...) {
@@ -505,25 +507,103 @@ func TestStartModeAgentTypesMatchTheNode(t *testing.T) {
 			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": "w1:p2"}})
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			startLine := "HERDR_AGENT="
+			if kind == traexAgent {
+				startLine = "model_reasoning_effort=high"
+			}
 			f.after(func(c herdrCall) {
-				if c.Method == "pane.send_input" && strings.Contains(c.String(), "HERDR_AGENT=") {
+				if c.Method == "pane.send_input" && strings.Contains(c.String(), startLine) {
 					cancel() // the start went through to the agent's command: that is all this asks
 				}
 			})
 			_, err := n.start(ctx, home, kind, "do the thing", "", "", "", "high", "", "", kind)
 			typed := f.trace("pane.send_input")
-			ran := slices.ContainsFunc(typed, func(c string) bool { return strings.Contains(c, "HERDR_AGENT=") })
+			ran := slices.ContainsFunc(typed, func(c string) bool { return strings.Contains(c, startLine) })
 			// Refused: an error before anything was typed. Went through: the agent's command was typed.
 			refused := err != nil && len(typed) == 0
 			work, none := proto.IsWorkAgentType(kind), proto.IsNoModeAgentType(kind)
 			switch {
 			case work == none:
 				t.Fatalf("%s: in proto.WorkAgentTypes %v, in proto.NoModeAgentTypes %v: want exactly one", kind, work, none)
-			case none && !refused:
-				t.Fatalf("%s with an effort: the node did not refuse it (%v), but proto.NoModeAgentTypes lists it", kind, err)
-			case work && (refused || !ran):
-				t.Fatalf("%s with an effort: the node did not start it (%v), but proto.WorkAgentTypes lists it", kind, err)
+			case kind == ompAgent && !refused:
+				t.Fatalf("%s with an effort: the node did not refuse it (%v)", kind, err)
+			case (work || kind == traexAgent) && (refused || !ran):
+				t.Fatalf("%s with an effort: the node did not start it (%v)", kind, err)
 			}
 		})
 	}
+}
+
+// Classic herdr returning agent_blocked on a work-agent send (agy or cursor) becomes a structured dialog_open refusal
+// with delivered=none instead of an uncoded internal/502 error.
+func TestWorkAgentSendRefusedByHerdrBlocked(t *testing.T) {
+	for _, kind := range []string{agyAgent, cursorAgent} {
+		for _, tc := range []struct {
+			name       string
+			screen     string
+			wantDialog string
+		}{
+			{name: "bare blocked", screen: "ready\n"},
+			{name: "dialog on screen", screen: "Allow command?\n❯ 1. Yes\n  2. No\n\nEsc to cancel\n", wantDialog: "Allow command?"},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				n, f, home := herdrNode(t)
+				const pane = "w1:p1"
+				agent := agentOf(kind, "", proto.StatusBlocked, pane, "w1:t1", "w1", home, kind)
+				seedAgents(t, n, f, agent)
+				f.reply("agent.get", map[string]any{"agent": agent})
+				f.reply("agent.prompt", herdrFail{Code: "agent_blocked", Message: "interactive input required"})
+				f.setScreen(pane, tc.screen)
+				id := otherSession(host.Agent{Agent: kind, PaneID: pane})
+				_, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": "hello"})
+				code, data := refusalOf(t, err)
+				if code != "dialog_open" || data["delivered"] != "none" {
+					t.Fatalf("code=%q data=%v, want dialog_open delivered=none", code, data)
+				}
+				if tc.wantDialog != "" && kind == agyAgent {
+					if data["dialog"] != tc.wantDialog || data["notice"] != false {
+						t.Fatalf("dialog data = %v, want dialog=%q notice=false", data, tc.wantDialog)
+					}
+				} else if _, has := data["dialog"]; has {
+					t.Fatalf("unexpected dialog headline: %v", data)
+				}
+			})
+		}
+	}
+
+	// Windows pre-paste blocked detection also marks ErrNotDelivered and ErrDialogOpen alongside ErrAgentBlocked.
+	n, f, home := herdrNode(t)
+	f.reply("agent.get", map[string]any{"agent": agentOf(agyAgent, "", proto.StatusBlocked, "w1:p2", "w1:t2", "w1", home, agyAgent)})
+	err := n.defaultHost().(*herdrHost).prompt(context.Background(), host.ParsePane("w1:p2"), "hello", true)
+	if !errors.Is(err, host.ErrAgentBlocked) || !errors.Is(err, host.ErrNotDelivered) || !errors.Is(err, host.ErrDialogOpen) {
+		t.Fatalf("windows blocked error missing markers: %v", err)
+	}
+	if code, data := refusalOf(t, deliveryRefusal(err)); code != "dialog_open" || data["delivered"] != "none" {
+		t.Fatalf("deliveryRefusal(windows blocked) = %q %v", code, data)
+	}
+
+	// A confirmed blocked refusal never issues a post-send screen read that could overrun the caller's RPC deadline.
+	t.Run("cursor/blocked refusal never issues post-send screen read", func(t *testing.T) {
+		n, f, home := herdrNode(t)
+		const pane = "w1:p1"
+		agent := agentOf(cursorAgent, "", proto.StatusBlocked, pane, "w1:t1", "w1", home, cursorAgent)
+		seedAgents(t, n, f, agent)
+		f.reply("agent.get", map[string]any{"agent": agent})
+		f.reply("agent.prompt", herdrFail{Code: "agent_blocked", Message: "interactive input required"})
+		reads := 0
+		f.handle("pane.read", func(map[string]any) any {
+			reads++
+			return map[string]any{"text": "Allow command?\n❯ 1. Yes\n  2. No\n\nEsc to cancel\n"}
+		})
+		id := otherSession(host.Agent{Agent: cursorAgent, PaneID: pane})
+		raw, _ := json.Marshal(map[string]any{"session_id": id, "text": "hello"})
+		_, err := n.handle(context.Background(), "session.send", raw)
+		code, data := refusalOf(t, err)
+		if code != "dialog_open" || data["delivered"] != "none" {
+			t.Fatalf("code=%q data=%v, want dialog_open delivered=none", code, data)
+		}
+		if reads != 0 {
+			t.Fatalf("pane.read called %d times on blocked refusal, want 0", reads)
+		}
+	})
 }

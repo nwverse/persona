@@ -375,6 +375,31 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
 
     func cue(_ pcm: Data) { schedule(pcm, voice: false) }
 
+    /// A reply began, or ended: then what is held plays now, without waiting for `quiet` or the lead (#14933).
+    func reply(_ open: Bool) {
+        guard !open else {
+            playout.replyBegan()
+            logEndedReply()
+            return holdUntilDue()
+        }
+        let ready = playout.replyEnded()
+        logEndedReply()
+        holdUntilDue()
+        guard let player, engine?.isRunning == true else { return }
+        for piece in ready { enqueue(piece.buffer, level: piece.level, on: player) }
+    }
+
+    var lead: VoiceLead { playout.lead }
+
+    func startLead(at level: Int) {
+        dropHeld()
+        playout = VoicePlayout(rate: playout.rate, level: level)
+        if level > 0 {
+            let lead = Int(playout.leadNow * 1000)
+            Self.log.notice("voice: this voice came slower than it plays on a call before: gathering \(lead, privacy: .public) ms before playing")
+        }
+    }
+
     func clear() {
         logCut("cut off")
         generation += 1
@@ -524,7 +549,7 @@ nonisolated final class VoiceInputProbe: @unchecked Sendable {
         self.playFormat = playFormat
         self.pump = pump
         // A new player for the same call: the link is the one the voice stalled on, so the raised lead stays (#12922).
-        playout = VoicePlayout(rate: format.outputRate, level: playout.level)
+        playout = playout.moved(to: format.outputRate)
         clock.restart()
     }
 

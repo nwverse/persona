@@ -193,3 +193,24 @@ func TestKnowledgeUIFollowsItsModule(t *testing.T) {
 		})
 	}
 }
+
+func TestKnowledgeUIToolsFollowTheModuleSwitchBeforeTheLayerStarts(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		off  []string
+		on   bool
+	}{{"build", nil, knowledgeuihost.InBuild(moduleswitch.Set{})}, {"switched off", []string{knowledgeuihost.ModuleID}, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			s := &Service{moduleSwitch: moduleswitch.Off(c.off...)}
+			var names []string
+			for _, tool := range s.Tools(context.Background()) {
+				names = append(names, tool.Name)
+			}
+			for _, name := range historyToolNames {
+				if slices.Contains(names, name) != c.on {
+					t.Errorf("tool %s offered before the layer starts: %v (module on: %v)", name, !c.on, c.on)
+				}
+			}
+		})
+	}
+}

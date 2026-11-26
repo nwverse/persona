@@ -55,6 +55,7 @@ class MergedSidebarContent(
     val onSearchAgent: (SessionKey) -> Unit,
     val agentsInFront: Boolean,
     val showKnowledge: Boolean,
+    val herdrTabNameHubs: Set<String?> = emptySet(),
 )
 
 /** The real shared history remains available even while a secondary page hides the Assistant root. */
@@ -328,6 +329,7 @@ fun AssistantSidebarContent(
             agents = merged?.agents,
             agentMachines = merged?.agentMachines.orEmpty(),
             pinnedAgents = merged?.pinnedAgents.orEmpty(),
+            herdrTabNameHubs = merged?.herdrTabNameHubs.orEmpty(),
             agentsFirst = searchAgentsFirst,
             onOpenAgent = if (merged == null && onOpenAgent == null) null else ({ key ->
                 fullSearchOpen = false

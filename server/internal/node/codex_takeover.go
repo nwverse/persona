@@ -87,10 +87,10 @@ func (n *Node) codexDesktopConflict(src codexSource, fresh bool, pass *codexList
 		return true
 	}
 	if !fresh && pass != nil {
-		if pass.desktopAvailable(src.home) {
+		if pass.desktopBusAvailable(src.home) {
 			return true
 		}
-	} else if codexDesktopAvailable(src.home) {
+	} else if codexDesktopBusAvailable(src.home) {
 		return true
 	}
 	if n == nil || n.codices == nil {
@@ -226,7 +226,7 @@ func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, runni
 		state.CanResume, state.Reason = false, "encrypted_context"
 	case !canResumeTarget:
 		state.CanResume, state.Reason = false, "unavailable"
-	case o.desktop && (running || n.codexDesktopConflict(src, false, pass) || n.codexWriterLockHeld(src)):
+	case o.desktopThread(src, pass) && (running || n.codexDesktopConflict(src, false, pass) || n.codexWriterLockHeld(src)):
 		state.CanResume, state.Reason = false, "unavailable"
 	case !running && n.codexWriterLockHeld(src):
 		state.Running = true
@@ -277,7 +277,7 @@ func (n *Node) prepareCodexTakeover(ctx context.Context, id string) (*codexTakeo
 		state.Running = true
 		state.CanResume, state.Reason = false, "unavailable"
 	}
-	if o.desktop && (state.Running || n.codexDesktopConflict(src, true, nil)) {
+	if o.desktopThread(src, nil) && (state.Running || n.codexDesktopConflict(src, true, nil)) {
 		state.CanResume, state.Reason = false, "unavailable"
 	}
 	if state.Running && runtime.GOOS == "windows" {
@@ -342,7 +342,10 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("changed")
 	}
 	o := readCodexOrigin(src.path)
-	if o.desktop && n.codexDesktopConflict(src, true, nil) {
+	desktopConflict := func() bool {
+		return o.desktopThread(src, nil) && n.codexDesktopConflict(src, true, nil)
+	}
+	if desktopConflict() {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	hostCtx, hostErr := n.takeoverHost(ctx)
@@ -391,13 +394,13 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 {
 		return nil, takeoverRefusal("writer_busy")
 	}
-	if n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true, nil)) {
+	if n.codexWriterLockHeld(src) || desktopConflict() {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	if err := settledCodexRollout(ctx, src.path); err != nil {
 		return nil, err
 	}
-	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 || n.codexWriterLockHeld(src) || (o.desktop && n.codexDesktopConflict(src, true, nil)) {
+	if current, err = n.takeoverWriters(src); err != nil || len(current) != 0 || n.codexWriterLockHeld(src) || desktopConflict() {
 		return nil, takeoverRefusal("writer_busy")
 	}
 	if hostErr != nil {

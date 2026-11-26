@@ -9,12 +9,14 @@ import {
   nudgeLabel, pairBot, pairingLeft, testBot, unpairBot, updateBot,
   type BotCredentials, type FeishuBotStatus,
 } from "../../../lib/feishu-bot";
+import { useStore } from "../../../lib/store";
 import { ago } from "../../../lib/format";
 import { documentPage, visiblePoll } from "../../../lib/visible-poll";
 import { Button, copyText, cx, IconButton, Spinner, toast } from "../../../ui/atoms";
 import { Icon } from "../../../ui/icons";
 import { BindSteps } from "../Channels";
 import { FEATURES, LarkReadSection, SOURCE_REPORT_DELAYS, STEPS, TopicGroups, useBot } from "../FeishuBot";
+import { LarkSyncSection } from "../LarkSyncSection";
 import { Disclosure } from "../ProviderFields";
 import { Group, Row, settingsInputClass, Switch } from "../SettingsParts";
 
@@ -37,7 +39,7 @@ export interface FeishuBotController {
 }
 
 /** Shared Feishu Bot state powering both Account & Connection and Chat & Delivery sections inline. */
-export function useFeishuBotController(enabled: boolean, reloadLarkcli?: () => Promise<void>): FeishuBotController {
+export function useFeishuBotController(enabled: boolean, reloadLarkcli: () => Promise<void>, reloadChannel: () => Promise<void>): FeishuBotController {
   const bot = useBot();
   const { status, accept, readStatus, loading, error, setError, load } = bot;
   const [form, setForm] = useState<BotCredentials>(() => (status ? credentialsOf(status) : { appID: "", appSecret: "", domain: "feishu" }));
@@ -89,16 +91,20 @@ export function useFeishuBotController(enabled: boolean, reloadLarkcli?: () => P
         if (result?.current()) adoptForm(result.status);
         return result;
       }),
-      reloadLarkcli ? reloadLarkcli().catch(() => {}) : Promise.resolve(),
+      reloadLarkcli().catch(() => {}),
+      reloadChannel(),
     ]);
     if (afterCreate && next?.current()) setCreated(true);
-  }, [readStatus, adoptForm, reloadLarkcli]);
+  }, [readStatus, adoptForm, reloadLarkcli, reloadChannel]);
 
   const run = useCallback(async (what: string, call: () => Promise<FeishuBotStatus>, done?: string, replace = false) => {
     setSaving(true);
     try {
       const next = await call();
-      if (accept(next)) adoptForm(next, replace);
+      if (accept(next)) {
+        adoptForm(next, replace);
+        void reloadChannel();
+      }
       setError("");
       if (done) toast(done, "ok");
       return true;
@@ -108,7 +114,7 @@ export function useFeishuBotController(enabled: boolean, reloadLarkcli?: () => P
     } finally {
       setSaving(false);
     }
-  }, [accept, adoptForm, setError]);
+  }, [accept, adoptForm, reloadChannel, setError]);
 
   const sendTest = useCallback(async () => {
     setSaving(true);
@@ -165,6 +171,8 @@ export function FeishuBotConnectionPanel({
           onOpen={() => onOpenConnector?.("larkcli")}
         />
       )}
+
+      <LarkSyncSection appID={status?.app_id} />
 
       <Group title={larkcli ? t("settings-feishubot.bot_section") : undefined} footer={t("settings-feishubot.footer")}>
         <div className="flex items-center gap-3 px-4 py-3">
@@ -323,6 +331,7 @@ export function FeishuBotConnectionPanel({
 export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
   const { status, saving, run } = ctl;
   const fullReplyDetail = useId();
+  const machines = useStore((s) => s.machines);
   if (!status?.has_secret) return null;
 
   const features = status.features ?? DEFAULT_FEATURES;
@@ -425,7 +434,7 @@ export function FeishuBotDeliveryPanel({ ctl }: { ctl: FeishuBotController }) {
         <Group title={t("settings-feishubot.agents")}>
           {agents.map((a) => (
             <Row key={a.session_id} label={a.title}>
-              <span className="max-w-[160px] truncate">{a.machine_id}</span>
+              <span className="max-w-[160px] truncate">{machines.find((m) => m.id === a.machine_id)?.name || a.machine_id}</span>
             </Row>
           ))}
         </Group>

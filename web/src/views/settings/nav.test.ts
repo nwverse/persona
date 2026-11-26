@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { searchSettings } from "./search";
 import { ASSISTANT_TABS, categoryState, FROM_LIST, itemState, NAV_GROUPS, navGroups, openedFromList, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
 
@@ -88,7 +89,7 @@ describe("settings sidebar groups", () => {
     expect(NAV_GROUPS.map((g) => g.key)).toEqual(["assistant", "device", "hub", "labs"]);
     expect(NAV_GROUPS.map((g) => g.tabs)).toEqual([
       ["models", "persona", "prompts", "integrations", "channels", "connectors", "sources", "extensions", "knowledge", "agents"],
-      ["general", "notifications", "shortcuts"],
+      ["general", "notifications", "shortcuts", "advanced"],
       ["hub", "managers", "avatar", "devices"],
       ["labs"],
     ]);
@@ -98,16 +99,50 @@ describe("settings sidebar groups", () => {
     expect(navGroups(false)[0]!.tabs).toEqual([
       "models", "persona", "prompts", "channels", "connectors", "sources", "extensions", "knowledge", "agents",
     ]);
-    // When integrations_v2 is on, channels/connectors/extensions collapse into one integrations entry.
+    // When integrations_v2 is on, channels/connectors/sources/extensions collapse 4-in-1 into integrations.
     expect(navGroups(true)[0]!.tabs).toEqual([
-      "models", "persona", "prompts", "integrations", "sources", "knowledge", "agents",
+      "models", "persona", "prompts", "integrations", "knowledge", "agents",
     ]);
   });
 
-  it("redirects legacy connectors/channels/extensions routes into integrations when integrations_v2 is on", () => {
+  it("keeps the default appearance in General and the non-default looks under Advanced (#13398)", () => {
+    expect(NAV_GROUPS.find((g) => g.key === "device")!.tabs).toEqual(["general", "notifications", "shortcuts", "advanced"]);
+    expect(settingsHref("advanced", null, false)).toBe("/settings?tab=advanced");
+    // the default look (Match system / Light / Dark) and text size stay in General
+    expect(searchSettings(t("settings.theme_dark")).groups).toContainEqual(expect.objectContaining({ tab: "general", anchor: "theme" }));
+    expect(searchSettings(t("ui-look.text_size")).groups).toContainEqual(expect.objectContaining({ tab: "general", anchor: "text-size" }));
+    // every opt-in look is reachable only from Advanced › Appearance
+    for (const [query, anchor] of [
+      [t("ui-look.accent"), "theme-color"],
+      [t("ui-extensionthemepicker.label"), "extension-theme"],
+      [t("ui-look.font"), "font"],
+      [t("ui-look.sidebar_icons"), "sidebar-icons"],
+    ]) {
+      const groups = searchSettings(query).groups;
+      expect(groups).toContainEqual(expect.objectContaining({ tab: "advanced", group: query, anchor }));
+      expect(groups.some((g) => g.tab === "general" && g.anchor === anchor)).toBe(false);
+    }
+  });
+
+  it("redirects legacy connectors/channels/extensions/sources routes into integrations when integrations_v2 is on", () => {
+    const sampleState = JSON.stringify({ p: "source", id: "sub_push_1" });
+    const encodedState = encodeURIComponent(sampleState);
     expect(redirectLegacySettings("?tab=connectors", "", "/settings", true)).toBe("/settings?tab=integrations&filter=data");
     expect(redirectLegacySettings("?tab=channels", "", "/settings", true)).toBe("/settings?tab=integrations&filter=channels");
     expect(redirectLegacySettings("?tab=extensions", "", "/settings", true)).toBe("/settings?tab=integrations");
+    expect(redirectLegacySettings("?tab=sources", "", "/settings", true)).toBe("/settings?tab=integrations&integration=-sources");
+    expect(redirectLegacySettings("?tab=sources&manager=work", "", "/settings", true))
+      .toBe("/settings?tab=integrations&manager=work&integration=-sources%40work");
+    expect(redirectLegacySettings(`?tab=sources&state=${encodedState}`, "", "/settings", true))
+      .toBe(`/settings?tab=integrations&integration=${encodeURIComponent(`-sources/${encodedState}`)}`);
+    expect(redirectLegacySettings(`?tab=sources&state=${encodedState}&manager=work`, "", "/settings", true))
+      .toBe(`/settings?tab=integrations&manager=work&integration=${encodeURIComponent(`-sources@work/${encodedState}`)}`);
+    expect(redirectLegacySettings("", "", "/settings/sources", true))
+      .toBe("/settings?tab=integrations&integration=-sources");
+    expect(redirectLegacySettings("", "", `/settings/sources/${encodedState}`, true))
+      .toBe(`/settings?tab=integrations&integration=${encodeURIComponent(`-sources/${encodedState}`)}`);
+    expect(redirectLegacySettings("", "", `/settings/sources@work/${encodedState}`, true))
+      .toBe(`/settings?tab=integrations&manager=work&integration=${encodeURIComponent(`-sources@work/${encodedState}`)}`);
     expect(redirectLegacySettings("?tab=connectors&connector=github%40work&manager=work", "", "/settings", true))
       .toBe("/settings?tab=integrations&manager=work&integration=connector%3Agithub%40work");
     expect(redirectLegacySettings("?tab=connectors&connector=feishu-bot", "", "/settings", true))
@@ -131,12 +166,32 @@ describe("settings sidebar groups", () => {
     expect(redirectLegacySettings("", "", "/settings/sent", true))
       .toBe("/settings?tab=integrations&integration=-sent");
     expect(redirectLegacySettings("?tab=integrations&integration=ext%3Alarkx", "", "/settings", true)).toBeNull();
+    expect(redirectLegacySettings("?tab=integrations&integration=-sources", "", "/settings", true)).toBeNull();
   });
 
-  it("redirects integrations routes back to legacy connectors/channels/extensions when integrations_v2 is off", () => {
+  it("redirects integrations routes back to legacy connectors/channels/extensions/sources when integrations_v2 is off", () => {
+    const sampleState = JSON.stringify({ p: "source", id: "sub_push_1" });
+    const encodedState = encodeURIComponent(sampleState);
     expect(redirectLegacySettings("?tab=integrations", "", "/settings", false)).toBe("/settings?tab=extensions");
     expect(redirectLegacySettings("?tab=integrations&filter=channels", "", "/settings", false)).toBe("/settings?tab=channels");
     expect(redirectLegacySettings("?tab=integrations&filter=data", "", "/settings", false)).toBe("/settings?tab=connectors");
+    expect(redirectLegacySettings("?tab=integrations&integration=-sources", "", "/settings", false)).toBe("/settings?tab=sources");
+    expect(redirectLegacySettings("?tab=integrations&integration=-sources%40work", "", "/settings", false))
+      .toBe("/settings?tab=sources&manager=work");
+    expect(redirectLegacySettings(`?tab=integrations&integration=${encodeURIComponent(`-sources/${encodedState}`)}`, "", "/settings", false))
+      .toBe(`/settings?tab=sources&state=${encodedState}`);
+    expect(redirectLegacySettings(`?tab=integrations&integration=${encodeURIComponent(`-sources@work/${encodedState}`)}`, "", "/settings", false))
+      .toBe(`/settings?tab=sources&state=${encodedState}&manager=work`);
+    expect(redirectLegacySettings("", "", "/settings/integrations/-sources", false)).toBe("/settings?tab=sources");
+    expect(redirectLegacySettings("", "", "/settings/integrations/-sources@work", false)).toBe("/settings?tab=sources&manager=work");
+    expect(redirectLegacySettings("", "", `/settings/integrations/-sources/${encodedState}`, false))
+      .toBe(`/settings?tab=sources&state=${encodedState}`);
+    expect(redirectLegacySettings("", "", `/settings/integrations/-sources@work/${encodedState}`, false))
+      .toBe(`/settings?tab=sources&state=${encodedState}&manager=work`);
+    expect(redirectLegacySettings("", "", "/settings/sources", false)).toBe("/settings?tab=sources");
+    expect(redirectLegacySettings("", "", `/settings/sources/${encodedState}`, false))
+      .toBe(`/settings?tab=sources&state=${encodedState}`);
+    expect(redirectLegacySettings("?tab=sources", "", "/settings", false)).toBeNull();
     expect(redirectLegacySettings("", "", "/settings/integrations", false)).toBe("/settings?tab=extensions");
     expect(redirectLegacySettings("", "", "/settings/integrations/builtin:mail", false)).toBe("/settings?tab=connectors");
     expect(redirectLegacySettings("", "", "/settings/integrations/builtin:feishu-bot@work", false))
@@ -153,17 +208,36 @@ describe("settings sidebar groups", () => {
       .toBe("/settings?tab=extensions&extension=-market");
     expect(redirectLegacySettings("", "", "/settings/integrations/-sent", false))
       .toBe("/settings?tab=connectors&connector=-sent");
-    // While assistant state is still loading ("loading"), do not redirect away from integrations yet.
+    // While assistant state is still loading ("loading"), do not redirect away from integrations or sources yet.
     expect(redirectLegacySettings("?tab=integrations&integration=builtin%3Amail", "", "/settings", "loading")).toBeNull();
+    expect(redirectLegacySettings("?tab=sources", "", "/settings", "loading")).toBeNull();
     // Target helper matches bidirectional rules.
     expect(resolveSettingsTarget("extensions", "larkx@work", true)).toEqual({ tab: "integrations", sub: "ext:larkx@work" });
+    expect(resolveSettingsTarget("sources", null, true)).toEqual({ tab: "integrations", sub: "-sources" });
+    expect(resolveSettingsTarget("sources", sampleState, true, null, "work")).toEqual({
+      tab: "integrations",
+      sub: `-sources@work/${encodedState}`,
+    });
     expect(resolveSettingsTarget("integrations", "channel:wechat@work", false)).toEqual({ tab: "channels", sub: "wechat@work" });
+    expect(resolveSettingsTarget("integrations", `-sources@work/${encodedState}`, false)).toEqual({
+      tab: "sources",
+      sub: sampleState,
+      manager: "work",
+    });
   });
 
   it("remaps Settings search to integrations when integrations_v2 is on and hides integrations when off", () => {
     expect(searchSettings("集成与扩展", false).tabs).not.toContain("integrations");
     expect(searchSettings("渠道", true).tabs).toContain("integrations");
     expect(searchSettings("渠道", true).tabs).not.toContain("channels");
+    expect(searchSettings("收件箱来源", false).tabs).toContain("sources");
+    expect(searchSettings("收件箱来源", false).tabs).not.toContain("integrations");
+    expect(searchSettings("收件箱来源", true, true).tabs).toContain("integrations");
+    expect(searchSettings("收件箱来源", true, true).tabs).not.toContain("sources");
+    expect(searchSettings("收件箱来源", true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+    expect(searchSettings("数据流向", true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+    expect(searchSettings("邮箱", true).groups.some((g) => g.sub === "builtin:mail")).toBe(false);
+    registerTestMailbox();
     expect(searchSettings("邮箱", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "mail", sub: "builtin:mail" }));
     expect(searchSettings("扩展市场", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "market", sub: "-market" }));
     expect(searchSettings("以你的名义发出", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "sent", sub: "-sent" }));
@@ -228,7 +302,9 @@ describe("settings search", () => {
     const finds = (q: string, tab: string, anchor: string) => expect(searchSettings(q).groups).toContainEqual(expect.objectContaining({ tab, anchor }));
     finds(t("language.label"), "general", "language");
     finds(t("ui-look.text_size"), "general", "text-size");
-    finds(t("ui-look.accent"), "general", "theme-color");
+    finds(t("ui-look.accent"), "advanced", "theme-color");
+    finds(t("ui-look.font"), "advanced", "font");
+    finds(t("ui-look.sidebar_icons"), "advanced", "sidebar-icons");
     finds(t("settings.theme_dark"), "general", "theme");
     finds(t("settings.reply_motion"), "general", "reply-motion");
     finds(t("settings.disconnect_browser"), "general", "disconnect");

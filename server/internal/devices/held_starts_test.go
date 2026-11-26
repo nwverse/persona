@@ -391,23 +391,24 @@ func TestHeldStartMidFlightDisconnectReconcilesWithoutDuplicate(t *testing.T) {
 
 		var liveAttempts atomic.Int32
 		reconciledCh := make(chan string, 1)
+		disconnect1 := attachFakeNode(t, m, nodeproto.Announced, nil)
 		host.onReplay = func(_ context.Context, req devicewire.ReplayHeldStartRequest) (devicewire.ReplayHeldStartReply, error) {
 			if req.ReconciledSessionID != "" {
 				reconciledCh <- req.ReconciledSessionID
 				return devicewire.ReplayHeldStartReply{Outcome: devicewire.ReplayOutcomeStarted, SessionID: req.ReconciledSessionID}, nil
 			}
 			liveAttempts.Add(1)
+			disconnect1() // Close the first peer while its launch is still in flight.
 			return devicewire.ReplayHeldStartReply{Outcome: devicewire.ReplayOutcomeUnclear}, nil
 		}
 
 		// Connection 1 drops mid-flight -> unclear.
-		disconnect1 := attachFakeNode(t, m, nodeproto.Announced, nil)
 		d.heldStartWake("mac")
 		unclear := host.waitEvent(t, func(e proto.HeldStart) bool { return e.OpID == opID && e.State == proto.HeldStartFailed })
 		if unclear.Failure != db.HeldUnclear {
 			t.Fatalf("expected unclear, got %+v", unclear)
 		}
-		disconnect1()
+		d.workers.Wait() // Reconnect only after the first worker can no longer publish events.
 
 		// Connection 2 reconnects: start.status says pending first, then started -> reconciles without launching again.
 		var statusChecks atomic.Int32
@@ -428,6 +429,11 @@ func TestHeldStartMidFlightDisconnectReconcilesWithoutDuplicate(t *testing.T) {
 		host.waitEvent(t, func(e proto.HeldStart) bool {
 			return e.OpID == opID && e.State == proto.HeldStartFailed && e.Failure == db.HeldUnclear
 		})
+		// The failed event is published before the worker releases its wake guard.
+		d.workers.Wait()
+		if got := statusChecks.Load(); got != 1 {
+			t.Fatalf("pending check made %d status calls, want 1", got)
+		}
 		if liveAttempts.Load() != 1 {
 			t.Fatalf("pending check launched a duplicate (%d attempts)", liveAttempts.Load())
 		}
@@ -440,6 +446,10 @@ func TestHeldStartMidFlightDisconnectReconcilesWithoutDuplicate(t *testing.T) {
 		}
 		if got := <-reconciledCh; got != "sess-reconciled-1" {
 			t.Fatalf("hub reconciled session=%q", got)
+		}
+		d.workers.Wait()
+		if got := statusChecks.Load(); got != 2 {
+			t.Fatalf("reconciliation made %d status calls, want 2", got)
 		}
 		if liveAttempts.Load() != 1 {
 			t.Fatalf("reconcile triggered duplicate live replay (%d attempts)", liveAttempts.Load())
