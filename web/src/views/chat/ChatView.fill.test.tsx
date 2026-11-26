@@ -135,12 +135,14 @@ describe("ChatView older pages", () => {
   });
 
   it("anchors a prepended page when the rail joins a read started elsewhere", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(
-      String(input).includes("user_inputs=1") ? { total: 3, history: "", inputs: [
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const query = new URL(String(input), "https://example.com").searchParams;
+      if (query.has("around_seq")) return Response.json({ code: "node_outdated" }, { status: 409 });
+      return Response.json(query.has("user_inputs") ? { total: 3, history: "", inputs: [
         { id: "distant#0", seq: 1, preview: "Compare the earlier drafts", answer: "The second draft is shorter." },
         { id: "intermediate#0", seq: 5 }, { id: "u1#0", seq: 10 },
-      ] } : {},
-    ), { headers: { "Content-Type": "application/json" } })));
+      ] } : {});
+    }));
     await open({ scrollHeight: 6_000, clientHeight: 800 });
     // Advancing the viewport timers does not wait for the lazy rail module.
     await act(async () => { await vi.dynamicImportSettled(); });
@@ -155,7 +157,10 @@ describe("ChatView older pages", () => {
     // The underlying read started outside the scroll loader, so it did not take an anchor.
     Object.assign(transcript, { loadEarlier, loadingEarlier: true });
     act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
-    act(() => { void rail.props!.onJump("seg:distant#0"); });
+    await act(async () => {
+      void rail.props!.onJump("seg:distant#0");
+      await vi.dynamicImportSettled();
+    });
     expect(loadEarlier).toHaveBeenCalledOnce();
     expect(scroller.scrollTop).toBe(3_200);
 

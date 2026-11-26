@@ -217,9 +217,10 @@ func TestSupervisionRelayInDoubtKeepsItsHoldOnlyWhenItWentIn(t *testing.T) {
 // A logical relay can reach the model before it appears in the manager's first transcript read.
 func TestLogicalSupervisionFinishAfterUnconfirmedSend(t *testing.T) {
 	for _, queued := range []bool{false, true} {
-		for _, state := range []string{"landed", "absent", "other_id", "newer_input", "owner_spoke", "promoted"} {
+		for _, state := range []string{"landed", "absent", "other_id", "newer_input", "owner_spoke", "turn_ended", "promoted"} {
 			t.Run(fmt.Sprintf("queued=%v/%s", queued, state), func(t *testing.T) {
-				s, f := newQuietService(t)
+				store := &memStore{}
+				s, f := newQuietServiceOn(t, store)
 				ctx := context.Background()
 				at := time.Now()
 				text := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{Kind: "review", Title: "Example task"}}})
@@ -256,13 +257,21 @@ func TestLogicalSupervisionFinishAfterUnconfirmedSend(t *testing.T) {
 				switch state {
 				case "owner_spoke":
 					s.UserSpoke(ctx, SessionRef{MachineID: "server", SessionID: "conv1"})
+				case "turn_ended":
+					s.endSupervisionTurn(ctx, "conv1", time.Now(), false)
 				case "promoted":
-					s.promoteSupervision("conv1")
+					if err := s.promoteSupervision("conv1"); err != nil {
+						t.Fatal(err)
+					}
 				}
 				receipt, err := s.toolSupervisionFinish(ctx, "conv1", json.RawMessage(`{"visibility":"silent","summary":"Checked the example task."}`))
 				if state == "landed" {
 					if err != nil || !strings.Contains(receipt, `"visibility":"silent"`) || !s.supervising("conv1") {
 						t.Fatalf("late delivery did not keep its supervision hold: result %q, error %v", receipt, err)
+					}
+					restarted, _ := newQuietServiceOn(t, store)
+					if !restarted.supervising("conv1") {
+						t.Fatal("verified supervision hold was lost on restart")
 					}
 				} else if err == nil {
 					t.Fatalf("%s allowed a silent finish: %s", state, receipt)

@@ -91,7 +91,7 @@ func (ps *extensions) extensionAssistantEvent(ctx context.Context, id string, pa
 		name = p.Full.Name
 	}
 	var out json.RawMessage
-	if err := ps.h.kbAsk(ctx, assistantwire.MethodExtensionEvent, assistantwire.ExtensionEvent{Extension: id, Name: name, Params: params}, &out); err != nil {
+	if err := ps.h.kbAsk(ctx, assistantwire.MethodExtensionEvent, assistantwire.ExtensionEvent{Extension: id, Name: name, Params: assistantwire.UncheckedEventParams(params)}, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

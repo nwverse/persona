@@ -221,12 +221,13 @@ type Store struct {
 	metaMu   sync.Mutex // acquire before mu when both are needed (projectInput reads Log under metaMu)
 	applyMu  sync.Mutex
 
-	recMu      sync.Mutex   // a recording's read-compare-write (recordings.go)
+	recMu      sync.Mutex   // a recording's read-compare-write (the upload, a hand edit, delete, retention)
 	recFilesMu sync.RWMutex // acquire before metaMu for recording snapshots and recovery
-	liveMu     sync.Mutex   // a live log's read-modify-write (live.go); after recMu, before recFilesMu
-	meetMu     sync.Mutex   // meeting.json's read-modify-write (meeting.go); after recMu, before liveMu
-	// A hub-mode recording's audio has a mutex of its own in the recording module (internal/modules/recording/writers,
-	// audioRec.mu), taken after liveMu and before recFilesMu; an audio append holds recFilesMu for reading.
+	meetMu     sync.Mutex   // meeting.json's read-modify-write (meeting_keep.go); after recMu, before recFilesMu
+	// Two more locks sit between meetMu and recFilesMu and are the recording module's own
+	// (internal/modules/recording/writers, storeState): the live log's (liveMu, a live log's read-modify-write) and,
+	// after it, each hub-mode recording's audio mutex (audioRec.mu); an audio append holds recFilesMu for reading.
+	// The order of the six: recMu, meetMu, liveMu, audio mutex, recFilesMu, metaMu.
 	// recordings is the recording module's write side once it hooked a knowledge base on this store (recording_port.go:
 	// the audio touch points of delete, retention and the trim); nil without the module.
 	recordings        atomic.Pointer[recordingwire.Provider]
@@ -239,6 +240,9 @@ type Store struct {
 	// sources' distill marks (topic_distill.go). Acquire before metaMu.
 	topicMu  sync.Mutex
 	ingestMu sync.Mutex // live identity filtering through attachment preparation and commit
+	// superseded: gateway lines the aligner found shorter than a sync message it let through (align_loose.go), by
+	// sync chat id and message id, dropped once that message is written (Engine.settleSuperseded). Under ingestMu.
+	superseded map[string]map[string]gatewayDrop
 	// chatMu: a chat's read-modify-write of meta.json by the pipeline (Ingest, saveArchived, WriteHistory in history.go,
 	// and compression's write-back, putCompressed), so none writes back a stale copy over what another wrote. Each
 	// reads the chat again under it and changes only the fields it owns. Hand edits (Apply, unlink) take it through

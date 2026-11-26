@@ -12,7 +12,7 @@
 // option replaces the old one locally (the wire value stays an array), so a replacement never shows two chosen or a
 // too-many error. Drafts stay through any failure or conflict. One write at a time, and a conflict or an uncertain write
 // needs Reload first.
-import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { formatList, t } from "../../../i18n";
 import { ConfigurationController, draftValue, type FieldState, type FormState, type Problem } from "../../../lib/configuration/controller";
 import { ERROR_CODES, fieldValue, sameValue, scalarLength, type ConfigurationField, type ConfigurationSource, type FieldValue, type KnownField } from "../../../lib/configuration/contract";
@@ -32,7 +32,9 @@ export function problemText(p: Problem): string {
 }
 
 /** The form for `source`. A source with another `key` is another resource: the form starts over for it. */
-export function ConfigurationForm({ source, guidance }: { source: ConfigurationSource; guidance?: ConfigurationGuidance }) {
+type FieldBadge = { id: string; content: ReactNode };
+
+export function ConfigurationForm({ source, guidance, fieldBadge }: { source: ConfigurationSource; guidance?: ConfigurationGuidance; fieldBadge?: FieldBadge }) {
   const [ctl, setCtl] = useState<ConfigurationController | null>(null);
   useEffect(() => {
     const c = new ConfigurationController(source, guidance);
@@ -44,7 +46,7 @@ export function ConfigurationForm({ source, guidance }: { source: ConfigurationS
   }, [source.key]);
   useLayoutEffect(() => ctl?.setGuidance(guidance), [ctl, guidance]);
   if (!ctl || ctl.source.key !== source.key) return <FormLoading />;
-  return <Form ctl={ctl} />;
+  return <Form ctl={ctl} fieldBadge={fieldBadge} />;
 }
 
 function FormLoading() {
@@ -57,7 +59,7 @@ function FormLoading() {
   );
 }
 
-function Form({ ctl }: { ctl: ConfigurationController }) {
+function Form({ ctl, fieldBadge }: { ctl: ConfigurationController; fieldBadge?: FieldBadge }) {
   const s = useSyncExternalStore(ctl.subscribe, ctl.snapshot);
   const heading = useRef<HTMLHeadingElement>(null);
   const previouslyConfirming = useRef(false);
@@ -100,7 +102,7 @@ function Form({ ctl }: { ctl: ConfigurationController }) {
       {doc.groups.map((g) => (
         <Group key={g.id} title={g.title || undefined} footer={g.description} anchor={`configuration-${doc.id}-${g.id}`}>
           {g.fields.map((f) => (
-            <FieldRow key={f.id} ctl={ctl} s={s} field={f} />
+            <FieldRow key={f.id} ctl={ctl} s={s} field={f} badge={fieldBadge?.id === f.id ? fieldBadge.content : undefined} />
           ))}
         </Group>
       ))}
@@ -152,7 +154,7 @@ function valueText(field: KnownField, v: FieldValue): string {
   }
 }
 
-function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormState; field: ConfigurationField }) {
+function FieldRow({ ctl, s, field, badge }: { ctl: ConfigurationController; s: FormState; field: ConfigurationField; badge?: ReactNode }) {
   const titleId = useId();
   const descId = useId();
   const countId = useId();
@@ -184,7 +186,12 @@ function FieldRow({ ctl, s, field }: { ctl: ConfigurationController; s: FormStat
     <div data-settings-row={`configuration-${doc.id}-${field.id}`} data-configuration-field={field.id} data-kind={field.kind} className="px-4 py-2.5">
       <div className="flex flex-col gap-x-3 gap-y-1.5 sm:flex-row sm:items-start">
         <div className="min-w-0 flex-1">
-          <div id={titleId} className="text-meta text-ink">{field.title}</div>
+          {badge ? (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-ink">
+              <span id={titleId}>{field.title}</span>
+              {badge}
+            </div>
+          ) : <div id={titleId} className="text-meta text-ink">{field.title}</div>}
           {field.description && <p id={descId} className="mt-0.5 text-submeta leading-snug text-ink-3">{field.description}</p>}
         </div>
         {known && inline && <div className="shrink-0"><InlineControl ctl={ctl} field={known} shown={shown} can={can} titleId={titleId} descId={described} invalidValue={invalid} /></div>}

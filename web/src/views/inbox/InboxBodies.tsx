@@ -1,7 +1,7 @@
 // The bodies of an opened item besides a Feishu chat: a mail (its HTML in a sandboxed frame), a Feishu document's
 // rows about you (status menus write into the document), a Moments post with its comments.
 import { useEffect, useRef, useState } from "react";
-import { api, enc, errorText } from "../../lib/api";
+import { api, enc, errorText, isAbort } from "../../lib/api";
 import { bytes, clock } from "../../lib/format";
 import { docTypeName, isDone, itemKey, withToken, type InboxItem, type MomentComment, type MomentPost } from "../../lib/inbox";
 import { momentText } from "../../lib/inbox-page";
@@ -14,14 +14,26 @@ import { Button, cx, Loading, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { ComposeDialog } from "./ComposeDialog";
 import { Glyph, Monogram, StatusMenu, Tag } from "./InboxParts";
+import { useMailReading } from "./item-write-gate";
 import { openMedia } from "./LarkThread";
+import { StoredMailBody } from "./StoredMailBody";
 
 // ── mail ─────────────────────────────────────────────────
 
 /** A mail: who, the body (its HTML in a sandboxed frame), attachments. Opening it marks it read in the mailbox; with
  * Settings › Translation on for mail, a foreign one is shown translated ("Original" one click away). Replies are written by hand.
- * `onLatest`: an older message from the handling chain is open; the action returns to the thread's latest. */
+ * `onLatest`: an older message from the handling chain is open; the action returns to the thread's latest.
+ * On a hub with mail off (lib/mail.ts mailReading) there is no message to ask for: the text the hub kept is shown
+ * (StoredMailBody), with no reply, flag or attachment. */
 export function MailBody({ item, onLatest }: { item: InboxItem; onLatest?: () => void }) {
+  const reading = useMailReading();
+  switch (reading.kind) {
+    case "stored": return <StoredMailBody item={item} onLatest={onLatest} />;
+    case "full": return <FullMailBody item={item} onLatest={onLatest} />;
+  }
+}
+
+function FullMailBody({ item, onLatest }: { item: InboxItem; onLatest?: () => void }) {
   const m = item.mail!;
   const uid = m.uids[m.uids.length - 1];
   const mailbox = m.mailbox || "INBOX";
@@ -41,17 +53,19 @@ export function MailBody({ item, onLatest }: { item: InboxItem; onLatest?: () =>
 
   useEffect(() => {
     let live = true;
+    const abort = new AbortController();
     setMsg(null);
     setError("");
-    api<{ message: MailMessage }>(`${path}?mailbox=${enc(mailbox)}`, { headers: itemHeaders(manager) })
+    api<{ message: MailMessage }>(`${path}?mailbox=${enc(mailbox)}`, { headers: itemHeaders(manager), signal: abort.signal })
       .then((r) => {
         if (!live) return;
         setMsg(r.message);
         if (unread && r.message?.seen !== true) void markMailSeen(m.account_id, uid, mailbox, manager);
       })
-      .catch((e) => live && setError(errorText(e)));
+      .catch((e) => { if (live && !isAbort(e)) setError(errorText(e)); });
     return () => {
       live = false;
+      abort.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, mailbox, manager]);
@@ -287,14 +301,16 @@ export function MomentBody({ item }: { item: InboxItem }) {
 
   useEffect(() => {
     let live = true;
+    const abort = new AbortController();
     setPost(null);
     setError("");
     const base = `/lark/moments/posts/${enc(id)}`;
     const headers = itemHeaders(manager);
-    api<MomentPost>(base, { headers }).then((p) => live && setPost(p)).catch((e) => live && setError(errorText(e)));
-    api<{ comments?: MomentComment[] }>(`${base}/comments`, { headers }).then((r) => live && setComments(r.comments ?? [])).catch(() => {});
+    api<MomentPost>(base, { headers, signal: abort.signal }).then((p) => live && setPost(p)).catch((e) => { if (live && !isAbort(e)) setError(errorText(e)); });
+    api<{ comments?: MomentComment[] }>(`${base}/comments`, { headers, signal: abort.signal }).then((r) => live && setComments(r.comments ?? [])).catch(() => {});
     return () => {
       live = false;
+      abort.abort();
     };
   }, [id, manager]);
 

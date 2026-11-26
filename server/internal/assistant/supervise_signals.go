@@ -81,7 +81,7 @@ var (
 	superviseSilentMin = 2 * time.Hour
 	// superviseTick is how often the tasks are looked at.
 	superviseTick = 30 * time.Second
-	// superviseHoldMax bounds how long the main conversation's turns stay unpushed after a supervision message went in.
+	// superviseHoldMax bounds how long a supervision message can hold a conversation's pushes.
 	superviseHoldMax = 2 * time.Hour
 )
 
@@ -302,11 +302,13 @@ type superviseBook struct {
 
 	// noMainSince is when digests started leaving signals waiting for a main conversation (zero: the last one left none
 	// waiting), noMainLogged when that was last logged (sendDigest).
-	noMainSince, noMainLogged time.Time
-	hold                      map[string]time.Time // conversation → when a supervision message went in: its turn's finish is not pushed
-	pendingHold               map[string]pendingSupervisionHold
-	visible                   map[string]bool     // an explicit user action makes the current triage turn visible
-	sideLinks                 map[string][]string // side conversation → task/conversation links to attach to its user-level supervision push
+	noMainSince, noMainLogged               time.Time
+	holds                                   map[string]supervisionHold
+	holdsLoaded, holdsDirty                 bool
+	pendingHolds                            map[string]pendingSupervisionHold
+	stallsHandled                           map[string]handledStall
+	stallsHandledLoaded, stallsHandledDirty bool
+	sideLinks                               map[string][]string // side conversation → task/conversation links to attach to its user-level supervision push
 	// failSeen: tasks whose failed start a supervision message carried, when, and for which conversation
 	// (start_remedy.go remedyTurnEnded)
 	failSeen map[string]failSeen
@@ -318,9 +320,7 @@ type superviseBook struct {
 
 func (b *superviseBook) init() {
 	if b.pending == nil {
-		b.pending, b.sent, b.asks, b.hold = map[string]superviseSignal{}, map[string]string{}, map[string]string{}, map[string]time.Time{}
-		b.visible = map[string]bool{}
-		b.pendingHold = map[string]pendingSupervisionHold{}
+		b.pending, b.sent, b.asks = map[string]superviseSignal{}, map[string]string{}, map[string]string{}
 		b.sideLinks = map[string][]string{}
 		b.legacyBackground = map[string]bool{}
 	}
@@ -1017,6 +1017,12 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 	if g.Kind != sigAsk {
 		g = s.currentSupervisorSignal(g)
 	}
+	currentSupervisor := ""
+	if g.Kind == sigReview && g.Recipient == "" {
+		if t, ok := s.todoNow(g.Todo); ok && t.Supervision != nil {
+			currentSupervisor = t.Supervision.Supervisor
+		}
+	}
 	if g.At.IsZero() {
 		g.At = time.Now()
 	}
@@ -1056,6 +1062,12 @@ func (s *Service) queueSignalReplacing(old *superviseSignal, g superviseSignal) 
 		}
 		if g.Detail == "" && cur.Key == g.Key {
 			g.Detail = cur.Detail // the watch's sight of what an event told already
+		}
+		if g.Recipient == "" && cur.Recipient != "" && cur.Key == g.Key &&
+			(g.To == "" || g.To == cur.Recipient) &&
+			(cur.To == "" || g.To == "" || cur.To == g.To) &&
+			(currentSupervisor == "" || currentSupervisor == cur.Recipient) {
+			g.Recipient = cur.Recipient
 		}
 		g = preserveIdleHandoff(cur, g)
 		if g.Kind == sigReport && cur.Key != g.Key {
@@ -1257,10 +1269,10 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 		case c.Assistant && c.State != proto.StateWorking:
 			// An assistant conversation (a task leader) waits on its workers, each told of on its own; a message always reaches it.
 		default:
-			moved := c.UpdatedAt
-			if c.ActivityAt != nil && c.ActivityAt.After(moved) {
-				moved = *c.ActivityAt
+			if aliveBackgroundWork(c, now) {
+				continue
 			}
+			moved := stalledSessionMoved(c)
 			// Working: stuck past stallAfter. Any other state (waiting on background work, a wake, stopped or gone)
 			// is told past silentAfter, so a state that should end by itself and never does is still heard of (#5124).
 			after := silentAfter(v.ExpectMinutes)
@@ -1269,13 +1281,17 @@ func watchSignals(t Todo, agents []proto.Session, now time.Time, groups ...super
 			}
 			if still := v.activeTimeSince(moved, now); !moved.IsZero() && still >= after {
 				g := base
-				g.Kind, g.Key, g.Minutes = sigStalled, c.SessionID+"@"+moved.UTC().Format(time.RFC3339), int(still.Minutes())
+				g.Kind, g.Key, g.Minutes = sigStalled, stalledSignalKey(c.SessionID, moved), int(still.Minutes())
 				g.Detail = strings.TrimSpace(c.Activity)
 				out = append(out, g)
 			}
 		}
 	}
 	return out
+}
+
+func stalledSignalKey(session string, moved time.Time) string {
+	return session + "@" + moved.UTC().Format(time.RFC3339)
 }
 
 // reviewKey names one review a task waits for: when it began to wait. The time is cut to the microsecond the database
@@ -1340,6 +1356,10 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.recoverTaskInboxEvents(ctx)
 	// Only the open tasks: everything below passes the finished ones by, and there can be thousands of them.
 	tasks := s.todosWhere(ctx, "*", func(t *Todo) bool { return t.DoneAt == nil })
+	openIDs := make(map[string]bool, len(tasks))
+	for _, t := range tasks {
+		openIDs[t.ID] = true
+	}
 	s.recoverOutsideDirectionDigests(ctx)
 	s.pruneAllStoppedDedup(ctx)
 	s.prunePRMergeWakes(ctx)
@@ -1380,6 +1400,11 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		s.remedyWatch(ctx, t, now, history) // a failed start's kept tab expired (start_remedy.go)
 		t = s.checkTaskHandoff(ctx, t, now)
 		agents := s.taskAgentsIn(ctx, t, lists)
+		for _, c := range agents {
+			if c.State == proto.StateWorking {
+				s.observeProgress(c, now)
+			}
+		}
 		s.closeStalledTask(ctx, t, agents, now)
 		if current, ok := s.todoNow(t.ID); ok {
 			t = current
@@ -1399,6 +1424,11 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		for _, g := range watchSignals(t, agents, now, group) {
 			allStopped = allStopped || g.Kind == sigAllStopped
 			stalled[g.Session] = stalled[g.Session] || g.Kind == sigStalled
+			if g.Kind == sigStalled {
+				if handled, known := s.stalledHandled(ctx, g.Todo, sigStalled, g.Session, g.Key); known && handled {
+					continue
+				}
+			}
 			if g.Kind == sigNeedsYou && routed[[2]string{g.Machine, g.Session}] {
 				continue // its card is with the supervisor as an ask already
 			}
@@ -1407,6 +1437,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if !allStopped && t.Supervision.state(t) == "" { // going on: neither parked nor with the owner nor waiting for review
 			for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
 				if g, ok := s.noProgressSignal(t, c, now); ok && !stalled[c.SessionID] {
+					if handled, known := s.stalledHandled(ctx, g.Todo, sigNoProgress, g.Session, g.Key); known && handled {
+						continue
+					}
 					s.signal(g)
 				}
 			}
@@ -1437,25 +1470,11 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		s.briefClock(ctx, t, now)   // past its brief's clock with no end (task_brief_scope.go)
 		s.watchTurn(ctx, t, agents) // a turn that ended with no working heard, or was left half handled (task_turns.go)
 	}
-	b := &s.supervise
-	b.mu.Lock()
-	changed := false
-	for id, at := range b.hold {
-		if now.Sub(at) > superviseHoldMax {
-			delete(b.hold, id)
-			delete(b.visible, id)
-			changed = true
-		}
-	}
-	for id, hold := range b.pendingHold {
-		if now.Sub(hold.at) > superviseHoldMax {
-			delete(b.pendingHold, id)
-			delete(b.visible, id)
-		}
-	}
-	b.mu.Unlock()
-	if changed {
+	if s.expireSupervisionHolds(ctx, now) {
 		s.publish(ctx)
+	}
+	if s.todosLoaded() {
+		s.pruneHandledStalls(ctx, openIDs)
 	}
 }
 

@@ -124,7 +124,8 @@ def gen_rust(defs: dict[str, Def], *, header: list[str] | None = None, defects: 
         return lines
 
     def id_type(d: Def) -> list[str]:
-        lines = doc((d.doc or f"{d.name}: an ID.") + " It encodes as the bare string.")
+        what = "a label (free text, not a closed set)" if d.kind == "text" else "an ID"
+        lines = doc((d.doc or f"{d.name}: {what}.") + " It encodes as the bare string.")
         lines += ["#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]",
                   "#[serde(transparent)]", f"pub struct {d.name}(pub String);", "",
                   f"impl {d.name} {{", "    pub fn new(raw: impl Into<String>) -> Self {", "        Self(raw.into())",
@@ -178,6 +179,8 @@ def gen_rust(defs: dict[str, Def], *, header: list[str] | None = None, defects: 
                    "a value this side does not know. Unset: nothing is called. Set it once, before decoding starts.")
         out += [f"pub static {hook}: std::sync::OnceLock<fn(&str, &str)> = std::sync::OnceLock::new();", ""]
     for d in defs.values():
+        if d.external:
+            raise SchemaError(f"{d.name} of {d.external}: Rust does not take a shared file's IDs yet")
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
         elif d.kind == "enum":
@@ -186,7 +189,7 @@ def gen_rust(defs: dict[str, Def], *, header: list[str] | None = None, defects: 
             out += [f"pub type {d.name} = String;", "", f"/// The values of {d.name}, in order.",
                     f"pub const {upper_snake(plural(d.name))}: &[&str] = &[{', '.join(json.dumps(v) for v in d.values)}];",
                     ""]
-        elif d.kind == "id":
+        elif d.kind in ("id", "text"):
             out += id_type(d)
         elif d.kind == "opaque":
             out += doc(" ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))

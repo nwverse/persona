@@ -18,6 +18,7 @@ import { answeredSession, answerPending, lastAnsweredAt } from "./assistant/answ
 import type { AgentState, Session } from "../lib/types";
 import { cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
 import { StatusMark } from "../ui/StatusMark";
+import { NoticeDot } from "../ui/NoticeDot";
 import { runningWorkflows, workflowLine, workflowShortLine } from "../lib/workflows";
 import { ultracodeMarkShown } from "../lib/ultracode";
 import { Rolling } from "../ui/Rolling";
@@ -139,11 +140,11 @@ export function SubHeading({ label, folded, onToggle, help }: { label: string; f
   );
 }
 
-type NavRowProps = { onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => void; menuLabel?: string; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; icon: IconName; /** Engine mark ID shown in place of `icon` (e.g. a starting agent placeholder's resolved engine). */ agent?: string; label: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; /** Spoken for the badge in place of its digits (NavPage). */ badgeLabel?: string; hint?: string; hintCount?: { n: number; label: string }; title?: string; /** A state shown as a dot before the hint ("Automatic"'s rows: some run). */ dot?: AgentState; /** A page's icon color (NavPage.color, #10822). */ color?: UIColor };
+type NavRowProps = { onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => void; menuLabel?: string; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; to: Route; go: GoFn; icon: IconName; /** Engine mark ID shown in place of `icon` (e.g. a starting agent placeholder's resolved engine). */ agent?: string; label: string; badge?: number | string; badgeTone?: keyof typeof BADGE_CLASS; /** Spoken for the badge in place of its digits (NavPage). */ badgeLabel?: string; notice?: string; hint?: string; hintCount?: { n: number; label: string }; title?: string; /** A state shown as a dot before the hint ("Automatic"'s rows: some run). */ dot?: AgentState; /** A page's icon color (NavPage.color, #10822). */ color?: UIColor };
 
 // The pages take nothing from the sessions, yet every sessions push re-renders the sidebar: memoized like SessionRow
 // (sameProps), a page row renders again only when its own props change (a badge, the highlight).
-export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, agent, label, badge, badgeTone, badgeLabel, hint, hintCount, title, onMenu, menuLabel, dot, color }: NavRowProps) {
+export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon, agent, label, badge, badgeTone, badgeLabel, notice, hint, hintCount, title, onMenu, menuLabel, dot, color }: NavRowProps) {
   // one ref for the row's life, so a re-render does not let go of it and register it again (useGlide's reg)
   const ref = useMemo(() => reg(k), [reg, k]);
   const link = (
@@ -156,6 +157,7 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
       onMouseEnter={() => hover(k)}
       onFocus={() => hover(k)}
       onBlur={() => hover(null)}
+      aria-label={notice ? `${label}, ${notice}` : undefined}
       aria-current={active ? "page" : undefined}
       className={cx("relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11", active && CURRENT_ROW)}
     >
@@ -163,6 +165,7 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
         {agent ? <AgentMark agent={agent} size={14} decorative /> : <Icon name={icon} size={14} stroke={1.8} />}
       </span>
       <span className={cx("min-w-0 flex-1 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2")}>{label}</span>
+      {notice && <NoticeDot />}
       {dot && <StatusMark state={dot} size="sm" />}
       {hintCount ? <GroupCount {...hintCount} className="shrink-0" />
         : hint && <span className="text-[11px] text-ink-3 tabular-nums">{hint}</span>}
@@ -298,7 +301,7 @@ function SideUnreadLine({ sides, count, open }: { sides?: readonly Session[]; co
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; /** Plain space and tab label for older nodes without a tab association. */ tabFallback?: string; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** The hint is whole, never cut (a lead's counts). */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
+type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; /** Plain space and tab label for older nodes without a tab association. */ tabFallback?: string; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** A lead's hint stays whole when there is room; the title keeps its minimum and the hint truncates first. */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
   /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
    * of covering them, so hovering removes no information. */
   keepTrailing?: boolean };
@@ -395,8 +398,8 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const aside = active ? undefined : "group-hover/row:invisible";
   // A 常驻 row's counts stay on screen while the ⋯ fades in beside them (#6214).
   const hintAside = keepTrailing ? undefined : aside;
-  // behind a prefix (a tab's name, a pane's agent) the title keeps room for a few characters: the prefix shrinks first
-  const titleMin = prefix ? ROW_TITLE_MIN : "min-w-0";
+  // Behind a prefix or beside a lead's full hint, the title keeps room for a few characters: secondary text gives way first.
+  const titleMin = prefix || (hintFull && tail) ? ROW_TITLE_MIN : "min-w-0";
   // The tab's name gives way before the session title does.
   const titleFirst = tail ? "basis-auto" : undefined;
   // one ref per key, so letting go takes out only this row's entry (keyedRefs)
@@ -460,7 +463,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
           workflow's start and end, so the mark does not fade in again */}
       {holdSides && <HoldSides mid={row.machine_id} sid={row.session_id} />}
       {ultra || detail.length > 0 || workflow || line || sideLine || childLine || plan || stall ? (
-        <span className={cx("flex min-w-0 flex-1 flex-col", titleMin, titleFirst)}>
+        <span className={cx("flex flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
@@ -547,7 +550,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       )}
       {origin && <OriginMark origin={origin} size={16} className={aside} session={s} />}
       {/* the row's ⋯ takes the end on hover: what is there steps aside instead of showing half under it */}
-      {tail && <span className={cx(hintFull ? "shrink-0 whitespace-nowrap tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
+      {tail && <span className={cx(hintFull ? "min-w-0 shrink-[20] truncate tabular-nums" : "max-w-[72px] min-w-6 shrink-[20] truncate", "text-[11px] text-ink-3", hintAside)}>{tail}</span>}
       {source && <SourceTag s={s} className={aside} />}
       {pendingCount > 0 && <span className={cx("flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-field px-1 text-[10px] font-semibold text-attention tabular-nums", aside)}>{pendingCount}</span>}
     </RowTag>

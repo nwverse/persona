@@ -13,45 +13,59 @@ import (
 )
 
 // promoteSupervision is monotone within a wake-up: a later silent finish cannot hide a user action.
-func (s *Service) promoteSupervision(self string) {
-	key := s.supervisionHoldKey(context.Background(), self)
+func (s *Service) promoteSupervision(self string) error {
+	ctx := context.Background()
+	key := s.supervisionHoldKey(ctx, self)
 	b := &s.supervise
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.init()
-	if _, held := b.hold[key]; held || !b.pendingHold[key].at.IsZero() {
-		b.visible[key] = true
+	if err := s.loadSupervisionHoldsLocked(ctx); err != nil {
+		return err
 	}
+	return s.promoteSupervisionLocked(ctx, key)
 }
 
-type pendingSupervisionHold struct {
-	at       time.Time
-	machine  string
-	clientID string
-}
-
-func (s *Service) hasSupervisionHold(id string) bool {
+func (s *Service) promoteSupervisionLocked(ctx context.Context, key string) error {
 	b := &s.supervise
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	_, held := b.hold[id]
-	return held || !b.pendingHold[id].at.IsZero()
+	now := time.Now()
+	if hold := b.holds[key]; hold.active(now) {
+		if !hold.Visible {
+			hold.Visible = true
+			b.holds[key] = hold
+			b.holdsDirty = true
+		}
+		if err := s.saveSupervisionHoldsLocked(ctx); err != nil {
+			return err
+		}
+		return s.markStalledHandledLocked(ctx, hold.Stalled, now)
+	}
+	if pending, ok := b.pendingHolds[key]; ok && pending.hold.active(now) {
+		pending.hold.Visible = true
+		b.pendingHolds[key] = pending
+	}
+	return s.saveSupervisionHoldsLocked(ctx)
 }
 
-// A missed transcript check is not proof that the relay never started. Stop
-// suppressing pushes until the matching logical delivery is visible, while
-// remembering which attempt and promotion state a finishing tool can verify.
+// A missed transcript check can precede a delivered relay. Stop suppressing pushes,
+// but let the finishing tool verify this exact delivery before restoring its hold.
 func (s *Service) deferSupervisionHold(machine, id, onceID string, at time.Time) {
 	b := &s.supervise
 	b.mu.Lock()
-	if held, ok := b.hold[id]; !ok || held != at {
+	hold, ok := b.holds[id]
+	if !ok || hold.At != at {
 		b.mu.Unlock()
 		return
 	}
-	delete(b.hold, id)
-	b.pendingHold[id] = pendingSupervisionHold{at, machine, proto.SegmentOnceIDPrefix + onceID}
+	if b.pendingHolds == nil {
+		b.pendingHolds = make(map[string]pendingSupervisionHold)
+	}
+	delete(b.holds, id)
+	b.pendingHolds[id] = pendingSupervisionHold{hold: hold, machine: machine, clientID: proto.SegmentOnceIDPrefix + onceID}
+	b.holdsDirty = true
+	ctx := context.Background()
+	_ = s.saveSupervisionHoldsLocked(ctx) // the hold sweep retries a failed write
 	b.mu.Unlock()
-	s.publish(context.Background())
+	s.publish(ctx)
 }
 
 func (s *Service) pendingSupervisionIsCurrent(ctx context.Context, id string, pending pendingSupervisionHold) bool {
@@ -114,32 +128,47 @@ func (s *Service) toolSupervisionFinish(ctx context.Context, self string, args j
 	key := s.supervisionHoldKey(ctx, self)
 	b := &s.supervise
 	b.mu.Lock()
-	_, held := b.hold[key]
-	pending := b.pendingHold[key]
-	restored := false
-	if !held && !pending.at.IsZero() && time.Since(pending.at) <= superviseHoldMax {
+	if err := s.loadSupervisionHoldsLocked(ctx); err != nil {
+		b.mu.Unlock()
+		return "", err
+	}
+	hold := b.holds[key]
+	pending, waiting := b.pendingHolds[key]
+	if !hold.active(time.Now()) && waiting && pending.hold.active(time.Now()) {
 		b.mu.Unlock()
 		current := s.pendingSupervisionIsCurrent(ctx, key, pending)
 		b.mu.Lock()
-		// An owner send, another relay, or a newer attempt can replace the hold while the read is in flight.
-		if current && b.pendingHold[key] == pending {
-			b.hold[key] = pending.at
-			delete(b.pendingHold, key)
-			restored = true
+		// Take the latest visibility, but require the same attempt after the transcript read.
+		if latest := b.pendingHolds[key]; current && latest.hold.At == pending.hold.At && latest.hold.active(time.Now()) {
+			b.holds[key] = latest.hold
+			b.holdsDirty = true
+			if err := s.saveSupervisionHoldsLocked(ctx); err != nil {
+				delete(b.holds, key)
+				b.mu.Unlock()
+				return "", err
+			}
+			delete(b.pendingHolds, key)
+			defer s.publish(ctx)
 		}
-		held = b.hold[key] == pending.at
+		hold = b.holds[key]
+		if hold.At != pending.hold.At {
+			hold = supervisionHold{}
+		}
 	}
-	if restored {
-		defer s.publish(ctx)
-	}
-	if !held || a.Visibility == "silent" && b.visible[key] {
+	if !hold.active(time.Now()) || a.Visibility == "silent" && hold.Visible {
 		b.mu.Unlock()
 		return "", errors.New("this is not an unpromoted supervision turn; normal user messages cannot be hidden")
 	}
 	level := "triage"
 	if a.Visibility == "user" {
 		level = "user"
-		b.visible[key] = true
+		if err := s.promoteSupervisionLocked(ctx, key); err != nil {
+			b.mu.Unlock()
+			return "", err
+		}
+	} else if err := s.markStalledHandledLocked(ctx, hold.Stalled, time.Now()); err != nil {
+		b.mu.Unlock()
+		return "", err
 	}
 	b.mu.Unlock()
 	body, err := json.Marshal(map[string]string{"visibility": a.Visibility, "summary": a.Summary, "level": level})
