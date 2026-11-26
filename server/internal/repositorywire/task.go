@@ -531,6 +531,15 @@ type PreparationRepository struct {
 	DirectoryAlias string         `json:"directory_alias,omitempty"`
 	RequestedRef   RequestedRef   `json:"requested_ref"`
 	SourceSnapshot SourceSnapshot `json:"source_snapshot"`
+	Local          *LocalCheckout `json:"local,omitempty"`
+}
+
+// LocalCheckout is a computer-resolved Git source for a single root worktree.
+// It carries the selected commit even when the source has a moving HEAD.
+type LocalCheckout struct {
+	CommonDir      string `json:"common_dir"`
+	Commit         string `json:"commit"`
+	ExistingBranch bool   `json:"existing_branch,omitempty"`
 }
 type PreparationSnapshot struct {
 	SchemaVersion int                     `json:"schema_version"`
@@ -556,9 +565,30 @@ func Snapshot(manager, todo string, revision int64, rows []TaskRepository, selec
 			return out, Problem("not_found")
 		}
 		r := rows[index]
-		out.Repositories = append(out.Repositories, PreparationRepository{r.RepoID, r.DirectoryAlias, r.RequestedRef, r.SourceSnapshot})
+		out.Repositories = append(out.Repositories, PreparationRepository{RepoID: r.RepoID, DirectoryAlias: r.DirectoryAlias, RequestedRef: r.RequestedRef, SourceSnapshot: r.SourceSnapshot})
 	}
 	slices.SortFunc(out.Repositories, func(a, b PreparationRepository) int { return strings.Compare(a.RepoID, b.RepoID) })
+	return digestPreparationSnapshot(out)
+}
+
+// LocalSnapshot binds a computer-resolved source without changing the to-do's
+// catalog associations. Local and catalog sources are mutually exclusive.
+func LocalSnapshot(manager, todo string, repo PreparationRepository) (PreparationSnapshot, error) {
+	var out PreparationSnapshot
+	if repo.Local == nil || repo.SourceSnapshot != (SourceSnapshot{}) || repo.Local.CommonDir == "" ||
+		repo.RepoID != "local" || repo.DirectoryAlias == "" || ValidateAlias(repo.DirectoryAlias) != nil {
+		return out, Problem("invalid")
+	}
+	ref, err := NormalizeRef(repo.RequestedRef)
+	commit, commitErr := NormalizeRef(RequestedRef{Kind: "commit", Value: repo.Local.Commit})
+	if err != nil || ref != repo.RequestedRef || commitErr != nil || commit.Value != repo.Local.Commit ||
+		(ref.Kind != "branch" && (ref.Kind != "commit" || ref.Value != commit.Value || repo.Local.ExistingBranch)) {
+		return out, Problem("invalid")
+	}
+	return digestPreparationSnapshot(PreparationSnapshot{SchemaVersion: 1, Manager: manager, TodoID: todo, Repositories: []PreparationRepository{repo}})
+}
+
+func digestPreparationSnapshot(out PreparationSnapshot) (PreparationSnapshot, error) {
 	payload := struct {
 		SchemaVersion int                     `json:"schema_version"`
 		Manager       string                  `json:"manager"`

@@ -264,6 +264,8 @@ type Source struct {
 	RuleSources  map[string]string                  `json:"rule_sources,omitempty"`
 	Layout       repositorywire.Layout              `json:"layout"`
 	Repositories repositorywire.PreparationSnapshot `json:"repository_snapshot"`
+	// TaskBranch is the literal branch explicitly requested for a single checkout.
+	TaskBranch string `json:"task_branch,omitempty"`
 }
 type NodeContext struct {
 	Home        string `json:"home"`
@@ -366,7 +368,7 @@ func Resolve(s Source, n NodeContext) Preview {
 	p := Preview{Status: "complete", Diagnostics: []Problem{}}
 	p.Describe(s)
 	rules := s.Rules
-	if len(s.Repositories.Repositories) == 0 {
+	if len(s.Repositories.Repositories) == 0 || s.TaskBranch != "" {
 		rules.BranchTemplate = ""
 	}
 	if err := Validate(rules); err != nil {
@@ -446,6 +448,10 @@ func Resolve(s Source, n NodeContext) Preview {
 		p.add("layout_invalid", "layout", "", "error")
 		return p
 	}
+	if s.TaskBranch != "" && len(s.Repositories.Repositories) != 1 {
+		p.add("branch_invalid", "branch_template", "", "error")
+		return p
+	}
 	plan := Plan{Version: Version, Source: s, Node: n, TaskSlug: slug, BasePath: base, RootPath: root, Repositories: []RepositoryPlan{}}
 	plan.Source.Repositories.Repositories = slices.Clone(s.Repositories.Repositories)
 	slices.SortFunc(plan.Source.Repositories.Repositories, func(a, b repositorywire.PreparationRepository) int { return strings.Compare(a.RepoID, b.RepoID) })
@@ -489,11 +495,14 @@ func Resolve(s Source, n NodeContext) Preview {
 				p.add("fragment_normalized", "branch_template", repo.RepoID, "warning")
 			}
 		}
-		branch, err := expand(s.Rules.BranchTemplate, "branch_template", v, false)
-		if err != nil {
-			e := err.(Problem)
-			p.add(e.Code, e.Field, repo.RepoID, "error")
-			continue
+		branch := s.TaskBranch
+		if branch == "" {
+			branch, err = expand(s.Rules.BranchTemplate, "branch_template", v, false)
+			if err != nil {
+				e := err.(Problem)
+				p.add(e.Code, e.Field, repo.RepoID, "error")
+				continue
+			}
 		}
 		if _, err = repositorywire.NormalizeRef(repositorywire.RequestedRef{Kind: "branch", Value: branch}); err != nil {
 			p.add("branch_invalid", "branch_template", repo.RepoID, "error")
@@ -530,6 +539,15 @@ func Digest(p Plan) string {
 func CheckPlan(p Plan) error {
 	if len(p.Repositories) != len(p.Source.Repositories.Repositories) || !repositorywire.ValidLayout(p.Source.Layout, len(p.Repositories)) {
 		return problem("layout_invalid", "layout")
+	}
+	for _, repo := range p.Source.Repositories.Repositories {
+		if repo.Local == nil {
+			continue
+		}
+		snapshot, err := repositorywire.LocalSnapshot(p.Source.Manager, p.Source.TodoID, repo)
+		if err != nil || p.Source.Layout != repositorywire.LayoutRoot || snapshot.Digest != p.Source.Repositories.Digest {
+			return problem("repository_invalid", "repositories")
+		}
 	}
 	if p.Version != Version || p.Digest == "" || p.Digest != Digest(p) {
 		return problem("plan_invalid", "plan")

@@ -21,6 +21,21 @@ type Capabilities struct {
 	Capability        string `json:"capability"`
 	Start             bool   `json:"start,omitempty"`
 	EmptyRepositories bool   `json:"empty_repositories,omitempty"`
+	LocalGit          bool   `json:"local_git,omitempty"`
+}
+
+// LocalSourceMethod inspects a source directory without consulting a terminal host.
+const LocalSourceMethod = "workspace.naming.local-source"
+
+type LocalSourceRequest struct {
+	Cwd        string `json:"cwd"`
+	TaskBranch string `json:"task_branch,omitempty"`
+}
+
+type LocalSource struct {
+	Repository   *repository.PreparationRepository `json:"repository,omitempty"`
+	ExistingPath string                            `json:"existing_path,omitempty"`
+	Error        *Problem                          `json:"error,omitempty"`
 }
 
 type Problem struct {
@@ -180,6 +195,9 @@ func ValidateReady(r Record) error {
 			}
 			_, err := repository.NormalizeRef(repository.RequestedRef{Kind: "commit", Value: instance.ResolvedCommit})
 			matched = err == nil && instance.State == "ready" && !instance.Removed && instance.Path == p.AbsolutePath && instance.RelativePath == p.RelativePath && instance.TaskBranch == p.TaskBranch && instance.CommonDir != "" && Hash(instance.Input) == Hash(r.Plan.Source.Repositories.Repositories[i])
+			if local := instance.Input.Local; local != nil {
+				matched = matched && instance.CommonDir == local.CommonDir && instance.ResolvedCommit == local.Commit
+			}
 		}
 		if !matched {
 			return Failure("result_mismatch", "manager", r.OperationID, instance.RepoID, instance.Path)

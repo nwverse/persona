@@ -860,7 +860,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.handleUpdate(ctx, method, params)
 	}
 	if method == "task.workspace.capabilities" {
-		return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, EmptyRepositories: true}, nil
+		return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, EmptyRepositories: true, LocalGit: true}, nil
 	}
 	if strings.HasPrefix(method, "task.workspace.") {
 		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params, nil)

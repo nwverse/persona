@@ -21,9 +21,10 @@ import (
 
 type workspaceJournal struct {
 	taskworkspace.Record
-	Identities map[string]string `json:"identities"`
-	Tombstones []string          `json:"tombstones"`
-	InFlight   bool              `json:"in_flight"`
+	Identities       map[string]string `json:"identities"`
+	Tombstones       []string          `json:"tombstones"`
+	InFlight         bool              `json:"in_flight"`
+	LocalGitIdentity string            `json:"local_git_identity,omitempty"`
 }
 type workspaceExecutor struct {
 	n                *Node
@@ -140,6 +141,9 @@ func (e *workspaceExecutor) git(ctx context.Context, dir string, args ...string)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir, "--no-pager", "-c", "core.hooksPath=" + filepath.Join(filepath.Dir(e.path), "hooks"), "-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "gc.auto=0"}, args...)...)
 	cmd.Env = taskworkspace.GitEnv(os.Environ())
+	if e.journal.LocalGitIdentity != "" {
+		cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=")
+	}
 	cmd.WaitDelay = time.Second
 	workspaceInheritLocks(cmd, e.locks)
 	var out workspaceOutput
@@ -175,7 +179,7 @@ func workspaceReadGit(ctx context.Context, dir string, args ...string) (string, 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir, "--no-pager", "-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "gc.auto=0"}, args...)...)
-	cmd.Env = append(taskworkspace.GitEnv(os.Environ()), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = append(taskworkspace.GitEnv(os.Environ()), "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=")
 	cmd.WaitDelay = time.Second
 	var out workspaceOutput
 	cmd.Stdout = &out
@@ -240,6 +244,11 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 		return taskworkspace.Record{Error: taskworkspace.Failure(problem.Code, "validation", req.OperationID, problem.RepoID, req.Plan.RootPath)}, nil
 	}
 	for _, source := range req.Plan.Source.Repositories.Repositories {
+		// An existing receipt must remain inspectable and cleanable if the source
+		// checkout disappears. The local store is attested before any Git use.
+		if source.Local != nil {
+			continue
+		}
 		if !n.workspaceSourceAllowed(source) {
 			return taskworkspace.Record{Error: taskworkspace.Failure("source_invalid", "validation", req.OperationID, source.RepoID, "")}, nil
 		}
@@ -474,6 +483,9 @@ func (e *workspaceExecutor) adopt(ctx context.Context, req taskworkspace.Request
 	j.InputDigest = taskworkspace.InputKey(req.Plan)
 	j.State = "preparing"
 	j.Repositories = reused
+	if len(reused) == 0 {
+		j.LocalGitIdentity = ""
+	}
 	j.Cleanup = nil
 	j.Error = nil
 	return e.save()
@@ -492,7 +504,12 @@ func (e *workspaceExecutor) prepare(ctx context.Context) taskworkspace.Record {
 	for index, p := range j.Plan.Repositories {
 		i := slices.IndexFunc(j.Repositories, func(r taskworkspace.Instance) bool { return r.RepoID == p.RepoID })
 		if i < 0 {
-			j.Repositories = append(j.Repositories, taskworkspace.Instance{RepoID: p.RepoID, Input: j.Plan.Source.Repositories.Repositories[index], RelativePath: p.RelativePath, Path: p.AbsolutePath, CommonDir: filepath.Join(filepath.Dir(e.path), "git", taskworkspace.Hash(p.RepoID)+".git"), TaskBranch: p.TaskBranch, State: "pending"})
+			input := j.Plan.Source.Repositories.Repositories[index]
+			common := filepath.Join(filepath.Dir(e.path), "git", taskworkspace.Hash(p.RepoID)+".git")
+			if input.Local != nil {
+				common = input.Local.CommonDir
+			}
+			j.Repositories = append(j.Repositories, taskworkspace.Instance{RepoID: p.RepoID, Input: input, RelativePath: p.RelativePath, Path: p.AbsolutePath, CommonDir: common, TaskBranch: p.TaskBranch, State: "pending"})
 			i = len(j.Repositories) - 1
 			if err := e.save(); err != nil {
 				return e.fail("persistence_failed", "reserve", p.RepoID, p.AbsolutePath)
