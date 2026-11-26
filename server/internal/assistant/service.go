@@ -19,6 +19,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
+	"github.com/nwverse/persona/server/internal/assistant/kernel/seam"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/saved"
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -217,6 +218,11 @@ type Service struct {
 	mux            *http.ServeMux
 	routes         []string
 	routeFallbacks []string // internal path-only fallbacks: not relayed, but included in module conflict checks
+	// kernel is the registry the modules register through (kernel/seam; seam_slots.go): sealed once New returns, it
+	// answers their bus methods and runs their hooks. routing is the Kernel a module's route functions register
+	// through while routesThrough runs them.
+	kernel  *seam.Registry
+	routing *seam.Kernel
 
 	standingJudgeModel jsonModel  // nil: the configured agent.delegate model; tests can supply a deterministic model.
 	standingMu         sync.Mutex // standing_authorizations.go: revocation and automatic answers serialize
@@ -374,6 +380,7 @@ type Service struct {
 	viewEvents viewNotifications // views.go: only coalesced notifications; contents are stored first
 	pages      pagesRuntime      // pages_actions.go, pages_events.go: the pages' events, taps and turns (Dashboards)
 	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
+	inlineFull inlineFullBook    // views_inline.go: truncated replies whose full text was already scanned
 
 	devs                 Devices // the computers (devices.go); nil: no fleet
 	mcpWaitMu            sync.Mutex
@@ -529,7 +536,7 @@ func New(o Options) *Service {
 	s.kbRoutes()
 	s.searchRoutes()
 	s.historyRoutes()
-	s.inboxRoutes()
+	reg.Register(newInboxModule(s)) // the Inbox's routes, bus methods, hooks and snapshot part (inbox_module.go)
 	s.modelConfigRoutes()
 	s.modelProfileRoutes()
 	s.launcherRoutes()
@@ -546,8 +553,18 @@ func New(o Options) *Service {
 	return s
 }
 
-// handle adds one of the routes the hub relays.
+// handle adds one of the routes the hub relays; while routesThrough runs a module's route functions, it registers
+// the route through that module's Kernel instead (seam_slots.go).
 func (s *Service) handle(pattern string, fn http.HandlerFunc) {
+	if k := s.routing; k != nil {
+		k.Route(seam.NewRoute(pattern, fn))
+		return
+	}
+	s.serveRoute(pattern, fn)
+}
+
+// serveRoute serves pattern with fn, among the routes the hub relays.
+func (s *Service) serveRoute(pattern string, fn http.HandlerFunc) {
 	s.routes = append(s.routes, pattern)
 	if _, path, _ := strings.Cut(pattern, " "); strings.HasPrefix(path, "/api/v1/todos/{id}") {
 		fn = s.todoScoped(fn) // what an extension is not shown of a to-do, at every route of one (todo_scope.go)
@@ -1131,8 +1148,7 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 	if cfg.Main != "" { // not snap.Profile: that is left out while a settings read fails
 		view(cfg.Main, cfg.MachineID).Title = mainTitle // never its first message, a model's name or a rename (#1313)
 	}
-	snap.Inbox = s.inboxReport(ctx)
-	snap.Partial = snap.Partial || snap.Inbox == nil
+	s.kernel.Snapshot(ctx, &snap) // the modules' parts (the Inbox's), before snap.Work: fleetTakeSnapshot reads both
 	snap.Work = s.workReport(ctx) // before the cards: they are read back with it
 	snap.Partial = snap.Partial || snap.Work == nil
 	snap.Interactions = append(s.pendingQuestions(), s.workCards()...)
@@ -1235,7 +1251,7 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	if !meeting {
 		// An assistant turn that failed is logged; a conversation conversation_new opened tells its parent (spawned.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.assistantTurnSettled, r.MachineID, r.SessionID)
-		s.afterSettle(context.WithoutCancel(ctx), s.inboxAgentTurnSettled, r.MachineID, r.SessionID)
+		s.turnSettledHooks(context.WithoutCancel(ctx), r) // the modules' (the Inbox's Agents; seam_slots.go)
 		// What the turn said is tagged with its information categories (info_tag.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.infoTagTurnSettled, r.MachineID, r.SessionID)
 		// A usage limit moves a conversation the owner relies on to a backup launcher (limit_fallback.go).
