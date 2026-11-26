@@ -27,6 +27,7 @@ var larkReadGroupCommands = []struct{ name, command string }{
 // only when --output names a plain file in lark-im-resources/. lark-cli overwrites an existing file and takes a dotfile
 // name, and without --output the file is named by the sender, so anything else stays a write; a high-risk rating too.
 func TestLarkCLIResourceDownloadIsRead(t *testing.T) {
+	needsLarkGate(t)
 	const dl = `lark-cli im +messages-resources-download --message-id om_1 --file-key img_v3_x --type image`
 	for _, risk := range []string{"write", ""} {
 		for _, out := range []string{" --output lark-im-resources/img_v3_x.jpg", " --output=lark-im-resources/a-b_c.v2.png",

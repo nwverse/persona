@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -91,33 +90,11 @@ func TestLarkReadFallbackDefaultMode(t *testing.T) {
 	}
 }
 
-func TestLarkCLINamedRead(t *testing.T) {
-	for _, tc := range []struct {
-		words string
-		read  bool
-	}{
-		{"calendar +agenda", true}, {"docs +fetch", true}, {"docs +search", true}, {"drive +search", true},
-		{"im +chat-messages-list", true}, {"im +messages-mget", true}, {"im +chat-search", true},
-		{"task +get-my-tasks", true}, {"calendar events list", true}, {"im chats get", true},
-		{"contact users batch_get", true}, {"im messages search", true},
-
-		{"im +messages-send", false}, {"im +messages-reply", false}, {"im +reactions-create", false},
-		{"docs +create", false}, {"docs +update", false}, {"calendar +create", false}, {"calendar +freebusy", false},
-		{"drive +download", false}, {"drive +upload", false}, {"im messages create", false},
-		{"calendar events delete", false}, {"im chats patch", false}, {"im +search-replace", false},
-		{"+agenda", false}, {"calendar", false}, {"calendar +", false}, {"im +messages-get extra", false},
-		{"calendar +agenda list", false}, {"im list", false},
-	} {
-		t.Run(tc.words, func(t *testing.T) {
-			if got := larkCLINamedRead(strings.Fields(tc.words)); got != tc.read {
-				t.Fatalf("larkCLINamedRead(%q) = %v, want %v", tc.words, got, tc.read)
-			}
-		})
-	}
-}
+// Pure TestNamedRead moved into server/internal/modules/lark/larkgate/cligate_test.go.
 
 // What lark-cli reports wins over the name: a command it calls a write stays one.
 func TestLarkCLIReportedRiskWinsOverName(t *testing.T) {
+	needsLarkGate(t)
 	v := classifyLark(`lark-cli calendar +agenda --start 2026-11-16`, nil, "", func([]string) string { return "write" })
 	if len(v.calls) != 1 || v.calls[0].Risk != "write" || !v.cliWrite {
 		t.Fatalf("verdict = %+v", v)

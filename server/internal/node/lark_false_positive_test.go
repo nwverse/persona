@@ -41,6 +41,7 @@ func TestLarkLeadingGlobalOptions(t *testing.T) {
 }
 
 func TestLarkDefaultRiskLookup(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct{ name, response, want string }{{"read", "Risk: read", "read"}, {"write", "Risk: write", "write"}, {"unknown", "help", ""}} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -382,6 +383,7 @@ func TestLarkReadsWithoutRiskDiscovery(t *testing.T) {
 
 // The fallback covers only an unknown risk: what lark-cli says wins.
 func TestLarkKnownReadsDoNotOverrideReportedRisk(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct{ risk, want string }{{"", "read"}, {"read", "read"}, {"write", "write"}, {"high-risk-write", "high-risk-write"}} {
 		v := classifyLark(`lark-cli im +chat-messages-list --chat-id oc_a`, nil, "", func([]string) string { return tc.risk })
 		if len(v.calls) != 1 || v.calls[0].Risk != tc.want {

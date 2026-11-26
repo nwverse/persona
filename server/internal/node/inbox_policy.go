@@ -242,5 +242,5 @@ func inboxLarkOutbound(cfg proto.AssistantLark, v larkVerdict, command string) b
 		return true
 	}
 	// A command substitution or unparsed fragment associated with a gated call cannot be shown to be read-only.
-	return (v.unsure || v.unparsed) && (len(v.calls) > 0 || larkCLIRe.MatchString(command))
+	return (v.unsure || v.unparsed) && (len(v.calls) > 0 || larkMentionsCLI(command))
 }

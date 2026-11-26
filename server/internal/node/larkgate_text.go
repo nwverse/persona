@@ -35,7 +35,7 @@ type larkFlow struct {
 // after another, as written) only a program after the text was written can run the file, and a note (Markdown,
 // plain text, a log, a table) only a program that names it (#8148).
 func larkTextRuns(cmd string, flow []larkFlow, sequential bool) bool {
-	names := larkCLIRe.MatchString(cmd)
+	names := larkMentionsCLI(cmd)
 	pipelineCalls := larkPipelineCallFlags(cmd, flow)
 	tainted, mentioned, writes, program, notesRun, pos := false, false, false, false, false, 0
 	var notes []string
@@ -43,7 +43,7 @@ func larkTextRuns(cmd string, flow []larkFlow, sequential bool) bool {
 		return f.program && slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(f.text, filepath.Base(n)) })
 	}
 	for i, f := range flow {
-		own := !f.call && larkCLIRe.MatchString(f.text)
+		own := !f.call && larkMentionsCLI(f.text)
 		piped := true // unless only another separator stands before the segment
 		if at := strings.Index(cmd[pos:], f.text); at >= 0 {
 			gap := cmd[pos : pos+at]

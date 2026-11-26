@@ -20,6 +20,7 @@ import (
 // job the shell's startup leaves running with stdout inherited (an update check, a daemon started from ~/.bashrc) keeps
 // the pipe open after the shell exits; the ask returns what the shell printed instead of waiting for that job.
 func TestLarkLoginShellAsksDoNotWaitForABackgroundJob(t *testing.T) {
+	needsLarkGate(t)
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("no bash")
 	}

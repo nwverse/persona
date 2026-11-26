@@ -1411,6 +1411,7 @@ func TestRemoteAgentMemoryToolsSymlinkDirAndWorkspaceScoping(t *testing.T) {
 }
 
 func TestRemoteAgentConfirmWritesPersistsAcrossDisconnectOwnershipChangeAndRestart(t *testing.T) {
+	needsLarkGate(t)
 	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
 	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
 	api := newFakeAPI(t)

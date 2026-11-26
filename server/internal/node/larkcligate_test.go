@@ -180,6 +180,7 @@ func TestLarkCLIRules(t *testing.T) {
 
 // A command the gate cannot follow that runs lark-cli is confirmed whole, unless every lark-cli call in it reads.
 func TestLarkCLIInComplexCommands(t *testing.T) {
+	needsLarkGate(t)
 	for cmd, write := range map[string]bool{
 		`for c in a b; do lark-cli im +messages-send --chat-id "$c" --text hi; done`:                                                                 true,
 		`for c in a b; do lark-cli "$CMD" --chat-id "$c"; done`:                                                                                      true,
@@ -194,7 +195,7 @@ func TestLarkCLIInComplexCommands(t *testing.T) {
 		if !v.other {
 			t.Fatalf("%s: the gate should not decide it alone: %+v", cmd, v)
 		}
-		got := v.cliWrite || v.unparsed && larkCLIRe.MatchString(cmd)
+		got := v.cliWrite || v.unparsed && larkMentionsCLI(cmd)
 		if got != write {
 			t.Errorf("%s: confirm whole = %v, want %v", cmd, got, write)
 		}
@@ -218,6 +219,7 @@ func TestLarkCLISummary(t *testing.T) {
 // The risk level comes from the command's --help, asked once per command; the binary is the configured one, with the
 // configured profile, and the assistant gets a wrapper doing the same.
 func TestLarkCLIRiskAndWrapper(t *testing.T) {
+	needsLarkGate(t)
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls")
 	bin := filepath.Join(dir, "lark-cli")
@@ -260,6 +262,7 @@ func TestLarkCLIRiskAndWrapper(t *testing.T) {
 
 // With lark.cli in the hub's config the assistant gets lark-cli on its PATH; without it, none.
 func TestAssistantLarkEnvLarkCLI(t *testing.T) {
+	needsLarkGate(t)
 	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
 	bin := filepath.Join(t.TempDir(), "lark-cli")
 	_ = os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755)
@@ -279,6 +282,7 @@ func TestAssistantLarkEnvLarkCLI(t *testing.T) {
 // The risk levels the gate relies on, read off the real lark-cli: PERSONA_LIVE_LARK_CLI=1 (lark-cli on the login
 // shell's PATH, or its path in PERSONA_LARK_CLI). Reads nothing from Feishu: only --help.
 func TestLarkCLIRiskLive(t *testing.T) {
+	needsLarkGate(t)
 	if os.Getenv("PERSONA_LIVE_LARK_CLI") == "" {
 		t.Skip("set PERSONA_LIVE_LARK_CLI=1 to ask the real lark-cli")
 	}
@@ -299,6 +303,7 @@ func TestLarkCLIRiskLive(t *testing.T) {
 // runs through the user's shell snapshot, whose PATH may find another lark-cli first, and lark-cli reads the variable
 // as --profile (#9123). Without a profile, nothing is set.
 func TestAssistantEnvNamesTheLarkCLIProfile(t *testing.T) {
+	needsLarkGate(t)
 	t.Setenv("PERSONA_SKILLS_DIR", t.TempDir())
 	bin := filepath.Join(t.TempDir(), "lark-cli")
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {

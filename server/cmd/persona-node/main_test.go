@@ -26,10 +26,14 @@ func TestPersonaNodeDoesNotLinkTheHubOrTheManager(t *testing.T) {
 		t.Skip("no go tool:", err)
 	}
 	// The hub's and the manager's own packages, and their sources and channels (they run in the manager).
+	// Node-side subpackages (such as internal/modules/lark/larkgate) live under internal/modules/<id>/<pkg> and are
+	// linked via internal/modules/all/node; the root lark package and its manager subpackages remain forbidden.
 	forbidden := []string{"internal/hub", "internal/hubedge", "internal/assistant", "internal/manager", "internal/devices",
 		"internal/extmgr", "internal/db", "internal/relay", "internal/modules/voice", "internal/modules/mail", "internal/lark",
-		"internal/modules/lark", "internal/botport", "internal/apns", "internal/bus", "internal/workspaceboard",
-		"internal/usagesource", "internal/admin"}
+		"internal/modules/lark/feishubot", "internal/modules/lark/larkauth", "internal/modules/lark/larkcli",
+		"internal/modules/lark/larksync", "internal/modules/lark/connector", "internal/botport", "internal/apns",
+		"internal/bus", "internal/workspaceboard", "internal/usagesource", "internal/admin"}
+	forbiddenExact := []string{"internal/modules/lark"}
 	// No database driver either, wherever it comes from.
 	drivers := []string{"github.com/jackc/pgx", "github.com/lib/pq", "database/sql/driver"}
 	for _, target := range []string{"linux/amd64", "linux/arm64", "darwin/arm64", "darwin/amd64", "windows/amd64"} {
@@ -59,6 +63,12 @@ func TestPersonaNodeDoesNotLinkTheHubOrTheManager(t *testing.T) {
 			}
 			for _, f := range forbidden {
 				if rel == f || strings.HasPrefix(rel, f+"/") {
+					t.Errorf("persona-node (%s) depends on %s: the device's program reaches the manager only over the node "+
+						"protocol; move what it needs into internal/node, internal/nodecmd or a contract package", target, dep)
+				}
+			}
+			for _, f := range forbiddenExact {
+				if rel == f {
 					t.Errorf("persona-node (%s) depends on %s: the device's program reaches the manager only over the node "+
 						"protocol; move what it needs into internal/node, internal/nodecmd or a contract package", target, dep)
 				}

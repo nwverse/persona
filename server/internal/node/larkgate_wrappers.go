@@ -216,7 +216,7 @@ func shellCommandUnknown(cmd string, includeCLI bool, depth int) bool {
 		offset := len(words) - len(rest)
 		if !parsed {
 			for i, w := range rest {
-				unknown = unknown || dynamic[offset+i] || strings.ContainsAny(w, "$`*?[]{}") || larkCLIRe.MatchString(w)
+				unknown = unknown || dynamic[offset+i] || strings.ContainsAny(w, "$`*?[]{}") || larkMentionsCLI(w)
 			}
 			return !unknown
 		}
