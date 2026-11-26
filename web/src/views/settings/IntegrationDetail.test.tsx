@@ -4,13 +4,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
-import type { ChannelDetail } from "../../lib/channels";
+import { channelStateText, type ChannelDetail } from "../../lib/channels";
 import type { HubConnector } from "../../lib/connectors";
 import type { HubExtensionDetail } from "../../lib/extensions";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 import { resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster } from "../../lib/managers";
 import { applyCompleteSessions } from "../../lib/store";
+import { FEATURES } from "./FeishuBot";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
 
 vi.mock("../../ui/atoms", async (original) => ({
@@ -96,6 +97,7 @@ const COMPOSITE_CHANNEL: ChannelDetail = {
   kind: "im",
   source: "plugin",
   plugin: "larkx",
+  settings_url: "settings/plugins/larkx",
   installed: true,
   enabled: true,
   state: "connected",
@@ -129,7 +131,7 @@ const FEISHU_BOT_STATUS: FeishuBotStatus = {
   domain: "feishu",
   bot_name: "Persona Feishu",
   owner: { name: "Alice", paired_at: 1700000000 },
-  features: { main: true, cards: true, all_cards: false, pushes: true, sync: true, reports: true, board: false, workbench: false, only_conclusions: false, agents: true },
+  features: { main: true, cards: false, report_steps: true, answer_new_card: true, topic_cot: false, read_group: false, all_cards: false, pushes: true, sync: true, reports: true, board: false, workbench: false, only_conclusions: false, agents: true },
   nudge_after: 15,
 };
 
@@ -145,8 +147,9 @@ const FEISHU_CHANNEL: ChannelDetail = {
   capabilities: { push: true, threads: true, asks: "buttons" },
   bind: "fields",
   target: { kind: "main" },
-  thread_mode: "per_topic",
-  thread_idle_hours: 24,
+  settings_url: "settings/connectors/feishu-bot",
+  target_override: { mode: "topics" },
+  features: FEATURES.map(({ key, title }) => ({ id: key, title, on: !!FEISHU_BOT_STATUS.features?.[key] })),
   waiting: { answers: 0, asks: 0 },
 };
 
@@ -276,13 +279,13 @@ beforeEach(() => {
       if (!ch) return notFound();
       if (method === "PUT" && body && typeof body === "object") {
         const patch = body as Partial<ChannelDetail>;
+        const mode = patch.thread_mode ?? ch.thread_mode;
         const next: ChannelDetail = {
           ...ch,
           ...patch,
-          target_override:
-            (patch.thread_mode ?? ch.thread_mode) === "per_group_and_topic" || (patch.thread_mode ?? ch.thread_mode) === "per_topic"
-              ? { mode: "topics" }
-              : undefined,
+          target_override: mode === "per_group_and_topic"
+            ? { mode: "groups_and_topics" }
+            : mode === "per_topic" ? { mode: "topics" } : undefined,
         };
         currentChannels[cid] = next;
         return ok(next);
@@ -414,16 +417,40 @@ describe("Built-in services", () => {
     expect(requests.some((r) => r.url.includes("/bots/feishu"))).toBe(false);
   });
 
-  it("renders Feishu Bot inline with connection, channel routing, bot features, and knowledge sync shortcut", async () => {
+  it("gives Feishu Bot a single set of controls and refreshes its channel after a bot save", async () => {
     const onSettings = vi.fn();
-    act(() => {
+    await act(async () => {
       root.render(<IntegrationDetail target={{ kind: "builtin", id: "feishu-bot" }} onSettings={onSettings} />);
     });
     await flush();
 
     expect(sectionIds()).toEqual(["connection", "channel", "inbox"]);
     expect(section("connection")!.textContent).toContain("Alice");
-    expect(section("channel")!.textContent).toContain(t("settings-integrations.thread_mode_title"));
+    const delivery = section("channel")!;
+    expect(delivery.querySelector("[data-channel-routing]")).toBeNull();
+    expect(delivery.textContent).toContain(t("settings-channels.target_row"));
+    expect(delivery.textContent).toContain(t("settings-channels.target_override_topics"));
+    expect(delivery.textContent).not.toContain(t("settings-channels.target_override_settings"));
+    expect(delivery.textContent).not.toContain(t("settings-channels.enable", { name: FEISHU_CHANNEL.name }));
+    expect(delivery.textContent).not.toContain(t("settings-channels.send_test"));
+    const buttons = [...section("connection")!.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.filter((b) => b.textContent === t("settings-feishubot.send_test"))).toHaveLength(1);
+    for (const { key, title } of FEATURES) {
+      const switches = delivery.querySelectorAll<HTMLButtonElement>(`[role="switch"][aria-label="${title}"]`);
+      expect(switches, key).toHaveLength(1);
+      if (key === "all_cards") expect(switches[0].disabled).toBe(true);
+    }
+    const enable = buttons.filter((b) => b.getAttribute("aria-label") === t("settings-feishubot.enable"));
+    expect(enable).toHaveLength(1);
+    requests.length = 0;
+    currentChannels.feishu.state = "disabled";
+    await act(async () => enable[0].click());
+    await flush();
+    const writes = requests.filter((r) => r.method === "PUT");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({ url: expect.stringContaining("/bots/feishu"), body: { enabled: false } });
+    expect(requests.some((r) => r.method === "GET" && r.url.endsWith("/channels/feishu"))).toBe(true);
+    expect(host.querySelector("h1")!.closest("section")!.textContent).toContain(channelStateText(currentChannels.feishu));
     expect(section("channel")!.textContent).toContain(t("settings-feishubot.topic_groups"));
     const kbBtn = section("inbox")!.querySelector<HTMLButtonElement>('[data-settings-row="knowledge-scope-shortcut"]');
     expect(kbBtn).not.toBeNull();
@@ -591,9 +618,55 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     });
   });
 
+  it("keeps the override link when it opens another integration", async () => {
+    const onSettings = vi.fn();
+    currentChannels.larkx_chat.settings_url = "settings/plugins/other";
+    currentChannels.larkx_chat.target_override = { mode: "threads" };
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "larkx" }} onSettings={onSettings} />));
+    await flush();
+    const link = [...section("channel")!.querySelectorAll("button")].find(
+      (b) => b.textContent === t("settings-channels.target_override_extension_settings"),
+    );
+    expect(link).toBeDefined();
+    act(() => link!.click());
+    expect(onSettings).toHaveBeenCalledWith("settings/plugins/other");
+  });
+
+  it("locks channel controls during a routing save and keeps the refreshed route after a late reply", async () => {
+    const fetchNow = fetch;
+    let finishPut!: () => void;
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/channels/larkx_chat") && init?.method === "PUT") {
+        return new Promise((resolve) => {
+          finishPut = () => resolve(ok({ ...COMPOSITE_CHANNEL, thread_mode: "per_topic" }));
+        });
+      }
+      return fetchNow(input, init);
+    });
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "larkx" }} />));
+    await flush();
+    const delivery = section("channel")!;
+    const option = (label: string) => [...delivery.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(
+      (b) => b.textContent?.includes(label),
+    )!;
+    const enable = delivery.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    await act(async () => option(t("settings-integrations.thread_mode_topic_title")).click());
+    expect(enable.disabled).toBe(true);
+    currentChannels.larkx_chat.thread_mode = "per_group_and_topic";
+    const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!;
+    await act(async () => refresh.click());
+    await flush();
+    const groupTopic = t("settings-integrations.thread_mode_group_topic_title");
+    expect(option(groupTopic).getAttribute("aria-checked")).toBe("true");
+    await act(async () => finishPut());
+    await flush();
+    expect(option(groupTopic).getAttribute("aria-checked")).toBe("true");
+    expect(delivery.querySelector<HTMLButtonElement>('[role="switch"]')!.disabled).toBe(false);
+  });
+
   it("saves thread_mode and thread_idle_hours via PUT /api/v1/channels/{id} and sends test messages", async () => {
     act(() => {
-      root.render(<IntegrationDetail target={{ kind: "extension", id: "larkx" }} />);
+      root.render(<IntegrationDetail target={{ kind: "extension", id: "larkx" }} onSettings={vi.fn()} />);
     });
     await flush();
 
@@ -608,7 +681,9 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     const modePut = requests.find((r) => r.method === "PUT" && r.url.includes("/channels/larkx_chat"));
     expect(modePut?.body).toEqual({ thread_mode: "per_group_and_topic" });
     // Response updated target_override -> override hint appears immediately
-    expect(section("channel")!.textContent).toContain(t("settings-channels.target_override_topics"));
+    expect(section("channel")!.textContent).toContain(t("settings-channels.target_override_groups_and_topics"));
+
+    expect(section("channel")!.textContent).not.toContain(t("settings-channels.target_override_extension_settings"));
 
     // Update thread_idle_hours to 48 and click Save inside the ConfigurationForm field
     const idleField = section("channel")!.querySelector<HTMLElement>('[data-configuration-field="thread_idle_hours"]')!;
@@ -633,6 +708,27 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
 });
 
 describe("Older Hub and legacy extension graceful degradation", () => {
+  it.each([
+    ["built-in voice", { id: "voice", kind: "voice", source: "builtin" }, false],
+    ["app", { kind: "app" }, false],
+    ["market", { source: "market" }, false],
+    ["uninstalled plugin", { installed: false }, false],
+    ["read-only plugin", { read_only: true }, false],
+    ["mention plugin", { kind: "mention" }, true],
+  ] as const)("shows the expected routing controls for %s", async (_name, patch, visible) => {
+    const channel = "source" in patch && patch.source === "builtin"
+      ? { ...FEISHU_CHANNEL, ...patch, id: "voice", name: "Voice" }
+      : { ...COMPOSITE_CHANNEL, ...patch };
+    currentChannels[channel.id] = channel;
+    const target = channel.source === "builtin"
+      ? { kind: "builtin" as const, id: channel.id, channelId: channel.id, connectorId: null }
+      : { kind: "extension" as const, id: "larkx" };
+    act(() => root.render(<IntegrationDetail target={target} />));
+    await flush();
+    expect(section("channel")).not.toBeNull();
+    expect(!!section("channel")!.querySelector("[data-channel-routing]")).toBe(visible);
+  });
+
   it("degrades routing controls to read-only on an older Hub omitting thread_mode/thread_idle_hours", async () => {
     currentChannels.larkx_chat = {
       ...COMPOSITE_CHANNEL,
